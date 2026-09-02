@@ -2,7 +2,9 @@
 
 use crate::app::reactive::reset_registered_anchors;
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
-use crate::components::{progress_circle, progress_circle_svg, ProgressCircle, ProgressCircleProps, ProgressCircleSize};
+use crate::components::{
+    progress_circle, progress_circle_svg, ProgressCircle, ProgressCircleProps, ProgressCircleSize,
+};
 use crate::core::reactivity::{
     create_effect, create_root, mark_next_effect_as_ui_root, use_signal,
 };
@@ -14,8 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn tree_has_svg_scene(el: &Element) -> bool {
-    el.get_attr(ATTR_SVG_SCENE).is_some()
-        || el.children.iter().any(tree_has_svg_scene)
+    el.get_attr(ATTR_SVG_SCENE).is_some() || el.children.iter().any(tree_has_svg_scene)
 }
 
 fn tree_has_placeholder(el: &Element) -> bool {
@@ -25,7 +26,11 @@ fn tree_has_placeholder(el: &Element) -> bool {
 
 fn count_attr(el: &Element, key: &str) -> usize {
     let here = usize::from(el.get_attr(key).is_some());
-    here + el.children.iter().map(|c| count_attr(c, key)).sum::<usize>()
+    here + el
+        .children
+        .iter()
+        .map(|c| count_attr(c, key))
+        .sum::<usize>()
 }
 
 /// Static SVG in gallery-shaped HStack must layout and produce textured draws.
@@ -92,11 +97,7 @@ fn progress_circle_ui_root_effect_mounts_svg() {
                 }))
                 .child(builder_el)
                 .into();
-            let card: Element = vstack()
-                .w(600.0)
-                .gap("0.5rem")
-                .child(row)
-                .into();
+            let card: Element = vstack().w(600.0).gap("0.5rem").child(row).into();
             live.borrow_mut().children = vec![card];
         });
     });

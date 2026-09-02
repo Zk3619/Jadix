@@ -1,7 +1,9 @@
 //! AvatarGroup label-to-row gap must stay stable when only scroll offset changes.
 
 use crate::app::reactive::reset_registered_anchors;
-use crate::components::avatar::{AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps};
+use crate::components::avatar::{
+    AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps,
+};
 use crate::core::reactivity::create_root;
 use crate::core::scroll_viewport::{activate_scroll_viewport, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{Element, IntoElementList, LayoutTree};
@@ -106,7 +108,11 @@ fn set_scroll_y(root: &mut Element, y: f32) {
     vp.scroll_offset = [0.0, y];
     use crate::core::reactivity::use_signal;
     use crate::core::scroll_viewport::scroll_offset_y_signal_key;
-    use_signal(scroll_offset_y_signal_key("avatar-scroll-test").as_str(), || 0.0_f32).set(y);
+    use_signal(
+        scroll_offset_y_signal_key("avatar-scroll-test").as_str(),
+        || 0.0_f32,
+    )
+    .set(y);
 }
 
 fn find_desc<'a>(el: &'a Element) -> Option<&'a Element> {

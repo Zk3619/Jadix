@@ -459,12 +459,7 @@ fn padding_block_two_values_and_gap_units() {
 #[test]
 fn vstack_box_builder_padding_insets_child() {
     let child = Element::from(r#box().w(50.0).h(20.0));
-    let parent: Element = vstack()
-        .w("100%")
-        .gap("0")
-        .p("0.25rem")
-        .child(child)
-        .into();
+    let parent: Element = vstack().w("100%").gap("0").p("0.25rem").child(child).into();
     let mut root = Element::new().w(200.0).h(100.0).child(parent);
     let mut layout = LayoutTree::new();
     let _ = layout.build_and_layout(&mut root, 200.0, 100.0, [-1.0, -1.0]);
@@ -483,12 +478,7 @@ fn vstack_box_builder_padding_insets_child() {
 #[test]
 fn vstack_padding_before_children_matches_after_into() {
     let child = Element::from(r#box().w(50.0).h(20.0));
-    let before: Element = vstack()
-        .w("100%")
-        .gap("0")
-        .p("0.25rem")
-        .child(child)
-        .into();
+    let before: Element = vstack().w("100%").gap("0").p("0.25rem").child(child).into();
     let child2 = Element::from(r#box().w(50.0).h(20.0));
     let mut after: Element = vstack().w("100%").gap("0").child(child2).into();
     after = after.p("0.25rem");
@@ -508,12 +498,7 @@ fn vstack_padding_before_children_matches_after_into() {
 #[test]
 fn nested_vstack_group_padding_with_flex_shrink_kids() {
     let item = Element::from(r#box().w(50.0).h(20.0));
-    let group: Element = vstack()
-        .w("100%")
-        .gap("0")
-        .p("0.25rem")
-        .child(item)
-        .into();
+    let group: Element = vstack().w("100%").gap("0").p("0.25rem").child(item).into();
     let list: Element = vstack()
         .w("100%")
         .flex_shrink(0.0)
@@ -540,12 +525,7 @@ fn nested_vstack_group_padding_with_flex_shrink_kids() {
 #[test]
 fn nested_vstack_group_padding_without_shell_px() {
     let item = Element::from(r#box().w(50.0).h(20.0));
-    let group: Element = vstack()
-        .w("100%")
-        .gap("0")
-        .p("0.25rem")
-        .child(item)
-        .into();
+    let group: Element = vstack().w("100%").gap("0").p("0.25rem").child(item).into();
     let list: Element = vstack()
         .w("100%")
         .flex_shrink(0.0)

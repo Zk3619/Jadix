@@ -316,11 +316,7 @@ fn overflow_scroll_box_content_h_stable_across_scroll_only_and_full_collect() {
 /// the Taffy box. Paint-collect extent must not grow/shrink as cards enter/leave the
 /// visit band — that is the gallery data-page thumb jitter.
 fn chart_like_abspos_overflow_column() -> Element {
-    let mut col = Element::new()
-        .flex_col()
-        .flex_shrink(0.0)
-        .w(200.0)
-        .gap(8.0);
+    let mut col = Element::new().flex_col().flex_shrink(0.0).w(200.0).gap(8.0);
     for _ in 0..10 {
         col = col.child(
             Element::new()

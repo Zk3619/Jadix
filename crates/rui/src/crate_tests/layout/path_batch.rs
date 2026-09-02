@@ -284,11 +284,7 @@ fn chart_column_does_not_enable_page_stack_bands() {
     let mut col = vstack().w("100%").gap(12.0).flex_shrink(0.0);
     for (i, id) in ["c-a", "c-b", "c-c"].iter().enumerate() {
         col = col.child(Element::new().text(format!("label-{i}")));
-        let chart: Element = line_chart()
-            .id(*id)
-            .values(vals)
-            .size(320.0, 120.0)
-            .into();
+        let chart: Element = line_chart().id(*id).values(vals).size(320.0, 120.0).into();
         col = col.child(chart);
     }
     let composed: Element = define_chart()
@@ -327,12 +323,11 @@ fn chart_column_does_not_enable_page_stack_bands() {
 fn scroll_only_chart_column_textures_stay_separated() {
     let vals = [0.1_f32, 0.55, 0.9];
     let mut col = Element::new().flex_col().flex_shrink(0.0).w(400.0);
-    for (idx, id) in ["gal-scroll-a", "gal-scroll-b", "gal-scroll-c"].iter().enumerate() {
-        let chart: Element = line_chart()
-            .id(*id)
-            .values(vals)
-            .size(400.0, 120.0)
-            .into();
+    for (idx, id) in ["gal-scroll-a", "gal-scroll-b", "gal-scroll-c"]
+        .iter()
+        .enumerate()
+    {
+        let chart: Element = line_chart().id(*id).values(vals).size(400.0, 120.0).into();
         col = col.child(chart);
         if idx < 2 {
             col = col.child(Element::new().h(500.0).flex_shrink(0.0));

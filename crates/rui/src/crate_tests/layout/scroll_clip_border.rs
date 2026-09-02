@@ -24,14 +24,14 @@ fn scrolled_card_border_keeps_true_top_not_viewport_edge() {
     // `overflow:hidden` clips but does not scroll; `scroll:` id applies offset in paint.
     root.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}card-test"));
     root = root.child(
-            Element::new()
-                .w(180.0)
-                .h(120.0)
-                .bg([1.0, 1.0, 1.0, 1.0])
-                .border([0.2, 0.2, 0.2, 1.0], 1.0)
-                .rounded(8.0)
-                .template_id("scroll-card"),
-        );
+        Element::new()
+            .w(180.0)
+            .h(120.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .border([0.2, 0.2, 0.2, 1.0], 1.0)
+            .rounded(8.0)
+            .template_id("scroll-card"),
+    );
     root.scroll_offset = [0.0, 40.0];
     // Paint/collect reads `scroll:` offsets from live signals, not only `Element.scroll_offset`.
     use_signal(&scroll_offset_y_signal_key("card-test"), || 0.0_f32).set_silent(40.0);

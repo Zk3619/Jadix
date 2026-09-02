@@ -1,7 +1,9 @@
 //! Gallery inset shell: flex children must not spill past SidebarInset border-box.
 
 use crate::components::scroll_area::scroll_area;
-use crate::components::sidebar::{sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps};
+use crate::components::sidebar::{
+    sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps,
+};
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};
 use crate::primitives::r#box::{hstack, vstack};
@@ -37,45 +39,32 @@ fn max_right_overflow(inset: &Element) -> f32 {
 }
 
 fn gallery_inset_shell(scroll: Element) -> Element {
-    sidebar_provider_scope(
-        "gal",
-        None,
-        true,
-        Some("inset"),
-        None,
-        move || {
-            let trigger = Element::from(
-                hstack()
-                    .w("100%")
-                    .p("0.5rem")
-                    .flex_shrink(0.0)
-                    .child(Element::new().w(28.0).h(28.0).bg([0.9, 0.9, 0.9, 1.0])),
-            );
-            let body = Element::from(
-                vstack()
-                    .min_w(0.0)
-                    .min_h(0.0)
-                    .flex_grow(1.0)
-                    .child(scroll),
-            );
-            let inset_children = {
-                let mut pack = Element::new();
-                pack.set_attr("rui_fragment", "1");
-                pack.children(vec![trigger, body])
-            };
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children(vec![
-                sidebar("gal-sidebar").variant("inset").into(),
-                SidebarInset(SidebarInsetProps {
-                    variant: Some("inset".into()),
-                    class: None,
-                    children: Some(inset_children),
-                    base: None,
-                }),
-            ])
-        },
-    )
+    sidebar_provider_scope("gal", None, true, Some("inset"), None, move || {
+        let trigger = Element::from(
+            hstack()
+                .w("100%")
+                .p("0.5rem")
+                .flex_shrink(0.0)
+                .child(Element::new().w(28.0).h(28.0).bg([0.9, 0.9, 0.9, 1.0])),
+        );
+        let body = Element::from(vstack().min_w(0.0).min_h(0.0).flex_grow(1.0).child(scroll));
+        let inset_children = {
+            let mut pack = Element::new();
+            pack.set_attr("rui_fragment", "1");
+            pack.children(vec![trigger, body])
+        };
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        frag.children(vec![
+            sidebar("gal-sidebar").variant("inset").into(),
+            SidebarInset(SidebarInsetProps {
+                variant: Some("inset".into()),
+                class: None,
+                children: Some(inset_children),
+                base: None,
+            }),
+        ])
+    })
 }
 
 fn find_inset<'a>(root: &'a Element) -> &'a Element {

@@ -4,8 +4,8 @@
 //! white flashes on light chrome then chrome-sync paints black again.
 
 use crate::components::sidebar::{sidebar, SidebarMenuButton, SidebarMenuButtonProps};
-use crate::core::tree::{parse_text_color, Element, LayoutStatus, LayoutTree};
 use crate::core::reactivity::{create_effect, create_root};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus, LayoutTree};
 use crate::layout::layout_tree::{RenderResult, TextLayoutInfo, ATTR_PORTAL_KEY};
 
 const HEADER: &str = "HeaderChrome";
