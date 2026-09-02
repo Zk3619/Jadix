@@ -884,7 +884,7 @@ fn expand_node(
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
             // Presentational shells that only need `*Props` (no scope): Pagination / Navbar /
-            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup — use the generic
+            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / List — use the generic
             // PascalCase expansion below; do not add them to this special-case list.
             if name_str == "Reactive"
                 || name_str == "Show"
@@ -902,6 +902,8 @@ fn expand_node(
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
+                || name_str == "AlertDialog"
+                || name_str == "AlertDialogContent"
                 || name_str == "Sheet"
                 || name_str == "SheetContent"
                 || name_str == "Drawer"
@@ -1723,6 +1725,48 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "AlertDialog" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:AlertDialog#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::alert_dialog_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3052,6 +3096,103 @@ fn expand_node(
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
                                 hug_content: false,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "AlertDialogContent" {
+                    let overlay_color = get_attr("overlay_color")
+                        .or_else(|| get_attr("overlayColor"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_opacity = get_attr("overlay_opacity")
+                        .or_else(|| get_attr("overlayOpacity"))
+                        .map(|e| {
+                            let v = quote_unitless_f32(e);
+                            quote! { Some(#v) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_overlay = get_attr("close_on_overlay_click")
+                        .or_else(|| get_attr("closeOnOverlayClick"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let overlay_blur = get_attr("overlay_blur")
+                        .or_else(|| get_attr("overlayBlur"))
+                        .or_else(|| get_attr("backdrop_blur"))
+                        .or_else(|| get_attr("backdropBlur"))
+                        .map(|e| {
+                            let v = quote_length_f32(e);
+                            quote! { Some(#v) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let size = get_attr("size")
+                        .map(|e| quote! { rui::components::AlertDialogSize::from(#e) })
+                        .unwrap_or_else(|| {
+                            quote! { rui::components::AlertDialogSize::Default }
+                        });
+                    let variant_static = get_attr("variant")
+                        .filter(|e| !expr_reads_get(e))
+                        .map(|e| quote! { rui::components::AlertDialogVariant::from(#e) })
+                        .unwrap_or_else(|| {
+                            quote! { rui::components::AlertDialogVariant::Default }
+                        });
+                    let filled_static = get_attr("filled")
+                        .filter(|e| !expr_reads_get(e))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let chrome_static = get_attr("chrome")
+                        .filter(|e| !expr_reads_get(e))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let variant_signal = get_attr("variant_signal")
+                        .or_else(|| get_attr("variantSignal"))
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let chrome_signal = get_attr("chrome_signal")
+                        .or_else(|| get_attr("chromeSignal"))
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::alert_dialog_content(
+                            rui::components::AlertDialogContentOpts {
+                                overlay_color: #overlay_color,
+                                overlay_opacity: #overlay_opacity,
+                                close_on_overlay_click: #close_on_overlay,
+                                overlay_blur: #overlay_blur,
+                                size: #size,
+                                variant: #variant_static,
+                                variant_signal: #variant_signal,
+                                filled: #filled_static,
+                                chrome: #chrome_static,
+                                chrome_signal: #chrome_signal,
                             },
                             move || #child_el,
                         )
@@ -4700,7 +4841,7 @@ fn expand_node(
                     // Button / Badge / Avatar / Bubble / Input chrome attrs → bind_attr (Solid-style, no rebuild).
                     if matches!(
                         name_str.as_str(),
-                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Input"
+                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Alert" | "Item" | "Input"
                     ) && matches!(
                         attr_name,
                         "variant" | "disabled" | "invalid" | "size" | "shape" | "align"
@@ -4736,6 +4877,106 @@ fn expand_node(
                                     |el, v| rui::components::apply_bound_bubble_align(el, v),
                                 );
                             });
+                            continue;
+                        }
+                        if name_str == "Alert" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_alert_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_alert_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Alert" && attr_name == "chrome" {
+                            if expr_reads_get(value) {
+                                let idx = *node_counter;
+                                *node_counter += 1;
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_attr(
+                                        __rui_el,
+                                        format!("{}:{}:bind_alert_chrome#{}", file!(), line!(), #idx),
+                                        move || #value,
+                                        |el, enabled| {
+                                            rui::components::apply_bound_alert_chrome(el, enabled)
+                                        },
+                                    );
+                                });
+                            } else {
+                                prop_names.push(attr.clone());
+                                prop_values.push(quote! { Some(#value) });
+                            }
+                            continue;
+                        }
+                        if name_str == "Item" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_item_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_item_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Item" && attr_name == "size" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_item_size#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_item_size(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "ItemMedia" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_item_media_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_item_media_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Badge" && attr_name == "chrome" {
+                            if expr_reads_get(value) {
+                                let idx = *node_counter;
+                                *node_counter += 1;
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_attr(
+                                        __rui_el,
+                                        format!("{}:{}:bind_badge_chrome#{}", file!(), line!(), #idx),
+                                        move || #value,
+                                        |el, enabled| {
+                                            rui::components::apply_bound_badge_chrome(el, enabled)
+                                        },
+                                    );
+                                });
+                            } else {
+                                prop_names.push(attr.clone());
+                                prop_values.push(quote! { Some(#value) });
+                            }
                             continue;
                         }
                         if name_str == "Avatar" && attr_name == "size" {
@@ -5138,14 +5379,7 @@ fn expand_node(
                                             let __v = (#value).to_string();
                                             rui::core::tree::parse_color(__v.as_str())
                                         },
-                                        |el, color| {
-                                            if el.style.bg_color == color {
-                                                rui::core::tree::LayoutStatus::Clean
-                                            } else {
-                                                el.style.bg_color = color;
-                                                rui::core::tree::LayoutStatus::StyleChanged
-                                            }
-                                        },
+                                        |el, color| rui::style::apply_user_bg(el, color),
                                     );
                                 });
                                 continue;
@@ -5159,14 +5393,7 @@ fn expand_node(
                                             let __v = (#value).to_string();
                                             rui::core::tree::parse_text_color(__v.as_str())
                                         },
-                                        |el, color| {
-                                            if el.text_style.color == color {
-                                                rui::core::tree::LayoutStatus::Clean
-                                            } else {
-                                                el.text_style.color = color;
-                                                rui::core::tree::LayoutStatus::StyleChanged
-                                            }
-                                        },
+                                        |el, color| rui::style::apply_user_fg(el, color),
                                     );
                                 });
                                 continue;
@@ -5180,14 +5407,7 @@ fn expand_node(
                                             let __v = (#value).to_string();
                                             rui::core::tree::parse_color(__v.as_str())
                                         },
-                                        |el, color| {
-                                            if el.style.border_color == color {
-                                                rui::core::tree::LayoutStatus::Clean
-                                            } else {
-                                                el.style.border_color = color;
-                                                rui::core::tree::LayoutStatus::StyleChanged
-                                            }
-                                        },
+                                        |el, color| rui::style::apply_user_border_color(el, color),
                                     );
                                 });
                                 continue;
@@ -5671,7 +5891,7 @@ fn expand_node(
                             #[allow(clippy::needless_update)]
                             let __rui_comp = #name_ident(#props_ident {
                                 base: #base_expr,
-                                children: #children_expr,
+                                children: rui::utils::children_none_if_vacuous(#children_expr),
                                 #(#prop_names: #prop_values,)*
                                 #rest_ts
                             });
@@ -5684,7 +5904,7 @@ fn expand_node(
                         #[allow(clippy::needless_update)]
                         let mut __rui_el: rui::core::tree::Element = #name_ident(#props_ident {
                             base: #base_expr,
-                            children: #children_expr,
+                            children: rui::utils::children_none_if_vacuous(#children_expr),
                             #(#prop_names: #prop_values,)*
                             #rest_ts
                         }).into();
@@ -6646,6 +6866,12 @@ fn expand_node(
                     "scrollbar_thumb_color" | "scrollbarThumbColor" => {
                         element = quote! { #element.scrollbar_thumb_color(#value) }
                     }
+                    "scrollbar_track_border_color" | "scrollbarTrackBorderColor" => {
+                        element = quote! { #element.scrollbar_track_border_color(#value) }
+                    }
+                    "scrollbar_thumb_border_color" | "scrollbarThumbBorderColor" => {
+                        element = quote! { #element.scrollbar_thumb_border_color(#value) }
+                    }
                     "mx" | "margin_x" | "marginX" => element = quote! { #element.mx(#value) },
                     "my" | "margin_y" | "marginY" => element = quote! { #element.my(#value) },
                     "mt" | "margin_top" | "marginTop" => element = quote! { #element.mt(#value) },
@@ -6755,6 +6981,16 @@ fn expand_node(
                     "thumb_color" => {
                         element =
                             quote! { #element.thumb_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "track_border_color" | "trackBorderColor" => {
+                        element = quote! {
+                            #element.track_border_color(rui::core::tree::parse_color(#value))
+                        }
+                    }
+                    "thumb_border_color" | "thumbBorderColor" => {
+                        element = quote! {
+                            #element.thumb_border_color(rui::core::tree::parse_color(#value))
+                        }
                     }
                     "disabled" => element = quote! { #element.disabled(#value) },
                     "placeholder" => element = quote! { #element.placeholder(#value) },

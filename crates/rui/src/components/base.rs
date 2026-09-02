@@ -19,6 +19,7 @@
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
+use crate::style::{mark_variant_style_override, VariantStyleField};
 
 pub struct BaseComponentBuilder {
     pub el: Element,
@@ -182,11 +183,13 @@ impl BaseComponentBuilder {
 
     pub fn bg(mut self, bg: [f32; 4]) -> Self {
         self.el = self.el.bg(bg);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Bg);
         self
     }
 
     pub fn box_shadow(mut self, spec: impl AsRef<str>) -> Self {
         self.el = self.el.box_shadow(spec);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
 
@@ -202,26 +205,32 @@ impl BaseComponentBuilder {
 
     pub fn box_shadow_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.box_shadow_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
     pub fn box_shadow_blur(mut self, blur: f32) -> Self {
         self.el = self.el.box_shadow_blur(blur);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
         self.el = self.el.box_shadow_offset_x(dx);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
     pub fn box_shadow_offset_y(mut self, dy: f32) -> Self {
         self.el = self.el.box_shadow_offset_y(dy);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
     pub fn box_shadow_spread(mut self, spread: f32) -> Self {
         self.el = self.el.box_shadow_spread(spread);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
     pub fn box_shadow_inset(mut self, inset: bool) -> Self {
         self.el = self.el.box_shadow_inset(inset);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
         self
     }
 
@@ -248,6 +257,7 @@ impl BaseComponentBuilder {
     }
     pub fn border_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.border_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
     }
     pub fn border_width(mut self, width: impl IntoBorderWidths) -> Self {
@@ -272,18 +282,22 @@ impl BaseComponentBuilder {
     }
     pub fn border_top_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.border_top_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
     }
     pub fn border_right_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.border_right_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
     }
     pub fn border_bottom_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.border_bottom_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
     }
     pub fn border_left_color(mut self, color: [f32; 4]) -> Self {
         self.el = self.el.border_left_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
     }
 
@@ -468,6 +482,7 @@ impl BaseComponentBuilder {
     }
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
         self.el = self.el.text_color(color);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Fg);
         self
     }
     pub fn underline(mut self, u: bool) -> Self {

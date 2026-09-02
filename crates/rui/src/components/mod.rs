@@ -33,6 +33,12 @@
 //! - InputOTP: `<InputOTP>` / Group / Slot / Separator (对位 ShadCN InputOTP); Builder [`input_otp`].
 //! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
 //! - Kbd: presentational `<Kbd>` / `<KbdGroup>` / [`kbd`] / [`kbd_group`] (keycap chrome; no special `ui!` scope).
+//! - Skeleton: presentational `<Skeleton>` / [`skeleton`] (loading placeholder; `animate-pulse` + `bg-accent`).
+//! - Empty: `<Empty>` / `EmptyHeader` / `EmptyMedia` / `EmptyTitle` / `EmptyDescription` / `EmptyContent` + [`empty`] builders.
+//! - Alert: `<Alert variant>` / `AlertTitle` / `AlertDescription` / `AlertAction` + [`alert`] (`default`/`destructive`/`info`/`success`/`warning`).
+//! - AlertDialog: `<AlertDialog>` / `AlertDialogContent` / `AlertDialogCancel` + [`alert_dialog`] (blocking confirm; semantic variants via [`apply_bound_alert_dialog_variant`]).
+//! - Item: `<Item>` / `ItemGroup` / `ItemMedia` / `ItemContent` / … + [`item`] / [`item_group`] (`variant`/`size`).
+//! - List: `<List>` / `ListItem` / `ListHeader` / `ListDescription` + [`list`] (`marker`); nest `Item` for rich rows.
 //! - Collapsible: Composite `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent` (macro `collapsible_scope` / `collapsible_content`); Builder [`collapsible`].
 //! - Carousel: `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots (macro `carousel_scope`); Builder [`.slide`](carousel::CarouselBuilder::slide).
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
@@ -44,6 +50,8 @@
 pub(crate) mod internal;
 
 pub mod accordion;
+pub mod alert;
+pub mod alert_dialog;
 pub mod aspect_ratio;
 pub mod avatar;
 pub mod badge;
@@ -66,14 +74,17 @@ pub mod date_picker;
 pub mod dialog;
 pub mod drawer;
 pub mod dropdown_menu;
+pub mod empty;
 pub mod form;
 pub mod hover_card;
 pub mod image;
 pub mod input;
 pub mod input_adornment;
 pub mod input_otp;
+pub mod item;
 pub mod kbd;
 pub mod label;
+pub mod list;
 pub mod menubar;
 pub mod navbar;
 pub mod navigation_menu;
@@ -89,6 +100,7 @@ pub mod select;
 pub mod separator;
 pub mod sheet;
 pub mod sidebar;
+pub mod skeleton;
 pub mod slider;
 pub mod stepper;
 pub mod switch;
@@ -109,6 +121,21 @@ pub use accordion::{
     AccordionTriggerProps, accordion, accordion_content, accordion_item_scope, accordion_scope,
     use_accordion, use_accordion_item,
 };
+pub use alert::{
+    Alert, AlertAction, AlertActionProps, AlertBuilder, AlertDescription, AlertDescriptionProps,
+    AlertProps, AlertTitle, AlertTitleProps, AlertVariant, alert, apply_bound_alert_chrome,
+    apply_bound_alert_variant, apply_alert_variant_paint,
+};
+pub use alert_dialog::{
+    AlertDialogAction, AlertDialogActionProps, AlertDialogBody, AlertDialogBodyProps,
+    AlertDialogBuilder, AlertDialogCancel, AlertDialogCancelProps, AlertDialogContentOpts,
+    AlertDialogCtx, AlertDialogDescription, AlertDialogDescriptionProps, AlertDialogFooter,
+    AlertDialogFooterProps, AlertDialogHeader, AlertDialogHeaderProps, AlertDialogMedia, AlertDialogMediaProps,
+    AlertDialogSize, AlertDialogTitle, AlertDialogTitleProps, AlertDialogTrigger,
+    AlertDialogTriggerProps, AlertDialogVariant, alert_dialog, alert_dialog_close,
+    alert_dialog_content, alert_dialog_open, alert_dialog_scope, apply_alert_dialog_variant_paint,
+    apply_bound_alert_dialog_chrome, apply_bound_alert_dialog_variant, use_alert_dialog,
+};
 pub use aspect_ratio::{
     AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue, aspect_ratio,
 };
@@ -119,7 +146,10 @@ pub use avatar::{
     AvatarShape, AvatarSize, apply_bound_avatar_badge_variant, apply_bound_avatar_shape,
     apply_bound_avatar_size, avatar, avatar_fallback, avatar_scope, use_avatar,
 };
-pub use badge::{Badge, BadgeBuilder, BadgeProps, BadgeVariant, apply_bound_badge_variant, badge};
+pub use badge::{
+    Badge, BadgeBuilder, BadgeProps, BadgeVariant, apply_bound_badge_chrome,
+    apply_bound_badge_variant, badge,
+};
 pub use base::BaseComponentBuilder;
 pub use breadcrumb::{
     Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis, BreadcrumbEllipsisProps, BreadcrumbItem,
@@ -242,6 +272,12 @@ pub use dropdown_menu::{
     dropdown_menu, dropdown_menu_content, dropdown_menu_radio_group, dropdown_menu_scope,
     dropdown_menu_sub, dropdown_menu_sub_content, use_dropdown_menu,
 };
+pub use empty::{
+    Empty, EmptyBuilder, EmptyContent, EmptyContentBuilder, EmptyContentProps, EmptyDescription,
+    EmptyDescriptionProps, EmptyHeader, EmptyHeaderBuilder, EmptyHeaderProps, EmptyMedia,
+    EmptyMediaBuilder, EmptyMediaProps, EmptyMediaVariant, EmptyProps, EmptyTitle, EmptyTitleProps,
+    empty, empty_content, empty_header, empty_media,
+};
 pub use form::{
     FormState, clear_all_errors, clear_field_error, field_error, field_invalid, form_errors_signal,
     form_field, form_provider, form_validate, set_field_error, use_form,
@@ -270,12 +306,24 @@ pub use input_otp::{
     InputOTPSeparator, InputOTPSeparatorProps, InputOTPSlot, InputOTPSlotProps, InputOtpBuilder,
     InputOtpCtx, InputOtpPattern, input_otp, input_otp_focus_id, input_otp_scope, use_input_otp,
 };
+pub use item::{
+    Item, ItemActions, ItemActionsProps, ItemBuilder, ItemContent, ItemContentProps,
+    ItemDescription, ItemDescriptionProps, ItemFooter, ItemFooterProps, ItemGroup,
+    ItemGroupBuilder, ItemGroupProps, ItemHeader, ItemHeaderProps, ItemMedia, ItemMediaProps,
+    ItemMediaVariant, ItemProps, ItemSeparator, ItemSeparatorProps, ItemSize, ItemTitle,
+    ItemTitleProps, ItemVariant, apply_bound_item_media_variant, apply_bound_item_size,
+    apply_bound_item_variant, apply_item_paint, item, item_group,
+};
 pub use kbd::{
     Kbd, KbdBuilder, KbdGroup, KbdGroupBuilder, KbdGroupProps, KbdProps, kbd, kbd_group,
 };
 pub use label::{
     LABEL_SELECTION_COPY_SIGNAL, Label, LabelBuilder, LabelProps, enable_label_selection, label,
     label_selection_signal_key, selectable_text_key, text_node as text, try_copy_label_selection,
+};
+pub use list::{
+    List, ListBuilder, ListDescription, ListDescriptionProps, ListHeader, ListHeaderProps,
+    ListItem, ListItemProps, ListMarker, ListProps, list,
 };
 pub use menubar::{
     MenuItem, MenuSection, MenubarBuilder, MenubarCheckboxItem, MenubarCheckboxItemProps,
@@ -365,6 +413,7 @@ pub use sidebar::{
     SidebarTriggerProps, SidebarVariant, apply_bound_sidebar_menu_button_active, sidebar,
     sidebar_menu_button, sidebar_provider_scope, sidebar_tree, toggle_sidebar, use_sidebar,
 };
+pub use skeleton::{Skeleton, SkeletonBuilder, SkeletonProps, skeleton};
 pub use slider::{Slider, SliderBuilder, SliderOrientation, SliderProps, slider};
 pub use stepper::{StepperBuilder, stepper};
 pub use switch::{Switch, SwitchBuilder, SwitchProps, switch};
