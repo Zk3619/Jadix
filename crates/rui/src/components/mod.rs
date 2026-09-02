@@ -38,7 +38,9 @@
 //! - Alert: `<Alert variant>` / `AlertTitle` / `AlertDescription` / `AlertAction` + [`alert`] (`default`/`destructive`/`info`/`success`/`warning`).
 //! - AlertDialog: `<AlertDialog>` / `AlertDialogContent` / `AlertDialogCancel` + [`alert_dialog`] (blocking confirm; semantic variants via [`apply_bound_alert_dialog_variant`]).
 //! - Item: `<Item>` / `ItemGroup` / `ItemMedia` / `ItemContent` / … + [`item`] / [`item_group`] (`variant`/`size`).
+//! - Attachment: `<Attachment>` / `AttachmentGroup` / `AttachmentMedia` / `AttachmentContent` / … + [`attachment`] / [`attachment_group`] (`state`/`size`/`orientation`).
 //! - List: `<List>` / `ListItem` / `ListHeader` / `ListDescription` + [`list`] (`marker`); nest `Item` for rich rows.
+//! - Table: `<Table>` / `TableHeader` / `TableRow` / `TableHead` / `TableCell` / `TableFooter` / `TableCaption` + [`table`] / [`data_table`]（TanStack 排序·筛选·分页）；宏 `bind_attr`：`selected` / `align`。
 //! - Collapsible: Composite `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent` (macro `collapsible_scope` / `collapsible_content`); Builder [`collapsible`].
 //! - Carousel: `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots (macro `carousel_scope`); Builder [`.slide`](carousel::CarouselBuilder::slide).
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
@@ -53,6 +55,7 @@ pub mod accordion;
 pub mod alert;
 pub mod alert_dialog;
 pub mod aspect_ratio;
+pub mod attachment;
 pub mod avatar;
 pub mod badge;
 pub mod base;
@@ -138,6 +141,16 @@ pub use alert_dialog::{
 };
 pub use aspect_ratio::{
     AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue, aspect_ratio,
+};
+pub use attachment::{
+    apply_attachment_paint, apply_bound_attachment_media_variant, apply_bound_attachment_orientation,
+    apply_bound_attachment_size, apply_bound_attachment_state, attachment, attachment_group,
+    Attachment, AttachmentAction, AttachmentActionProps, AttachmentActions, AttachmentActionsProps,
+    AttachmentBuilder, AttachmentContent, AttachmentContentProps, AttachmentDescription,
+    AttachmentDescriptionProps, AttachmentGroup, AttachmentGroupBuilder, AttachmentGroupProps,
+    AttachmentMedia, AttachmentMediaProps, AttachmentMediaVariant, AttachmentOrientation,
+    AttachmentProps, AttachmentSize, AttachmentState, AttachmentTitle, AttachmentTitleProps,
+    AttachmentTrigger, AttachmentTriggerProps,
 };
 pub use avatar::{
     Avatar, AvatarBadge, AvatarBadgeProps, AvatarBuilder, AvatarCtx, AvatarFallback,
@@ -418,11 +431,12 @@ pub use slider::{Slider, SliderBuilder, SliderOrientation, SliderProps, slider};
 pub use stepper::{StepperBuilder, stepper};
 pub use switch::{Switch, SwitchBuilder, SwitchProps, switch};
 pub use table::{
-    DataTable, DataTableProps, Table, TableAlign, TableBody, TableBodyProps, TableBuilder,
-    TableCaption, TableCaptionProps, TableCell, TableCellProps, TableColumn, TableDensity,
-    TableFooter, TableFooterProps, TableHead, TableHeadProps, TableHeader, TableHeaderProps,
-    TablePaginationState, TableProps, TableRow, TableRowProps, TableSortDir, TableSortState,
-    data_table, table, table_comfortable, table_compact,
+    apply_bound_table_align, apply_bound_table_row_selected, DataTable, DataTableProps, Table,
+    TableAlign, TableBody, TableBodyProps, TableBuilder, TableCaption, TableCaptionProps,
+    TableCell, TableCellProps, TableColumn, TableDensity, TableFooter, TableFooterProps,
+    TableHead, TableHeadProps, TableHeader, TableHeaderProps, TablePaginationState, TableProps,
+    TableRow, TableRowProps, TableSortDir, TableSortState, data_table, table, table_comfortable,
+    table_compact,
 };
 pub use tabs::{
     TABSTRIP_FOCUS_PREFIX, Tabs, TabsContent, TabsContentProps, TabsCtx, TabsHeadlessBuilder,

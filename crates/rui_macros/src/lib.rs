@@ -884,7 +884,7 @@ fn expand_node(
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
             // Presentational shells that only need `*Props` (no scope): Pagination / Navbar /
-            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / List — use the generic
+            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / Attachment / List / Table* — use the generic
             // PascalCase expansion below; do not add them to this special-case list.
             if name_str == "Reactive"
                 || name_str == "Show"
@@ -4841,10 +4841,11 @@ fn expand_node(
                     // Button / Badge / Avatar / Bubble / Input chrome attrs → bind_attr (Solid-style, no rebuild).
                     if matches!(
                         name_str.as_str(),
-                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Alert" | "Item" | "Input"
+                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Alert" | "Item" | "Attachment" | "Input"
+                            | "TableRow" | "TableHead" | "TableCell"
                     ) && matches!(
                         attr_name,
-                        "variant" | "disabled" | "invalid" | "size" | "shape" | "align"
+                        "variant" | "disabled" | "invalid" | "size" | "shape" | "align" | "state" | "orientation"
                     ) && expr_reads_get(value)
                     {
                         let idx = *node_counter;
@@ -4957,6 +4958,103 @@ fn expand_node(
                                     |el, v| rui::components::apply_bound_item_media_variant(el, v),
                                 );
                             });
+                            continue;
+                        }
+                        if name_str == "Attachment" && attr_name == "state" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_attachment_state#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_attachment_state(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Attachment" && attr_name == "size" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_attachment_size#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_attachment_size(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Attachment" && attr_name == "orientation" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_attachment_orientation#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_attachment_orientation(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "AttachmentMedia" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_attachment_media_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_attachment_media_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "TableRow" && attr_name == "selected" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| #value))
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_table_row_selected#{}", file!(), line!(), #idx),
+                                    move || #value,
+                                    |el, v| rui::components::apply_bound_table_row_selected(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if (name_str == "TableHead" || name_str == "TableCell") && attr_name == "align" {
+                            prop_names.push(attr.clone());
+                            let is_reactive = expr_reads_get(value);
+                            prop_values.push(if is_reactive {
+                                quote! {
+                                    Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                                }
+                            } else {
+                                quote! { Some((#value).to_string()) }
+                            });
+                            if is_reactive {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_attr(
+                                        __rui_el,
+                                        format!("{}:{}:bind_table_align#{}", file!(), line!(), #idx),
+                                        move || (#value).to_string(),
+                                        |el, v| rui::components::apply_bound_table_align(el, v),
+                                    );
+                                });
+                            }
                             continue;
                         }
                         if name_str == "Badge" && attr_name == "chrome" {
@@ -5110,8 +5208,13 @@ fn expand_node(
                     let textarea_own_prop =
                         name_str == "Textarea" && matches!(attr_name, "wrap" | "rows");
 
+                    // TableHead/TableCell：`w` / `align` 是列 prop，不是根节点 base。
+                    let table_cell_own_prop = matches!(name_str.as_str(), "TableHead" | "TableCell")
+                        && matches!(attr_name, "w" | "width" | "align");
+
                     let is_base = !chart_plot_height
                         && !textarea_own_prop
+                        && !table_cell_own_prop
                         && matches!(
                             attr_name,
                             "w" | "width"
@@ -5681,6 +5784,10 @@ fn expand_node(
                         let final_attr = if name_str == "Input" && attr_str == "type" {
                             // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
                             syn::Ident::new("input_type", attr.span())
+                        } else if matches!(name_str.as_str(), "TableHead" | "TableCell")
+                            && matches!(attr_str.as_str(), "width")
+                        {
+                            syn::Ident::new("w", attr.span())
                         } else {
                             match attr_str.as_str() {
                                 "onClick" => syn::Ident::new("on_click", attr.span()),

@@ -33,9 +33,11 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::style::{
-    TimingFunction, TransitionEntry, TransitionProperty, focus_ring_border_color, focus_ring_color,
+    TimingFunction, TransitionEntry, TransitionProperty, button_soft_semantic_chrome,
+    color_mix_over_background, focus_ring_border_color, focus_ring_color,
     focus_ring_destructive_color, focus_ring_params, focus_ring_style, is_dark_theme,
-    lerp_display_srgb_linear, mix_display_srgb_in_oklab,
+    lerp_display_srgb_linear, lerp_paint_chrome, lerp_text_rgba, mix_display_srgb_in_oklab,
+    PaintChrome, SemanticTone,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::{TextNodeConfig, build_text_node};
@@ -165,43 +167,6 @@ fn lerp_shadow_params(
     (blur, col, off, spread)
 }
 
-fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
-    let af = [
-        a[0] as f32 / 255.0,
-        a[1] as f32 / 255.0,
-        a[2] as f32 / 255.0,
-        a[3] as f32 / 255.0,
-    ];
-    let bf = [
-        b[0] as f32 / 255.0,
-        b[1] as f32 / 255.0,
-        b[2] as f32 / 255.0,
-        b[3] as f32 / 255.0,
-    ];
-    let o = lerp_display_srgb_linear(af, bf, t);
-    [
-        (o[0] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (o[1] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (o[2] * 255.0).round().clamp(0.0, 255.0) as u8,
-        (o[3] * 255.0).round().clamp(0.0, 255.0) as u8,
-    ]
-}
-
-/// Tailwind / CSS `color-mix(..., fg alpha%, transparent)` The opaque equivalent color overlaid on the `background`.
-///
-/// Use **straight channel sRGB alpha synthesis** (consistent with document site canvas sampling: `primary/80`→`#333`,
-/// `destructive/10`→`#fde6e7`). Don’t use Oklab Hybrid Substitute – it will overstate the results.
-fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
-    let bg = parse_color("background");
-    let a = alpha.clamp(0.0, 1.0);
-    [
-        fg[0] * a + bg[0] * (1.0 - a),
-        fg[1] * a + bg[1] * (1.0 - a),
-        fg[2] * a + bg[2] * (1.0 - a),
-        1.0,
-    ]
-}
-
 /// `color-mix(in oklch, base, other pct%)` — pct is the proportion of other (0–100).
 fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32; 4] {
     let t = (other_pct / 100.0).clamp(0.0, 1.0);
@@ -210,27 +175,10 @@ fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32;
     out
 }
 
-/// Soft semantic tint (same origin as Toast semantic color, recipe aligned destructive):
-/// `accent/10` → hover `accent/20` (dark color `20/30`); the text color is opaque accent.
-fn soft_semantic_chrome(
-    accent: [f32; 4],
-    text: [u8; 4],
-    hover_t: f32,
-    dark: bool,
-) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
-    let t = hover_t.clamp(0.0, 1.0);
-    let (rest_a, hover_a) = if dark { (0.2, 0.3) } else { (0.1, 0.2) };
-    let rest = color_mix_over_background(accent, rest_a);
-    let hover = color_mix_over_background(accent, hover_a);
-    let bg = lerp_display_srgb_linear(rest, hover, t);
-    (bg, text, None)
-}
-
 /// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
 /// - default: `bg-primary` → hover `primary/80`
 /// - secondary: `bg-secondary` → hover `color-mix(secondary, foreground 5%)`
-/// - success / warning / destructive: soft tint (see [`soft_semantic_chrome`]);
-///   success=`green-600`, warning=`orange-600` (same origin as Toast tone), destructive token
+/// - success / warning / destructive: soft tint via [`button_soft_semantic_chrome`] / [`SemanticTone`]
 /// - outline / ghost / link: see each branch
 pub(crate) fn button_chrome_for_variant(
     variant: &str,
@@ -238,19 +186,48 @@ pub(crate) fn button_chrome_for_variant(
 ) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
     let t = hover_t.clamp(0.0, 1.0);
     let dark = is_dark_theme();
+    if let Some(tone) = match variant {
+        "success" | "warning" | "destructive" | "info" => Some(SemanticTone::parse(variant)),
+        _ => None,
+    } {
+        if tone.is_semantic() {
+            return button_soft_semantic_chrome(tone, t);
+        }
+    }
     match variant {
         "default" => {
-            let rest = parse_color("primary");
-            let hover = color_mix_over_background(parse_color("primary"), 0.8);
-            let bg = lerp_display_srgb_linear(rest, hover, t);
-            (bg, parse_text_color("primary-foreground"), None)
+            let fg = parse_text_color("primary-foreground");
+            let c = lerp_paint_chrome(
+                PaintChrome {
+                    bg: parse_color("primary"),
+                    fg,
+                    border: None,
+                },
+                PaintChrome {
+                    bg: color_mix_over_background(parse_color("primary"), 0.8),
+                    fg,
+                    border: None,
+                },
+                t,
+            );
+            (c.bg, c.fg, c.border)
         }
         "secondary" => {
-            let rest = parse_color("secondary");
-            let hover =
-                color_mix_oklch_pct(parse_color("secondary"), parse_color("foreground"), 5.0);
-            let bg = lerp_display_srgb_linear(rest, hover, t);
-            (bg, parse_text_color("secondary-foreground"), None)
+            let fg = parse_text_color("secondary-foreground");
+            let c = lerp_paint_chrome(
+                PaintChrome {
+                    bg: parse_color("secondary"),
+                    fg,
+                    border: None,
+                },
+                PaintChrome {
+                    bg: color_mix_oklch_pct(parse_color("secondary"), parse_color("foreground"), 5.0),
+                    fg,
+                    border: None,
+                },
+                t,
+            );
+            (c.bg, c.fg, c.border)
         }
         "outline" => {
             let (rest_bg, hover_bg, border) = if dark {
@@ -266,13 +243,20 @@ pub(crate) fn button_chrome_for_variant(
                     parse_color("border"),
                 )
             };
-            let bg = lerp_display_srgb_linear(rest_bg, hover_bg, t);
-            let tc = lerp_text_rgba(
-                parse_text_color("foreground"),
-                parse_text_color("accent-foreground"),
+            let c = lerp_paint_chrome(
+                PaintChrome {
+                    bg: rest_bg,
+                    fg: parse_text_color("foreground"),
+                    border: Some(border),
+                },
+                PaintChrome {
+                    bg: hover_bg,
+                    fg: parse_text_color("accent-foreground"),
+                    border: Some(border),
+                },
                 t,
             );
-            (bg, tc, Some(border))
+            (c.bg, c.fg, c.border)
         }
         "ghost" => {
             let hover_bg = if dark {
@@ -291,30 +275,23 @@ pub(crate) fn button_chrome_for_variant(
             );
             (bg, tc, None)
         }
-        "success" => soft_semantic_chrome(
-            parse_color("green-600"),
-            parse_text_color("green-600"),
-            t,
-            dark,
-        ),
-        "warning" => soft_semantic_chrome(
-            parse_color("orange-600"),
-            parse_text_color("orange-600"),
-            t,
-            dark,
-        ),
-        "destructive" => soft_semantic_chrome(
-            parse_color("destructive"),
-            parse_text_color("destructive"),
-            t,
-            dark,
-        ),
         "link" => ([0.0; 4], parse_text_color("primary"), None),
         _ => {
-            let rest = parse_color("primary");
-            let hover = color_mix_over_background(parse_color("primary"), 0.8);
-            let bg = lerp_display_srgb_linear(rest, hover, t);
-            (bg, parse_text_color("primary-foreground"), None)
+            let fg = parse_text_color("primary-foreground");
+            let c = lerp_paint_chrome(
+                PaintChrome {
+                    bg: parse_color("primary"),
+                    fg,
+                    border: None,
+                },
+                PaintChrome {
+                    bg: color_mix_over_background(parse_color("primary"), 0.8),
+                    fg,
+                    border: None,
+                },
+                t,
+            );
+            (c.bg, c.fg, c.border)
         }
     }
 }
@@ -1418,7 +1395,8 @@ impl crate::core::tree::IntoElementList for ButtonBuilder {
 
 #[cfg(test)]
 mod chrome_tests {
-    use super::{button, button_chrome_for_variant, color_mix_over_background};
+    use super::{button, button_chrome_for_variant};
+    use crate::style::color_mix_over_background;
     use crate::core::tree::Element;
     use crate::style::{ThemeMode, parse_color, parse_text_color, set_theme_mode};
 

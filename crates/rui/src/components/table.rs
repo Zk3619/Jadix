@@ -1,15 +1,17 @@
 //! # Table
 //!
-//! 对齐 **solid-ui / shadcn** 复合表壳 + **TanStack Table** 的 columns / data 心智。
+//! ShadCN **base** 复合表壳 + **TanStack Table**（`reference/table-main`）columns / data 心智。
+//! 样式对位 `Reference/ShadCN-UI/.../bases/base/ui/table.tsx`（`style-nova`：`cn-table-*`）。
 //!
 //! ```text
-//! Table                         // overflow 外壳 + w-full text-sm
-//! ├── TableCaption              // 可选；muted-foreground
-//! ├── TableHeader               // 表头区；行带 border-b
-//! │   └── TableRow → TableHead
-//! ├── TableBody                 // 行区
-//! │   └── TableRow → TableCell  // hover muted/50；selected → muted
-//! └── TableFooter               // solid-ui：bg-primary / primary-foreground
+//! Table                         // table-container · relative · overflow-x-auto
+//! └── table (inner)             // w-full · caption-bottom · text-sm
+//!     ├── TableCaption          // mt-4 · text-sm · muted-foreground
+//!     ├── TableHeader           // [&_tr]:border-b
+//!     │   └── TableRow → TableHead
+//!     ├── TableBody             // [&_tr:last-child]:border-0
+//!     │   └── TableRow → TableCell  // hover muted/50 · selected muted
+//!     └── TableFooter           // bg-muted/50 · border-t · font-medium
 //! ```
 //!
 //! ## 数据表预设（TanStack 风格）
@@ -17,45 +19,56 @@
 //! | 入口 | 说明 |
 //! |------|------|
 //! | [`table`] / [`data_table`] | 默认密度；VirtualList 行体；排序 / 单行选中 / 可选分页与全局筛选 |
-//! | [`table_compact`] | 紧凑行高（`py` 更矮） |
+//! | [`table_compact`] | 紧凑行高 |
 //! | [`table_comfortable`] | 舒适行高 |
 //!
-//! 预设内部用复合零件的视觉契约（边框、表头 muted-foreground、选中 muted），
-//! 不承诺分组 / 列 pinning / 多列排序（见 `docs/component_inventory.md`）。
+//! 预设复用复合壳视觉契约；不承诺分组 / 列 pinning / 多列排序（见 `docs/component_inventory.md`）。
 //!
-//! ## Usage
+//! `ui!` 中 `<Table>` / `<TableRow>` / `<TableHead>` / `<TableCell>` 走通用 `*Props`；
+//! 宏对 `selected` / `align` / `density` 做 `bind_attr`（与 Button `variant` 同模式）。
+//!
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // 复合 RSX（静态小表）
+//! // A · RSX / tags（ShadCN invoices 示例）
 //! ui! {
 //!     <Table>
-//!         <TableCaption>"Recent invoices"</TableCaption>
+//!         <TableCaption>"A list of your recent invoices."</TableCaption>
 //!         <TableHeader>
-//!             <TableRow>
+//!             <TableRow id="inv-h">
 //!                 <TableHead w="100">"Invoice"</TableHead>
 //!                 <TableHead>"Status"</TableHead>
 //!                 <TableHead align="end">"Amount"</TableHead>
 //!             </TableRow>
 //!         </TableHeader>
 //!         <TableBody>
-//!             <TableRow>
+//!             <TableRow id="inv-1" selected={sel.get() == Some(0)}>
 //!                 <TableCell>"INV001"</TableCell>
 //!                 <TableCell>"Paid"</TableCell>
 //!                 <TableCell align="end">"$250.00"</TableCell>
 //!             </TableRow>
 //!         </TableBody>
+//!         <TableFooter>
+//!             <TableRow id="inv-f">
+//!                 <TableCell>"Total"</TableCell>
+//!                 <TableCell align="end">"$2,500.00"</TableCell>
+//!             </TableRow>
+//!         </TableFooter>
 //!     </Table>
 //! }
 //!
-//! // 数据表预设
+//! // B · Builder（TanStack columns + data）
 //! Element::from(
 //!     data_table("people")
 //!         .columns([
 //!             TableColumn::new("name", "Name").width(120.0),
-//!             TableColumn::new("role", "Role").width(100.0),
+//!             TableColumn::new("role", "Role").width(100.0).align("end"),
 //!         ])
 //!         .row_count(40)
-//!         .cell(|r, c| format!("{r}:{c}"))
-//!         .selected_signal(sel),
+//!         .sort_signal(sort)
+//!         .global_filter_signal(filter)
+//!         .pagination_signal(page)
+//!         .selected_signal(sel)
+//!         .cell(|r, c| format!("{r}:{c}")),
 //! )
 //! ```
 
@@ -65,12 +78,15 @@ use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::virtual_list::virtual_list;
 use crate::core::reactivity::{Signal, use_signal};
-use crate::core::tree::{ButtonHoverPaint, Element, Handler};
-use crate::primitives::r#box::{r#box, hstack, vstack};
+use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
+use crate::primitives::r#box::{r#box, gstack, hstack, vstack};
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::primitives::text::text;
+use crate::style::parse_color;
 use crate::style::parse_text_color;
+use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::tokens;
+use crate::utils::motion::ensure_motion_transitions;
 use crate::utils::take_packed;
 use rui_macros::component;
 
@@ -87,6 +103,64 @@ const HEAD_H_COMFORTABLE: f32 = 48.0;
 const ROW_H_DEFAULT: f32 = 40.0;
 const ROW_H_COMPACT: f32 = 32.0;
 const ROW_H_COMFORTABLE: f32 = 48.0;
+fn table_row_transitions() -> [TransitionEntry; 1] {
+    [TransitionEntry {
+        property: TransitionProperty::BackgroundColor,
+        duration_ms: 150.0,
+        delay_ms: 0.0,
+        timing: TimingFunction::Ease,
+    }]
+}
+
+fn table_footer_bg() -> [f32; 4] {
+    parse_color("muted/50")
+}
+
+fn strip_last_row_border(mut rows: Vec<Element>) -> Vec<Element> {
+    if let Some(last) = rows.last_mut() {
+        last.style.set_border_side_width(2, 0.0);
+    }
+    rows
+}
+
+fn apply_table_row_state(mut row: Element, selected: bool) -> Element {
+    if selected {
+        row = row.bg(tokens::muted());
+        row.set_attr("data-state", "selected");
+        row.button_hover_paint = None;
+    } else {
+        row = row.bg([0.0, 0.0, 0.0, 0.0]);
+        row.attrs.remove("data-state");
+    }
+    row
+}
+
+fn wire_table_row_hover(mut row: Element, row_id: &str, selected: bool) -> Element {
+    ensure_motion_transitions(&mut row.style, &table_row_transitions());
+    row.focus_id = Some(row_id.to_string());
+    row.template_id = Some(row_id.to_string());
+    if !selected {
+        let hover_key = format!("{row_id}_hover");
+        let hovered = use_signal(hover_key.as_str(), || false);
+        let _ = hovered.peek();
+        row.button_hover_paint = Some(ButtonHoverPaint {
+            variant: "ghost".into(),
+            disabled: false,
+            hover_easing: "spring".into(),
+            text_color: None,
+        });
+        row = row.on_hover(move |h| {
+            hovered.set_silent(h);
+            mark_hover_paint_dirty();
+        });
+    }
+    row
+}
+
+fn head_cell_height(density: TableDensity) -> f32 {
+    density.header_h()
+}
+
 fn slot_of(el: &Element) -> Option<&str> {
     el.attrs.get(ATTR_TABLE_SLOT).map(|s| s.as_str())
 }
@@ -97,12 +171,168 @@ fn mark_slot(mut el: Element, slot: &str) -> Element {
 }
 
 fn apply_cell_align(mut el: Element, align: TableAlign) -> Element {
-    el = match align {
-        TableAlign::Start => el.justify_start().text_left(),
-        TableAlign::Center => el.justify_center().text_center(),
-        TableAlign::End => el.justify_end().text_right(),
-    };
+    apply_cell_align_in_place(&mut el, align);
     el
+}
+
+/// 只写 `text-align`，**不**把文本叶撑成 `width: 100%`。
+/// nowrap 叶在测宽时会忽略 available width；撑满后 `justify-content` 失效，
+/// 而绘制宽度又回到 intrinsic，看起来永远左对齐。
+fn patch_table_text_align_recursive(el: &mut Element, align: TableAlign) -> bool {
+    use crate::style::{TextAlign, TextAlignDeclaration};
+
+    if el.text.is_some() {
+        let keyword = match align {
+            TableAlign::Start => "start",
+            TableAlign::Center => "center",
+            TableAlign::End => "end",
+        };
+        if let TextAlignDeclaration::Value(want) = TextAlign::parse_declaration(keyword) {
+            if el.text_style.align != Some(want) {
+                el.text_style.align = Some(want);
+                return true;
+            }
+        }
+        return false;
+    }
+    let mut changed = false;
+    for child in &mut el.children {
+        if patch_table_text_align_recursive(child, align) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn apply_cell_align_in_place(el: &mut Element, align: TableAlign) -> bool {
+    use taffy::prelude::JustifyContent;
+
+    let want_justify = match align {
+        TableAlign::Start => JustifyContent::FLEX_START,
+        TableAlign::Center => JustifyContent::CENTER,
+        TableAlign::End => JustifyContent::FLEX_END,
+    };
+    let mut changed = false;
+    if el.style.justify_content != Some(want_justify) {
+        el.style.justify_content = Some(want_justify);
+        changed = true;
+    }
+    if patch_table_text_align_recursive(el, align) {
+        changed = true;
+    }
+    changed
+}
+
+fn parse_table_col_width(raw: &str) -> crate::layout::dimension::CssDim {
+    use crate::layout::dimension::{CssDim, parse_css_dim};
+    let s = raw.trim();
+    if s.is_empty() {
+        return CssDim::Auto;
+    }
+    // ShadCN `w-[100px]` / Tailwind 表头列宽：无单位数字 = px（非 rem）。
+    if s.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        if let Ok(px) = s.parse::<f32>() {
+            return CssDim::Px(px);
+        }
+    }
+    parse_css_dim(s).unwrap_or(CssDim::Auto)
+}
+
+fn apply_table_cell_width(mut cell: Element, w: Option<&str>) -> Element {
+    cell = cell.min_w(0.0).w("100%").justify_self_kw("stretch");
+    if let Some(width) = w.filter(|s| !s.trim().is_empty()) {
+        cell.set_attr("data-table-col-w", width.trim());
+    }
+    cell
+}
+
+fn finish_table_row_grid(mut row: Element, tracks: Vec<crate::layout::GridTrack>) -> Element {
+    row.style.display = taffy::prelude::Display::Grid;
+    row.style.grid_template_columns = tracks;
+    row.style.justify_items = Some(taffy::prelude::AlignItems::STRETCH);
+    row
+}
+
+fn is_table_row_slot(el: &Element) -> bool {
+    el.attrs.get("data-slot").map(|s| s.as_str()) == Some("table-row")
+}
+
+fn find_first_table_row(el: &Element) -> Option<&Element> {
+    if is_table_row_slot(el) {
+        return Some(el);
+    }
+    for child in &el.children {
+        if let Some(row) = find_first_table_row(child) {
+            return Some(row);
+        }
+    }
+    None
+}
+
+fn stamp_shared_column_tracks(el: &mut Element, tracks: &[crate::layout::GridTrack]) {
+    if is_table_row_slot(el) {
+        el.style.display = taffy::prelude::Display::Grid;
+        el.style.grid_template_columns = tracks.to_vec();
+        el.style.justify_items = Some(taffy::prelude::AlignItems::STRETCH);
+    }
+    for child in &mut el.children {
+        stamp_shared_column_tracks(child, tracks);
+    }
+}
+
+/// 用表头（否则第一行）的 `data-table-col-w` 作为整表列轨，避免各行独立 `1fr` 对不齐。
+fn infer_shared_column_tracks(sections: &[Element]) -> Option<Vec<crate::layout::GridTrack>> {
+    let header_row = sections
+        .iter()
+        .find(|el| slot_of(el) == Some(SLOT_HEADER))
+        .and_then(find_first_table_row);
+    let row = header_row.or_else(|| sections.iter().find_map(find_first_table_row))?;
+    if row.children.is_empty() {
+        return None;
+    }
+    Some(table_row_grid_template_from_cells(&row.children))
+}
+
+/// 从行内单元格的 `data-table-col-w` 生成共享列轨（各行同模板 → 列纵向对齐）。
+fn table_row_grid_template_from_cells(cells: &[Element]) -> Vec<crate::layout::GridTrack> {
+    use crate::layout::track_fr_1;
+    use taffy::prelude::{GridTemplateComponent, length};
+
+    if cells.is_empty() {
+        return crate::layout::cols_equal_fr(1);
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            if let Some(raw) = cell.attrs.get("data-table-col-w") {
+                let dim = parse_table_col_width(raw);
+                if let crate::layout::dimension::CssDim::Px(px) = dim {
+                    return GridTemplateComponent::Single(length(px));
+                }
+            }
+            track_fr_1()
+        })
+        .collect()
+}
+
+fn table_row_grid_template_from_columns(columns: &[TableColumn]) -> Vec<crate::layout::GridTrack> {
+    use crate::layout::{GridTrack, track_fr_1};
+    use taffy::prelude::{fr, length, minmax};
+
+    if columns.is_empty() {
+        return crate::layout::cols_equal_fr(1);
+    }
+    columns
+        .iter()
+        .map(|col| {
+            if col.width.is_finite() && col.width > 0.0 {
+                // 指定宽度是下限；`minmax(w, 1fr)` 让列铺满表格，`align=end` 才看得到。
+                minmax::<GridTrack>(length(col.width), fr(1.0))
+            } else {
+                track_fr_1()
+            }
+        })
+        .collect()
 }
 
 fn style_textish(el: &mut Element, size: f32, weight: f32, color: [u8; 4]) {
@@ -110,6 +340,9 @@ fn style_textish(el: &mut Element, size: f32, weight: f32, color: [u8; 4]) {
         el.text_style.size = Some(size);
         el.text_style.weight = Some(weight as u16);
         el.text_style.color = Some(color);
+        el.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+        el.attrs
+            .insert("white_space".to_string(), "nowrap".to_string());
     }
     for c in &mut el.children {
         style_textish(c, size, weight, color);
@@ -138,6 +371,26 @@ impl TableAlign {
             "end" | "right" => Self::End,
             _ => Self::Start,
         }
+    }
+}
+
+impl std::str::FromStr for TableAlign {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
+    }
+}
+
+impl From<&str> for TableAlign {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for TableAlign {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
     }
 }
 
@@ -179,9 +432,17 @@ impl TableDensity {
     }
 }
 
+impl std::str::FromStr for TableDensity {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
+    }
+}
+
 // ── Composite（solid-ui / shadcn）────────────────────────────────────────────
 
-/// 表根：`relative w-full overflow-auto` 外壳 + 内层 `w-full text-sm`。
+/// 表根：`relative w-full overflow-x-auto` 外壳 + 内层 `w-full caption-bottom text-sm`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
@@ -201,7 +462,6 @@ pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
         }
     }
 
-    // HTML caption 可在上/下；solid-ui demo 放顶部。其余按 Header → Body → Footer → 未标记。
     let mut ordered = Vec::new();
     ordered.append(&mut caption);
     ordered.append(&mut header);
@@ -209,68 +469,72 @@ pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
     ordered.append(&mut footer);
     ordered.append(&mut rest);
 
-    let inner: Element = vstack().w("100%").min_w(0.0).children(ordered).into();
+    if let Some(tracks) = infer_shared_column_tracks(&ordered) {
+        for section in &mut ordered {
+            stamp_shared_column_tracks(section, &tracks);
+        }
+    }
+
+    let mut inner: Element = vstack().w("100%").min_w(0.0).children(ordered).into();
+    inner.set_attr("data-slot", "table");
     let mut wrap: Element = r#box()
+        .relative(true)
         .w("100%")
         .min_w(0.0)
         .overflow("auto")
         .child(inner)
         .into();
     wrap.set_attr("rui_table", "1");
-    wrap.set_attr("data-slot", "table");
+    wrap.set_attr("data-slot", "table-container");
     if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
         wrap.set_attr("class", c);
     }
     wrap
 }
 
-/// `thead`：子行带底边（由 [`TableRow`] 绘制）。
+/// `thead`：子行带底边（[`TableRow`] `border-b`）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableHeader(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    mark_slot(
-        vstack().w("100%").min_w(0.0).children(kids).into(),
-        SLOT_HEADER,
-    )
+    let mut el: Element = vstack().w("100%").min_w(0.0).children(kids).into();
+    el.set_attr("data-slot", "table-header");
+    mark_slot(el, SLOT_HEADER)
 }
 
-/// `tbody`。
+/// `tbody`：末行去底边（`[&_tr:last-child]:border-0`）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableBody(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed).unwrap_or_default();
-    mark_slot(
-        vstack().w("100%").min_w(0.0).children(kids).into(),
-        SLOT_BODY,
-    )
+    let kids = strip_last_row_border(children.map(take_packed).unwrap_or_default());
+    let mut el: Element = vstack().w("100%").min_w(0.0).children(kids).into();
+    el.set_attr("data-slot", "table-body");
+    mark_slot(el, SLOT_BODY)
 }
 
-/// `tfoot`：solid-ui `bg-primary font-medium text-primary-foreground`。
+/// `tfoot`：`bg-muted/50 border-t font-medium`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableFooter(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let fg = tokens::primary_foreground_text();
+    let fg = parse_text_color("foreground");
     let mut styled = kids;
     for k in &mut styled {
         style_textish(k, TEXT_SM, 500.0, fg);
     }
-    mark_slot(
-        hstack()
-            .w("100%")
-            .min_w(0.0)
-            .items_center()
-            .bg(tokens::primary())
-            .children(styled)
-            .into(),
-        SLOT_FOOTER,
-    )
+    let mut el: Element = vstack()
+        .w("100%")
+        .min_w(0.0)
+        .border_style("solid")
+        .border_top(tokens::border(), 1.0)
+        .bg(table_footer_bg())
+        .children(styled)
+        .into();
+    el.set_attr("data-slot", "table-footer");
+    mark_slot(el, SLOT_FOOTER)
 }
 
-/// `tr`：`border-b`；选中 `bg-muted`；可选 hover（ghost 近似 `muted/50`）。
-///
-/// `id` 可选；空则自动分配，供 hover 信号键使用。
+/// `tr`：`border-b transition-colors`；`hover:bg-muted/50`；`data-state=selected` → `bg-muted`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableRow(
@@ -280,21 +544,19 @@ pub fn TableRow(
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut row: Element = hstack()
+    let col_tracks = table_row_grid_template_from_cells(&kids);
+    let mut row: Element = gstack()
         .w("100%")
         .min_w(0.0)
+        .grid_template_columns(col_tracks.clone())
         .items_center()
         .border_style("solid")
         .border_bottom(tokens::border(), 1.0)
         .children(kids)
         .into();
+    row = finish_table_row_grid(row, col_tracks);
 
-    if selected {
-        row = row.bg(tokens::muted());
-        row.set_attr("data-state", "selected");
-    } else {
-        row = row.bg([0.0, 0.0, 0.0, 0.0]);
-    }
+    row = apply_table_row_state(row, selected);
 
     let row_id = if id.trim().is_empty() {
         format!("rui-tr-{}", row_uid())
@@ -302,25 +564,7 @@ pub fn TableRow(
         id
     };
 
-    // hover：复用 Button ghost 管线（accent ≈ muted 主题下接近 muted/50）。
-    let hover_key = format!("{row_id}_hover");
-    let hovered = use_signal(hover_key.as_str(), || false);
-    let _ = hovered.peek();
-    row.focus_id = Some(row_id.clone());
-    row.template_id = Some(row_id);
-    if !selected {
-        row.button_hover_paint = Some(ButtonHoverPaint {
-            variant: "ghost".into(),
-            disabled: false,
-            hover_easing: "spring".into(),
-            text_color: None,
-        });
-        row = row.on_hover(move |h| {
-            hovered.set_silent(h);
-            mark_hover_paint_dirty();
-        });
-    }
-
+    row = wire_table_row_hover(row, &row_id, selected);
     row = row.on_click(move || on_click.call(()));
     row.set_attr("data-slot", "table-row");
     row
@@ -332,7 +576,7 @@ fn row_uid() -> u64 {
     N.fetch_add(1, Ordering::Relaxed)
 }
 
-/// `th`：`h-10 px-2`、`font-medium text-muted-foreground`。
+/// `th`：`h-10 px-2 text-left align-middle font-medium text-foreground whitespace-nowrap`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
@@ -340,37 +584,34 @@ pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Elem
         .as_deref()
         .map(parse_align)
         .unwrap_or(TableAlign::Start);
-    let muted = parse_text_color("muted-foreground");
+    let fg = parse_text_color("foreground");
+    let head_h = head_cell_height(TableDensity::Default);
     let mut kids = children.map(take_packed).unwrap_or_default();
     if kids.is_empty() {
         kids.push(Element::from(
-            text("").size(TEXT_SM).weight(500.0).color(muted),
+            text("").size(TEXT_SM).weight(500.0).color(fg),
         ));
     } else {
         for k in &mut kids {
-            style_textish(k, TEXT_SM, 500.0, muted);
+            style_textish(k, TEXT_SM, 500.0, fg);
         }
     }
 
     let mut cell: Element = hstack()
-        .h(HEAD_H_DEFAULT)
-        .min_h(HEAD_H_DEFAULT)
+        .h(head_h)
+        .min_h(head_h)
         .px(tokens::SPACE_2)
         .items_center()
         .min_w(0.0)
         .children(kids)
         .into();
-    if let Some(width) = w.filter(|s| !s.trim().is_empty()) {
-        cell = cell.w(width.as_str());
-    } else {
-        cell = cell.flex_grow(1.0);
-    }
+    cell = apply_table_cell_width(cell, w.as_deref());
     cell = apply_cell_align(cell, align);
     cell.set_attr("data-slot", "table-head");
     cell
 }
 
-/// `td`：`p-2 align-middle`。
+/// `td`：`p-2 align-middle whitespace-nowrap`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
@@ -396,11 +637,7 @@ pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Elem
         .min_w(0.0)
         .children(kids)
         .into();
-    if let Some(width) = w.filter(|s| !s.trim().is_empty()) {
-        cell = cell.w(width.as_str());
-    } else {
-        cell = cell.flex_grow(1.0);
-    }
+    cell = apply_table_cell_width(cell, w.as_deref());
     cell = apply_cell_align(cell, align);
     cell.set_attr("data-slot", "table-cell");
     cell
@@ -420,10 +657,13 @@ pub fn TableCaption(children: Option<Element>) -> Element {
             text("").size(TEXT_SM).weight(400.0).color(muted),
         ));
     }
-    mark_slot(
-        r#box().w("100%").mt(tokens::SPACE_4).children(kids).into(),
-        SLOT_CAPTION,
-    )
+    let mut cap: Element = r#box()
+        .w("100%")
+        .mt(tokens::SPACE_4)
+        .children(kids)
+        .into();
+    cap.set_attr("data-slot", "table-caption");
+    mark_slot(cap, SLOT_CAPTION)
 }
 
 // ── Column / state（TanStack 对齐）───────────────────────────────────────────
@@ -498,7 +738,7 @@ impl TablePaginationState {
     }
 }
 
-// ── Data table builder + presets ─────────────────────────────────────────────
+// ── Data table builder + presets (ADR-9 surface B) ───────────────────────────
 
 pub struct TableBuilder {
     id: String,
@@ -516,7 +756,7 @@ pub struct TableBuilder {
     cell: Rc<dyn Fn(usize, usize) -> String>,
 }
 
-/// 默认密度数据表预设（shadcn 外观 + TanStack columns/data）。
+/// 默认密度数据表预设（ShadCN 外观 + TanStack columns/data）。
 pub fn table(id: impl Into<String>) -> TableBuilder {
     TableBuilder {
         id: id.into(),
@@ -535,7 +775,7 @@ pub fn table(id: impl Into<String>) -> TableBuilder {
     }
 }
 
-/// [`table`] 的别名（强调「数据表」角色，对齐 solid-ui `data-table-demo`）。
+/// [`table`] 的别名（强调数据表角色，对齐 ShadCN data-table demo）。
 pub fn data_table(id: impl Into<String>) -> TableBuilder {
     table(id)
 }
@@ -737,16 +977,22 @@ impl From<TableBuilder> for Element {
             };
 
             let muted_fg = parse_text_color("muted-foreground");
+            let head_fg = parse_text_color("foreground");
             let fg = parse_text_color("foreground");
 
+            let col_tracks = table_row_grid_template_from_columns(&columns);
+
             // Header row — TableHead 视觉
-            let mut header_row: Element = hstack()
+            let mut header_row: Element = gstack()
                 .w("100%")
                 .min_w(0.0)
+                .grid_template_columns(col_tracks.clone())
                 .items_center()
                 .border_style("solid")
                 .border_bottom(tokens::border(), 1.0)
                 .into();
+            header_row = finish_table_row_grid(header_row, col_tracks.clone());
+            header_row.set_attr("data-slot", "table-row");
 
             for col in &columns {
                 let can_sort = sortable && col.sortable;
@@ -757,7 +1003,8 @@ impl From<TableBuilder> for Element {
                 };
                 let label = format!("{}{marker}", col.header);
                 let mut head: Element = hstack()
-                    .w(col.width)
+                    .w("100%")
+                    .min_w(0.0)
                     .h(header_h)
                     .min_h(header_h)
                     .px(tokens::SPACE_2)
@@ -766,19 +1013,21 @@ impl From<TableBuilder> for Element {
                         text(label.as_str())
                             .size(TEXT_SM)
                             .weight(500.0)
-                            .color(muted_fg),
+                            .color(head_fg),
                     )
                     .into();
+                head = head.whitespace_nowrap();
+                head.set_attr("data-slot", "table-head");
+                head = head.justify_self_kw("stretch");
                 head = apply_cell_align(head, col.align);
                 if can_sort {
                     let col_id = col.id.clone();
                     let sort_sig = sort;
                     let bid = format!("{id}:th:{}", col.id);
-                    // ghost Button：可点排序，外观贴近 shadcn data-table header。
                     head = button(bid)
                         .variant("ghost")
                         .size("sm")
-                        .w(col.width)
+                        .w_full()
                         .h(header_h)
                         .on_click(move || {
                             let next = cycle_sort(&sort_sig.peek(), &col_id);
@@ -788,9 +1037,10 @@ impl From<TableBuilder> for Element {
                             text(label.as_str())
                                 .size(TEXT_SM)
                                 .weight(500.0)
-                                .color(muted_fg),
+                                .color(head_fg),
                         )
                         .into();
+                    head = head.min_w(0.0).justify_self_kw("stretch");
                     head = apply_cell_align(head, col.align);
                 }
                 header_row = header_row.child(head);
@@ -800,79 +1050,71 @@ impl From<TableBuilder> for Element {
             let sel = selected;
             let cell_fn = cell.clone();
             let table_id = id.clone();
+            let row_count_vis = order.len();
             let list: Element = virtual_list(format!("{id}__rows"))
-                .item_count(order.len())
+                .item_count(row_count_vis)
                 .item_height(row_h)
                 .height(height)
                 .render_item(move |vis_i| {
                     let row = order.get(vis_i).copied().unwrap_or(vis_i);
                     let is_sel = sel.peek() == Some(row);
-                    let mut row_el: Element = hstack()
+                    let is_last = vis_i + 1 == row_count_vis;
+                    let mut row_el: Element = gstack()
                         .w("100%")
                         .min_w(0.0)
+                        .grid_template_columns(col_tracks.clone())
                         .h(row_h)
                         .items_center()
                         .border_style("solid")
                         .border_bottom(tokens::border(), 1.0)
                         .into();
-                    if is_sel {
-                        row_el = row_el.bg(tokens::muted());
-                        row_el.set_attr("data-state", "selected");
-                    } else {
-                        row_el = row_el.bg([0.0, 0.0, 0.0, 0.0]);
+                    row_el = finish_table_row_grid(row_el, col_tracks.clone());
+                    if is_last {
+                        row_el.style.set_border_side_width(2, 0.0);
                     }
+                    row_el = apply_table_row_state(row_el, is_sel);
 
                     for (ci, col) in cols.iter().enumerate() {
                         let label = cell_fn(row, ci);
                         let mut cell_el: Element = hstack()
-                            .w(col.width)
+                            .w("100%")
+                            .min_w(0.0)
                             .h(row_h)
                             .px(tokens::SPACE_2)
                             .items_center()
                             .child(text(label).size(TEXT_SM).weight(400.0).color(fg))
                             .into();
+                        cell_el = cell_el.justify_self_kw("stretch");
+                        cell_el = cell_el.whitespace_nowrap();
+                        cell_el.set_attr("data-slot", "table-cell");
                         cell_el = apply_cell_align(cell_el, col.align);
                         row_el = row_el.child(cell_el);
                     }
 
                     let row_focus = format!("{table_id}:tr:{row}");
-                    let hover_key = format!("{row_focus}_hover");
-                    let hovered = use_signal(hover_key.as_str(), || false);
-                    let _ = hovered.peek();
-                    row_el.focus_id = Some(row_focus.clone());
-                    row_el.template_id = Some(row_focus);
-                    if !is_sel {
-                        row_el.button_hover_paint = Some(ButtonHoverPaint {
-                            variant: "ghost".into(),
-                            disabled: false,
-                            hover_easing: "spring".into(),
-                            text_color: None,
-                        });
-                        row_el = row_el.on_hover(move |h| {
-                            hovered.set_silent(h);
-                            mark_hover_paint_dirty();
-                        });
-                    }
+                    row_el = wire_table_row_hover(row_el, &row_focus, is_sel);
+                    row_el.set_attr("data-slot", "table-row");
 
                     let s = sel;
                     row_el.on_click(move || s.set(Some(row)))
                 })
                 .into();
 
-            let header_wrap: Element =
+            let mut header_wrap: Element =
                 mark_slot(vstack().w("100%").child(header_row).into(), SLOT_HEADER);
-            let body_wrap: Element = mark_slot(list, SLOT_BODY);
+            header_wrap.set_attr("data-slot", "table-header");
+            let mut body_wrap: Element = mark_slot(list, SLOT_BODY);
+            body_wrap.set_attr("data-slot", "table-body");
 
             let mut stack_kids: Vec<Element> = Vec::new();
             if let Some(cap) = caption.clone() {
-                stack_kids.push(mark_slot(
-                    r#box()
-                        .w("100%")
-                        .mt(tokens::SPACE_4)
-                        .child(text(cap).size(TEXT_SM).weight(400.0).color(muted_fg))
-                        .into(),
-                    SLOT_CAPTION,
-                ));
+                let mut cap_el: Element = r#box()
+                    .w("100%")
+                    .mt(tokens::SPACE_4)
+                    .child(text(cap).size(TEXT_SM).weight(400.0).color(muted_fg))
+                    .into();
+                cap_el.set_attr("data-slot", "table-caption");
+                stack_kids.push(mark_slot(cap_el, SLOT_CAPTION));
             }
             stack_kids.push(header_wrap);
             stack_kids.push(body_wrap);
@@ -916,12 +1158,14 @@ impl From<TableBuilder> for Element {
                     .justify("between")
                     .px(tokens::SPACE_2)
                     .py(tokens::SPACE_2)
-                    .bg(tokens::primary())
+                    .border_style("solid")
+                    .border_top(tokens::border(), 1.0)
+                    .bg(table_footer_bg())
                     .child(
                         text(info)
                             .size(TEXT_SM)
                             .weight(500.0)
-                            .color(tokens::primary_foreground_text()),
+                            .color(fg),
                     )
                     .child(
                         hstack()
@@ -931,21 +1175,68 @@ impl From<TableBuilder> for Element {
                             .child(next),
                     )
                     .into();
-                stack_kids.push(mark_slot(footer_row, SLOT_FOOTER));
+                let mut footer_wrap = mark_slot(footer_row, SLOT_FOOTER);
+                footer_wrap.set_attr("data-slot", "table-footer");
+                stack_kids.push(footer_wrap);
             }
 
-            let inner: Element = vstack().w("100%").min_w(0.0).children(stack_kids).into();
+            let mut inner: Element = vstack().w("100%").min_w(0.0).children(stack_kids).into();
+            inner.set_attr("data-slot", "table");
             let mut root: Element = r#box()
+                .relative(true)
                 .w("100%")
                 .min_w(0.0)
                 .overflow("auto")
                 .child(inner)
                 .into();
             root.set_attr("rui_table", "1");
-            root.set_attr("data-slot", "table");
+            root.set_attr("data-slot", "table-container");
             root.template_id = Some(id.clone());
             root
         })
+    }
+}
+
+/// RSX：`selected={sig.get()}` 原位刷新行底色（不整树重建）。
+pub fn apply_bound_table_row_selected(el: &mut Element, selected: bool) -> LayoutStatus {
+    let want_bg = if selected {
+        tokens::muted()
+    } else {
+        [0.0, 0.0, 0.0, 0.0]
+    };
+    let mut changed = false;
+    if el.style.bg_color != want_bg {
+        el.style.bg_color = want_bg;
+        changed = true;
+    }
+    if selected {
+        if el.attrs.get("data-state").map(|s| s.as_str()) != Some("selected") {
+            el.set_attr("data-state", "selected");
+            changed = true;
+        }
+        if el.button_hover_paint.is_some() {
+            el.button_hover_paint = None;
+            changed = true;
+        }
+    } else {
+        if el.attrs.contains_key("data-state") {
+            el.attrs.remove("data-state");
+            changed = true;
+        }
+    }
+    if changed {
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
+/// RSX：`align={…}` / `align="end"` 原位刷新单元格对齐。
+pub fn apply_bound_table_align(el: &mut Element, raw: impl AsRef<str>) -> LayoutStatus {
+    if apply_cell_align_in_place(el, TableAlign::parse(raw.as_ref())) {
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
     }
 }
 
@@ -1006,6 +1297,351 @@ mod tests {
         let page = TablePaginationState::new(1, 2);
         let paged = paginate_order(vec![0, 1, 2, 3, 4], page);
         assert_eq!(paged, vec![2, 3]);
+    }
+
+    #[test]
+    fn parse_table_col_width_bare_number_is_px() {
+        use crate::layout::dimension::{CssDim, dim_length_px};
+        let dim = parse_table_col_width("100");
+        assert!(matches!(dim, CssDim::Px(v) if (v - 100.0).abs() < 1e-4));
+        let px = parse_table_col_width("6.25rem");
+        assert!(dim_length_px(px.as_immediate_dimension().unwrap()).unwrap() > 90.0);
+    }
+
+    #[test]
+    fn table_row_unpacks_four_heads_from_fragment() {
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        frag = frag.children(vec![
+            TableHead(TableHeadProps {
+                w: Some("100".into()),
+                align: None,
+                children: Some(Element::from(text("Invoice"))),
+                ..Default::default()
+            }),
+            TableHead(TableHeadProps {
+                w: None,
+                align: None,
+                children: Some(Element::from(text("Status"))),
+                ..Default::default()
+            }),
+            TableHead(TableHeadProps {
+                w: None,
+                align: None,
+                children: Some(Element::from(text("Method"))),
+                ..Default::default()
+            }),
+            TableHead(TableHeadProps {
+                w: None,
+                align: Some("end".into()),
+                children: Some(Element::from(text("Amount"))),
+                ..Default::default()
+            }),
+        ]);
+        let row = TableRow(TableRowProps {
+            id: "hdr".into(),
+            selected: Some(false),
+            on_click: Some(Handler::default()),
+            children: Some(frag),
+            ..Default::default()
+        });
+        assert_eq!(row.children.len(), 4, "each TableHead must be a row column");
+        assert_eq!(
+            row.children[0].attrs.get("data-slot").map(|s| s.as_str()),
+            Some("table-head")
+        );
+    }
+
+    #[test]
+    fn table_row_grid_template_uses_col_w_attr() {
+        use taffy::prelude::Display;
+
+        let fixed = apply_table_cell_width(r#box().into(), Some("100px"));
+        let flex = apply_table_cell_width(r#box().into(), None);
+        let tracks = table_row_grid_template_from_cells(&[fixed, flex]);
+        assert_eq!(tracks.len(), 2);
+
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        frag = frag.children(vec![
+            apply_table_cell_width(r#box().into(), Some("100px")),
+            apply_table_cell_width(r#box().into(), None),
+        ]);
+        let row = TableRow(TableRowProps {
+            id: "grid-r".into(),
+            selected: Some(false),
+            on_click: Some(Handler::default()),
+            children: Some(frag),
+            ..Default::default()
+        });
+        assert_eq!(row.style.display, Display::Grid);
+        assert_eq!(row.style.grid_template_columns.len(), 2);
+    }
+
+    #[test]
+    fn apply_cell_align_end_fills_text_leaf() {
+        use crate::style::TextAlign;
+        use taffy::prelude::JustifyContent;
+
+        let cell = apply_cell_align(
+            hstack().child(text("$250.00").size(14.0)).into(),
+            TableAlign::End,
+        );
+        assert_eq!(cell.style.justify_content, Some(JustifyContent::FLEX_END));
+        assert_eq!(cell.children.len(), 1);
+        let leaf = &cell.children[0];
+        assert_eq!(leaf.text_style.align, Some(TextAlign::End));
+    }
+
+    #[test]
+    fn table_head_amount_align_end() {
+        use crate::style::TextAlign;
+        use taffy::prelude::JustifyContent;
+
+        let head = TableHead(TableHeadProps {
+            w: None,
+            align: Some("end".into()),
+            children: Some(Element::from(text("Amount"))),
+            ..Default::default()
+        });
+        assert_eq!(head.style.justify_content, Some(JustifyContent::FLEX_END));
+        assert_eq!(head.children.len(), 1);
+        let leaf = &head.children[0];
+        assert_eq!(leaf.text_style.align, Some(TextAlign::End));
+    }
+
+    #[test]
+    fn composite_rows_share_header_column_tracks() {
+        use taffy::prelude::Display;
+
+        let header = TableHeader(TableHeaderProps {
+            children: Some(TableRow(TableRowProps {
+                id: "h".into(),
+                selected: Some(false),
+                on_click: Some(Handler::default()),
+                children: Some({
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag = frag.children(vec![
+                        TableHead(TableHeadProps {
+                            w: Some("100px".into()),
+                            align: None,
+                            children: Some(Element::from(text("A"))),
+                            ..Default::default()
+                        }),
+                        TableHead(TableHeadProps {
+                            w: None,
+                            align: None,
+                            children: Some(Element::from(text("B"))),
+                            ..Default::default()
+                        }),
+                        TableHead(TableHeadProps {
+                            w: Some("96px".into()),
+                            align: Some("end".into()),
+                            children: Some(Element::from(text("C"))),
+                            ..Default::default()
+                        }),
+                    ]);
+                    frag
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let body = TableBody(TableBodyProps {
+            children: Some(TableRow(TableRowProps {
+                id: "b".into(),
+                selected: Some(false),
+                on_click: Some(Handler::default()),
+                children: Some({
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag = frag.children(vec![
+                        TableCell(TableCellProps {
+                            w: None,
+                            align: None,
+                            children: Some(Element::from(text("aaaaaa"))),
+                            ..Default::default()
+                        }),
+                        TableCell(TableCellProps {
+                            w: None,
+                            align: None,
+                            children: Some(Element::from(text("b"))),
+                            ..Default::default()
+                        }),
+                        TableCell(TableCellProps {
+                            w: None,
+                            align: Some("end".into()),
+                            children: Some(Element::from(text("1"))),
+                            ..Default::default()
+                        }),
+                    ]);
+                    frag
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let mut kids = Element::new();
+        kids.set_attr("rui_fragment", "1");
+        kids = kids.children(vec![header, body]);
+        let el = Table(TableProps {
+            class: None,
+            children: Some(kids),
+            ..Default::default()
+        });
+        let inner = &el.children[0];
+        let header_row = find_first_table_row(
+            inner
+                .children
+                .iter()
+                .find(|c| slot_of(c) == Some(SLOT_HEADER))
+                .expect("header"),
+        )
+        .expect("header row");
+        let body_row = find_first_table_row(
+            inner
+                .children
+                .iter()
+                .find(|c| slot_of(c) == Some(SLOT_BODY))
+                .expect("body"),
+        )
+        .expect("body row");
+        assert_eq!(header_row.style.display, Display::Grid);
+        assert_eq!(body_row.style.display, Display::Grid);
+        assert_eq!(
+            header_row.style.grid_template_columns.len(),
+            body_row.style.grid_template_columns.len()
+        );
+        assert_eq!(
+            header_row.style.grid_template_columns, body_row.style.grid_template_columns,
+            "body rows must reuse the header column tracks"
+        );
+    }
+
+    #[test]
+    fn composite_table_column_x_aligns_across_rows() {
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::LayoutTree;
+
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let header = TableHeader(TableHeaderProps {
+                    children: Some(TableRow(TableRowProps {
+                        id: "lh".into(),
+                        selected: Some(false),
+                        on_click: Some(Handler::default()),
+                        children: Some({
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag = frag.children(vec![
+                                TableHead(TableHeadProps {
+                                    w: Some("100px".into()),
+                                    align: None,
+                                    children: Some(Element::from(text("Inv"))),
+                                    ..Default::default()
+                                }),
+                                TableHead(TableHeadProps {
+                                    w: None,
+                                    align: Some("end".into()),
+                                    children: Some(Element::from(text("Amt"))),
+                                    ..Default::default()
+                                }),
+                            ]);
+                            frag
+                        }),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                });
+                let body = TableBody(TableBodyProps {
+                    children: Some(TableRow(TableRowProps {
+                        id: "lb".into(),
+                        selected: Some(false),
+                        on_click: Some(Handler::default()),
+                        children: Some({
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag = frag.children(vec![
+                                TableCell(TableCellProps {
+                                    w: None,
+                                    align: None,
+                                    children: Some(Element::from(text("INV001"))),
+                                    ..Default::default()
+                                }),
+                                TableCell(TableCellProps {
+                                    w: None,
+                                    align: Some("end".into()),
+                                    children: Some(Element::from(text("$1"))),
+                                    ..Default::default()
+                                }),
+                            ]);
+                            frag
+                        }),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                });
+                let mut kids = Element::new();
+                kids.set_attr("rui_fragment", "1");
+                kids = kids.children(vec![header, body]);
+                let table = Table(TableProps {
+                    class: None,
+                    children: Some(kids),
+                    ..Default::default()
+                });
+                let mut root = Element::new().w(400.0).h(200.0).child(table);
+                let mut tree = LayoutTree::new();
+                tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+
+                let inner = &root.children[0].children[0];
+                let header_row = find_first_table_row(
+                    inner
+                        .children
+                        .iter()
+                        .find(|c| slot_of(c) == Some(SLOT_HEADER))
+                        .unwrap(),
+                )
+                .unwrap();
+                let body_row = find_first_table_row(
+                    inner
+                        .children
+                        .iter()
+                        .find(|c| slot_of(c) == Some(SLOT_BODY))
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(header_row.children.len(), 2);
+                assert_eq!(body_row.children.len(), 2);
+                for i in 0..2 {
+                    let hx = header_row.children[i].layout_bounds[0];
+                    let bx = body_row.children[i].layout_bounds[0];
+                    let hw = header_row.children[i].layout_bounds[2];
+                    let bw = body_row.children[i].layout_bounds[2];
+                    assert!(
+                        (hx - bx).abs() < 1.0,
+                        "col {i} x: header={hx} body={bx}"
+                    );
+                    assert!(
+                        (hw - bw).abs() < 1.0,
+                        "col {i} w: header={hw} body={bw}"
+                    );
+                }
+                let amt = &body_row.children[1];
+                assert!(
+                    amt.layout_bounds[2] > 200.0,
+                    "end column should grow, got {}",
+                    amt.layout_bounds[2]
+                );
+                let leaf = &amt.children[0];
+                let leaf_right = leaf.layout_bounds[0] + leaf.layout_bounds[2];
+                let cell_right = amt.layout_bounds[0] + amt.layout_bounds[2];
+                assert!(
+                    (cell_right - leaf_right).abs() < 12.0,
+                    "end-aligned text should sit on the cell's trailing edge; leaf_right={leaf_right} cell_right={cell_right}"
+                );
+            });
+        });
     }
 
     #[test]
