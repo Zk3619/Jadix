@@ -235,6 +235,544 @@ fn KbdShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn SkeletonShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1c-s) Skeleton（ShadCN loading placeholder）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: <Skeleton> and skeleton(); default bg-accent + rounded-md + animate-pulse; size/shape via w/h/rounded/class."
+                </Label>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Text lines"</Label>
+                    <VStack w="100%" min_w="0" gap="0.5rem">
+                        <Skeleton class="h-4 w-[250px]" />
+                        <Skeleton class="h-4 w-[200px]" />
+                        { Element::from(skeleton().w("180px").h("1rem")) }
+                    </VStack>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Avatar row"</Label>
+                    <HStack w="100%" min_w="0" gap="1rem" items="center">
+                        <Skeleton class="h-12 w-12 rounded-full" />
+                        <VStack gap="0.5rem" min_w="0">
+                            <Skeleton class="h-4 w-[150px]" />
+                            <Skeleton class="h-4 w-[100px]" />
+                        </VStack>
+                    </HStack>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Card"</Label>
+                    <VStack
+                        w="18rem"
+                        gap="1rem"
+                        p="1rem"
+                        border_color="border"
+                        border_width="1"
+                        rounded="0.75rem"
+                    >
+                        <Skeleton class="h-40 w-full rounded-lg" />
+                        <Skeleton class="h-4 w-3/4" />
+                        <Skeleton class="h-4 w-1/2" />
+                        { Element::from(skeleton().w("100%").h("2.5rem").rounded("0.375rem")) }
+                    </VStack>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn EmptyShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1c-e) Empty（ShadCN empty state）">
+            <VStack w="100%" min_w="0" gap="1rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: <Empty> compound tags and empty() / empty_header() builders; EmptyMedia variant=icon for muted icon chrome."
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" wrap="wrap" items="stretch">
+                    <Box
+                        flex_grow="1"
+                        min_w="16rem"
+                        min_h="14rem"
+                        border_color="border"
+                        border_width="1"
+                        rounded="0.75rem"
+                        p="1rem"
+                    >
+                        <Empty>
+                            <EmptyHeader>
+                                <EmptyMedia variant="icon">
+                                    <Icon name="inbox" color="foreground" />
+                                </EmptyMedia>
+                                <EmptyTitle>"No Projects Yet"</EmptyTitle>
+                                <EmptyDescription>
+                                    "You have not created a project yet. Get started by creating your first project."
+                                </EmptyDescription>
+                            </EmptyHeader>
+                            <EmptyContent>
+                                <Button>"Create Project"</Button>
+                            </EmptyContent>
+                        </Empty>
+                    </Box>
+                    <Box
+                        flex_grow="1"
+                        min_w="16rem"
+                        min_h="14rem"
+                        border_color="border"
+                        border_width="1"
+                        rounded="0.75rem"
+                        p="1rem"
+                    >
+                        { Element::from(
+                            empty()
+                                .header(
+                                    empty_header()
+                                        .media_icon(
+                                            build_icon_text_node(
+                                                lucide_glyph("folder-open").unwrap_or_else(|| "…".into())
+                                            )
+                                            .text_size(24.0)
+                                            .text_color(parse_text_color("foreground"))
+                                        )
+                                        .title("No files")
+                                        .description("Upload a file to get started.")
+                                )
+                                .content_child(button("").text("Upload"))
+                        ) }
+                    </Box>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn AlertShowcase() -> rui::core::tree::Element {
+    let alert_variant = use_signal("gal_alert_variant", || "default".to_string());
+    let alert_var_btn = alert_variant;
+    let alert_var_live = alert_variant;
+    ui! {
+        <MyCard title="1c-a) Alert（ShadCN + semantic variants）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: <Alert> / AlertTitle / AlertDescription / AlertAction and alert() builder. ShadCN default/destructive; GPUI-style info/success/warning. Dynamic variant bind below."
+                </Label>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Alert variant="default">
+                        <Icon name="info" size="1rem" color="foreground" />
+                        <AlertTitle>"Heads up!"</AlertTitle>
+                        <AlertDescription>
+                            "You can add components and dependencies using the CLI."
+                        </AlertDescription>
+                    </Alert>
+                    <Alert variant="destructive">
+                        <Icon name="triangle-alert" size="1rem" />
+                        <AlertTitle>"Error"</AlertTitle>
+                        <AlertDescription>"Your session has expired. Please sign in again."</AlertDescription>
+                        <AlertAction>
+                            <Button variant="outline" size="sm">"Sign in"</Button>
+                        </AlertAction>
+                    </Alert>
+                    <Alert variant="info">
+                        <Icon name="info" size="1rem" />
+                        <AlertTitle>"Information"</AlertTitle>
+                        <AlertDescription>"New features are available in this release."</AlertDescription>
+                    </Alert>
+                    <Alert variant="success">
+                        <Icon name="circle-check" size="1rem" />
+                        <AlertTitle>"Success"</AlertTitle>
+                        <AlertDescription>"Your changes have been saved."</AlertDescription>
+                    </Alert>
+                    <Alert variant="warning">
+                        <Icon name="triangle-alert" size="1rem" />
+                        <AlertTitle>"Warning"</AlertTitle>
+                        <AlertDescription>"This action requires additional confirmation."</AlertDescription>
+                    </Alert>
+                    { Element::from(
+                        alert()
+                            .variant("info")
+                            .icon(
+                                build_icon_text_node(lucide_glyph("bell").unwrap_or_else(|| "…".into()))
+                                    .text_size(16.0)
+                            )
+                            .title("Builder alert")
+                            .description("alert().variant().icon().title().description()")
+                    ) }
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Reactive variant bind"</Label>
+                    <HStack w="100%" gap="0.5rem" wrap="wrap">
+                        <Button size="sm" variant="outline" on_click={move || alert_var_btn.set("default".into())}>"default"</Button>
+                        <Button size="sm" variant="outline" on_click={move || alert_var_btn.set("destructive".into())}>"destructive"</Button>
+                        <Button size="sm" variant="outline" on_click={move || alert_var_btn.set("success".into())}>"success"</Button>
+                        <Button size="sm" variant="outline" on_click={move || alert_var_btn.set("warning".into())}>"warning"</Button>
+                    </HStack>
+                    <Alert variant={ alert_var_live.get() }>
+                        <Icon name="info" size="1rem" />
+                        <AlertTitle>{ format!("Live variant: {}", alert_var_live.get()) }</AlertTitle>
+                        <AlertDescription>"variant={signal.get()} uses apply_bound_alert_variant."</AlertDescription>
+                    </Alert>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn AlertDialogShowcase() -> rui::core::tree::Element {
+    let delete_open = use_signal("gal_alert_dialog_delete", || false);
+    let delete_open_action = delete_open;
+    let sm_open = use_signal("gal_alert_dialog_sm", || false);
+    let info_open = use_signal("gal_alert_dialog_info", || false);
+    let warning_open = use_signal("gal_alert_dialog_warning", || false);
+    let success_open = use_signal("gal_alert_dialog_success", || false);
+    let builder_open = use_signal("gal_alert_dialog_builder", || false);
+    let ad_variant = use_signal("gal_alert_dialog_variant", || "info".to_string());
+    let ad_var_btn = ad_variant;
+    let ad_var_live = ad_variant;
+    let live_open = use_signal("gal_alert_dialog_live", || false);
+    let live_open_btn = live_open;
+    ui! {
+        <MyCard title="1c-ad) AlertDialog（ShadCN confirm + semantic variants）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Click each Trigger to open. Semantic variants: info / warning / success (same palette as Alert). Bottom row: reactive variant bind."
+                </Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                    <AlertDialog id="gal-delete-account" open={delete_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="destructive" size="sm">"destructive"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent variant="destructive">
+                            <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                    <Icon name="triangle-alert" size="2rem" />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>"Are you absolutely sure?"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "This action cannot be undone."
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogBody>
+                                <Label text_size="0.875rem" leading="normal">
+                                    "This will permanently delete your account and remove your data from our servers."
+                                </Label>
+                            </AlertDialogBody>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel />
+                                <AlertDialogAction>
+                                    <Button
+                                        variant="destructive"
+                                        on_click={move || delete_open_action.set(false)}
+                                    >
+                                        "Continue"
+                                    </Button>
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog id="gal-alert-dialog-sm" open={sm_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="outline" size="sm">"sm · success"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent size="sm" variant="success">
+                            <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                    <Icon name="circle-check" size="2rem" />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>"Allow notifications?"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "You can change this later in Settings."
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>"Not now"</AlertDialogCancel>
+                                <AlertDialogAction>
+                                    <Button on_click={move || sm_open.set(false)}>"Allow"</Button>
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog id="gal-alert-dialog-info" open={info_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="outline" size="sm">"info"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent variant="info">
+                            <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                    <Icon name="info" size="2rem" />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>"Information"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "New features are available in this release."
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel />
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog id="gal-alert-dialog-warning" open={warning_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="outline" size="sm">"warning"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent variant="warning">
+                            <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                    <Icon name="circle-alert" size="2rem" />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>"Warning"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "This action requires additional confirmation."
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel />
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog id="gal-alert-dialog-success" open={success_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="outline" size="sm">"success"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent variant="success">
+                            <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                    <Icon name="circle-check" size="2rem" />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>"Success"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "Your changes have been saved."
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel />
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                    <AlertDialog id="gal-alert-dialog-builder" open={builder_open}>
+                        <AlertDialogTrigger>
+                            <Button variant="outline" size="sm">"Builder scope"</Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent variant="info">
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>"Builder alert_dialog()"</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    "alert_dialog(id).open(sig).child with Trigger + Content"
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel />
+                                <AlertDialogAction>
+                                    <Button on_click={move || builder_open.set(false)}>"OK"</Button>
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                </HStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Reactive variant bind"</Label>
+                    <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            on_click={move || {
+                                ad_var_btn.set("info".into());
+                                live_open_btn.set(true);
+                            }}
+                        >
+                            "info"
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            on_click={move || {
+                                ad_var_btn.set("warning".into());
+                                live_open_btn.set(true);
+                            }}
+                        >
+                            "warning"
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            on_click={move || {
+                                ad_var_btn.set("success".into());
+                                live_open_btn.set(true);
+                            }}
+                        >
+                            "success"
+                        </Button>
+                        <AlertDialog id="gal-alert-dialog-live" open={live_open}>
+                            <AlertDialogTrigger>
+                                <Button variant="outline" size="sm">
+                                    { format!("Open live · {}", ad_var_live.get()) }
+                                </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent variant_signal={ad_variant}>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>{ format!("Variant: {}", ad_var_live.get()) }</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        "Pick variant above, then open — variant_signal subscribes inside the portal."
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel />
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                    </HStack>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn ItemShowcase() -> rui::core::tree::Element {
+    let item_variant = use_signal("gal_item_variant", || "outline".to_string());
+    let item_var_btn = item_variant;
+    let item_var_live = item_variant;
+    ui! {
+        <MyCard title="1c-i) Item（ShadCN list row）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: ItemGroup / Item / ItemMedia / ItemContent / ItemActions and item() / item_group() builders. variant + size bind below."
+                </Label>
+                <ItemGroup>
+                    <Item variant="default" size="default">
+                        <ItemMedia variant="icon">
+                            <Icon name="bell" size="1rem" color="foreground" />
+                        </ItemMedia>
+                        <ItemContent>
+                            <ItemTitle>"Default item"</ItemTitle>
+                            <ItemDescription>"Transparent border · default padding."</ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                            <Button variant="outline" size="sm">"Edit"</Button>
+                        </ItemActions>
+                    </Item>
+                    <ItemSeparator />
+                    <Item variant="outline" size="sm">
+                        <ItemHeader>
+                            <Badge variant="secondary">"Pro"</Badge>
+                            <Label text_size="0.75rem" color="muted-foreground">"Header slot"</Label>
+                        </ItemHeader>
+                        <ItemMedia variant="icon">
+                            <Icon name="shield" size="1rem" />
+                        </ItemMedia>
+                        <ItemContent>
+                            <ItemTitle>"Outline · sm"</ItemTitle>
+                            <ItemDescription>"Bordered row with header and trailing action."</ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                            <Button size="sm">"Upgrade"</Button>
+                        </ItemActions>
+                    </Item>
+                    <ItemSeparator />
+                    <Item variant="muted" size="xs">
+                        <ItemContent>
+                            <ItemTitle>"Muted · xs"</ItemTitle>
+                            <ItemDescription>"Compact muted background for secondary rows."</ItemDescription>
+                        </ItemContent>
+                        <ItemFooter>
+                            <Label text_size="0.75rem" color="muted-foreground">"Footer slot"</Label>
+                            <Button variant="ghost" size="sm">"More"</Button>
+                        </ItemFooter>
+                    </Item>
+                    <ItemSeparator />
+                    <Item variant={ item_var_live.get() } size="default">
+                        <ItemMedia variant="icon">
+                            <Icon name="settings" size="1rem" />
+                        </ItemMedia>
+                        <ItemContent>
+                            <ItemTitle>{ format!("Reactive variant: {}", item_var_live.get()) }</ItemTitle>
+                            <ItemDescription>"variant={signal.get()} uses apply_bound_item_variant."</ItemDescription>
+                        </ItemContent>
+                    </Item>
+                </ItemGroup>
+                <HStack w="100%" gap="0.5rem" wrap="wrap">
+                    <Button size="sm" variant="outline" on_click={move || item_var_btn.set("default".into())}>"default"</Button>
+                    <Button size="sm" variant="outline" on_click={move || item_var_btn.set("outline".into())}>"outline"</Button>
+                    <Button size="sm" variant="outline" on_click={move || item_var_btn.set("muted".into())}>"muted"</Button>
+                </HStack>
+                <Box w="100%" max_w="28rem" border_color="border" border_width="1" rounded="0.75rem" p="0.5rem">
+                    { Element::from(
+                        item_group()
+                            .child(
+                                item()
+                                    .variant("outline")
+                                    .size("sm")
+                                    .media_icon(
+                                        build_icon_text_node(lucide_glyph("user").unwrap_or_else(|| "…".into()))
+                                            .text_size(16.0)
+                                    )
+                                    .title_description("Builder row", "item().variant().media_icon().title_description()")
+                                    .action(button("gal-item-view").variant("outline").size("sm").text("View"))
+                            )
+                    ) }
+                </Box>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn ListShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1c-j) List（语义 ul/li）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: List / ListItem / ListHeader / ListDescription (role=list/listitem) and list() builder. Nest Item for rich rows; plain rows support marker=disc|decimal."
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" wrap="wrap" items="start">
+                    <VStack w="100%" min_w="0" max_w="16rem" gap="0.5rem" flex_grow="1">
+                        <Label font_weight="700" text_size="0.75rem">"Bullet · RSX"</Label>
+                        <List marker="disc">
+                            <ListHeader>"Included"</ListHeader>
+                            <ListDescription>"Everything in the Pro plan."</ListDescription>
+                            <ListItem>"Unlimited projects"</ListItem>
+                            <ListItem>"24/7 support"</ListItem>
+                            <ListItem>"Custom domains"</ListItem>
+                        </List>
+                    </VStack>
+                    <VStack w="100%" min_w="0" max_w="16rem" gap="0.5rem" flex_grow="1">
+                        <Label font_weight="700" text_size="0.75rem">"Ordered · Builder"</Label>
+                        { Element::from(
+                            list()
+                                .marker("decimal")
+                                .header("Steps")
+                                .description("Follow in order.")
+                                .text("Create a project")
+                                .text("Invite teammates")
+                                .text("Ship to production")
+                        ) }
+                    </VStack>
+                    <VStack w="100%" min_w="0" max_w="20rem" gap="0.5rem" flex_grow="1">
+                        <Label font_weight="700" text_size="0.75rem">"Item inside ListItem"</Label>
+                        <List>
+                            <ListItem>
+                                <Item variant="outline" size="sm">
+                                    <ItemMedia variant="icon">
+                                        <Icon name="inbox" size="1rem" />
+                                    </ItemMedia>
+                                    <ItemContent>
+                                        <ItemTitle>"Inbox"</ItemTitle>
+                                        <ItemDescription>"12 unread messages"</ItemDescription>
+                                    </ItemContent>
+                                </Item>
+                            </ListItem>
+                            <ListItem>
+                                <Item variant="muted" size="sm">
+                                    <ItemContent>
+                                        <ItemTitle>"Archive"</ItemTitle>
+                                        <ItemDescription>"Muted row without media."</ItemDescription>
+                                    </ItemContent>
+                                </Item>
+                            </ListItem>
+                        </List>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn BubbleShowcase() -> rui::core::tree::Element {
     ui! {
@@ -819,8 +1357,9 @@ fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
 
 /// Fixed rows for the MouseEvent readout. Variable wrap used to grow the card
 /// on every `mousemove` (digit width / `relatedTarget` Debug) and collapse the page.
+#[cfg(test)]
 const MOUSE_LOG_LINES: usize = 7;
-/// 7×12px×leading-normal(1.5) + 0.75rem×2 padding; keep in sync with [`MOUSE_LOG_LINES`].
+/// 7×12px×leading-normal(1.5) + 0.75rem×2 padding; keep in sync with mouse log row count.
 const MOUSE_LOG_PANEL_H: f32 = 152.0;
 
 fn clip_mouse_debug(s: Option<&str>) -> String {
@@ -2775,6 +3314,56 @@ fn TransformShowcase() -> rui::core::tree::Element {
 /// CSS `rotate` + `translate` Gallery 展示。
 #[component]
 fn RotateTranslateShowcase() -> rui::core::tree::Element {
+    use rui::style::with_class_list;
+
+    fn translate_demo(
+        label: &str,
+        color_token: &str,
+        utility_class: &str,
+        box_w: &str,
+        box_h: &str,
+        cell_w: &str,
+        cell_h: &str,
+    ) -> Element {
+        let ghost = r#box()
+            .w(box_w)
+            .h(box_h)
+            .border(parse_color("muted-foreground"), 1.0)
+            .border_style("dashed")
+            .rounded(6.0)
+            .absolute(true);
+        let moved = with_class_list(
+            Element::from(
+                r#box()
+                    .w(box_w)
+                    .h(box_h)
+                    .bg(parse_color(color_token))
+                    .rounded(6.0)
+                    .absolute(true),
+            ),
+            utility_class,
+        );
+        let slot = r#box()
+            .w(box_w)
+            .h(box_h)
+            .relative(true)
+            .overflow("visible")
+            .children([Element::from(ghost), moved]);
+        let cell = r#box()
+            .w(cell_w)
+            .h(cell_h)
+            .overflow("visible")
+            .items("center")
+            .justify("center")
+            .child(slot);
+        ui! {
+            <VStack gap="0.25rem" items="center">
+                { Element::from(cell) }
+                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+            </VStack>
+        }
+    }
+
     ui! {
         <MyCard title="CSS rotate + translate">
             <VStack w="100%" gap="0.75rem">
@@ -2859,8 +3448,8 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-12 + Label"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Box w="5.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-45 flex items-center justify-center">
-                            <Label text_size="0.7rem" color="accent-foreground" font_weight="600">"45°"</Label>
+                        <Box w="5.5rem" h="3.5rem" bg="chart-2" rounded="0.375rem" class="rotate-45 flex items-center justify-center">
+                            <Label text_size="0.7rem" color="primary-foreground" font_weight="600">"45°"</Label>
                         </Box>
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-45 + Label"</Label>
                     </VStack>
@@ -2875,8 +3464,8 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.6rem" color="muted-foreground">"animate-spin + Label"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Box w="5.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 flex items-center justify-center">
-                            <Label text_size="0.7rem" font_weight="600">"悬停转"</Label>
+                        <Box w="5.5rem" h="3.5rem" bg="chart-4" rounded="0.375rem" class="transition-transform hover:rotate-45 flex items-center justify-center">
+                            <Label text_size="0.7rem" color="primary-foreground" font_weight="600">"悬停转"</Label>
                         </Box>
                         <Label text_size="0.6rem" color="muted-foreground">"hover:rotate-45 + Label"</Label>
                     </VStack>
@@ -2898,67 +3487,31 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "视觉平移，不影响布局。灰色虚框表示原始位置。"
                 </Label>
-                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="chart-1" rounded="0.375rem" class="translate-x-4" />
-                        <Label text_size="0.6rem" color="muted-foreground">"translate-x-4"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="chart-2" rounded="0.375rem" class="translate-y-4" />
-                        <Label text_size="0.6rem" color="muted-foreground">"translate-y-4"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="chart-3" rounded="0.375rem" class="-translate-x-4" />
-                        <Label text_size="0.6rem" color="muted-foreground">"-translate-x-4"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="chart-4" rounded="0.375rem" class="translate-x-4 translate-y-4" />
-                        <Label text_size="0.6rem" color="muted-foreground">"X+Y 偏移"</Label>
-                    </VStack>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem" overflow="visible">
+                    { translate_demo("translate-x-4", "chart-1", "translate-x-4", "3.5rem", "3.5rem", "7.5rem", "6rem") }
+                    { translate_demo("translate-y-4", "chart-2", "translate-y-4", "3.5rem", "3.5rem", "7.5rem", "6rem") }
+                    { translate_demo("-translate-x-4", "chart-3", "-translate-x-4", "3.5rem", "3.5rem", "7.5rem", "6rem") }
+                    { translate_demo("X+Y 偏移", "chart-4", "translate-x-4 translate-y-4", "3.5rem", "3.5rem", "7.5rem", "6.5rem") }
                 </HStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "5 · translate — 百分比 + 任意值"
                 </Label>
-                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="4rem" h="3rem" bg="primary" rounded="0.375rem" class="translate-x-1/2" />
-                        <Label text_size="0.6rem" color="muted-foreground">"x-1/2 (50%)"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="4rem" h="3rem" bg="destructive" rounded="0.375rem" class="translate-x-full" />
-                        <Label text_size="0.6rem" color="muted-foreground">"x-full (100%)"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="4rem" h="3rem" bg="accent" rounded="0.375rem" class="-translate-x-1/2" />
-                        <Label text_size="0.6rem" color="muted-foreground">"-x-1/2"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="4rem" h="3rem" bg="secondary" rounded="0.375rem" class="translate-x-[30px]" />
-                        <Label text_size="0.6rem" color="muted-foreground">"x-[30px]"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="4rem" h="3rem" bg="chart-1" rounded="0.375rem" class="translate-y-[50%]" />
-                        <Label text_size="0.6rem" color="muted-foreground">"y-[50%]"</Label>
-                    </VStack>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem" overflow="visible">
+                    { translate_demo("x-1/2 (50%)", "chart-1", "translate-x-1/2", "4rem", "3rem", "9rem", "6.5rem") }
+                    { translate_demo("x-full (100%)", "chart-2", "translate-x-full", "4rem", "3rem", "10rem", "6.5rem") }
+                    { translate_demo("-x-1/2", "chart-3", "-translate-x-1/2", "4rem", "3rem", "9rem", "6.5rem") }
+                    { translate_demo("x-[30px]", "chart-4", "translate-x-[30px]", "4rem", "3rem", "9rem", "6.5rem") }
+                    { translate_demo("y-[50%]", "chart-5", "translate-y-[50%]", "4rem", "3rem", "9rem", "7rem") }
                 </HStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "6 · rotate + translate 组合"
                 </Label>
-                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45 translate-x-4" />
-                        <Label text_size="0.6rem" color="muted-foreground">"旋转+平移"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="rotate-12 translate-x-1/2 scale-110" />
-                        <Label text_size="0.6rem" color="muted-foreground">"旋转+%平移+缩放"</Label>
-                    </VStack>
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 hover:translate-x-4 hover:scale-110" />
-                        <Label text_size="0.6rem" color="muted-foreground">"hover 组合"</Label>
-                    </VStack>
+                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem" overflow="visible">
+                    { translate_demo("旋转+平移", "primary", "rotate-45 translate-x-4", "3.5rem", "3.5rem", "8.5rem", "8.5rem") }
+                    { translate_demo("旋转+%平移+缩放", "destructive", "rotate-12 translate-x-1/2 scale-110", "3.5rem", "3.5rem", "9rem", "8.5rem") }
+                    { translate_demo("hover 组合", "chart-4", "transition-transform hover:rotate-45 hover:translate-x-4 hover:scale-110", "3.5rem", "3.5rem", "8.5rem", "8.5rem") }
                 </HStack>
             </VStack>
         </MyCard>
@@ -2971,16 +3524,16 @@ fn ScrollShowcase() -> rui::core::tree::Element {
         <MyCard title="4) ScrollArea + Scrollbar">
             <VStack gap="1rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Minimal visual cases: inset (inside/outside/mixed), visibility (auto/always/never), and all 4 corner combos."
+                    "inside = overlay on content (no padding reserve, any side); outside = dedicated flex lane. Visibility: auto / always / never."
                 </Label>
-                <Label font_weight="700" text_size="0.875rem">"A) Inset: inside / outside / mixed"</Label>
+                <Label font_weight="700" text_size="0.875rem">"A) Inset: overlay (inside) / lane (outside) / mixed"</Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap">
                     <Box w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-inset-inside" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="inside" scrollbar_visibility="always"
                             overflow_y="auto" overflow_x="auto">
                             <VStack gap="0.25rem" min_w="18rem">
-                                <Label font_weight="700">"inside"</Label>
+                                <Label font_weight="700">"inside (overlay)"</Label>
                                 <For each={1..=8} key={*item}>
                                     <Label>{ format!("row {:02}", item) }</Label>
                                 </For>
@@ -3108,6 +3661,38 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 <Label font_weight="700">"right + bottom (default sides)"</Label>
                                 <For each={1..=8}>
                                     <Label>{ format!("corner {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Box>
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"D) Overlay chrome: transparent track + thumb only"</Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap">
+                    <Box w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-overlay-thumb" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="inside" scrollbar_visibility="always"
+                            scrollbar_track_color="transparent"
+                            scrollbar_thumb_color="scrollbar-thumb/50"
+                            scrollbar_variant="capsule" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"thumb only"</Label>
+                                <For each={1..=8} key={*item}>
+                                    <Label>{ format!("overlay row {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Box>
+                    <Box w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-overlay-left" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="inside" scrollbar_y_side="left" scrollbar_visibility="always"
+                            scrollbar_track_color="transparent"
+                            scrollbar_thumb_color="scrollbar-thumb/50"
+                            overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"left overlay"</Label>
+                                <For each={1..=8} key={*item}>
+                                    <Label>{ format!("same inset {:02}", item) }</Label>
                                 </For>
                             </VStack>
                         </ScrollArea>
@@ -8376,12 +8961,37 @@ fn gallery_nav_menu(section: Signal<String>) -> Element {
     })
 }
 
+fn gallery_section_meta(section: &str) -> (&'static str, Option<&'static str>) {
+    match section {
+        "forms" => ("表单", None),
+        "events" => (
+            "指针事件",
+            Some("crates/rui/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"),
+        ),
+        "overlays" => ("浮层 / 反馈", None),
+        "draw" => (
+            "绘制",
+            Some("WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · lucide-animated。"),
+        ),
+        "data" => ("数据", None),
+        "navigation" => ("导航", None),
+        "layout" => ("布局", None),
+        "text" => ("文本", None),
+        "about" => ("关于", None),
+        _ => (
+            "基础",
+            Some(
+                "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Skeleton · Empty · Alert · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰",
+            ),
+        ),
+    }
+}
+
 fn gallery_section_body(section: &str) -> Element {
     match section {
         "forms" => ui! {
             <ScrollArea id="scroll-forms" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"表单"</Label>
                     <InputShowcase />
                     <InputAdornmentShowcase />
                     <InputOTPShowcase />
@@ -8397,10 +9007,6 @@ fn gallery_section_body(section: &str) -> Element {
         "events" => ui! {
             <ScrollArea id="scroll-events" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"指针事件"</Label>
-                    <Label text_size="0.875rem" color="muted-foreground">
-                        "crates/rui/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"
-                    </Label>
                     <MouseEventShowcase />
                     <CursorShowcase />
                 </VStack>
@@ -8409,7 +9015,6 @@ fn gallery_section_body(section: &str) -> Element {
         "overlays" => ui! {
             <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"浮层 / 反馈"</Label>
                     <OverlayFeedbackShowcase />
                     <PrimitivesShowcase />
                 </VStack>
@@ -8418,10 +9023,6 @@ fn gallery_section_body(section: &str) -> Element {
         "draw" => ui! {
             <ScrollArea id="scroll-draw" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"绘制"</Label>
-                    <Label text_size="0.875rem" color="muted-foreground">
-                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · lucide-animated。"
-                    </Label>
                     <DrawingSvgShowcase />
                     <LucideAnimatedShowcase />
                     <DrawingCanvasShowcase />
@@ -8432,7 +9033,6 @@ fn gallery_section_body(section: &str) -> Element {
         "data" => ui! {
             <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"数据"</Label>
                     <PaginationShowcase />
                     <DataChartShowcase />
                     <VirtualMasonryShowcase />
@@ -8442,7 +9042,6 @@ fn gallery_section_body(section: &str) -> Element {
         "navigation" => ui! {
             <ScrollArea id="scroll-navigation" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"导航"</Label>
                     <SidebarShowcase />
                     <NavbarNavigationMenuShowcase />
                     <MenubarStepperShowcase />
@@ -8457,7 +9056,6 @@ fn gallery_section_body(section: &str) -> Element {
         "layout" => ui! {
             <ScrollArea id="scroll-layout" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"布局"</Label>
                     <LayoutSubtreeShowcase />
                     <DamageShowcase />
                     <OwnerRegistryShowcase />
@@ -8487,7 +9085,6 @@ fn gallery_section_body(section: &str) -> Element {
         "text" => ui! {
             <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"文本"</Label>
                     <TextAlignShowcase />
                     <TextCompatibilityShowcase />
                     <EmojiRealtimeRegressionShowcase />
@@ -8498,7 +9095,6 @@ fn gallery_section_body(section: &str) -> Element {
         "about" => ui! {
             <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
-                    <Label text_size="1.25rem" font_weight="700">"关于"</Label>
                     <Box bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
                         <VStack gap="0.5rem">
                             <Label font_weight="700">"Technical Stack"</Label>
@@ -8518,14 +9114,16 @@ fn gallery_section_body(section: &str) -> Element {
         _ => ui! {
             <ScrollArea id="scroll-basics" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
-                    <Label text_size="1.25rem" font_weight="700">"基础"</Label>
-                    <Label text_size="0.875rem" color="muted-foreground">
-                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰"
-                    </Label>
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
                     { KbdShowcase() }
+                    { SkeletonShowcase() }
+                    { EmptyShowcase() }
+                    { AlertShowcase() }
+                    { AlertDialogShowcase() }
+                    { ItemShowcase() }
+                    { ListShowcase() }
                     <BubbleShowcase />
                     { AvatarShowcase() }
                     { BreadcrumbShowcase() }
@@ -8543,6 +9141,7 @@ fn build_gallery_app() -> Element {
     let section = use_signal("gal_nav_section", || "basics".to_string());
     let sec_nav = section;
     let sec_body = section;
+    let sec_header = section;
 
     let nav_menu = gallery_nav_menu(sec_nav);
 
@@ -8580,8 +9179,41 @@ fn build_gallery_app() -> Element {
                 </SidebarFooter>
             </Sidebar>
             <SidebarInset variant="inset">
-                <HStack w="100%" items="center" gap="0.25rem" p="0.5rem" flex_shrink="0">
+                <HStack
+                    w="100%"
+                    items="center"
+                    gap="0.5rem"
+                    px="1rem"
+                    py="0.5rem"
+                    flex_shrink="0"
+                    min_w="0"
+                >
                     <SidebarTrigger id="gal-sidebar-trigger" />
+                    <Separator vertical={true} />
+                    <VStack gap="0.125rem" min_w="0" grow="1">
+                        <Label
+                            id="gal-section-title"
+                            w="100%"
+                            min_w="0"
+                            text_size="1.25rem"
+                            font_weight="700"
+                            text_overflow="ellipsis"
+                        >
+                            { gallery_section_meta(sec_header.get().as_str()).0 }
+                        </Label>
+                        <Show when={ gallery_section_meta(sec_header.get().as_str()).1.is_some() }>
+                            <Label
+                                id="gal-section-desc"
+                                w="100%"
+                                min_w="0"
+                                text_size="0.875rem"
+                                color="muted-foreground"
+                                text_overflow="ellipsis"
+                            >
+                                { gallery_section_meta(sec_header.get().as_str()).1.unwrap_or("") }
+                            </Label>
+                        </Show>
+                    </VStack>
                 </HStack>
                 <VStack min_w="0" min_h="0" grow="1">
                     { body }
@@ -9143,7 +9775,7 @@ mod mount_tests {
                     .text_nodes
                     .iter()
                     .filter(|n| n.style.font_family.as_deref() == Some("lucide"))
-                    .filter(|n| n.style.color[3] > 0 && n.width > 0.5)
+                    .filter(|n| n.style.color_resolved()[3] > 0 && n.width > 0.5)
                     .count();
                 assert!(
                     lucide >= 2,
@@ -9364,7 +9996,7 @@ mod mount_tests {
                     None
                 }
                 let caption = find_caption(&mut tree).expect("caption node");
-                let color = caption.text_style.color;
+                let color = caption.text_style.color_resolved();
                 assert!(
                     color[3] > 0,
                     "caption alpha must be visible, got {:?}",

@@ -5,7 +5,7 @@
 
 RUI 用分层 + `#[component]` 组合原语。`#[component]` **每实例自动** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14）。纯 Builder 复合根（自己 `provide_context` / 浮层）仍须显式调用同一 helper。浮层子树用 `isolate_reads`，不要用 `untrack`。
 
-需要「`show`→播退场→再卸树」时，先用 [`utils::presence`](../crates/rui/src/utils/presence.rs)（`ExitGate` / `exit_elapsed`，**WP-PRIM.1**）。需要 CSS 入退场/位移时，用 [`utils::motion`](../crates/rui/src/utils/motion.rs)（`MotionStyle` / `prepare_motion_sync`，**WP-PRIM.2**）——只写目标，mid 由 `transition_snapshot` 推进；与 `@keyframes` 路径的分工见 [`animation_and_motion.md`](animation_and_motion.md)。Portal 浮层 + 多条实例同 key 调和（含 shadow/transform mid），用 [`utils::keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs)（**WP-PRIM.3**）。堆叠/列表 `rank → translate/scale` 目标用 [`utils::layout_group`](../crates/rui/src/utils/layout_group.rs)（**WP-PRIM.4**）。战略背景见 [`custom_components_suggestions.md`](custom_components_suggestions.md)。
+需要「`show`→播退场→再卸树」时，先用 [`utils::presence`](../crates/rui/src/utils/presence.rs)（`ExitGate` / `exit_elapsed`，**WP-PRIM.1**）。需要 CSS 入退场/位移时，用 [`utils::motion`](../crates/rui/src/utils/motion.rs)（`MotionStyle` / `prepare_motion_sync`，**WP-PRIM.2**）——只写目标，mid 由 `transition_snapshot` 推进；与 `@keyframes` 路径的分工见 [`animation_and_motion.md`](animation_and_motion.md)。Portal 浮层 + 多条实例同 key 调和（含 shadow/transform mid），用 [`utils::keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs)（**WP-PRIM.3**）。堆叠/列表 `rank → translate/scale` 目标用 [`utils::layout_group`](../crates/rui/src/utils/layout_group.rs)（**WP-PRIM.4**）。**完整交互浮层**（菜单 / 模态 / 随意放置面板）应走计划中的 [`utils/anchored_overlay` + `utils/viewport_modal`](overlay_shells.md)（**WP-OVL**），须 **RSX + Builder 双写**（[overlay_shells.md §8.5](overlay_shells.md)）；不要手拼 `portal_sync` + `mount_*`；战略背景见 [`custom_components_suggestions.md`](custom_components_suggestions.md)。
 
 ## Two equivalent ways to write UI
 
@@ -175,7 +175,7 @@ fn my_combobox(id: &str, body: impl FnOnce() -> Element) -> Element {
 |------|--------|----------|
 | `#[component]` 即可；Builder 根包 [`component_root`](../crates/rui/src/core/reactivity.rs) | Builder 上同父级连续 `provide_context` 且不包根 | 三个 Combobox 共用最后一个菜单 |
 | 浮层 / `reactive_anchor` 子树用 [`isolate_reads`](../crates/rui/src/core/reactivity.rs) | 用 [`untrack`](../crates/rui/src/core/reactivity.rs) 包整棵面板 | 锚点不注册，浮层空壳（只剩分割线） |
-| 浮层走 `mount_anchored_overlay` / `mount_viewport_portal_stage` + portal Esc 栈 | 再抄一套 0×0 portal / 滚动锚 / 嵌套 `rui_portal` | 滚动错位、叠层 Esc 穿透；**WP-3.4 ☑** 后视为回归 |
+| 浮层走 [`overlay_shells`](overlay_shells.md)（落地后 `anchored_overlay` / `viewport_modal`）；过渡期仍用 `mount_anchored_overlay` / `mount_viewport_portal_stage` + Esc 栈 | 再抄一套 0×0 portal / 滚动锚 / 嵌套 `rui_portal` | 滚动错位、叠层 Esc 穿透；**WP-3.4 ☑** 后视为回归 |
 | 每实例自己的选中/开合 Signal（或调用方受控 Signal） | `use_signal("chart_pin")` 这类全局键 | 多图/多选器串状态 |
 
 `untrack`：**关掉** `current_effect`，`reactive_anchor` 直接 return。  

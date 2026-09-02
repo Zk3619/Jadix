@@ -2,7 +2,7 @@
 
 > **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §3（双书写）· §4.3（外观）· §4.2.5（状态）。  
 > **范围**：仅 [`component_inventory.md`](component_inventory.md) **verified** 控件。experimental（Toggle / ToggleGroup / ColorPicker…）不进本冻结。  
-> **日期**：2026-08-17；**2026-08-31** §0 `Into` 双收（字符串产品面 + 可选枚举）；**2026-08-31** 明确为 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1** 在 `variant` / `size` 轴上的冻结实例
+> **日期**：2026-08-17；**2026-08-31** §0 `Into` 双收；**2026-09-02** §6 `SemanticTone` 语义色共享层（`error`≡`destructive` 等）
 
 未知 `variant` / `size` **回退 `default`**（可测）。禁止在 verified 控件里发明第二套 Button 同名、不同语义的词汇而不登记本表。
 
@@ -154,3 +154,127 @@ let v = use_signal("name", || String::new());
 ui! { <Input id="name" value={v} /> }
 let _: Element = input("name").value_signal(v).into();
 ```
+
+---
+
+## 6. 语义色 / 语气变体（SemanticTone）共享层
+
+> **动机**：`error`≡`destructive`、`warn`≡`warning`、`info`/`success`/`warning` 的 **parse 回退** 与 **accent 色真源** 在 Alert / Badge / Button / Bubble / Toast 中各写一遍；soft tint 混色公式亦重复且 **α 不完全一致**（见下表）。应抽成 `style/semantic_tone.rs`（或 `tokens/semantic.rs`），组件只保留 **产品 variant 枚举**（如 Button 的 `outline`/`ghost`）并 **委托** 语义色。
+
+### 6.1 两层 variant，不要混成一个枚举
+
+| 层 | 职责 | 示例 | 共享？ |
+|----|------|------|--------|
+| **产品外观 variant** | 控件独有的形状/边框/交互 | Button `outline`·`ghost`·`link`；Badge `secondary`·`outline` | **否** — 各组件 `*Variant` 枚举 |
+| **语义语气 tone** | 信息/成功/警告/错误着色 | `info`·`success`·`warning`·`destructive`（=`error`） | **是** — `SemanticTone` |
+
+规则：
+
+- 字符串 parse：**未知 → `Default`**（与 §1 一致）。
+- 别名（全局唯一）：`error`→`Destructive` · `warn`→`Warning`。
+- 产品 variant 枚举可 **嵌入或映射** tone：例如 `ButtonVariant::Success` → `SemanticTone::Success`；`AlertVariant::Default` 无 tone。
+
+### 6.2 建议 API（`crates/rui/src/style/semantic_tone.rs`）
+
+```rust
+/// 跨组件语义语气（非 Button outline/ghost 族）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticTone {
+    #[default]
+    Default,
+    Info,
+    Success,
+    Warning,
+    Destructive,
+}
+
+impl SemanticTone {
+    /// `error`→Destructive · `warn`→Warning · 未知→Default
+    pub fn parse(s: &str) -> Self { /* 单处 FromStr */ }
+
+    /// 主题 accent 令牌名（真源一处）
+    pub fn accent_token(self) -> &'static str {
+        match self {
+            Self::Default => "foreground",
+            Self::Info => "blue-600",
+            Self::Success => "green-600",
+            Self::Warning => "orange-600",
+            Self::Destructive => "destructive", // 统一；见 §6.4
+        }
+    }
+
+    /// 默认 lucide 名（Toast / Alert 可选图标）
+    pub fn default_icon(self) -> Option<&'static str> { /* info/success/… */ }
+}
+
+/// soft tint：`accent` 叠在 `background` 上（文档站采样 α）
+pub fn soft_fill_over_background(accent: [f32; 4], dark: bool) -> [f32; 4];
+
+/// 静态语气色（无 hover）：Alert 条、Badge 静止态
+pub struct SemanticChrome {
+    pub bg: [f32; 4],
+    pub border: [f32; 4],
+    pub fg: [u8; 4],
+    pub muted_fg: [u8; 4],
+}
+
+pub fn semantic_chrome(tone: SemanticTone, style: SemanticChromeStyle) -> SemanticChrome;
+
+pub enum SemanticChromeStyle {
+    /// Button/Badge 静止 soft tint（浅 10%/深 20%）
+    SoftFill,
+    /// Alert：soft bg + accent 混 border
+    AlertCard,
+    /// Toast：popover 底 + accent 边框（底不变）
+    ToastPopover,
+}
+```
+
+组件改造方式（示意）：
+
+```rust
+// alert.rs — 删除本地 mix_soft_bg / alert_chrome 大 match
+let chrome = semantic_chrome(tone_from_alert_variant(v), SemanticChromeStyle::AlertCard);
+
+// button.rs — success/warning/destructive 分支
+let (accent, fg) = semantic_tone_accent_rgba(ButtonVariant::Success.into());
+soft_semantic_chrome(accent, fg, hover_t, dark); // 或迁入 semantic_tone 模块
+
+// badge.rs — badge_chrome 的 success/warning/destructive 三枝删除
+```
+
+### 6.3 现状重复与不一致（合并时必须统一）
+
+| 位置 | parse 别名 | accent（destructive） | soft α（浅/深） |
+|------|------------|----------------------|-----------------|
+| `button.rs` | error·warn ✓ | `destructive` token | 0.1 / 0.2 rest；hover 0.2 / 0.3 |
+| `badge.rs` | 同左 | `destructive` | 0.1 / 0.2（与 Button rest 对齐） |
+| `alert.rs` | 同左 | `destructive` | **0.08 / 0.18**（与 Button 不一致） |
+| `toast/view.rs` | 同左 | **`red-600`**（非 destructive token） | 无 soft fill（popover 底） |
+| `bubble.rs` | error ✓ | `destructive/10`·`/20` token 后缀 | 与 Button 思路同，实现另路 |
+| `ToastTone` | 另 enum；**Error 与 Destructive 分列** | 同 toast | 应合并为 `SemanticTone::Destructive` |
+
+**合并验收**（库测）：
+
+- `semantic_tone_parse_aliases`：`error`/`destructive`/`warn`/`warning`/未知
+- `semantic_chrome_matches_button_badge_rest`：Success/Warning/Destructive 与现 Button 静止色一致
+- `alert_adopts_unified_soft_alpha`：Alert info 与统一 α 后 golden 更新
+- `toast_destructive_uses_destructive_token`：与 Button 同源（或文档化为何用 red-600）
+
+### 6.4 与 §1–§2 的关系
+
+- §1 Button **variant 词汇表不变**；其中 `success`/`warning`/`destructive` 的 **色值** 改从 `SemanticTone` 读，parse 可委托 `SemanticTone::parse` 再映射回 `ButtonVariant`。
+- §2 Toast **条目** `variant`/`tone` 合法值不变；实现改为 `ToastTone` = `SemanticTone` 的 type alias 或 `From`。
+- **Scrollbar / Toaster layout variant** 仍 **不得** 走 `SemanticTone`（§2 禁区保持）。
+
+### 6.5 实施顺序（小步，不挡 CV）
+
+| 步 | 动作 | 风险 |
+|----|------|------|
+| 1 | 新增 `semantic_tone.rs`：仅 `SemanticTone::parse` + `accent_token` | 低 |
+| 2 | Button / Badge / Alert 的 `FromStr` 改调 `SemanticTone`（行为不变） | 低 |
+| 3 | 迁入 `soft_fill_over_background` + `semantic_chrome`；删各文件重复 `mix_soft` | 中（golden） |
+| 4 | Toast `tone_colors` 改用 `SemanticChromeStyle::ToastPopover`；合并 Error/Destructive | 中 |
+| 5 | Bubble `destructive/10` 与 semantic 层对齐（或保留 token 后缀为第二 style） | 低 |
+
+**不做**：把 `outline`/`ghost`/`link` 塞进 `SemanticTone`；不要让 Alert 与 Button 共用一个巨型 `Variant` 枚举。

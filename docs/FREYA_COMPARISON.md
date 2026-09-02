@@ -1,6 +1,6 @@
 # RUI × Freya（`reference/freya-main`）全面对照
 
-> **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；细粒度机制见 [REACTIVITY.md](REACTIVITY.md)；六参考总表见 [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md)。  
+> **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；细粒度机制见 [REACTIVITY.md](REACTIVITY.md)；六参考总表见 [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md)；GPUI 生态见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)。  
 > **对照源**：[`reference/freya-main`](../reference/freya-main)（Freya `0.5.0-rc.4` / main 快照）· RUI 以 `crates/` 与工程文档为准。  
 > **日期**：2026-08-30；**2026-08-31** §7 扩为「你有我没有 / 我有你没有」编号清单；同日补 **§7.1-C / §7.2-C 拖拽与放置**  
 > **规模快照**（非空白且非纯注释行，约数）：RUI `crates/` ≈ **162k** 行 / **339** `.rs`；Freya `crates/` ≈ **68k** 行 / **403** `.rs`。RUI 体量更大 partly 因单体 crate + 厚组件/测试；Freya 拆成更多 crate，单仓示例约 **154** 个 `.rs`。
@@ -530,7 +530,8 @@ RUI 在 **「领域规范、ADR、反应性不变量、组件 CV 门禁」** 上
 
 | 文档 | 角色 |
 |------|------|
-| [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md) | GPUI / Slint / Xilem / EUI / Iced / egui **六参考**；**未专章 Freya** |
+| [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md) | GPUI / Slint / Xilem / EUI / Iced / egui **六参考** |
+| [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md) | GPUI 生态四项目专章 |
 | [gap_analysis.md](gap_analysis.md) | Solid / ShadCN / EUI / Pretext 基线 |
 | [REACTIVITY.md](REACTIVITY.md) | Solid / Leptos / Floem / Dioxus 机制；Freya 属「组件级失效」近邻，**不是**细粒度标尺 |
 | **本文** | **Freya 专章**：栈、反应、生态、学/禁 |

@@ -59,6 +59,8 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 └─ 非执行源
     三份 *_PLAN.md                   冻结展开（历史 WP 细则；勾选作废）
     gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
+    GPUI_ECOSYSTEM_COMPARISON（× gpui / gpui-component / gpui-vue / gpuix；非执行源）
+    COMPONENT_LAYERING（组件体量 × gpui-component 分层；非执行源）
     FREYA_COMPARISON（× reference/freya-main；非执行源）
     archive/ · rui.md · bugs.md · site/README
 ```

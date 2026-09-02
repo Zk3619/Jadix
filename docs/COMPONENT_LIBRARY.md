@@ -3,9 +3,9 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §3.1.1 Builder 属性：链式优先 + `Into` 双收（全属性口径）；**2026-08-31** §4.3 `Into` 双收（variant/size 冻结实例）  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §3.1.1 Builder 属性：链式优先 + `Into` 双收（全属性口径）；**2026-08-31** §4.3 `Into` 双收（variant/size 冻结实例）；**2026-09-02** 组件体量与 gpui-component 分层对照见 [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md)  
 
-交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
+交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`custom_components_suggestions.md`](custom_components_suggestions.md) · [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
 ---
 
@@ -64,14 +64,17 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
 
-现状缺口（须按计划下沉，见实施计划 C-WP）：
+现状缺口（须按计划下沉，见实施计划 C-WP；**体量与 gpui-component 对照**见 [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md)）：
 
-- **浮层**：几何与挂载已收口：`utils/popup` 的 `mark_floating` + **`mount_anchored_overlay`** / **`mount_viewport_portal_stage`**；Esc 栈 `portal_overlay`。开合状态仍可内嵌各组件——禁止第二套 placement 或嵌套 `rui_portal`。 
+- **折叠面板 motion**：`collapsible` / `accordion` 各有一套 `apply_*_panel_motion`（~350 行重复）——**P0** 合并为 `utils/collapse_panel.rs`（见 [COMPONENT_LAYERING.md](COMPONENT_LAYERING.md) §5 P0）。
+- **语义色 variant**：`error`/`warn` parse 与 soft tint 在 Alert/Button/Badge/Toast 重复 —— 抽 `style/semantic_tone.rs`（见 [component_variants.md](component_variants.md) §6）。
+- **单文件体量**：与 gpui-component 未拆分组件逐项对照见 [COMPONENT_LAYERING.md](COMPONENT_LAYERING.md) §1.6 / §6（combobox、hover_card、kbd、label 等）。
+- **浮层**：几何与挂载已收口：`utils/popup` 的 `mark_floating` + **`mount_anchored_overlay`** / **`mount_viewport_portal_stage`**；Esc 栈 `portal_overlay`。开合状态仍可内嵌各组件——禁止第二套 placement 或嵌套 `rui_portal`。
 - **Toggle 布尔态**：[`utils/toggle_state`](../crates/rui/src/utils/toggle_state.rs)（WP-3.7 ☑）；Toggle / Checkbox / Switch 只消费状态 + token。外观仍在 `components/`。  
 - **Tabs / Toggle 外观**：`primitives/mod.rs` 已指向 `components/`；布尔原语不在 primitives。  
 - **作者面**：`#[component]` **默认** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14 ☑）；纯 Builder 复合根仍须显式调用。`untrack` 仍会跳过 `reactive_anchor`——用 `isolate_reads`（§2.3）。
@@ -360,6 +363,8 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 **禁区（外观轴）**：为对齐 Freya 等纯枚举 API，废除 Builder / RSX 字符串入口，或拆成 `.variant_str` / `.variant_enum` 两套平行方法。
 
 ### 4.4 浮层
+
+> **编排收敛（设计 · 未落地）**：[`overlay_shells.md`](overlay_shells.md) — `utils/anchored_overlay` + `utils/viewport_modal`（WP-OVL）。落地前仍按下表直接调用 `popup` / `portal_overlay`。
 
 必用 API（新组件不得绕开）：
 

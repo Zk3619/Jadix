@@ -17,9 +17,9 @@
 - 并考虑：增加 popup_window 能力，为桌面端实现可超出视口的独立菜单/弹窗/通知等能力
 - 平台能力特化
 - 缺的主要是 steps / jump-* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
-- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等
+- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — 设计拆分见 [overlay_shells.md](overlay_shells.md) §9
 - orientation="vertical"  自动检测屏幕方向 auto、始终水平、始终垂直
-- 浮层的入场退场动画
+- 浮层编排壳（设计）：[overlay_shells.md](overlay_shells.md)（`anchored_overlay` / `viewport_modal` · WP-OVL）
 - 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
 

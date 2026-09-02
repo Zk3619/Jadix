@@ -1,8 +1,8 @@
 # RUI × 六参考项目对照
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) §2–§3；**细粒度反应性**见 [REACTIVITY.md](REACTIVITY.md)（Solid / Leptos / Floem / Dioxus **机制**对照 + §5.7 完整 FG 不变量）。  
-> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `Reference/leptos-main` · `Reference/floem-main` · `Reference/SolidJS` · `Reference/dioxus`；**Freya 专章**见 [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（`reference/freya-main`）；RUI 以 `crates/` 与工程文档为准。  
-> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；**2026-08-18** 反应性源码对照见 [REACTIVITY.md](REACTIVITY.md) §5.10；公开自绘面见 [`drawing.md`](drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）
+> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `Reference/leptos-main` · `Reference/floem-main` · `Reference/SolidJS` · `Reference/dioxus`；**GPUI 生态专章**见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)（`gpui` · `gpui-component-main` · `gpui-vue-main` · `gpuix-main`）；**组件体量分层**见 [COMPONENT_LAYERING.md](COMPONENT_LAYERING.md)；**Freya 专章**见 [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（`reference/freya-main`）；RUI 以 `crates/` 与工程文档为准。  
+> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；**2026-08-18** 反应性源码对照见 [REACTIVITY.md](REACTIVITY.md) §5.10；**2026-09-02** GPUI 生态四项目拆至专章；公开自绘面见 [`drawing.md`](drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）
 
 ---
 
@@ -14,7 +14,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 | 参考 | 角色 |
 |------|------|
-| **GPUI** | 原生桌面深度上限 |
+| **GPUI** | 原生桌面深度上限（生态详见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)） |
 | **Slint** | 产品化工具链与发布契约 |
 | **Xilem / Masonry** | 测试 / pass / a11y 纪律 |
 | **EUI-NEO** | 组件密度与脏绘纪律 |
@@ -271,6 +271,9 @@ RUI 的设计目标落在 **D**，并额外押注 **Solid 细粒度 + ShadCN 产
 | [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) | 权威纲领与禁区（含否决 egui 即时模式） |
 | [AUTHORITY.md](AUTHORITY.md) | 巩固期唯一执行源 |
 | [gap_analysis.md](gap_analysis.md) | 历史审计；§1 参考分层与本文一致（本文扩展 iced/egui） |
+| [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md) | GPUI · gpui-component · gpui-vue · gpuix **生态专章** |
+| [COMPONENT_LAYERING.md](COMPONENT_LAYERING.md) | 组件体量 × gpui-component 分层；P0 collapse 去重 |
+| [FREYA_COMPARISON.md](FREYA_COMPARISON.md) | Freya 专章 |
 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) | 组件领域规范；CV 见 AUTHORITY Wave CV |
 | [desktop_smoke.md](desktop_smoke.md) · [ime.md](ime.md) · [damage.md](damage.md) · [PUBLISH.md](PUBLISH.md) | 原生 / 脏区 / 发布细则 |
 | [size_and_memory.md](size_and_memory.md) | 体积叙事：不追 egui/EUI 量级而弃 wgpu |

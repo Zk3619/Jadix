@@ -26,10 +26,11 @@
 | MotionStyle | [`utils/motion`](../crates/rui/src/utils/motion.rs) | **WP-PRIM.2**；只写目标、保 mid + transition；与 `@keyframes` 分工见 [`animation_and_motion.md`](animation_and_motion.md) |
 | KeyedOverlay | [`utils/keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs) | **WP-PRIM.3**；portal + 同 key 调和（shadow/transform mid） |
 | LayoutGroup / slot_list | [`utils/layout_group`](../crates/rui/src/utils/layout_group.rs) | **WP-PRIM.4**；rank → offset/scale 目标 |
+| **AnchoredOverlay / ViewportModal** | 设计：[overlay_shells.md](overlay_shells.md)（**WP-OVL** · 未落地） | 浮层编排壳；收敛 `popup` + `portal_overlay` + `internal/{modal_shell,floating_motion}` |
 | Toast 产品策略 | `components/toast/{timer,queue,swipe}` | 单组件拆分（**非**框架原语；已从 internal 折回） |
 | Carousel 产品策略 | `components/carousel/{track,snap,loop_anim,autoplay}` | 同上 |
 
-用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。`#[component]` 默认实例 Owner（WP-3.14）；纯 Builder 复合根用 `component_root`。浮层子树用 `isolate_reads`。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态壳在 `components/dialog.rs`。
+用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。`#[component]` 默认实例 Owner（WP-3.14）；纯 Builder 复合根用 `component_root`。浮层子树用 `isolate_reads`。自定义浮层见 [overlay_shells.md](overlay_shells.md)（计划中的 `utils/anchored_overlay` / `utils/viewport_modal`）。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态编排今日仍在 `components/dialog.rs` + `internal/modal_shell`。
 
 ## 受控与非受控
 

@@ -1,5 +1,7 @@
 结论先说：**难，主要不是因为「用 Rust 写 UI」本身难，而是复杂组件在 rui 里要同时扛产品语义 + 即时模式重建 + 运动/浮层基础设施缺口；组件库值得做，但应做成「薄壳 + 可复用原语」，而不是再堆几个 2k 行单体。**
 
+与 gpui-component 的**行数对照、根因与 P0–P5 优化路线**见专章 [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md)。
+
 当前体量也印证了这一点：`carousel` ~3.5k、`toast` ~2.8k、`color_picker` ~2.1k，后面一串菜单/选择类都在 1k+。Toast 只是「交互面最全」的那个，不是唯一的。
 
 ---
