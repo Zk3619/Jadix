@@ -945,16 +945,9 @@ fn parse_color_opacity_suffix(tail: &str) -> Option<f32> {
     })
 }
 
-/// `color-mix` 等价：语义色 `token/N` 叠在 `background` 上的不透明结果（与 Button 一致）。
-fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
-    let bg = get_theme().colors.background;
-    let a = alpha.clamp(0.0, 1.0);
-    [
-        fg[0] * a + bg[0] * (1.0 - a),
-        fg[1] * a + bg[1] * (1.0 - a),
-        fg[2] * a + bg[2] * (1.0 - a),
-        1.0,
-    ]
+/// `color-mix` 等价：语义色 `token/N` 叠在主题 `background` 上的不透明结果（与 Button 一致）。
+pub fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
+    super::color_space::color_mix_over_surface(fg, get_theme().colors.background, alpha)
 }
 
 /// Parse a color name / hex / Tailwind shade / CSS color function for backgrounds.

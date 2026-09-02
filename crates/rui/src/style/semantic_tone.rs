@@ -1,6 +1,9 @@
 //! 跨组件语义语气（`info` / `success` / `warning` / `destructive`）解析与配色。
 //!
-//! 配色对齐 Badge soft tint（填充）与 Toast 卡片（不填充：主题底 + 语义边框/字色）。
+//! [`SemanticPalette`] / [`soft_semantic_mix_alphas`] 为共享 tone→色板入口：
+//! [`semantic_chrome`]（Alert / Badge / Attachment）、[`button_soft_semantic_chrome`]（Button soft tint）、
+//! [`semantic_media_wash`]（Attachment media）均从此取 accent / mix 比例。
+//! 混色原语见 [`crate::style::color_mix_over_surface`] / [`crate::style::color_mix_over_background`]。
 //! 边框、阴影仅在 [`SemanticChromeDecor`] 启用时写入 [`SemanticChrome`]；组件侧对 `Option` 再落盒模型。
 //! 别名：`error`≡`destructive` · `warn`≡`warning` · 未知→[`SemanticTone::Default`].
 
@@ -201,22 +204,100 @@ pub struct SemanticChrome {
     pub shadow: Option<SemanticShadow>,
 }
 
-/// Tailwind / CSS `color-mix` 等价：accent 叠在 `background` 上（与 Badge / Button rest 同源）。
-pub fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
-    let bg = parse_color("background");
-    let a = alpha.clamp(0.0, 1.0);
-    [
-        fg[0] * a + bg[0] * (1.0 - a),
-        fg[1] * a + bg[1] * (1.0 - a),
-        fg[2] * a + bg[2] * (1.0 - a),
-        1.0,
-    ]
+/// Resolved accent colors for a tone (shared by [`semantic_chrome`], Button soft tint, Attachment media wash).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticPalette {
+    pub tone: SemanticTone,
+    /// Accent in linear display RGBA (`accent_fg_token` resolved).
+    pub accent: [f32; 4],
+    /// Opaque caption / icon foreground (same token as accent).
+    pub fg: [u8; 4],
+    /// Bordered chrome outline (`accent_border_token`).
+    pub border: [f32; 4],
+    /// Shadow hue (`accent_shadow_token`, alpha unset).
+    pub shadow: [f32; 4],
 }
 
-/// Badge / Button 语义静止态 soft tint（浅 10% / 深 20%）。
+/// Soft-fill mix alphas for rest / hover (light vs dark) — Badge, Button semantic variants.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoftSemanticMix {
+    pub rest: f32,
+    pub hover: f32,
+}
+
+/// Shared rest/hover mix ratios for soft semantic fills (Button hover, Badge tint).
+pub fn soft_semantic_mix_alphas() -> SoftSemanticMix {
+    if is_dark_theme() {
+        SoftSemanticMix {
+            rest: 0.2,
+            hover: 0.3,
+        }
+    } else {
+        SoftSemanticMix {
+            rest: 0.1,
+            hover: 0.2,
+        }
+    }
+}
+
+/// Resolve tone → accent / fg / border / shadow tokens (single palette source).
+pub fn semantic_palette(tone: SemanticTone) -> SemanticPalette {
+    let accent_token = tone.accent_fg_token();
+    SemanticPalette {
+        tone,
+        accent: parse_color(accent_token),
+        fg: parse_text_color(accent_token),
+        border: parse_color(tone.accent_border_token()),
+        shadow: parse_color(tone.accent_shadow_token()),
+    }
+}
+
+/// Attachment / chip media box wash (`accent/10` over background).
+pub const SEMANTIC_MEDIA_WASH_ALPHA: f32 = 0.1;
+
+/// Media-slot accent wash; `None` for [`SemanticTone::Default`].
+pub fn semantic_media_wash(tone: SemanticTone) -> Option<[f32; 4]> {
+    if !tone.is_semantic() {
+        return None;
+    }
+    let palette = semantic_palette(tone);
+    Some(crate::style::color_mix_over_surface(
+        palette.accent,
+        parse_color("background"),
+        SEMANTIC_MEDIA_WASH_ALPHA,
+    ))
+}
+
+/// Badge / Button 语义静止态 soft tint（浅 rest / 深 rest — 见 [`soft_semantic_mix_alphas`]）。
 pub fn soft_semantic_fill(accent: [f32; 4]) -> [f32; 4] {
-    let a = if is_dark_theme() { 0.2 } else { 0.1 };
-    color_mix_over_background(accent, a)
+    crate::style::color_mix_over_background(accent, soft_semantic_mix_alphas().rest)
+}
+
+/// Badge / Button 语义 hover 端点 soft tint。
+pub fn soft_semantic_fill_hover(accent: [f32; 4]) -> [f32; 4] {
+    crate::style::color_mix_over_background(accent, soft_semantic_mix_alphas().hover)
+}
+
+/// Button semantic variant chrome: soft tint rest→hover + opaque accent caption.
+pub fn button_soft_semantic_chrome(
+    tone: SemanticTone,
+    hover_t: f32,
+) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
+    use crate::style::{lerp_paint_chrome, PaintChrome};
+    let palette = semantic_palette(tone);
+    let mix = soft_semantic_mix_alphas();
+    let rest = PaintChrome {
+        bg: crate::style::color_mix_over_background(palette.accent, mix.rest),
+        fg: palette.fg,
+        border: None,
+    };
+    let hover = PaintChrome {
+        bg: crate::style::color_mix_over_background(palette.accent, mix.hover),
+        fg: palette.fg,
+        border: None,
+    };
+    let c = lerp_paint_chrome(rest, hover, hover_t);
+    (c.bg, c.fg, c.border)
 }
 
 /// 语义副文案色：与 Toast 描述一致，accent 前景降 alpha（非主题 `muted-foreground`）。
@@ -249,7 +330,7 @@ const MODAL_OVERLAY_SEMANTIC_WASH_DARK: f32 = 0.22;
 /// 四边均匀阴影（offset 0,0）；语义变体仅换色相，强度与 default 一致。
 pub fn semantic_shadow(tone: SemanticTone) -> SemanticShadow {
     let color = if tone.is_semantic() {
-        let mut c = parse_color(tone.accent_shadow_token());
+        let mut c = semantic_palette(tone).shadow;
         c[3] = SHADOW_ALPHA;
         c
     } else {
@@ -269,7 +350,7 @@ fn resolve_border(tone: SemanticTone, filled: bool, decor: SemanticChromeDecor) 
     let color = if filled || !tone.is_semantic() {
         parse_color("border")
     } else {
-        parse_color(tone.accent_border_token())
+        semantic_palette(tone).border
     };
     Some(SemanticBorder {
         color,
@@ -300,13 +381,13 @@ pub fn semantic_modal_overlay_scrim(
             .clamp(0.0, 1.0);
         return c;
     }
-    let accent = parse_color(tone.accent_fg_token());
+    let accent = semantic_palette(tone).accent;
     let wash = if is_dark_theme() {
         MODAL_OVERLAY_SEMANTIC_WASH_DARK
     } else {
         MODAL_OVERLAY_SEMANTIC_WASH_LIGHT
     };
-    let mut c = color_mix_over_background(accent, wash);
+    let mut c = crate::style::color_mix_over_background(accent, wash);
     c[3] = explicit_opacity
         .unwrap_or_else(|| {
             if is_dark_theme() {
@@ -345,9 +426,9 @@ pub fn semantic_chrome(opts: SemanticChromeOpts) -> SemanticChrome {
         };
     }
 
-    let accent_token = tone.accent_fg_token();
-    let accent = parse_color(accent_token);
-    let fg = parse_text_color(accent_token);
+    let palette = semantic_palette(tone);
+    let accent = palette.accent;
+    let fg = palette.fg;
 
     if filled {
         SemanticChrome {
@@ -419,16 +500,50 @@ mod tests {
     fn filled_soft_matches_badge_recipe() {
         let accent = parse_color("green-600");
         let filled = soft_semantic_fill(accent);
-        let dark = is_dark_theme();
-        let a = if dark { 0.2 } else { 0.1 };
+        let mix = soft_semantic_mix_alphas();
         let bg = parse_color("background");
         let expect = [
-            accent[0] * a + bg[0] * (1.0 - a),
-            accent[1] * a + bg[1] * (1.0 - a),
-            accent[2] * a + bg[2] * (1.0 - a),
+            accent[0] * mix.rest + bg[0] * (1.0 - mix.rest),
+            accent[1] * mix.rest + bg[1] * (1.0 - mix.rest),
+            accent[2] * mix.rest + bg[2] * (1.0 - mix.rest),
             1.0,
         ];
         assert_eq!(filled, expect);
+    }
+
+    #[test]
+    fn semantic_palette_resolves_tone_tokens() {
+        let p = semantic_palette(SemanticTone::Success);
+        assert_eq!(p.accent, parse_color("green-600"));
+        assert_eq!(p.fg, parse_text_color("green-600"));
+        assert_eq!(p.border, parse_color("green-300"));
+        assert_eq!(p.shadow, parse_color("green-500"));
+    }
+
+    #[test]
+    fn button_soft_rest_matches_soft_semantic_fill() {
+        let tone = SemanticTone::Warning;
+        let (bg, fg, border) = button_soft_semantic_chrome(tone, 0.0);
+        assert_eq!(bg, soft_semantic_fill(semantic_palette(tone).accent));
+        assert_eq!(fg, parse_text_color("orange-600"));
+        assert!(border.is_none());
+    }
+
+    #[test]
+    fn button_soft_hover_endpoint_matches_fill_hover() {
+        let tone = SemanticTone::Destructive;
+        let (bg, ..) = button_soft_semantic_chrome(tone, 1.0);
+        assert_eq!(bg, soft_semantic_fill_hover(semantic_palette(tone).accent));
+    }
+
+    #[test]
+    fn semantic_media_wash_matches_attachment_recipe() {
+        let wash = semantic_media_wash(SemanticTone::Info).expect("info wash");
+        let accent = semantic_palette(SemanticTone::Info).accent;
+        assert_eq!(
+            wash,
+            crate::style::color_mix_over_background(accent, SEMANTIC_MEDIA_WASH_ALPHA)
+        );
     }
 
     #[test]

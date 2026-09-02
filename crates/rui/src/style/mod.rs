@@ -38,12 +38,14 @@ pub use animation::{
     use_ui_transition_cubic, AnimationBaseline, AnimationLock, AnimationRunState,
     AnimationSnapshot, AnimationTick, CubicTween, CubicTweenState, TransitionSnapshot,
 };
-pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
+pub use color::{
+    color_mix_over_background, parse_color, parse_text_color, try_parse_color, try_parse_text_color,
+};
 pub use color_space::{
-    display_srgba_to_linear_srgba, encode_linear_srgb_component,
-    encode_linear_srgb_to_display_srgb, lerp_display_srgb_linear, lerp_premultiplied_display_srgba,
-    linearize_display_srgb, linearize_display_srgb_component, mix_display_srgb_in_oklab,
-    oklch_to_display_srgba,
+    color_mix_over_surface, display_srgba_to_linear_srgba, encode_linear_srgb_component,
+    encode_linear_srgb_to_display_srgb, lerp_display_srgb_linear, lerp_paint_chrome,
+    lerp_premultiplied_display_srgba, lerp_rgba_u8, lerp_text_rgba, linearize_display_srgb,
+    linearize_display_srgb_component, mix_display_srgb_in_oklab, oklch_to_display_srgba, PaintChrome,
 };
 pub use cursor::{CursorKind, CursorUrl, CursorValue};
 pub use cursor_image::register_cursor_rgba8;
@@ -78,10 +80,12 @@ pub use svg_filter::{
     resolve_filter_list_to_graph, resolve_svg_filter_url, FilterGraph, FilterParseError,
 };
 pub use semantic_tone::{
-    apply_semantic_border, apply_semantic_shadow, color_mix_over_background, dim_semantic_shadow,
-    muted_from_accent, semantic_chrome, semantic_modal_overlay_scrim, semantic_shadow,
-    soft_semantic_fill, SemanticBorder, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
-    SemanticShadow, SemanticSurface, SemanticTone, MODAL_OVERLAY_OPACITY_NEUTRAL,
+    apply_semantic_border, apply_semantic_shadow, button_soft_semantic_chrome,
+    dim_semantic_shadow, muted_from_accent, semantic_chrome, semantic_media_wash,
+    semantic_modal_overlay_scrim, semantic_palette, semantic_shadow, soft_semantic_fill,
+    soft_semantic_fill_hover, soft_semantic_mix_alphas, SemanticBorder, SemanticChrome,
+    SemanticChromeDecor, SemanticChromeOpts, SemanticPalette, SemanticShadow, SemanticSurface,
+    SemanticTone, SoftSemanticMix, SEMANTIC_MEDIA_WASH_ALPHA, MODAL_OVERLAY_OPACITY_NEUTRAL,
 };
 pub use variant_override::{
     apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,

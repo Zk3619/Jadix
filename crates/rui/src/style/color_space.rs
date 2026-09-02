@@ -188,6 +188,78 @@ pub fn mix_display_srgb_in_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     [rgb[0], rgb[1], rgb[2], ao]
 }
 
+// ---------------------------------------------------------------------------
+// ① Mix / lerp primitives (see `docs/color.md` §B)
+// ---------------------------------------------------------------------------
+
+/// Straight-channel α blend: `fg` at opacity `alpha` over `surface`, opaque result (`α=1`).
+///
+/// Matches Tailwind `token/N` and ShadCN soft tints (not linear-light lerp).
+pub fn color_mix_over_surface(fg: [f32; 4], surface: [f32; 4], alpha: f32) -> [f32; 4] {
+    let a = alpha.clamp(0.0, 1.0);
+    [
+        fg[0] * a + surface[0] * (1.0 - a),
+        fg[1] * a + surface[1] * (1.0 - a),
+        fg[2] * a + surface[2] * (1.0 - a),
+        1.0,
+    ]
+}
+
+/// Linear-light lerp for 8-bit RGBA (caption / icon foreground hover).
+pub fn lerp_rgba_u8(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    let af = [
+        a[0] as f32 / 255.0,
+        a[1] as f32 / 255.0,
+        a[2] as f32 / 255.0,
+        a[3] as f32 / 255.0,
+    ];
+    let bf = [
+        b[0] as f32 / 255.0,
+        b[1] as f32 / 255.0,
+        b[2] as f32 / 255.0,
+        b[3] as f32 / 255.0,
+    ];
+    let o = lerp_display_srgb_linear(af, bf, t);
+    [
+        (o[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+/// Alias for text/caption hover (same as [`lerp_rgba_u8`]).
+#[inline]
+pub fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    lerp_rgba_u8(a, b, t)
+}
+
+/// Rest/hover paint triple for component chrome interpolation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintChrome {
+    pub bg: [f32; 4],
+    pub fg: [u8; 4],
+    pub border: Option<[f32; 4]>,
+}
+
+fn lerp_border_opt(a: Option<[f32; 4]>, b: Option<[f32; 4]>, t: f32) -> Option<[f32; 4]> {
+    match (a, b) {
+        (Some(ab), Some(bb)) => Some(lerp_display_srgb_linear(ab, bb, t)),
+        (Some(c), None) | (None, Some(c)) => Some(c),
+        (None, None) => None,
+    }
+}
+
+/// Interpolate bg / fg / border between two chrome endpoints.
+pub fn lerp_paint_chrome(a: PaintChrome, b: PaintChrome, t: f32) -> PaintChrome {
+    let t = t.clamp(0.0, 1.0);
+    PaintChrome {
+        bg: lerp_display_srgb_linear(a.bg, b.bg, t),
+        fg: lerp_rgba_u8(a.fg, b.fg, t),
+        border: lerp_border_opt(a.border, b.border, t),
+    }
+}
+
 /// Display sRGB RGBA → 线性光 RGBA（alpha 不变）。
 ///
 /// 写入 wgpu `*Srgb` 渲染目标前，片元输出须为线性值；若把 display 编码色直接写出，
@@ -250,6 +322,41 @@ mod tests {
             linear[3],
         ];
         assert_eq!(hex3(back), "333333");
+    }
+
+    #[test]
+    fn color_mix_over_surface_matches_straight_alpha() {
+        let fg = [1.0, 0.0, 0.0, 1.0];
+        let surface = [0.0, 0.0, 0.0, 1.0];
+        let mixed = color_mix_over_surface(fg, surface, 0.5);
+        assert!((mixed[0] - 0.5).abs() < 1e-4);
+        assert_eq!(mixed[3], 1.0);
+    }
+
+    #[test]
+    fn lerp_rgba_u8_midpoint() {
+        let a = [0, 0, 0, 255];
+        let b = [255, 255, 255, 255];
+        let m = lerp_rgba_u8(a, b, 0.5);
+        assert!(m[0] > 180 && m[0] < 190, "{}", m[0]);
+    }
+
+    #[test]
+    fn lerp_paint_chrome_interpolates_bg_and_fg() {
+        let rest = PaintChrome {
+            bg: [0.0, 0.0, 0.0, 1.0],
+            fg: [0, 0, 0, 255],
+            border: None,
+        };
+        let hover = PaintChrome {
+            bg: [1.0, 1.0, 1.0, 1.0],
+            fg: [255, 255, 255, 255],
+            border: Some([0.5, 0.5, 0.5, 1.0]),
+        };
+        let mid = lerp_paint_chrome(rest, hover, 0.5);
+        assert!(mid.bg[0] > 0.73 && mid.bg[0] < 0.74);
+        assert!(mid.fg[0] > 180);
+        assert!(mid.border.is_some());
     }
 
     #[test]
