@@ -13,6 +13,9 @@
 //!   box-model layout (padding / margin / gap / border) so Taffy still sees insets.
 //! - **Recursive**: nested pack shells are flattened; preserved nodes are leaves of the
 //!   walk (their children are not hoisted).
+//! - **Vacuous children**: [`children_none_if_vacuous`] treats empty fragments / blank
+//!   leaves as `None` so slot components (`AlertDialogCancel`, `SheetClose`, …) can apply
+//!   their default chrome for `<Foo />` and `<Foo></Foo>`.
 
 use crate::core::tree::Element;
 use crate::layout::{lp_length_px, lpa_kind, DimKind};
@@ -101,6 +104,37 @@ fn is_pack_shell(el: &Element) -> bool {
         return false;
     }
     is_fragment(el) || is_anonymous_multi_pack(el)
+}
+
+/// Plain-text RSX child (`"Cancel"`) — whitespace-only strings are treated as absent.
+pub fn is_text_content_leaf(el: &Element) -> bool {
+    el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// `true` when the subtree carries no renderable or interactive content.
+pub fn is_vacuous_element(el: &Element) -> bool {
+    if is_preserved_shell(el) || el.focusable {
+        return false;
+    }
+    if is_text_content_leaf(el) {
+        return false;
+    }
+    if el.children.is_empty() {
+        return true;
+    }
+    if is_pack_shell(el) {
+        return el.children.iter().all(is_vacuous_element);
+    }
+    false
+}
+
+/// Normalize RSX `children` before slot components: empty / fragment-only → `None`.
+pub fn children_none_if_vacuous(children: Option<Element>) -> Option<Element> {
+    match children {
+        None => None,
+        Some(el) if is_vacuous_element(&el) => None,
+        Some(el) => Some(el),
+    }
 }
 
 fn take_packed_inner(mut el: Element) -> Vec<Element> {
@@ -220,5 +254,30 @@ mod tests {
         let kids = take_packed(btn);
         assert_eq!(kids.len(), 1);
         assert_eq!(kids[0].children.len(), 2);
+    }
+
+    #[test]
+    fn vacuous_leaf_and_fragment_normalize_to_none() {
+        assert!(is_vacuous_element(&Element::new()));
+        let mut frag = Element::new();
+        frag.set_attr(ATTR_FRAGMENT, "1");
+        assert!(is_vacuous_element(&frag));
+        assert!(children_none_if_vacuous(None).is_none());
+        assert!(children_none_if_vacuous(Some(Element::new())).is_none());
+        assert!(children_none_if_vacuous(Some(frag)).is_none());
+    }
+
+    #[test]
+    fn vacuous_whitespace_text_is_absent() {
+        assert!(is_text_content_leaf(&Element::new().text("Cancel")));
+        assert!(!is_text_content_leaf(&Element::new().text("   ")));
+        assert!(is_vacuous_element(&Element::new().text("   ")));
+    }
+
+    #[test]
+    fn non_vacuous_children_survive_normalization() {
+        let el = Element::new().text("OK");
+        let out = children_none_if_vacuous(Some(el));
+        assert_eq!(out.unwrap().text.as_deref(), Some("OK"));
     }
 }

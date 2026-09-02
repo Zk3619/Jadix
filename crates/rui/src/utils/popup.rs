@@ -133,6 +133,15 @@ pub(crate) const ATTR_FLOATING_CONTENT_H: &str = "rui_floating_content_h";
 pub(crate) const ATTR_FLOATING_EXPAND_MEASURE: &str = "rui_floating_expand_measure";
 /// Trigger-facing edge y when the panel is placed above; accordion `top` tracks visual height from this.
 pub(crate) const ATTR_FLOATING_ANCHOR_EDGE_Y: &str = "rui_floating_anchor_edge_y";
+/// Expand enter/exit baseline height (logical px). When set, accordion clips from this height
+/// instead of 0 so covered triggers (e.g. bubble reaction bar) continue downward/upward.
+pub(crate) const ATTR_FLOATING_EXPAND_FROM_H: &str = "rui_floating_expand_from_h";
+/// Expand enter/exit baseline width (logical px). When set, `max-width` interpolates with the
+/// accordion so row-wise content (e.g. AvatarGroup +N) is clipped instead of popping in/out.
+pub(crate) const ATTR_FLOATING_EXPAND_FROM_W: &str = "rui_floating_expand_from_w";
+/// When `"1"` with [`ATTR_FLOATING_EXPAND_FROM_W`], lerp `max-width` and `nowrap` (horizontal
+/// clip). When unset, pin width to `from_w` so wrapped rows unveil via `max-height` (Bubble +N).
+pub(crate) const ATTR_FLOATING_EXPAND_CLIP_X: &str = "rui_floating_expand_clip_x";
 
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
@@ -463,7 +472,7 @@ fn height_keyframe_animation_active(el: &Element) -> bool {
         matches!(
             a.name.as_str(),
             "accordion-down" | "accordion-up" | "collapsible-down" | "collapsible-up"
-        )
+        ) || a.name.starts_with("rui-expand-down-") || a.name.starts_with("rui-expand-up-")
     })
 }
 

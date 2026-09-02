@@ -699,7 +699,7 @@ impl super::App {
             .unwrap_or_default();
 
         let line_h = crate::utils::text_field::text_edit_line_box_px(
-            text_style.size,
+            text_style.size_resolved(),
             text_style.line_height_px,
             text_style.line_height_scale,
         )

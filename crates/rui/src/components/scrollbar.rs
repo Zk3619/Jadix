@@ -13,14 +13,15 @@
 //! - `target` 必须与对应视口的 `id` 一致。
 //! - `visibility`: auto | always | never（never 仍可能可滚内容）。
 //! - `children` 当前忽略。
-//! - Overlay：[`ScrollbarBuilder::overlay`] / attr `rui_scrollbar_overlay=1` → 绝对定位，不占 flex 宽。
+//! - 主题色：`scrollbar-track` / `scrollbar-thumb` / `scrollbar-track-border` / `scrollbar-thumb-border`。
+//! - `auto` 显隐：仅拇指（及有色的边框）参与淡入；透明轨道不参与。
 
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
 };
-use crate::core::tree::{Element, IntoDimension, IntoF32};
+use crate::core::tree::{Element, IntoDimension, IntoF32, parse_color};
 use rui_macros::component;
 use taffy::prelude::*;
 
@@ -53,6 +54,85 @@ pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {
 
 pub const SCROLLBAR_THUMB_FOCUS_PREFIX: &str = "scrollbar-thumb:";
 pub const SCROLLBAR_TRACK_FOCUS_PREFIX: &str = "scrollbar-track:";
+/// When `"0"`, `auto` fade skips track chrome (overlay thumb-only).
+pub(crate) const ATTR_SCROLLBAR_TRACK_FADES: &str = "rui_scrollbar_track_fades";
+
+const CHROME_ALPHA_EPS: f32 = 0.01;
+
+#[inline]
+pub(crate) fn scrollbar_chrome_has_alpha(color: [f32; 4]) -> bool {
+    color[3] > CHROME_ALPHA_EPS
+}
+
+#[inline]
+pub(crate) fn scrollbar_track_fades(track_bg: [f32; 4], track_border: [f32; 4]) -> bool {
+    scrollbar_chrome_has_alpha(track_bg) || scrollbar_chrome_has_alpha(track_border)
+}
+
+#[inline]
+pub(crate) fn scrollbar_border_width(color: [f32; 4], explicit: Option<f32>) -> f32 {
+    match explicit {
+        Some(w) => w.max(0.0),
+        None => {
+            if scrollbar_chrome_has_alpha(color) {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
+/// Restore base alpha after build-time `auto` zeroing; skip intentionally transparent track chrome.
+#[inline]
+pub(crate) fn normalize_scrollbar_base_for_auto(
+    vis: &str,
+    track_fades: bool,
+    track_border_width: f32,
+    thumb_border_width: f32,
+    track_bg: &mut [f32; 4],
+    track_border: &mut [f32; 4],
+    thumb_bg: &mut [f32; 4],
+    thumb_border: &mut [f32; 4],
+) {
+    if vis != "auto" {
+        return;
+    }
+    if track_fades && track_bg[3] <= CHROME_ALPHA_EPS {
+        track_bg[3] = 1.0;
+    }
+    if thumb_bg[3] <= CHROME_ALPHA_EPS {
+        thumb_bg[3] = 1.0;
+    }
+    if track_fades && track_border_width > 0.0 && track_border[3] <= CHROME_ALPHA_EPS {
+        track_border[3] = 1.0;
+    }
+    if thumb_border_width > 0.0 && thumb_border[3] <= CHROME_ALPHA_EPS {
+        thumb_border[3] = 1.0;
+    }
+}
+
+/// Apply `auto` / `always` visibility alpha; track and thumb fade independently.
+#[inline]
+pub(crate) fn apply_scrollbar_visible_alpha(
+    visible_alpha: f32,
+    track_fades: bool,
+    thumb_border_fades: bool,
+    track_bg: &mut [f32; 4],
+    thumb_bg: &mut [f32; 4],
+    track_border: &mut [f32; 4],
+    thumb_border: &mut [f32; 4],
+) {
+    let v = visible_alpha.clamp(0.0, 1.0);
+    if track_fades {
+        track_bg[3] *= v;
+        track_border[3] *= v;
+    }
+    thumb_bg[3] *= v;
+    if thumb_border_fades {
+        thumb_border[3] *= v;
+    }
+}
 
 /// 沿轨道方向的最小滑块长度。
 ///
@@ -104,6 +184,10 @@ pub struct ScrollbarBuilder {
     thickness: f32,
     track_color: [f32; 4],
     thumb_color: [f32; 4],
+    track_border_color: [f32; 4],
+    thumb_border_color: [f32; 4],
+    track_border_width: Option<f32>,
+    thumb_border_width: Option<f32>,
     flex_grow: f32,
     flex_shrink: f32,
     position: Position,
@@ -121,8 +205,12 @@ pub fn scrollbar(id: &str) -> ScrollbarBuilder {
         variant: ScrollbarVariant::Capsule,
         visibility: ScrollbarVisibility::Auto,
         thickness: 10.0,
-        track_color: crate::core::tree::parse_color("secondary"),
-        thumb_color: crate::core::tree::parse_color("foreground"),
+        track_color: parse_color("scrollbar-track"),
+        thumb_color: parse_color("scrollbar-thumb"),
+        track_border_color: parse_color("scrollbar-track-border"),
+        thumb_border_color: parse_color("scrollbar-thumb-border"),
+        track_border_width: None,
+        thumb_border_width: None,
         flex_grow: 0.0,
         flex_shrink: 0.0, // Scrollbars usually shouldn't shrink by default if they have a fixed cross size.
         position: Position::Relative,
@@ -234,6 +322,26 @@ impl ScrollbarBuilder {
 
     pub fn thumb_color(mut self, color: [f32; 4]) -> Self {
         self.thumb_color = color;
+        self
+    }
+
+    pub fn track_border_color(mut self, color: [f32; 4]) -> Self {
+        self.track_border_color = color;
+        self
+    }
+
+    pub fn thumb_border_color(mut self, color: [f32; 4]) -> Self {
+        self.thumb_border_color = color;
+        self
+    }
+
+    pub fn track_border_width(mut self, width: impl IntoF32) -> Self {
+        self.track_border_width = Some(width.into_f32().max(0.0));
+        self
+    }
+
+    pub fn thumb_border_width(mut self, width: impl IntoF32) -> Self {
+        self.thumb_border_width = Some(width.into_f32().max(0.0));
         self
     }
 
@@ -352,14 +460,25 @@ impl From<ScrollbarBuilder> for Element {
             ScrollbarVisibility::Always => 1.0_f32,
             ScrollbarVisibility::Auto | ScrollbarVisibility::Never => 0.0_f32,
         };
+        let track_fades = scrollbar_track_fades(builder.track_color, builder.track_border_color);
+        let track_border_w =
+            scrollbar_border_width(builder.track_border_color, builder.track_border_width);
+        let thumb_border_w =
+            scrollbar_border_width(builder.thumb_border_color, builder.thumb_border_width);
         let mut track_color = builder.track_color;
-        track_color[3] *= initial_alpha;
+        if track_fades {
+            track_color[3] *= initial_alpha;
+        }
         let mut thumb_color = builder.thumb_color;
         thumb_color[3] *= initial_alpha;
-        let mut thumb_border_color = crate::core::tree::parse_color("background");
-        thumb_border_color[3] *= initial_alpha;
-        let mut track_border_color = crate::core::tree::parse_color("input");
-        track_border_color[3] *= initial_alpha;
+        let mut track_border_color = builder.track_border_color;
+        if track_fades {
+            track_border_color[3] *= initial_alpha;
+        }
+        let mut thumb_border_color = builder.thumb_border_color;
+        if scrollbar_chrome_has_alpha(thumb_border_color) {
+            thumb_border_color[3] *= initial_alpha;
+        }
 
         let inset = 1.0_f32;
         let base_cross = builder.thickness.max(2.0);
@@ -380,7 +499,7 @@ impl From<ScrollbarBuilder> for Element {
                         0.0
                     };
                     let ml = (track - tw).max(0.0) * t.clamp(0.0, 1.0);
-                    (track, track_cross, tw, thumb_cross, ml, 0.0)
+                    (track, track_cross, tw, thumb_cross, ml, inset)
                 }
                 ScrollbarOrientation::Vertical => {
                     let track = if vh > 1.0 { vh } else { 120.0 };
@@ -394,7 +513,7 @@ impl From<ScrollbarBuilder> for Element {
                         0.0
                     };
                     let mt = (track - th).max(0.0) * t.clamp(0.0, 1.0);
-                    (track_cross, track, thumb_cross, th, 0.0, mt)
+                    (track_cross, track, thumb_cross, th, inset, mt)
                 }
             };
 
@@ -422,7 +541,7 @@ impl From<ScrollbarBuilder> for Element {
             .mt(thumb_mt)
             .rounded(thumb_radius)
             .bg(thumb_color)
-            .border(thumb_border_color, 1.0)
+            .border(thumb_border_color, thumb_border_w)
             .cursor_kind(crate::core::tree::CursorKind::Pointer);
         if let Some(fid) = thumb_focus {
             thumb = thumb.focus_id(fid);
@@ -433,7 +552,7 @@ impl From<ScrollbarBuilder> for Element {
             .flex_shrink(builder.flex_shrink)
             .rounded(track_radius)
             .bg(track_color)
-            .border(track_border_color, 1.0);
+            .border(track_border_color, track_border_w);
         match builder.orientation {
             ScrollbarOrientation::Horizontal => {
                 let w = if track_w_px > 0.0 { track_w_px } else { 120.0 };
@@ -470,7 +589,6 @@ impl From<ScrollbarBuilder> for Element {
             .child(thumb);
         if builder.overlay {
             track.set_attr("rui_scrollbar_overlay", "1");
-            // Absolute + no flex contribution: pin to the trailing edge of the containing block.
             match builder.orientation {
                 ScrollbarOrientation::Vertical => {
                     track = track.absolute().right(0.0).top(0.0).bottom(0.0);
@@ -480,7 +598,54 @@ impl From<ScrollbarBuilder> for Element {
                 }
             }
         }
+        track.set_attr(
+            ATTR_SCROLLBAR_TRACK_FADES,
+            if track_fades { "1" } else { "0" },
+        );
         track
+    }
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::*;
+
+    #[test]
+    fn transparent_track_does_not_fade_with_thumb() {
+        let mut track = [0.0, 0.0, 0.0, 0.0];
+        let mut track_border = [0.0, 0.0, 0.0, 0.0];
+        let mut thumb = [0.2, 0.2, 0.2, 1.0];
+        let mut thumb_border = [0.0, 0.0, 0.0, 0.0];
+        normalize_scrollbar_base_for_auto(
+            "auto",
+            false,
+            0.0,
+            0.0,
+            &mut track,
+            &mut track_border,
+            &mut thumb,
+            &mut thumb_border,
+        );
+        apply_scrollbar_visible_alpha(0.5, false, false, &mut track, &mut thumb, &mut track_border, &mut thumb_border);
+        assert_eq!(track[3], 0.0);
+        assert!((thumb[3] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn opaque_track_and_thumb_both_fade() {
+        let mut track = [0.9, 0.9, 0.9, 1.0];
+        let mut track_border = [0.0, 0.0, 0.0, 0.0];
+        let mut thumb = [0.2, 0.2, 0.2, 1.0];
+        let mut thumb_border = [0.0, 0.0, 0.0, 0.0];
+        apply_scrollbar_visible_alpha(0.5, true, false, &mut track, &mut thumb, &mut track_border, &mut thumb_border);
+        assert!((track[3] - 0.5).abs() < 1e-4);
+        assert!((thumb[3] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transparent_border_has_zero_width_by_default() {
+        assert_eq!(scrollbar_border_width([0.0; 4], None), 0.0);
+        assert_eq!(scrollbar_border_width([1.0, 1.0, 1.0, 1.0], None), 1.0);
     }
 }
 

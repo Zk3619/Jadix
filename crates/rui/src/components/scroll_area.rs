@@ -14,7 +14,9 @@
 //!
 //! ## Notes
 //! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
-//! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior` 默认
+//! - 默认 `scrollbar_inset="inside"`（overlay：绝对叠在视口边缘，不占 flex 槽、不内缩内容；
+//!   `scrollbar_y_side` / `scrollbar_x_side` 只决定条贴哪条边）。`outside` 为独立 flex 槽。
+//! - 默认 visibility auto、条在 right / bottom；`scroll_behavior` 默认
 //!   [`smooth`](crate::core::scroll_viewport::SCROLL_BEHAVIOR_SMOOTH)，瞬时跳转用
 //!   [`jump`](crate::core::scroll_viewport::SCROLL_BEHAVIOR_JUMP)。
 //! - 独立外挂条见 [`crate::components::Scrollbar`]。
@@ -59,6 +61,8 @@ pub struct ScrollAreaBuilder {
     scrollbar_variant: String,
     scrollbar_track_color: Option<String>,
     scrollbar_thumb_color: Option<String>,
+    scrollbar_track_border_color: Option<String>,
+    scrollbar_thumb_border_color: Option<String>,
 }
 
 pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
@@ -85,6 +89,8 @@ pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
         scrollbar_variant: String::new(),
         scrollbar_track_color: None,
         scrollbar_thumb_color: None,
+        scrollbar_track_border_color: None,
+        scrollbar_thumb_border_color: None,
     }
 }
 
@@ -109,6 +115,10 @@ pub fn ScrollArea(
     scrollbar_variant: Option<String>,
     scrollbar_y_side: Option<String>,
     scrollbar_x_side: Option<String>,
+    scrollbar_track_color: Option<String>,
+    scrollbar_thumb_color: Option<String>,
+    scrollbar_track_border_color: Option<String>,
+    scrollbar_thumb_border_color: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut builder = scroll_area(&id);
@@ -148,6 +158,18 @@ pub fn ScrollArea(
     if let Some(s) = scrollbar_x_side {
         builder = builder.scrollbar_x_side(s);
     }
+    if let Some(c) = scrollbar_track_color {
+        builder = builder.scrollbar_track_color(c);
+    }
+    if let Some(c) = scrollbar_thumb_color {
+        builder = builder.scrollbar_thumb_color(c);
+    }
+    if let Some(c) = scrollbar_track_border_color {
+        builder = builder.scrollbar_track_border_color(c);
+    }
+    if let Some(c) = scrollbar_thumb_border_color {
+        builder = builder.scrollbar_thumb_border_color(c);
+    }
     if let Some(c) = children {
         builder = builder.child(c);
     }
@@ -166,6 +188,12 @@ fn apply_scrollbar_appearance(mut b: ScrollbarBuilder, a: &ScrollAreaBuilder) ->
     }
     if let Some(ref tok) = a.scrollbar_thumb_color {
         b = b.thumb_color(parse_color(tok));
+    }
+    if let Some(ref tok) = a.scrollbar_track_border_color {
+        b = b.track_border_color(parse_color(tok));
+    }
+    if let Some(ref tok) = a.scrollbar_thumb_border_color {
+        b = b.thumb_border_color(parse_color(tok));
     }
     b
 }
@@ -213,6 +241,10 @@ impl ScrollAreaBuilder {
     }
 
     /// `inside` | `outside` (default `inside`).
+    ///
+    /// - `inside`: overlay — track is absolute on the viewport edge; content is **not** inset
+    ///   (same for every `scrollbar_*_side`).
+    /// - `outside`: scrollbar occupies a dedicated flex lane beside/along the content.
     pub fn scrollbar_inset(mut self, mode: impl Into<String>) -> Self {
         let mode = mode.into();
         self.scrollbar_inset_x = mode.clone();
@@ -257,6 +289,16 @@ impl ScrollAreaBuilder {
 
     pub fn scrollbar_thumb_color(mut self, token: impl Into<String>) -> Self {
         self.scrollbar_thumb_color = Some(token.into());
+        self
+    }
+
+    pub fn scrollbar_track_border_color(mut self, token: impl Into<String>) -> Self {
+        self.scrollbar_track_border_color = Some(token.into());
+        self
+    }
+
+    pub fn scrollbar_thumb_border_color(mut self, token: impl Into<String>) -> Self {
+        self.scrollbar_thumb_border_color = Some(token.into());
         self
     }
 
@@ -378,7 +420,6 @@ impl From<ScrollAreaBuilder> for Element {
             .eq_ignore_ascii_case("outside");
         let v_right = !builder.scrollbar_y_side.trim().eq_ignore_ascii_case("left");
         let h_top = builder.scrollbar_x_side.trim().eq_ignore_ascii_case("top");
-        let base_thickness = builder.scrollbar_thickness.unwrap_or(10.0).max(2.0);
         let vis_x = if vis == "auto" && inset_outside_x {
             "always"
         } else {
@@ -453,18 +494,6 @@ impl From<ScrollAreaBuilder> for Element {
         outer.style.position = taffy::style::Position::Relative;
 
         let content_children = std::mem::take(&mut outer.children);
-        let inside_reserve = base_thickness + SCROLLBAR_EDGE_PAD;
-        let add_padding = |p: &mut taffy::style::LengthPercentage, delta: f32| {
-            *p = match crate::layout::lp_kind(*p) {
-                crate::layout::DimKind::Length(v) => {
-                    taffy::style::LengthPercentage::length((v + delta).max(0.0))
-                }
-                crate::layout::DimKind::Percent(v) => taffy::style::LengthPercentage::percent(v),
-                crate::layout::DimKind::Auto => {
-                    taffy::style::LengthPercentage::length(delta.max(0.0))
-                }
-            };
-        };
 
         let mut viewport = activate_scroll_viewport(
             Element::new()
@@ -481,12 +510,6 @@ impl From<ScrollAreaBuilder> for Element {
             &builder.hover_mode,
         );
         viewport.style.padding = padding;
-        if show_v && !inset_outside_y && !v_right {
-            add_padding(&mut viewport.style.padding.left, inside_reserve);
-        }
-        if show_h && !inset_outside_x && h_top {
-            add_padding(&mut viewport.style.padding.top, inside_reserve);
-        }
         viewport.style.gap = gap;
         viewport.style.flex_direction = flex_direction;
         viewport.style.justify_content = justify_content;

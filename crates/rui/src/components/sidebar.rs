@@ -533,7 +533,7 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
 
 fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], weight: u16, size_px: f32) {
     if el.text.is_some() {
-        el.text_style.color = fg;
+        el.text_style.color = Some(fg);
         // Stamp inherit-lock attrs. Chrome writes color/weight/size without going through
         // `Element::text_color` — otherwise the next full `cascade_inheritable_text_style`
         // (portal hoist / overlay enter) copies `TextStyle::default` white from the
@@ -541,11 +541,11 @@ fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], weight: u16, size
         // (`scroll_only`), so the flash is only on the animation's first layout.
         el.attrs.insert("text_color".into(), "1".into());
         if el.text_style.font_family.as_deref() == Some("lucide") {
-            el.text_style.size = 16.0;
+            el.text_style.size = Some(16.0);
             el.attrs.insert("text_size".into(), "1".into());
         } else {
-            el.text_style.weight = weight;
-            el.text_style.size = size_px;
+            el.text_style.weight = Some(weight);
+            el.text_style.size = Some(size_px);
             el.attrs.insert("font_weight".into(), "1".into());
             el.attrs.insert("text_size".into(), "1".into());
         }
@@ -629,8 +629,8 @@ fn apply_sidebar_menu_button_chrome(
         status = status.merge(LayoutStatus::StyleChanged);
     }
 
-    if el.text_style.weight != want_weight {
-        el.text_style.weight = want_weight;
+    if el.text_style.weight_resolved() != want_weight {
+        el.text_style.weight = Some(want_weight);
         status = status.merge(LayoutStatus::StyleChanged);
     }
     paint_sidebar_menu_button_fg(el, want_fg, want_weight, size_px);
@@ -970,7 +970,7 @@ pub fn SidebarGroup(class: Option<String>, children: Option<Element>) -> Element
 fn paint_group_label_text(el: &mut Element) {
     let fg = parse_text_color("sidebar-foreground/70");
     if el.text.is_some() {
-        el.text_style.color = fg;
+        el.text_style.color = Some(fg);
         el.attrs.insert("text_color".into(), "1".into());
     }
     for child in &mut el.children {
@@ -1587,7 +1587,7 @@ mod tests {
             .into();
         fn first_text_color(el: &Element) -> Option<[u8; 4]> {
             if el.text.is_some() {
-                return Some(el.text_style.color);
+                return Some(el.text_style.color_resolved());
             }
             el.children.iter().find_map(first_text_color)
         }
@@ -1626,7 +1626,7 @@ mod tests {
         let mut btn = rsx_string_menu_button("gal-workspace", "RUI Gallery");
         let fg = parse_text_color("sidebar-foreground");
         let leaf = first_text_leaf(&btn).expect("text leaf");
-        assert_eq!(leaf.text_style.color, fg);
+        assert_eq!(leaf.text_style.color_resolved(), fg);
         assert!(
             leaf.attrs.contains_key("text_color"),
             "paint must lock color against cascade"
@@ -1635,10 +1635,10 @@ mod tests {
         crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut btn);
         let leaf = first_text_leaf(&btn).expect("text leaf after cascade");
         assert_eq!(
-            leaf.text_style.color, fg,
+            leaf.text_style.color_resolved(), fg,
             "cascade must not reset RSX string leaves to default white"
         );
-        assert_ne!(leaf.text_style.color, [255, 255, 255, 255]);
+        assert_ne!(leaf.text_style.color_resolved(), [255, 255, 255, 255]);
     }
 
     #[test]
@@ -1648,8 +1648,7 @@ mod tests {
             children: Some(Element::from("RUI Gallery")),
             base: None,
         });
-        assert_eq!(el.text_style.color, parse_text_color("sidebar-foreground"));
-        assert!(el.attrs.contains_key("text_color"));
+        assert_eq!(el.text_style.color, Some(parse_text_color("sidebar-foreground")));
     }
 
     #[test]

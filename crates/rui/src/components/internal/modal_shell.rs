@@ -4,9 +4,9 @@
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ, portal_sync};
 use crate::core::reactivity::Signal;
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::overlay::overlay;
-use crate::style::parse_color;
+use crate::style::{parse_color, semantic_modal_overlay_scrim, SemanticTone};
 use crate::tokens;
 
 /// 模态遮罩默认不透明度（alpha）。
@@ -41,6 +41,21 @@ impl ShellOverlayOpts {
             close_on_click,
             overlay_blur.unwrap_or(DEFAULT_MODAL_OVERLAY_BLUR),
         )
+    }
+
+    /// Variant-aware scrim: semantic tone tints the underlay unless `color` is explicit.
+    pub(crate) fn from_semantic_parts(
+        tone: SemanticTone,
+        color: Option<&str>,
+        opacity: Option<f32>,
+        close_on_click: bool,
+        overlay_blur: Option<f32>,
+    ) -> Self {
+        Self {
+            color: semantic_modal_overlay_scrim(tone, color, opacity),
+            close_on_click,
+            backdrop_blur: overlay_blur.unwrap_or(DEFAULT_MODAL_OVERLAY_BLUR).max(0.0),
+        }
     }
 
     fn from_parts(
@@ -90,4 +105,23 @@ pub(crate) fn build_modal_overlay(
         b = b.close_on_click(open);
     }
     b.into()
+}
+
+/// In-place underlay repaint for reactive semantic variant binds (`{modal_id}__modal_overlay`).
+pub(crate) fn sync_modal_overlay_scrim(
+    modal_id: &str,
+    tone: SemanticTone,
+    explicit_color: Option<&str>,
+    explicit_opacity: Option<f32>,
+) -> LayoutStatus {
+    let color = semantic_modal_overlay_scrim(tone, explicit_color, explicit_opacity);
+    let template_id = format!("{modal_id}__modal_overlay");
+    crate::app::runtime::try_update_element_by_template_id(&template_id, |el| {
+        if el.style.bg_color == color {
+            return LayoutStatus::Clean;
+        }
+        el.style.bg_color = color;
+        LayoutStatus::StyleChanged
+    })
+    .unwrap_or(LayoutStatus::Clean)
 }

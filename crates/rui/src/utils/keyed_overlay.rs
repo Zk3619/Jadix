@@ -17,7 +17,7 @@ use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::style::{css_animation_needs_frame, css_transition_needs_frame};
 use crate::utils::popup::{
     portal_panel, ATTR_FLOATING_ANCHOR_EDGE_Y, ATTR_FLOATING_CONTENT_H,
-    ATTR_FLOATING_EXPAND_MEASURE,
+    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_MEASURE,
 };
 
 /// 通用 keyed 项前缀（新组件推荐 `ko:{scope}`）。
@@ -115,6 +115,9 @@ fn preserve_floating_panel_motion(fresh: &mut Element, prev: &Element) {
     }
     if let Some(edge) = prev.attrs.get(ATTR_FLOATING_ANCHOR_EDGE_Y) {
         fresh.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, edge.clone());
+    }
+    if let Some(from_h) = prev.attrs.get(ATTR_FLOATING_EXPAND_FROM_H) {
+        fresh.set_attr(ATTR_FLOATING_EXPAND_FROM_H, from_h.clone());
     }
     if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
         fresh.style.transition = prev.style.transition.clone();

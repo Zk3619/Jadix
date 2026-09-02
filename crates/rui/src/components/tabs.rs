@@ -318,16 +318,16 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     }
 
     if el.text.is_some() {
-        if el.text_style.color != want_fg {
-            el.text_style.color = want_fg;
+        if el.text_style.color_resolved() != want_fg {
+            el.text_style.color = Some(want_fg);
             paint = true;
         }
-        if el.text_style.weight != 500 {
-            el.text_style.weight = 500;
+        if el.text_style.weight_resolved() != 500 {
+            el.text_style.weight = Some(500);
             layout = true;
         }
-        if el.text_style.align != crate::style::TextAlign::Center {
-            el.text_style.align = crate::style::TextAlign::Center;
+        if el.text_style.align_resolved() != crate::style::TextAlign::Center {
+            el.text_style.align = Some(crate::style::TextAlign::Center);
             el.attrs
                 .insert("text_align".to_string(), "center".to_string());
             paint = true;
@@ -344,8 +344,8 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
                 .insert("white_space".to_string(), "nowrap".to_string());
             layout = true;
         }
-        if (el.text_style.size - 14.0).abs() > f32::EPSILON {
-            el.text_style.size = 14.0;
+        if (el.text_style.size_resolved() - 14.0).abs() > f32::EPSILON {
+            el.text_style.size = Some(14.0);
             layout = true;
         }
     }
@@ -1052,7 +1052,7 @@ mod tests {
             trigger.style.box_sizing,
             taffy::style::BoxSizing::ContentBox
         );
-        assert_eq!(trigger.text_style.align, crate::style::TextAlign::Center);
+        assert_eq!(trigger.text_style.align_resolved(), crate::style::TextAlign::Center);
         let tn = result
             .text_nodes
             .iter()
@@ -1076,7 +1076,7 @@ mod tests {
             "text border-box center matches chip center y"
         );
         assert!(
-            tn.height > trigger.text_style.size + pad_t + pad_b - 1.0,
+            tn.height > trigger.text_style.size_resolved() + pad_t + pad_b - 1.0,
             "chip taller than bare glyphs so prepare_text dy can vertical-center"
         );
     }

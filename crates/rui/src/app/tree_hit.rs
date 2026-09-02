@@ -1942,6 +1942,17 @@ mod hover_occlusion_tests {
                 f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
             }) {
                 el.scroll_offset[1] = sy;
+                if let Some(rest) = el
+                    .focus_id
+                    .as_deref()
+                    .and_then(|f| f.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
+                {
+                    crate::core::reactivity::use_signal(
+                        &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
+                        || 0.0_f32,
+                    )
+                    .set_silent(sy);
+                }
                 return true;
             }
             for child in &mut el.children {
@@ -2035,6 +2046,9 @@ mod ime_scroll_bounds_tests {
 
     #[test]
     fn find_bounds_prefers_scrolled_duplicate_focus_id() {
+        use crate::core::reactivity::use_signal;
+        use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+
         let mut ghost = Element::new();
         ghost.focus_id = Some("input:dup".into());
         ghost.layout_bounds = [20.0, 400.0, 200.0, 32.0];
@@ -2047,6 +2061,7 @@ mod ime_scroll_bounds_tests {
         viewport.focus_id = Some("scroll:root-scroll".into());
         viewport.style.overflow.y = Overflow::Visible; // overflow wrong, but scroll: still counts
         viewport.scroll_offset = [0.0, 220.0];
+        use_signal(&scroll_offset_y_signal_key("root-scroll"), || 0.0_f32).set_silent(220.0);
         viewport = viewport.child(real);
 
         let root = Element::new().child(ghost).child(viewport);

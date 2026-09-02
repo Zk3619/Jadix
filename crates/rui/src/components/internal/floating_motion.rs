@@ -7,6 +7,7 @@
 //! `mounted` stays alive through exit. Do not reuse [`super::modal_motion`] (dual surface + Dialog zoom).
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -14,16 +15,17 @@ use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::core::reactivity::{Signal, use_signal};
 use crate::core::tree::Element;
 use crate::style::{
-    AnimationFillMode, TimingFunction, animation_run_active, keyframes_anim_entry,
-    tick_element_animations,
+    AnimationFillMode, TimingFunction, animation_run_active, keyframes::KeyframeStop,
+    keyframes_anim_entry, register_keyframes, tick_element_animations,
 };
 use crate::utils::motion::clear_motion;
 use crate::utils::popup::{
-    ATTR_FLOATING_CONTENT_H, ATTR_FLOATING_EXPAND_MEASURE, clamp_animated_max_h_to_place,
+    ATTR_FLOATING_CONTENT_H, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
+    ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_MEASURE, clamp_animated_max_h_to_place,
     peek_floating_place_max_h,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
-use taffy::style::{Dimension, Overflow};
+use taffy::style::{Dimension, FlexWrap, Overflow};
 
 /// Dialog-aligned fade enter.
 const FADE_ENTER_MS: f32 = 300.0;
@@ -39,6 +41,130 @@ const ACCORDION_UP: &str = "accordion-up";
 /// Last accordion-up frames keep chrome (padding/border/shadow) as a flat sliver.
 /// Hide before collect so the exit does not stall on a 0-height capsule.
 const EXPAND_EXIT_HIDE_PX: f32 = 16.0;
+
+thread_local! {
+    static EXPAND_OFFSET_KEYFRAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+fn floating_expand_from_h(el: &Element) -> Option<f32> {
+    el.attrs
+        .get(ATTR_FLOATING_EXPAND_FROM_H)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|h| *h > 0.5)
+}
+
+fn floating_expand_from_w(el: &Element) -> Option<f32> {
+    el.attrs
+        .get(ATTR_FLOATING_EXPAND_FROM_W)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|w| *w > 0.5)
+}
+
+fn expand_clip_x(el: &Element) -> bool {
+    el.attrs
+        .get(ATTR_FLOATING_EXPAND_CLIP_X)
+        .is_some_and(|s| s != "0")
+}
+
+fn expand_anim_progress(el: &Element) -> f32 {
+    let Some(entry) = el.style.animations.first() else {
+        return 1.0;
+    };
+    let elapsed = el
+        .animation_snapshot
+        .runs
+        .first()
+        .map(|r| r.elapsed_ms)
+        .unwrap_or(0.0);
+    let dur = entry.duration_ms.max(1.0);
+    ((elapsed - entry.delay_ms).max(0.0) / dur).clamp(0.0, 1.0)
+}
+
+fn expand_width_clip_active(el: &Element) -> bool {
+    el.style
+        .animations
+        .iter()
+        .any(|a| is_expand_down_anim(&a.name) || is_expand_up_anim(&a.name))
+}
+
+/// Clip extra row content with `max-width` on the same 200ms ease as accordion height.
+fn apply_expand_width_clip(
+    panel: &mut Element,
+    presence: &FloatingPresenceHandle,
+    exiting: bool,
+) {
+    let Some(from_w) = floating_expand_from_w(panel) else {
+        return;
+    };
+    panel.style.overflow.x = Overflow::Hidden;
+    if !expand_clip_x(panel) {
+        let measuring = presence.cell.borrow().measuring;
+        if !measuring && !expand_width_clip_active(panel) {
+            return;
+        }
+        panel.style.max_size.width = Dimension::length(from_w);
+        presence.cell.borrow_mut().clip_width = Some(from_w);
+        return;
+    }
+    if !expand_width_clip_active(panel) {
+        return;
+    }
+    panel.style.min_size.width = Dimension::length(0.0);
+    panel.style.flex_wrap = FlexWrap::NoWrap;
+    let to_w = presence
+        .cell
+        .borrow()
+        .measured_width
+        .max(from_w)
+        .max(1.0);
+    let t = expand_anim_progress(panel);
+    let e = if exiting {
+        TimingFunction::EaseIn.eval(t)
+    } else {
+        TimingFunction::EaseOut.eval(t)
+    };
+    let w = if exiting {
+        from_w + (to_w - from_w) * (1.0 - e)
+    } else {
+        from_w + (to_w - from_w) * e
+    };
+    panel.style.max_size.width = Dimension::length(w);
+    presence.cell.borrow_mut().clip_width = Some(w);
+}
+
+fn is_expand_down_anim(name: &str) -> bool {
+    name == ACCORDION_DOWN || name.starts_with("rui-expand-down-")
+}
+
+fn is_expand_up_anim(name: &str) -> bool {
+    name == ACCORDION_UP || name.starts_with("rui-expand-up-")
+}
+
+fn ensure_expand_down_from_keyframe(from_h: f32) -> String {
+    let from_h = from_h.max(0.0);
+    let key = format!("rui-expand-down-{}", from_h.round().max(1.0) as u32);
+    EXPAND_OFFSET_KEYFRAMES.with(|cache| {
+        let mut set = cache.borrow_mut();
+        if !set.contains(&key) {
+            register_keyframes(&key, vec![KeyframeStop::at(0.0).max_height(from_h)]);
+            set.insert(key.clone());
+        }
+    });
+    key
+}
+
+fn ensure_expand_up_to_keyframe(to_h: f32) -> String {
+    let to_h = to_h.max(0.0);
+    let key = format!("rui-expand-up-{}", to_h.round().max(1.0) as u32);
+    EXPAND_OFFSET_KEYFRAMES.with(|cache| {
+        let mut set = cache.borrow_mut();
+        if !set.contains(&key) {
+            register_keyframes(&key, vec![KeyframeStop::at(1.0).max_height(to_h)]);
+            set.insert(key.clone());
+        }
+    });
+    key
+}
 
 /// Floating panel motion kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,10 +199,13 @@ struct FloatingPresenceCell {
     needs_exit_anim: bool,
     shell: Option<FloatingShellState>,
     measured_height: f32,
+    measured_width: f32,
     exit_from_height: Option<f32>,
     /// Last accordion clip height (interpolated max-height). Rebuild/placement must not
     /// flash the viewport cap before flush re-seeds.
     clip_height: Option<f32>,
+    /// Last `max-width` clip when [`ATTR_FLOATING_EXPAND_FROM_W`] is set.
+    clip_width: Option<f32>,
     /// Expand: waiting for an unconstrained layout before seeding accordion-down.
     measuring: bool,
 }
@@ -122,8 +251,10 @@ pub(crate) fn use_floating_presence(
             needs_exit_anim: false,
             shell: None,
             measured_height: 0.0,
+            measured_width: 0.0,
             exit_from_height: None,
             clip_height: None,
+            clip_width: None,
             measuring: false,
         }));
         PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
@@ -161,6 +292,7 @@ pub(crate) fn sync_floating_presence(
             c.shell = None;
             c.exit_from_height = None;
             c.clip_height = None;
+            c.clip_width = None;
             c.measuring = false;
             return PresencePhase::Absent;
         }
@@ -178,8 +310,10 @@ pub(crate) fn sync_floating_presence(
             c.needs_exit_anim = false;
             c.exit_from_height = None;
             c.clip_height = None;
+            c.clip_width = None;
             c.measuring = false;
             c.measured_height = 0.0;
+            c.measured_width = 0.0;
         }
         if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
             c.exit_armed = true;
@@ -268,7 +402,10 @@ fn fade_has_exit_anim(el: &Element) -> bool {
 }
 
 fn expand_has_exit_anim(el: &Element) -> bool {
-    el.style.animations.iter().any(|a| a.name == ACCORDION_UP)
+    el.style
+        .animations
+        .iter()
+        .any(|a| is_expand_up_anim(&a.name))
 }
 
 fn reset_anim_snapshot(el: &mut Element) {
@@ -304,8 +441,13 @@ fn seed_expand_enter(el: &mut Element, content_height: f32) {
     el.style.opacity = 1.0;
     // Baseline = content height; keyframes `from { max-height: 0 }` → interpolate to baseline.
     el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    let anim_name = if let Some(from_h) = floating_expand_from_h(el) {
+        ensure_expand_down_from_keyframe(from_h.min(content_height))
+    } else {
+        ACCORDION_DOWN.to_string()
+    };
     el.style.animations = vec![keyframes_anim_entry(
-        ACCORDION_DOWN,
+        anim_name,
         EXPAND_MS,
         TimingFunction::EaseOut,
         AnimationFillMode::Both,
@@ -373,8 +515,13 @@ fn seed_expand_exit(el: &mut Element, content_height: f32) {
         .min(content_height.max(0.0))
         .max(1.0);
     el.style.max_size.height = Dimension::length(from);
+    let anim_name = if let Some(to_h) = floating_expand_from_h(el) {
+        ensure_expand_up_to_keyframe(to_h.min(from))
+    } else {
+        ACCORDION_UP.to_string()
+    };
     el.style.animations = vec![keyframes_anim_entry(
-        ACCORDION_UP,
+        anim_name,
         EXPAND_MS,
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
@@ -400,6 +547,10 @@ fn take_measured_height(
     max_height_cap: Option<f32>,
 ) -> f32 {
     let mut c = presence.cell.borrow_mut();
+    let w = panel.layout_bounds[2];
+    if w > 1.0 && w > c.measured_width {
+        c.measured_width = w;
+    }
     if c.measured_height >= 1.0 {
         return c.measured_height;
     }
@@ -419,6 +570,14 @@ fn prepare_expand_measure(panel: &mut Element, max_height_cap: Option<f32>) {
     panel.set_attr(ATTR_FLOATING_EXPAND_MEASURE, "1");
     panel.style.opacity = 0.0;
     panel.style.overflow.y = Overflow::Hidden;
+    if floating_expand_from_w(panel).is_some() {
+        panel.style.overflow.x = Overflow::Hidden;
+        if expand_clip_x(panel) {
+            panel.style.max_size.width = Dimension::auto();
+        } else if let Some(from_w) = floating_expand_from_w(panel) {
+            panel.style.max_size.width = Dimension::length(from_w);
+        }
+    }
     if let Some(cap) = max_height_cap.filter(|h| *h > 0.0) {
         panel.style.max_size.height = Dimension::length(cap);
     } else if !max_height_is_auto(panel) {
@@ -435,6 +594,9 @@ fn apply_idle_expand_max_h(panel: &mut Element, presence: &FloatingPresenceHandl
         .map(|s| s.overlay_id.clone());
     let Some(id) = overlay_id else {
         panel.style.max_size.height = Dimension::auto();
+        if floating_expand_from_w(panel).is_some() {
+            panel.style.max_size.width = Dimension::auto();
+        }
         return;
     };
     match peek_floating_place_max_h(&id) {
@@ -444,6 +606,10 @@ fn apply_idle_expand_max_h(panel: &mut Element, presence: &FloatingPresenceHandl
         _ => {
             panel.style.max_size.height = Dimension::auto();
         }
+    }
+    if floating_expand_from_w(panel).is_some() {
+        panel.style.max_size.width = Dimension::auto();
+        presence.cell.borrow_mut().clip_width = None;
     }
 }
 
@@ -481,6 +647,7 @@ fn finish_floating_exit(presence: &FloatingPresenceHandle) {
         c.shell = None;
         c.exit_from_height = None;
         c.clip_height = None;
+        c.clip_width = None;
         c.measuring = false;
         meta
     };
@@ -587,6 +754,9 @@ fn apply_expand_motion(
     if panel.style.overflow.y != Overflow::Hidden {
         panel.style.overflow.y = Overflow::Hidden;
     }
+    if floating_expand_from_w(panel).is_some() && panel.style.overflow.x != Overflow::Hidden {
+        panel.style.overflow.x = Overflow::Hidden;
+    }
 
     let (needs_enter, needs_exit_anim, enter_active) = {
         let mut c = presence.cell.borrow_mut();
@@ -608,11 +778,13 @@ fn apply_expand_motion(
         let h = panel_content_height(presence, panel, max_height_cap);
         seed_expand_exit(panel, h);
         remember_clip_height(presence, panel);
+        apply_expand_width_clip(panel, presence, true);
         return true;
     }
     if exiting {
         if animation_run_active(&panel.style, &panel.animation_snapshot) {
             remember_clip_height(presence, panel);
+            apply_expand_width_clip(panel, presence, true);
             let _ = hide_expand_exit_sliver(panel, presence, false);
             return true;
         }
@@ -626,10 +798,11 @@ fn apply_expand_motion(
             .style
             .animations
             .iter()
-            .any(|a| a.name == ACCORDION_DOWN);
+            .any(|a| is_expand_down_anim(&a.name));
         if has_enter {
             if animation_run_active(&panel.style, &panel.animation_snapshot) {
                 remember_clip_height(presence, panel);
+                apply_expand_width_clip(panel, presence, false);
                 return true;
             }
             panel.style.animations.clear();
@@ -639,6 +812,7 @@ fn apply_expand_motion(
                 c.enter_active = false;
                 c.needs_enter = false;
                 c.clip_height = None;
+                c.clip_width = None;
                 c.measuring = false;
             }
             return false;
@@ -653,15 +827,20 @@ fn apply_expand_motion(
                 c.measuring = true;
                 c.enter_active = true;
                 c.measured_height = 0.0;
+                c.measured_width = 0.0;
+                c.clip_width = None;
             }
+            panel.layout_bounds[2] = 0.0;
             panel.layout_bounds[3] = 0.0;
             prepare_expand_measure(panel, max_height_cap);
+            apply_expand_width_clip(panel, presence, false);
             return true;
         }
 
         let measured = take_measured_height(presence, panel, max_height_cap);
         if measured < 1.0 {
             prepare_expand_measure(panel, max_height_cap);
+            apply_expand_width_clip(panel, presence, false);
             let mut c = presence.cell.borrow_mut();
             c.enter_active = true;
             c.measuring = true;
@@ -675,6 +854,7 @@ fn apply_expand_motion(
         }
         seed_expand_enter(panel, measured);
         remember_clip_height(presence, panel);
+        apply_expand_width_clip(panel, presence, false);
         return true;
     }
 
@@ -690,6 +870,13 @@ fn apply_expand_motion(
             if capped > c.measured_height + 0.5 {
                 c.measured_height = capped;
                 panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{capped}"));
+            }
+        }
+        let w = panel.layout_bounds[2];
+        if w > 1.0 {
+            let mut c = presence.cell.borrow_mut();
+            if w > c.measured_width + 0.5 {
+                c.measured_width = w;
             }
         }
     }
@@ -752,6 +939,14 @@ pub(crate) fn apply_floating_panel_motion(
             panel.style.overflow.y = Overflow::Hidden;
             panel.set_attr(ATTR_FLOATING_EXPAND_MEASURE, "1");
             panel.style.opacity = 0.0;
+            if floating_expand_from_w(panel).is_some() {
+                panel.style.overflow.x = Overflow::Hidden;
+                if expand_clip_x(panel) {
+                    panel.style.max_size.width = Dimension::auto();
+                } else if let Some(from_w) = floating_expand_from_w(panel) {
+                    panel.style.max_size.width = Dimension::length(from_w);
+                }
+            }
             if let Some(cap) = max_height_cap.filter(|h| *h > 0.0) {
                 panel.style.max_size.height = Dimension::length(cap);
             } else {
@@ -763,6 +958,9 @@ pub(crate) fn apply_floating_panel_motion(
             && matches!(phase, PresencePhase::Present | PresencePhase::Exiting)
         {
             panel.style.overflow.y = Overflow::Hidden;
+            if floating_expand_from_w(panel).is_some() {
+                panel.style.overflow.x = Overflow::Hidden;
+            }
             if let Some(h) = c.clip_height {
                 let apply = h > 1.0 || matches!(phase, PresencePhase::Present);
                 if apply {
@@ -772,6 +970,13 @@ pub(crate) fn apply_floating_panel_motion(
                     } else if c.enter_active || matches!(phase, PresencePhase::Exiting) {
                         panel.style.opacity = 1.0;
                     }
+                }
+            }
+            if let Some(w) = c.clip_width.filter(|w| *w > 0.0) {
+                panel.style.max_size.width = Dimension::length(w);
+                if expand_clip_x(panel) {
+                    panel.style.min_size.width = Dimension::length(0.0);
+                    panel.style.flex_wrap = FlexWrap::NoWrap;
                 }
             }
         }
@@ -871,6 +1076,13 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
             };
             if tick_element_css(panel, dt) {
                 any = true;
+            }
+            if shell.kind == FloatingMotionKind::Expand {
+                apply_expand_width_clip(
+                    panel,
+                    &handle,
+                    matches!(shell.phase, PresencePhase::Exiting),
+                );
             }
             if clamp_animated_max_h_to_place(panel, &shell.overlay_id) {
                 any = true;
@@ -1101,6 +1313,145 @@ mod tests {
                 (panel.style.opacity - 1.0).abs() < 0.05,
                 "enter seed must restore opacity"
             );
+        });
+    }
+
+    #[test]
+    fn expand_with_from_h_starts_at_baseline_not_zero() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_H, "28");
+            panel.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-from", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-from",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Popover,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from__floating_panel").unwrap();
+            assert!(
+                panel.style.animations.is_empty(),
+                "must not seed before measured height"
+            );
+            panel.layout_bounds[3] = 120.0;
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from__floating_panel").unwrap();
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name.starts_with("rui-expand-down-")),
+                "offset expand must use rui-expand-down-* keyframes"
+            );
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                mh > 20.0 && mh < 40.0,
+                "seed+tick(0) must start near collapsed bar height, got {mh}"
+            );
+        });
+    }
+
+    #[test]
+    fn expand_with_from_w_clips_width_on_enter() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_H, "32");
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_W, "80");
+            panel.set_attr(ATTR_FLOATING_EXPAND_CLIP_X, "1");
+            panel.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-from-w", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-from-w",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Popover,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from-w__floating_panel").unwrap();
+            panel.layout_bounds[2] = 240.0;
+            panel.layout_bounds[3] = 48.0;
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from-w__floating_panel").unwrap();
+            let mw = crate::layout::dim_length_px(panel.style.max_size.width).unwrap_or(0.0);
+            assert!(
+                (mw - 80.0).abs() < 2.0,
+                "seed+tick(0) must start near collapsed row width, got {mw}"
+            );
+            assert_eq!(
+                panel.style.overflow.x,
+                Overflow::Hidden,
+                "row expand must clip overflow-x"
+            );
+        });
+    }
+
+    #[test]
+    fn expand_from_w_without_clip_x_pins_width_for_wrap() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_H, "28");
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_W, "90");
+            panel.style.flex_wrap = FlexWrap::Wrap;
+            panel.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-pin-w", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-pin-w",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Popover,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-pin-w__floating_panel").unwrap();
+            let mw = crate::layout::dim_length_px(panel.style.max_size.width).unwrap_or(0.0);
+            assert!(
+                (mw - 90.0).abs() < 2.0,
+                "wrap expand must pin max-width to collapsed bar during measure, got {mw}"
+            );
+            assert_eq!(
+                panel.style.flex_wrap,
+                FlexWrap::Wrap,
+                "wrap expand must not force nowrap"
+            );
+            panel.layout_bounds[2] = 90.0;
+            panel.layout_bounds[3] = 56.0;
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-pin-w__floating_panel").unwrap();
+            let mw = crate::layout::dim_length_px(panel.style.max_size.width).unwrap_or(0.0);
+            assert!(
+                (mw - 90.0).abs() < 2.0,
+                "wrap expand must stay pinned after seed, got {mw}"
+            );
+            assert_eq!(panel.style.flex_wrap, FlexWrap::Wrap);
         });
     }
 

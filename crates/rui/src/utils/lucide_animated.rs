@@ -1195,12 +1195,12 @@ mod tests {
     fn animated_icon_sets_text_color_attr_for_cascade() {
         let el: Element = animated_icon("heart").size_px(28.0).controlled(true).into();
         let fg = crate::style::parse_text_color("foreground");
-        assert_eq!(el.text_style.color, fg);
+        assert_eq!(el.text_style.color, Some(fg));
         assert!(
-            el.attrs.contains_key("text_color"),
-            "must mark text_color so cascade cannot overwrite with parent white"
+            el.text_style.color.is_some(),
+            "explicit color must survive cascade (no parent white overwrite)"
         );
-        assert_ne!(el.text_style.color, [255, 255, 255, 255]);
+        assert_ne!(el.text_style.color_resolved(), [255, 255, 255, 255]);
     }
 
     #[test]

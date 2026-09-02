@@ -33,7 +33,7 @@ pub mod virtual_masonry;
 
 pub use block_on::block_on;
 pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
-pub use element_pack::{take_fragment, take_packed};
+pub use element_pack::{children_none_if_vacuous, is_text_content_leaf, is_vacuous_element, take_fragment, take_packed};
 pub use file_dialog::{
     file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
     pick_folder, pick_folder_into,
