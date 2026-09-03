@@ -24,28 +24,28 @@
 //! date_picker("due").kind(DatePickerKind::Date).value_signal(sig)
 //! ```
 
-use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
+use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
 use crate::components::button::button;
 use crate::components::calendar::{
-    CalendarCaption, calendar, calendar_month_select, calendar_year_select, days_in_month,
-    format_long_date, format_month_year, parse_ymd, weekday,
+    calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
+    format_month_year, parse_ymd, weekday, CalendarCaption,
 };
-use crate::components::combobox::{ComboboxItemData, combobox};
+use crate::components::combobox::{combobox, ComboboxItemData};
 use crate::components::separator::separator;
-use crate::core::reactivity::{Signal, isolate_reads, use_signal};
-use crate::core::tree::{Element, parse_text_color};
+use crate::core::reactivity::{isolate_reads, use_signal, Signal};
+use crate::core::tree::{parse_text_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, PopupPlacement,
-    apply_stored_floating_place, mark_floating, mount_anchored_overlay,
+    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
-use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 

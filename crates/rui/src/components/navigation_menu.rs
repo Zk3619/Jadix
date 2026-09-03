@@ -78,23 +78,23 @@ use winit::keyboard::{Key, NamedKey};
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, Handler, parse_color, parse_text_color};
-use crate::primitives::r#box::{r#box, hstack, vstack};
+use crate::core::tree::{parse_color, parse_text_color, Element, Handler};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
-    PopupPlacement, mark_floating, mount_anchored_overlay, panel_block_clicks,
+    mark_floating, mount_anchored_overlay, panel_block_clicks, PopupPlacement,
 };
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{FocusRovingAxis, focus_by_id, focus_roving_key};
-use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
+use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use crate::utils::{take_fragment, take_packed};
 
 const ATTR_SLOT: &str = "data-slot";
@@ -628,7 +628,11 @@ pub fn NavigationMenuTrigger(
         Some(c) if is_text_leaf(c) => c.text.clone().unwrap_or_else(|| "Menu".into()),
         Some(c) => {
             let t = extract_text_leaf(c);
-            if t.is_empty() { "Menu".into() } else { t }
+            if t.is_empty() {
+                "Menu".into()
+            } else {
+                t
+            }
         }
     };
     let _ = children;

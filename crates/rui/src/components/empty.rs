@@ -49,12 +49,12 @@
 //! - 展示型空状态：无受控状态；标题/说明为子节点或 Builder 文案 helper。
 
 use crate::components::base::BaseComponentBuilder;
-use crate::core::tree::{Element, IntoF32, parse_color, parse_text_color};
+use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -361,52 +361,44 @@ impl EmptyHeaderBuilder {
     }
 
     pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            EmptyMedia(EmptyMediaProps {
-                variant: Some(EmptyMediaVariant::Default),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(EmptyMedia(EmptyMediaProps {
+            variant: Some(EmptyMediaVariant::Default),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            EmptyMedia(EmptyMediaProps {
-                variant: Some(EmptyMediaVariant::Icon),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(EmptyMedia(EmptyMediaProps {
+            variant: Some(EmptyMediaVariant::Icon),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            EmptyTitle(EmptyTitleProps {
-                children: Some(Element::new().text(text.into())),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(EmptyTitle(EmptyTitleProps {
+            children: Some(Element::new().text(text.into())),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            EmptyDescription(EmptyDescriptionProps {
-                children: Some(Element::new().text(text.into())),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(EmptyDescription(EmptyDescriptionProps {
+            children: Some(Element::new().text(text.into())),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 }
@@ -504,8 +496,7 @@ impl EmptyBuilder {
     }
 
     pub fn content_child(mut self, child: impl Into<Element>) -> Self {
-        self.children
-            .push(empty_content().child(child).into());
+        self.children.push(empty_content().child(child).into());
         self
     }
 }
@@ -613,11 +604,11 @@ mod tests {
             base_builder: None,
             ..Default::default()
         });
-        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_MEDIA));
         assert_eq!(
-            el.attrs.get(ATTR_VARIANT).map(String::as_str),
-            Some("icon")
+            el.attrs.get(ATTR_SLOT).map(String::as_str),
+            Some(SLOT_MEDIA)
         );
+        assert_eq!(el.attrs.get(ATTR_VARIANT).map(String::as_str), Some("icon"));
         assert_eq!(el.style.bg_color, parse_color("muted"));
     }
 
@@ -669,9 +660,7 @@ mod tests {
 
     #[test]
     fn dual_surface_compiles_shape() {
-        let _b: Element = empty()
-            .header(empty_header().title("X"))
-            .into();
+        let _b: Element = empty().header(empty_header().title("X")).into();
         let el = Empty(EmptyProps {
             id: String::new(),
             children: None,

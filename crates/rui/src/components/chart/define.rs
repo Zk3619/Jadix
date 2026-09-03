@@ -8,22 +8,22 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
-use crate::core::reactivity::{Signal, SignalId, use_scoped_signal, use_signal};
+use crate::core::reactivity::{use_scoped_signal, use_signal, Signal, SignalId};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::path::{
-    ATTR_PATH_D, ATTR_PATH_MARKERS, ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX, PathCommand, PathStyle,
-    Point2, encode_path_d, encode_points, ensure_raster_texture, filled_circle,
-    points_from_commands, register_path_scene,
+    encode_path_d, encode_points, ensure_raster_texture, filled_circle, points_from_commands,
+    register_path_scene, PathCommand, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_MARKERS,
+    ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
 };
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 
 use super::datum::ChartTooltipItem;
 use super::mark::{ChartMark, MarkRenderContext, SceneLayer};
 use super::polar::polar_guide_layers;
-use super::scale::{AxisSpec, ScaleKind, format_time_label, resolve_scales, resolve_scales_pad};
+use super::scale::{format_time_label, resolve_scales, resolve_scales_pad, AxisSpec, ScaleKind};
 use super::theme::{ChartConfig, ChartTheme, TooltipIndicator};
 
 /// RSX `<Chart definition={…} />` input parameter.
@@ -1977,7 +1977,7 @@ mod hover_freeze_tests {
 
     #[test]
     fn frozen_leave_hides_overlay_via_opacity_not_structure() {
-        use crate::core::tree::{LayoutTree, sync_reactive_elements_subtree};
+        use crate::core::tree::{sync_reactive_elements_subtree, LayoutTree};
         create_root(|| {
             set_chart_hover_frozen(false);
             let sig = use_signal("t-chart-hov-hide-style", || ChartHover {
@@ -2012,7 +2012,7 @@ mod hover_freeze_tests {
     #[test]
     fn hover_enter_samples_datum_without_mousemove() {
         use super::super::mark::bar_y;
-        use super::super::scale::{AxisSpec, resolve_scales};
+        use super::super::scale::{resolve_scales, AxisSpec};
         create_root(|| {
             set_chart_hover_frozen(false);
             let sig = use_signal("t-chart-hov-enter", ChartHover::default);

@@ -150,6 +150,57 @@ fn icon_name_get_lowers_to_bind_attr() {
 }
 
 #[test]
+fn marker_variant_get_lowers_to_bind_attr() {
+    use rui::prelude::*;
+    reset_registered_anchors();
+    let variant = use_signal("__rui_wp_r7_marker_var", || "default".to_string());
+    variant.set_silent("default".to_string());
+    let before = registered_binding_count();
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let mounted_a = Rc::clone(&mounted);
+    let (_owner, _) = create_root(|| {
+        create_effect(move || {
+            isolate_reads(|| {
+                let el = ui! {
+                    <Marker variant={ variant.get() }>
+                        <MarkerContent>"Today"</MarkerContent>
+                    </Marker>
+                };
+                *mounted_a.borrow_mut() = Some(el);
+            });
+        });
+    });
+    let el = mounted.borrow_mut().take().expect("mounted");
+    let mut ids = Vec::new();
+    collect_ids(&el, &mut ids);
+    let variant_attr = el.attrs.get("data-variant").cloned();
+    assert!(
+        registered_binding_count() > before || template_contains(&el, "bind_marker_variant"),
+        "Marker variant={{sig.get()}} must lower to bind_attr; ids={ids:?} variant={variant_attr:?} binds={}->{}",
+        before,
+        registered_binding_count()
+    );
+    reset_registered_anchors();
+}
+
+#[test]
+fn icon_src_attaches_texture_key() {
+    reset_registered_anchors();
+    let el = ui! {
+        <Icon src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" />
+    };
+    assert!(
+        el.image_texture
+            .as_deref()
+            .is_some_and(|k| k.starts_with("rui-src:")),
+        "Icon src must queue an image texture, got {:?}",
+        el.image_texture
+    );
+    assert!(el.get_attr("rui_icon_src").is_some());
+    reset_registered_anchors();
+}
+
+#[test]
 fn isolate_reads_naked_get_does_not_update() {
     reset_registered_anchors();
     let sig = use_signal("__rui_wp_r7_naked", || "a".to_string());

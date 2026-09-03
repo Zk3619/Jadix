@@ -33,17 +33,15 @@
 //! - Dynamic `variant={sig.get()}` is reduced from macro to [`apply_bound_badge_variant`] (same origin as Button).
 //! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
-use crate::core::tree::{
-    Element, IntoCssDim, IntoF32, LayoutStatus,
-};
-use crate::primitives::r#box::{BoxBuilder, hstack};
+use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
+use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
     apply_semantic_border, is_variant_style_overridden, parse_color, parse_text_color,
-    semantic_chrome, set_variant_chrome_enabled, SemanticBorder, SemanticChromeDecor,
-    SemanticChromeOpts, SemanticSurface, SemanticTone, variant_chrome_enabled, VariantStyleField,
+    semantic_chrome, set_variant_chrome_enabled, variant_chrome_enabled, SemanticBorder,
+    SemanticChromeDecor, SemanticChromeOpts, SemanticSurface, SemanticTone, VariantStyleField,
 };
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -148,13 +146,7 @@ fn apply_chrome(el: &mut Element, variant: &str) {
             el.style.bg_color = bg;
         }
         if !is_variant_style_overridden(&el.attrs, VariantStyleField::Border) {
-            apply_semantic_border(
-                el,
-                border.map(|color| SemanticBorder {
-                    color,
-                    width: 1.0,
-                }),
-            );
+            apply_semantic_border(el, border.map(|color| SemanticBorder { color, width: 1.0 }));
         }
         if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
             paint_descendant_text(el, text_color, variant == "link");
@@ -543,7 +535,8 @@ mod tests {
                 "child {i} must be a text/icon leaf"
             );
             assert_eq!(
-                c.text_style.color_resolved(), want,
+                c.text_style.color_resolved(),
+                want,
                 "child {i} must use secondary-foreground, not default white"
             );
         }
@@ -571,7 +564,7 @@ mod tests {
 
     #[test]
     fn semantic_badge_soft_tint_matches_button_rest() {
-        use crate::style::{ThemeMode, set_theme_mode};
+        use crate::style::{set_theme_mode, ThemeMode};
         set_theme_mode(ThemeMode::Light);
         for (name, accent_token, text_token) in [
             ("success", "green-600", "green-600"),

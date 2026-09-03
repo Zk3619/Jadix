@@ -4,10 +4,10 @@
 
 use super::*;
 use crate::style::{dim_semantic_shadow, semantic_shadow};
-use crate::utils::layout_group::{SlotListConfig, slot_list_pose, slot_visual_offset};
+use crate::utils::layout_group::{slot_list_pose, slot_visual_offset, SlotListConfig};
 use crate::utils::motion::{
-    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, ensure_motion_transitions,
-    motion_sync_status, prepare_motion_sync, snap_motion_baseline,
+    ensure_motion_transitions, motion_sync_status, prepare_motion_sync, snap_motion_baseline,
+    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform,
 };
 use std::cell::{Cell, RefCell};
 

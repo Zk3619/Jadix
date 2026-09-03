@@ -15,15 +15,16 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::app::portal_overlay::modal_stack_metrics;
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::{
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
-    css_transition_needs_frame, keyframes_anim_entry, tick_element_transitions_locked,
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry,
+    tick_element_transitions_locked, AnimationFillMode, TimingFunction, TransitionEntry,
+    TransitionProperty,
 };
 use crate::utils::motion::{
-    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, clear_motion,
-    motion_is_animating, motion_sync_status, prepare_motion_sync,
+    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
+    MotionEpsilon, MotionStyle, MotionTransform,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
 
@@ -692,7 +693,7 @@ pub(crate) fn drain_pending_modal_unmounts() {
     if pending.is_empty() {
         return;
     }
-    use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
+    use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
     for (mounted_sig, modal_id) in pending {
         mounted_sig.set(false);
         let _ = portal_sync(
@@ -1499,13 +1500,11 @@ mod tests {
                 "flush must start overlay faded, got {}",
                 overlay.style.opacity
             );
-            assert!(
-                overlay
-                    .style
-                    .animations
-                    .iter()
-                    .any(|a| a.name == "fade-in-0")
-            );
+            assert!(overlay
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-in-0"));
             assert!(zoom.style.animations.iter().any(|a| a.name == "zoom-in-90"));
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-in-0"),
@@ -1617,7 +1616,7 @@ mod tests {
     #[test]
     fn flush_finds_shell_after_portal_hoist() {
         use crate::app::portal_overlay::{
-            OverlayKind, OverlayMode, clear_overlay_stack, portal_sync,
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
         };
         use crate::layout::layout_tree::hoist_portal_subtrees;
         use crate::primitives::overlay::overlay;
@@ -1692,7 +1691,7 @@ mod tests {
     #[test]
     fn dialog_exit_finish_defers_mounted_until_drain() {
         use crate::app::portal_overlay::{
-            OverlayKind, OverlayMode, clear_overlay_stack, portal_sync,
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
         };
 
         create_root(|| {
@@ -1816,13 +1815,11 @@ mod tests {
                 find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap() as *mut Element;
             let z_ptr = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
             let (overlay, zoom) = unsafe { (&*o_ptr, &*z_ptr) };
-            assert!(
-                overlay
-                    .style
-                    .animations
-                    .iter()
-                    .any(|a| a.name == "fade-out-0")
-            );
+            assert!(overlay
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-out-0"));
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-out-0"),
                 "panel must fade out with the overlay"

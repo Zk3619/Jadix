@@ -1,6 +1,6 @@
 //! Toast 卡片壳与 stack/list 渲染。
 
-use super::motion::{ToastStackMotion, apply_enter_motion, stack_pose_for_rank};
+use super::motion::{apply_enter_motion, stack_pose_for_rank, ToastStackMotion};
 use super::*;
 use crate::components::button::button;
 use crate::style::{
@@ -650,7 +650,10 @@ mod tests {
             false,
         );
         assert_eq!(card.style.bg_color, custom);
-        assert!(is_variant_style_overridden(&card.attrs, VariantStyleField::Bg));
+        assert!(is_variant_style_overridden(
+            &card.attrs,
+            VariantStyleField::Bg
+        ));
     }
 
     #[test]

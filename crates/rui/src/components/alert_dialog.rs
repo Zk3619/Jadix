@@ -73,25 +73,26 @@ use crate::components::internal::modal_motion::{
     mounted_signal, sync_modal_presence, use_modal_presence,
 };
 use crate::components::internal::modal_shell::{
-    ShellOverlayOpts, modal_sync, sync_modal_overlay_scrim,
+    modal_sync, sync_modal_overlay_scrim, ShellOverlayOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
-    component_root, provide_context, Context, Signal, create_context, use_context, use_signal,
+    component_root, create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{Element, LayoutStatus};
-use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{
-    apply_semantic_chrome_respecting_overrides, is_variant_style_overridden, reapply_class_color_overrides,
-    semantic_chrome, set_variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
-    SemanticSurface, variant_chrome_enabled, VariantStyleField,
+    apply_semantic_chrome_respecting_overrides, is_variant_style_overridden,
+    reapply_class_color_overrides, semantic_chrome, set_variant_chrome_enabled,
+    variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
+    SemanticSurface, VariantStyleField,
 };
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -364,7 +365,10 @@ fn find_alert_dialog_content_by_template<'a>(
 }
 
 /// Apply variant chroming to an alert-dialog content shell and repaint title/description/icon slots.
-pub fn apply_alert_dialog_variant_paint(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
+pub fn apply_alert_dialog_variant_paint(
+    el: &mut Element,
+    variant: impl AsRef<str>,
+) -> LayoutStatus {
     let variant = AlertDialogVariant::from(variant.as_ref());
     let prev = el
         .attrs
@@ -403,7 +407,10 @@ pub fn apply_bound_alert_dialog_chrome(el: &mut Element, enabled: bool) -> Layou
 }
 
 /// Solid-style in-place bind for `<AlertDialogContent variant={sig.get()}>`.
-pub fn apply_bound_alert_dialog_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
+pub fn apply_bound_alert_dialog_variant(
+    el: &mut Element,
+    variant: impl AsRef<str>,
+) -> LayoutStatus {
     if let Some(shell) = find_alert_dialog_content_mut(el) {
         apply_alert_dialog_variant_paint(shell, variant)
     } else if slot_of(el) == Some(SLOT_CONTENT) {
@@ -640,13 +647,7 @@ fn collect_focus_ids(el: &Element, out: &mut Vec<String>) {
 fn build_alert_dialog_body(open: Signal<bool>, id: &str, body: &dyn Fn() -> Element) -> Element {
     let id = id.to_string();
     component_root(|| {
-        provide_context(
-            alert_dialog_context(),
-            AlertDialogCtx {
-                open,
-                id,
-            },
-        );
+        provide_context(alert_dialog_context(), AlertDialogCtx { open, id });
         body()
     })
 }
@@ -710,11 +711,7 @@ pub fn alert_dialog_content(
             paint_alert_dialog_tree(&mut inner, &chrome);
         }
         // 与 DialogContent 相同：Header / Body / Footer 并列，单层 shell 负责 bg/border/p。
-        inner = inner
-            .w("100%")
-            .min_h("0")
-            .flex_grow(1.0)
-            .gap("1rem");
+        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
 
         let mut ring = Vec::new();
         collect_focus_ids(&inner, &mut ring);
@@ -832,11 +829,7 @@ pub fn AlertDialogMedia(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn AlertDialogTitle(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = vstack()
-        .w("100%")
-        .min_w("0")
-        .children(kids)
-        .into();
+    let mut el: Element = vstack().w("100%").min_w("0").children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_TITLE);
     el
 }
@@ -947,8 +940,7 @@ pub fn AlertDialogCancel(id: String, children: Option<Element>) -> Element {
 mod tests {
     use super::*;
     use crate::components::internal::modal_shell::{
-        DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
-        default_modal_overlay_color,
+        default_modal_overlay_color, DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
     };
 
     #[test]
@@ -966,7 +958,10 @@ mod tests {
 
     #[test]
     fn alert_dialog_default_overlay_does_not_close_on_click() {
-        let opts = alert_shell_overlay_opts(&AlertDialogContentOpts::default(), AlertDialogVariant::Default);
+        let opts = alert_shell_overlay_opts(
+            &AlertDialogContentOpts::default(),
+            AlertDialogVariant::Default,
+        );
         assert!(!opts.close_on_click);
         assert!(
             (opts.color[3] - DEFAULT_MODAL_OVERLAY_OPACITY).abs() < 0.001,
@@ -1038,7 +1033,10 @@ mod tests {
         shell.children.push(desc);
         shell.set_attr(ATTR_SLOT, SLOT_CONTENT);
         assert_eq!(
-            shell.attrs.get(ATTR_ALERT_DIALOG_VARIANT).map(String::as_str),
+            shell
+                .attrs
+                .get(ATTR_ALERT_DIALOG_VARIANT)
+                .map(String::as_str),
             Some("destructive")
         );
         assert_eq!(shell.style.border_color, parse_color("red-300"));
@@ -1092,7 +1090,10 @@ mod tests {
             LayoutStatus::StyleChanged
         );
         assert_eq!(
-            shell.attrs.get(ATTR_ALERT_DIALOG_VARIANT).map(String::as_str),
+            shell
+                .attrs
+                .get(ATTR_ALERT_DIALOG_VARIANT)
+                .map(String::as_str),
             Some("warning")
         );
         assert_eq!(

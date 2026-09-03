@@ -27,20 +27,20 @@
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus, parse_color, parse_text_color,
+    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    TimingFunction, TransitionEntry, TransitionProperty, button_soft_semantic_chrome,
-    color_mix_over_background, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, focus_ring_params, focus_ring_style, is_dark_theme,
-    lerp_display_srgb_linear, lerp_paint_chrome, lerp_text_rgba, mix_display_srgb_in_oklab,
-    PaintChrome, SemanticTone,
+    button_soft_semantic_chrome, color_mix_over_background, focus_ring_border_color,
+    focus_ring_color, focus_ring_destructive_color, focus_ring_params, focus_ring_style,
+    is_dark_theme, lerp_display_srgb_linear, lerp_paint_chrome, lerp_text_rgba,
+    mix_display_srgb_in_oklab, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
+    TransitionProperty,
 };
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -131,7 +131,11 @@ fn ensure_button_css_transition(el: &mut Element) {
 }
 
 fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
-    if disabled || !hovered { 0.0 } else { 1.0 }
+    if disabled || !hovered {
+        0.0
+    } else {
+        1.0
+    }
 }
 
 /// `link` + explicit rest text color (such as Breadcrumb muted): hover cuts `foreground`.
@@ -221,7 +225,11 @@ pub(crate) fn button_chrome_for_variant(
                     border: None,
                 },
                 PaintChrome {
-                    bg: color_mix_oklch_pct(parse_color("secondary"), parse_color("foreground"), 5.0),
+                    bg: color_mix_oklch_pct(
+                        parse_color("secondary"),
+                        parse_color("foreground"),
+                        5.0,
+                    ),
                     fg,
                     border: None,
                 },
@@ -1396,9 +1404,9 @@ impl crate::core::tree::IntoElementList for ButtonBuilder {
 #[cfg(test)]
 mod chrome_tests {
     use super::{button, button_chrome_for_variant};
-    use crate::style::color_mix_over_background;
     use crate::core::tree::Element;
-    use crate::style::{ThemeMode, parse_color, parse_text_color, set_theme_mode};
+    use crate::style::color_mix_over_background;
+    use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
 
     fn hex(c: [f32; 4]) -> String {
         format!(
@@ -1589,7 +1597,8 @@ mod chrome_tests {
             .find(|c| c.text.as_deref() == Some("Search"))
             .expect("Search caption must be hoisted to the button row");
         assert_eq!(
-            caption.text_style.color_resolved(), want_fg,
+            caption.text_style.color_resolved(),
+            want_fg,
             "outline caption must use foreground, not default white"
         );
         let group = el

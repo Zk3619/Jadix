@@ -47,7 +47,7 @@ use crate::core::tree::{CssDim, Element, UnitSlot};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -204,7 +204,11 @@ pub(crate) fn apply_button_group_join_chrome(el: &mut Element) {
             .copied()
             .filter(|v| *v > 0.0)
             .fold(0.0_f32, f32::max);
-        if m > 0.0 { m } else { JOIN_RADIUS_PX }
+        if m > 0.0 {
+            m
+        } else {
+            JOIN_RADIUS_PX
+        }
     };
     el.style.radii = join_radii(edge.as_str(), vertical, r);
     overlap_shared_edge(el);

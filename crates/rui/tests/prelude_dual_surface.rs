@@ -43,6 +43,107 @@ fn prelude_badge_dual_surface_compiles() {
 }
 
 #[test]
+fn prelude_marker_dual_surface_compiles() {
+    let _b: Element = ui_marker().variant("separator").content("Today").into();
+    let _i: Element = marker_icon().child(Element::new().text("•")).into();
+    let _c: Element = marker_content().text("Note").into();
+    let el = ui! {
+        <VStack gap="0.5rem" w="20rem">
+            <Marker>
+                <MarkerIcon>
+                    <Icon name="git-branch" size="1rem" />
+                </MarkerIcon>
+                <MarkerContent>"Switched to a new branch"</MarkerContent>
+            </Marker>
+            <Marker variant="separator">
+                <MarkerContent>"Today"</MarkerContent>
+            </Marker>
+            <Marker variant="border" role="status">
+                <MarkerContent>"Thinking..."</MarkerContent>
+            </Marker>
+            { Element::from(ui_marker().variant("border").content("Builder")) }
+        </VStack>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_message_dual_surface_compiles() {
+    let _g: Element = message_group()
+        .child(
+            message()
+                .align("end")
+                .header("You")
+                .content_child(Element::new().text("On it."))
+                .footer("Delivered"),
+        )
+        .into();
+    let _a: Element = message_avatar().into();
+    let _c: Element = message_content()
+        .header("Oliver")
+        .child(Element::new().text("Hello"))
+        .footer("Sent")
+        .into();
+    let el = ui! {
+        <MessageGroup>
+            <Message align="start">
+                <MessageAvatar />
+                <MessageContent>
+                    <MessageHeader>"Oliver"</MessageHeader>
+                    <MessageFooter>"Delivered"</MessageFooter>
+                </MessageContent>
+            </Message>
+            <Message align="end">
+                <MessageAvatar />
+                <MessageContent>
+                    <MessageHeader>"You"</MessageHeader>
+                </MessageContent>
+            </Message>
+            { Element::from(message().align("end").header("Builder").footer("ok")) }
+        </MessageGroup>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_message_scroller_dual_surface_compiles() {
+    let _p: Element = message_scroller_provider()
+        .auto_scroll(true)
+        .default_scroll_position("end")
+        .child(
+            message_scroller().h("12rem").child(
+                message_scroller_viewport().child(
+                    message_scroller_content().child(
+                        message_scroller_item()
+                            .message_id("1")
+                            .child(message().align("start").header("Oliver").footer("ok")),
+                    ),
+                ),
+            ),
+        )
+        .into();
+    let el = ui! {
+        <MessageScrollerProvider autoScroll={true} defaultScrollPosition="end">
+            <MessageScroller h="12rem">
+                <MessageScrollerViewport>
+                    <MessageScrollerContent>
+                        <MessageScrollerItem messageId="1" scrollAnchor={false}>
+                            <Message align="start">
+                                <MessageContent>
+                                    <MessageHeader>"Oliver"</MessageHeader>
+                                </MessageContent>
+                            </Message>
+                        </MessageScrollerItem>
+                    </MessageScrollerContent>
+                </MessageScrollerViewport>
+                <MessageScrollerButton direction="end" />
+            </MessageScroller>
+        </MessageScrollerProvider>
+    };
+    let _: Element = el;
+}
+
+#[test]
 fn prelude_kbd_dual_surface_compiles() {
     let _b: Element = kbd().text("⌘").into();
     let _g: Element = kbd_group().kbd("Ctrl").kbd("K").into();

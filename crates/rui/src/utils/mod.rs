@@ -7,6 +7,7 @@ pub mod element_pack;
 pub mod file_dialog;
 pub mod focus_trap;
 pub mod font;
+pub mod icon_provider;
 pub mod icon_texture;
 pub mod input_hit;
 pub mod instance_id;
@@ -17,6 +18,7 @@ pub mod list_nav;
 pub mod lucide;
 pub mod lucide_animated;
 pub mod motion;
+pub mod overflow_fit;
 pub mod pointer_drag;
 pub mod popup;
 pub mod presence;
@@ -33,7 +35,9 @@ pub mod virtual_masonry;
 
 pub use block_on::block_on;
 pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
-pub use element_pack::{children_none_if_vacuous, is_text_content_leaf, is_vacuous_element, take_fragment, take_packed};
+pub use element_pack::{
+    children_none_if_vacuous, is_text_content_leaf, is_vacuous_element, take_fragment, take_packed,
+};
 pub use file_dialog::{
     file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
     pick_folder, pick_folder_into,
@@ -41,6 +45,12 @@ pub use file_dialog::{
 pub use focus_trap::{
     activate_focus_trap, deactivate_focus_trap, focus_trap_ring_ids, sync_focus_trap,
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
+};
+pub use icon_provider::{
+    apply_bound_icon_name, apply_bound_icon_src, build_icon_from_src, build_icon_named,
+    clear_icon_provider, clear_registered_icons, glyph_for_name, icon_named, icon_src,
+    register_icon, resolve_icon, set_icon_provider, unregister_icon, with_icon_size, IconProvider,
+    IconSource, ATTR_ICON_SRC, DEFAULT_ICON_SIZE_PX,
 };
 pub use instance_id::resolve_instance_id;
 pub use keyed_overlay::{
@@ -51,7 +61,7 @@ pub use keyed_overlay::{
 pub use layout_group::{
     linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
 };
-pub use lucide::{apply_bound_icon_name, lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
+pub use lucide::{lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,

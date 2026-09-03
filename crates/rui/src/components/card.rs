@@ -39,7 +39,7 @@
 //! }
 //! ```
 
-use crate::core::tree::{Element, parse_color};
+use crate::core::tree::{parse_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_text_color;

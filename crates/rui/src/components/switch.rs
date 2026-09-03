@@ -39,15 +39,15 @@
 //!   `transition-transform` / `transition-colors`（~150ms）。
 //! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
-use crate::components::label::{ATTR_LABEL_FOR, label, label_accesskit_id_for};
+use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;
-use crate::core::tree::{Element, IntoCssDim, LayoutStatus, parse_color};
+use crate::core::tree::{parse_color, Element, IntoCssDim, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::resolve_instance_id;
-use crate::utils::toggle_state::{SLOT_SWITCH, bool_on_click, resolve_bool_signal};
+use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_SWITCH};
 use rui_macros::component;
 
 const ATTR_THUMB: &str = "data-slot";
@@ -501,7 +501,7 @@ pub(crate) fn sync_switch_checked_subtree(
 mod tests {
     use super::*;
     use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
-    use crate::components::label::{ATTR_LABEL_FOR, label};
+    use crate::components::label::{label, ATTR_LABEL_FOR};
     use accesskit::Role;
 
     #[test]

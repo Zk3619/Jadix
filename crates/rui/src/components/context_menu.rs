@@ -68,7 +68,7 @@ use winit::keyboard::{Key, NamedKey};
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
@@ -76,22 +76,22 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    Context, Signal, create_context, isolate_reads, provide_context, untrack, use_context,
-    use_signal, with_child_owner,
+    create_context, isolate_reads, provide_context, untrack, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_TRIGGER, FLOATING_TRIGGER_GAP,
-    PopupPlacement, apply_stored_floating_place, mark_floating, mark_floating_at_point,
-    mark_floating_with_gap, mount_anchored_overlay,
+    apply_stored_floating_place, mark_floating, mark_floating_at_point, mark_floating_with_gap,
+    mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
+    ATTR_FLOATING_TRIGGER, FLOATING_TRIGGER_GAP,
 };
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{roving_edge, roving_move};

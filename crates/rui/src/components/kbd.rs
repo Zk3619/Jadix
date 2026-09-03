@@ -33,11 +33,11 @@
 //! - Distinct from menu `*Shortcut` slots (those are inline muted captions inside menus).
 //! - `ui!` multi-child packs into `rui_fragment` / anonymous shell; both roots use `take_packed` then lay out in a row.
 
-use crate::core::tree::{Element, IntoF32, parse_color, parse_text_color};
-use crate::primitives::r#box::{BoxBuilder, hstack};
+use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32};
+use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::tokens;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -318,7 +318,10 @@ mod tests {
             .iter()
             .find(|c| c.text.as_deref() == Some("⌘"))
             .expect("caption leaf");
-        assert_eq!(leaf.text_style.color_resolved(), parse_text_color("muted-foreground"));
+        assert_eq!(
+            leaf.text_style.color_resolved(),
+            parse_text_color("muted-foreground")
+        );
         assert_eq!(leaf.text_style.weight_resolved(), 500);
     }
 
@@ -342,11 +345,10 @@ mod tests {
             Some(SLOT_KBD_GROUP)
         );
         assert_eq!(el.children.len(), 2);
-        assert!(
-            el.children
-                .iter()
-                .all(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_KBD))
-        );
+        assert!(el
+            .children
+            .iter()
+            .all(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_KBD)));
     }
 
     #[test]

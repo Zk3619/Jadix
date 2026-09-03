@@ -19,7 +19,7 @@ use crate::core::scroll_viewport::{
 use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::r#box::r#box;
 use crate::utils::virtual_masonry::{
-    MasonryItemFrame, MasonryLayout, height_from_cache, pack_masonry, visible_masonry_indices,
+    height_from_cache, pack_masonry, visible_masonry_indices, MasonryItemFrame, MasonryLayout,
 };
 
 const RANGE_ATTR: &str = "__rui_vmasonry_range";

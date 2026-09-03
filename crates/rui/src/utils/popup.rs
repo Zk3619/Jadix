@@ -472,7 +472,8 @@ fn height_keyframe_animation_active(el: &Element) -> bool {
         matches!(
             a.name.as_str(),
             "accordion-down" | "accordion-up" | "collapsible-down" | "collapsible-up"
-        ) || a.name.starts_with("rui-expand-down-") || a.name.starts_with("rui-expand-up-")
+        ) || a.name.starts_with("rui-expand-down-")
+            || a.name.starts_with("rui-expand-up-")
     })
 }
 

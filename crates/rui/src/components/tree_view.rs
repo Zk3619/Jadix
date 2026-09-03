@@ -48,26 +48,26 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use crate::components::collapsible::{
-    CollapsibleTrigger, CollapsibleTriggerProps, collapsible_content, collapsible_scope,
+    collapsible_content, collapsible_scope, CollapsibleTrigger, CollapsibleTriggerProps,
 };
 use crate::components::scroll_area::scroll_area;
 use crate::components::virtual_list::virtual_list;
 use crate::core::reactivity::{
-    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
-    with_child_owner,
+    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus, parse_text_color};
-use crate::primitives::r#box::{hstack, vstack};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    TransitionEntry, TransitionProperty, css_transition_needs_frame, parse_color, with_class_list,
+    css_transition_needs_frame, parse_color, with_class_list, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::motion::ensure_motion_transitions;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
 use crate::utils::text_node::{
-    TextNodeConfig, build_icon_text_node, build_lucide_icon_text_node_or, build_text_node,
+    build_icon_text_node, build_lucide_icon_text_node_or, build_text_node, TextNodeConfig,
 };
 use crate::utils::tree_model::{self, TreeNodeLike};
 use rui_macros::component;
@@ -389,9 +389,7 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
         })
         .into();
     row.reactive_sync(move |el, _| {
-        let selected = sel
-            .and_then(|s| s.try_peek())
-            .is_some_and(|id| id == nid);
+        let selected = sel.and_then(|s| s.try_peek()).is_some_and(|id| id == nid);
         let hovered = use_signal(hover_key_sync.as_str(), || false)
             .try_peek()
             .unwrap_or(false);
@@ -1432,16 +1430,12 @@ mod tests {
                 .roots(roots)
                 .into();
             toggle_node_expanded_key(a_key, "root");
-            assert!(
-                !expanded_signal_for_key(a_key)
-                    .try_peek()
-                    .is_some_and(|s| s.contains("root"))
-            );
-            assert!(
-                expanded_signal_for_key(b_key)
-                    .try_peek()
-                    .is_some_and(|s| s.contains("root"))
-            );
+            assert!(!expanded_signal_for_key(a_key)
+                .try_peek()
+                .is_some_and(|s| s.contains("root")));
+            assert!(expanded_signal_for_key(b_key)
+                .try_peek()
+                .is_some_and(|s| s.contains("root")));
         });
     }
 

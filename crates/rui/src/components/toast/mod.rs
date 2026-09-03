@@ -59,23 +59,21 @@ mod swipe;
 mod timer;
 pub mod view;
 
-use crate::core::reactivity::{Signal, batch, remove_named_signal, use_signal};
-use crate::core::tree::{ATTR_POINTER_EVENTS, Element, LayoutStatus, PointerEvents};
+use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
+use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::{
-    SemanticTone, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
-};
+use crate::style::{SemanticTone, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot};
 use crate::tokens;
-use crate::utils::keyed_overlay::{TOAST_CARD_SCOPE, item_template_id};
+use crate::utils::keyed_overlay::{item_template_id, TOAST_CARD_SCOPE};
 use crate::utils::layout_group::linear_slot_offset;
 use crate::utils::lucide_glyph;
 use crate::utils::presence::exit_elapsed;
-use queue::{MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP, max_displace_fades, non_displace_budget_full};
-use swipe::{ToastSwipeDirs, clamp_swipe_offset, should_dismiss};
+use queue::{max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP};
+use swipe::{clamp_swipe_offset, should_dismiss, ToastSwipeDirs};
 
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
@@ -1397,19 +1395,17 @@ pub fn toast_dismiss(id: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::host::{TOAST_HOST_VIEW, paint_toast_host, toaster};
+    use super::host::{paint_toast_host, toaster, TOAST_HOST_VIEW};
     use super::motion::{
-        ToastStackMotion, exit_target, stack_lift_visual, toast_enter_offset_y,
-        toast_exit_offset_y, toast_motion_pose, tone_shadow_stacked,
+        exit_target, stack_lift_visual, toast_enter_offset_y, toast_exit_offset_y,
+        toast_motion_pose, tone_shadow_stacked, ToastStackMotion,
     };
     use super::view::tone_chrome;
     use super::*;
     use crate::layout::layout_tree::ATTR_PORTAL_KEY;
     use crate::style::{parse_color, parse_text_color, SemanticTone};
 
-    fn toast_tone_palette(
-        tone: ToastTone,
-    ) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
+    fn toast_tone_palette(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
         let chrome = tone_chrome(tone);
         let border = chrome
             .border
@@ -1637,7 +1633,7 @@ mod tests {
     #[test]
     fn toast_stage_hoists_to_window_portal_layer() {
         use crate::layout::layout_tree::{
-            ATTR_HOISTED_PORTAL, LayoutTree, PORTAL_LAYER_ID, hoist_portal_subtrees,
+            hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
         };
         toast_queue().set(vec![]);
         toast_pending().set(vec![]);
@@ -1716,7 +1712,7 @@ mod tests {
     #[test]
     fn toast_still_paints_after_command_modal_closes() {
         use crate::app::portal_overlay::{
-            OverlayKind, OverlayMode, clear_overlay_stack, portal_sync,
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
         };
         clear_overlay_stack();
         toast_queue().set(vec![]);

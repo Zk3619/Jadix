@@ -77,10 +77,10 @@ use std::rc::Rc;
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::virtual_list::virtual_list;
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
-use crate::primitives::r#box::{r#box, gstack, hstack, vstack};
 use crate::primitives::interactive::mark_hover_paint_dirty;
+use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_color;
 use crate::style::parse_text_color;
@@ -224,7 +224,7 @@ fn apply_cell_align_in_place(el: &mut Element, align: TableAlign) -> bool {
 }
 
 fn parse_table_col_width(raw: &str) -> crate::layout::dimension::CssDim {
-    use crate::layout::dimension::{CssDim, parse_css_dim};
+    use crate::layout::dimension::{parse_css_dim, CssDim};
     let s = raw.trim();
     if s.is_empty() {
         return CssDim::Auto;
@@ -296,7 +296,7 @@ fn infer_shared_column_tracks(sections: &[Element]) -> Option<Vec<crate::layout:
 /// 从行内单元格的 `data-table-col-w` 生成共享列轨（各行同模板 → 列纵向对齐）。
 fn table_row_grid_template_from_cells(cells: &[Element]) -> Vec<crate::layout::GridTrack> {
     use crate::layout::track_fr_1;
-    use taffy::prelude::{GridTemplateComponent, length};
+    use taffy::prelude::{length, GridTemplateComponent};
 
     if cells.is_empty() {
         return crate::layout::cols_equal_fr(1);
@@ -316,7 +316,7 @@ fn table_row_grid_template_from_cells(cells: &[Element]) -> Vec<crate::layout::G
 }
 
 fn table_row_grid_template_from_columns(columns: &[TableColumn]) -> Vec<crate::layout::GridTrack> {
-    use crate::layout::{GridTrack, track_fr_1};
+    use crate::layout::{track_fr_1, GridTrack};
     use taffy::prelude::{fr, length, minmax};
 
     if columns.is_empty() {
@@ -657,11 +657,7 @@ pub fn TableCaption(children: Option<Element>) -> Element {
             text("").size(TEXT_SM).weight(400.0).color(muted),
         ));
     }
-    let mut cap: Element = r#box()
-        .w("100%")
-        .mt(tokens::SPACE_4)
-        .children(kids)
-        .into();
+    let mut cap: Element = r#box().w("100%").mt(tokens::SPACE_4).children(kids).into();
     cap.set_attr("data-slot", "table-caption");
     mark_slot(cap, SLOT_CAPTION)
 }
@@ -1161,12 +1157,7 @@ impl From<TableBuilder> for Element {
                     .border_style("solid")
                     .border_top(tokens::border(), 1.0)
                     .bg(table_footer_bg())
-                    .child(
-                        text(info)
-                            .size(TEXT_SM)
-                            .weight(500.0)
-                            .color(fg),
-                    )
+                    .child(text(info).size(TEXT_SM).weight(500.0).color(fg))
                     .child(
                         hstack()
                             .gap(tokens::SPACE_2)
@@ -1301,7 +1292,7 @@ mod tests {
 
     #[test]
     fn parse_table_col_width_bare_number_is_px() {
-        use crate::layout::dimension::{CssDim, dim_length_px};
+        use crate::layout::dimension::{dim_length_px, CssDim};
         let dim = parse_table_col_width("100");
         assert!(matches!(dim, CssDim::Px(v) if (v - 100.0).abs() < 1e-4));
         let px = parse_table_col_width("6.25rem");
@@ -1618,14 +1609,8 @@ mod tests {
                     let bx = body_row.children[i].layout_bounds[0];
                     let hw = header_row.children[i].layout_bounds[2];
                     let bw = body_row.children[i].layout_bounds[2];
-                    assert!(
-                        (hx - bx).abs() < 1.0,
-                        "col {i} x: header={hx} body={bx}"
-                    );
-                    assert!(
-                        (hw - bw).abs() < 1.0,
-                        "col {i} w: header={hw} body={bw}"
-                    );
+                    assert!((hx - bx).abs() < 1.0, "col {i} x: header={hx} body={bx}");
+                    assert!((hw - bw).abs() < 1.0, "col {i} w: header={hw} body={bw}");
                 }
                 let amt = &body_row.children[1];
                 assert!(

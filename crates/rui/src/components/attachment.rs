@@ -36,6 +36,13 @@
 //!     </Attachment>
 //! </AttachmentGroup>
 //!
+//! // Image preview (Message / composer): vertical card + variant=image
+//! <Attachment orientation="vertical">
+//!     <AttachmentMedia variant="image">
+//!         <Image texture="photo" />
+//!     </AttachmentMedia>
+//! </Attachment>
+//!
 //! // B · Builder
 //! Element::from(
 //!     attachment_group()
@@ -53,6 +60,11 @@
 //!
 //! ## Notes
 //! - **Presentational**: no scope / open state; `state` / `size` / `orientation` support macro `bind_attr`.
+//! - `orientation=vertical` is `w-24` (`w-30` when `AttachmentContent` is present); media is `w-full` + `aspect-square` (ShadCN).
+//! - Horizontal file chips hug content (`max-w-full` + `w-fit`); the middle title / description
+//!   ellipsize. Icon and trailing actions do not shrink. Stretch columns still `align-self: start`
+//!   (Message content pack) so chips do not fill the parent.
+//! - `AttachmentMedia variant=image` fills a child [`crate::components::Image`] (`w-full` / `h-full`).
 //! - `<Attachment>` compound tags use generic PascalCase → `*Props` (same as Item / Empty).
 //! - `idle` uses dashed border; semantic states (`info` / `success` / `warning` / `destructive`) use
 //!   [`semantic_chrome`] (same tone keys as Alert / Button); `uploading` / `processing` pulse title.
@@ -63,17 +75,17 @@ use std::sync::OnceLock;
 
 use crate::components::base::BaseComponentBuilder;
 use crate::components::button::{button, ButtonSize, ButtonVariant};
-use crate::core::reactivity::{Context, create_context, provide_context, use_context};
-use crate::core::tree::{Element, IntoF32, LayoutStatus, parse_color, parse_text_color};
+use crate::core::reactivity::{create_context, provide_context, use_context, Context};
+use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     apply_semantic_chrome_respecting_overrides, is_variant_style_overridden, semantic_chrome,
-    semantic_media_wash, with_class_list, SemanticChrome, SemanticChromeDecor,
-    SemanticChromeOpts, SemanticSurface, SemanticTone, VariantStyleField,
+    semantic_media_wash, with_class_list, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
+    SemanticSurface, SemanticTone, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -99,8 +111,11 @@ const TITLE_SIZE_PX: f32 = 13.0;
 const TITLE_WEIGHT: u16 = 500;
 const DESC_SIZE_PX: f32 = 11.0;
 const DESC_WEIGHT: u16 = 400;
-const ROOT_RADIUS: &str = "0.5rem";
+const ROOT_RADIUS: &str = "0.75rem";
 const PULSE_CLASS: &str = "animate-pulse";
+/// ShadCN `orientation=vertical` → `w-24`; `has-content` → `w-30`.
+const VERTICAL_W: &str = "6rem";
+const VERTICAL_W_CONTENT: &str = "7.5rem";
 
 // ---------------------------------------------------------------------------
 // Variants
@@ -211,25 +226,49 @@ impl AttachmentSize {
 
     fn px(self) -> &'static str {
         match self {
+            Self::Default => "0.625rem",
+            Self::Sm => "0.5rem",
+            Self::Xs => "0.375rem",
+        }
+    }
+
+    fn py(self) -> &'static str {
+        match self {
             Self::Default => "0.5rem",
             Self::Sm => "0.375rem",
             Self::Xs => "0.25rem",
         }
     }
 
-    fn py(self) -> &'static str {
+    /// `has-media:p-2` / `p-1.5` / `p-1` when the card is media-only.
+    fn media_pad(self) -> &'static str {
         match self {
-            Self::Default => "0.375rem",
-            Self::Sm => "0.3125rem",
+            Self::Default => "0.5rem",
+            Self::Sm => "0.375rem",
             Self::Xs => "0.25rem",
         }
     }
 
+    /// Horizontal icon well: `w-10` / `w-8` / `w-7`.
     fn media_box(self) -> &'static str {
         match self {
-            Self::Default => "2rem",
-            Self::Sm => "1.75rem",
-            Self::Xs => "1.5rem",
+            Self::Default => "2.5rem",
+            Self::Sm => "2rem",
+            Self::Xs => "1.75rem",
+        }
+    }
+
+    fn root_radius(self) -> &'static str {
+        match self {
+            Self::Xs => "0.5rem",
+            _ => ROOT_RADIUS,
+        }
+    }
+
+    fn media_radius(self) -> &'static str {
+        match self {
+            Self::Xs => "0.375rem",
+            _ => "0.5rem",
         }
     }
 
@@ -362,6 +401,7 @@ impl std::str::FromStr for AttachmentMediaVariant {
 struct AttachmentCtx {
     state: AttachmentState,
     size: AttachmentSize,
+    orientation: AttachmentOrientation,
 }
 
 fn attachment_context() -> Context<AttachmentCtx> {
@@ -373,7 +413,9 @@ fn use_attachment() -> Option<AttachmentCtx> {
     use_context(attachment_context())
 }
 
-fn attachment_state_from_attrs(attrs: &std::collections::HashMap<String, String>) -> AttachmentState {
+fn attachment_state_from_attrs(
+    attrs: &std::collections::HashMap<String, String>,
+) -> AttachmentState {
     attrs
         .get(ATTR_ATTACHMENT_STATE)
         .map(|s| AttachmentState::from(s.as_str()))
@@ -456,24 +498,75 @@ fn media_fg_for_state(state: AttachmentState, chrome: &SemanticChrome) -> [u8; 4
     }
 }
 
-fn media_bg_for_state(state: AttachmentState) -> Option<[f32; 4]> {
+fn media_bg_for_state(state: AttachmentState) -> [f32; 4] {
     state
         .semantic_tone()
         .and_then(semantic_media_wash)
+        .unwrap_or_else(|| parse_color("muted"))
+}
+
+fn fill_image_media_child(child: &mut Element) {
+    if child.image_texture.is_some() {
+        *child = std::mem::take(child).w("100%").h("100%");
+    }
+}
+
+fn size_media_shell(
+    mut el: Element,
+    variant: AttachmentMediaVariant,
+    size: AttachmentSize,
+    orientation: AttachmentOrientation,
+    state: AttachmentState,
+) -> Element {
+    el = el
+        .flex_shrink(0.0)
+        .rounded(size.media_radius())
+        .overflow("hidden")
+        .aspect_ratio(1.0);
+    el = match orientation {
+        AttachmentOrientation::Vertical => el.w("100%").h("auto").min_w(0.0).min_h(0.0),
+        AttachmentOrientation::Horizontal => {
+            let box_sz = size.media_box();
+            el.w(box_sz).h(box_sz).min_w(box_sz).min_h(box_sz)
+        }
+    };
+    if !is_variant_style_overridden(&el.attrs, VariantStyleField::Bg) {
+        el.style.bg_color = media_bg_for_state(state);
+    }
+    if variant == AttachmentMediaVariant::Image {
+        let opaque = matches!(state, AttachmentState::Done | AttachmentState::Idle);
+        el = el.opacity(if opaque { 1.0 } else { 0.6 });
+        for child in &mut el.children {
+            fill_image_media_child(child);
+        }
+    } else {
+        el = el.opacity(1.0);
+    }
+    el
+}
+
+fn media_variant_from_attrs(
+    attrs: &std::collections::HashMap<String, String>,
+) -> AttachmentMediaVariant {
+    attrs
+        .get(ATTR_VARIANT)
+        .map(|s| AttachmentMediaVariant::from(s.as_str()))
+        .unwrap_or_default()
 }
 
 fn repaint_attachment_media_on_place(
     el: &mut Element,
     state: AttachmentState,
     size: AttachmentSize,
+    orientation: AttachmentOrientation,
     chrome: &SemanticChrome,
 ) {
-    let box_sz = size.media_box();
-    *el = std::mem::take(el)
-        .w(box_sz)
-        .h(box_sz)
-        .min_w(box_sz)
-        .min_h(box_sz);
+    let variant = media_variant_from_attrs(&el.attrs);
+    let taken = std::mem::take(el);
+    *el = size_media_shell(taken, variant, size, orientation, state);
+    el.set_attr(ATTR_ATTACHMENT_STATE, state.as_str());
+    el.set_attr(ATTR_ATTACHMENT_SIZE, size.as_str());
+    el.set_attr(ATTR_ATTACHMENT_ORIENTATION, orientation.as_str());
     let fg = media_fg_for_state(state, chrome);
     for child in &mut el.children {
         if is_lucide_icon(child) && child.text_style.size_resolved() <= 1.0 {
@@ -483,11 +576,6 @@ fn repaint_attachment_media_on_place(
         {
             child.text_style.color = Some(fg);
         }
-    }
-    if let Some(bg) = media_bg_for_state(state) {
-        el.style.bg_color = bg;
-    } else if !is_variant_style_overridden(&el.attrs, VariantStyleField::Bg) {
-        el.style.bg_color = [0.0, 0.0, 0.0, 0.0];
     }
 }
 
@@ -522,18 +610,23 @@ fn repaint_attachment_description_on_place(
     paint_text_nodes(el, color, size.desc_size_px(), DESC_WEIGHT);
 }
 
-fn repaint_attachment_descendants(el: &mut Element, state: AttachmentState, size: AttachmentSize) {
+fn repaint_attachment_descendants(
+    el: &mut Element,
+    state: AttachmentState,
+    size: AttachmentSize,
+    orientation: AttachmentOrientation,
+) {
     let chrome = attachment_chrome(state);
     match slot_of(el) {
-        Some(SLOT_MEDIA) => repaint_attachment_media_on_place(el, state, size, &chrome),
-        Some(SLOT_TITLE) => repaint_attachment_title_on_place(el, state, size, &chrome),
-        Some(SLOT_DESCRIPTION) => {
-            repaint_attachment_description_on_place(el, state, size, &chrome)
+        Some(SLOT_MEDIA) => {
+            repaint_attachment_media_on_place(el, state, size, orientation, &chrome)
         }
+        Some(SLOT_TITLE) => repaint_attachment_title_on_place(el, state, size, &chrome),
+        Some(SLOT_DESCRIPTION) => repaint_attachment_description_on_place(el, state, size, &chrome),
         _ => {}
     }
     for child in &mut el.children {
-        repaint_attachment_descendants(child, state, size);
+        repaint_attachment_descendants(child, state, size, orientation);
     }
 }
 
@@ -602,7 +695,12 @@ pub fn apply_attachment_paint(
     let prev_state = attachment_state_from_attrs(&el.attrs);
     let prev_size = attachment_size_from_attrs(&el.attrs);
     let prev_orientation = attachment_orientation_from_attrs(&el.attrs);
-    if prev_state == state && prev_size == size && prev_orientation == orientation {
+    let already_painted = el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_ROOT);
+    if already_painted
+        && prev_state == state
+        && prev_size == size
+        && prev_orientation == orientation
+    {
         return LayoutStatus::Clean;
     }
 
@@ -611,32 +709,47 @@ pub fn apply_attachment_paint(
 
     let mut taken = std::mem::take(el);
     let kids = std::mem::take(&mut taken.children);
+    let has_media = kids.iter().any(|k| slot_of(k) == Some(SLOT_MEDIA));
+    let has_content = kids.iter().any(|k| slot_of(k) == Some(SLOT_CONTENT));
 
     let mut painted: Element = match orientation {
-        AttachmentOrientation::Horizontal => {
-            let mut row: Element = hstack()
-                .items_center()
-                .gap(size.gap())
-                .children(kids)
-                .into();
-            row = row.flex_wrap_kw("wrap");
-            row
-        }
+        AttachmentOrientation::Horizontal => hstack()
+            .items_center()
+            .gap(size.gap())
+            .wrap("nowrap")
+            .children(kids)
+            .into(),
         AttachmentOrientation::Vertical => vstack()
-            .items("start")
+            .items("stretch")
             .gap(size.gap())
             .children(kids)
             .into(),
     };
     painted = painted
-        .w("fit-content")
         .max_w("100%")
-        .min_w(0.0)
         .flex_shrink(0.0)
-        .px(size.px())
-        .py(size.py())
-        .rounded(ROOT_RADIUS)
+        .rounded(size.root_radius())
+        .overflow("hidden")
         .position("relative");
+    painted = match orientation {
+        // Hug content; `max-w-full` already applied. `w("fit-content")` stays Auto in Taffy;
+        // stretch columns still need `align-self: start` (Message content pack).
+        AttachmentOrientation::Horizontal => painted.w("fit-content").min_w(0.0),
+        AttachmentOrientation::Vertical => painted
+            .w(if has_content {
+                VERTICAL_W_CONTENT
+            } else {
+                VERTICAL_W
+            })
+            .min_w(0.0),
+    };
+    painted = if has_content {
+        painted.px(size.px()).py(size.py())
+    } else if has_media {
+        painted.p(size.media_pad())
+    } else {
+        painted.px(size.px()).py(size.py())
+    };
 
     painted.set_attr(ATTR_ATTACHMENT_STATE, state.as_str());
     painted.set_attr(ATTR_ATTACHMENT_SIZE, size.as_str());
@@ -662,7 +775,7 @@ pub fn apply_attachment_paint(
             .border_color(parse_color("border"));
         *el = taken;
     }
-    repaint_attachment_descendants(el, state, size);
+    repaint_attachment_descendants(el, state, size, orientation);
 
     if size_changed || orientation_changed {
         LayoutStatus::LayoutChanged
@@ -700,52 +813,57 @@ pub fn apply_bound_attachment_orientation(
     )
 }
 
-fn build_attachment_media(variant: AttachmentMediaVariant, children: Vec<Element>) -> Element {
-    let ctx = use_attachment();
-    let state = ctx.map(|c| c.state).unwrap_or(AttachmentState::Done);
-    let size = ctx.map(|c| c.size).unwrap_or(AttachmentSize::Default);
+fn paint_attachment_media(
+    variant: AttachmentMediaVariant,
+    children: Vec<Element>,
+    state: AttachmentState,
+    size: AttachmentSize,
+    orientation: AttachmentOrientation,
+) -> Element {
     let chrome = attachment_chrome(state);
-    let box_sz = size.media_box();
 
     let kids: Vec<Element> = children
         .into_iter()
         .map(|mut child| {
-            child = child.pointer_events_none();
-            if variant == AttachmentMediaVariant::Icon
-                && is_lucide_icon(&child)
-                && child.text_style.size_resolved() <= 1.0
-            {
-                child = child.text_size(IntoF32::into_f32("0.875rem"));
+            if is_lucide_icon(&child) {
+                child = child.pointer_events_none();
+                if variant == AttachmentMediaVariant::Icon
+                    && child.text_style.size_resolved() <= 1.0
+                {
+                    child = child.text_size(IntoF32::into_f32("0.875rem"));
+                }
             }
             if child.text.is_some() {
                 child.text_style.color = Some(media_fg_for_state(state, &chrome));
+            }
+            if variant == AttachmentMediaVariant::Image {
+                fill_image_media_child(&mut child);
             }
             child
         })
         .collect();
 
-    let mut shell = hstack()
-        .items_center()
-        .justify_center()
-        .flex_shrink(0.0)
-        .w(box_sz)
-        .h(box_sz)
-        .min_w(box_sz)
-        .min_h(box_sz)
-        .overflow("hidden");
-
-    if let Some(bg) = media_bg_for_state(state) {
-        shell = shell.bg(bg);
-    }
-
-    if variant == AttachmentMediaVariant::Image {
-        shell = shell.aspect_ratio(1.0);
-    }
-
+    let shell = hstack().items_center().justify_center();
     let mut el: Element = shell.children(kids).into();
+    el = size_media_shell(el, variant, size, orientation, state);
     el.set_attr(ATTR_SLOT, SLOT_MEDIA);
     el.set_attr(ATTR_VARIANT, variant.as_str());
+    el.set_attr(ATTR_ATTACHMENT_STATE, state.as_str());
+    el.set_attr(ATTR_ATTACHMENT_SIZE, size.as_str());
+    el.set_attr(ATTR_ATTACHMENT_ORIENTATION, orientation.as_str());
     el
+}
+
+fn build_attachment_media(variant: AttachmentMediaVariant, children: Vec<Element>) -> Element {
+    let ctx = use_attachment();
+    paint_attachment_media(
+        variant,
+        children,
+        ctx.map(|c| c.state).unwrap_or(AttachmentState::Done),
+        ctx.map(|c| c.size).unwrap_or(AttachmentSize::Default),
+        ctx.map(|c| c.orientation)
+            .unwrap_or(AttachmentOrientation::Horizontal),
+    )
 }
 
 pub fn apply_bound_attachment_media_variant(
@@ -753,16 +871,18 @@ pub fn apply_bound_attachment_media_variant(
     variant: impl AsRef<str>,
 ) -> LayoutStatus {
     let v = AttachmentMediaVariant::from(variant.as_ref());
-    let prev = el
-        .attrs
-        .get(ATTR_VARIANT)
-        .map(|s| AttachmentMediaVariant::from(s.as_str()))
-        .unwrap_or_default();
+    let prev = media_variant_from_attrs(&el.attrs);
     if prev == v {
         return LayoutStatus::Clean;
     }
     let kids = std::mem::take(&mut el.children);
-    let mut rebuilt = build_attachment_media(v, kids);
+    let mut rebuilt = paint_attachment_media(
+        v,
+        kids,
+        attachment_state_from_attrs(&el.attrs),
+        attachment_size_from_attrs(&el.attrs),
+        attachment_orientation_from_attrs(&el.attrs),
+    );
     preserve_binding_identity(el, &mut rebuilt);
     *el = rebuilt;
     LayoutStatus::StyleChanged
@@ -775,7 +895,7 @@ fn build_attachment_title(children: Vec<Element>) -> Element {
     let cfg = title_text_config(size, state);
     let kids = caption_from_children(Some(Element::new().children(children)), &cfg);
     let mut el: Element = hstack()
-        .w("fit-content")
+        .w("100%")
         .max_w("100%")
         .min_w(0.0)
         .items_center()
@@ -851,7 +971,11 @@ pub fn Attachment(
     let orientation = orientation.unwrap_or_default();
     provide_context(
         attachment_context(),
-        AttachmentCtx { state, size },
+        AttachmentCtx {
+            state,
+            size,
+            orientation,
+        },
     );
     let kids = children.map(take_packed).unwrap_or_default();
     let mut el: Element = hstack().children(kids).into();
@@ -1095,41 +1219,35 @@ impl AttachmentBuilder {
     }
 
     pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            AttachmentMedia(AttachmentMediaProps {
-                variant: Some(AttachmentMediaVariant::Icon),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AttachmentMedia(AttachmentMediaProps {
+            variant: Some(AttachmentMediaVariant::Icon),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            AttachmentMedia(AttachmentMediaProps {
-                variant: Some(AttachmentMediaVariant::Icon),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AttachmentMedia(AttachmentMediaProps {
+            variant: Some(AttachmentMediaVariant::Icon),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn media_image(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            AttachmentMedia(AttachmentMediaProps {
-                variant: Some(AttachmentMediaVariant::Image),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AttachmentMedia(AttachmentMediaProps {
+            variant: Some(AttachmentMediaVariant::Image),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
@@ -1138,40 +1256,41 @@ impl AttachmentBuilder {
         self
     }
 
-    pub fn title_description(mut self, title: impl Into<String>, description: impl Into<String>) -> Self {
-        self.children.push(
-            AttachmentContent(AttachmentContentProps {
+    pub fn title_description(
+        mut self,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.children
+            .push(AttachmentContent(AttachmentContentProps {
                 children: {
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
-                    Some(
-                        frag.children([
-                            AttachmentTitle(AttachmentTitleProps {
-                                children: Some(Element::new().text(title.into())),
-                                base: None,
-                                base_builder: None,
-                                ..Default::default()
-                            }),
-                            AttachmentDescription(AttachmentDescriptionProps {
-                                children: Some(Element::new().text(description.into())),
-                                base: None,
-                                base_builder: None,
-                                ..Default::default()
-                            }),
-                        ]),
-                    )
+                    Some(frag.children([
+                        AttachmentTitle(AttachmentTitleProps {
+                            children: Some(Element::new().text(title.into())),
+                            base: None,
+                            base_builder: None,
+                            ..Default::default()
+                        }),
+                        AttachmentDescription(AttachmentDescriptionProps {
+                            children: Some(Element::new().text(description.into())),
+                            base: None,
+                            base_builder: None,
+                            ..Default::default()
+                        }),
+                    ]))
                 },
                 base: None,
                 base_builder: None,
                 ..Default::default()
-            }),
-        );
+            }));
         self
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            AttachmentContent(AttachmentContentProps {
+        self.children
+            .push(AttachmentContent(AttachmentContentProps {
                 children: {
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
@@ -1185,14 +1304,13 @@ impl AttachmentBuilder {
                 base: None,
                 base_builder: None,
                 ..Default::default()
-            }),
-        );
+            }));
         self
     }
 
     pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            AttachmentActions(AttachmentActionsProps {
+        self.children
+            .push(AttachmentActions(AttachmentActionsProps {
                 children: {
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
@@ -1201,8 +1319,7 @@ impl AttachmentBuilder {
                 base: None,
                 base_builder: None,
                 ..Default::default()
-            }),
-        );
+            }));
         self
     }
 }
@@ -1233,7 +1350,10 @@ mod tests {
 
     #[test]
     fn attachment_enums_parse() {
-        assert_eq!(AttachmentState::from("uploading"), AttachmentState::Uploading);
+        assert_eq!(
+            AttachmentState::from("uploading"),
+            AttachmentState::Uploading
+        );
         assert_eq!(AttachmentState::from("error"), AttachmentState::Destructive);
         assert_eq!(AttachmentState::from("warn"), AttachmentState::Warning);
         assert_eq!(AttachmentState::from("info"), AttachmentState::Info);
@@ -1260,10 +1380,7 @@ mod tests {
             ),
             LayoutStatus::LayoutChanged
         );
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(
             el.attrs.get(ATTR_STATE).map(String::as_str),
             Some("destructive")
@@ -1350,5 +1467,106 @@ mod tests {
                 .as_ref()
                 .is_some_and(|cs| cs.base.iter().any(|t| t.contains(PULSE_CLASS)));
         assert!(has_pulse, "uploading should enable animate-pulse on title");
+    }
+
+    fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+            return Some(el);
+        }
+        for child in &el.children {
+            if let Some(found) = find_slot(child, slot) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn default_done_horizontal_paints_card_chrome() {
+        let mut el = Element::new();
+        assert_ne!(
+            apply_attachment_paint(
+                &mut el,
+                AttachmentState::Done,
+                AttachmentSize::Default,
+                AttachmentOrientation::Horizontal,
+            ),
+            LayoutStatus::Clean
+        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
+        assert_eq!(
+            crate::layout::dim_length_px(el.style.min_size.width),
+            Some(0.0)
+        );
+        assert_eq!(el.style.flex_wrap, taffy::style::FlexWrap::NoWrap);
+        assert_eq!(
+            apply_attachment_paint(
+                &mut el,
+                AttachmentState::Done,
+                AttachmentSize::Default,
+                AttachmentOrientation::Horizontal,
+            ),
+            LayoutStatus::Clean
+        );
+    }
+
+    #[test]
+    fn attachment_title_is_full_width_for_ellipsis() {
+        let el = AttachmentTitle(AttachmentTitleProps {
+            children: Some(Element::new().text("very-long-filename.pdf")),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        assert!(
+            matches!(
+                crate::layout::dim_kind(el.style.size.width),
+                crate::layout::DimKind::Percent(p) if (p - 1.0).abs() < 0.001
+            ),
+            "title must be w-full so a clamped chip can ellipsize"
+        );
+    }
+
+    #[test]
+    fn vertical_image_preview_fills_media_and_uses_w24() {
+        let mut img = Element::new();
+        img.image_texture = Some("demo-checker".into());
+        let root = Attachment(AttachmentProps {
+            orientation: Some(AttachmentOrientation::Vertical),
+            children: {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                Some(frag.children([AttachmentMedia(AttachmentMediaProps {
+                    variant: Some(AttachmentMediaVariant::Image),
+                    children: Some(img),
+                    base: None,
+                    base_builder: None,
+                    ..Default::default()
+                })]))
+            },
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        assert_eq!(
+            crate::layout::dim_length_px(root.style.size.width),
+            Some(96.0)
+        );
+        let media = find_slot(&root, SLOT_MEDIA).expect("media slot");
+        assert!(
+            matches!(
+                crate::layout::dim_kind(media.style.size.width),
+                crate::layout::DimKind::Percent(p) if (p - 1.0).abs() < 0.001
+            ),
+            "vertical image media should be w-full"
+        );
+        let photo = media.children.first().expect("image child");
+        assert!(
+            matches!(
+                crate::layout::dim_kind(photo.style.size.width),
+                crate::layout::DimKind::Percent(p) if (p - 1.0).abs() < 0.001
+            ),
+            "image child should fill the media well"
+        );
     }
 }

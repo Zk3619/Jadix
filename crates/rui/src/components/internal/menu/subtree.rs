@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::utils::roving::roving_edge;
 

@@ -27,10 +27,10 @@
 //! - 值变化经 [`ReactiveSync`](crate::core::tree::ReactiveSync) 原位同步，不订阅根 UI effect。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
-use crate::core::reactivity::{Signal, use_signal};
-use crate::core::tree::{Element, LayoutStatus, parse_color};
-use crate::primitives::r#box::{r#box, hstack, vstack};
+use crate::core::reactivity::{use_signal, Signal};
+use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::use_ui_transition_cubic;
 use crate::utils::controlled::resolve_f32_signal;
 use rui_macros::component;
@@ -871,7 +871,7 @@ impl crate::core::tree::IntoElementList for SliderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pointer_events::{PointerKind, dispatch_pointer, hit_path};
+    use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
     use crate::app::test_support::sync_reactive_elements_subtree;
     use crate::core::tree::LayoutTree;
 

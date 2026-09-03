@@ -21,7 +21,7 @@ use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
 };
-use crate::core::tree::{Element, IntoDimension, IntoF32, parse_color};
+use crate::core::tree::{parse_color, Element, IntoDimension, IntoF32};
 use rui_macros::component;
 use taffy::prelude::*;
 
@@ -626,7 +626,15 @@ mod chrome_tests {
             &mut thumb,
             &mut thumb_border,
         );
-        apply_scrollbar_visible_alpha(0.5, false, false, &mut track, &mut thumb, &mut track_border, &mut thumb_border);
+        apply_scrollbar_visible_alpha(
+            0.5,
+            false,
+            false,
+            &mut track,
+            &mut thumb,
+            &mut track_border,
+            &mut thumb_border,
+        );
         assert_eq!(track[3], 0.0);
         assert!((thumb[3] - 0.5).abs() < 1e-4);
     }
@@ -637,7 +645,15 @@ mod chrome_tests {
         let mut track_border = [0.0, 0.0, 0.0, 0.0];
         let mut thumb = [0.2, 0.2, 0.2, 1.0];
         let mut thumb_border = [0.0, 0.0, 0.0, 0.0];
-        apply_scrollbar_visible_alpha(0.5, true, false, &mut track, &mut thumb, &mut track_border, &mut thumb_border);
+        apply_scrollbar_visible_alpha(
+            0.5,
+            true,
+            false,
+            &mut track,
+            &mut thumb,
+            &mut track_border,
+            &mut thumb_border,
+        );
         assert!((track[3] - 0.5).abs() < 1e-4);
         assert!((thumb[3] - 0.5).abs() < 1e-4);
     }

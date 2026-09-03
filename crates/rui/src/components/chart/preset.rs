@@ -7,8 +7,8 @@ use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use rui_macros::component;
 
-use super::datum::{ChartDatum, ChartSelect, ChartSelected, rows_from_values_labels};
-use super::define::{ChartDefinition, define_chart};
+use super::datum::{rows_from_values_labels, ChartDatum, ChartSelect, ChartSelected};
+use super::define::{define_chart, ChartDefinition};
 use super::mark::{area_y, bar_y, line_y, pie};
 use super::polar::radial_bar;
 use super::theme::{ChartConfig, ChartTheme, TooltipIndicator};

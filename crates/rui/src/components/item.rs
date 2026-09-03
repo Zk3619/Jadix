@@ -63,12 +63,12 @@ use std::sync::OnceLock;
 
 use crate::components::base::BaseComponentBuilder;
 use crate::components::separator::separator;
-use crate::core::reactivity::{Context, create_context, provide_context, use_context};
-use crate::core::tree::{Element, IntoF32, LayoutStatus, parse_color, parse_text_color};
+use crate::core::reactivity::{create_context, provide_context, use_context, Context};
+use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -345,11 +345,7 @@ fn preserve_binding_identity(from: &Element, to: &mut Element) {
     to.on_click = from.on_click.clone();
 }
 
-pub fn apply_item_paint(
-    el: &mut Element,
-    variant: ItemVariant,
-    size: ItemSize,
-) -> LayoutStatus {
+pub fn apply_item_paint(el: &mut Element, variant: ItemVariant, size: ItemSize) -> LayoutStatus {
     let prev_v = item_variant_from_attrs(&el.attrs);
     let prev_s = item_size_from_attrs(&el.attrs);
     if prev_v == variant && prev_s == size {
@@ -465,10 +461,7 @@ fn build_item_media(variant: ItemMediaVariant, children: Vec<Element>) -> Elemen
     el
 }
 
-pub fn apply_bound_item_media_variant(
-    el: &mut Element,
-    variant: impl AsRef<str>,
-) -> LayoutStatus {
+pub fn apply_bound_item_media_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
     let v = ItemMediaVariant::from(variant.as_ref());
     let prev = el
         .attrs
@@ -497,12 +490,7 @@ pub fn ItemGroup(
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = vstack()
-        .w("100%")
-        .min_w(0.0)
-        .gap(0.0)
-        .children(kids)
-        .into();
+    let mut el: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_GROUP);
     el.set_attr("role", "list");
     if let Some(b) = base_builder {
@@ -731,13 +719,11 @@ impl ItemGroupBuilder {
     }
 
     pub fn separator(mut self) -> Self {
-        self.children.push(
-            ItemSeparator(ItemSeparatorProps {
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemSeparator(ItemSeparatorProps {
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 }
@@ -790,41 +776,35 @@ impl ItemBuilder {
     }
 
     pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            ItemMedia(ItemMediaProps {
-                variant: Some(ItemMediaVariant::Default),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemMedia(ItemMediaProps {
+            variant: Some(ItemMediaVariant::Default),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            ItemMedia(ItemMediaProps {
-                variant: Some(ItemMediaVariant::Icon),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemMedia(ItemMediaProps {
+            variant: Some(ItemMediaVariant::Icon),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn media_image(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            ItemMedia(ItemMediaProps {
-                variant: Some(ItemMediaVariant::Image),
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemMedia(ItemMediaProps {
+            variant: Some(ItemMediaVariant::Image),
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
@@ -833,69 +813,63 @@ impl ItemBuilder {
         self
     }
 
-    pub fn title_description(mut self, title: impl Into<String>, description: impl Into<String>) -> Self {
-        self.children.push(
-            ItemContent(ItemContentProps {
-                children: {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    Some(
-                        frag.children(vec![
-                            ItemTitle(ItemTitleProps {
-                                children: Some(Element::new().text(title.into())),
-                                base: None,
-                                base_builder: None,
-                                ..Default::default()
-                            }),
-                            ItemDescription(ItemDescriptionProps {
-                                children: Some(Element::new().text(description.into())),
-                                base: None,
-                                base_builder: None,
-                                ..Default::default()
-                            }),
-                        ]),
-                    )
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+    pub fn title_description(
+        mut self,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.children.push(ItemContent(ItemContentProps {
+            children: {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                Some(frag.children(vec![
+                    ItemTitle(ItemTitleProps {
+                        children: Some(Element::new().text(title.into())),
+                        base: None,
+                        base_builder: None,
+                        ..Default::default()
+                    }),
+                    ItemDescription(ItemDescriptionProps {
+                        children: Some(Element::new().text(description.into())),
+                        base: None,
+                        base_builder: None,
+                        ..Default::default()
+                    }),
+                ]))
+            },
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            ItemContent(ItemContentProps {
-                children: {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    Some(
-                        frag.children(vec![ItemTitle(ItemTitleProps {
-                            children: Some(Element::new().text(text.into())),
-                            base: None,
-                            base_builder: None,
-                            ..Default::default()
-                        })]),
-                    )
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemContent(ItemContentProps {
+            children: {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                Some(frag.children(vec![ItemTitle(ItemTitleProps {
+                    children: Some(Element::new().text(text.into())),
+                    base: None,
+                    base_builder: None,
+                    ..Default::default()
+                })]))
+            },
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            ItemActions(ItemActionsProps {
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ItemActions(ItemActionsProps {
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 }
@@ -937,10 +911,7 @@ mod tests {
             apply_item_paint(&mut el, ItemVariant::Outline, ItemSize::Sm),
             LayoutStatus::LayoutChanged
         );
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ITEM)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ITEM));
         assert_eq!(
             el.attrs.get(ATTR_VARIANT).map(String::as_str),
             Some("outline")

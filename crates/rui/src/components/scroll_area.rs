@@ -22,25 +22,25 @@
 //! - 独立外挂条见 [`crate::components::Scrollbar`]。
 
 use crate::components::base::BaseComponentBuilder;
-use crate::components::scrollbar::{ScrollbarBuilder, ScrollbarOrientation, scrollbar};
+use crate::components::scrollbar::{scrollbar, ScrollbarBuilder, ScrollbarOrientation};
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::activate_scroll_viewport;
-use crate::core::tree::{Element, IntoCssDim, IntoF32, parse_color};
+use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
 use rui_macros::component;
 
 // ── re-export viewport 契约（兼容 `scroll_area::…` 旧路径）──────────────────
 pub use crate::core::scroll_viewport::{
-    DEFAULT_SCROLL_BEHAVIOR, SCROLL_AREA_FOCUS_PREFIX, SCROLL_BEHAVIOR_JUMP,
-    SCROLL_BEHAVIOR_SMOOTH, SCROLL_VIEWPORT_FOCUS_PREFIX, ScrollAreaSignalKeys,
-    ScrollViewportSignalKeys, normalize_scroll_behavior, scroll_activity_signal_key,
-    scroll_behavior_is_jump, scroll_behavior_is_smooth, scroll_behavior_signal_key,
-    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_hover_mode_signal_key,
-    scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_allows_scrollbar,
-    scroll_overflow_x_signal_key, scroll_overflow_y_signal_key, scroll_scrollbar_inset_signal_key,
+    normalize_scroll_behavior, scroll_activity_signal_key, scroll_behavior_is_jump,
+    scroll_behavior_is_smooth, scroll_behavior_signal_key, scroll_content_h_signal_key,
+    scroll_content_w_signal_key, scroll_hover_mode_signal_key, scroll_offset_x_signal_key,
+    scroll_offset_y_signal_key, scroll_overflow_allows_scrollbar, scroll_overflow_x_signal_key,
+    scroll_overflow_y_signal_key, scroll_scrollbar_inset_signal_key,
     scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
     scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
     scroll_target_x_signal_key, scroll_target_y_signal_key, scroll_viewport_h_signal_key,
-    scroll_viewport_w_signal_key, signal_keys_for_rest_cached,
+    scroll_viewport_w_signal_key, signal_keys_for_rest_cached, ScrollAreaSignalKeys,
+    ScrollViewportSignalKeys, DEFAULT_SCROLL_BEHAVIOR, SCROLL_AREA_FOCUS_PREFIX,
+    SCROLL_BEHAVIOR_JUMP, SCROLL_BEHAVIOR_SMOOTH, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 
 const SCROLLBAR_EDGE_PAD: f32 = 2.0;

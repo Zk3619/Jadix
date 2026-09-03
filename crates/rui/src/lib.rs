@@ -185,6 +185,21 @@ pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedIma
     crate::media::load_src(src.as_ref(), crate::media::DecodeOptions::image())
 }
 
+/// 注册自定义图标名（覆盖 Lucide / [`set_icon_provider`]）。路径、`data:` URL 或内联 SVG。
+pub fn register_icon(name: impl Into<String>, source: impl Into<crate::utils::IconSource>) {
+    crate::utils::register_icon(name, source)
+}
+
+/// 替换自定义 [`IconProvider`](crate::utils::IconProvider)（Lucide 仍为回退；[`register_icon`] 优先）。
+pub fn set_icon_provider(provider: std::sync::Arc<dyn crate::utils::IconProvider>) {
+    crate::utils::set_icon_provider(provider)
+}
+
+pub use crate::utils::{
+    clear_icon_provider, clear_registered_icons, icon_named, icon_src, unregister_icon,
+    IconProvider, IconSource,
+};
+
 /// 图像处理（resize / blur / encode 等），基于 [`image`](https://github.com/image-rs/image)。
 pub mod image_ops {
     pub use crate::media::{

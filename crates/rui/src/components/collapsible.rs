@@ -51,23 +51,23 @@ use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    Context, Signal, create_context, create_effect, on_cleanup, provide_context, use_context,
-    use_signal, with_child_owner,
+    create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus, parse_text_color};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
-    css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::motion::{clear_motion, ensure_motion_transitions};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
-use crate::utils::text_node::{TextNodeConfig, build_lucide_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_lucide_icon_text_node, build_text_node, TextNodeConfig};
 use crate::utils::toggle_state::{resolve_bool_signal, write_bool_toggle};
 
 const ATTR_SLOT: &str = "data-slot";
@@ -1203,7 +1203,10 @@ mod tests {
                 "must keep needs_enter until height is known"
             );
             assert!(
-                !el.style.animations.iter().any(|a| a.name == COLLAPSIBLE_DOWN),
+                !el.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == COLLAPSIBLE_DOWN),
                 "must not seed down with 0 height"
             );
             el.layout_bounds = [0.0, 0.0, 100.0, 64.0];

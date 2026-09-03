@@ -1,9 +1,10 @@
 //! Lucide icon name → glyph / SVG-path lookup (shared by `<Icon name="…">` binds).
+//!
+//! Name resolution for app icons goes through [`crate::utils::icon_provider`]. This
+//! module owns the bundled Lucide tables; [`lucide_glyph`] forwards to the provider.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-
-use crate::core::tree::{Element, LayoutStatus};
 
 pub const ATTR_ICON_NAME: &str = "rui_icon_name";
 
@@ -28,31 +29,21 @@ fn lucide_paths_map() -> &'static HashMap<String, String> {
     })
 }
 
-/// Resolve a Lucide icon name (e.g. `"check"`) to a single-glyph string for the lucide font.
-pub fn lucide_glyph(name: &str) -> Option<String> {
+pub(crate) fn lucide_builtin_glyph(name: &str) -> Option<String> {
     let hex = lucide_map().get(name)?;
     let cp = u32::from_str_radix(hex, 16).ok()?;
     char::from_u32(cp).map(|c| c.to_string())
 }
 
+/// Resolve an icon name to a font glyph.
+///
+/// Uses [`crate::utils::icon_provider::resolve_icon`]: overlay / custom provider /
+/// bundled Lucide. Raster `src` names return `None`.
+pub fn lucide_glyph(name: &str) -> Option<String> {
+    crate::utils::icon_provider::glyph_for_name(name)
+}
+
 /// Inner SVG markup for a Lucide icon (no root `<svg>`), from [`lucide_paths.json`].
 pub fn lucide_svg_inner(name: &str) -> Option<&'static str> {
     lucide_paths_map().get(name).map(|s| s.as_str())
-}
-
-/// Attach / refresh glyph + `rui_icon_name` for Solid-style `<Icon name={…}>`.
-pub fn apply_bound_icon_name(el: &mut Element, name: impl AsRef<str>) -> LayoutStatus {
-    let name = name.as_ref();
-    let Some(glyph) = lucide_glyph(name) else {
-        return LayoutStatus::Clean;
-    };
-    let family_ok = el.text_style.font_family.as_deref() == Some("lucide");
-    let name_ok = el.get_attr(ATTR_ICON_NAME).map(|s| s.as_str()) == Some(name);
-    if el.text.as_deref() == Some(glyph.as_str()) && family_ok && name_ok {
-        return LayoutStatus::Clean;
-    }
-    el.text = Some(glyph);
-    el.text_style.font_family = Some("lucide".to_string());
-    el.set_attr(ATTR_ICON_NAME, name);
-    LayoutStatus::LayoutChanged
 }

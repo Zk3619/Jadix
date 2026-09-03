@@ -99,14 +99,14 @@ fn svg_tag_canonical(name: &str) -> Option<&'static str> {
         "polyline" | "Polyline" => "polyline",
         "polygon" | "Polygon" => "polygon",
         "g" => "g",
-        // Lowercase-only where PascalCase is a UI component (`Text`/`Image`/`Switch`/…).
+        // Lowercase-only where PascalCase is a UI component (`Text`/`Image`/`Switch`/`Marker`/…).
         "text" => "text",
         "tspan" | "Tspan" | "TSpan" => "tspan",
         "textPath" | "TextPath" => "textPath",
         "image" => "image",
         "mask" | "Mask" => "mask",
         "pattern" | "Pattern" => "pattern",
-        "marker" | "Marker" => "marker",
+        "marker" => "marker",
         "filter" | "Filter" => "filter",
         "title" | "Title" => "title",
         "desc" | "Desc" => "desc",
@@ -202,6 +202,10 @@ fn is_boolish_attr(name: &str) -> bool {
             | "boxShadowInset"
             | "with_handle"
             | "withHandle"
+            | "auto_scroll"
+            | "autoScroll"
+            | "scroll_anchor"
+            | "scrollAnchor"
     )
 }
 
@@ -876,7 +880,9 @@ fn expand_node(
             let tabs_is_compound =
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             let accordion_is_compound = name_str == "Accordion";
+            let questionnaire_is_compound = name_str == "Questionnaire";
             let collapsible_is_compound = name_str == "Collapsible";
+            let message_scroller_is_compound = name_str == "MessageScrollerProvider";
             let input_otp_is_compound = name_str == "InputOTP";
             let tree_view_is_compound = name_str == "TreeView";
             let carousel_is_compound = matches!(
@@ -884,8 +890,9 @@ fn expand_node(
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
             // Presentational shells that only need `*Props` (no scope): Pagination / Navbar /
-            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / Attachment / List / Table* — use the generic
+            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / Attachment / List / Table* / MessageScroller (parts) — use the generic
             // PascalCase expansion below; do not add them to this special-case list.
+            // MessageScrollerProvider is compound (scope before Viewport / Button).
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -896,6 +903,7 @@ fn expand_node(
                 || name_str == "Bubble"
                 || name_str == "Avatar"
                 || name_str == "Accordion"
+                || name_str == "Questionnaire"
                 || name_str == "Collapsible"
                 || tree_view_is_compound
                 || input_otp_is_compound
@@ -942,7 +950,9 @@ fn expand_node(
                 || name_str == "TabsContent"
                 || name_str == "AccordionContent"
                 || name_str == "AccordionItem"
+                || name_str == "QuestionnaireItem"
                 || name_str == "CollapsibleContent"
+                || message_scroller_is_compound
                 || name_str == "TreeViewItem"
                 || carousel_is_compound
                 || name_str == "ForKeyed"
@@ -1224,6 +1234,98 @@ fn expand_node(
                     };
                 }
 
+                if questionnaire_is_compound {
+                    // ShadCN compound Questionnaire: provide context before Progress / Item / Actions.
+                    let id_expr = get_attr("id");
+                    let item_expr = get_attr("item")
+                        .or_else(|| get_attr("item_signal"))
+                        .or_else(|| get_attr("itemSignal"));
+                    let default_expr = get_attr("default_item").or_else(|| get_attr("defaultItem"));
+                    let shortcuts_expr = get_attr("shortcuts");
+                    let items_expr = get_attr("items");
+                    let class_expr = get_attr("class");
+                    let on_submit_expr = get_attr("on_submit").or_else(|| get_attr("onSubmit"));
+                    let on_item_change_expr = get_attr("on_item_change")
+                        .or_else(|| get_attr("onItemChange"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Questionnaire#{}", file!(), line!(), #idx) }
+                    };
+                    let item_ts = if let Some(item) = item_expr {
+                        quote! { Some(#item) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { (#d).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let shortcuts_ts = if let Some(s) = shortcuts_expr {
+                        quote! { rui::components::QuestionnaireShortcuts::parse(&(#s).to_string()) }
+                    } else {
+                        quote! { rui::components::QuestionnaireShortcuts::None }
+                    };
+                    let items_ts = if let Some(i) = items_expr {
+                        quote! { #i }
+                    } else {
+                        quote! { Vec::new() }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let on_submit_ts = if let Some(s) = on_submit_expr {
+                        quote! { Some(rui::components::questionnaire_submit_fn(#s)) }
+                    } else {
+                        quote! { None }
+                    };
+                    let on_item_change_ts = if let Some(s) = on_item_change_expr {
+                        quote! { Some(rui::components::questionnaire_item_change_fn(#s)) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::questionnaire_scope(
+                            #id_ts,
+                            #item_ts,
+                            #default_ts,
+                            #shortcuts_ts,
+                            #items_ts,
+                            #class_ts,
+                            #on_submit_ts,
+                            #on_item_change_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if tree_view_is_compound {
                     let id_expr = get_attr("id");
                     let variant_expr = get_attr("variant");
@@ -1427,6 +1529,90 @@ fn expand_node(
                             #class_ts,
                             #exclusive_ts,
                             #group_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if message_scroller_is_compound {
+                    // ShadCN compound MessageScroller: provide context before Viewport / Button.
+                    let id_expr = get_attr("id");
+                    let auto_expr = get_attr("auto_scroll").or_else(|| get_attr("autoScroll"));
+                    let pos_expr = get_attr("default_scroll_position")
+                        .or_else(|| get_attr("defaultScrollPosition"));
+                    let threshold_expr = get_attr("scroll_edge_threshold")
+                        .or_else(|| get_attr("scrollEdgeThreshold"));
+                    let peek_expr = get_attr("scroll_previous_item_peek")
+                        .or_else(|| get_attr("scrollPreviousItemPeek"));
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:MessageScrollerProvider#{}", file!(), line!(), #idx) }
+                    };
+                    let auto_ts = if let Some(a) = auto_expr {
+                        if let Some(b) = expr_as_bool_compat(a) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#a) }
+                        }
+                    } else {
+                        quote! { true }
+                    };
+                    let pos_ts = if let Some(p) = pos_expr {
+                        quote! { (#p).to_string() }
+                    } else {
+                        quote! { "end".to_string() }
+                    };
+                    let threshold_ts = if let Some(t) = threshold_expr {
+                        let v = quote_unitless_f32(t);
+                        quote! { #v }
+                    } else {
+                        quote! { 8.0_f32 }
+                    };
+                    let peek_ts = if let Some(p) = peek_expr {
+                        let v = quote_unitless_f32(p);
+                        quote! { #v }
+                    } else {
+                        quote! { 48.0_f32 }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::message_scroller_scope(
+                            #id_ts,
+                            #auto_ts,
+                            #pos_ts,
+                            #threshold_ts,
+                            #peek_ts,
+                            #class_ts,
                             || #child_el,
                         )
                     };
@@ -3027,6 +3213,102 @@ fn expand_node(
                             #value_ts,
                             #disabled_ts,
                             #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "QuestionnaireItem" {
+                    let Some(name_expr) = get_attr("name") else {
+                        return quote! {
+                            compile_error!("<QuestionnaireItem> requires `name={...}`");
+                        };
+                    };
+                    let required_expr = get_attr("required");
+                    let multiple_expr = get_attr("multiple");
+                    let disabled_expr = get_attr("disabled");
+                    let invalid_expr = get_attr("invalid");
+                    let class_expr = get_attr("class");
+                    let on_status_expr = get_attr("on_status_change")
+                        .or_else(|| get_attr("onStatusChange"));
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let name_ts = quote! { (#name_expr).to_string() };
+                    let required_ts = if let Some(v) = required_expr {
+                        if let Some(b) = expr_as_bool_compat(v) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#v) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let multiple_ts = if let Some(v) = multiple_expr {
+                        if let Some(b) = expr_as_bool_compat(v) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#v) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let invalid_ts = if let Some(v) = invalid_expr {
+                        if let Some(b) = expr_as_bool_compat(v) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#v) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let on_status_ts = if let Some(s) = on_status_expr {
+                        quote! { Some(rui::components::questionnaire_status_change_fn(#s)) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::questionnaire_item_scope(
+                            #name_ts,
+                            #required_ts,
+                            #multiple_ts,
+                            #disabled_ts,
+                            #invalid_ts,
+                            #class_ts,
+                            #on_status_ts,
                             || #child_el,
                         )
                     };
@@ -4787,7 +5069,6 @@ fn expand_node(
                     "Set",
                     "Mask",
                     "Pattern",
-                    "Marker",
                     "Filter",
                     "Title",
                     "Desc",
@@ -4842,7 +5123,7 @@ fn expand_node(
                     if matches!(
                         name_str.as_str(),
                         "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Alert" | "Item" | "Attachment" | "Input"
-                            | "TableRow" | "TableHead" | "TableCell"
+                            | "TableRow" | "TableHead" | "TableCell" | "Marker" | "Message"
                     ) && matches!(
                         attr_name,
                         "variant" | "disabled" | "invalid" | "size" | "shape" | "align" | "state" | "orientation"
@@ -4880,6 +5161,21 @@ fn expand_node(
                             });
                             continue;
                         }
+                        if name_str == "Message" && attr_name == "align" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_message_align#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_message_align(el, v),
+                                );
+                            });
+                            continue;
+                        }
                         if name_str == "Alert" && attr_name == "variant" {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {
@@ -4913,6 +5209,21 @@ fn expand_node(
                                 prop_names.push(attr.clone());
                                 prop_values.push(quote! { Some(#value) });
                             }
+                            continue;
+                        }
+                        if name_str == "Marker" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_marker_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_marker_variant(el, v),
+                                );
+                            });
                             continue;
                         }
                         if name_str == "Item" && attr_name == "variant" {
@@ -5825,7 +6136,25 @@ fn expand_node(
                                 "sizesSignal" => syn::Ident::new("sizes", attr.span()),
                                 // Sidebar（ShadCN base）
                                 "defaultOpen" => syn::Ident::new("default_open", attr.span()),
+                                "defaultItem" => syn::Ident::new("default_item", attr.span()),
+                                "itemSignal" => syn::Ident::new("item_signal", attr.span()),
+                                "onItemChange" => syn::Ident::new("on_item_change", attr.span()),
+                                "onSubmit" => syn::Ident::new("on_submit", attr.span()),
+                                "onStatusChange" => syn::Ident::new("on_status_change", attr.span()),
                                 "isActive" => syn::Ident::new("is_active", attr.span()),
+                                // MessageScroller (ShadCN base)
+                                "autoScroll" => syn::Ident::new("auto_scroll", attr.span()),
+                                "defaultScrollPosition" => {
+                                    syn::Ident::new("default_scroll_position", attr.span())
+                                }
+                                "scrollEdgeThreshold" => {
+                                    syn::Ident::new("scroll_edge_threshold", attr.span())
+                                }
+                                "scrollPreviousItemPeek" => {
+                                    syn::Ident::new("scroll_previous_item_peek", attr.span())
+                                }
+                                "messageId" => syn::Ident::new("message_id", attr.span()),
+                                "scrollAnchor" => syn::Ident::new("scroll_anchor", attr.span()),
                                 // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
                                 "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),
@@ -6067,7 +6396,7 @@ fn expand_node(
                     "image" => quote! { rui::primitives::svg::image() },
                     "mask" | "Mask" => quote! { rui::primitives::svg::mask() },
                     "pattern" | "Pattern" => quote! { rui::primitives::svg::pattern() },
-                    "marker" | "Marker" => quote! { rui::primitives::svg::marker() },
+                    "marker" => quote! { rui::primitives::svg::marker() },
                     "filter" | "Filter" => quote! { rui::primitives::svg::filter() },
                     "title" | "Title" => quote! { rui::primitives::svg::title() },
                     "desc" | "Desc" => quote! { rui::primitives::svg::desc() },
@@ -6101,51 +6430,59 @@ fn expand_node(
 
             let mut pending_icon_bind: Option<proc_macro2::TokenStream> = None;
             if name_str == "Icon" {
-                let mut icon_code = "ea0e".to_string(); // fallback to an album icon
                 let mut static_icon_name: Option<String> = None;
                 let mut dynamic_name: Option<&syn::Expr> = None;
+                let mut static_src: Option<String> = None;
+                let mut dynamic_src: Option<&syn::Expr> = None;
                 for (attr, value) in &el.attributes {
-                    if *attr == "name" {
-                        if expr_reads_get(value) {
-                            dynamic_name = Some(value);
-                            continue;
-                        }
+                    let key = attr.to_string();
+                    if key == "name" {
                         if let syn::Expr::Lit(expr_lit) = value
                             && let syn::Lit::Str(lit_str) = &expr_lit.lit
+                            && !expr_reads_get(value)
                         {
-                            let name_str = lit_str.value();
-                            let json_str = include_str!("../../rui/assets/lucide.json");
-                            static ICONS: std::sync::OnceLock<
-                                std::collections::HashMap<String, String>,
-                            > = std::sync::OnceLock::new();
-                            let map = ICONS
-                                .get_or_init(|| serde_json::from_str(json_str).unwrap_or_default());
-                            if let Some(code) = map.get(&name_str) {
-                                icon_code = code.clone();
-                                static_icon_name = Some(name_str);
-                            } else {
-                                panic!(
-                                    "Icon '{}' not found in lucide.json. Ensure the name is correct.",
-                                    name_str
-                                );
-                            }
+                            static_icon_name = Some(lit_str.value());
+                        } else {
+                            dynamic_name = Some(value);
+                        }
+                    } else if key == "src" {
+                        if let syn::Expr::Lit(expr_lit) = value
+                            && let syn::Lit::Str(lit_str) = &expr_lit.lit
+                            && !expr_reads_get(value)
+                        {
+                            static_src = Some(lit_str.value());
+                        } else {
+                            dynamic_src = Some(value);
                         }
                     }
                 }
 
-                if let Some(name_expr) = dynamic_name {
+                if let Some(src_expr) = dynamic_src {
                     let idx = *node_counter;
                     *node_counter += 1;
-                    // Initial glyph via untrack; subsequent updates via bind_attr.
                     element = quote! {
                         {
-                            let (__glyph, __n) = rui::core::reactivity::untrack(|| {
-                                let __n = (#name_expr).to_string();
-                                let __g = rui::utils::lucide_glyph(__n.as_str())
-                                    .unwrap_or_else(|| "\u{ea0e}".to_string());
-                                (__g, __n)
-                            });
-                            rui::utils::text_node::build_named_icon_text_node(__n, __glyph)
+                            let __src = rui::core::reactivity::untrack(|| (#src_expr).to_string());
+                            rui::utils::build_icon_from_src(__src)
+                        }
+                    };
+                    pending_icon_bind = Some(quote! {
+                        __rui_el = rui::app::reactive::bind_attr(
+                            __rui_el,
+                            format!("{}:{}:bind_icon_src#{}", file!(), line!(), #idx),
+                            move || (#src_expr).to_string(),
+                            |el, src| rui::utils::apply_bound_icon_src(el, src),
+                        );
+                    });
+                } else if let Some(src) = static_src {
+                    element = quote! { rui::utils::build_icon_from_src(#src) };
+                } else if let Some(name_expr) = dynamic_name {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    element = quote! {
+                        {
+                            let __n = rui::core::reactivity::untrack(|| (#name_expr).to_string());
+                            rui::utils::build_icon_named(__n)
                         }
                     };
                     pending_icon_bind = Some(quote! {
@@ -6156,17 +6493,12 @@ fn expand_node(
                             |el, name| rui::utils::apply_bound_icon_name(el, name),
                         );
                     });
-                } else if let Ok(cp) = u32::from_str_radix(&icon_code, 16)
-                    && let Some(c) = std::char::from_u32(cp)
-                {
-                    let c_str = c.to_string();
-                    if let Some(ref iname) = static_icon_name {
-                        element = quote! {
-                            rui::utils::text_node::build_named_icon_text_node(#iname, #c_str)
-                        };
-                    } else {
-                        element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
-                    }
+                } else if let Some(iname) = static_icon_name {
+                    element = quote! { rui::utils::build_icon_named(#iname) };
+                } else {
+                    element = quote! {
+                        rui::utils::text_node::build_icon_text_node("\u{ea0e}")
+                    };
                 }
             }
 
@@ -6867,6 +7199,13 @@ fn expand_node(
                     "size" => {
                         if name_str == "AnimatedIcon" {
                             // Consumed by AnimatedIcon pre-pass (builder size_px).
+                        } else if name_str == "Icon" {
+                            element = quote! {
+                                rui::utils::with_icon_size(
+                                    #element,
+                                    rui::core::tree::IntoF32::into_f32(#value),
+                                )
+                            }
                         } else if is_custom || name_str == "Button" || name_str == "Input" {
                             element = quote! { #element.size(#value) }
                         } else {
@@ -7194,6 +7533,7 @@ fn expand_node(
                     // Consumed by a dedicated pre-pass above, so reaching the fallback here would
                     // be a false "unknown attribute" report.
                     "name" if name_str == "Icon" || name_str == "AnimatedIcon" => {}
+                    "src" if name_str == "Icon" => {}
                     _ => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;

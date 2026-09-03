@@ -52,36 +52,38 @@
 //! - `ghost` 变体去框 / 去内边距，根 `max_w` 放宽为 `100%`（对位 ShadCN）。
 //! - [`BubbleReactions`] 默认独立行；省略 `align` 时左气泡右下、右气泡左下（朝向会话内侧）。
 //!   可用 `side` / `align` 覆盖到上/下 × 左/中/右。`layout="overlay"` 用像素位移咬住气泡边
-//!   （仍走文档流，避免 `position:absolute` 在停滚后让文字相对壳错位）。`+N` 展开走根级 Portal
+//!   （仍走文档流，避免 `position:absolute` 在停滚后让文字相对壳错位）。`max_visible` 控制折叠前
+//!   展示数（默认 3），父气泡宽度不足时自动收入 `+N`。`+N` 展开走根级 Portal
 //!   （与菜单 / Popover 同一套 `portal_sync`，互斥）；就地盖住原条，宽度不够则换行。底条只向下、
 //!   顶条只向上，绝不翻向盖住当前气泡。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::label::label;
 use crate::core::reactivity::{
-    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
-    with_child_owner,
+    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
 };
-use crate::core::tree::{Element, IntoF32, LayoutStatus, parse_color, parse_text_color};
-use crate::primitives::r#box::{BoxBuilder, r#box, hstack, vstack};
+use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::style::{is_dark_theme, with_class_list};
 use crate::tokens;
 use crate::utils::popup::{
+    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
     ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_STRATEGY, PopupPlacement, apply_stored_floating_place, mark_floating_with_gap,
-    mount_anchored_overlay,
+    ATTR_FLOATING_STRATEGY,
 };
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::overflow_fit::tighten_horizontal_constraint;
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -99,7 +101,9 @@ const ATTR_REACTIONS_ID: &str = "data-reactions-id";
 const ATTR_REACTIONS_INNER: &str = "data-reactions-inner";
 const ATTR_REACTIONS_OVERLAY: &str = "data-reactions-overlay";
 const ATTR_OVERFLOW_CHIP: &str = "data-reaction-overflow";
-const MAX_COLLAPSED_REACTIONS: usize = 3;
+const ATTR_MAX_VISIBLE: &str = "data-reactions-max-visible";
+/// Default visible reaction chips before folding the rest into `+N`.
+pub const DEFAULT_MAX_VISIBLE_REACTIONS: usize = 3;
 /// Overlay 叠进气泡边的距离。用像素 `translate`（不是 `translate_pct` / `position:absolute`）：
 /// 百分比位移和绝对定位都会让停滚后文字相对气泡壳上下错开。
 const REACTION_OVERLAY_OVERLAP: &str = "0.5rem";
@@ -659,16 +663,54 @@ fn overflow_reaction_chip(count: u32, _expanded: Signal<bool>, reactions_id: Str
         .into()
 }
 
+fn collapsed_reaction_slots_for(visible: usize, total: usize) -> usize {
+    if total <= visible {
+        total.max(1)
+    } else {
+        visible + 1
+    }
+}
+
+fn collapsed_reaction_bar_width_for(visible: usize, total: usize) -> f32 {
+    let chip = IntoF32::into_f32(REACTION_CHIP_SIZE);
+    let gap = IntoF32::into_f32(tokens::SPACE_1);
+    let pad = 2.0 * IntoF32::into_f32(REACTION_BAR_PAD);
+    let n = collapsed_reaction_slots_for(visible, total) as f32;
+    pad + n * chip + (n - 1.0).max(0.0) * gap
+}
+
+fn effective_visible_count(
+    total: usize,
+    max_visible: usize,
+    avail_w: Option<f32>,
+    width_for: impl Fn(usize, usize) -> f32,
+) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    let cap = max_visible.min(total);
+    let Some(w) = avail_w.filter(|w| *w > 0.0) else {
+        return cap;
+    };
+    for visible in (1..=cap).rev() {
+        if width_for(visible, total) <= w + 0.5 {
+            return visible;
+        }
+    }
+    1
+}
+
 fn collapsed_reaction_chips(
     all: &[String],
+    visible: usize,
     expanded_sig: Signal<bool>,
     reactions_id: &str,
 ) -> Vec<Element> {
-    if all.len() <= MAX_COLLAPSED_REACTIONS {
+    if all.len() <= visible {
         return all.iter().map(|t| reaction_chip_shell(t.clone())).collect();
     }
-    let hidden = all.len() - MAX_COLLAPSED_REACTIONS;
-    let mut chips: Vec<Element> = all[..MAX_COLLAPSED_REACTIONS]
+    let hidden = all.len() - visible;
+    let mut chips: Vec<Element> = all[..visible]
         .iter()
         .map(|t| reaction_chip_shell(t.clone()))
         .collect();
@@ -687,6 +729,8 @@ fn overlay_reaction_chips(all: &[String]) -> Vec<Element> {
 struct BubbleReactionsEntry {
     focus_id: String,
     all_items: Vec<String>,
+    max_visible: usize,
+    rendered_visible: Cell<usize>,
     expanded: Signal<bool>,
     last_expanded: Cell<bool>,
     side: Cell<BubbleReactionsSide>,
@@ -707,6 +751,8 @@ fn register_bubble_reactions_entry(
     id: String,
     focus_id: String,
     all_items: Vec<String>,
+    max_visible: usize,
+    rendered_visible: usize,
     expanded: Signal<bool>,
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
@@ -718,6 +764,8 @@ fn register_bubble_reactions_entry(
             BubbleReactionsEntry {
                 focus_id,
                 all_items,
+                max_visible,
+                rendered_visible: Cell::new(rendered_visible),
                 expanded,
                 last_expanded: Cell::new(false),
                 side: Cell::new(side),
@@ -842,22 +890,8 @@ fn reaction_collapsed_bar_height() -> f32 {
     IntoF32::into_f32(REACTION_CHIP_SIZE) + 2.0 * IntoF32::into_f32(REACTION_BAR_PAD)
 }
 
-fn collapsed_reaction_slots(item_count: usize) -> usize {
-    if item_count <= MAX_COLLAPSED_REACTIONS {
-        item_count.max(1)
-    } else {
-        MAX_COLLAPSED_REACTIONS + 1
-    }
-}
-
-/// Collapsed pill width (visible chips + optional +N). Pins expand `max-width` so extra
-/// chips wrap onto the next row instead of laying out on a 160px / 12rem first row.
-fn collapsed_reaction_bar_width(item_count: usize) -> f32 {
-    let chip = IntoF32::into_f32(REACTION_CHIP_SIZE);
-    let gap = IntoF32::into_f32(tokens::SPACE_1);
-    let pad = 2.0 * IntoF32::into_f32(REACTION_BAR_PAD);
-    let n = collapsed_reaction_slots(item_count) as f32;
-    pad + n * chip + (n - 1.0).max(0.0) * gap
+fn collapsed_reaction_bar_width(item_count: usize, visible: usize) -> f32 {
+    collapsed_reaction_bar_width_for(visible, item_count)
 }
 
 /// Negative gap ≈ collapsed bar height so the portal panel covers the pill in place.
@@ -871,9 +905,10 @@ fn build_reaction_expand_panel(
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
     chips: Vec<Element>,
+    visible: usize,
     expand_class: Option<&str>,
 ) -> Element {
-    let from_w = collapsed_reaction_bar_width(chips.len());
+    let from_w = collapsed_reaction_bar_width(chips.len(), visible);
     let mut panel = reaction_expand_chrome(chips, side, expand_class);
     panel.set_attr(ATTR_REACTIONS_OVERLAY, "1");
     panel.set_attr(
@@ -896,41 +931,113 @@ fn build_reaction_expand_panel(
     panel.align_content_kw("flex-start").absolute()
 }
 
-fn sync_bubble_reactions_row(el: &mut Element) -> bool {
+fn find_reactions_inner_mut(el: &mut Element) -> Option<&mut Element> {
+    for child in &mut el.children {
+        if child.attrs.get(ATTR_REACTIONS_INNER).map(|s| s.as_str()) == Some("1") {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn rebuild_reactions_inner(el: &mut Element, id: &str, visible: usize) {
+    let Some(inner) = find_reactions_inner_mut(el) else {
+        return;
+    };
+    let (chips, expanded) = BUBBLE_REACTIONS.with(|m| {
+        let map = m.borrow();
+        let Some(entry) = map.get(id) else {
+            return (Vec::new(), None);
+        };
+        (
+            collapsed_reaction_chips(&entry.all_items, visible, entry.expanded, id),
+            Some(entry.expanded),
+        )
+    });
+    let Some(expanded) = expanded else {
+        return;
+    };
+    let _ = expanded;
+    let mut next: Element = reaction_bar_chrome(chips).into();
+    next.set_attr(ATTR_REACTIONS_INNER, "1");
+    *inner = next;
+}
+
+fn sync_bubble_reactions_row(
+    el: &mut Element,
+    constraint_w: Option<f32>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) -> bool {
     let Some(id) = el.attrs.get(ATTR_REACTIONS_ID).cloned() else {
         return false;
     };
-    let expanded = BUBBLE_REACTIONS.with(|m| {
+    let mut structure_changed = false;
+    BUBBLE_REACTIONS.with(|m| {
         let mut binding = m.borrow_mut();
-        let entry = binding.get_mut(&id)?;
+        let Some(entry) = binding.get_mut(&id) else {
+            return;
+        };
         let expanded = entry.expanded.peek();
-        if entry.last_expanded.get() == expanded {
-            return None;
+        if entry.last_expanded.get() != expanded {
+            entry.last_expanded.set(expanded);
+            el.set_attr("data-state", if expanded { "open" } else { "closed" });
         }
-        entry.last_expanded.set(expanded);
-        Some(expanded)
+        let total = entry.all_items.len();
+        let next_visible = effective_visible_count(
+            total,
+            entry.max_visible,
+            constraint_w,
+            collapsed_reaction_bar_width_for,
+        );
+        if next_visible != entry.rendered_visible.get() {
+            entry.rendered_visible.set(next_visible);
+            structure_changed = true;
+        }
     });
-    let Some(expanded) = expanded else {
-        return false;
-    };
-    el.set_attr("data-state", if expanded { "open" } else { "closed" });
-    false
+    if structure_changed {
+        rebuild_reactions_inner(el, &id, {
+            BUBBLE_REACTIONS.with(|m| {
+                m.borrow()
+                    .get(&id)
+                    .map(|e| e.rendered_visible.get())
+                    .unwrap_or(0)
+            })
+        });
+        if el.layout_node.is_some() {
+            layout_tree.mark_element_layout_dirty(el);
+        }
+        *impact = impact.merge(LayoutStatus::StructureChanged);
+    }
+    structure_changed
 }
 
-/// 每帧把 `data-state` 与 `expanded` 对齐；指针已离开条带和浮层时收起。
-pub(crate) fn sync_bubble_reactions_subtree(el: &mut Element, impact: &mut LayoutStatus) {
+/// 每帧把 `data-state` 与 `expanded` 对齐；指针已离开条带和浮层时收起；宽度不足时自动折叠 `+N`。
+pub(crate) fn sync_bubble_reactions_subtree(
+    el: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+    viewport_w: f32,
+) {
     if dismiss_idle_reaction_hovers() {
         crate::app::runtime::request_redraw();
     }
-    walk_bubble_reactions_sync(el, impact);
+    let root_budget = (viewport_w > 0.0).then_some(viewport_w);
+    walk_bubble_reactions_sync(el, root_budget, layout_tree, impact);
 }
 
-fn walk_bubble_reactions_sync(el: &mut Element, _impact: &mut LayoutStatus) {
+fn walk_bubble_reactions_sync(
+    el: &mut Element,
+    constraint_w: Option<f32>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    let child_constraint = tighten_horizontal_constraint(el, constraint_w);
     if is_bubble_reactions(el) {
-        let _ = sync_bubble_reactions_row(el);
+        let _ = sync_bubble_reactions_row(el, child_constraint, layout_tree, impact);
     }
     for child in &mut el.children {
-        walk_bubble_reactions_sync(child, _impact);
+        walk_bubble_reactions_sync(child, child_constraint, layout_tree, impact);
     }
 }
 
@@ -964,6 +1071,7 @@ fn build_bubble_reactions_element(
     align: BubbleReactionsAlign,
     layout: BubbleReactionsLayout,
     expand_class: Option<String>,
+    max_visible: usize,
     kids: Vec<Element>,
 ) -> Element {
     let seq = BUBBLE_REACTIONS_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -973,11 +1081,20 @@ fn build_bubble_reactions_element(
     let expanded = use_signal(exp_key.as_str(), || false);
     let all_items = normalize_reaction_items(kids);
     let expand_class = expand_class.unwrap_or_default();
+    let max_visible = max_visible.max(1);
+    let rendered_visible = effective_visible_count(
+        all_items.len(),
+        max_visible,
+        None,
+        collapsed_reaction_bar_width_for,
+    );
 
     register_bubble_reactions_entry(
         reactions_id.clone(),
         focus_id.clone(),
         all_items.clone(),
+        max_visible,
+        rendered_visible,
         expanded,
         side,
         align,
@@ -987,6 +1104,7 @@ fn build_bubble_reactions_element(
 
     let mut inner: Element = reaction_bar_chrome(collapsed_reaction_chips(
         &all_items,
+        rendered_visible,
         expanded,
         &reactions_id,
     ))
@@ -1006,7 +1124,7 @@ fn build_bubble_reactions_element(
         ) else {
             return Element::new().w(0.0).h(0.0);
         };
-        let (chips, side, align, fid, expand_class) = BUBBLE_REACTIONS.with(|m| {
+        let (chips, side, align, fid, expand_class, visible) = BUBBLE_REACTIONS.with(|m| {
             let map = m.borrow();
             match map.get(&portal_id) {
                 Some(e) => (
@@ -1015,6 +1133,7 @@ fn build_bubble_reactions_element(
                     e.align.get(),
                     e.focus_id.clone(),
                     e.expand_class.clone(),
+                    e.rendered_visible.get(),
                 ),
                 None => (
                     Vec::new(),
@@ -1022,6 +1141,7 @@ fn build_bubble_reactions_element(
                     BubbleReactionsAlign::End,
                     String::new(),
                     String::new(),
+                    DEFAULT_MAX_VISIBLE_REACTIONS,
                 ),
             }
         });
@@ -1031,6 +1151,7 @@ fn build_bubble_reactions_element(
             side,
             align,
             chips,
+            visible,
             Some(expand_class.as_str()).filter(|s| !s.is_empty()),
         );
         apply_stored_floating_place(&mut panel, &portal_id);
@@ -1085,6 +1206,7 @@ fn build_bubble_reactions_element(
     row.set_attr(ATTR_ALIGN, align.as_str());
     row.set_attr(ATTR_LAYOUT, layout.as_str());
     row.set_attr(ATTR_REACTIONS_ID, &reactions_id);
+    row.set_attr(ATTR_MAX_VISIBLE, max_visible.to_string());
     row.focus_id = Some(focus_id);
     row.set_attr(
         "data-state",
@@ -1490,6 +1612,7 @@ pub struct BubbleReactionsBuilder {
     align: Option<BubbleReactionsAlign>,
     layout: BubbleReactionsLayout,
     expand_class: String,
+    max_visible: usize,
     children: Vec<Element>,
 }
 
@@ -1500,6 +1623,7 @@ pub fn bubble_reactions() -> BubbleReactionsBuilder {
         align: None,
         layout: BubbleReactionsLayout::Row,
         expand_class: String::new(),
+        max_visible: DEFAULT_MAX_VISIBLE_REACTIONS,
         children: Vec::new(),
     }
 }
@@ -1526,6 +1650,12 @@ impl BubbleReactionsBuilder {
         self
     }
 
+    /// 折叠前最多展示的反应数（默认 3）；宽度不足时还会自动减少。
+    pub fn max_visible(mut self, n: usize) -> Self {
+        self.max_visible = n.max(1);
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
         self
@@ -1544,6 +1674,7 @@ impl From<BubbleReactionsBuilder> for Element {
             align: builder.align,
             layout: Some(builder.layout),
             expand_class: Some(builder.expand_class).filter(|s| !s.is_empty()),
+            max_visible: Some(builder.max_visible as i32),
             children: {
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
@@ -1600,7 +1731,8 @@ pub fn BubbleContent(children: Option<Element>) -> Element {
 /// - `align`：`start` / `center` / `end`（及 `left` / `right`）。省略时左气泡右下、右气泡左下。
 /// - `layout`：`row` 独立行占位（默认）；`overlay` 叠在气泡外侧，不挡正文。
 /// - `expand_class`：展开 Portal 容器的 utility class（默认保持折叠反应条同款绘制）。
-/// - 超过 3 个时折叠为 `+N`，悬停 / 点击打开根级 Portal 浮层（与菜单 / Popover 互斥；不占文档流，可盖住邻条；底条只向下、顶条只向上）。
+/// - `max_visible`：折叠前最多展示的反应数（默认 3）；父气泡宽度不足时自动减少并收入 `+N`。
+/// - 超过可见上限时折叠为 `+N`，悬停 / 点击打开根级 Portal 浮层（与菜单 / Popover 互斥；不占文档流，可盖住邻条；底条只向下、顶条只向上）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn BubbleReactions(
@@ -1608,9 +1740,13 @@ pub fn BubbleReactions(
     align: Option<BubbleReactionsAlign>,
     layout: BubbleReactionsLayout,
     expand_class: Option<String>,
+    max_visible: Option<i32>,
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
+    let max_visible = max_visible
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(DEFAULT_MAX_VISIBLE_REACTIONS);
     let (align, inherit) = match align {
         Some(a) => (a, false),
         None => {
@@ -1621,7 +1757,7 @@ pub fn BubbleReactions(
             }
         }
     };
-    let mut el = build_bubble_reactions_element(side, align, layout, expand_class, kids);
+    let mut el = build_bubble_reactions_element(side, align, layout, expand_class, max_visible, kids);
     if inherit {
         el.set_attr(ATTR_ALIGN_INHERIT, "1");
     }
@@ -1631,8 +1767,8 @@ pub fn BubbleReactions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::portal_overlay::{OverlayKind, OverlayMode, clear_overlay_stack, portal_sync};
-    use crate::core::reactivity::{Signal, create_root};
+    use crate::app::portal_overlay::{clear_overlay_stack, portal_sync, OverlayKind, OverlayMode};
+    use crate::core::reactivity::{create_root, Signal};
     use crate::layout::layout_tree::LayoutTree;
     use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_GAP};
 
@@ -2250,6 +2386,78 @@ mod tests {
     }
 
     #[test]
+    fn bubble_reactions_max_visible_is_configurable() {
+        let el: Element = bubble()
+            .child(bubble_content().text("x"))
+            .child(
+                bubble_reactions()
+                    .max_visible(2)
+                    .emoji("👍")
+                    .emoji("🔥")
+                    .emoji("👀")
+                    .emoji("🎉"),
+            )
+            .into();
+        let reactions = el.children.iter().find(|c| is_bubble_reactions(c)).unwrap();
+        assert_eq!(
+            reactions.attrs.get(ATTR_MAX_VISIBLE).map(|s| s.as_str()),
+            Some("2")
+        );
+        let inner = find_desc_attr(reactions, ATTR_REACTIONS_INNER).expect("inner");
+        assert_eq!(inner.children.len(), 3, "2 visible + +2 badge");
+    }
+
+    #[test]
+    fn bubble_reactions_width_collapses_visible_chips() {
+        let mut el: Element = bubble()
+            .child(bubble_content().text("x"))
+            .child(
+                bubble_reactions()
+                    .max_visible(5)
+                    .emoji("👍")
+                    .emoji("🔥")
+                    .emoji("👀")
+                    .emoji("🎉")
+                    .emoji("👏"),
+            )
+            .into();
+        let reactions_id = el
+            .children
+            .iter()
+            .find(|c| is_bubble_reactions(c))
+            .and_then(|rx| rx.attrs.get(ATTR_REACTIONS_ID).cloned())
+            .expect("reactions id");
+        let mut host = Element::new().w(44.0).child(el);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut host, 44.0, 120.0, [-1.0, -1.0]);
+        let mut impact = LayoutStatus::Clean;
+        sync_bubble_reactions_subtree(&mut host, &mut tree, &mut impact, 44.0);
+        let rendered = BUBBLE_REACTIONS.with(|m| {
+            m.borrow()
+                .get(&reactions_id)
+                .expect("registry")
+                .rendered_visible
+                .get()
+        });
+        assert!(
+            rendered < 5,
+            "tight bubble width must reduce visible reactions, got {rendered}"
+        );
+        let reactions = host
+            .children
+            .iter()
+            .flat_map(|c| c.children.iter())
+            .find(|c| is_bubble_reactions(c))
+            .expect("reactions");
+        let inner = find_desc_attr(reactions, ATTR_REACTIONS_INNER).expect("inner");
+        assert!(
+            inner.children.len() <= rendered + 1,
+            "collapsed bar must rebuild (chips={}, rendered={rendered})",
+            inner.children.len()
+        );
+    }
+
+    #[test]
     fn bubble_reactions_overflow_keeps_collapsed_bar_and_opens_overlay() {
         let mut el: Element = bubble()
             .child(bubble_content().text("x"))
@@ -2303,7 +2511,8 @@ mod tests {
             entry.expanded.set(true);
         });
         let mut impact = LayoutStatus::Clean;
-        sync_bubble_reactions_subtree(&mut el, &mut impact);
+        let mut tree = LayoutTree::new();
+        sync_bubble_reactions_subtree(&mut el, &mut tree, &mut impact, 400.0);
         let reactions = el.children.iter().find(|c| is_bubble_reactions(c)).unwrap();
         assert_eq!(
             reactions.attrs.get("data-state").map(|s| s.as_str()),
@@ -2345,6 +2554,7 @@ mod tests {
             BubbleReactionsSide::Bottom,
             BubbleReactionsAlign::End,
             overlay_reaction_chips(&["👍", "🔥", "👀", "🎉", "👏"].map(str::to_string)),
+            DEFAULT_MAX_VISIBLE_REACTIONS,
             None,
         );
         assert_eq!(overlay.children.len(), 5, "overlay shows all reactions");
@@ -2405,7 +2615,7 @@ mod tests {
                 .attrs
                 .get(ATTR_FLOATING_EXPAND_FROM_W)
                 .and_then(|s| s.parse::<f32>().ok()),
-            Some(collapsed_reaction_bar_width(5)),
+            Some(collapsed_reaction_bar_width(5, DEFAULT_MAX_VISIBLE_REACTIONS)),
             "expand must pin width to the collapsed pill so extra chips wrap instead of popping in"
         );
         assert_eq!(
@@ -2430,6 +2640,7 @@ mod tests {
             BubbleReactionsSide::Top,
             BubbleReactionsAlign::End,
             overlay_reaction_chips(&["👍", "🔥", "👀", "🎉", "👏"].map(str::to_string)),
+            DEFAULT_MAX_VISIBLE_REACTIONS,
             None,
         );
         assert_eq!(overlay.style.position, taffy::style::Position::Absolute);
@@ -2493,7 +2704,8 @@ mod tests {
             e.panel_hover.set(false);
         });
         let mut impact = LayoutStatus::Clean;
-        sync_bubble_reactions_subtree(&mut el, &mut impact);
+        let mut tree = LayoutTree::new();
+        sync_bubble_reactions_subtree(&mut el, &mut tree, &mut impact, 400.0);
         BUBBLE_REACTIONS.with(|m| {
             let binding = m.borrow();
             let e = binding.get(&id).expect("registry");
@@ -2506,7 +2718,8 @@ mod tests {
             m.borrow().get(&id).expect("registry").expanded.set(true);
         });
         let mut impact = LayoutStatus::Clean;
-        sync_bubble_reactions_subtree(&mut el, &mut impact);
+        let mut tree = LayoutTree::new();
+        sync_bubble_reactions_subtree(&mut el, &mut tree, &mut impact, 400.0);
         BUBBLE_REACTIONS.with(|m| {
             assert!(
                 m.borrow().get(&id).expect("registry").expanded.peek(),
@@ -2688,6 +2901,7 @@ mod tests {
             BubbleReactionsSide::Bottom,
             BubbleReactionsAlign::Start,
             overlay_reaction_chips(&items),
+            DEFAULT_MAX_VISIBLE_REACTIONS,
             None,
         );
         overlay = overlay.w(bar_w);
@@ -2716,6 +2930,7 @@ mod tests {
             BubbleReactionsSide::Bottom,
             BubbleReactionsAlign::Start,
             overlay_reaction_chips(&["👍", "🔥"].map(str::to_string)),
+            2,
             Some("bg-card shadow-md"),
         );
         assert!(
@@ -2734,6 +2949,7 @@ mod tests {
             BubbleReactionsSide::Top,
             BubbleReactionsAlign::End,
             overlay_reaction_chips(&["👍"].map(str::to_string)),
+            1,
             None,
         );
         assert_eq!(

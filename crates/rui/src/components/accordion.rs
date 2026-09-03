@@ -63,24 +63,24 @@ use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    Context, Signal, create_context, create_effect, provide_context, use_context,
-    use_scoped_signal, use_signal, with_child_owner,
+    create_context, create_effect, provide_context, use_context, use_scoped_signal, use_signal,
+    with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus, parse_color, parse_text_color};
+use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
-    css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::motion::{clear_motion, ensure_motion_transitions};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{FocusRovingAxis, attach_focus_roving};
+use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_fragment;
-use crate::utils::text_node::{TextNodeConfig, build_lucide_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_lucide_icon_text_node, build_text_node, TextNodeConfig};
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_ITEM_VALUE: &str = "rui_accordion_item_value";
@@ -1340,10 +1340,7 @@ mod tests {
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
             assert!(!p.cell.borrow().needs_enter);
             assert!(
-                el.style
-                    .animations
-                    .iter()
-                    .any(|a| a.name == ACCORDION_DOWN),
+                el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
                 "first real expand must run accordion-down"
             );
         });

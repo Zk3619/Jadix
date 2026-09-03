@@ -33,7 +33,7 @@
 //!   helpers; the root is a leaf block (no children slot).
 //! - 展示型占位：无受控状态；尺寸与圆角由 `w`/`h`/`rounded`/`class` 或 Builder 链式指定。
 
-use crate::core::tree::{Element, IntoCssDim, IntoF32, parse_color};
+use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
 use crate::primitives::r#box::r#box;
 use crate::style::with_class_list;
 use crate::tokens;
@@ -179,11 +179,7 @@ mod tests {
 
     #[test]
     fn builder_applies_size_and_class() {
-        let el: Element = skeleton()
-            .w("250px")
-            .h("1rem")
-            .class("rounded-full")
-            .into();
+        let el: Element = skeleton().w("250px").h("1rem").class("rounded-full").into();
         let bare: Element = skeleton().into();
         assert_ne!(el.style.size.width, bare.style.size.width);
         assert_ne!(el.style.size.height, bare.style.size.height);

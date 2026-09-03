@@ -75,21 +75,21 @@ use rui_macros::component;
 
 use crate::components::button::button;
 use crate::components::input::input;
-use crate::components::tree_view::{TreeViewBuilder, TreeViewChrome, TreeViewVariant, tree_view};
+use crate::components::tree_view::{tree_view, TreeViewBuilder, TreeViewChrome, TreeViewVariant};
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal,
+    create_context, provide_context, use_context, use_signal, Context, Signal,
 };
-use crate::core::scroll_viewport::{DEFAULT_SCROLL_BEHAVIOR, activate_scroll_viewport};
-use crate::core::tree::{Element, Handler, IntoCssDim, LayoutStatus, parse_text_color};
+use crate::core::scroll_viewport::{activate_scroll_viewport, DEFAULT_SCROLL_BEHAVIOR};
+use crate::core::tree::{parse_text_color, Element, Handler, IntoCssDim, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, with_class_list};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{FocusRovingAxis, attach_focus_roving};
+use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_SIDEBAR: &str = "data-sidebar";
@@ -652,7 +652,11 @@ pub(crate) fn sync_sidebar_menu_button_paint_subtree(
             .map(|fid| {
                 let key = format!("{fid}_hover");
                 let sig = use_signal(key.as_str(), || false);
-                if sig.is_alive() { sig.peek() } else { false }
+                if sig.is_alive() {
+                    sig.peek()
+                } else {
+                    false
+                }
             })
             .unwrap_or(false);
         *impact = impact.merge(apply_sidebar_menu_button_chrome(
@@ -1635,7 +1639,8 @@ mod tests {
         crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut btn);
         let leaf = first_text_leaf(&btn).expect("text leaf after cascade");
         assert_eq!(
-            leaf.text_style.color_resolved(), fg,
+            leaf.text_style.color_resolved(),
+            fg,
             "cascade must not reset RSX string leaves to default white"
         );
         assert_ne!(leaf.text_style.color_resolved(), [255, 255, 255, 255]);
@@ -1648,7 +1653,10 @@ mod tests {
             children: Some(Element::from("RUI Gallery")),
             base: None,
         });
-        assert_eq!(el.text_style.color, Some(parse_text_color("sidebar-foreground")));
+        assert_eq!(
+            el.text_style.color,
+            Some(parse_text_color("sidebar-foreground"))
+        );
     }
 
     #[test]

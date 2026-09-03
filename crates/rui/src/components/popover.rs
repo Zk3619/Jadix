@@ -60,22 +60,22 @@ use std::sync::OnceLock;
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::label::label;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::primitives::r#box::vstack;
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::popup::{
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
-    PopupPlacement, disarm_underlay_close, mark_floating_with_gap, mount_anchored_overlay,
-    panel_block_clicks,
+    disarm_underlay_close, mark_floating_with_gap, mount_anchored_overlay, panel_block_clicks,
+    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
+    ATTR_FLOATING_W,
 };
 use crate::utils::take_packed;
 use rui_macros::component;
@@ -619,8 +619,8 @@ mod tests {
     fn content_keeps_panel_tid_while_exiting() {
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::components::internal::floating_motion::{
-            FloatingMotionKind, apply_floating_panel_motion, floating_mounted_signal,
-            floating_portal_phase, use_floating_presence,
+            apply_floating_panel_motion, floating_mounted_signal, floating_portal_phase,
+            use_floating_presence, FloatingMotionKind,
         };
         use crate::core::reactivity::Signal;
         use crate::utils::presence::PresencePhase;

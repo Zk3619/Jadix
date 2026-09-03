@@ -45,17 +45,17 @@
 //! - 项 `focus_id = "{group_id}:{value}"`；选中态 `peek` + 每帧 style sync，不订阅根 effect。
 //! - 兼容旧 prop 名 `selected`（宏映射到 `value`）。
 
-use crate::components::label::{ATTR_LABEL_FOR, label, label_accesskit_id_for};
+use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus, parse_color};
+use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::LineStyle;
 use crate::utils::controlled::resolve_string_signal;
-use crate::utils::roving::{FocusRovingAxis, attach_focus_roving};
+use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_fragment;
 use rui_macros::component;
 use std::sync::OnceLock;

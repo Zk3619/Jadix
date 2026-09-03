@@ -4,7 +4,7 @@
 //! 带滚动条请用 [`crate::components::ScrollArea`]。
 
 pub use crate::core::scroll_viewport::{
-    SCROLL_VIEWPORT_FOCUS_PREFIX, ScrollViewportBuilder, scroll_viewport, scrollviewport,
+    scroll_viewport, scrollviewport, ScrollViewportBuilder, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 
 use crate::core::scroll_viewport::scroll_viewport as scroll_viewport_fn;

@@ -3,8 +3,8 @@
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{BoxBuilder, hstack};
-use crate::style::{WhiteSpace, parse_color, parse_text_color};
+use crate::primitives::r#box::{hstack, BoxBuilder};
+use crate::style::{parse_color, parse_text_color, WhiteSpace};
 
 /// Shared item chrome. Do **not** use `min_w(0)` — that collapses wrapping labels to 1ch.
 pub fn item_row_chrome(inset: bool) -> BoxBuilder {

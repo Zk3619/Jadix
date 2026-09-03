@@ -52,12 +52,12 @@
 
 use crate::components::base::BaseComponentBuilder;
 use crate::components::button::button;
-use crate::core::tree::{Element, Handler, parse_text_color};
+use crate::core::tree::{parse_text_color, Element, Handler};
 use crate::primitives::r#box::hstack;
 use crate::style::{parse_text_color as theme_fg, with_class_list};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -593,8 +593,14 @@ mod tests {
             .iter()
             .find(|c| c.text.is_some())
             .expect("page caption");
-        assert_eq!(link_text.text_style.size_resolved(), page_text.text_style.size_resolved());
-        assert_eq!(link_text.text_style.weight_resolved(), page_text.text_style.weight_resolved());
+        assert_eq!(
+            link_text.text_style.size_resolved(),
+            page_text.text_style.size_resolved()
+        );
+        assert_eq!(
+            link_text.text_style.weight_resolved(),
+            page_text.text_style.weight_resolved()
+        );
         assert_eq!(
             link_text.text_style.line_height_scale,
             page_text.text_style.line_height_scale

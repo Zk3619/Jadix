@@ -100,9 +100,10 @@ use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_CLIP_X,
+    ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
+use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -117,6 +118,11 @@ const SLOT_FALLBACK: &str = "avatar-fallback";
 const SLOT_BADGE: &str = "avatar-badge";
 const SLOT_GROUP: &str = "avatar-group";
 const SLOT_GROUP_COUNT: &str = "avatar-group-count";
+const ATTR_GROUP_ID: &str = "data-avatar-group-id";
+const ATTR_GROUP_ROW: &str = "data-avatar-group-row";
+const ATTR_MAX_VISIBLE: &str = "data-avatar-max-visible";
+/// Default visible faces before folding the rest into `+N` when `max_visible` is set.
+pub const DEFAULT_MAX_VISIBLE_AVATARS: usize = 3;
 /// Collapsed group overlap (`-space-x-2`).
 const GROUP_OVERLAP: &str = "-0.5rem";
 /// Expand chrome padding (equal on all sides); placement shifts by this so faces
@@ -784,9 +790,14 @@ fn expand_cover_gap_for_group(trigger_h: f32) -> f32 {
 struct AvatarGroupEntry {
     focus_id: String,
     faces: Vec<AvatarFaceSpec>,
+    max_visible: usize,
+    count_size: AvatarSize,
+    manual_visible_n: usize,
+    manual_has_count: bool,
     /// Number of faces shown in the collapsed row (not nested under Count).
     visible_n: usize,
     has_count: bool,
+    rendered_visible: Cell<usize>,
     expanded: Signal<bool>,
     placement: Cell<PopupPlacement>,
     expand_class: String,
@@ -809,6 +820,10 @@ fn register_avatar_group_entry(
     id: String,
     focus_id: String,
     faces: Vec<AvatarFaceSpec>,
+    max_visible: usize,
+    count_size: AvatarSize,
+    manual_visible_n: usize,
+    manual_has_count: bool,
     visible_n: usize,
     has_count: bool,
     expanded: Signal<bool>,
@@ -821,8 +836,13 @@ fn register_avatar_group_entry(
             AvatarGroupEntry {
                 focus_id,
                 faces,
+                max_visible,
+                count_size,
+                manual_visible_n,
+                manual_has_count,
                 visible_n,
                 has_count,
+                rendered_visible: Cell::new(visible_n),
                 expanded,
                 placement: Cell::new(placement),
                 expand_class,
@@ -999,6 +1019,84 @@ fn expand_group_faces(faces: &[AvatarFaceSpec]) -> Vec<Element> {
         .collect()
 }
 
+fn collapsed_group_slots(visible: usize, total: usize) -> usize {
+    if total <= visible {
+        total.max(1)
+    } else {
+        visible + 1
+    }
+}
+
+fn avatar_row_width(face_size: f32, visible: usize, total: usize) -> f32 {
+    collapsed_group_row_width(face_size, collapsed_group_slots(visible, total))
+}
+
+fn effective_visible_count(
+    total: usize,
+    max_visible: usize,
+    avail_w: Option<f32>,
+    face_size: f32,
+) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    let cap = max_visible.min(total);
+    let Some(w) = avail_w.filter(|w| *w > 0.0) else {
+        return cap;
+    };
+    for visible in (1..=cap).rev() {
+        if avatar_row_width(face_size, visible, total) <= w + 0.5 {
+            return visible;
+        }
+    }
+    1
+}
+
+fn avatar_size_from_el(el: &Element) -> AvatarSize {
+    el.attrs
+        .get(ATTR_SIZE)
+        .map(|s| AvatarSize::parse(s))
+        .unwrap_or(AvatarSize::Default)
+}
+
+fn resolve_group_visible_n(
+    faces_len: usize,
+    manual_visible_n: usize,
+    manual_has_count: bool,
+    max_visible: usize,
+    avail_w: Option<f32>,
+    face_size: f32,
+) -> usize {
+    let manual_cap = if manual_has_count {
+        manual_visible_n
+    } else {
+        faces_len
+    };
+    let cap = if max_visible == usize::MAX {
+        manual_cap
+    } else {
+        max_visible.min(faces_len)
+    };
+    effective_visible_count(faces_len, cap, avail_w, face_size)
+}
+
+fn hide_overflow_avatar(mut c: Element) -> Element {
+    c = c
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .w(0.0)
+        .h(0.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .max_w(0.0)
+        .max_h(0.0)
+        .opacity(0.0)
+        .overflow("hidden")
+        .pointer_events_box_none();
+    c
+}
+
 fn collapsed_group_row_width(face_size: f32, slots: usize) -> f32 {
     let n = slots.max(1) as f32;
     let overlap = IntoF32::into_f32(GROUP_OVERLAP);
@@ -1083,39 +1181,203 @@ fn split_group_children(
     (avatars, count, faces, visible_n)
 }
 
-fn build_avatar_group(
-    children: Vec<Element>,
-    expand_placement: PopupPlacement,
-    expand_class: Option<String>,
+fn build_auto_group_count(
+    group_id: &str,
+    overflow_n: usize,
+    overflow_faces: &[AvatarFaceSpec],
+    size: AvatarSize,
 ) -> Element {
-    let (avatars, count_el, faces, visible_n) = split_group_children(children);
-    let seq = AVATAR_GROUP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let group_id = format!("avatar_grp_{seq}");
-    let focus_id = format!("{group_id}__focus");
-    let exp_key = format!("{group_id}__exp");
-    let expanded = use_signal(exp_key.as_str(), || false);
-    let expand_class = expand_class.unwrap_or_default();
+    let open_id = group_id.to_string();
+    let click_id = group_id.to_string();
+    let hover_id = group_id.to_string();
+    let mut kids = vec![Element::new().text(format!("+{overflow_n}"))];
+    for spec in overflow_faces {
+        kids.push(hide_overflow_avatar(rebuild_face(spec)));
+    }
+    let mut count: Element = build_avatar_group_count(size, kids, None);
+    count = interactive(count)
+        .on_click(move || open_avatar_group_expand_from_click(&click_id))
+        .on_hover(move |h| {
+            note_avatar_group_hover(&hover_id, false, h);
+            if h {
+                open_avatar_group_expand(&open_id);
+            }
+        })
+        .into();
+    apply_group_ring(count)
+}
 
-    register_avatar_group_entry(
-        group_id.clone(),
-        focus_id.clone(),
-        faces,
-        visible_n,
-        count_el.is_some(),
-        expanded,
-        expand_placement,
-        expand_class,
-    );
-    register_avatar_group_redraw(&group_id, expanded);
-
-    let mut row = hstack()
+fn build_avatar_group_row_element(
+    group_id: &str,
+    faces: &[AvatarFaceSpec],
+    visible_n: usize,
+    count_size: AvatarSize,
+) -> Element {
+    let mut row: Element = hstack()
         .w("auto")
         .flex_grow(0.0)
         .flex_shrink(0.0)
         .align_self_kw("flex-start")
-        .items_center();
+        .items_center()
+        .into();
+    row.set_attr(ATTR_GROUP_ROW, "1");
+    for (i, spec) in faces.iter().enumerate().take(visible_n) {
+        let mut c = apply_group_ring(rebuild_face(spec));
+        if i > 0 {
+            c = c.ml(GROUP_OVERLAP);
+        }
+        row = row.child(c);
+    }
+    let overflow = faces.len().saturating_sub(visible_n);
+    if overflow > 0 {
+        let mut count = build_auto_group_count(group_id, overflow, &faces[visible_n..], count_size);
+        if visible_n > 0 {
+            count = count.ml(GROUP_OVERLAP);
+        }
+        row = row.child(count);
+    }
+    row
+}
+
+fn find_avatar_group_row_mut(el: &mut Element) -> Option<&mut Element> {
+    for child in &mut el.children {
+        if child.attrs.get(ATTR_GROUP_ROW).map(|s| s.as_str()) == Some("1") {
+            return Some(child);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+fn find_avatar_group_row<'a>(el: &'a Element) -> Option<&'a Element> {
+    for child in &el.children {
+        if child.attrs.get(ATTR_GROUP_ROW).map(|s| s.as_str()) == Some("1") {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn rebuild_avatar_group_row(el: &mut Element, group_id: &str, visible_n: usize) {
+    let Some(row) = find_avatar_group_row_mut(el) else {
+        return;
+    };
+    let next = AVATAR_GROUPS.with(|m| {
+        let map = m.borrow();
+        let entry = map.get(group_id)?;
+        Some(build_avatar_group_row_element(
+            group_id,
+            &entry.faces,
+            visible_n,
+            entry.count_size,
+        ))
+    });
+    if let Some(next) = next {
+        *row = next;
+    }
+}
+
+fn sync_avatar_group_shell(
+    el: &mut Element,
+    constraint_w: Option<f32>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) -> bool {
+    let Some(group_id) = el.attrs.get(ATTR_GROUP_ID).cloned() else {
+        return false;
+    };
+    let mut structure_changed = false;
+    AVATAR_GROUPS.with(|m| {
+        let mut binding = m.borrow_mut();
+        let Some(entry) = binding.get_mut(&group_id) else {
+            return;
+        };
+        let face_size = entry
+            .faces
+            .first()
+            .map(|f| IntoF32::into_f32(f.size.box_dim()))
+            .unwrap_or(32.0);
+        let next_visible = resolve_group_visible_n(
+            entry.faces.len(),
+            entry.manual_visible_n,
+            entry.manual_has_count,
+            entry.max_visible,
+            constraint_w,
+            face_size,
+        );
+        if next_visible != entry.rendered_visible.get() {
+            entry.rendered_visible.set(next_visible);
+            entry.visible_n = next_visible;
+            entry.has_count = entry.faces.len() > next_visible
+                || (entry.manual_has_count && entry.faces.len() <= entry.manual_visible_n);
+            structure_changed = true;
+        }
+        let expanded = entry.expanded.peek();
+        el.set_attr("data-state", if expanded { "open" } else { "closed" });
+    });
+    if structure_changed {
+        rebuild_avatar_group_row(
+            el,
+            &group_id,
+            AVATAR_GROUPS.with(|m| {
+                m.borrow()
+                    .get(&group_id)
+                    .map(|e| e.rendered_visible.get())
+                    .unwrap_or(0)
+            }),
+        );
+        if el.layout_node.is_some() {
+            layout_tree.mark_element_layout_dirty(el);
+        }
+        *impact = impact.merge(LayoutStatus::StructureChanged);
+    }
+    structure_changed
+}
+
+/// 每帧按父级宽度与 `max_visible` 折叠头像行；指针离开组与浮层时收起展开。
+pub(crate) fn sync_avatar_group_subtree(
+    el: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+    viewport_w: f32,
+) {
+    if flush_avatar_group_hover_dismiss() {
+        crate::app::runtime::request_redraw();
+    }
+    let root_budget = (viewport_w > 0.0).then_some(viewport_w);
+    walk_avatar_group_sync(el, root_budget, layout_tree, impact);
+}
+
+fn walk_avatar_group_sync(
+    el: &mut Element,
+    constraint_w: Option<f32>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    let child_constraint = tighten_horizontal_constraint(el, constraint_w);
+    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP) {
+        let _ = sync_avatar_group_shell(el, child_constraint, layout_tree, impact);
+    }
+    for child in &mut el.children {
+        walk_avatar_group_sync(child, child_constraint, layout_tree, impact);
+    }
+}
+
+fn build_avatar_group_row_manual(
+    group_id: &str,
+    avatars: Vec<Element>,
+    count_el: Option<Element>,
+) -> Element {
+    let mut row: Element = hstack()
+        .w("auto")
+        .flex_grow(0.0)
+        .flex_shrink(0.0)
+        .align_self_kw("flex-start")
+        .items_center()
+        .into();
+    row.set_attr(ATTR_GROUP_ROW, "1");
     let mut avatar_n = 0usize;
-    for child in avatars.into_iter() {
+    for child in avatars {
         let mut c = apply_group_ring(child);
         if avatar_n > 0 {
             c = c.ml(GROUP_OVERLAP);
@@ -1124,9 +1386,9 @@ fn build_avatar_group(
         avatar_n += 1;
     }
     if let Some(mut count) = count_el {
-        let open_id = group_id.clone();
-        let click_id = group_id.clone();
-        let hover_id = group_id.clone();
+        let open_id = group_id.to_string();
+        let click_id = group_id.to_string();
+        let hover_id = group_id.to_string();
         count = interactive(count)
             .on_click(move || open_avatar_group_expand_from_click(&click_id))
             .on_hover(move |h| {
@@ -1142,6 +1404,63 @@ fn build_avatar_group(
         }
         row = row.child(count);
     }
+    row
+}
+
+fn build_avatar_group(
+    children: Vec<Element>,
+    expand_placement: PopupPlacement,
+    expand_class: Option<String>,
+    max_visible: usize,
+) -> Element {
+    let (avatars, count_el, faces, manual_visible_n) = split_group_children(children);
+    let seq = AVATAR_GROUP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let group_id = format!("avatar_grp_{seq}");
+    let focus_id = format!("{group_id}__focus");
+    let exp_key = format!("{group_id}__exp");
+    let expanded = use_signal(exp_key.as_str(), || false);
+    let expand_class = expand_class.unwrap_or_default();
+    let manual_has_count = count_el.is_some();
+    let count_size = count_el
+        .as_ref()
+        .map(avatar_size_from_el)
+        .or_else(|| faces.first().map(|f| f.size))
+        .unwrap_or(AvatarSize::Default);
+    let face_size = faces
+        .first()
+        .map(|f| IntoF32::into_f32(f.size.box_dim()))
+        .unwrap_or(32.0);
+    let rendered_visible = resolve_group_visible_n(
+        faces.len(),
+        manual_visible_n,
+        manual_has_count,
+        max_visible,
+        None,
+        face_size,
+    );
+    let has_count = faces.len() > rendered_visible || manual_has_count;
+
+    register_avatar_group_entry(
+        group_id.clone(),
+        focus_id.clone(),
+        faces.clone(),
+        max_visible,
+        count_size,
+        manual_visible_n,
+        manual_has_count,
+        rendered_visible,
+        has_count,
+        expanded,
+        expand_placement,
+        expand_class.clone(),
+    );
+    register_avatar_group_redraw(&group_id, expanded);
+
+    let row = if max_visible == usize::MAX && rendered_visible == manual_visible_n {
+        build_avatar_group_row_manual(&group_id, avatars, count_el)
+    } else {
+        build_avatar_group_row_element(&group_id, &faces, rendered_visible, count_size)
+    };
 
     let view_id = format!("{group_id}__expand_view");
     let portal_id = group_id.clone();
@@ -1234,6 +1553,10 @@ fn build_avatar_group(
         .into();
     row_el.focus_id = Some(focus_id.clone());
     row_el.set_attr(ATTR_SLOT, SLOT_GROUP);
+    row_el.set_attr(ATTR_GROUP_ID, &group_id);
+    if max_visible != usize::MAX {
+        row_el.set_attr(ATTR_MAX_VISIBLE, max_visible.to_string());
+    }
     row_el.set_attr(
         "data-state",
         if expanded.peek() { "open" } else { "closed" },
@@ -1308,7 +1631,9 @@ fn build_avatar_group_count(
             );
             face = face.child(node);
         } else {
-            if c.text_style.font_family.as_deref() == Some("lucide") && c.text_style.size_resolved() <= 1.0 {
+            if c.text_style.font_family.as_deref() == Some("lucide")
+                && c.text_style.size_resolved() <= 1.0
+            {
                 c.text_style.size = Some(IntoF32::into_f32("1rem"));
             }
             face = face.child(c);
@@ -1602,6 +1927,7 @@ pub fn AvatarBadge(
 ///
 /// - `expand_placement`: floating expand side for `+N` (default `bottom-start`, in-place cover; faces align to collapsed faces).
 /// - `expand_class`: utility class for the expand container (default = popover / border / shadow tokens).
+/// - `max_visible`: 折叠前最多展示的头像数；未设置时保留手动 `AvatarGroupCount` 布局，但仍会在宽度不足时自动折叠。
 /// - Hover/click `AvatarGroupCount` opens a portal covering the group: all faces lay out as
 ///   independent chips (equal gap, wrap) inside popover chrome (width auto, equal padding).
 #[component(crate_path = "crate")]
@@ -1609,6 +1935,7 @@ pub fn AvatarBadge(
 pub fn AvatarGroup(
     expand_placement: Option<String>,
     expand_class: Option<String>,
+    max_visible: Option<i32>,
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
@@ -1616,7 +1943,10 @@ pub fn AvatarGroup(
         .as_deref()
         .map(expand_placement_from_attr)
         .unwrap_or(PopupPlacement::BottomStart);
-    build_avatar_group(kids, placement, expand_class)
+    let max_visible = max_visible
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(usize::MAX);
+    build_avatar_group(kids, placement, expand_class, max_visible)
 }
 
 /// "+N" counting capsules in the group.
@@ -1798,8 +2128,8 @@ mod tests {
     fn avatar_group_expand_panel_covers_down_and_wraps_faces() {
         use crate::core::reactivity::create_root;
         use crate::utils::popup::{
-            ATTR_FLOATING, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
-            ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_GAP, ATTR_FLOATING_MATCH_TRIGGER,
+            ATTR_FLOATING, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
+            ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_GAP, ATTR_FLOATING_MATCH_TRIGGER,
             ATTR_FLOATING_STRATEGY,
         };
 
@@ -1905,7 +2235,10 @@ mod tests {
             "expand motion must clip from collapsed row width so extra faces do not pop in"
         );
         assert_eq!(
-            panel.attrs.get(ATTR_FLOATING_EXPAND_CLIP_X).map(|s| s.as_str()),
+            panel
+                .attrs
+                .get(ATTR_FLOATING_EXPAND_CLIP_X)
+                .map(|s| s.as_str()),
             Some("1"),
             "avatar extra faces clip on the x axis (nowrap + max-width lerp)"
         );
@@ -2163,6 +2496,116 @@ mod tests {
             );
         });
         let _ = super::set_avatar_group_expand_hover_frozen(false);
+    }
+
+    #[test]
+    fn avatar_group_width_collapses_visible_faces() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, mut group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                avatar_with_fallback("B"),
+                avatar_with_fallback("C"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some({
+                        let mut f = Element::new();
+                        f.set_attr("rui_fragment", "1");
+                        f = f.children(vec![
+                            Element::new().text("+3"),
+                            avatar_with_fallback("D"),
+                            avatar_with_fallback("E"),
+                            avatar_with_fallback("F"),
+                        ]);
+                        f
+                    }),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        let group_id = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .keys()
+                .next()
+                .cloned()
+                .expect("avatar group registry")
+        });
+        let mut host = Element::new().w(72.0).child(group);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let _ = tree.build_and_layout(&mut host, 72.0, 120.0, [-1.0, -1.0]);
+        let mut impact = LayoutStatus::Clean;
+        sync_avatar_group_subtree(&mut host, &mut tree, &mut impact, 72.0);
+        let rendered = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .get(&group_id)
+                .expect("entry")
+                .rendered_visible
+                .get()
+        });
+        assert!(
+            rendered < 3,
+            "narrow column must fold visible avatars into +N, got {rendered}"
+        );
+        let visible_faces = host
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP))
+            .and_then(find_avatar_group_row)
+            .map(|row| {
+                row.children
+                    .iter()
+                    .filter(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR))
+                    .count()
+            })
+            .expect("group row");
+        assert_eq!(
+            visible_faces, rendered,
+            "collapsed row must rebuild to match rendered visible count"
+        );
+    }
+
+    #[test]
+    fn avatar_group_max_visible_auto_splits_faces() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                avatar_with_fallback("B"),
+                avatar_with_fallback("C"),
+                avatar_with_fallback("D"),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                max_visible: Some(2),
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+        let faces: Vec<_> = find_slot(&group, SLOT_GROUP)
+            .into_iter()
+            .flat_map(|g| g.children.iter())
+            .flat_map(|row| row.children.iter())
+            .filter(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR))
+            .collect();
+        assert_eq!(faces.len(), 2, "max_visible=2 keeps two faces in the row");
+        assert!(
+            find_slot(&group, SLOT_GROUP_COUNT).is_some(),
+            "overflow faces must fold into +N"
+        );
     }
 
     #[test]

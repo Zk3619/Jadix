@@ -50,13 +50,13 @@ use winit::keyboard::{Key, NamedKey};
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal,
+    create_context, provide_context, use_context, use_signal, Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus, parse_text_color};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty, UnitSlot};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
@@ -76,7 +76,7 @@ mod loop_anim;
 mod snap;
 mod track;
 
-pub use builder::{CarouselBuilder, carousel, carousel_multi, carousel_single, carousel_stack};
+pub use builder::{carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder};
 #[allow(unused_imports)] // used by external crates / window layer
 pub(crate) use drag::is_carousel_dragging;
 use drag::*;
@@ -86,8 +86,8 @@ pub(crate) use drag::{
 };
 use geometry::*;
 
-use autoplay::{AutoplayAction, decide_autoplay, gate_autoplay_visibility};
-use loop_anim::{LoopAnim, loop_reached};
+use autoplay::{decide_autoplay, gate_autoplay_visibility, AutoplayAction};
+use loop_anim::{loop_reached, LoopAnim};
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_CAROUSEL: &str = "carousel";
@@ -2153,8 +2153,8 @@ mod tests {
     #[test]
     fn narrow_outside_single_parks_on_first_slide_full_width() {
         use crate::core::reactivity::create_root;
-        use crate::layout::DimKind;
         use crate::layout::dim_kind;
+        use crate::layout::DimKind;
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
         let id = format!("t-car-narrow-{}", N.fetch_add(1, Ordering::Relaxed));

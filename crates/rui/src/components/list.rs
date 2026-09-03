@@ -59,13 +59,16 @@
 use std::sync::OnceLock;
 
 use crate::components::base::BaseComponentBuilder;
-use crate::components::item::{ItemBuilder, ItemContent, ItemContentProps, ItemDescription, ItemDescriptionProps, ItemTitle, ItemTitleProps};
-use crate::core::reactivity::{Context, create_context, provide_context, use_context};
-use crate::core::tree::{Element, parse_text_color};
+use crate::components::item::{
+    ItemBuilder, ItemContent, ItemContentProps, ItemDescription, ItemDescriptionProps, ItemTitle,
+    ItemTitleProps,
+};
+use crate::core::reactivity::{create_context, provide_context, use_context, Context};
+use crate::core::tree::{parse_text_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -257,11 +260,7 @@ fn build_list_item_shell(
         kids
     };
 
-    let mut row = hstack()
-        .w("100%")
-        .min_w(0.0)
-        .gap("0.5rem")
-        .items("start");
+    let mut row = hstack().w("100%").min_w(0.0).gap("0.5rem").items("start");
 
     match marker {
         ListMarker::None => {}
@@ -382,12 +381,7 @@ pub fn ListDescription(
 ) -> Element {
     let cfg = list_text_config(parse_text_color("muted-foreground"), TEXT_WEIGHT);
     let kids = caption_from_children(children, &cfg);
-    let mut el: Element = vstack()
-        .w("100%")
-        .min_w(0.0)
-        .gap(0.0)
-        .children(kids)
-        .into();
+    let mut el: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
     if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
         el = with_class_list(el, &c);
@@ -448,28 +442,24 @@ impl ListBuilder {
     }
 
     pub fn header(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            ListHeader(ListHeaderProps {
-                children: Some(Element::new().text(text.into())),
-                class: None,
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ListHeader(ListHeaderProps {
+            children: Some(Element::new().text(text.into())),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            ListDescription(ListDescriptionProps {
-                children: Some(Element::new().text(text.into())),
-                class: None,
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ListDescription(ListDescriptionProps {
+            children: Some(Element::new().text(text.into())),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
@@ -479,31 +469,27 @@ impl ListBuilder {
     }
 
     pub fn item(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            ListItem(ListItemProps {
-                marker: None,
-                children: Some(child.into()),
-                class: None,
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ListItem(ListItemProps {
+            marker: None,
+            children: Some(child.into()),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     /// Plain text row (inherits list `marker` when inside [`List`]).
     pub fn text(mut self, label: impl Into<String>) -> Self {
-        self.children.push(
-            ListItem(ListItemProps {
-                marker: None,
-                children: Some(Element::new().text(label.into())),
-                class: None,
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(ListItem(ListItemProps {
+            marker: None,
+            children: Some(Element::new().text(label.into())),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
@@ -511,44 +497,36 @@ impl ListBuilder {
     pub fn text_row(self, title: impl Into<String>, description: impl Into<String>) -> Self {
         let mut frag = Element::new();
         frag.set_attr("rui_fragment", "1");
-        self.item(
-            ListItem(ListItemProps {
-                marker: None,
-                children: Some(
-                    frag.children(vec![
-                        ItemContent(ItemContentProps {
-                            children: {
-                                let mut inner = Element::new();
-                                inner.set_attr("rui_fragment", "1");
-                                Some(
-                                    inner.children(vec![
-                                        ItemTitle(ItemTitleProps {
-                                            children: Some(Element::new().text(title.into())),
-                                            base: None,
-                                            base_builder: None,
-                                            ..Default::default()
-                                        }),
-                                        ItemDescription(ItemDescriptionProps {
-                                            children: Some(Element::new().text(description.into())),
-                                            base: None,
-                                            base_builder: None,
-                                            ..Default::default()
-                                        }),
-                                    ]),
-                                )
-                            },
+        self.item(ListItem(ListItemProps {
+            marker: None,
+            children: Some(frag.children(vec![ItemContent(ItemContentProps {
+                children: {
+                    let mut inner = Element::new();
+                    inner.set_attr("rui_fragment", "1");
+                    Some(inner.children(vec![
+                        ItemTitle(ItemTitleProps {
+                            children: Some(Element::new().text(title.into())),
                             base: None,
                             base_builder: None,
                             ..Default::default()
                         }),
-                    ]),
-                ),
-                class: None,
+                        ItemDescription(ItemDescriptionProps {
+                            children: Some(Element::new().text(description.into())),
+                            base: None,
+                            base_builder: None,
+                            ..Default::default()
+                        }),
+                    ]))
+                },
                 base: None,
                 base_builder: None,
                 ..Default::default()
-            }),
-        )
+            })])),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }))
     }
 
     /// Rich row Ã¯Â¿Â½?wraps an [`Item`] builder inside [`ListItem`].
@@ -599,10 +577,7 @@ mod tests {
         });
         assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(el.attrs.get("role").map(String::as_str), Some("list"));
-        assert_eq!(
-            el.attrs.get(ATTR_MARKER).map(String::as_str),
-            Some("disc")
-        );
+        assert_eq!(el.attrs.get(ATTR_MARKER).map(String::as_str), Some("disc"));
     }
 
     #[test]
@@ -615,17 +590,22 @@ mod tests {
             base_builder: None,
             ..Default::default()
         });
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ITEM)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ITEM));
         assert_eq!(el.attrs.get("role").map(String::as_str), Some("listitem"));
-        assert!(el.children.iter().any(|c| c.text.as_deref() == Some("Ã¢ÂÂ¢")));
+        assert!(el
+            .children
+            .iter()
+            .any(|c| c.text.as_deref() == Some("Ã¢ÂÂ¢")));
     }
 
     #[test]
     fn list_decimal_marker_renders_index() {
-        let el = build_list_item_shell(ListMarker::Decimal, 2, vec![Element::new().text("Third")], None);
+        let el = build_list_item_shell(
+            ListMarker::Decimal,
+            2,
+            vec![Element::new().text("Third")],
+            None,
+        );
         assert!(el.children.iter().any(|c| c.text.as_deref() == Some("3.")));
     }
 
@@ -639,7 +619,15 @@ mod tests {
         );
         let kids = apply_list_decimal_indices(
             ListMarker::Decimal,
-            vec![first, build_list_item_shell(ListMarker::Decimal, 0, vec![Element::new().text("Two")], None)],
+            vec![
+                first,
+                build_list_item_shell(
+                    ListMarker::Decimal,
+                    0,
+                    vec![Element::new().text("Two")],
+                    None,
+                ),
+            ],
         );
         assert_eq!(kids.len(), 2);
         let count_ones = kids[0]

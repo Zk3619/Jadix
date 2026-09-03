@@ -30,21 +30,21 @@ use std::sync::OnceLock;
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::label::label;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal,
+    create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::primitives::r#box::r#box;
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::r#box;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::popup::{
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, PopupPlacement, mark_floating_with_gap,
-    mount_anchored_overlay,
+    mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MIN_W,
 };
 use rui_macros::component;
 

@@ -74,12 +74,12 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::dialog::{DialogContentOpts, dialog_content, dialog_scope, use_dialog};
+use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
 use crate::components::internal::floating_motion::{
-    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 #[cfg(test)]
 use crate::components::internal::floating_motion::{
@@ -89,13 +89,13 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    Context, Signal, batch, create_context, provide_context, use_context, use_signal,
-    with_child_owner,
+    batch, create_context, provide_context, use_context, use_signal, with_child_owner, Context,
+    Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
-use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, LayoutTree};
-use crate::primitives::r#box::{r#box, hstack, vstack};
+use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
@@ -1370,7 +1370,7 @@ mod tests {
     use crate::app::portal_overlay::clear_overlay_stack;
     use crate::core::reactivity::create_root;
     use crate::layout::layout_tree::{
-        ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, LayoutTree, PORTAL_LAYER_ID, hoist_portal_subtrees,
+        hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
     };
 
     #[test]
@@ -2102,7 +2102,7 @@ mod tests {
         use crate::components::dialog::dialog_shell_frame;
         use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
         use crate::components::internal::modal_shell::{
-            ShellOverlayOpts, default_modal_overlay_color, modal_sync,
+            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
         };
         use crate::utils::presence::PresencePhase;
 

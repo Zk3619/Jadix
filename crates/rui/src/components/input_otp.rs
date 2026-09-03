@@ -41,12 +41,12 @@ use std::cell::Cell;
 use std::sync::OnceLock;
 
 use crate::core::reactivity::{
-    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
-    with_child_owner,
+    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
 };
 use crate::core::tree::{Element, LayoutStatus};
-use crate::primitives::r#box::{r#box, hstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box};
 use crate::renderer::caret_blink_visible;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
@@ -56,7 +56,7 @@ use crate::utils::controlled::resolve_string_signal;
 use crate::utils::instance_id::resolve_instance_id;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::take_fragment;
-use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
@@ -1014,12 +1014,10 @@ mod tests {
             assert_eq!(start.style.radii, otp_slot_radii(EDGE_START));
             assert_eq!(mid.style.radii, otp_slot_radii(EDGE_MIDDLE));
             assert_eq!(end.style.radii, otp_slot_radii(EDGE_END));
-            assert!(
-                start
-                    .attrs
-                    .get(crate::components::button_group::ATTR_PAINT_NUDGE)
-                    .is_none()
-            );
+            assert!(start
+                .attrs
+                .get(crate::components::button_group::ATTR_PAINT_NUDGE)
+                .is_none());
             assert_eq!(
                 mid.attrs
                     .get(crate::components::button_group::ATTR_PAINT_NUDGE)

@@ -54,13 +54,14 @@ use crate::components::base::BaseComponentBuilder;
 use crate::core::tree::{Element, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    apply_semantic_chrome_respecting_overrides, is_variant_style_overridden, reapply_class_color_overrides,
-    semantic_chrome, set_variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
-    SemanticSurface, SemanticTone, variant_chrome_enabled, VariantStyleField, with_class_list,
+    apply_semantic_chrome_respecting_overrides, is_variant_style_overridden,
+    reapply_class_color_overrides, semantic_chrome, set_variant_chrome_enabled,
+    variant_chrome_enabled, with_class_list, SemanticChrome, SemanticChromeDecor,
+    SemanticChromeOpts, SemanticSurface, SemanticTone, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::take_packed;
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -315,7 +316,12 @@ fn assemble_alert_body(chrome: &SemanticChrome, kids: Vec<Element>) -> Element {
     }
 }
 
-fn build_alert_root(variant: AlertVariant, filled: bool, chrome: bool, kids: Vec<Element>) -> Element {
+fn build_alert_root(
+    variant: AlertVariant,
+    filled: bool,
+    chrome: bool,
+    kids: Vec<Element>,
+) -> Element {
     let chrome_paint = alert_chrome(variant, filled);
     let body_chrome = if chrome {
         chrome_paint
@@ -348,10 +354,7 @@ fn build_alert_root(variant: AlertVariant, filled: bool, chrome: bool, kids: Vec
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_ALERT_VARIANT, variant.as_str());
-    el.set_attr(
-        ATTR_SEMANTIC_FILLED,
-        if filled { "1" } else { "0" },
-    );
+    el.set_attr(ATTR_SEMANTIC_FILLED, if filled { "1" } else { "0" });
     el = el.accesskit_role("alert");
     set_variant_chrome_enabled(&mut el, chrome);
     el
@@ -483,11 +486,7 @@ pub fn AlertTitle(
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = vstack()
-        .w("100%")
-        .min_w(0.0)
-        .children(kids)
-        .into();
+    let mut el: Element = vstack().w("100%").min_w(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_TITLE);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
@@ -504,11 +503,7 @@ pub fn AlertDescription(
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = vstack()
-        .w("100%")
-        .min_w(0.0)
-        .children(kids)
-        .into();
+    let mut el: Element = vstack().w("100%").min_w(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
@@ -597,38 +592,32 @@ impl AlertBuilder {
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            AlertTitle(AlertTitleProps {
-                children: Some(Element::new().text(text.into())),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AlertTitle(AlertTitleProps {
+            children: Some(Element::new().text(text.into())),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(
-            AlertDescription(AlertDescriptionProps {
-                children: Some(Element::new().text(text.into())),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AlertDescription(AlertDescriptionProps {
+            children: Some(Element::new().text(text.into())),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 
     pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(
-            AlertAction(AlertActionProps {
-                children: Some(child.into()),
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }),
-        );
+        self.children.push(AlertAction(AlertActionProps {
+            children: Some(child.into()),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        }));
         self
     }
 }
@@ -839,7 +828,13 @@ mod tests {
 
         let mut title_ok = false;
         let mut desc_ok = false;
-        fn walk(el: &Element, title_fg: [u8; 4], desc_fg: [u8; 4], title_ok: &mut bool, desc_ok: &mut bool) {
+        fn walk(
+            el: &Element,
+            title_fg: [u8; 4],
+            desc_fg: [u8; 4],
+            title_ok: &mut bool,
+            desc_ok: &mut bool,
+        ) {
             match el.text.as_deref() {
                 Some("Heads up!") => {
                     assert_eq!(el.text_style.color_resolved(), title_fg);
@@ -904,13 +899,18 @@ mod tests {
 
     #[test]
     fn alert_class_bg_preserved_on_variant_change() {
-        use crate::style::{apply_class_list, is_variant_style_overridden, parse_color, VariantStyleField};
+        use crate::style::{
+            apply_class_list, is_variant_style_overridden, parse_color, VariantStyleField,
+        };
 
         let mut el = build_alert_root(AlertVariant::Info, false, true, vec![]);
         let custom = parse_color("red-500");
         apply_class_list(&mut el, "bg-red-500");
         assert_eq!(el.style.bg_color, custom);
-        assert!(is_variant_style_overridden(&el.attrs, VariantStyleField::Bg));
+        assert!(is_variant_style_overridden(
+            &el.attrs,
+            VariantStyleField::Bg
+        ));
         apply_alert_variant_paint(&mut el, "warning");
         assert_eq!(el.style.bg_color, custom);
     }

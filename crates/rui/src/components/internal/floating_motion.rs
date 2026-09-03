@@ -12,17 +12,17 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::style::{
-    AnimationFillMode, TimingFunction, animation_run_active, keyframes::KeyframeStop,
-    keyframes_anim_entry, register_keyframes, tick_element_animations,
+    animation_run_active, keyframes::KeyframeStop, keyframes_anim_entry, register_keyframes,
+    tick_element_animations, AnimationFillMode, TimingFunction,
 };
 use crate::utils::motion::clear_motion;
 use crate::utils::popup::{
-    ATTR_FLOATING_CONTENT_H, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
-    ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_MEASURE, clamp_animated_max_h_to_place,
-    peek_floating_place_max_h,
+    clamp_animated_max_h_to_place, peek_floating_place_max_h, ATTR_FLOATING_CONTENT_H,
+    ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
+    ATTR_FLOATING_EXPAND_MEASURE,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
 use taffy::style::{Dimension, FlexWrap, Overflow};
@@ -88,11 +88,7 @@ fn expand_width_clip_active(el: &Element) -> bool {
 }
 
 /// Clip extra row content with `max-width` on the same 200ms ease as accordion height.
-fn apply_expand_width_clip(
-    panel: &mut Element,
-    presence: &FloatingPresenceHandle,
-    exiting: bool,
-) {
+fn apply_expand_width_clip(panel: &mut Element, presence: &FloatingPresenceHandle, exiting: bool) {
     let Some(from_w) = floating_expand_from_w(panel) else {
         return;
     };
@@ -111,12 +107,7 @@ fn apply_expand_width_clip(
     }
     panel.style.min_size.width = Dimension::length(0.0);
     panel.style.flex_wrap = FlexWrap::NoWrap;
-    let to_w = presence
-        .cell
-        .borrow()
-        .measured_width
-        .max(from_w)
-        .max(1.0);
+    let to_w = presence.cell.borrow().measured_width.max(from_w).max(1.0);
     let t = expand_anim_progress(panel);
     let e = if exiting {
         TimingFunction::EaseIn.eval(t)
@@ -1256,13 +1247,11 @@ mod tests {
             );
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "fade-exit__floating_panel").unwrap();
-            assert!(
-                panel
-                    .style
-                    .animations
-                    .iter()
-                    .any(|a| a.name == "fade-out-0")
-            );
+            assert!(panel
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-out-0"));
         });
     }
 
@@ -1604,13 +1593,11 @@ mod tests {
             );
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "exp-exit-mid__floating_panel").unwrap();
-            assert!(
-                panel
-                    .style
-                    .animations
-                    .iter()
-                    .any(|a| a.name == ACCORDION_UP)
-            );
+            assert!(panel
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == ACCORDION_UP));
             let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
             assert!(
                 mh <= 50.0,

@@ -32,21 +32,21 @@ mod theme;
 
 pub use datum::{ChartDatum, ChartSelect, ChartSelected, ChartTooltipItem};
 pub(crate) use define::set_chart_hover_frozen;
-pub use define::{ChartBuilder, ChartDefinition, define_chart};
+pub use define::{define_chart, ChartBuilder, ChartDefinition};
 pub use mark::{
-    ChartMark, CustomMarkBuilder, MarkChannels, MarkRenderContext, SceneLayer, area_y, bar_x,
-    bar_y, custom_mark, dot, line_y, pie, rule_x, rule_x_num, rule_y,
+    area_y, bar_x, bar_y, custom_mark, dot, line_y, pie, rule_x, rule_x_num, rule_y, ChartMark,
+    CustomMarkBuilder, MarkChannels, MarkRenderContext, SceneLayer,
 };
 pub use polar::{radial_area, radial_bar, radial_dot, radial_line};
 pub use preset::{
-    AreaChart, AreaChartProps, BarChart, BarChartBuilder, BarChartProps, Chart, ChartProps,
-    DonutChart, DonutChartProps, LineChart, LineChartBuilder, LineChartProps, PieChart,
-    PieChartBuilder, PieChartProps, RadialChart, RadialChartBuilder, RadialChartProps, area_chart,
-    bar_chart, donut_chart, line_chart, pie_chart, radial_chart,
+    area_chart, bar_chart, donut_chart, line_chart, pie_chart, radial_chart, AreaChart,
+    AreaChartProps, BarChart, BarChartBuilder, BarChartProps, Chart, ChartProps, DonutChart,
+    DonutChartProps, LineChart, LineChartBuilder, LineChartProps, PieChart, PieChartBuilder,
+    PieChartProps, RadialChart, RadialChartBuilder, RadialChartProps,
 };
 pub use scale::{
-    AxisSpec, ScaleKind, format_time_label, pie_layout, pie_layout_span, scale_band, scale_linear,
-    scale_log, scale_point, scale_time, unix_ms_to_utc,
+    format_time_label, pie_layout, pie_layout_span, scale_band, scale_linear, scale_log,
+    scale_point, scale_time, unix_ms_to_utc, AxisSpec, ScaleKind,
 };
 pub use theme::{
     ChartConfig, ChartPaint, ChartSeriesConfig, ChartTheme, MarkStyle, TooltipIndicator,
@@ -55,12 +55,12 @@ pub use theme::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::pointer_events::{PointerEvent, PointerKind, dispatch_pointer, hit_path};
+    use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerEvent, PointerKind};
     use crate::core::tree::Element;
     use crate::layout::layout_tree::LayoutTree;
     use crate::primitives::path::{
-        ATTR_PATH_D, ATTR_PATH_MARKERS, ATTR_PATH_SCENE, PathStyle, commands_from_attrs,
-        rasterize_path_rgba, tessellate_path,
+        commands_from_attrs, rasterize_path_rgba, tessellate_path, PathStyle, ATTR_PATH_D,
+        ATTR_PATH_MARKERS, ATTR_PATH_SCENE,
     };
     use std::cell::Cell;
     use std::f32::consts::{FRAC_PI_2, TAU};
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn custom_mark_emits_scene_layers() {
-        use crate::primitives::path::{PathStyle, polyline};
+        use crate::primitives::path::{polyline, PathStyle};
         let el: Element = define_chart()
             .mark(custom_mark("diag", |ctx| {
                 let a = (ctx.scales.pad[0], ctx.scales.plot_h - ctx.scales.pad[3]);
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn bar_axis_labels_center_on_band() {
-        use crate::layout::{DimKind, lpa_kind};
+        use crate::layout::{lpa_kind, DimKind};
         let labels = ["Mon", "Tue", "Wed", "Thu", "Fri"];
         let plot_w = 320.0;
         let pad = [8.0, 8.0, 8.0, 0.0];

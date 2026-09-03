@@ -61,20 +61,20 @@ use crate::app::reactive::reactive_view;
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
-    ModalPresenceHandle, ModalSurfaceMotion, apply_modal_shell_motion, mounted_signal,
-    sync_modal_presence, use_modal_presence,
+    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
+    ModalPresenceHandle, ModalSurfaceMotion,
 };
 use crate::components::internal::modal_shell::{
-    ModalShellZs, ShellOverlayOpts, build_modal_overlay, modal_sync,
+    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal,
+    create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn drawer_y_shell_uses_max_h_at_full_open() {
-        use crate::layout::dimension::{DimKind, dim_kind};
+        use crate::layout::dimension::{dim_kind, DimKind};
         let max_h = drawer_y_max_h(800.0);
         let panel = apply_drawer_shell_surface(
             Element::new(),

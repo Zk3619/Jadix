@@ -69,17 +69,17 @@ use winit::keyboard::{Key, NamedKey};
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::dropdown_menu::{
-    DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps, DropdownMenuContentOpts,
-    DropdownMenuGroup, DropdownMenuGroupProps, DropdownMenuItem, DropdownMenuItemProps,
-    DropdownMenuLabel, DropdownMenuLabelProps, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
-    DropdownMenuSeparator, DropdownMenuSeparatorProps, DropdownMenuShortcut,
-    DropdownMenuShortcutProps, DropdownMenuSubTrigger, DropdownMenuSubTriggerProps,
     attach_dropdown_menu_trigger_keys, dropdown_menu_active_is_sub_trigger, dropdown_menu_content,
     dropdown_menu_open_sub_id, dropdown_menu_radio_group, dropdown_menu_scope, dropdown_menu_sub,
-    use_dropdown_menu,
+    use_dropdown_menu, DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps,
+    DropdownMenuContentOpts, DropdownMenuGroup, DropdownMenuGroupProps, DropdownMenuItem,
+    DropdownMenuItemProps, DropdownMenuLabel, DropdownMenuLabelProps, DropdownMenuRadioItem,
+    DropdownMenuRadioItemProps, DropdownMenuSeparator, DropdownMenuSeparatorProps,
+    DropdownMenuShortcut, DropdownMenuShortcutProps, DropdownMenuSubTrigger,
+    DropdownMenuSubTriggerProps,
 };
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal,
+    create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{Element, Handler};
 use crate::primitives::r#box::hstack;
@@ -87,7 +87,7 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::popup::disarm_underlay_close;
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{FocusRovingAxis, focus_by_id, focus_roving_key, roving_move};
+use crate::utils::roving::{focus_by_id, focus_roving_key, roving_move, FocusRovingAxis};
 use crate::utils::take_packed;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -419,7 +419,11 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
         Some(c) if is_text_leaf(c) => c.text.clone().unwrap_or_else(|| "Menu".into()),
         Some(c) => {
             let t = extract_text_leaf(c);
-            if t.is_empty() { "Menu".into() } else { t }
+            if t.is_empty() {
+                "Menu".into()
+            } else {
+                t
+            }
         }
     };
     let _ = children;

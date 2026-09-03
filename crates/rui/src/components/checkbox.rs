@@ -33,17 +33,17 @@
 //! - 状态用 `peek` + 每帧 style sync；Indicator 始终保留勾选字形，未选中仅字色透明。
 //! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
-use crate::components::label::{ATTR_LABEL_FOR, label, label_accesskit_id_for};
+use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;
-use crate::core::tree::{Element, LayoutStatus, parse_color, parse_text_color};
+use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::hstack;
 use crate::primitives::interactive::interactive;
-use crate::style::{LineStyle, is_dark_theme};
+use crate::primitives::r#box::hstack;
+use crate::style::{is_dark_theme, LineStyle};
 use crate::utils::lucide_glyph;
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::build_icon_text_node;
-use crate::utils::toggle_state::{SLOT_CHECKBOX, bool_on_click, resolve_bool_signal};
+use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_CHECKBOX};
 use rui_macros::component;
 
 const ATTR_INVALID: &str = "data-invalid";
@@ -490,7 +490,7 @@ pub(crate) fn sync_checkbox_checked_subtree(
 mod tests {
     use super::*;
     use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
-    use crate::components::label::{ATTR_LABEL_FOR, label};
+    use crate::components::label::{label, ATTR_LABEL_FOR};
     use accesskit::Role;
 
     #[test]
