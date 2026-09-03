@@ -19,15 +19,15 @@ pub mod filter;
 mod focus_ring;
 pub(crate) mod gradient;
 pub mod keyframes;
-pub mod svg_filter;
 mod semantic_tone;
-mod variant_override;
+pub mod svg_filter;
 mod tailwind_leading;
 mod text_style;
 mod theme;
 pub mod timeline;
 pub mod transform;
 pub(crate) mod utility;
+mod variant_override;
 
 pub use animation::{
     advance_css_transition_timeline_ms, animation_run_active, any_ui_animation_active,
@@ -45,7 +45,8 @@ pub use color_space::{
     color_mix_over_surface, display_srgba_to_linear_srgba, encode_linear_srgb_component,
     encode_linear_srgb_to_display_srgb, lerp_display_srgb_linear, lerp_paint_chrome,
     lerp_premultiplied_display_srgba, lerp_rgba_u8, lerp_text_rgba, linearize_display_srgb,
-    linearize_display_srgb_component, mix_display_srgb_in_oklab, oklch_to_display_srgba, PaintChrome,
+    linearize_display_srgb_component, mix_display_srgb_in_oklab, oklch_to_display_srgba,
+    PaintChrome,
 };
 pub use cursor::{CursorKind, CursorUrl, CursorValue};
 pub use cursor_image::register_cursor_rgba8;
@@ -75,23 +76,17 @@ pub use keyframes::{
     keyframe_coverage, keyframes_exist, lookup_keyframes, register_keyframes, sample_keyframes,
     sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
 };
+pub use semantic_tone::{
+    apply_semantic_border, apply_semantic_shadow, button_soft_semantic_chrome, dim_semantic_shadow,
+    muted_from_accent, semantic_chrome, semantic_media_wash, semantic_modal_overlay_scrim,
+    semantic_palette, semantic_shadow, soft_semantic_fill, soft_semantic_fill_hover,
+    soft_semantic_mix_alphas, SemanticBorder, SemanticChrome, SemanticChromeDecor,
+    SemanticChromeOpts, SemanticPalette, SemanticShadow, SemanticSurface, SemanticTone,
+    SoftSemanticMix, MODAL_OVERLAY_OPACITY_NEUTRAL, SEMANTIC_MEDIA_WASH_ALPHA,
+};
 pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,
     resolve_filter_list_to_graph, resolve_svg_filter_url, FilterGraph, FilterParseError,
-};
-pub use semantic_tone::{
-    apply_semantic_border, apply_semantic_shadow, button_soft_semantic_chrome,
-    dim_semantic_shadow, muted_from_accent, semantic_chrome, semantic_media_wash,
-    semantic_modal_overlay_scrim, semantic_palette, semantic_shadow, soft_semantic_fill,
-    soft_semantic_fill_hover, soft_semantic_mix_alphas, SemanticBorder, SemanticChrome,
-    SemanticChromeDecor, SemanticChromeOpts, SemanticPalette, SemanticShadow, SemanticSurface,
-    SemanticTone, SoftSemanticMix, SEMANTIC_MEDIA_WASH_ALPHA, MODAL_OVERLAY_OPACITY_NEUTRAL,
-};
-pub use variant_override::{
-    apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,
-    apply_user_fg, is_variant_style_overridden, mark_variant_style_override,
-    set_variant_chrome_enabled, variant_chrome_enabled, VariantStyleField, ATTR_OVERRIDE_BG,
-    ATTR_OVERRIDE_BORDER, ATTR_OVERRIDE_FG, ATTR_OVERRIDE_SHADOW, ATTR_VARIANT_CHROME,
 };
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,
@@ -122,4 +117,10 @@ pub use utility::{
     apply_class_list, apply_utility_classes, class_variant_hover_needs_frame,
     reapply_class_color_overrides, resolve_class_variants, sync_class_variants_subtree,
     tick_active_css_transitions_subtree, with_class_list, ClassSet, VariantContext,
+};
+pub use variant_override::{
+    apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,
+    apply_user_fg, is_variant_style_overridden, mark_variant_style_override,
+    set_variant_chrome_enabled, variant_chrome_enabled, VariantStyleField, ATTR_OVERRIDE_BG,
+    ATTR_OVERRIDE_BORDER, ATTR_OVERRIDE_FG, ATTR_OVERRIDE_SHADOW, ATTR_VARIANT_CHROME,
 };

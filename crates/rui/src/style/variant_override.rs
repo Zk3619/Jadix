@@ -42,10 +42,7 @@ pub fn variant_chrome_enabled(attrs: &std::collections::HashMap<String, String>)
 
 /// 在根节点记录 `chrome` 开关（供动态 bind 与初次挂载共用）。
 pub fn set_variant_chrome_enabled(el: &mut Element, enabled: bool) {
-    el.set_attr(
-        ATTR_VARIANT_CHROME,
-        if enabled { "1" } else { "0" },
-    );
+    el.set_attr(ATTR_VARIANT_CHROME, if enabled { "1" } else { "0" });
 }
 
 /// 标记用户已显式设置某字段；后续 [`apply_semantic_chrome_respecting_overrides`] 不再改写。
@@ -57,7 +54,10 @@ pub fn is_variant_style_overridden(
     attrs: &std::collections::HashMap<String, String>,
     field: VariantStyleField,
 ) -> bool {
-    matches!(attrs.get(field.attr()).map(String::as_str), Some("1" | "true"))
+    matches!(
+        attrs.get(field.attr()).map(String::as_str),
+        Some("1" | "true")
+    )
 }
 
 /// 将 [`SemanticChrome`] 落到容器，跳过 `chrome={false}` 与用户已覆盖字段。

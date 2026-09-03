@@ -221,6 +221,26 @@ pub enum KnownUtility<'a> {
     FilterDropShadow(&'a str),
     /// Tailwind `filter-none` → clear CSS `filter`.
     FilterNone,
+    /// shadcn `shimmer` — streaming-text highlight (`background-clip: text` analog).
+    Shimmer,
+    /// `shimmer-once` — one sweep then settle (`shimmer-count-1`).
+    ShimmerOnce,
+    /// `shimmer-count-N` / `shimmer-count-infinite` — play N sweeps (`None` = loop).
+    ShimmerCount(Option<f32>),
+    /// `shimmer-box` / `animate-shimmer` — container overlay sheen (above content; not text-clip).
+    ShimmerBox,
+    /// `shimmer-reverse` — sweep against the reading direction.
+    ShimmerReverse,
+    /// `shimmer-none` — disable the effect (wins in any class order vs `shimmer`).
+    ShimmerNone,
+    /// `shimmer-duration-N` — one sweep in milliseconds (default 2000).
+    ShimmerDuration(u32),
+    /// `shimmer-spread-*` — highlight band width in logical px.
+    ShimmerSpread(f32),
+    /// `shimmer-angle-*` — band tilt in degrees (default 20).
+    ShimmerAngle(f32),
+    /// `shimmer-color-*` — explicit highlight color token.
+    ShimmerColor(&'a str),
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -301,20 +321,24 @@ fn spacing_value(token: &str, prefix: &str) -> Option<String> {
     Some(format!("{px}px"))
 }
 
-/// Tailwind size keywords → CSS dimension strings consumed by [`IntoDimension`].
+/// Tailwind size keywords → CSS dimension strings consumed by builder / class apply.
 ///
 /// | token | CSS |
 /// |-------|-----|
-/// | `full` | `100%` |
+/// | `full` | `100%` (parent containing-block content box) |
 /// | `auto` | `auto` |
+/// | `fit` / `fit-content` | `fit-content` |
+/// | `min` / `min-content` | `min-content` |
+/// | `max` / `max-content` | `max-content` |
 /// | `screen` | `100vw` / `100vh` |
-/// | `a/b` | `{a/b * 100}%` (`w-3/4` → `75%`, `h-1/2` → `50%`) |
-///
-/// (`fit` / `min` / `max` content keywords omitted until layout supports them.)
+/// | `a/b` | `{a/b}` of the **parent** content box (`w-3/4` → `75%`, `h-1/2` → `50%`) |
 fn size_keyword_value(prefix: &str, rest: &str) -> Option<String> {
     match rest {
         "full" => Some("100%".into()),
         "auto" => Some("auto".into()),
+        "fit" | "fit-content" => Some("fit-content".into()),
+        "min" | "min-content" => Some("min-content".into()),
+        "max" | "max-content" => Some("max-content".into()),
         "screen" => match prefix {
             "w-" | "min-w-" | "max-w-" => Some("100vw".into()),
             "h-" | "min-h-" | "max-h-" => Some("100vh".into()),
@@ -335,7 +359,7 @@ fn parse_tailwind_fraction_ratio(rest: &str) -> Option<f32> {
     Some(num / den)
 }
 
-/// Size utility fraction → CSS percentage (`3/4` → `"75%"`).
+/// Size utility fraction → CSS percentage of the **parent** containing block (`3/4` → `"75%"`).
 fn tailwind_fraction_percent_string(rest: &str) -> Option<String> {
     let ratio = parse_tailwind_fraction_ratio(rest)?;
     Some(format!("{}%", ratio * 100.0))
@@ -432,6 +456,11 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "animate-pulse" => return Some(KnownUtility::AnimatePulse),
         "animate-bounce" => return Some(KnownUtility::AnimateBounce),
         "animate-none" => return Some(KnownUtility::AnimateNone),
+        "shimmer" => return Some(KnownUtility::Shimmer),
+        "shimmer-once" => return Some(KnownUtility::ShimmerOnce),
+        "shimmer-box" | "animate-shimmer" => return Some(KnownUtility::ShimmerBox),
+        "shimmer-reverse" => return Some(KnownUtility::ShimmerReverse),
+        "shimmer-none" => return Some(KnownUtility::ShimmerNone),
         "group" => return Some(KnownUtility::GroupMarker { name: None }),
         "peer" => return Some(KnownUtility::PeerMarker { name: None }),
         "box-border" => return Some(KnownUtility::BoxBorder),
@@ -769,6 +798,30 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::OutlineStyle("solid"));
     }
 
+    if let Some(rest) = token.strip_prefix("shimmer-count-") {
+        return parse_shimmer_count(rest).map(KnownUtility::ShimmerCount);
+    }
+    if let Some(rest) = token.strip_prefix("shimmer-duration-") {
+        if let Ok(ms) = rest.parse::<u32>() {
+            return Some(KnownUtility::ShimmerDuration(ms));
+        }
+    }
+    if let Some(rest) = token.strip_prefix("shimmer-spread-") {
+        if let Some(px) = parse_shimmer_spread_px(rest) {
+            return Some(KnownUtility::ShimmerSpread(px));
+        }
+    }
+    if let Some(rest) = token.strip_prefix("shimmer-angle-") {
+        if let Some(deg) = parse_shimmer_angle_deg(rest) {
+            return Some(KnownUtility::ShimmerAngle(deg));
+        }
+    }
+    if let Some(rest) = token.strip_prefix("shimmer-color-") {
+        if !rest.is_empty() {
+            return Some(KnownUtility::ShimmerColor(rest));
+        }
+    }
+
     // Inset / top / right / bottom / left utilities
     if let Some(v) = spacing_value(token, "inset-x-") {
         return Some(KnownUtility::InsetX(v));
@@ -1094,6 +1147,43 @@ fn parse_filter_amount_token(rest: &str) -> Option<f32> {
     }
 }
 
+fn parse_shimmer_count(rest: &str) -> Option<Option<f32>> {
+    let rest = rest
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(rest)
+        .trim();
+    if rest.eq_ignore_ascii_case("infinite") || rest.eq_ignore_ascii_case("inf") {
+        return Some(None);
+    }
+    let n: f32 = rest.parse().ok()?;
+    if n > 0.0 && n.is_finite() {
+        Some(Some(n))
+    } else {
+        None
+    }
+}
+
+fn parse_shimmer_spread_px(rest: &str) -> Option<f32> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let v = inner.trim();
+        if let Some(n) = v.strip_suffix('%') {
+            // Percentage of a ~1-line caption; treat as a generous band width.
+            return n.parse::<f32>().ok().map(|p| (p / 100.0) * 80.0);
+        }
+        return spacing_token_to_px(v);
+    }
+    spacing_token_to_px(rest)
+}
+
+fn parse_shimmer_angle_deg(rest: &str) -> Option<f32> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let v = inner.trim().trim_end_matches("deg");
+        return v.parse().ok();
+    }
+    rest.parse().ok()
+}
+
 #[inline]
 pub fn is_known_utility(token: &str) -> bool {
     classify_utility(token).is_some()
@@ -1200,6 +1290,18 @@ mod tests {
         assert!(matches!(
             classify_utility("h-screen"),
             Some(KnownUtility::Height(ref v)) if v == "100vh"
+        ));
+        assert!(matches!(
+            classify_utility("w-fit"),
+            Some(KnownUtility::Width(ref v)) if v == "fit-content"
+        ));
+        assert!(matches!(
+            classify_utility("w-min"),
+            Some(KnownUtility::Width(ref v)) if v == "min-content"
+        ));
+        assert!(matches!(
+            classify_utility("max-h-max"),
+            Some(KnownUtility::MaxHeight(ref v)) if v == "max-content"
         ));
         // `full` must not resolve as a spacing px for gap/padding.
         assert_eq!(spacing_token_to_px("full"), None);
@@ -1441,6 +1543,68 @@ mod tests {
             classify_utility("animate-none"),
             Some(KnownUtility::AnimateNone)
         ));
+    }
+
+    #[test]
+    fn shimmer_utility_classes() {
+        assert!(matches!(
+            classify_utility("shimmer"),
+            Some(KnownUtility::Shimmer)
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-once"),
+            Some(KnownUtility::ShimmerOnce)
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-count-3"),
+            Some(KnownUtility::ShimmerCount(Some(n))) if (n - 3.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-count-infinite"),
+            Some(KnownUtility::ShimmerCount(None))
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-box"),
+            Some(KnownUtility::ShimmerBox)
+        ));
+        assert!(matches!(
+            classify_utility("animate-shimmer"),
+            Some(KnownUtility::ShimmerBox)
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-reverse"),
+            Some(KnownUtility::ShimmerReverse)
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-none"),
+            Some(KnownUtility::ShimmerNone)
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-duration-1000"),
+            Some(KnownUtility::ShimmerDuration(1000))
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-spread-24"),
+            Some(KnownUtility::ShimmerSpread(px)) if (px - 96.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-spread-[5rem]"),
+            Some(KnownUtility::ShimmerSpread(px)) if (px - 80.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-angle-45"),
+            Some(KnownUtility::ShimmerAngle(deg)) if (deg - 45.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-color-blue-500/60"),
+            Some(KnownUtility::ShimmerColor("blue-500/60"))
+        ));
+        assert!(matches!(
+            classify_utility("shimmer-color-[#378ADD]"),
+            Some(KnownUtility::ShimmerColor("[#378ADD]"))
+        ));
+        assert!(is_known_utility("shimmer"));
+        assert!(!is_known_utility("shimmering"));
     }
 
     #[test]

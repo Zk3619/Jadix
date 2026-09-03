@@ -532,9 +532,7 @@ impl TextStyle {
         out.overline = self.overline.or(parent.overline);
         out.line_through = self.line_through.or(parent.line_through);
         out.decoration_style = self.decoration_style.or(parent.decoration_style);
-        out.decoration_thickness = self
-            .decoration_thickness
-            .or(parent.decoration_thickness);
+        out.decoration_thickness = self.decoration_thickness.or(parent.decoration_thickness);
         out.underline_offset = self.underline_offset.or(parent.underline_offset);
         out.font_family = self
             .font_family

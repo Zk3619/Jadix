@@ -246,6 +246,15 @@ fn ensure_builtins() {
             "collapsible-up",
             vec![KeyframeStop::at(1.0).max_height(0.0)],
         );
+        // shadcn `shimmer` utility (`animation: tw-shimmer`). Visual sweep is painted
+        // in prepare_text; this rule keeps the CSS animation pump alive.
+        register_keyframes(
+            "tw-shimmer",
+            vec![
+                KeyframeStop::at(0.0).opacity(1.0),
+                KeyframeStop::at(1.0).opacity(1.0),
+            ],
+        );
         // `slide-in-from-*-2` / `slide-out-to-*-2` — Tailwind `-2` is 0.5rem.
         for (name, dxy) in [
             ("top", [0.0, -SLIDE_2_PX]),

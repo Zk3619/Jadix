@@ -343,7 +343,11 @@ pub fn semantic_shadow(tone: SemanticTone) -> SemanticShadow {
     }
 }
 
-fn resolve_border(tone: SemanticTone, filled: bool, decor: SemanticChromeDecor) -> Option<SemanticBorder> {
+fn resolve_border(
+    tone: SemanticTone,
+    filled: bool,
+    decor: SemanticChromeDecor,
+) -> Option<SemanticBorder> {
     if !decor.border {
         return None;
     }
@@ -489,7 +493,10 @@ mod tests {
     #[test]
     fn parse_aliases_and_unknown() {
         assert_eq!(SemanticTone::parse("error"), SemanticTone::Destructive);
-        assert_eq!(SemanticTone::parse("destructive"), SemanticTone::Destructive);
+        assert_eq!(
+            SemanticTone::parse("destructive"),
+            SemanticTone::Destructive
+        );
         assert_eq!(SemanticTone::parse("warn"), SemanticTone::Warning);
         assert_eq!(SemanticTone::parse("warning"), SemanticTone::Warning);
         assert_eq!(SemanticTone::parse("INFO"), SemanticTone::Info);
@@ -629,7 +636,9 @@ mod tests {
     fn semantic_shadow_success_is_green_tinted() {
         let s = semantic_shadow(SemanticTone::Success);
         assert!(
-            s.color[1] > s.color[0] && s.color[1] > s.color[2] && (s.color[3] - SHADOW_ALPHA).abs() < 0.001,
+            s.color[1] > s.color[0]
+                && s.color[1] > s.color[2]
+                && (s.color[3] - SHADOW_ALPHA).abs() < 0.001,
             "success shadow must be green-tinted, got {:?}",
             s.color
         );

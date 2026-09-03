@@ -14,8 +14,7 @@ use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::style::{
-    mark_variant_style_override, parse_color, parse_text_color, Style, TextStyle,
-    VariantStyleField,
+    mark_variant_style_override, parse_color, parse_text_color, Style, TextStyle, VariantStyleField,
 };
 
 thread_local! {
@@ -781,6 +780,97 @@ fn tick_animate_spin(el: &mut Element) -> bool {
     true
 }
 
+fn apply_or_update_named_animation(
+    el: &mut Element,
+    name: &str,
+    duration_ms: f32,
+    timing: &str,
+    count: Option<f32>,
+    reverse: bool,
+) {
+    let mut entry = crate::style::AnimationEntry::default();
+    entry.name = name.to_string();
+    entry.duration_ms = duration_ms.max(1.0);
+    entry.timing = crate::style::TimingFunction::from_css(timing);
+    entry.iteration_count = match count {
+        Some(n) if n > 0.0 && n.is_finite() => crate::style::AnimationIterationCount::Finite(n),
+        _ => crate::style::AnimationIterationCount::Infinite,
+    };
+    entry.direction = if reverse {
+        crate::style::AnimationDirection::Reverse
+    } else {
+        crate::style::AnimationDirection::Normal
+    };
+    if let Some(existing) = el.style.animations.iter_mut().find(|e| e.name == name) {
+        *existing = entry;
+    } else {
+        el.style.animations.push(entry);
+    }
+}
+
+fn sync_shimmer_animation(el: &mut Element) {
+    if !crate::renderer::ShimmerParams::effect_active(&el.attrs) {
+        el.style.animations.retain(|e| e.name != "tw-shimmer");
+        if el.attrs.get("rui_animate").map(|s| s.as_str()) == Some("tw-shimmer") {
+            el.attrs
+                .insert("rui_animate".to_string(), "none".to_string());
+        }
+        return;
+    }
+    let params = crate::renderer::ShimmerParams::from_shared_attrs(&el.attrs);
+    apply_or_update_named_animation(
+        el,
+        "tw-shimmer",
+        params.duration_ms,
+        "linear",
+        params.count,
+        params.reverse,
+    );
+    el.attrs
+        .insert("rui_animate".to_string(), "tw-shimmer".to_string());
+}
+
+fn ensure_shimmer_epoch(el: &mut Element) {
+    if !el.attrs.contains_key(crate::renderer::ATTR_SHIMMER_EPOCH) {
+        el.attrs.insert(
+            crate::renderer::ATTR_SHIMMER_EPOCH.to_string(),
+            format!("{}", crate::style::global_time_s()),
+        );
+    }
+}
+
+fn enable_shimmer(el: &mut Element) {
+    ensure_shimmer_epoch(el);
+    el.attrs.insert(
+        crate::renderer::ATTR_GLYPH_FX.to_string(),
+        "shimmer".to_string(),
+    );
+    sync_shimmer_animation(el);
+}
+
+fn enable_shimmer_box(el: &mut Element) {
+    ensure_shimmer_epoch(el);
+    el.attrs.insert(
+        crate::renderer::ATTR_SHIMMER_BOX.to_string(),
+        "1".to_string(),
+    );
+    sync_shimmer_animation(el);
+}
+
+fn disable_shimmer(el: &mut Element) {
+    el.attrs
+        .insert(crate::renderer::ATTR_GLYPH_FX.to_string(), String::new());
+    el.attrs.remove(crate::renderer::ATTR_SHIMMER_BOX);
+    el.attrs.remove(crate::renderer::ATTR_SHIMMER_REVERSE);
+    el.attrs.remove(crate::renderer::ATTR_SHIMMER_ONCE);
+    el.attrs.remove(crate::renderer::ATTR_SHIMMER_COUNT);
+    sync_shimmer_animation(el);
+}
+
+fn shimmer_modifiers_live(el: &Element) -> bool {
+    crate::renderer::ShimmerParams::effect_active(&el.attrs)
+}
+
 fn apply_builtin_animation(
     el: &mut Element,
     name: &str,
@@ -824,7 +914,10 @@ fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflo
 
 fn apply_text_align_utility(el: &mut Element, kw: &str) -> LayoutStatus {
     use crate::style::{TextAlign, TextAlignDeclaration};
-    let before = (el.text_style.align_resolved(), el.attrs.contains_key("text_align"));
+    let before = (
+        el.text_style.align_resolved(),
+        el.attrs.contains_key("text_align"),
+    );
     match TextAlign::parse_declaration(kw) {
         TextAlignDeclaration::Inherit => {
             el.attrs.remove("text_align");
@@ -840,7 +933,10 @@ fn apply_text_align_utility(el: &mut Element, kw: &str) -> LayoutStatus {
                 .insert("text_align".to_string(), v.as_str().to_string());
         }
     }
-    let after = (el.text_style.align_resolved(), el.attrs.contains_key("text_align"));
+    let after = (
+        el.text_style.align_resolved(),
+        el.attrs.contains_key("text_align"),
+    );
     if before == after {
         LayoutStatus::Clean
     } else {
@@ -1519,6 +1615,100 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::StyleChanged
             }
         }
+        KnownUtility::Shimmer => {
+            enable_shimmer(el);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerBox => {
+            enable_shimmer_box(el);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerOnce => {
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_ONCE.to_string(),
+                "1".to_string(),
+            );
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_COUNT.to_string(),
+                "1".to_string(),
+            );
+            if shimmer_modifiers_live(el) {
+                sync_shimmer_animation(el);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerCount(n) => {
+            match n {
+                Some(times) => {
+                    el.attrs.remove(crate::renderer::ATTR_SHIMMER_ONCE);
+                    el.attrs.insert(
+                        crate::renderer::ATTR_SHIMMER_COUNT.to_string(),
+                        format!("{times}"),
+                    );
+                }
+                None => {
+                    el.attrs.remove(crate::renderer::ATTR_SHIMMER_ONCE);
+                    el.attrs.insert(
+                        crate::renderer::ATTR_SHIMMER_COUNT.to_string(),
+                        "infinite".to_string(),
+                    );
+                }
+            }
+            if shimmer_modifiers_live(el) {
+                sync_shimmer_animation(el);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerReverse => {
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_REVERSE.to_string(),
+                "1".to_string(),
+            );
+            if shimmer_modifiers_live(el) {
+                sync_shimmer_animation(el);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerNone => {
+            disable_shimmer(el);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerDuration(ms) => {
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_DURATION_MS.to_string(),
+                ms.to_string(),
+            );
+            if shimmer_modifiers_live(el) {
+                sync_shimmer_animation(el);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerSpread(px) => {
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_SPREAD_PX.to_string(),
+                format!("{px}"),
+            );
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerAngle(deg) => {
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_ANGLE_DEG.to_string(),
+                format!("{deg}"),
+            );
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::ShimmerColor(name) => {
+            let token = name
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .unwrap_or(name);
+            let color = parse_text_color(token);
+            el.attrs.insert(
+                crate::renderer::ATTR_SHIMMER_COLOR.to_string(),
+                crate::renderer::format_rgba8(color),
+            );
+            LayoutStatus::StyleChanged
+        }
     }
 }
 
@@ -1677,17 +1867,26 @@ mod tests {
     fn apply_text_align_utilities() {
         let mut el = Element::new();
         apply_class_list(&mut el, "text-center");
-        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Center);
+        assert_eq!(
+            el.text_style.align_resolved(),
+            crate::style::TextAlign::Center
+        );
         assert_eq!(
             el.attrs.get("text_align").map(String::as_str),
             Some("center")
         );
 
         apply_class_list(&mut el, "text-start");
-        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Start);
+        assert_eq!(
+            el.text_style.align_resolved(),
+            crate::style::TextAlign::Start
+        );
 
         apply_class_list(&mut el, "text-justify");
-        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Justify);
+        assert_eq!(
+            el.text_style.align_resolved(),
+            crate::style::TextAlign::Justify
+        );
 
         apply_class_list(&mut el, "text-end");
         assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::End);
@@ -1784,6 +1983,179 @@ mod p1_utility_tests {
         // Must not also set `rui_transition` — that dual-drove UI springs against the
         // CSS tween and kept gallery `hover:scale-*` tiles dirty while hovering the sidebar.
         assert!(el.attrs.get("rui_transition").is_none());
+    }
+
+    #[test]
+    fn apply_shimmer_utility() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "shimmer");
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_GLYPH_FX)
+                .map(|s| s.as_str()),
+            Some("shimmer")
+        );
+        assert_eq!(
+            el.attrs.get("rui_animate").map(|s| s.as_str()),
+            Some("tw-shimmer")
+        );
+        assert_eq!(el.style.animations.len(), 1);
+        assert_eq!(el.style.animations[0].name, "tw-shimmer");
+        assert_eq!(el.style.animations[0].duration_ms, 2000.0);
+        assert!(matches!(
+            el.style.animations[0].iteration_count,
+            crate::style::AnimationIterationCount::Infinite
+        ));
+
+        apply_class_list(&mut el, "shimmer shimmer-duration-1000 shimmer-reverse");
+        assert_eq!(el.style.animations[0].duration_ms, 1000.0);
+        assert_eq!(
+            el.style.animations[0].direction,
+            crate::style::AnimationDirection::Reverse
+        );
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_SHIMMER_REVERSE)
+                .map(|s| s.as_str()),
+            Some("1")
+        );
+
+        apply_class_list(&mut el, "shimmer shimmer-count-3");
+        assert!(matches!(
+            el.style.animations[0].iteration_count,
+            crate::style::AnimationIterationCount::Finite(n) if (n - 3.0).abs() < f32::EPSILON
+        ));
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_SHIMMER_COUNT)
+                .map(|s| s.as_str()),
+            Some("3")
+        );
+
+        apply_class_list(&mut el, "shimmer shimmer-none");
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_GLYPH_FX)
+                .map(|s| s.as_str()),
+            Some("")
+        );
+        assert!(el.style.animations.iter().all(|e| e.name != "tw-shimmer"));
+    }
+
+    #[test]
+    fn apply_shimmer_box_utility() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "shimmer-box shimmer-duration-800 shimmer-count-2");
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_SHIMMER_BOX)
+                .map(|s| s.as_str()),
+            Some("1")
+        );
+        assert!(el.attrs.get(crate::renderer::ATTR_GLYPH_FX).is_none());
+        assert_eq!(el.style.animations[0].name, "tw-shimmer");
+        assert_eq!(el.style.animations[0].duration_ms, 800.0);
+        assert!(matches!(
+            el.style.animations[0].iteration_count,
+            crate::style::AnimationIterationCount::Finite(n) if (n - 2.0).abs() < f32::EPSILON
+        ));
+
+        let mut el = Element::new();
+        apply_class_list(&mut el, "animate-shimmer");
+        assert_eq!(
+            el.attrs
+                .get(crate::renderer::ATTR_SHIMMER_BOX)
+                .map(|s| s.as_str()),
+            Some("1")
+        );
+
+        apply_class_list(&mut el, "animate-shimmer shimmer-none");
+        assert!(el.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
+    }
+
+    #[test]
+    fn shimmer_class_inherits_to_text_leaf() {
+        let mut root = Element::new();
+        apply_class_list(&mut root, "shimmer shimmer-duration-1100");
+        root.children.push(Element::new().text("Thinking..."));
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
+        let leaf = &root.children[0];
+        assert_eq!(
+            leaf.attrs
+                .get(crate::renderer::ATTR_GLYPH_FX)
+                .map(|s| s.as_str()),
+            Some("shimmer")
+        );
+        assert_eq!(
+            leaf.attrs
+                .get(crate::renderer::ATTR_SHIMMER_DURATION_MS)
+                .map(|s| s.as_str()),
+            Some("1100")
+        );
+    }
+
+    #[test]
+    fn shimmer_box_does_not_inherit_to_children() {
+        let mut root = Element::new();
+        apply_class_list(&mut root, "shimmer-box shimmer-count-3");
+        root.children.push(Element::new().text("Thinking..."));
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
+        let leaf = &root.children[0];
+        assert!(leaf.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
+        assert!(leaf
+            .attrs
+            .get(crate::renderer::ATTR_GLYPH_FX)
+            .is_none_or(|s| s.is_empty()));
+        assert_eq!(
+            leaf.attrs
+                .get(crate::renderer::ATTR_SHIMMER_COUNT)
+                .map(|s| s.as_str()),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn shimmer_box_overlay_paints_in_chrome_above_glyphs() {
+        let mut box_el = Element::new()
+            .w(200.0)
+            .h(48.0)
+            .bg(crate::style::parse_color("secondary"));
+        apply_class_list(&mut box_el, "shimmer-box shimmer-duration-1000");
+        // Pin mid-cycle: tests have global_time_s() == 0.
+        box_el.set_attr(crate::renderer::ATTR_SHIMMER_EPOCH, "-0.5");
+        box_el = box_el.child(Element::new().text("shimmer-box · container overlay"));
+        let mut root = Element::new().w(200.0).h(48.0).child(box_el);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 200.0, 48.0, [-1.0, -1.0]);
+        let sheen =
+            |i: &crate::renderer::InstanceInput| i.color[3] >= 0.01 && i.rect_size[0] < 40.0;
+        let in_chrome: Vec<_> = result
+            .input_chrome_instances
+            .iter()
+            .filter(|i| sheen(i))
+            .collect();
+        let in_instances: Vec<_> = result.instances.iter().filter(|i| sheen(i)).collect();
+        assert!(
+            in_chrome.len() >= 5,
+            "soft column sheen in chrome (above glyphs), not 3 slabs; chrome_sheen={} chrome={} instances={}",
+            in_chrome.len(),
+            result.input_chrome_instances.len(),
+            result.instances.len()
+        );
+        assert!(
+            in_instances.is_empty(),
+            "sheen must not ride the SDF fill band (that draws under glyphon)"
+        );
+        assert!(
+            in_chrome
+                .iter()
+                .all(|i| i.color[0] + i.color[1] + i.color[2] > 2.5),
+            "sheen must be a light lift, not a dark stamp"
+        );
+        assert!(
+            !result.text_nodes.is_empty(),
+            "glyphs stay a separate earlier pass"
+        );
     }
 
     #[test]
