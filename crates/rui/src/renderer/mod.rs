@@ -45,7 +45,12 @@ pub use effect::{
 pub use effect_pass::EffectPassGpu;
 pub use emoji_config::{configured_twemoji_dir, emoji_bitmap_override_active};
 pub use geometry2d::{gpu2d_enabled, path_to_instances, quads_to_instances};
-pub use glyph_fx::{GlyphFx, GlyphFxKind, ATTR_GLYPH_FX};
+pub use glyph_fx::{
+    format_rgba8, mix_rgba, shimmer_band_mix, shimmer_box_highlight_rgba, shimmer_box_mix_at,
+    GlyphFx, GlyphFxKind, ShimmerParams, ATTR_GLYPH_FX, ATTR_SHIMMER_ANGLE_DEG, ATTR_SHIMMER_BOX,
+    ATTR_SHIMMER_COLOR, ATTR_SHIMMER_COUNT, ATTR_SHIMMER_DURATION_MS, ATTR_SHIMMER_EPOCH,
+    ATTR_SHIMMER_ONCE, ATTR_SHIMMER_REVERSE, ATTR_SHIMMER_SPREAD_PX, SHIMMER_INHERIT_ATTRS,
+};
 pub use graph::{
     env_dump_enabled as render_graph_dump_enabled, store_last_dump as store_render_graph_dump,
     PassKind, RenderGraph, RenderPassNode,

@@ -377,7 +377,9 @@ impl EffectPassGpu {
                     } else if let Some(sc) = info.style.line_height_scale {
                         size * sc
                     } else {
-                        size * crate::style::tailwind_default_leading_scale(info.style.size_resolved())
+                        size * crate::style::tailwind_default_leading_scale(
+                            info.style.size_resolved(),
+                        )
                     };
                     let family = if let Some(ref name) = info.style.font_family {
                         crate::utils::font::resolve_family(unsafe { &*fs }.db(), name)

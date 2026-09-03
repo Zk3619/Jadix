@@ -527,7 +527,7 @@ fn correct_bidi_ink_spill(
     nowrap: bool,
     force_fast: bool,
 ) -> f32 {
-    if nowrap || text.is_ascii() || soft_w_target <= 8.0 {
+    if nowrap || soft_w_target <= 8.0 {
         return wrap_w;
     }
     let mut max_ink = 0.0_f32;
@@ -899,6 +899,67 @@ fn direction_mark(dir: TextDirection) -> &'static str {
         TextDirection::Rtl => "\u{200F}",
         TextDirection::Auto => "",
     }
+}
+
+/// Recolor glyphs for a shadcn `shimmer` sweep. Positions stay stable (color-only).
+fn apply_shimmer_sweep(
+    buffer: &mut glyphon::Buffer,
+    font_system: &mut glyphon::FontSystem,
+    text: &str,
+    st: &crate::style::TextStyle,
+    family: glyphon::Family,
+    font_weight: u16,
+    shaping: glyphon::Shaping,
+    params: &crate::renderer::ShimmerParams,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let mut line_w = 1.0f32;
+    let mut glyph_u = Vec::new();
+    for run in buffer.layout_runs() {
+        line_w = line_w.max(run.line_w.max(1.0));
+        for g in run.glyphs.iter() {
+            if g.w <= 0.0 {
+                continue;
+            }
+            glyph_u.push((g.x + g.w * 0.5) / run.line_w.max(1.0));
+        }
+    }
+    let t = params.progress(crate::style::global_time_s());
+    let spread = (params.spread_px_or_default(st.size_resolved()) / line_w).clamp(0.12, 0.85);
+    let base = st.color_resolved();
+    let highlight = params.highlight(base);
+    let attrs = glyphon::Attrs::new()
+        .family(family)
+        .weight(glyphon::fontdb::Weight(font_weight));
+    let n = text.chars().count().max(1);
+    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(n);
+    for (i, ch) in text.chars().enumerate() {
+        let u = glyph_u
+            .get(i)
+            .copied()
+            .unwrap_or((i as f32 + 0.5) / n as f32);
+        let mix = crate::renderer::shimmer_band_mix(u, t, spread, params.reverse, params.angle_deg);
+        let c = crate::renderer::mix_rgba(base, highlight, mix);
+        let mut body = ch.to_string();
+        if i == 0 {
+            let m = direction_mark(st.direction);
+            if !m.is_empty() {
+                body = format!("{m}{body}");
+            }
+        }
+        owned.push((
+            body,
+            attrs
+                .clone()
+                .color(glyphon::Color::rgba(c[0], c[1], c[2], c[3])),
+        ));
+    }
+    let rich: Vec<(&str, glyphon::Attrs)> =
+        owned.iter().map(|(s, a)| (s.as_str(), a.clone())).collect();
+    buffer.set_rich_text(rich, &attrs, shaping, None);
+    buffer.shape_until_scroll(font_system, false);
 }
 
 fn resolve_text_align(
@@ -2772,7 +2833,20 @@ pub fn prepare_text_frame(
         let mut glyph_dy = dy;
         if let Some(raw) = info.glyph_fx.as_deref() {
             let kind = crate::renderer::GlyphFxKind::parse(raw);
-            if kind != crate::renderer::GlyphFxKind::None {
+            if kind == crate::renderer::GlyphFxKind::Shimmer {
+                if let Some(params) = info.shimmer.as_ref() {
+                    apply_shimmer_sweep(
+                        &mut text_renderer.shaped_cache[i].buffer,
+                        unsafe { &mut *text_renderer.font_system },
+                        info.text.as_str(),
+                        st,
+                        family,
+                        font_weight,
+                        shaping,
+                        params,
+                    );
+                }
+            } else if kind != crate::renderer::GlyphFxKind::None {
                 let fx = crate::renderer::GlyphFx::new(kind, crate::style::global_time_s().fract());
                 let n = info.text.chars().count().max(1);
                 glyph_color[3] = ((glyph_color[3] as f32) * fx.opacity(0, n))

@@ -144,7 +144,12 @@ pub fn ensure_text_xform_texture_with_shadow(
     shadow: Option<([u8; 4], [f32; 2], f32)>,
     glyph_dy: f32,
 ) -> Option<(String, f32)> {
-    if text.is_empty() || layout_w < 1.0 || layout_h < 1.0 || bake_w < 1.0 || bake_h < 1.0 || font_size_px < 0.5
+    if text.is_empty()
+        || layout_w < 1.0
+        || layout_h < 1.0
+        || bake_w < 1.0
+        || bake_h < 1.0
+        || font_size_px < 0.5
     {
         return None;
     }
@@ -653,15 +658,7 @@ fn rasterize_text_rgba(
 
         if wants_twemoji {
             composite_twemoji_into_bake(
-                &mut rgba,
-                tw,
-                th,
-                &buffer,
-                text,
-                &layout,
-                size,
-                origin_x,
-                origin_y,
+                &mut rgba, tw, th, &buffer, text, &layout, size, origin_x, origin_y,
             );
         }
 
@@ -1349,7 +1346,10 @@ mod tests {
         let dy = super::bake_glyph_layout_dy(tall, font, 1, true, false);
         assert!((dy - (tall - line_h) * 0.5).abs() < 0.01);
         assert_eq!(super::bake_glyph_layout_dy(tall, font, 2, true, false), 0.0);
-        assert_eq!(super::bake_glyph_layout_dy(tall, font, 1, false, false), 0.0);
+        assert_eq!(
+            super::bake_glyph_layout_dy(tall, font, 1, false, false),
+            0.0
+        );
     }
 
     #[test]
@@ -1358,7 +1358,10 @@ mod tests {
         let layout_w = 80.0_f32;
         let layout_h = 28.0_f32;
         let dy = super::bake_glyph_layout_dy(layout_h, font, 1, true, false);
-        assert!(dy > 0.0, "tall padded layout box should get Coverage-matching dy");
+        assert!(
+            dy > 0.0,
+            "tall padded layout box should get Coverage-matching dy"
+        );
         let (bw, bh, pad) = text_xform_bake_box(layout_w, layout_h, font);
         let Some((w, h, rgba)) = super::rasterize_text_rgba(
             "居中",

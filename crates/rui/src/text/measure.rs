@@ -652,7 +652,7 @@ pub fn bidi_soft_wrap_height(
     // Prefer segment arithmetic / FIT_CACHE. Resize drag (fast) never *computes* fit —
     // only settle frames may glyphon_fit on miss (smooth resize vs correct resting height).
     let base = metrics.height.max(line_height);
-    if nowrap || text.is_ascii() {
+    if nowrap {
         return base;
     }
     // MinContent / single-segment probe (`layout_w≈0` → max_seg): no soft-wrap fit.

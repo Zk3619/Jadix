@@ -109,7 +109,7 @@ pub fn build_named_icon_text_node(name: impl AsRef<str>, glyph: impl Into<String
 /// cannot paint `▾` / `›`; claiming that family would tofu or drop the rotate
 /// texture (`rasterize_glyph_rgba` maps the char to glyph id 0).
 pub fn build_lucide_icon_text_node(name: impl AsRef<str>) -> Element {
-    build_lucide_icon_text_node_or(name, "▾")
+    crate::utils::icon_provider::build_icon_named(name)
 }
 
 /// [`build_lucide_icon_text_node`] with an explicit Unicode fallback glyph.
@@ -119,18 +119,27 @@ pub fn build_lucide_icon_text_node_or(
 ) -> Element {
     let name = name.as_ref();
     let fallback = fallback.into();
-    if let Some(glyph) = crate::utils::lucide::lucide_glyph(name) {
-        return build_named_icon_text_node(name, glyph);
+    match crate::utils::icon_provider::resolve_icon(name) {
+        Some(crate::utils::icon_provider::IconSource::Glyph { family, glyph }) => {
+            let mut el = build_named_icon_text_node(name, glyph);
+            el.text_style.font_family = Some(family);
+            el
+        }
+        Some(crate::utils::icon_provider::IconSource::Src(src)) => {
+            crate::utils::icon_provider::build_icon_from_src(src)
+        }
+        None => {
+            if crate::utils::lucide::lucide_svg_inner(name).is_some() {
+                return build_named_icon_text_node(name, fallback);
+            }
+            Element::new()
+                .text(fallback)
+                .font_weight(400.0)
+                .underline(false)
+                .text_color(parse_text_color("foreground"))
+                .pointer_events("bounding-box")
+        }
     }
-    if crate::utils::lucide::lucide_svg_inner(name).is_some() {
-        return build_named_icon_text_node(name, fallback);
-    }
-    Element::new()
-        .text(fallback)
-        .font_weight(400.0)
-        .underline(false)
-        .text_color(parse_text_color("foreground"))
-        .pointer_events("bounding-box")
 }
 
 #[cfg(test)]

@@ -314,7 +314,11 @@ pub fn hit_test_input_text_index(
         best_font_family(font_system)
     };
     let is_icon = style.font_family.as_deref() == Some("lucide");
-    let requested_weight = if is_icon { 400 } else { style.weight_resolved() };
+    let requested_weight = if is_icon {
+        400
+    } else {
+        style.weight_resolved()
+    };
     let font_weight =
         crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
@@ -517,7 +521,11 @@ pub fn hit_test_input_is_line_side_blank(
         best_font_family(font_system)
     };
     let is_icon = style.font_family.as_deref() == Some("lucide");
-    let requested_weight = if is_icon { 400 } else { style.weight_resolved() };
+    let requested_weight = if is_icon {
+        400
+    } else {
+        style.weight_resolved()
+    };
     let font_weight =
         crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
