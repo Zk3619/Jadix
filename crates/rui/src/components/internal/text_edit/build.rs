@@ -1,22 +1,22 @@
 //! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
+use super::strings::{compose_text_edit_strings, TextEditStringsInput};
 use crate::components::input::{
-    InputType, effective_invalid, input_adornment_button, input_caret_signal_key,
-    input_clear_template_id, input_ime_anchor_signal_key, input_number_dec_template_id,
-    input_number_inc_template_id, input_number_step_button, input_number_steppers_column,
-    input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_sel_signal_key,
-    input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key,
-    input_text_template_id, input_type_signal_key, input_value_signal_key, lucide_named,
-    map_byte_index_to_masked, map_byte_range_to_masked, mask_password, resolve_placeholder,
-    set_adornment_visible,
+    effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
+    input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
+    input_number_step_button, input_number_steppers_column, input_overwrite_signal_key,
+    input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_reveal_template_id, input_selection_signal_key, input_text_template_id,
+    input_type_signal_key, input_value_signal_key, lucide_named, map_byte_range_to_masked,
+    resolve_placeholder, set_adornment_visible, InputType,
 };
-use crate::core::reactivity::{Signal, use_signal};
-use crate::core::tree::{Element, TextEditPaintSync, parse_color, parse_text_color};
-use crate::primitives::r#box::{BoxBuilder, r#box, hstack};
+use crate::core::reactivity::{use_signal, Signal};
+use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
 use crate::utils::text_field::{bind_controlled_value, focus_id_for_text_edit};
-use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 pub(crate) struct TextEditBuildParams {
     pub field_id: String,
     pub placeholder: String,
@@ -107,45 +107,6 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let invalid = effective_invalid(explicit_invalid, input_type, &committed);
 
     let show_placeholder = committed.is_empty() && preedit.is_empty();
-    let real_display = if show_placeholder {
-        placeholder.clone()
-    } else if preedit.is_empty() {
-        committed.clone()
-    } else {
-        let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-        a = committed.floor_char_boundary(a);
-        format!("{}{}{}", &committed[..a], preedit, &committed[a..])
-    };
-
-    let caret_in_real = if is_focused {
-        if show_placeholder {
-            0
-        } else if !preedit.is_empty() {
-            let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-            a = committed.floor_char_boundary(a);
-            let end = preedit_sel
-                .map(|(_, e)| e)
-                .unwrap_or_else(|| preedit.len())
-                .min(preedit.len());
-            a + preedit.floor_char_boundary(end)
-        } else {
-            let len = real_display.len();
-            let ix = text_sel_sig
-                .peek()
-                .and_then(|(a, b)| {
-                    if a.min(b) < a.max(b) {
-                        Some(a.max(b))
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| caret_sig.peek())
-                .unwrap_or(len);
-            real_display.floor_char_boundary(ix.min(len))
-        }
-    } else {
-        0
-    };
 
     let reveal = if input_type.is_password() && password_toggle {
         use_signal(&input_password_reveal_signal_key(&field_id), || false).peek()
@@ -153,16 +114,44 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         false
     };
     let mask = input_type.is_password() && !reveal && !show_placeholder;
-    let display_text = if mask {
-        mask_password(&real_display)
+
+    let caret_override = if is_focused && !show_placeholder && preedit.is_empty() {
+        let len = if show_placeholder {
+            placeholder.len()
+        } else {
+            committed.len()
+        };
+        text_sel_sig
+            .peek()
+            .and_then(|(a, b)| {
+                if a.min(b) < a.max(b) {
+                    Some(a.max(b))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| caret_sig.peek())
+            .map(|ix| ix.min(len))
     } else {
-        real_display.clone()
+        None
     };
-    let caret_byte = if mask {
-        map_byte_index_to_masked(&real_display, caret_in_real, &display_text)
-    } else {
-        caret_in_real
-    };
+
+    let strings = compose_text_edit_strings(TextEditStringsInput {
+        committed: &committed,
+        preedit: &preedit,
+        preedit_sel,
+        ime_anchor,
+        placeholder: &placeholder,
+        show_placeholder,
+        mask,
+        is_focused,
+        caret_override,
+    });
+    let display_text = strings.display_text;
+    let layout_measure_text = strings.layout_measure_text;
+    let caret_byte = strings.caret_byte;
+    let real_display = strings.real_display;
+    let caret_in_real = strings.caret_in_real;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -284,7 +273,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             10_000.0
         };
         let content_h = crate::utils::text_field::text_edit_content_height_px_wrap(
-            &display_text,
+            &layout_measure_text,
             text_size_px,
             font_weight,
             line_box,
@@ -424,7 +413,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let rest = scroll_rest
             .as_deref()
             .expect("multiline text edit always has scroll_rest");
-        use crate::components::scrollbar::{ScrollbarOrientation, scrollbar};
+        use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
         use crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key;
         use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
             "inside".to_string()

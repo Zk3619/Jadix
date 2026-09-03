@@ -1,20 +1,21 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
+use super::strings::{compose_text_edit_strings, TextEditStringsInput};
 use crate::components::input::{
-    InputType, effective_invalid, input_caret_signal_key, input_clear_template_id,
+    effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_value_signal_key, lucide_named,
-    map_byte_index_to_masked, map_byte_range_to_masked, mask_password, resolve_placeholder,
-    set_adornment_icon_glyph, set_adornment_visible,
+    map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder,
+    set_adornment_icon_glyph, set_adornment_visible, InputType,
 };
 use crate::core::reactivity::use_signal;
-use crate::core::tree::{Element, InputPaintSync, LayoutStatus, parse_color, parse_text_color};
+use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
-    InputCaretDraw, apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
+    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
     focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
-    focus_ring_style,
+    focus_ring_style, InputCaretDraw,
 };
 use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit,
@@ -116,15 +117,6 @@ fn sync_one_text_edit_paint(
     let input_ty = InputType::parse(&desc.input_type);
     let placeholder = resolve_placeholder(&desc.placeholder, input_ty);
     let invalid = effective_invalid(desc.invalid, input_ty, &committed);
-    let real_display = if show_placeholder {
-        placeholder
-    } else if preedit.is_empty() {
-        committed.clone()
-    } else {
-        let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-        a = committed.floor_char_boundary(a);
-        format!("{}{}{}", &committed[..a], preedit, &committed[a..])
-    };
 
     let reveal = if desc.password_toggle && input_ty.is_password() {
         use_signal(&input_password_reveal_signal_key(&desc.base_id), || false).peek()
@@ -132,6 +124,44 @@ fn sync_one_text_edit_paint(
         false
     };
     let mask = input_ty.is_password() && !reveal && !show_placeholder;
+
+    let caret_override = if is_focused && !show_placeholder && preedit.is_empty() {
+        let len = if show_placeholder {
+            placeholder.len()
+        } else {
+            committed.len()
+        };
+        text_sel_sig
+            .peek()
+            .and_then(|(a, b)| {
+                if a.min(b) < a.max(b) {
+                    Some(a.max(b))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| caret_sig.peek())
+            .map(|ix| ix.min(len))
+    } else {
+        None
+    };
+
+    let strings = compose_text_edit_strings(TextEditStringsInput {
+        committed: &committed,
+        preedit: &preedit,
+        preedit_sel,
+        ime_anchor,
+        placeholder: &placeholder,
+        show_placeholder,
+        mask,
+        is_focused,
+        caret_override,
+    });
+    let display_text = strings.display_text;
+    let layout_measure_text = strings.layout_measure_text;
+    let caret_byte = strings.caret_byte;
+    let real_display = strings.real_display;
+    let caret_in_real = strings.caret_in_real;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -161,47 +191,6 @@ fn sync_one_text_edit_paint(
         focus_ring_destructive_color()
     } else {
         focus_ring_color()
-    };
-
-    let caret_in_real = if is_focused {
-        if show_placeholder {
-            0
-        } else if !preedit.is_empty() {
-            let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-            a = committed.floor_char_boundary(a);
-            let end = preedit_sel
-                .map(|(_, e)| e)
-                .unwrap_or_else(|| preedit.len())
-                .min(preedit.len());
-            a + preedit.floor_char_boundary(end)
-        } else {
-            let len = real_display.len();
-            let ix = text_sel_sig
-                .peek()
-                .and_then(|(a, b)| {
-                    if a.min(b) < a.max(b) {
-                        Some(a.max(b))
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| caret_sig.peek())
-                .unwrap_or(len);
-            real_display.floor_char_boundary(ix.min(len))
-        }
-    } else {
-        0
-    };
-
-    let display_text = if mask {
-        mask_password(&real_display)
-    } else {
-        real_display.clone()
-    };
-    let caret_byte = if mask {
-        map_byte_index_to_masked(&real_display, caret_in_real, &display_text)
-    } else {
-        caret_in_real
     };
 
     let mut container_layout = false;
@@ -499,7 +488,11 @@ fn sync_one_text_edit_paint(
             let soft = desc.wrap_mode.soft_wrap();
             let avail = if soft {
                 let w = text_el.layout_bounds[2];
-                if w > 1.0 { w } else { 320.0 }
+                if w > 1.0 {
+                    w
+                } else {
+                    320.0
+                }
             } else {
                 10_000.0
             };
@@ -508,7 +501,7 @@ fn sync_one_text_edit_paint(
                     .set_silent(avail);
             }
             crate::utils::text_field::text_edit_content_height_px_wrap(
-                &display_text,
+                &layout_measure_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_box,
@@ -628,7 +621,7 @@ fn sync_one_text_edit_paint(
                 10_000.0
             };
             let content_h_text = crate::utils::text_field::text_edit_content_height_px_wrap(
-                &display_text,
+                &layout_measure_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_height,
@@ -646,7 +639,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }
@@ -696,45 +689,63 @@ fn sync_one_text_edit_paint(
 
             // wrap=off: keep the caret in the horizontal viewport — but never while
             // drag-select edge auto-scroll owns `sx` (that pair caused scroll bounce).
+            // Cap at the **current** hard line's end (pad + ink + caret) so a longer
+            // sibling line cannot pull the view past this line's caret.
             let mut want_sx = sx;
             if !soft
                 && is_focused
                 && caret_moved
                 && !crate::utils::text_field::text_drag_select_active()
             {
-                let cw_key = crate::core::scroll_viewport::scroll_content_w_signal_key(rest);
                 let vw_key = crate::core::scroll_viewport::scroll_viewport_w_signal_key(rest);
                 let mut vp_w_layout = 0.0_f32;
-                let mut content_w_layout = 0.0_f32;
+                let mut pad_left = crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
                 for child in el.children.iter() {
                     if child.focus_id.as_deref() == Some(vp_fid.as_str()) {
                         vp_w_layout = child.layout_bounds[2];
+                        pad_left = crate::utils::text_field::textarea_scrollport_padding_x(
+                            child,
+                            child.layout_bounds[0],
+                            vp_w_layout.max(1.0),
+                        )
+                        .0;
                         break;
                     }
                 }
-                if let Some(text_leaf) = find_descendant_by_template_id_ref(el, &text_tid) {
-                    content_w_layout = text_leaf.layout_bounds[2];
-                }
                 let vw_sig = use_signal(&vw_key, || 0.0_f32).peek();
-                let cw_sig = use_signal(&cw_key, || 0.0_f32).peek();
                 let viewport_w = if vp_w_layout > 1.0 {
                     vp_w_layout
                 } else {
                     vw_sig
                 };
-                let content_w = content_w_layout.max(cw_sig).max(1.0);
-                if viewport_w > 4.0 && content_w > viewport_w + 0.5 {
+                if viewport_w > 4.0 {
                     let (_, local) =
                         crate::utils::text_field::caret_line_and_local(&display_text, caret_byte);
                     let line_start = caret_byte.saturating_sub(local);
+                    let line_end = display_text[line_start..]
+                        .find('\n')
+                        .map(|i| line_start + i)
+                        .unwrap_or(display_text.len());
                     let prefix = &display_text[line_start..caret_byte.min(display_text.len())];
+                    let line_body = &display_text[line_start..line_end];
                     let anchor_x = crate::text::measure_prefix_advance(
                         prefix,
                         desc.text_size_px,
                         desc.font_weight,
                         line_height,
                     );
-                    want_sx = ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, sx);
+                    let line_end_x = crate::text::measure_prefix_advance(
+                        line_body,
+                        desc.text_size_px,
+                        desc.font_weight,
+                        line_height,
+                    );
+                    want_sx = ensure_caret_visible_scroll_x(
+                        pad_left + anchor_x,
+                        pad_left + line_end_x,
+                        viewport_w,
+                        sx,
+                    );
                 }
             }
 

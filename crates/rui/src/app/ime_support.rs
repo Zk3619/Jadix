@@ -957,9 +957,9 @@ pub(crate) fn estimate_caret_x_in_field(
     let line_height = if let Some(lh) = text_style.line_height_px {
         lh * scale
     } else {
-        let leading = text_style
-            .line_height_scale
-            .unwrap_or_else(|| crate::style::tailwind_default_leading_scale(text_style.size_resolved()));
+        let leading = text_style.line_height_scale.unwrap_or_else(|| {
+            crate::style::tailwind_default_leading_scale(text_style.size_resolved())
+        });
         scaled_size * leading
     };
     let family = if let Some(ref f) = text_style.font_family {
@@ -967,8 +967,11 @@ pub(crate) fn estimate_caret_x_in_field(
     } else {
         glyphon::Family::SansSerif
     };
-    let weight =
-        crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight_resolved());
+    let weight = crate::utils::font::normalize_weight_for_family(
+        fs.db(),
+        family,
+        text_style.weight_resolved(),
+    );
     let measure_one = |fs: &mut glyphon::FontSystem, text: &str| -> f32 {
         if text.is_empty() {
             return 0.0;
@@ -1178,6 +1181,7 @@ mod tests {
                 style: TextStyle::default(),
                 prepared: None,
                 glyph_fx: None,
+                shimmer: None,
                 paint_scale: 1.0,
                 paint_transform: crate::style::MAT2D_IDENTITY,
                 paint_origin: [0.0, 0.0],
@@ -1196,6 +1200,7 @@ mod tests {
                 style,
                 prepared: None,
                 glyph_fx: None,
+                shimmer: None,
                 paint_scale: 1.0,
                 paint_transform: crate::style::MAT2D_IDENTITY,
                 paint_origin: [0.0, 0.0],

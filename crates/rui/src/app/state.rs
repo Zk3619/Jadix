@@ -1625,7 +1625,15 @@ impl AppState {
             );
             crate::components::bubble::sync_bubble_reactions_subtree(
                 &mut self.root_element,
+                &mut self.layout_tree,
                 &mut sync_impact,
+                viewport_w,
+            );
+            crate::components::avatar::sync_avatar_group_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+                viewport_w,
             );
             // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
             crate::style::sync_focus_ring_subtree(
@@ -1989,6 +1997,36 @@ impl AppState {
                 layout_subtree_root,
             )
         };
+        if !scroll_paint_only {
+            let mut overflow_impact = crate::core::tree::LayoutStatus::Clean;
+            crate::components::bubble::sync_bubble_reactions_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut overflow_impact,
+                logical_w,
+            );
+            crate::components::avatar::sync_avatar_group_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut overflow_impact,
+                logical_w,
+            );
+            if matches!(
+                overflow_impact,
+                crate::core::tree::LayoutStatus::StructureChanged
+                    | crate::core::tree::LayoutStatus::LayoutChanged
+            ) {
+                render_result = self.layout_tree.build_and_layout_fast_ex(
+                    &mut self.root_element,
+                    logical_w,
+                    logical_h,
+                    mouse_pos,
+                    false,
+                    scrollbar_overlay_collect,
+                    None,
+                );
+            }
+        }
         // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
         // Only dirty floating layer nodes + fast compute, prohibiting full reconstruction of Taffy every frame (the whole page scrolls and freezes after opening DatePicker).
         if crate::utils::popup::sync_floating_placement(
@@ -2600,7 +2638,10 @@ impl AppState {
                 n.style.overline_resolved().hash(&mut hasher);
                 n.style.line_through_resolved().hash(&mut hasher);
                 n.style.decoration_color.hash(&mut hasher);
-                n.style.underline_offset_resolved().to_bits().hash(&mut hasher);
+                n.style
+                    .underline_offset_resolved()
+                    .to_bits()
+                    .hash(&mut hasher);
                 // Caret index / selection must affect present even when underline instance
                 // bytes happen to collide (e.g. empty selection vs no caret).
                 match &n.style.input_caret {
@@ -3816,8 +3857,8 @@ fn update_scrollbar_elements(
     .peek();
     // Corner lane trim only when both axes use outside flex slots. Inside (overlay) tracks
     // always span the full edge regardless of scrollbar_*_side.
-    let both_outside = inset_x.eq_ignore_ascii_case("outside")
-        && inset_y.eq_ignore_ascii_case("outside");
+    let both_outside =
+        inset_x.eq_ignore_ascii_case("outside") && inset_y.eq_ignore_ascii_case("outside");
     let y_is_left = y_side.eq_ignore_ascii_case("left");
     let x_is_top = x_side.eq_ignore_ascii_case("top");
     let corner_reserve = base_thickness;
@@ -3975,8 +4016,7 @@ fn update_scrollbar_elements(
                 thumb.style.size.width = Dimension::length(tw);
                 thumb.style.size.height = Dimension::length(thumb_cross);
                 thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(ml);
-                thumb.style.margin.top =
-                    taffy::style::LengthPercentageAuto::length(inset);
+                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(inset);
             }
             _ => {
                 let track =
@@ -4000,8 +4040,7 @@ fn update_scrollbar_elements(
                 thumb.style.size.width = Dimension::length(thumb_cross);
                 thumb.style.size.height = Dimension::length(th);
                 thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(mt);
-                thumb.style.margin.left =
-                    taffy::style::LengthPercentageAuto::length(inset);
+                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(inset);
             }
         }
         layout_tree.update_taffy_node_style(thumb);
@@ -4087,8 +4126,7 @@ mod hot_reload_inject {
                             changed = true;
                         }
                         "color" => {
-                            target.text_style.color =
-                                Some(crate::core::tree::parse_text_color(v));
+                            target.text_style.color = Some(crate::core::tree::parse_text_color(v));
                             changed = true;
                         }
                         "text_size" | "font_size" => {
@@ -4124,8 +4162,8 @@ mod hot_reload_inject {
                                             || raw.contains("strikethrough"),
                                     );
                                 }
-                                target.text_style.decoration_style = Some(
-                                    if raw.contains("double") {
+                                target.text_style.decoration_style =
+                                    Some(if raw.contains("double") {
                                         crate::style::TextDecorationStyle::Double
                                     } else if raw.contains("dotted") {
                                         crate::style::TextDecorationStyle::Dotted
@@ -4135,8 +4173,7 @@ mod hot_reload_inject {
                                         crate::style::TextDecorationStyle::Wavy
                                     } else {
                                         crate::style::TextDecorationStyle::Solid
-                                    },
-                                );
+                                    });
                             }
                             changed = true;
                         }
@@ -4843,12 +4880,12 @@ mod hot_reload_inject {
             let label = &vstack.children[0];
             let expected = 2.0 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX;
             assert_eq!(
-                label.text_style.size_resolved(), expected,
+                label.text_style.size_resolved(),
+                expected,
                 "text_size must land on Label (CLI index 2), not the viewport/VStack wrapper"
             );
             assert_eq!(
-                vstack.text_style.size,
-                None,
+                vstack.text_style.size, None,
                 "VStack must not receive the Label style patch"
             );
             assert_eq!(
@@ -4977,6 +5014,7 @@ mod text_scroll_cache_tests {
             style: TextStyle::default(),
             prepared: None,
             glyph_fx: None,
+            shimmer: None,
             paint_scale: 1.0,
             paint_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             paint_origin: [8.0, y],

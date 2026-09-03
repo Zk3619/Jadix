@@ -20,7 +20,7 @@ pub(super) fn tick_input_drag_select_at(
     rest: &str,
     anchor: usize,
 ) -> bool {
-    let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, dt);
+    let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, y, dt);
     let vscroll = super::tree_hit::nudge_textarea_vscroll_for_drag(root, rest, y, dt);
 
     let Some((bounds, display_el, style, leaf_scroll)) =

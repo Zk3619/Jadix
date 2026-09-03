@@ -127,6 +127,10 @@ pub fn textarea_nowrap_trailing_pad_x(
         .unwrap_or(TEXTAREA_SCROLLPORT_PAD_X)
 }
 
+/// Hairline caret width (logical px). Wrap=off follow-scroll must pan this far past ink
+/// so the caret is not clipped at the viewport edge.
+pub const TEXT_EDIT_CARET_W: f32 = 2.0;
+
 /// Scrollport vertical padding from style, falling back to layout gap text leaf ↔ region box.
 pub fn textarea_scrollport_padding_y(
     region: &crate::core::tree::Element,
@@ -206,6 +210,66 @@ pub fn textarea_scroll_content_h(
         break;
     }
     content
+}
+
+/// Textarea internal scrollport content width (text leaf + inline padding).
+///
+/// Wrap=off leaf is sized to the longest hard line; using the viewport border box as
+/// `content_w` made `max_scroll_x = 0`, so post-render clamped caret/selection `sx` back
+/// to 0 every frame. Soft-wrap leaves are ~content-box wide, so this stays ≈ viewport.
+pub fn textarea_scroll_content_w(
+    region: &crate::core::tree::Element,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> f32 {
+    let (pad_left, _pad_right) = textarea_scrollport_padding_x(region, region_abs_x, viewport_w);
+    let mut content = viewport_w.max(0.0);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let style_w = crate::layout::dim_length_px(child.style.size.width)
+            .filter(|w| w.is_finite())
+            .unwrap_or(0.0);
+        let layout_w = child.layout_bounds[2];
+        let child_w = if layout_w > 0.5 { layout_w } else { style_w };
+        if child_w > 0.0 {
+            // Leaf sits in the padded content box (`px` on the region). Trailing pad is
+            // already baked into wrap=off `leaf_w = ink + TEXTAREA_SCROLLPORT_PAD_X`.
+            let origin_x = if child.layout_bounds[2] > 0.5 {
+                (child.layout_bounds[0] - region_abs_x).max(0.0)
+            } else {
+                pad_left
+            };
+            content = content.max(origin_x + child_w);
+        }
+        break;
+    }
+    content
+}
+
+/// Hard-`\n` line body under leaf-local `rel_y` (0 at the first line top).
+pub fn hard_line_body_at_y(text: &str, rel_y: f32, line_height: f32) -> &str {
+    let n = text.split('\n').count().max(1);
+    let i = (rel_y / line_height.max(1.0)).floor() as isize;
+    let i = i.clamp(0, (n as isize) - 1) as usize;
+    text.split('\n').nth(i).unwrap_or("")
+}
+
+/// Max `scroll_x` that keeps a wrap=off line-end caret fully inside the viewport clip.
+///
+/// `line_end_x` is leaf-relative ink width of the **current** hard line (not the longest
+/// sibling). `pad_left` is the scrollport inline-start padding.
+pub fn nowrap_line_end_max_scroll_x(line_end_x: f32, viewport_w: f32, pad_left: f32) -> f32 {
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return 0.0;
+    }
+    (pad_left.max(0.0) + line_end_x.max(0.0) + TEXT_EDIT_CARET_W - viewport_w).max(0.0)
 }
 
 /// 解析 Input/Textarea 行盒高度（逻辑 px）。
@@ -399,7 +463,12 @@ pub fn ensure_caret_visible_scroll_y_at_line(
     }
 }
 
-/// Keep `anchor_x` (caret / selection end in content space) inside a single-line viewport.
+/// Keep `anchor_x` (caret / selection end) inside the viewport along X.
+///
+/// `anchor_x` and `content_w` share a coordinate space whose origin is the scroll
+/// content's inline-start (for wrap=off textarea: `pad_left + leaf-relative X`).
+/// Pass the **current hard line's ink end** as `content_w` so follow-scroll never
+/// pans past that line's caret (a longer sibling line must not extend the cap).
 ///
 /// Returns the clamped `scroll_x` (always a concrete value; caller writes the signal).
 pub fn ensure_caret_visible_scroll_x(
@@ -408,8 +477,8 @@ pub fn ensure_caret_visible_scroll_x(
     viewport_w: f32,
     scroll_x: f32,
 ) -> f32 {
-    let pad = 2.0_f32;
-    // Extra `pad` so a caret sitting on `content_w` is not flush with the clip edge.
+    let pad = TEXT_EDIT_CARET_W;
+    // Extra `pad` so a caret sitting on `content_w` is fully inside the clip.
     let max_sx = (content_w + pad - viewport_w).max(0.0);
     if !viewport_w.is_finite() || viewport_w < 4.0 {
         return if scroll_x > 0.5 {
@@ -760,5 +829,30 @@ mod tests {
             100.0 - end <= 40.0 - 1.5,
             "caret must sit inside the viewport"
         );
+    }
+
+    #[test]
+    fn ensure_caret_visible_scroll_x_caps_at_current_line_end() {
+        let pad_left = 12.0;
+        let line_end = 300.0;
+        let vw = 200.0;
+        let caret = pad_left + line_end;
+        let cap = pad_left + line_end;
+        let want = nowrap_line_end_max_scroll_x(line_end, vw, pad_left);
+        assert!((want - 114.0).abs() < 0.01, "want={want}");
+        let from_zero = ensure_caret_visible_scroll_x(caret, cap, vw, 0.0);
+        assert!((from_zero - want).abs() < 0.01, "from_zero={from_zero}");
+        // Stale offset from a longer sibling line must snap back to this line's end.
+        let from_overscroll = ensure_caret_visible_scroll_x(caret, cap, vw, 400.0);
+        assert!(
+            (from_overscroll - want).abs() < 0.01,
+            "from_overscroll={from_overscroll}"
+        );
+        assert!(
+            caret + TEXT_EDIT_CARET_W - from_zero <= vw + 0.01,
+            "caret must sit fully inside the viewport"
+        );
+        assert_eq!(hard_line_body_at_y("short\nlong line here", 5.0, 21.0), "short");
+        assert_eq!(hard_line_body_at_y("short\nlong line here", 25.0, 21.0), "long line here");
     }
 }

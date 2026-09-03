@@ -1215,23 +1215,30 @@ fn input_text_edit_pointer_space_impl(
 /// While drag-selecting in a `wrap=off` textarea, scroll horizontally when the pointer
 /// is near/past the scrollport on X. `dt` is frame delta so holding still still scrolls.
 ///
+/// Follow-scroll stops at the **current** hard line's end (caret fully visible). A longer
+/// sibling line must not keep panning into empty space beside this line.
+///
 /// Paint must not run `ensure_caret_visible_scroll_x` during text drag (see
 /// [`crate::utils::text_field::text_drag_select_active`]).
 pub(super) fn nudge_textarea_hscroll_for_drag(
     root: &mut Element,
     field_id: &str,
     pointer_x: f32,
+    pointer_y: f32,
     dt: f32,
 ) -> TextDragHScrollTick {
     use crate::core::reactivity::use_signal;
     use crate::core::scroll_viewport::{
-        focus_id_for_scroll_viewport, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-        scroll_offset_y_signal_key, scroll_viewport_w_signal_key,
+        focus_id_for_scroll_viewport, scroll_offset_x_signal_key, scroll_offset_y_signal_key,
+        scroll_viewport_w_signal_key,
     };
     use crate::style::WhiteSpace;
-    use crate::utils::text_field::textarea_scroll_rest;
+    use crate::utils::text_field::{
+        hard_line_body_at_y, nowrap_line_end_max_scroll_x, text_edit_line_box_px,
+        textarea_scroll_rest, textarea_scrollport_padding_x, TEXTAREA_SCROLLPORT_PAD_X,
+    };
 
-    let Some((leaf_bounds, _, style, _)) = find_input_text_leaf_for_rest(root, None, field_id)
+    let Some((leaf_bounds, display, style, _)) = find_input_text_leaf_for_rest(root, None, field_id)
     else {
         return TextDragHScrollTick::Idle;
     };
@@ -1249,37 +1256,65 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     let right = left + vp_layout[2];
     let vw_layout = vp_layout[2].max(1.0);
 
+    let pad_left = find_element_by_focus_id(root, &vp_fid)
+        .map(|vp| textarea_scrollport_padding_x(vp, vp_layout[0], vw_layout).0)
+        .unwrap_or(TEXTAREA_SCROLLPORT_PAD_X);
+
+    let lh = text_edit_line_box_px(
+        style.size_resolved(),
+        style.line_height_px,
+        style.line_height_scale,
+    );
+    let rel_y = (pointer_y - leaf_bounds[1]).clamp(0.0, leaf_bounds[3].max(0.0));
+    let line_body = hard_line_body_at_y(&display, rel_y, lh);
+    let measured = crate::text::measure_prefix_advance(
+        line_body,
+        style.size_resolved(),
+        style.weight_resolved(),
+        lh,
+    );
+    let line_end_x = if line_body.is_empty() {
+        0.0
+    } else if measured > 1.0 {
+        measured
+    } else {
+        leaf_bounds[2]
+    };
+
     // Inner hot-zone: paint ensure is skipped during text drag, so this no longer
     // fights `ensure_caret_visible_scroll_x` (that pair caused bounce before).
     const EDGE_SLOP: f32 = 16.0;
     let outside_right = pointer_x > right - EDGE_SLOP;
     let outside_left = pointer_x < left + EDGE_SLOP;
-    if !outside_left && !outside_right {
-        return TextDragHScrollTick::Idle;
-    }
 
     let sx_key = scroll_offset_x_signal_key(&scroll_rest);
     let sy_key = scroll_offset_y_signal_key(&scroll_rest);
     let vw_key = scroll_viewport_w_signal_key(&scroll_rest);
-    let cw_key = scroll_content_w_signal_key(&scroll_rest);
     let sx_sig = use_signal(&sx_key, || 0.0_f32);
     let sy = use_signal(&sy_key, || 0.0_f32).peek();
     let vw = use_signal(&vw_key, || 0.0_f32)
         .peek()
         .max(vw_layout)
         .max(1.0);
-    // Prefer live leaf width when the content-w signal is still one frame stale
-    // (CSSOM / wrap=off long lines would otherwise report max_sx≈0 → no follow).
-    let cw = use_signal(&cw_key, || 0.0_f32)
-        .peek()
-        .max(leaf_bounds[2])
-        .max(vw);
-    let max_sx = (cw - vw).max(0.0);
+    let max_sx = nowrap_line_end_max_scroll_x(line_end_x, vw, pad_left);
+    let sx_raw = sx_sig.peek().max(0.0);
+    // Dragging onto a shorter line while still panned from a longer sibling: snap back
+    // so the current line-end caret is fully visible.
+    if sx_raw > max_sx + 0.05 {
+        super::scroll_support::set_scroll_offset_with_behavior(&scroll_rest, max_sx, sy, true);
+        if let Some(vp) = find_element_by_focus_id_mut(root, &vp_fid) {
+            vp.scroll_offset[0] = max_sx;
+        }
+        return TextDragHScrollTick::Scrolled;
+    }
     if max_sx < 0.5 {
         return TextDragHScrollTick::AtLimit;
     }
+    if !outside_left && !outside_right {
+        return TextDragHScrollTick::Idle;
+    }
 
-    let sx = sx_sig.peek().clamp(0.0, max_sx);
+    let sx = sx_raw.clamp(0.0, max_sx);
     let dt = dt.clamp(1.0 / 240.0, 0.05);
     // px/s — base rate + boost by how far past the edge the pointer is.
     let over = if outside_right {
@@ -1942,11 +1977,9 @@ mod hover_occlusion_tests {
                 f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
             }) {
                 el.scroll_offset[1] = sy;
-                if let Some(rest) = el
-                    .focus_id
-                    .as_deref()
-                    .and_then(|f| f.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
-                {
+                if let Some(rest) = el.focus_id.as_deref().and_then(|f| {
+                    f.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+                }) {
                     crate::core::reactivity::use_signal(
                         &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
                         || 0.0_f32,
@@ -2295,6 +2328,8 @@ mod drag_select_bounds_tests {
             leaf.layout_bounds = [0.0, 0.0, 600.0, 40.0];
             leaf.text = Some("x".repeat(80));
             leaf.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+            leaf.text_style.size = Some(14.0);
+            leaf.text_style.line_height_px = Some(21.0);
             leaf.focus_id = Some(format!("textarea:{id}"));
 
             let mut viewport = Element::new();
@@ -2306,7 +2341,7 @@ mod drag_select_bounds_tests {
             viewport = viewport.child(leaf);
 
             // Pointer inside clip but within 16px of the right edge.
-            let tick = nudge_textarea_hscroll_for_drag(&mut viewport, id, 190.0, 1.0 / 60.0);
+            let tick = nudge_textarea_hscroll_for_drag(&mut viewport, id, 190.0, 20.0, 1.0 / 60.0);
             assert_eq!(tick, TextDragHScrollTick::Scrolled);
             let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
             assert!(sx > 0.5, "inner edge hot-zone must advance sx, got {sx}");
