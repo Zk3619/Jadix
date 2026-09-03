@@ -1,6 +1,6 @@
 # Creating Custom Components in RUI
 
-> 分层与选型见权威规范 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（含 **§2.3 作者面**、**§3 双书写面**）；无头细则见 [headless.md](headless.md)。  
+> 分层与选型见权威规范 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（含 **§2.3 作者面**、**§3 双书写面**、**§3.3 复合组件三层 API**）；无头细则见 [headless.md](headless.md)。  
 > **W3 实证 / WP-3.14**：复合控件难写，主因曾是框架默认值。现 `#[component]` 默认实例 Owner；Builder 根与跟踪纪律见下文配方。诊断：[COMPONENT_LIBRARY.md §2.3](COMPONENT_LIBRARY.md)。
 
 RUI 用分层 + `#[component]` 组合原语。`#[component]` **每实例自动** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14）。纯 Builder 复合根（自己 `provide_context` / 浮层）仍须显式调用同一 helper。浮层子树用 `isolate_reads`，不要用 `untrack`。
@@ -182,6 +182,86 @@ fn my_combobox(id: &str, body: impl FnOnce() -> Element) -> Element {
 `isolate_reads`：**保持** tracking，只丢弃这次收集的 deps。契约测：`untrack_skips_anchor_but_isolate_reads_registers`。
 
 完整诊断表：[COMPONENT_LIBRARY.md §2.3](COMPONENT_LIBRARY.md)。
+
+#### 复合组件三层 API（样式 · 组合）
+
+**权威条文**：[COMPONENT_LIBRARY.md §3.3](COMPONENT_LIBRARY.md)。本节只给作者向摘要。
+
+| 层 | 你写什么 | 样式在哪调 |
+|----|----------|------------|
+| **Tier 1 · 组合** | `{name}_scope` + 零件 `#[component]`；`{name}().child(\|\| ui! { … })` | 每个零件的 `class` / `base`；根 `.class()` |
+| **Tier 2 · Opts** | `{Comp}ContentOpts`（placement、motion…） | Opts.`class` + 零件 `base` |
+| **Tier 3 · 数据糖** | `.item()` / `.question()` 等（可选） | 项级 `class` 或文档化的 `.parts()`；**须另有 Tier 1 示例** |
+
+**不要**为每个槽复制一份 `*PartsClass`（维护 N 份结构体）。Questionnaire 的 `.parts()` 是数据 DSL 例外，不是默认模板。
+
+最小复合控件骨架：
+
+```rust
+use rui::prelude::*;
+use rui::core::reactivity::{create_context, provide_context, Context};
+use std::sync::OnceLock;
+
+#[derive(Clone)]
+struct MyWidgetCtx {
+    id: String,
+}
+
+fn my_widget_ctx() -> Context<MyWidgetCtx> {
+    static CTX: OnceLock<Context<MyWidgetCtx>> = OnceLock::new();
+    *CTX.get_or_init(create_context)
+}
+
+/// Tier 1：行为接缝（深模块）
+pub fn my_widget_scope(
+    id: impl Into<String>,
+    class: Option<String>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    let id = id.into();
+    component_root(|| {
+        provide_context(my_widget_ctx(), MyWidgetCtx { id: id.clone() });
+        let mut root = vstack().w("100%").gap("1rem").child(body()).into();
+        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+            root = rui::style::with_class_list(root, &c);
+        }
+        root
+    })
+}
+
+/// Tier 1：根 Builder（浅接口）
+pub struct MyWidgetBuilder {
+    id: String,
+    class: Option<String>,
+}
+
+pub fn my_widget(id: impl Into<String>) -> MyWidgetBuilder {
+    MyWidgetBuilder { id: id.into(), class: None }
+}
+
+impl MyWidgetBuilder {
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.class = Some(c.into());
+        self
+    }
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        my_widget_scope(self.id, self.class, body)
+    }
+}
+
+// Tier 3（可选）：仅当内容是数据 DSL 时再加 From<MyWidgetBuilder>，
+// 且内部调用与 .child() 相同的 render_*，禁止第二棵 class: None 树。
+```
+
+**落地 Checklist**（与 §3.3.6 一致）：
+
+- [ ] `*_scope` 公开，`body` 内可自由组合零件  
+- [ ] 每槽零件有 `data-slot` + `class` + `base`  
+- [ ] 根 Builder 有 `.child(|| …)`  
+- [ ] `ui!` 复合标签展开到 scope  
+- [ ] 行为内容壳用 `*Opts`，RSX 与 Builder 共用  
+- [ ] Tier 3（若有）复用 `render_*`；Gallery 展示 Tier 1 + Tier 3  
+- [ ] 库测：组合面与糖 Builder 行为 / `data-slot` 一致  
 
 #### Form 校验（WP-3.9）
 

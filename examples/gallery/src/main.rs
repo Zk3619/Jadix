@@ -345,6 +345,607 @@ fn EmptyShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn MarkerShowcase() -> rui::core::tree::Element {
+    let marker_variant = use_signal("gal_marker_variant", || "default".to_string());
+    let marker_var_btn = marker_variant;
+    let marker_var_live = marker_variant;
+    ui! {
+        <MyCard title="1c-m) Marker（ShadCN conversation marker）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: Marker / MarkerIcon / MarkerContent and marker() / ui_marker(). Variants: default, border, separator. PascalCase is the UI component; lowercase marker stays SVG. MarkerContent class shimmer is the streaming-text sweep."
+                </Label>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="1rem">
+                    <Label font_weight="700" text_size="0.75rem">"Default + icon"</Label>
+                    <Marker>
+                        <MarkerIcon>
+                            <Icon name="git-branch" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Switched to a new branch"</MarkerContent>
+                    </Marker>
+                    <Marker role="status">
+                        <MarkerIcon>
+                            <Icon name="loader-circle" size="1rem" class="animate-spin" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent class="shimmer">"Thinking..."</MarkerContent>
+                    </Marker>
+                    <Marker>
+                        <MarkerIcon>
+                            <Icon name="search" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Explored 4 files"</MarkerContent>
+                    </Marker>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="0.75rem">
+                    <Label font_weight="700" text_size="0.75rem">"Shimmer (streaming text)"</Label>
+                    <Marker role="status">
+                        <MarkerIcon>
+                            <Icon name="loader-circle" size="1rem" class="animate-spin" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent class="shimmer">"Thinking..."</MarkerContent>
+                    </Marker>
+                    <Marker variant="separator">
+                        <MarkerContent class="shimmer">"Reading 4 files"</MarkerContent>
+                    </Marker>
+                    <Marker>
+                        <MarkerContent class="shimmer shimmer-duration-1000">"Generating response…"</MarkerContent>
+                    </Marker>
+                    <Marker>
+                        <MarkerContent class="shimmer shimmer-count-3 shimmer-duration-900">
+                            "Three sweeps then settle"
+                        </MarkerContent>
+                    </Marker>
+                    <Box class="shimmer-box shimmer-duration-1600" w="100%" px="0.75rem" py="0.5rem" bg="secondary" rounded="0.5rem">
+                        <Label text_size="0.875rem" color="muted-foreground">"shimmer-box · overlay on container"</Label>
+                    </Box>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="0.75rem">
+                    <Label font_weight="700" text_size="0.75rem">"Separator"</Label>
+                    <Marker w="100%" variant="separator">
+                        <MarkerContent>"Today"</MarkerContent>
+                    </Marker>
+                    <Marker w="100%" variant="separator">
+                        <MarkerIcon>
+                            <Icon name="search" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Explored 4 files"</MarkerContent>
+                    </Marker>
+                    <Marker w="100%" variant="separator">
+                        <MarkerContent>"Conversation compacted"</MarkerContent>
+                    </Marker>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="0.75rem">
+                    <Label font_weight="700" text_size="0.75rem">"Border"</Label>
+                    <Marker variant="border">
+                        <MarkerIcon>
+                            <Icon name="git-branch" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Switched to release-candidate"</MarkerContent>
+                    </Marker>
+                    <Marker variant="border">
+                        <MarkerIcon>
+                            <Icon name="file-text" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Opened implementation notes"</MarkerContent>
+                    </Marker>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="0.75rem">
+                    <Label font_weight="700" text_size="0.75rem">"Stacked icon (flex-col)"</Label>
+                    <Marker class="flex-col">
+                        <MarkerIcon>
+                            <Icon name="book-open-check" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>"Syncing completed"</MarkerContent>
+                    </Marker>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="24rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Reactive variant bind"</Label>
+                    <HStack w="100%" gap="0.5rem" wrap="wrap">
+                        <Button size="sm" variant="outline" on_click={move || marker_var_btn.set("default".into())}>"default"</Button>
+                        <Button size="sm" variant="outline" on_click={move || marker_var_btn.set("border".into())}>"border"</Button>
+                        <Button size="sm" variant="outline" on_click={move || marker_var_btn.set("separator".into())}>"separator"</Button>
+                    </HStack>
+                    <Marker w="100%" variant={ marker_var_live.get() }>
+                        <MarkerIcon>
+                            <Icon name="info" size="1rem" color="muted-foreground" />
+                        </MarkerIcon>
+                        <MarkerContent>
+                            { format!("Reactive variant: {}", marker_var_live.get()) }
+                        </MarkerContent>
+                    </Marker>
+                </VStack>
+                <Box w="100%" max_w="24rem">
+                    { Element::from(
+                        marker()
+                            .variant("separator")
+                            .icon(
+                                build_icon_text_node(lucide_glyph("check").unwrap_or_else(|| "…".into()))
+                                    .text_size(16.0)
+                                    .text_color(parse_text_color("muted-foreground"))
+                            )
+                            .content("Builder · marker().variant().icon().content()")
+                    ) }
+                </Box>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn MessageShowcase() -> rui::core::tree::Element {
+    let msg_align = use_signal("gal_message_align", || "start".to_string());
+    let msg_align_btn = msg_align;
+    let msg_align_live = msg_align;
+    ui! {
+        <MyCard title="1c-msg) Message（ShadCN conversation row）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Conversation row: Message, MessageGroup, MessageAvatar, MessageContent, MessageHeader, MessageFooter."
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style with message() / message_group(). align is start or end. Empty avatar keeps grouped turns in column. Put the chat surface in Bubble. Images and files reuse Attachment (vertical + variant=image for photos). Download / preview stay on the app (on_click), not Message."
+                </Label>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Start / end"</Label>
+                    <MessageGroup>
+                        <Message align="start">
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"CN"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <MessageHeader>"Oliver"</MessageHeader>
+                                <Bubble variant="muted" align="start">
+                                    <BubbleContent>"How can I help you today?"</BubbleContent>
+                                </Bubble>
+                                <MessageFooter>"4:55 PM"</MessageFooter>
+                            </MessageContent>
+                        </Message>
+                        <Message align="end">
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"ME"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <MessageHeader>"You"</MessageHeader>
+                                <Bubble variant="default" align="end">
+                                    <BubbleContent>"It's a one-line change."</BubbleContent>
+                                </Bubble>
+                                <MessageFooter>"Delivered"</MessageFooter>
+                            </MessageContent>
+                        </Message>
+                    </MessageGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Group (empty avatar spacer)"</Label>
+                    <MessageGroup>
+                        <Message>
+                            <MessageAvatar />
+                            <MessageContent>
+                                <Bubble variant="muted">
+                                    <BubbleContent>"I checked the registry addresses."</BubbleContent>
+                                </Bubble>
+                            </MessageContent>
+                        </Message>
+                        <Message>
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"CN"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <Bubble variant="muted">
+                                    <BubbleContent>"The component and example JSON now live under the UI registry."</BubbleContent>
+                                </Bubble>
+                            </MessageContent>
+                        </Message>
+                    </MessageGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Header / footer actions"</Label>
+                    <Message align="start">
+                        <MessageAvatar>
+                            <Avatar>
+                                <AvatarFallback>"OL"</AvatarFallback>
+                            </Avatar>
+                        </MessageAvatar>
+                        <MessageContent>
+                            <MessageHeader>"Oliver"</MessageHeader>
+                            <Bubble variant="secondary" align="start">
+                                <BubbleContent>"Send the report to the team."</BubbleContent>
+                            </Bubble>
+                            <MessageFooter>
+                                <Button variant="ghost" size="icon-xs" class="rounded-full">
+                                    <Icon name="copy" size="0.75rem" />
+                                </Button>
+                                <Button variant="ghost" size="icon-xs" class="rounded-full">
+                                    <Icon name="refresh-cw" size="0.75rem" />
+                                </Button>
+                            </MessageFooter>
+                        </MessageContent>
+                    </Message>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Attachment (image + file)"</Label>
+                    <MessageGroup>
+                        <Message align="end">
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"ME"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <Attachment orientation="vertical">
+                                    <AttachmentMedia variant="image">
+                                        <Image texture="demo-checker" />
+                                    </AttachmentMedia>
+                                </Attachment>
+                                <Bubble variant="default" align="end">
+                                    <BubbleContent>"Here's the image. Can you add it to the PDF? Use it for the cover page."</BubbleContent>
+                                </Bubble>
+                            </MessageContent>
+                        </Message>
+                        <Message align="start">
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"CN"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <Bubble variant="muted" align="start">
+                                    <BubbleContent>"Done. Here's the PDF with the image added as the cover page."</BubbleContent>
+                                </Bubble>
+                                <Attachment state="done" size="default" orientation="horizontal">
+                                    <AttachmentMedia variant="icon">
+                                        <Icon name="file-text" size="0.875rem" />
+                                    </AttachmentMedia>
+                                    <AttachmentContent>
+                                        <AttachmentTitle>"sales-dashboard.pdf"</AttachmentTitle>
+                                        <AttachmentDescription>"PDF · 2.4 MB"</AttachmentDescription>
+                                    </AttachmentContent>
+                                    <AttachmentActions>
+                                        <AttachmentAction id="gal-msg-att-dl" variant="secondary" size="icon-sm">
+                                            <Icon name="download" size="0.875rem" />
+                                        </AttachmentAction>
+                                    </AttachmentActions>
+                                </Attachment>
+                            </MessageContent>
+                        </Message>
+                        <Message align="end">
+                            <MessageAvatar>
+                                <Avatar>
+                                    <AvatarFallback>"ME"</AvatarFallback>
+                                </Avatar>
+                            </MessageAvatar>
+                            <MessageContent>
+                                <Bubble variant="default" align="end">
+                                    <BubbleContent>"Thanks. Looks good."</BubbleContent>
+                                </Bubble>
+                            </MessageContent>
+                        </Message>
+                    </MessageGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Status (Marker inside Message)"</Label>
+                    <Message>
+                        <Marker role="status">
+                            <MarkerIcon>
+                                <Icon name="loader-circle" size="1rem" class="animate-spin" color="muted-foreground" />
+                            </MarkerIcon>
+                            <MarkerContent class="shimmer">"Oliver is typing..."</MarkerContent>
+                        </Marker>
+                    </Message>
+                </VStack>
+                <VStack w="100%" min_w="0" max_w="28rem" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Reactive align bind"</Label>
+                    <HStack w="100%" gap="0.5rem" wrap="wrap">
+                        <Button size="sm" variant="outline" on_click={move || msg_align_btn.set("start".into())}>"start"</Button>
+                        <Button size="sm" variant="outline" on_click={move || msg_align_btn.set("end".into())}>"end"</Button>
+                    </HStack>
+                    <Message align={ msg_align_live.get() }>
+                        <MessageAvatar>
+                            <Avatar>
+                                <AvatarFallback>"ME"</AvatarFallback>
+                            </Avatar>
+                        </MessageAvatar>
+                        <MessageContent>
+                            <MessageHeader>{ format!("align={}", msg_align_live.get()) }</MessageHeader>
+                            <Bubble variant="outline" align={ msg_align_live.get() }>
+                                <BubbleContent>"The row packs to this side."</BubbleContent>
+                            </Bubble>
+                            <MessageFooter>"Delivered"</MessageFooter>
+                        </MessageContent>
+                    </Message>
+                </VStack>
+                <Box w="100%" max_w="28rem">
+                    { Element::from(
+                        message_group().child(
+                            message()
+                                .align("end")
+                                .avatar(avatar().fallback("B"))
+                                .header("Builder")
+                                .content_child(
+                                    bubble()
+                                        .variant("secondary")
+                                        .align("end")
+                                        .child(bubble_content().text("On it, one-line change."))
+                                )
+                                .footer("Delivered")
+                        )
+                    ) }
+                </Box>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct GalMsMsg {
+    id: String,
+    user: bool,
+    text: String,
+}
+
+fn gal_ms_script() -> Vec<GalMsMsg> {
+    vec![
+        GalMsMsg {
+            id: "1".into(),
+            user: true,
+            text: "I'm building a chat for our app and the scroll behavior is driving me nuts. Every time the AI streams a reply, the whole thread jumps around.".into(),
+        },
+        GalMsMsg {
+            id: "2".into(),
+            user: false,
+            text: "That's the classic streaming scroll problem. Wrap your message list in MessageScroller and turn on autoScroll — the viewport pins to the bottom as tokens arrive, so users always see the latest text land in place.\n\nThe important part: it only auto-scrolls while the reader is already at the bottom. The moment they scroll up to read something earlier, auto-scroll backs off and their position is preserved. You get smooth streaming without fighting the user's intent.".into(),
+        },
+        GalMsMsg {
+            id: "3".into(),
+            user: true,
+            text: "Okay, but when someone sends a new message the view still feels jarring — like the whole conversation reloads from the top.".into(),
+        },
+        GalMsMsg {
+            id: "4".into(),
+            user: false,
+            text: "MessageScrollerItem fixes that with turn anchoring. Set scrollAnchor on the turn that should settle near the top instead of blindly snapping to the document bottom.\n\nIt also leaves a small peek of the previous exchange visible above the anchor, so context isn't lost. The reply starts in view without that disorienting jump you get from a plain overflow container.".into(),
+        },
+        GalMsMsg {
+            id: "5".into(),
+            user: true,
+            text: "And if they've scrolled up to re-read an older answer? I don't want to yank them back down.".into(),
+        },
+        GalMsMsg {
+            id: "6".into(),
+            user: false,
+            text: "You won't. Auto-scroll only runs when the viewport is already pinned to the bottom, so scrolling up is a deliberate opt-out — their place in the thread stays put even as new tokens keep arriving below.\n\nWhen there is content they haven't seen yet, MessageScrollerButton appears at the bottom of the viewport. One tap jumps them back to the newest message and re-engages auto-scroll. Same pattern as Slack or iMessage: quiet when you're caught up, helpful when you're not.".into(),
+        },
+        GalMsMsg {
+            id: "7".into(),
+            user: true,
+            text: "Last one — does this work with assistive tech?".into(),
+        },
+        GalMsMsg {
+            id: "8".into(),
+            user: false,
+            text: "MessageScrollerContent sets role=log and aria-relevant=additions by default, so screen readers announce new messages as they stream in.\n\nThe scroll button is a real button with a label, and it's removed from the tab order when you're already at the bottom — no ghost focus stops.".into(),
+        },
+    ]
+}
+
+fn gal_ms_followups() -> Vec<GalMsMsg> {
+    vec![
+        GalMsMsg {
+            id: "s0".into(),
+            user: true,
+            text: "Thanks — that matches Slack / iMessage.".into(),
+        },
+        GalMsMsg {
+            id: "s1".into(),
+            user: false,
+            text: "Got it. Stay at the live edge and I'll keep following.".into(),
+        },
+    ]
+}
+
+/// Plain bubble children (no `BubbleContent` — must be built inside `<Bubble>` or auto-wrapped).
+fn gal_ms_bubble_body(text: &str) -> rui::core::tree::Element {
+    let paras: Vec<String> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect();
+    if paras.len() <= 1 {
+        let t = paras.into_iter().next().unwrap_or_default();
+        rui::core::tree::Element::new().text(t)
+    } else {
+        let lines: Vec<rui::core::tree::Element> = paras
+            .into_iter()
+            .map(|p| {
+                ui! {
+                    <Label w="100%" min_w="0" text_size="0.875rem" leading="normal">{ p }</Label>
+                }
+            })
+            .collect();
+        let mut frag = rui::core::tree::Element::new();
+        frag.set_attr("rui_fragment", "1");
+        let frag = frag.children(lines);
+        ui! {
+            <VStack w="100%" min_w="0" gap="0.5rem">
+                { frag }
+            </VStack>
+        }
+    }
+}
+
+fn gal_ms_item(m: &GalMsMsg) -> rui::core::tree::Element {
+    let id = m.id.clone();
+    let body = gal_ms_bubble_body(&m.text);
+    if m.user {
+        ui! {
+            <MessageScrollerItem messageId={ id } scrollAnchor={true}>
+                <Message align="end">
+                    <MessageContent>
+                        <Bubble variant="muted" align="end">
+                            { body }
+                        </Bubble>
+                    </MessageContent>
+                </Message>
+            </MessageScrollerItem>
+        }
+    } else {
+        ui! {
+            <MessageScrollerItem messageId={ id }>
+                <Message align="start">
+                    <MessageContent>
+                        <Bubble variant="ghost" align="start">
+                            { body }
+                        </Bubble>
+                    </MessageContent>
+                </Message>
+            </MessageScrollerItem>
+        }
+    }
+}
+
+fn gal_ms_rows(items: &[GalMsMsg]) -> Vec<rui::core::tree::Element> {
+    items.iter().map(gal_ms_item).collect()
+}
+
+fn MessageScrollerShowcase() -> rui::core::tree::Element {
+    let thread = use_signal("gal_ms_thread", gal_ms_script);
+    let extra = use_signal("gal_ms_extra", || 0u32);
+    let thread_send = thread;
+    let extra_send = extra;
+    let thread_reset = thread;
+    let extra_reset = extra;
+    let thread_scroll = thread;
+    let extra_preview = extra;
+
+    // `max-content` placeholder — default `100%×100%` reactive shells inflate scroll metrics
+    // inside MessageScrollerContent and end-anchoring scrolls into blank tail space.
+    let rows_live = rui::app::reactive::reactive_view_sized(
+        "examples/gallery/MessageScrollerShowcase:rows",
+        "100%",
+        "max-content",
+        move || {
+            let mut frag = rui::core::tree::Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(gal_ms_rows(&thread_scroll.get()))
+        },
+    );
+
+    let preview_live = rui::reactive!("examples/gallery/MessageScrollerShowcase:preview", move || {
+        let extra_n = extra_preview.get() as usize;
+        let followups = gal_ms_followups();
+        let preview = followups
+            .get(extra_n)
+            .map(|m| m.text.clone())
+            .unwrap_or_else(|| "No messages queued. Reset the conversation.".to_string());
+        let preview_color = if extra_n < followups.len() {
+            "foreground"
+        } else {
+            "muted-foreground"
+        };
+        ui! {
+            <Label
+                w="100%"
+                min_w="0"
+                text_size="0.875rem"
+                leading="normal"
+                color={ parse_text_color(preview_color) }
+            >
+                { preview }
+            </Label>
+        }
+    });
+
+    ui! {
+        <MyCard title="1c-ms) MessageScroller（ShadCN conversation scroller）">
+            <VStack w="100%" min_w="0" gap="0.75rem" items="center">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Official chat card: New Chat header, muted user bubbles (align=end, scrollAnchor), ghost assistant text, composer preview + send. autoScroll follows only at the live edge."
+                </Label>
+                <VStack w="100%" max_w="24rem" min_w="0" gap="1rem" items="center">
+                        <Card w="100%" gap="0" py="0">
+                            <CardHeader py="1rem" gap="0.25rem">
+                                <CardTitle>"New Chat"</CardTitle>
+                                <CardDescription>"How can I help you today?"</CardDescription>
+                                <CardAction>
+                                    <Button
+                                        variant="outline"
+                                        size="icon"
+                                        class="rounded-full"
+                                        on_click={move || {
+                                            thread_reset.set(gal_ms_script());
+                                            extra_reset.set(0);
+                                        }}
+                                    >
+                                        <Icon name="rotate-cw" size="1rem" />
+                                    </Button>
+                                </CardAction>
+                            </CardHeader>
+                            <Separator />
+                            <CardContent p="0">
+                                <Box w="100%" h="24rem" min_h="24rem" min_w="0" overflow="hidden">
+                                    <MessageScrollerProvider
+                                        id="gal-ms-showcase"
+                                        autoScroll={true}
+                                        defaultScrollPosition="end"
+                                    >
+                                        <MessageScroller h="100%">
+                                            <MessageScrollerViewport>
+                                                <MessageScrollerContent p="1.5rem">
+                                                    { rows_live }
+                                                </MessageScrollerContent>
+                                            </MessageScrollerViewport>
+                                            <MessageScrollerButton direction="end" />
+                                        </MessageScroller>
+                                    </MessageScrollerProvider>
+                                </Box>
+                            </CardContent>
+                            <CardFooter py="1rem">
+                                <VStack w="100%" min_w="0" gap="0.5rem">
+                                    <InputAdornment w="100%">
+                                        <Box w="100%" min_w="0" h="3.5rem" px="0.75rem" py="0.625rem">
+                                            { preview_live }
+                                        </Box>
+                                        <InputAdornmentAddon align="block-end">
+                                            <InputAdornmentButton id="gal-ms-plus" variant="outline" size="icon-sm">
+                                                <Icon name="plus" size="1rem" />
+                                            </InputAdornmentButton>
+                                            <Box flex_grow="1" min_w="0" />
+                                            <InputAdornmentButton
+                                                id="gal-ms-send"
+                                                variant="default"
+                                                size="icon-sm"
+                                                on_click={move || {
+                                                    let n = extra_send.get() as usize;
+                                                    let followups = gal_ms_followups();
+                                                    if let Some(next) = followups.get(n).cloned() {
+                                                        let mut v = thread_send.get();
+                                                        v.push(next);
+                                                        thread_send.set(v);
+                                                        extra_send.set((n as u32) + 1);
+                                                    }
+                                                }}
+                                            >
+                                                <Icon name="arrow-up" size="1rem" />
+                                            </InputAdornmentButton>
+                                        </InputAdornmentAddon>
+                                    </InputAdornment>
+                                </VStack>
+                            </CardFooter>
+                        </Card>
+                        <Label w="100%" text_size="0.75rem" color="muted-foreground" text_align="center">
+                            "Demo is read only. Press send to send messages."
+                        </Label>
+                    </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 fn AlertShowcase() -> rui::core::tree::Element {
     let alert_variant = use_signal("gal_alert_variant", || "default".to_string());
     let alert_var_btn = alert_variant;
@@ -803,6 +1404,11 @@ fn AttachmentShowcase() -> rui::core::tree::Element {
                         </AttachmentContent>
                         <AttachmentTrigger id="gal-att-pick" />
                     </Attachment>
+                    <Attachment orientation="vertical">
+                        <AttachmentMedia variant="image">
+                            <Image texture="demo-checker" />
+                        </AttachmentMedia>
+                    </Attachment>
                     <Attachment state={ att_state_live.get() } size="default" orientation="horizontal">
                         <AttachmentMedia variant="icon">
                             <Icon
@@ -933,7 +1539,7 @@ fn BubbleShowcase() -> rui::core::tree::Element {
         <MyCard title="1c-b) Bubble 聊天气泡（ShadCN）">
             <VStack w="100%" min_w="0" gap="1.25rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：<Bubble variant align> + <BubbleContent> / <BubbleReactions>。默认独立行（左气泡右下 / 右气泡左下）；side / align 可覆盖；layout=\"overlay\" 咬住气泡边并内缩。超过 3 个显示圆形 +N，悬停/点击展开浮层。Emoji 默认系统色光栅 + 字形盒内居中；Twemoji 位图需 RUI_EMOJI_CUSTOM_GLYPH=1 或 RUI_TWEMOJI_DIR。"
+                    "双写法：<Bubble variant align> + <BubbleContent> / <BubbleReactions>。默认独立行（左气泡右下 / 右气泡左下）；side / align 可覆盖；layout=\"overlay\" 咬住气泡边并内缩。`max_visible` 控制折叠前展示数（默认 3），宽度不足时自动收入 +N；悬停/点击展开浮层。Emoji 默认系统色光栅 + 字形盒内居中；Twemoji 位图需 RUI_EMOJI_CUSTOM_GLYPH=1 或 RUI_TWEMOJI_DIR。"
                 </Label>
                 <VStack
                     w="100%"
@@ -1158,10 +1764,10 @@ fn AvatarShowcase() -> rui::core::tree::Element {
                         </HStack>
                     </VStack>
                 </HStack>
-                <VStack gap="0.25rem">
+                <VStack w="100%" min_w="0" gap="0.25rem">
                     <Label font_weight="700" text_size="0.75rem">"AvatarGroup + Count"</Label>
                     <Label w="100%" text_size="0.7rem" color="muted-foreground" leading="normal">
-                        "悬停 / 点击 +N：原地向下盖住展开（expand_placement / expand_class 可配）；Count 内可嵌隐藏头像参与展开列表"
+                        "悬停 / 点击 +N：原地向下盖住展开（expand_placement / expand_class / max_visible 可配）；Count 内可嵌隐藏头像参与展开列表；宽度不足时自动折叠"
                     </Label>
                     <AvatarGroup>
                         <Avatar>
@@ -2138,6 +2744,143 @@ fn FormValidateShowcase() -> rui::core::tree::Element {
                     "form_provider + form_field：错误文案与 Input invalid 环同源。空提交 →「必填」+ 红环；清除错误 → 文案与环一起消失。"
                 </Label>
                 { wp39_form_demo() }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn QuestionnaireShowcase() -> rui::core::tree::Element {
+    let summary = use_signal("gal-q-summary", || String::new());
+    let summary_submit = summary;
+    let builder_el: Element = questionnaire("gal-q-builder")
+        .class("gap-8")
+        .parts(|p| p.choices("gap-2").actions("gap-3").title("text-lg"))
+        .shortcuts("letters")
+        .default_item("scope")
+        .question("scope", "Which files are in scope?", |q| {
+            q.required(true)
+                .class("gap-4")
+                .description("Pick one area. Letter shortcuts A–C are enabled.")
+                .choice("component", "Component only")
+                .choice("tests", "Component and tests")
+                .choice("feature", "The complete feature area")
+        })
+        .question("timing", "When should this be revisited?", |q| {
+            q.description("Optional — Skip if timing is undecided.")
+                .choice("week", "This week")
+                .choice("cycle", "Next cycle")
+        })
+        .on_submit(move |answers| {
+            let scope = answers.get("scope").unwrap_or("none");
+            let timing = match answers.status_of("timing") {
+                QuestionnaireItemStatus::Skipped => "skipped",
+                _ => answers.get("timing").unwrap_or("none"),
+            };
+            toast("Questionnaire saved")
+                .description(format!("Scope: {scope} · Timing: {timing}"))
+                .duration(4000)
+                .show();
+        })
+        .into();
+
+    ui! {
+        <MyCard title="2d) Questionnaire（ShadCN one-question flow）">
+            <VStack w="100%" min_w="0" gap="1rem" max_w="28rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style: composite RSX (macro → questionnaire_scope / questionnaire_item_scope) and Builder. Builder `.class` is the root; `.parts` styles auto-assembled slots; `.child` composes parts yourself. shortcuts=\"letters\" assigns A, B, C."
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"A · RSX (letters + freeform + skip)"</Label>
+                <Questionnaire
+                    id="gal-q-rsx"
+                    defaultItem="direction"
+                    shortcuts="letters"
+                    on_submit={move |answers: QuestionnaireAnswers| {
+                        let direction = answers.get("direction").unwrap_or("none").to_string();
+                        let signals = answers.get_all("signals").join(", ");
+                        let timing = match answers.status_of("timing") {
+                            QuestionnaireItemStatus::Skipped => "skipped".to_string(),
+                            _ => answers.get("timing").unwrap_or("none").to_string(),
+                        };
+                        let line = format!(
+                            "Direction: {direction} · Signals: {} · Timing: {timing}",
+                            if signals.is_empty() { "none".to_string() } else { signals }
+                        );
+                        summary_submit.set(line.clone());
+                        toast("Agent plan saved").description(line).duration(4000).show();
+                    }}
+                >
+                    <QuestionnaireProgress />
+                    <QuestionnaireItem name="direction" required={true}>
+                        <QuestionnaireTitle>"What should the agent build next?"</QuestionnaireTitle>
+                        <QuestionnaireDescription>
+                            "Choose a direction or describe another task."
+                        </QuestionnaireDescription>
+                        <QuestionnaireChoices>
+                            <QuestionnaireChoice value="tool-calls">
+                                "Tool call timeline"
+                                <QuestionnaireChoiceDescription>
+                                    "Show what the agent ran and what came back."
+                                </QuestionnaireChoiceDescription>
+                            </QuestionnaireChoice>
+                            <QuestionnaireChoice value="approvals">
+                                "Approval checkpoints"
+                                <QuestionnaireChoiceDescription>
+                                    "Ask before sensitive or destructive actions."
+                                </QuestionnaireChoiceDescription>
+                            </QuestionnaireChoice>
+                            <QuestionnaireChoice value="handoffs">
+                                "Sub-agent handoffs"
+                                <QuestionnaireChoiceDescription>
+                                    "Make delegated work and results easier to follow."
+                                </QuestionnaireChoiceDescription>
+                            </QuestionnaireChoice>
+                            <QuestionnaireInput placeholder="Describe another feature…" />
+                        </QuestionnaireChoices>
+                        <QuestionnaireError />
+                    </QuestionnaireItem>
+                    <QuestionnaireItem name="signals" multiple={true}>
+                        <QuestionnaireTitle>"What should every progress update include?"</QuestionnaireTitle>
+                        <QuestionnaireDescription>
+                            "Select all that apply, or skip this question."
+                        </QuestionnaireDescription>
+                        <QuestionnaireChoices>
+                            <QuestionnaireChoice value="progress">"Progress"</QuestionnaireChoice>
+                            <QuestionnaireChoice value="decisions">"Decisions"</QuestionnaireChoice>
+                            <QuestionnaireChoice value="risks">"Risks"</QuestionnaireChoice>
+                            <QuestionnaireChoice value="next-step">"Next step"</QuestionnaireChoice>
+                        </QuestionnaireChoices>
+                        <QuestionnaireError />
+                    </QuestionnaireItem>
+                    <QuestionnaireItem name="timing" required={true}>
+                        <QuestionnaireTitle>"When should work begin?"</QuestionnaireTitle>
+                        <QuestionnaireDescription>
+                            "Choose when the agent should begin the work."
+                        </QuestionnaireDescription>
+                        <QuestionnaireChoices>
+                            <QuestionnaireChoice value="now">"Start now"</QuestionnaireChoice>
+                            <QuestionnaireChoice value="next-cycle">"Next development cycle"</QuestionnaireChoice>
+                            <QuestionnaireChoice value="backlog">"Add it to the backlog"</QuestionnaireChoice>
+                        </QuestionnaireChoices>
+                        <QuestionnaireError />
+                    </QuestionnaireItem>
+                    <QuestionnaireActions>
+                        <QuestionnairePrevious />
+                        <Box flex_grow="1" min_w="0" h="1px" />
+                        <QuestionnaireSkip />
+                        <QuestionnaireNext>"Next"</QuestionnaireNext>
+                        <QuestionnaireSubmit>"Save plan"</QuestionnaireSubmit>
+                    </QuestionnaireActions>
+                </Questionnaire>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { if summary.get().is_empty() {
+                        "Submit to see the collected answers here.".to_string()
+                    } else {
+                        summary.get()
+                    } }
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"B · Builder dual style"</Label>
+                { builder_el }
             </VStack>
         </MyCard>
     }
@@ -9216,7 +9959,7 @@ fn gallery_section_meta(section: &str) -> (&'static str, Option<&'static str>) {
         _ => (
             "基础",
             Some(
-                "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰",
+                "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Marker · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰",
             ),
         ),
     }
@@ -9231,6 +9974,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <InputAdornmentShowcase />
                     <InputOTPShowcase />
                     <FormValidateShowcase />
+                    <QuestionnaireShowcase />
                     <PickerPlaceholdersShowcase />
                     <TextareaComboboxShowcase />
                     <ToggleControlsShowcase />
@@ -9354,6 +10098,9 @@ fn gallery_section_body(section: &str) -> Element {
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
                     { KbdShowcase() }
+                    { MarkerShowcase() }
+                    { MessageShowcase() }
+                    { MessageScrollerShowcase() }
                     { SkeletonShowcase() }
                     { EmptyShowcase() }
                     { AlertShowcase() }

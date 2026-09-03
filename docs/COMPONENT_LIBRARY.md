@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §3.1.1 Builder 属性：链式优先 + `Into` 双收（全属性口径）；**2026-08-31** §4.3 `Into` 双收（variant/size 冻结实例）；**2026-09-02** 组件体量与 gpui-component 分层对照见 [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md)  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §3.1.1 Builder 属性：链式优先 + `Into` 双收（全属性口径）；**2026-08-31** §4.3 `Into` 双收（variant/size 冻结实例）；**2026-09-02** 组件体量与 gpui-component 分层对照见 [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md)；**2026-09-03** §3.3 复合组件三层 API（组合 / Opts / 数据糖）；**2026-09-03** §3.3 复合组件三层 API（组合 / Opts / 数据糖）
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`custom_components_suggestions.md`](custom_components_suggestions.md) · [`COMPONENT_LAYERING.md`](COMPONENT_LAYERING.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
@@ -226,6 +226,8 @@ hstack().w("100%").pointer_events("none").child(separator()).into();
 | Builder 只收枚举、废除 `.variant("outline")` | 打断 ShadCN / `ui!` / 热重载字符串契约；见 **§3.1.1** · [`component_variants.md`](component_variants.md) §0 |
 | 先 `.into()` 再改属性，而链上可一次写完 | 破坏 fluent 一致性；见 **§3.1.1** 链式优先 |
 | 为 `w("50%")` 等开放域强造枚举 | 应用 `IntoCssDim`；见 **§3.1.1** · [`box_model.md`](box_model.md) |
+| 复合组件为每个槽发明 `*PartsClass` / 十余个 `*_class` 字段 | 维护 N 份平行结构体；与 §3.3「组合面调样式」冲突；数据糖例外见 §3.3.4 |
+| `From<*Builder>` 代建第二棵 `class: None` 树、且无 `.child()` / `*_scope` | Tier 3 成为唯一路径；RSX 与 Builder 样式能力不对等 |
 
 代码锚点（同一按钮 · 双面）：
 
@@ -270,6 +272,130 @@ let _: Element = vstack()
 ```
 
 实现细节以各组件 `//!` 与 `From<*Builder> for Element` 为准；宏展开不得绕过公开 Builder 另造私有平行 API（宏生成调用公开函数除外）。
+
+### 3.3 复合组件三层 API（组合 · Opts · 数据糖）
+
+本节约束 **多槽复合控件**（Dialog、Accordion、Questionnaire、Sidebar…）的公开形状。  
+**ADR-9** 要求双书写面**行为等价、可互嵌**；**并不要求**「一个根 Builder 链式改完所有内部槽的间距/字号」。  
+**样式自定义的主路径**是 **Tier 1 组合面**：各零件自带 `class` / `base`（对位 ShadCN 各 primitive 的 `className`）。
+
+#### 3.3.1 三层模型
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Tier 1 · 组合面（文档默认推荐 · 自定义样式主路径）              │
+│   {comp}_scope(…, body)  或  {comp}().child(|| parts…)       │
+│   每槽 = 独立 #[component] / 已构建 Element，class / base 可调 │
+├──────────────────────────────────────────────────────────────┤
+│ Tier 2 · 零件 Opts（仅有「行为参数」的面板 / 内容壳）           │
+│   {Comp}ContentOpts { class, side, motion, … }               │
+│   RSX 属性与 Builder 链式方法共用同一 Opts 结构（见 overlay §8.5）│
+├──────────────────────────────────────────────────────────────┤
+│ Tier 3 · 数据便利糖（Gallery / 快速原型 · 非唯一路径）          │
+│   .question() / .item() / .slide() / .link() …                 │
+│   内部必须复用 Tier 1 的 render_* / scope，禁止第二套状态机     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+| 层 | 职责 | 样式怎么调 | 标杆实现 |
+|----|------|------------|----------|
+| **Tier 1** | Context + 根壳；用户拼零件树 | 每个零件 `class` / `base`；根 `.class()` 或 scope 的 `class` 参数 | `dialog_scope` + `dialog().child()`；`empty().header()`；`progress().child()`；[`overlay_shells.md` §8.5](overlay_shells.md) |
+| **Tier 2** | 带 placement / motion / trap 等**行为**的内容壳 | Opts 上的 `class` + 零件 `base` | `PopoverContentOpts`、`DialogContentOpts`、`SelectContentOpts` |
+| **Tier 3** | 用数据/闭包描述内容，少写树 | 见 **§3.3.3**；不得承载**唯一**行为路径 | `accordion().item()`、`carousel().slide()`、`questionnaire().question()` |
+
+**叶子控件**（Button、Input、Badge）只有一层：Builder 即产品面，不适用本节三层划分。
+
+#### 3.3.2 Tier 1 形状（新增与重构的默认模板）
+
+每个稳定面复合组件应同时具备：
+
+1. **`{name}_scope`** — 提供 Context、根 `data-slot`、受控 Signal 接线；接受根 `class: Option<String>` 与 `body: impl FnOnce() -> Element`。  
+2. **零件 `#[component]`** — `{Name}Title` / `{Name}Content` / `{Name}Actions`…；每零件暴露 `class` + `base`（宏已生成）。  
+3. **根 Builder** — `{name}(id)` 配置根行为（受控 signal、`on_*`、根 `.class()`），并提供 **`.child(|| …)`** 进入 scope 拼树（对位 `dialog().child()`）。  
+4. **RSX** — 复合标签经宏展开为 `{name}_scope` / `{name}_item_scope`，不得绕过公开 scope。
+
+推荐写法（Builder 组合面 · 样式全开）：
+
+```rust
+use rui::prelude::*;
+
+questionnaire("plan")
+    .shortcuts("letters")
+    .class("gap-8") // 根壳
+    .child(|| ui! {
+        <QuestionnaireProgress class="text-sm" />
+        <QuestionnaireItem name="direction" class="gap-4">
+            <QuestionnaireTitle class="text-lg">"What next?"</QuestionnaireTitle>
+            <QuestionnaireChoices class="gap-2">
+                <QuestionnaireChoice value="a" class="py-3">"Option A"</QuestionnaireChoice>
+            </QuestionnaireChoices>
+        </QuestionnaireItem>
+        <QuestionnaireActions class="gap-3">
+            <QuestionnairePrevious />
+            <QuestionnaireNext />
+        </QuestionnaireActions>
+    })
+```
+
+RSX 与上例 **同一棵零件树、同一套 `class`**，仅书写面不同。
+
+#### 3.3.3 样式规则（硬性）
+
+| 需求 | 做法 | 禁止 |
+|------|------|------|
+| 改某一槽间距/字号/颜色 | 该零件 `class="…"` 或 RSX 布局属性（进 `base`） | 指望根 Builder 穿透所有槽 |
+| 改根纵向节奏 | scope / 根 Builder 的 `.class()`（如 `gap-8`） | 在 Tier 3 里硬编码且不可覆盖 |
+| 改带行为的内容壳 | Tier 2 `{Comp}ContentOpts { class, … }` | 为纯 `class` 单独再发明 Opts 枚举 |
+| 数据糖场景偶尔改壳 | 题级/项级 `class` 字段（见 §3.3.4） | 全库复制 `*PartsClass` 十数字段 |
+
+**合并顺序**（与 ShadCN `cn(defaults, className)` 一致）：先组件默认 utility，再用户 `class`；后写覆盖冲突项。共享 helper 可放在 `style/utility`（如 `merge_slot_class`），**不要**每组件一份 `*PartsClass` 除非有充分数据 DSL 理由（§3.3.4）。
+
+#### 3.3.4 Tier 3 与 `*PartsClass` 的边界
+
+**默认**：Tier 3 的 `From<*Builder>` 是**薄适配器**——调用与 Tier 1 相同的 `render_*` / 零件函数，而不是在 `From` 里再写一棵 `class: None` 的平行树。
+
+允许在 Tier 3 上增加**少量**根级/项级 `class` 或 **`.parts(|p| …)`** 当且仅当：
+
+- 内容是 **数据 DSL**（如问卷 `question(name, title, |q| …)`），用户合理期望「只描述数据、少写树」；且  
+- 文档与 Gallery **同时展示 Tier 1 组合示例**，标明 Tier 3 为便利路径。
+
+`Questionnaire` 的 `QuestionnairePartsClass` / `.parts()` 属于上述**例外**，**不得**作为 Accordion / Carousel / Pagination 等组件的默认模板。
+
+#### 3.3.5 Tier 2 与 overlay 对齐
+
+浮层、菜单、选择器等内容面板：**`*Opts` 为共享真源**（[`overlay_shells.md` §8.5](overlay_shells.md)）：
+
+- RSX：`<PopoverContent side="bottom" class="…" />` → `PopoverContentOpts`  
+- Builder：`popover_content(PopoverContentOpts { class: Some(…), … }, body)`  
+- 禁止 RSX 与 Builder 各维护一套不同的 content 参数表。
+
+#### 3.3.6 新增复合组件 Checklist
+
+落地前自检（库测 + Gallery 各至少一例）：
+
+- [ ] `{name}_scope` 公开，且 `body` 内可放任意零件组合  
+- [ ] 每槽 `{Name}*` 零件有 `data-slot`、`class`、`base`  
+- [ ] `{name}()` Builder 有根配置 + **`.child(|| …)`**  
+- [ ] `ui!` 复合标签展开到 scope（非仅 `#[component]` 直调）  
+- [ ] 若有行为内容壳，有 `{Name}ContentOpts` 且 RSX/Builder 共用  
+- [ ] 若有 Tier 3，其 `From` 复用 `render_*`，且文档/Gallery 有 Tier 1 对照  
+- [ ] 库测：组合面与 Tier 3（若有）同一 `template_id` / 关键 `data-slot` / 行为（开合、提交等）
+
+作者向步骤见 [`custom_components.md`](custom_components.md) §复合控件配方。
+
+#### 3.3.7 存量组件治理（不要求一次改完）
+
+按**接缝成本**递增推进，新增组件**直接遵守 §3.3.2**，不等待存量扫尾：
+
+| 优先级 | 动作 | 典型对象 |
+|--------|------|----------|
+| P0 | 补 **`.child()`** 或公开 `*_scope`，使 Tier 1 可组合 | Accordion、Pagination、Menubar、NavigationMenu、Breadcrumb |
+| P1 | `From<*Builder>` 抽 **`render_*`**，去掉重复 `class: None` | Accordion `.item()`、Carousel `From`、Sidebar `From` |
+| P2 | 已有 **`*Opts`** 的补 `class` 文档与 Builder 链式透传 | `MenubarContentOpts`、`DropdownMenuContentOpts` |
+| P3 | Tier 3 文档降级为「快速原型」；Gallery 补 Tier 1 示例 | 与 §6.3 联动 |
+| 例外 | 数据 DSL 保留 `.parts()` / 项级 `class`，不推广 `*PartsClass` | Questionnaire |
+
+**Stepper** 等仍无 scope/零件拆分的，应按 §3.3.2 拆为 `stepper_scope` + 零件，而不是在单文件过程式渲染里堆 `class` API。
 
 ---
 
@@ -508,6 +634,7 @@ cargo check -p gallery
 - 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · **绘制** · 导航 · 布局 · 文本 · 关于；Svg / Canvas / Scene3d 已在「绘制」（WP-3.11 / 3.12 / 3.13）；Chart 仍在「数据」。Scene3d 演示需 `--features scene3d`。  
 - **每公开稳定面组件至少一处可运行示例**。  
 - 变体矩阵优先展示在「基础 / 表单」（Button variants/sizes 已是标杆）。  
+- **复合组件**：Gallery 宜同时展示 **Tier 1 组合面**（`.child()` / 手写零件 `class`）与 **Tier 3 数据糖**（若有），见 **§3.3**。  
 - 「关于」或基础区宜保留 **Builder 写法** 对照示例，避免用户以为只能写标签。
 
 ---
@@ -518,7 +645,7 @@ cargo check -p gallery
 AUTHORITY.md                       ← ★执行源（CV / 组件 WP 并入统一计划）
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 REACTIVITY.md                      ← 细粒度领域规范（受控 Signal / 三档更新）
-COMPONENT_LIBRARY.md               ← 本文件（组件领域规范；§2.3 作者面；§3 prelude + 双书写面）
+COMPONENT_LIBRARY.md               ← 本文件（组件领域规范；§2.3 作者面；§3 prelude + 双书写面 + §3.3 复合三层 API）
 component_inventory.md             ← §5 分桶附录（verified/broken + id 策略 + EUI 密度）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
