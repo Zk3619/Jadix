@@ -156,10 +156,20 @@ fn parse_css_length_px(s: &str, em_base_px: f32) -> Option<f32> {
 
 /// Convert builder / RSX size tokens into a Taffy [`Dimension`].
 ///
-/// # Percentage (`"50%"`, `"100%"`)
+/// # Percentage (`"50%"`, `"100%"`) and fractions (`"1/2"`, `"3/4"`)
 /// Resolves against the **containing block's content box** (CSS): the parent's
 /// content width/height after subtracting that parent's padding and border.
-/// It does **not** include the parent's margin.
+/// It is **not** a fraction of this element's inner content. Same for `min-width` /
+/// `max-width` / `min-height` / `max-height`. `"1/2"` ≡ `"50%"` of the parent.
+///
+/// # Unsuffixed numbers (`"100"`, `"12"`)
+/// Remain **rem** (root 16px). `"100"` is **not** `100%` — write `"100%"` for
+/// a parent-relative fraction.
+///
+/// # Content keywords (`"fit"`, `"fit-content"`, `"min-content"`, `"max-content"`)
+/// Parsed on the [`CssDim`] / [`IntoCssDim`] path. Taffy 0.13 flex `Dimension`
+/// cannot carry those tags (they panic in `maybe_resolve`), so they map to
+/// [`Dimension::Auto`] plus a stretch-hug policy in layout.
 ///
 /// # Viewport units (`vw` / `vh` / `dvw` / …)
 /// Immediate [`IntoDimension`] maps these to [`Dimension::Percent`] (bind fallback).
@@ -189,21 +199,9 @@ impl IntoDimension for i32 {
 
 impl IntoDimension for &str {
     fn into_dimension(self) -> Dimension {
-        let s = self.trim();
-        if let Some(rest) = s.strip_suffix('%') {
-            if let Ok(val) = rest.parse::<f32>() {
-                return Dimension::percent(val / 100.0);
-            }
-        } else if let Some(rest) = strip_viewport_unit(s) {
-            // Taffy Dimension has no viewport units; map to percent of the containing
-            // block (portal body mount ≈ viewport for Dialog / floating shells).
-            if let Ok(val) = rest.parse::<f32>() {
-                return Dimension::percent(val / 100.0);
-            }
-        } else if let Some(val) = parse_css_length_px(s, CSS_ROOT_FONT_SIZE_PX) {
-            return Dimension::length(val);
-        }
-        Dimension::auto()
+        parse_css_dim(self)
+            .and_then(|d| d.preview_dimension())
+            .unwrap_or(Dimension::auto())
     }
 }
 
@@ -288,7 +286,7 @@ impl UnitCtx {
 pub enum CssDim {
     Auto,
     Px(f32),
-    /// 0..=1 fraction of containing block (Taffy Percent).
+    /// 0..=1 fraction of the **parent containing-block content box** (CSS `%`).
     Percent(f32),
     Em(f32),
     Rem(f32),
@@ -296,6 +294,12 @@ pub enum CssDim {
     Vw(f32),
     /// 0..=1 fraction of layout viewport height (`vh` / `dvh` / `svh` / `lvh`).
     Vh(f32),
+    /// CSS `width: fit-content` / Tailwind `w-fit`. Taffy flex maps this to Auto.
+    FitContent,
+    /// CSS `min-content` / Tailwind `w-min`.
+    MinContent,
+    /// CSS `max-content` / Tailwind `w-max`.
+    MaxContent,
     CalcAdd(Box<CssDim>, Box<CssDim>),
     CalcSub(Box<CssDim>, Box<CssDim>),
 }
@@ -323,10 +327,17 @@ impl CssDim {
         }
     }
 
+    /// CSS `fit-content` / `min-content` / `max-content` (and Tailwind `fit` / `min` / `max`).
+    pub fn is_content_keyword(&self) -> bool {
+        matches!(self, Self::FitContent | Self::MinContent | Self::MaxContent)
+    }
+
     /// Immediate Taffy value when no viewport / element font-size is required.
     pub fn as_immediate_dimension(&self) -> Option<Dimension> {
         match self {
-            Self::Auto => Some(Dimension::auto()),
+            Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent => {
+                Some(Dimension::auto())
+            }
             Self::Px(v) => Some(Dimension::length(*v)),
             Self::Percent(p) => Some(Dimension::percent(*p)),
             Self::Rem(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
@@ -348,7 +359,7 @@ impl CssDim {
 
     pub fn resolve_px(&self, ctx: &UnitCtx, axis: PercentAxis) -> Option<f32> {
         match self {
-            Self::Auto => None,
+            Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent => None,
             Self::Percent(p) => {
                 let cb = match axis {
                     PercentAxis::Inline => ctx.cb_w?,
@@ -371,10 +382,13 @@ impl CssDim {
     }
 
     pub fn to_dimension_axis(&self, ctx: &UnitCtx, axis: PercentAxis) -> Dimension {
-        if let Self::Percent(p) = *self {
-            return Dimension::percent(p);
+        if let Self::Percent(p) = self {
+            return Dimension::percent(*p);
         }
-        if let Self::Auto = self {
+        if matches!(
+            self,
+            Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent
+        ) {
             return Dimension::auto();
         }
         if let Some(px) = self.resolve_px(ctx, axis) {
@@ -408,6 +422,7 @@ impl CssDim {
             // -(a + b) = (-a) + (-b); -(a - b) = (-a) + b
             Self::CalcAdd(a, b) => Self::CalcAdd(Box::new(a.negated()), Box::new(b.negated())),
             Self::CalcSub(a, b) => Self::CalcAdd(Box::new(a.negated()), b),
+            Self::FitContent | Self::MinContent | Self::MaxContent => self,
         }
     }
 }
@@ -417,8 +432,13 @@ pub fn parse_css_dim(s: &str) -> Option<CssDim> {
     if s.is_empty() {
         return None;
     }
-    if s.eq_ignore_ascii_case("auto") {
-        return Some(CssDim::Auto);
+    let lower = s.to_ascii_lowercase();
+    match lower.as_str() {
+        "auto" => return Some(CssDim::Auto),
+        "fit" | "fit-content" => return Some(CssDim::FitContent),
+        "min-content" | "min_content" | "min" => return Some(CssDim::MinContent),
+        "max-content" | "max_content" | "max" => return Some(CssDim::MaxContent),
+        _ => {}
     }
     if let Some(inner) = s.strip_prefix("calc(").and_then(|t| t.strip_suffix(')')) {
         return parse_calc(inner.trim());
@@ -430,7 +450,6 @@ pub fn parse_css_dim(s: &str) -> Option<CssDim> {
     if let Some(rest) = strip_viewport_unit(s) {
         let val: f32 = rest.trim().parse().ok()?;
         let frac = val / 100.0;
-        let lower = s.to_ascii_lowercase();
         if lower.contains("vw") {
             return Some(CssDim::Vw(frac));
         }
@@ -445,7 +464,26 @@ pub fn parse_css_dim(s: &str) -> Option<CssDim> {
     if let Some(raw) = s.strip_suffix("px") {
         return parse_css_number(raw).map(CssDim::Px);
     }
-    parse_css_number(s).map(|v| CssDim::Rem(v))
+    // Tailwind-style `a/b` → parent containing-block fraction (`1/2` ≡ 50%).
+    if let Some(dim) = parse_css_fraction_percent(s) {
+        return Some(dim);
+    }
+    // Unsuffixed number = rem (root 16px). `"100"` is 100rem, not 100% of the parent.
+    parse_css_number(s).map(CssDim::Rem)
+}
+
+/// `"1/2"` / `"3/4"` → [`CssDim::Percent`] of the **parent** content box (not inner content).
+fn parse_css_fraction_percent(s: &str) -> Option<CssDim> {
+    let (num_s, den_s) = s.split_once('/')?;
+    if num_s.trim().is_empty() || den_s.trim().is_empty() {
+        return None;
+    }
+    let num: f32 = num_s.trim().parse().ok()?;
+    let den: f32 = den_s.trim().parse().ok()?;
+    if !num.is_finite() || !den.is_finite() || den <= 0.0 || num < 0.0 || num > den {
+        return None;
+    }
+    Some(CssDim::Percent(num / den))
 }
 
 fn parse_calc(inner: &str) -> Option<CssDim> {
@@ -739,6 +777,144 @@ mod tests {
             pair,
             CssRectPair::StartEnd(CssDim::Px(10.0), CssDim::Px(20.0))
         ));
+    }
+
+    #[test]
+    fn unsuffixed_100_is_rem_not_parent_percent() {
+        match parse_css_dim("100") {
+            Some(CssDim::Rem(v)) => assert!((v - 100.0).abs() < 1e-6, "got Rem({v})"),
+            other => panic!("w(\"100\") must stay rem, got {other:?}"),
+        }
+        match dim_kind("100".into_dimension()) {
+            DimKind::Length(px) => assert!(
+                (px - 100.0 * CSS_ROOT_FONT_SIZE_PX).abs() < 1e-6,
+                "100rem → {px}"
+            ),
+            other => panic!("expected length, got {other:?}"),
+        }
+        match parse_css_dim("12") {
+            Some(CssDim::Rem(v)) => assert!((v - 12.0).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn percent_token_is_parent_fraction_not_content() {
+        match parse_css_dim("100%") {
+            Some(CssDim::Percent(p)) => assert!((p - 1.0).abs() < 1e-6),
+            other => panic!("100% must be parent fraction, got {other:?}"),
+        }
+        match parse_css_dim("50%") {
+            Some(CssDim::Percent(p)) => assert!((p - 0.5).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+        match dim_kind("100%".into_dimension()) {
+            DimKind::Percent(p) => assert!((p - 1.0).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+        let ctx = UnitCtx::new(800.0, 600.0, 16.0).with_containing_block(Some(260.0), Some(180.0));
+        match dim_kind(parse_css_dim("100%").unwrap().to_dimension(&ctx)) {
+            DimKind::Percent(p) => assert!(
+                (p - 1.0).abs() < 1e-6,
+                "Taffy keeps % so layout resolves against the parent CB, got {p}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            (parse_css_dim("100%")
+                .unwrap()
+                .resolve_px(&ctx, PercentAxis::Inline)
+                .unwrap()
+                - 260.0)
+                .abs()
+                < 0.5,
+            "100% of parent content 260"
+        );
+        assert!(
+            (parse_css_dim("100%")
+                .unwrap()
+                .resolve_px(&ctx, PercentAxis::Block)
+                .unwrap()
+                - 180.0)
+                .abs()
+                < 0.5,
+            "100% of parent content height 180"
+        );
+    }
+
+    #[test]
+    fn slash_fraction_is_parent_percent_not_content() {
+        match parse_css_dim("1/2") {
+            Some(CssDim::Percent(p)) => assert!((p - 0.5).abs() < 1e-6),
+            other => panic!("1/2 must be 50% of parent, got {other:?}"),
+        }
+        match parse_css_dim("3/4") {
+            Some(CssDim::Percent(p)) => assert!((p - 0.75).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+        match parse_css_dim("11/12") {
+            Some(CssDim::Percent(p)) => assert!((p - 11.0 / 12.0).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+        match dim_kind("1/2".into_dimension()) {
+            DimKind::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            parse_css_dim("3/2").is_none(),
+            "ratio > 1 is not a size fraction"
+        );
+        assert!(parse_css_dim("1/0").is_none());
+        let ctx = UnitCtx::new(800.0, 600.0, 16.0).with_containing_block(Some(260.0), Some(180.0));
+        assert!(
+            (parse_css_dim("1/2")
+                .unwrap()
+                .resolve_px(&ctx, PercentAxis::Inline)
+                .unwrap()
+                - 130.0)
+                .abs()
+                < 0.5,
+            "1/2 of parent content 260"
+        );
+        assert!(
+            (parse_css_dim("1/2")
+                .unwrap()
+                .resolve_px(&ctx, PercentAxis::Block)
+                .unwrap()
+                - 90.0)
+                .abs()
+                < 0.5,
+            "1/2 of parent content height 180"
+        );
+    }
+
+    #[test]
+    fn fit_min_max_content_keywords() {
+        assert!(matches!(parse_css_dim("fit"), Some(CssDim::FitContent)));
+        assert!(matches!(
+            parse_css_dim("fit-content"),
+            Some(CssDim::FitContent)
+        ));
+        assert!(matches!(
+            parse_css_dim("FIT-CONTENT"),
+            Some(CssDim::FitContent)
+        ));
+        assert!(matches!(
+            parse_css_dim("min-content"),
+            Some(CssDim::MinContent)
+        ));
+        assert!(matches!(parse_css_dim("min"), Some(CssDim::MinContent)));
+        assert!(matches!(
+            parse_css_dim("max-content"),
+            Some(CssDim::MaxContent)
+        ));
+        assert!(matches!(parse_css_dim("max"), Some(CssDim::MaxContent)));
+        assert!(parse_css_dim("fit").unwrap().is_content_keyword());
+        match dim_kind("fit-content".into_dimension()) {
+            DimKind::Auto => {}
+            other => panic!("fit-content maps to Auto for Taffy, got {other:?}"),
+        }
+        assert!(matches!("fit".into_css_dim(), CssDim::FitContent));
     }
 }
 

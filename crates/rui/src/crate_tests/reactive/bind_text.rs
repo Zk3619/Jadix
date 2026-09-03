@@ -128,7 +128,10 @@ fn bind_with_can_patch_text_color_style() {
     });
 
     assert_eq!(
-        mounted.borrow().as_ref().map(|e| e.text_style.color_resolved()),
+        mounted
+            .borrow()
+            .as_ref()
+            .map(|e| e.text_style.color_resolved()),
         Some([1, 2, 3, 255])
     );
 

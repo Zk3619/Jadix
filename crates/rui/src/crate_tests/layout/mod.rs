@@ -5,6 +5,7 @@ mod collect_clip_cull;
 mod gallery_inset_overflow;
 mod headless_smoke;
 mod mark_dirty;
+mod message_scroller_scroll;
 mod path_batch;
 mod percent_content_box;
 mod portal_hoist;

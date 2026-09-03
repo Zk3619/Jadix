@@ -975,8 +975,22 @@ fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextS
         ts.line_height_scale = parent.line_height_scale;
     }
 
+    let inherit_attrs: Vec<(String, String)> = crate::renderer::SHIMMER_INHERIT_ATTRS
+        .iter()
+        .filter_map(|key| {
+            node.attrs
+                .get(*key)
+                .map(|v| ((*key).to_string(), v.clone()))
+        })
+        .collect();
     let child_parent = ts.effective_ancestry(&parent);
     for child in &mut node.children {
+        for (key, value) in &inherit_attrs {
+            child
+                .attrs
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
         cascade_inheritable_text_style(child, Some(child_parent.clone()));
     }
 }
@@ -1262,6 +1276,122 @@ fn scroll_viewport_taffy_content_size(
     [
         ovf[0].max(layout_size.width),
         (ovf[1] + pad_b).max(layout_size.height),
+    ]
+}
+
+fn cap_message_scroller_collect_content_h(
+    layout_tree: &LayoutTree,
+    viewport_el: &Element,
+    viewport_nid: NodeId,
+    content_h: f32,
+    viewport_h: f32,
+) -> f32 {
+    const SLOT_CONTENT: &str = "message-scroller-content";
+    const SLOT_ITEM: &str = "message-scroller-item";
+
+    let child_nodes = match layout_tree.taffy.children(viewport_nid) {
+        Ok(n) => n,
+        Err(_) => return content_h,
+    };
+    for (i, child) in viewport_el.children.iter().enumerate() {
+        if child.attrs.get("data-slot").map(String::as_str) != Some(SLOT_CONTENT) {
+            continue;
+        }
+        let Some(&content_nid) = child_nodes.get(i) else {
+            return content_h;
+        };
+        let Ok(content_lay) = layout_tree.taffy.layout(content_nid) else {
+            return content_h;
+        };
+        let origin_y = content_lay.location.y;
+        let mut found_item = false;
+        let mut max_bottom = origin_y;
+        walk_ms_item_bottoms(
+            child,
+            layout_tree,
+            origin_y,
+            SLOT_ITEM,
+            &mut found_item,
+            &mut max_bottom,
+        );
+        if !found_item {
+            return content_h;
+        }
+        let pad_b = crate::layout::lp_length_px(child.style.padding.bottom)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let capped = (max_bottom + pad_b).max(viewport_h);
+        return content_h.min(capped);
+    }
+    content_h
+}
+
+fn walk_ms_item_bottoms(
+    el: &Element,
+    layout_tree: &LayoutTree,
+    base_y: f32,
+    item_slot: &str,
+    found_item: &mut bool,
+    max_bottom: &mut f32,
+) {
+    let Some(nid) = el.layout_node else {
+        for child in &el.children {
+            walk_ms_item_bottoms(child, layout_tree, base_y, item_slot, found_item, max_bottom);
+        }
+        return;
+    };
+    let Ok(lay) = layout_tree.taffy.layout(nid) else {
+        return;
+    };
+    let y = base_y + lay.location.y;
+    let bottom = y + lay.size.height;
+    if el.attrs.get("data-slot").map(String::as_str) == Some(item_slot) {
+        *found_item = true;
+        *max_bottom = max_bottom.max(bottom);
+    }
+    for child in &el.children {
+        walk_ms_item_bottoms(child, layout_tree, y, item_slot, found_item, max_bottom);
+    }
+}
+
+/// Layout-backed scroll metrics for `reactive_sync` (signal `content_h` can lag paint by a frame).
+pub(crate) fn scroll_viewport_content_metrics(
+    layout_tree: &LayoutTree,
+    viewport_el: &Element,
+) -> Option<(f32, f32)> {
+    let nid = viewport_el.layout_node?;
+    let layout = layout_tree.taffy.layout(nid).ok()?;
+    if layout.size.height <= 1.0 {
+        return None;
+    }
+    let [_, mut ch] = scroll_viewport_taffy_content_size(
+        &layout_tree.taffy,
+        viewport_el,
+        nid,
+        layout.size,
+    );
+    ch = cap_message_scroller_collect_content_h(
+        layout_tree,
+        viewport_el,
+        nid,
+        ch,
+        layout.size.height,
+    );
+    if ch <= 1.0 {
+        return None;
+    }
+    Some((ch, layout.size.height))
+}
+
+fn textarea_scrollport_content_size(
+    element: &Element,
+    abs_x: f32,
+    abs_y: f32,
+    layout_size: taffy::geometry::Size<f32>,
+) -> [f32; 2] {
+    [
+        crate::utils::text_field::textarea_scroll_content_w(element, abs_x, layout_size.width),
+        crate::utils::text_field::textarea_scroll_content_h(element, abs_y, layout_size.height),
     ]
 }
 
@@ -1588,6 +1718,8 @@ pub struct TextLayoutInfo {
     pub prepared: Option<crate::text::PreparedText>,
     /// B17 glyph/cluster motion (`rui_glyph_fx` attr).
     pub glyph_fx: Option<String>,
+    /// shadcn `shimmer` sweep (present when [`Self::glyph_fx`] is `shimmer`).
+    pub shimmer: Option<crate::renderer::ShimmerParams>,
     /// CSS/`ancestor_scale` paint scale for glyphon `TextArea.scale` (default 1).
     /// Keep [`Self::style`] font size at layout size so drag/coverflow does not reshape every frame.
     pub paint_scale: f32,
@@ -2055,7 +2187,11 @@ impl LayoutTree {
 
     #[inline]
     fn unit_ctx_for(&self, element: &Element) -> UnitCtx {
-        UnitCtx::new(self.viewport[0], self.viewport[1], element.text_style.size_resolved())
+        UnitCtx::new(
+            self.viewport[0],
+            self.viewport[1],
+            element.text_style.size_resolved(),
+        )
     }
 
     fn unit_ctx_with_cb(&self, element: &Element, cb_w: Option<f32>, cb_h: Option<f32>) -> UnitCtx {
@@ -2093,9 +2229,10 @@ impl LayoutTree {
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {
         if let Some(node_id) = element.layout_node {
-            let style = element
-                .style
-                .to_taffy_style_with(&self.unit_ctx_from_parent_layout(element));
+            let style = element.style.to_taffy_style_with_parent(
+                &self.unit_ctx_from_parent_layout(element),
+                self.parent_flex_direction(element),
+            );
             self.taffy.set_style(node_id, style).unwrap();
         }
     }
@@ -2209,7 +2346,7 @@ impl LayoutTree {
         self.text_measurements.clear();
         self.visited_nodes.clear();
         // DO NOT clear taffy anymore; we rely on reconciliation and selective removal.
-        let root_node = self.build_taffy_node_mut(root, Some(width), Some(height));
+        let root_node = self.build_taffy_node_mut(root, Some(width), Some(height), None);
         self.root_node = Some(root_node);
 
         // Prune nodes that were not visited in this pass.
@@ -2535,7 +2672,9 @@ impl LayoutTree {
         if element.style.has_deferred_units() {
             if let Some(node_id) = element.layout_node {
                 let ctx = self.unit_ctx_from_parent_layout(element);
-                let new_style = element.style.to_taffy_style_with(&ctx);
+                let new_style = element
+                    .style
+                    .to_taffy_style_with_parent(&ctx, self.parent_flex_direction(element));
                 let changed = self.taffy.style(node_id).ok().map_or(true, |old| {
                     old.size != new_style.size
                         || old.min_size != new_style.min_size
@@ -2557,21 +2696,38 @@ impl LayoutTree {
         }
     }
 
+    fn parent_flex_direction(&self, element: &Element) -> Option<FlexDirection> {
+        let id = element.layout_node?;
+        let pid = self.taffy.parent(id)?;
+        let style = self.taffy.style(pid).ok()?;
+        matches!(style.display, Display::Flex).then_some(style.flex_direction)
+    }
+
     fn build_taffy_node_mut(
         &mut self,
         element: &mut Element,
         cb_w: Option<f32>,
         cb_h: Option<f32>,
+        parent_flex_direction: Option<FlexDirection>,
     ) -> NodeId {
         let ctx = self.unit_ctx_with_cb(element, cb_w, cb_h);
         let (child_cb_w, child_cb_h) = element.style.estimate_content_box(&ctx);
+        let child_parent_dir =
+            matches!(element.style.display, Display::Flex).then_some(element.style.flex_direction);
 
         let mut child_nodes = Vec::new();
         for child in &mut element.children {
-            child_nodes.push(self.build_taffy_node_mut(child, child_cb_w, child_cb_h));
+            child_nodes.push(self.build_taffy_node_mut(
+                child,
+                child_cb_w,
+                child_cb_h,
+                child_parent_dir,
+            ));
         }
 
-        let style = element.style.to_taffy_style_with(&ctx);
+        let style = element
+            .style
+            .to_taffy_style_with_parent(&ctx, parent_flex_direction);
         let is_text_leaf = element.text.is_some() && child_nodes.is_empty();
 
         let node_id = if let Some(existing_id) = element.layout_node {
@@ -2987,21 +3143,27 @@ impl LayoutTree {
                         // post-render would clamp their offset to 0 (table/tree/masonry
                         // snap to top while the page scrolls).
                         let content = if rest.ends_with("__ta_scroll") {
-                            [
-                                layout.size.width.max(0.0),
-                                crate::utils::text_field::textarea_scroll_content_h(
-                                    element,
-                                    abs_y,
-                                    layout.size.height,
-                                ),
-                            ]
+                            textarea_scrollport_content_size(
+                                element,
+                                abs_x,
+                                abs_y,
+                                layout.size,
+                            )
                         } else {
-                            scroll_viewport_taffy_content_size(
+                            let mut content = scroll_viewport_taffy_content_size(
                                 &self.taffy,
                                 element,
                                 node,
                                 layout.size,
-                            )
+                            );
+                            content[1] = cap_message_scroller_collect_content_h(
+                                self,
+                                element,
+                                node,
+                                content[1],
+                                layout.size.height,
+                            );
+                            content
                         };
                         scroll_metrics.push((
                             rest.to_string(),
@@ -3508,12 +3670,15 @@ impl LayoutTree {
         if !path_tex_drawn {
             if let Some(tex_key) = element.image_texture.as_ref() {
                 if !tex_key.is_empty() {
-                    if let Some(draw) = TexturedDraw::clipped(
+                    if let Some(mut draw) = TexturedDraw::clipped(
                         [vis_x, vis_y, vis_w, vis_h],
                         parent_clip,
                         tex_key.clone(),
                         opacity,
                     ) {
+                        if element.attrs.contains_key(crate::utils::ATTR_ICON_SRC) {
+                            draw = draw.with_transform(crate::style::mat2d_linear(&transform));
+                        }
                         textured_draws.push(draw);
                     }
                 }
@@ -3691,13 +3856,21 @@ impl LayoutTree {
                         &text_world_linear,
                         text_scale,
                     );
+                    let shimmer_active = element
+                        .attrs
+                        .get(crate::renderer::ATTR_GLYPH_FX)
+                        .is_some_and(|s| {
+                            crate::renderer::GlyphFxKind::parse(s)
+                                == crate::renderer::GlyphFxKind::Shimmer
+                        });
                     let use_bake = matches!(
                         glyph_raster,
                         crate::renderer::GlyphRasterMode::Bake
                             | crate::renderer::GlyphRasterMode::Msdf
                     ) && !text.trim().is_empty()
                         && text_w >= 1.0
-                        && text_h >= 1.0;
+                        && text_h >= 1.0
+                        && !shimmer_active;
 
                     let mut text_baked = false;
                     if use_bake {
@@ -3830,12 +4003,7 @@ impl LayoutTree {
                         };
                         if let Some((tex_key, _)) = bake_result {
                             let full = crate::utils::text_texture::bake_draw_rect_for_layout(
-                                text_x,
-                                text_y0,
-                                draw_w,
-                                draw_h,
-                                bake_w,
-                                bake_h,
+                                text_x, text_y0, draw_w, draw_h, bake_w, bake_h,
                             );
                             if let Some(draw) =
                                 TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
@@ -3875,7 +4043,9 @@ impl LayoutTree {
                                 text_style.size_resolved() * scale
                             } else {
                                 text_style.size_resolved()
-                                    * crate::style::tailwind_default_leading_scale(text_style.size_resolved())
+                                    * crate::style::tailwind_default_leading_scale(
+                                        text_style.size_resolved(),
+                                    )
                             };
                             if let Some(spans) =
                                 element.text_spans.as_ref().filter(|s| !s.is_empty())
@@ -3929,6 +4099,7 @@ impl LayoutTree {
                             style: text_style.clone(),
                             prepared,
                             glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
+                            shimmer: crate::renderer::ShimmerParams::from_attrs(&element.attrs),
                             paint_scale: text_scale,
                             paint_transform: text_world_linear,
                             paint_origin: [
@@ -4134,7 +4305,12 @@ impl LayoutTree {
                     || parent_rotates;
                 let is_carousel_track =
                     element.attrs.get("data-carousel-track").map(|s| s.as_str()) == Some("1");
-                if _scroll_only && !parent_translates && !is_carousel_track {
+                let skip_scroll_band_cull = element
+                    .attrs
+                    .get("data-slot")
+                    .map(|s| s.as_str())
+                    == Some("message-scroller-content");
+                if _scroll_only && !skip_scroll_band_cull && !parent_translates && !is_carousel_track {
                     if let Some(clip_rect) = clip {
                         if !element.children[i].style.position_fixed
                             && element.children[i].style.position != Position::Absolute
@@ -4415,22 +4591,29 @@ impl LayoutTree {
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let [content_w, content_h] = if rest.ends_with("__ta_scroll") {
-                    // Floor content_h by explicit Length children + padding. A flex-sized
+                    // Floor content size by the text leaf + scrollport padding. A flex-sized
                     // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
-                    // still holds the real field-sizing-content height.
-                    [
-                        layout.size.width.max(0.0),
-                        crate::utils::text_field::textarea_scroll_content_h(
-                            element,
-                            abs_y,
-                            layout.size.height,
-                        ),
-                    ]
+                    // still holds the real field-sizing-content height; wrap=off width must
+                    // not collapse to the viewport or post-render clamps sx to 0.
+                    textarea_scrollport_content_size(element, abs_x, abs_y, layout.size)
                 } else {
                     // Taffy overflow is cull-independent. Paint-collect `max_right`/`max_bottom`
                     // grow when overflow:visible abspos/charts enter the visit band (gallery
                     // data page: overflow_x=auto → X bar appears → Y viewport shrinks → thumb jumps).
-                    scroll_viewport_taffy_content_size(&self.taffy, element, node, layout.size)
+                    let mut content = scroll_viewport_taffy_content_size(
+                        &self.taffy,
+                        element,
+                        node,
+                        layout.size,
+                    );
+                    content[1] = cap_message_scroller_collect_content_h(
+                        self,
+                        element,
+                        node,
+                        content[1],
+                        layout.size.height,
+                    );
+                    content
                 };
                 scroll_metrics.push((
                     rest.to_string(),
@@ -4462,6 +4645,18 @@ impl LayoutTree {
         if nested_scroll_viewport || overflow_contains_axis(element.style.overflow.y) {
             extent_b = abs_y + layout.size.height;
         }
+
+        // After children/glyphs: `shimmer-box` is a container overlay (chrome band,
+        // above glyphon). Streaming text uses `class="shimmer"` only — do not also
+        // put `shimmer-box` on the same node or the sheen double-paints the glyphs.
+        push_shimmer_box_overlay(
+            input_chrome_instances,
+            element,
+            render_rect,
+            parent_clip,
+            transform,
+            opacity,
+        );
 
         element.collect_extent = [extent_r, extent_b];
         element.collect_extent_valid = true;
@@ -4549,8 +4744,8 @@ fn scrollbar_track_overlay_abs(
             .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
     };
 
-    let both_outside = sig.inset_x.eq_ignore_ascii_case("outside")
-        && sig.inset_y.eq_ignore_ascii_case("outside");
+    let both_outside =
+        sig.inset_x.eq_ignore_ascii_case("outside") && sig.inset_y.eq_ignore_ascii_case("outside");
     let y_is_left = sig.y_side.eq_ignore_ascii_case("left");
     let x_is_top = sig.x_side.eq_ignore_ascii_case("top");
     // Keep identical with `app::state`: reserve only opposite lane thickness when both outside.
@@ -4748,6 +4943,69 @@ fn lpa_to_px(v: taffy::style::LengthPercentageAuto) -> Option<f32> {
     }
 }
 
+/// Soft white column sheen for `class="shimmer-box"`. Pushed into the input
+/// chrome band so it overlays this node's contents (including glyphs). Thin
+/// columns, zero radii (rounded slabs read as pills). Text-clip sweep is
+/// `class="shimmer"` and must not share this overlay.
+fn push_shimmer_box_overlay(
+    chrome: &mut Vec<InstanceInput>,
+    element: &Element,
+    render_rect: [f32; 4],
+    parent_clip: Option<[f32; 4]>,
+    transform: crate::style::Mat2d,
+    opacity: f32,
+) {
+    let Some(params) = crate::renderer::ShimmerParams::box_from_attrs(&element.attrs) else {
+        return;
+    };
+    let now = crate::style::global_time_s();
+    if params.finished(now) {
+        return;
+    }
+    let box_clip = intersect_rect(parent_clip, render_rect);
+    if box_clip[2] <= 0.5 || box_clip[3] <= 0.5 {
+        return;
+    }
+    let highlight = crate::renderer::shimmer_box_highlight_rgba(&params, element.style.bg_color);
+    let [bx, by, bw, bh] = render_rect;
+    // Same quadratic falloff as glyph shimmer — thin columns, not 3 rounded slabs.
+    const COLS: usize = 28;
+    let col_w = (bw / COLS as f32).max(1.0);
+    for i in 0..COLS {
+        let u = (i as f32 + 0.5) / COLS as f32;
+        let mix = crate::renderer::shimmer_box_mix_at(&params, now, u, bw);
+        if mix < 0.02 {
+            continue;
+        }
+        let mut color = highlight;
+        color[3] = (highlight[3] * mix * opacity).clamp(0.0, 1.0);
+        if color[3] < 0.01 {
+            continue;
+        }
+        let x = bx + i as f32 * col_w;
+        chrome.push(
+            InstanceInput {
+                rect_pos: [x - 0.5, by],
+                rect_size: [col_w + 1.0, bh],
+                color,
+                border_color: [0.0, 0.0, 0.0, 0.0],
+                radii: [0.0; 4],
+                border_width: 0.0,
+                shadow_color: [0.0, 0.0, 0.0, 0.0],
+                shadow_offset: [0.0, 0.0],
+                shadow_blur: 0.0,
+                shadow_spread: 0.0,
+                shadow_inset: 0.0,
+                transform,
+                clip_pos: [0.0, 0.0],
+                clip_size: InstanceInput::NO_CLIP_SIZE,
+                border_extra: 0.0,
+            }
+            .with_clip(Some(box_clip)),
+        );
+    }
+}
+
 fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     if let Some(c) = clip {
         let x0 = rect[0].max(c[0]);
@@ -4853,8 +5111,7 @@ fn push_input_chrome_instances(
     } else if let Some(scale) = style.line_height_scale {
         style.size_resolved() * scale
     } else {
-        style.size_resolved()
-            * crate::style::tailwind_default_leading_scale(style.size_resolved())
+        style.size_resolved() * crate::style::tailwind_default_leading_scale(style.size_resolved())
     };
     let soft_wrap = style.white_space == crate::style::WhiteSpace::Normal
         && !style.overflow.allows_caret_scroll();
@@ -4885,7 +5142,8 @@ fn push_input_chrome_instances(
     };
     // Soft-wrap of one hard line still stacks visual rows — never center in the tall box.
     let multi_line_layout = line_count > 1;
-    let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, style.size_resolved());
+    let caret_h =
+        crate::utils::text_field::text_edit_caret_height_px(line_height, style.size_resolved());
     let sel_h = if multi_line_layout {
         line_height.max(1.0)
     } else {
@@ -4982,9 +5240,20 @@ fn push_input_chrome_instances(
                 }
                 continue;
             }
-            let prefix_w =
-                prefix_width_logical(line_body, from, style.size_resolved(), style.weight_resolved(), line_height);
-            let end_w = prefix_width_logical(line_body, to, style.size_resolved(), style.weight_resolved(), line_height);
+            let prefix_w = prefix_width_logical(
+                line_body,
+                from,
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height,
+            );
+            let end_w = prefix_width_logical(
+                line_body,
+                to,
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height,
+            );
             let line_w = prefix_width_logical(
                 line_body,
                 line_body.len(),
@@ -5024,7 +5293,13 @@ fn push_input_chrome_instances(
     ix = text.floor_char_boundary(ix);
     let (line_i, local) = line_and_local(ix);
     let (_line_start, line_body) = line_body_at(line_i);
-    let prefix_w = prefix_width_logical(line_body, local, style.size_resolved(), style.weight_resolved(), line_height);
+    let prefix_w = prefix_width_logical(
+        line_body,
+        local,
+        style.size_resolved(),
+        style.weight_resolved(),
+        line_height,
+    );
     let line_w = prefix_width_logical(
         line_body,
         line_body.len(),
@@ -5081,6 +5356,7 @@ mod prepared_text_attach_tests {
             style: TextStyle::default(),
             prepared: Some(prepared.clone()),
             glyph_fx: None,
+            shimmer: None,
             paint_scale: 1.0,
             paint_transform: crate::style::MAT2D_IDENTITY,
             paint_origin: [0.0, 0.0],

@@ -966,6 +966,16 @@ impl Style {
     }
 
     pub fn to_taffy_style_with(&self, ctx: &UnitCtx) -> taffy::style::Style {
+        self.to_taffy_style_with_parent(ctx, None)
+    }
+
+    /// Bake Taffy style. `parent_flex_direction` lets `fit-content` hug the cross axis
+    /// (Taffy cannot put content-sizing tags on flex `Dimension`).
+    pub fn to_taffy_style_with_parent(
+        &self,
+        ctx: &UnitCtx,
+        parent_flex_direction: Option<FlexDirection>,
+    ) -> taffy::style::Style {
         let [bt, br, bb, bl] = self.resolved_border_widths();
         let border = Rect {
             top: LengthPercentage::length(bt),
@@ -1061,7 +1071,7 @@ impl Style {
             border
         };
 
-        taffy::style::Style {
+        let mut taffy = taffy::style::Style {
             box_sizing: self.box_sizing,
             display: self.display,
             flex_direction: self.flex_direction,
@@ -1094,7 +1104,9 @@ impl Style {
             grid_row: self.grid_row.clone(),
             grid_column: self.grid_column.clone(),
             ..Default::default()
-        }
+        };
+        apply_content_keyword_cross_axis_hug(self, parent_flex_direction, &mut taffy);
+        taffy
     }
 
     pub fn has_percent_calc(&self) -> bool {
@@ -1245,6 +1257,11 @@ impl Style {
                 self.apply_taffy_slot(slot, preview);
             }
             self.unit_specs.push((slot, dim));
+        } else if dim.is_content_keyword() {
+            // Keep the keyword so layout can hug the flex cross axis (Taffy Auto + stretch
+            // would otherwise fill the parent).
+            self.apply_taffy_slot(slot, Dimension::auto());
+            self.unit_specs.push((slot, dim));
         } else if let Some(immediate) = dim.as_immediate_dimension() {
             self.apply_taffy_slot(slot, immediate);
         }
@@ -1280,6 +1297,36 @@ impl Style {
 }
 
 /// Scale a `Dimension` by zoom factor (length values only; percent/auto pass through).
+/// Taffy flex `Dimension` cannot carry `fit-content` / min / max-content tags.
+/// Auto + stretch fills the parent; CSS treats those keywords as definite, so
+/// stretch must not apply on that axis. Approximate with `align-self: start`
+/// when the keyword is on the **cross** axis (column + width, or row + height).
+fn apply_content_keyword_cross_axis_hug(
+    style: &Style,
+    parent_flex_direction: Option<FlexDirection>,
+    taffy: &mut taffy::style::Style,
+) {
+    let Some(dir) = parent_flex_direction else {
+        return;
+    };
+    if !matches!(taffy.align_self, None | Some(AlignSelf::STRETCH)) {
+        return;
+    }
+    let hug_w = style
+        .unit_specs
+        .iter()
+        .any(|(slot, dim)| *slot == UnitSlot::Width && dim.is_content_keyword());
+    let hug_h = style
+        .unit_specs
+        .iter()
+        .any(|(slot, dim)| *slot == UnitSlot::Height && dim.is_content_keyword());
+    let width_is_cross = matches!(dir, FlexDirection::Column | FlexDirection::ColumnReverse);
+    let height_is_cross = matches!(dir, FlexDirection::Row | FlexDirection::RowReverse);
+    if (width_is_cross && hug_w) || (height_is_cross && hug_h) {
+        taffy.align_self = Some(AlignSelf::FLEX_START);
+    }
+}
+
 fn zoom_dimension(dim: Dimension, z: f32) -> Dimension {
     match dim_kind(dim) {
         DimKind::Length(l) => Dimension::length(l * z),

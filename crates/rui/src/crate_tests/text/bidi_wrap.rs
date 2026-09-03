@@ -56,7 +56,13 @@ fn gallery_bidi_labels_shrink_and_wrap_in_narrow_card() {
                     .line_height_scale
                     .map(|s| size * s)
                     .unwrap_or(size * 1.5);
-                let runs = glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight_resolved(), lh, w);
+                let runs = glyphon_soft_wrap_line_count(
+                    text,
+                    size,
+                    leaf.text_style.weight_resolved(),
+                    lh,
+                    w,
+                );
                 println!("{tid}: lay={w:.1}x{h:.1} lh={lh:.1} glyphon_runs={runs}");
                 assert!(
                     w <= viewport_w + 1.0,
@@ -103,8 +109,13 @@ fn gallery_bidi_labels_wrap_without_ancestor_min_w_zero() {
             let text = leaf.text.as_deref().unwrap_or("");
             let size = leaf.text_style.size_resolved();
             let lh = size * 1.5;
-            let runs =
-                glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight_resolved(), lh, w.max(1.0));
+            let runs = glyphon_soft_wrap_line_count(
+                text,
+                size,
+                leaf.text_style.weight_resolved(),
+                lh,
+                w.max(1.0),
+            );
             println!("no-ancestor-min_w: lay={w:.1}x{h:.1} runs={runs}");
             assert!(
                 w <= viewport_w + 1.0,
@@ -223,6 +234,82 @@ fn shaped_buffer_set_size_reflows_gallery_bidi_line() {
     assert!(
         runs.iter().all(|w| *w <= avail + 1.0),
         "wrapped line_w must fit avail; runs={runs:?}"
+    );
+    shutdown_layout_text();
+}
+
+#[test]
+fn gallery_ascii_marker_description_wraps_without_section_overlap() {
+    const DESC: &str = "Dual style: Marker / MarkerIcon / MarkerContent and marker() / ui_marker(). Variants: default, border, separator. PascalCase is the UI component; lowercase marker stays SVG. MarkerContent class shimmer is the streaming-text sweep.";
+    const GAP: f32 = 12.0;
+
+    invalidate_prepare_cache();
+    let desc: Element = label("gal-marker-desc")
+        .w("100%")
+        .text_size(12.0)
+        .leading(1.5)
+        .text(DESC)
+        .into();
+    let header: Element = label("gal-marker-header")
+        .font_weight(600.0)
+        .text_size(12.0)
+        .text("Default + icon")
+        .into();
+    let inner = Element::from(
+        r#box()
+            .flex_col()
+            .w("100%")
+            .min_w(0.0)
+            .gap(GAP)
+            .child(desc)
+            .child(header),
+    );
+    let card = Element::from(
+        r#box()
+            .flex_col()
+            .w("100%")
+            .min_w(0.0)
+            .p(16.0)
+            .child(inner),
+    );
+    let mut root = Element::new().w("100%").h("100%").min_w(0.0).child(card);
+
+    let viewport_w = 280.0_f32;
+    let mut layout = LayoutTree::new();
+    let _ = layout.build_and_layout(&mut root, viewport_w, 600.0, [-1.0, -1.0]);
+
+    let desc_leaf = find_tid(&root, "gal-marker-desc").expect("description");
+    let header_leaf = find_tid(&root, "gal-marker-header").expect("section header");
+    let w = desc_leaf.layout_bounds[2];
+    let h = desc_leaf.layout_bounds[3];
+    let size = desc_leaf.text_style.size_resolved();
+    let lh = size * 1.5;
+    let runs = glyphon_soft_wrap_line_count(
+        DESC,
+        size,
+        desc_leaf.text_style.weight_resolved(),
+        lh,
+        w.max(1.0),
+    );
+    let expect_h = lh * runs as f32;
+    let header_y = header_leaf.layout_bounds[1];
+    let desc_bottom = desc_leaf.layout_bounds[1] + h;
+
+    assert!(
+        w <= viewport_w + 1.0,
+        "description width {w} must fit viewport {viewport_w}"
+    );
+    assert!(
+        runs >= 3,
+        "marker gallery blurb must soft-wrap at {w}px, got {runs} glyphon runs"
+    );
+    assert!(
+        h + 0.5 >= expect_h - lh * 0.25,
+        "layout height {h} must cover {runs} lines (expect≈{expect_h}, lh={lh})"
+    );
+    assert!(
+        header_y + 0.5 >= desc_bottom + GAP,
+        "section header must sit below wrapped description (header_y={header_y} desc_bottom={desc_bottom} gap={GAP})"
     );
     shutdown_layout_text();
 }
