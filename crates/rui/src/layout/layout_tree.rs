@@ -2378,23 +2378,26 @@ impl LayoutTree {
     ///
     /// Taffy's `compute_layout_with_measure` still recurses with tree depth
     /// (flex/grid/block). Rounding is disabled here; `round_layout` is not on
-    /// this path. Deep-chain tests stay at 128 wrappers so the default ~1 MiB
-    /// stack covers Taffy's frames.
+    /// this path. Deep-chain tests stay at 128 wrappers so one ~1 MiB segment
+    /// covers Taffy's frames; [`with_ui_build_stack`] only grows if the PE
+    /// thread is already inside the 64 KiB red zone (GPUI `stacksafe` analog).
     #[inline(never)]
     fn compute_layout_cached_measure(
         &mut self,
         node: NodeId,
         available_space: Size<AvailableSpace>,
     ) -> Result<(), taffy::TaffyError> {
-        let tm = &self.text_measurements;
-        let mcache = &self.measure_layout_cache;
-        self.taffy.compute_layout_with_measure(
-            node,
-            available_space,
-            |known_dimensions, available_space, node_id, _context, _style| {
-                measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-            },
-        )
+        crate::core::reactivity::with_ui_build_stack(|| {
+            let tm = &self.text_measurements;
+            let mcache = &self.measure_layout_cache;
+            self.taffy.compute_layout_with_measure(
+                node,
+                available_space,
+                |known_dimensions, available_space, node_id, _context, _style| {
+                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+                },
+            )
+        })
     }
 
     pub fn new() -> Self {
@@ -7643,10 +7646,8 @@ mod text_cascade_tests {
         let child = Element::new().text("x").text_color([0, 0, 0, 255]);
         root.children.push(child);
 
-        cascade_inheritable_text_style(
-            &mut root.children[0],
-            Some(root.text_style.as_ref().clone()),
-        );
+        let parent_text = root.text_style.as_ref().clone();
+        cascade_inheritable_text_style(&mut root.inner.children[0], Some(parent_text));
         assert_eq!(
             root.children[0].text_style.decoration_color,
             Some([239, 68, 68, 255])

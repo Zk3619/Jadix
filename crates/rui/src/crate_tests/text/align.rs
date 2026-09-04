@@ -1,6 +1,6 @@
 //! WP-2.1: measure `layout_lines` ≡ glyphon soft-wrap (named `text_align_*`).
 //!
-//! Contract: `docs/text_align.md`.
+//! Contract: `docs/engine/text_align.md`.
 
 use glyphon::{fontdb::Database, FontSystem};
 

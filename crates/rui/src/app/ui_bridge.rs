@@ -55,7 +55,7 @@ pub(crate) fn drain_ui_tasks() {
         q.drain(..).collect()
     };
     for task in tasks {
-        task();
+        crate::core::reactivity::with_ui_build_stack(task);
     }
 }
 

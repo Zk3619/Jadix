@@ -1,6 +1,6 @@
 //! WP-2.9 / BM7：盒模型命中与 overflow+padding 裁剪边。
 //!
-//! 契约见 `docs/box_model.md`：命中 = `layout_bounds`（border-box）；`outline` 只绘制；
+//! 契约见 `docs/engine/box_model.md`：命中 = `layout_bounds`（border-box）；`outline` 只绘制；
 //! overflow clip 边 = 父 border-box（padding **不**内缩裁剪矩形）。
 
 use std::cell::Cell;

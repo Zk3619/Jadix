@@ -568,7 +568,8 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
     *rt.current_owner.borrow_mut() = Some(owner);
     let _window_scope = enter_owner_window_scope(rt, owner);
 
-    (*effect_fn.borrow_mut())();
+    // GPUI `#[stacksafe]` analog: only grow when remaining < 64 KiB.
+    with_ui_build_stack(|| (*effect_fn.borrow_mut())());
 
     let new_deps = rt
         .dep_stack
@@ -585,7 +586,7 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
             log::warn!(
                 "root app_builder subscribed {dep_count} signal(s) via bare Signal::get() \
                  — prefer bind_* / Show / For / reactive! \
-                 (see docs/reactivity_and_hot_reload.md; diagnose with ui_root_effect_dep_count)"
+                 (see docs/ops/reactivity_and_hot_reload.md; diagnose with ui_root_effect_dep_count)"
             );
         }
     }
@@ -887,7 +888,7 @@ fn flush_pending(rt: &Runtime) {
                 drop(q);
                 drop(set);
                 for job in jobs {
-                    job();
+                    with_ui_build_stack(job);
                 }
                 continue;
             }
@@ -928,7 +929,7 @@ fn flush_pending(rt: &Runtime) {
                 return;
             }
             for job in jobs {
-                job();
+                with_ui_build_stack(job);
             }
             // Deferred writes may enqueue more work — continue the loop.
         }
@@ -1433,20 +1434,21 @@ impl Drop for OwnerHandle {
     }
 }
 
-/// Ensure the current thread can host a large MSVC-debug `ui!` / `app_builder` frame.
+/// GPUI `#[stacksafe]` analog: grow the call stack only when remaining space is
+/// inside a small red zone (not a PE `/STACK` bump, not a per-event 8 MiB wrap).
 ///
-/// Windows GUI threads default to ~1 MiB. Debug prologues reserve space for every
-/// `Element` temporary in a function; a page-sized RSX tree overflows that. This
-/// grows **only for `f`** (typically 8 MiB) when remaining stack is below 1 MiB —
-/// not a PE `/STACK` bump and not a process-lifetime grow.
+/// `stacker`'s documented pattern is `maybe_grow(32 KiB, 1 MiB, …)`. RUI uses
+/// **64 KiB** red zone / **1 MiB** segment so a wide MSVC-debug `ui!` prologue
+/// still fits after `Element` became a pointer, without forcing grow on every
+/// click of a 1 MiB GUI thread (the old 1 MiB red zone always tripped).
 ///
-/// The framework already wraps `run` / redraw / input. Headless tests that spawn a
-/// 1 MiB thread should call this around UI construction (gallery uses
-/// `run_on_gallery_build_stack`).
+/// Framework hotspots: `run_effect` user body, [`component_root`], Taffy
+/// `compute_layout`, each `run_on_ui_thread` job, file-drop callback, HMR
+/// `app_builder`. Gallery `run_on_gallery_build_stack` still wraps construction.
 #[inline(never)]
 pub fn with_ui_build_stack<R>(f: impl FnOnce() -> R) -> R {
-    const RED_ZONE: usize = 1024 * 1024;
-    const GROW: usize = 8 * 1024 * 1024;
+    const RED_ZONE: usize = 64 * 1024;
+    const GROW: usize = 1024 * 1024;
     stacker::maybe_grow(RED_ZONE, GROW, f)
 }
 
@@ -1786,7 +1788,7 @@ where
         rt.current_owner.replace(Some(child))
     });
     let _restore = OwnerRestore(prev);
-    f()
+    with_ui_build_stack(f)
 }
 
 /// Alias of [`component_root`]. Prefer [`component_root`] at new Builder call sites.

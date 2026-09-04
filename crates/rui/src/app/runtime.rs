@@ -217,10 +217,7 @@ fn test_reconcile_subtree(
 
 #[cfg(test)]
 fn element_contains_rui_portal(el: &Element) -> bool {
-    crate::core::tree::find_in_tree(el, |n| {
-        n.attrs.get("rui_portal").map(String::as_str) == Some("1")
-    })
-    .is_some()
+    crate::core::tree::find_by_attr(el, "rui_portal", "1").is_some()
 }
 
 #[cfg(test)]

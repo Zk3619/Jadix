@@ -2316,7 +2316,7 @@ impl super::App {
                 let file = super::hmr_log::display_path(&hot_reload.last_patch_file);
 
                 if hot_reload.force_reload {
-                    let new_root = (self.app_builder.borrow_mut())();
+                    let new_root = super::with_grown_ui_stack(|| (self.app_builder.borrow_mut())());
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
                     super::hmr_log::update("full reload");

@@ -121,11 +121,6 @@ type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
 pub use crate::core::reactivity::with_ui_build_stack;
 
-#[inline(never)]
-pub(crate) fn with_grown_ui_stack<R>(f: impl FnOnce() -> R) -> R {
-    with_ui_build_stack(f)
-}
-
 /// Textarea bottom-right resize-grip drag state.
 struct TextareaResizeDrag {
     field_id: String,
@@ -319,9 +314,8 @@ pub(super) fn push_dropped_file(path: std::path::PathBuf) {
 }
 
 pub(super) fn fire_file_drop(paths: Vec<std::path::PathBuf>) {
-    FILE_DROP_HANDLER.with(|h| {
-        if let Some(cb) = h.borrow().as_ref() {
-            (*cb.borrow_mut())(paths);
-        }
-    });
+    let cb = FILE_DROP_HANDLER.with(|h| h.borrow().clone());
+    if let Some(cb) = cb {
+        crate::core::reactivity::with_ui_build_stack(|| (*cb.borrow_mut())(paths));
+    }
 }

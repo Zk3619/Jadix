@@ -1,3 +1,4 @@
+use std::ops::{Deref, DerefMut};
 use taffy::prelude::*;
 use winit::event::KeyEvent;
 
@@ -588,12 +589,20 @@ impl Drop for UnmountHook {
 
 impl Drop for Element {
     fn drop(&mut self) {
-        // Default recursive `Vec<Element>` Drop overflows on tall UI trees (Gallery) with
-        // Windows' ~1MB stack in debug builds. Drain the subtree iteratively instead.
+        // Default recursive `Vec<Element>` Drop still overflows on tall trees: each
+        // handle drops `Box<ElementInner>` which owns `children`. Drain iteratively
+        // and recycle detached inners into the TLS slab (retained-tree analog of
+        // GPUI's arena — the tree outlives a frame, so this is a free-list, not
+        // a per-frame bump).
+        //
+        // `Element: Drop` forbids moving `inner` by destructure; `ptr::read` +
+        // `forget` takes the box after children have been moved onto the worklist.
         let mut stack = std::mem::take(&mut self.children);
         while let Some(mut node) = stack.pop() {
             stack.append(&mut node.children);
-            // `node` drops here with empty `children` → O(1) stack frame per element.
+            let inner = unsafe { std::ptr::read(&node.inner) };
+            std::mem::forget(node);
+            recycle_inner_box(inner);
         }
     }
 }
@@ -622,8 +631,79 @@ pub(crate) fn walk_elements_mut(root: &mut Element, mut visit: impl FnMut(&mut E
     }
 }
 
+/// Pre-order heap DFS. `visit` returning `false` skips `el.children` (shortcut
+/// slots, chevron subtrees, …).
+pub(crate) fn walk_elements_pruned(root: &Element, mut visit: impl FnMut(&Element) -> bool) {
+    let mut stack: Vec<&Element> = vec![root];
+    while let Some(el) = stack.pop() {
+        if !visit(el) {
+            continue;
+        }
+        stack.extend(el.children.iter().rev());
+    }
+}
+
+/// Mutable counterpart of [`walk_elements_pruned`].
+pub(crate) fn walk_elements_mut_pruned(
+    root: &mut Element,
+    mut visit: impl FnMut(&mut Element) -> bool,
+) {
+    let mut stack: Vec<*mut Element> = vec![root as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: exclusive subtree walk; skip means children stay off the worklist.
+        let el = unsafe { &mut *ptr };
+        if !visit(el) {
+            continue;
+        }
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push(std::ptr::addr_of_mut!(el.children[i]));
+        }
+    }
+}
+
+pub(crate) fn any_in_tree(root: &Element, pred: impl FnMut(&Element) -> bool) -> bool {
+    find_in_tree(root, pred).is_some()
+}
+
+pub(crate) fn find_by_attr<'a>(root: &'a Element, key: &str, value: &str) -> Option<&'a Element> {
+    find_in_tree(root, |el| {
+        el.attrs.get(key).map(String::as_str) == Some(value)
+    })
+}
+
+pub(crate) fn find_by_attr_mut<'a>(
+    root: &'a mut Element,
+    key: &str,
+    value: &str,
+) -> Option<&'a mut Element> {
+    find_in_tree_mut(root, |el| {
+        el.attrs.get(key).map(String::as_str) == Some(value)
+    })
+}
+
+/// First node whose `text` is `Some` and non-empty after trim.
+pub(crate) fn first_trimmed_text(root: &Element) -> Option<String> {
+    find_in_tree(root, |n| {
+        n.text
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+    })
+    .map(|n| n.text.as_deref().unwrap().trim().to_string())
+}
+
+/// First node with `text: Some(_)` (empty string counts). `""` if none.
+pub(crate) fn first_text_leaf(root: &Element) -> String {
+    find_in_tree(root, |n| n.text.is_some())
+        .and_then(|n| n.text.clone())
+        .unwrap_or_default()
+}
+
 /// Pre-order heap DFS that does not enter nested `template_id` children.
 /// `root` is always visited (hot-reload patches a template island from the island root).
+/// Callers live in `#[cfg(debug_assertions)]` HMR inject (`app/state.rs`).
+#[cfg(debug_assertions)]
 pub(crate) fn walk_within_template<'a>(root: &'a Element, mut visit: impl FnMut(&'a Element)) {
     let mut stack: Vec<&'a Element> = vec![root];
     while let Some(el) = stack.pop() {
@@ -639,6 +719,7 @@ pub(crate) fn walk_within_template<'a>(root: &'a Element, mut visit: impl FnMut(
 
 /// Mutable pre-order heap DFS with the same nested-`template_id` boundary as
 /// [`walk_within_template`]. `visit` returning `true` stops the walk.
+#[cfg(debug_assertions)]
 pub(crate) fn walk_within_template_mut(
     root: &mut Element,
     mut visit: impl FnMut(&mut Element) -> bool,
@@ -673,6 +754,31 @@ pub(crate) fn find_in_tree<'a>(
         stack.extend(el.children.iter().rev());
     }
     None
+}
+
+pub(crate) fn normalize_template_id(id: &str) -> String {
+    id.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn template_id_eq_normalized(el: &Element, want: &str) -> bool {
+    el.template_id
+        .as_deref()
+        .is_some_and(|t| normalize_template_id(t) == want)
+}
+
+/// Heap DFS by `template_id` (path separators + ASCII case folded).
+pub(crate) fn find_by_template_id<'a>(root: &'a Element, want: &str) -> Option<&'a Element> {
+    let want = normalize_template_id(want);
+    find_in_tree(root, |el| template_id_eq_normalized(el, &want))
+}
+
+/// Mutable heap DFS by `template_id` (same matching as [`find_by_template_id`]).
+pub(crate) fn find_by_template_id_mut<'a>(
+    root: &'a mut Element,
+    want: &str,
+) -> Option<&'a mut Element> {
+    let want = normalize_template_id(want);
+    find_in_tree_mut(root, |el| template_id_eq_normalized(el, &want))
 }
 
 pub(crate) fn find_in_tree_mut<'a>(
@@ -763,10 +869,9 @@ pub(crate) fn find_path_in_tree(
     None
 }
 
-pub struct Element {
-    /// Boxed so `Element` stays cheap to move. MSVC debug reserves stack for every
-    /// `Element` temporary in a function prologue; a 3KB+ inline `Style` overflows
-    /// the Windows ~1 MiB main thread on wide builder / `ui!` trees.
+/// Heap payload of [`Element`]. Public fields stay reachable via `Deref`
+/// (`el.style`, `el.children`, …) so builder / layout call sites do not change.
+pub struct ElementInner {
     pub style: Box<crate::style::Style>,
     pub children: Vec<Element>,
     pub text: Option<String>,
@@ -860,6 +965,169 @@ pub struct Element {
     pub class_set: Option<crate::style::ClassSet>,
     pub(crate) layout_node: Option<taffy::prelude::NodeId>,
     pub attrs: std::collections::HashMap<String, String>,
+}
+
+/// Cap so a huge unmount cannot pin unbounded RSS. Excess boxes return to the
+/// system allocator.
+const INNER_SLAB_CAP: usize = 4096;
+
+struct InnerSlab {
+    free: Vec<Box<ElementInner>>,
+}
+
+thread_local! {
+    static INNER_SLAB: std::cell::RefCell<InnerSlab> =
+        const { std::cell::RefCell::new(InnerSlab { free: Vec::new() }) };
+}
+
+fn blank_inner() -> ElementInner {
+    ElementInner {
+        style: Box::new(crate::style::Style::default()),
+        children: Vec::new(),
+        text: None,
+        text_spans: None,
+        text_shape_suffix: None,
+        text_style: Box::new(TextStyle::default()),
+        layout_bounds: [0.0, 0.0, 0.0, 0.0],
+        collect_extent: [0.0, 0.0],
+        collect_extent_valid: false,
+        sticky_visual_offset: [0.0, 0.0],
+        #[cfg(feature = "devtools")]
+        paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
+        #[cfg(feature = "devtools")]
+        paint_visual_gen: 0,
+        transition_snapshot: Default::default(),
+        animation_snapshot: Default::default(),
+        on_click: None,
+        on_hover: None,
+        on_mousedown: None,
+        on_mouseup: None,
+        on_context_menu: None,
+        on_double_click: None,
+        on_mousemove: None,
+        on_mouseover: None,
+        on_mouseout: None,
+        on_key_down: None,
+        on_unmount: None,
+        focus_id: None,
+        focusable: false,
+        cursor: None,
+        scroll_offset: [0.0, 0.0],
+        contains_scroll_viewport: false,
+        scroll_viewport_subtree_count: 0,
+        template_hash: None,
+        template_id: None,
+        button_hover_paint: None,
+        input_paint_sync: None,
+        switch_checked_sync: None,
+        checkbox_sync: None,
+        radio_selected_sync: None,
+        focus_ring: false,
+        reactive_sync: None,
+        image_texture: None,
+        class_set: None,
+        layout_node: None,
+        attrs: std::collections::HashMap::new(),
+    }
+}
+
+fn alloc_inner() -> Box<ElementInner> {
+    INNER_SLAB
+        .try_with(|cell| cell.borrow_mut().free.pop())
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| Box::new(blank_inner()))
+}
+
+fn recycle_inner_box(mut inner: Box<ElementInner>) {
+    let _ = INNER_SLAB.try_with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.free.len() >= INNER_SLAB_CAP {
+            return;
+        }
+        *inner = blank_inner();
+        slab.free.push(inner);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn element_inner_slab_len() -> usize {
+    INNER_SLAB
+        .try_with(|cell| cell.borrow().free.len())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn drain_element_inner_slab() {
+    let _ = INNER_SLAB.try_with(|cell| cell.borrow_mut().free.clear());
+}
+
+/// UI node handle. Construction allocates [`ElementInner`] on the heap (Iced
+/// `Box<dyn Widget>` / GPUI arena-box). `size_of::<Element>()` is one pointer so
+/// MSVC debug `ui!` frames do not reserve ~2.4 KiB per temporary.
+pub struct Element {
+    /// Heap payload. Prefer `el.field` via `Deref`; use `el.inner.a` / `el.inner.b`
+    /// when one call must mutably borrow two fields (Deref cannot split-borrow).
+    pub inner: Box<ElementInner>,
+}
+
+impl Deref for Element {
+    type Target = ElementInner;
+    #[inline]
+    fn deref(&self) -> &ElementInner {
+        &self.inner
+    }
+}
+
+impl DerefMut for Element {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut ElementInner {
+        &mut self.inner
+    }
+}
+
+impl Element {
+    /// Split-borrow style + animation snapshot (Deref cannot).
+    #[inline]
+    pub(crate) fn tick_css_animations(&mut self, dt: f32) -> bool {
+        crate::style::tick_element_animations(
+            &mut self.inner.style,
+            &mut self.inner.animation_snapshot,
+            dt,
+        )
+    }
+
+    /// Split-borrow style + transition snapshot (Deref cannot).
+    #[inline]
+    #[allow(dead_code)] // used by crate tests (motion / keyed_overlay)
+    pub(crate) fn tick_css_transitions(&mut self, dt: f32) -> bool {
+        crate::style::tick_element_transitions(
+            &mut self.inner.style,
+            &mut self.inner.transition_snapshot,
+            dt,
+        )
+    }
+
+    /// Split-borrow style + transition snapshot; animation lock is copied first.
+    #[inline]
+    pub(crate) fn tick_css_transitions_locked(&mut self, dt: f32) -> bool {
+        let lock = self.inner.animation_snapshot.lock();
+        crate::style::tick_element_transitions_locked(
+            &mut self.inner.style,
+            &mut self.inner.transition_snapshot,
+            lock,
+            dt,
+        )
+    }
+
+    /// Split-borrow style + transition snapshot (Deref cannot).
+    #[inline]
+    pub(crate) fn snap_css_transition_baseline(&mut self) {
+        crate::style::snap_element_transitions_to_current(
+            &self.inner.style,
+            &mut self.inner.transition_snapshot,
+        );
+    }
 }
 
 /// A wrapper for event handlers to allow them to be passed as props in functional components.
@@ -1133,54 +1401,13 @@ impl Element {
         }
     }
 
+    /// Allocates from the TLS inner slab, or the heap on a miss. `#[inline(never)]`
+    /// keeps the `ElementInner` temporary inside this frame (MSVC debug would
+    /// otherwise reserve it in every inlined caller).
+    #[inline(never)]
     pub fn new() -> Self {
         Self {
-            style: Box::new(crate::style::Style::default()),
-            children: Vec::new(),
-            text: None,
-            text_spans: None,
-            text_shape_suffix: None,
-            text_style: Box::new(TextStyle::default()),
-            layout_bounds: [0.0, 0.0, 0.0, 0.0],
-            collect_extent: [0.0, 0.0],
-            collect_extent_valid: false,
-            sticky_visual_offset: [0.0, 0.0],
-            #[cfg(feature = "devtools")]
-            paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
-            #[cfg(feature = "devtools")]
-            paint_visual_gen: 0,
-            transition_snapshot: Default::default(),
-            animation_snapshot: Default::default(),
-            on_click: None,
-            on_hover: None,
-            on_mousedown: None,
-            on_mouseup: None,
-            on_context_menu: None,
-            on_double_click: None,
-            on_mousemove: None,
-            on_mouseover: None,
-            on_mouseout: None,
-            on_key_down: None,
-            on_unmount: None,
-            focus_id: None,
-            focusable: false,
-            cursor: None,
-            scroll_offset: [0.0, 0.0],
-            contains_scroll_viewport: false,
-            scroll_viewport_subtree_count: 0,
-            template_hash: None,
-            template_id: None,
-            button_hover_paint: None,
-            input_paint_sync: None,
-            switch_checked_sync: None,
-            checkbox_sync: None,
-            radio_selected_sync: None,
-            focus_ring: false,
-            reactive_sync: None,
-            image_texture: None,
-            class_set: None,
-            layout_node: None,
-            attrs: std::collections::HashMap::new(),
+            inner: alloc_inner(),
         }
     }
 }
@@ -1766,7 +1993,7 @@ impl Element {
     }
     /// Stable AccessKit node key when the element has no `focus_id` (e.g. static Label).
     ///
-    /// Pair with [`Self::aria_labelledby`] on a control. See `docs/a11y_smoke.md`.
+    /// Pair with [`Self::aria_labelledby`] on a control. See `docs/ops/a11y_smoke.md`.
     pub fn accesskit_id(mut self, id: impl Into<String>) -> Self {
         self.attrs.insert("accesskit_id".to_string(), id.into());
         self

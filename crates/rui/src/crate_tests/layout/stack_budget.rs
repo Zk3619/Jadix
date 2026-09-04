@@ -5,7 +5,7 @@
 //! work queue — they are a memory/time cost, not a stack overflow.
 
 use crate::components::button::button;
-use crate::core::tree::Element;
+use crate::core::tree::{Element, ElementInner};
 use crate::layout::layout_tree::{stack_probe, LayoutTree, TextLayoutInfo};
 use crate::primitives::{hstack, vstack};
 use crate::renderer::InstanceInput;
@@ -23,7 +23,7 @@ fn chain(depth: usize) -> Element {
     nest_chain_iterative(depth)
 }
 
-/// Build a parent-chain without mapping depth onto the call stack (`Element` is ~3.6 KiB).
+/// Build a parent-chain without mapping depth onto the call stack.
 fn nest_chain_iterative(wrappers: usize) -> Element {
     let mut el = Element::new().text("leaf").w(40.0).h(20.0);
     for _ in 0..wrappers {
@@ -97,6 +97,7 @@ fn layout_and_probe(root: &mut Element, w: f32, h: f32) -> (usize, usize, usize,
 #[test]
 fn layout_type_sizes_are_documented() {
     eprintln!("size_of Element            = {}", size_of::<Element>());
+    eprintln!("size_of ElementInner       = {}", size_of::<ElementInner>());
     eprintln!("size_of Style              = {}", size_of::<Style>());
     eprintln!(
         "size_of taffy::Style       = {}",
@@ -118,6 +119,15 @@ fn layout_type_sizes_are_documented() {
     eprintln!(
         "size_of AnimationSnapshot  = {}",
         size_of::<AnimationSnapshot>()
+    );
+    assert_eq!(
+        size_of::<Element>(),
+        size_of::<*const ()>(),
+        "Element must be a heap handle so MSVC debug ui! temporaries stay pointer-sized"
+    );
+    assert!(
+        size_of::<ElementInner>() > 256,
+        "payload belongs on the heap; shrinking Inner is a later pass, not a reason to unbox Element"
     );
 }
 
@@ -217,9 +227,18 @@ fn reconcile_deep_chain_stays_on_heap() {
     let mut new = nest_chain_iterative(WRAPPERS);
     // Same structure, different leaf text — positional zip must not recurse on the OS stack.
     {
+        let depth = {
+            let mut d = 0usize;
+            let mut cur: &Element = &new;
+            while let Some(child) = cur.children.first() {
+                cur = child;
+                d += 1;
+            }
+            d
+        };
         let mut leaf = &mut new;
-        while let Some(child) = leaf.children.first_mut() {
-            leaf = child;
+        for _ in 0..depth {
+            leaf = &mut leaf.inner.children[0];
         }
         leaf.text = Some("leaf-b".into());
     }
@@ -230,4 +249,118 @@ fn reconcile_deep_chain_stays_on_heap() {
         leaf = child;
     }
     assert_eq!(leaf.text.as_deref(), Some("leaf-b"));
+}
+
+/// Per-frame class/CSS walks used to recurse. 4k wrappers overflow a 1 MiB thread
+/// if those walks map tree depth onto the OS stack (Taffy `compute_layout` is not
+/// in this test — it stays recursive and is capped at [`DEEP_CHAIN_WRAPPERS`]).
+#[test]
+fn class_variant_walks_stay_on_heap() {
+    use crate::core::tree::LayoutStatus;
+    use crate::style::{
+        class_variant_hover_needs_frame, sync_class_variants_subtree,
+        tick_active_css_transitions_subtree,
+    };
+
+    const WRAPPERS: usize = 4_000;
+    let mut root = nest_chain_iterative(WRAPPERS);
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        320.0,
+        240.0,
+        &mut tree,
+        &mut impact,
+    );
+    tick_active_css_transitions_subtree(
+        &mut root,
+        320.0,
+        240.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    assert!(!class_variant_hover_needs_frame(&root, [0.0, 0.0]));
+}
+
+/// Overlay shells used to recurse `find_template_id*` / portal probes. 4k wrappers
+/// overflow a 1 MiB thread if those lookups map tree depth onto the OS stack.
+#[test]
+fn overlay_template_find_stays_on_heap() {
+    use crate::core::tree::{find_by_attr, find_by_template_id, find_by_template_id_mut};
+
+    const WRAPPERS: usize = 4_000;
+    let mut root = nest_chain_iterative(WRAPPERS);
+    {
+        let mut leaf = &mut root;
+        while !leaf.inner.children.is_empty() {
+            leaf = &mut leaf.inner.children[0];
+        }
+        leaf.template_id = Some("leaf-tid".into());
+        leaf.attrs.insert("rui_portal".into(), "1".into());
+    }
+    assert!(find_by_template_id(&root, "leaf-tid").is_some());
+    assert!(find_by_template_id(&root, "LEAF-TID").is_some());
+    assert!(find_by_attr(&root, "rui_portal", "1").is_some());
+    assert!(find_by_template_id_mut(&mut root, "leaf-tid").is_some());
+}
+
+/// Component-shell slot lookup used to recurse. 4k wrappers overflow a 1 MiB thread
+/// if those finds map tree depth onto the OS stack.
+#[test]
+fn component_slot_find_stays_on_heap() {
+    use crate::core::tree::{any_in_tree, find_by_attr, find_by_attr_mut, first_trimmed_text};
+
+    const WRAPPERS: usize = 4_000;
+    let mut root = nest_chain_iterative(WRAPPERS);
+    {
+        let mut leaf = &mut root;
+        while !leaf.inner.children.is_empty() {
+            leaf = &mut leaf.inner.children[0];
+        }
+        leaf.set_attr("data-slot", "shell-leaf");
+        leaf.text = Some("  caption  ".into());
+    }
+    assert!(find_by_attr(&root, "data-slot", "shell-leaf").is_some());
+    assert!(any_in_tree(&root, |n| n
+        .attrs
+        .get("data-slot")
+        .map(String::as_str)
+        == Some("shell-leaf")));
+    assert_eq!(first_trimmed_text(&root).as_deref(), Some("caption"));
+    assert!(find_by_attr_mut(&mut root, "data-slot", "shell-leaf").is_some());
+}
+
+/// Retained-tree analog of GPUI's frame arena: unmounted `Box<ElementInner>`
+/// returns to a TLS free-list (not a per-frame bump — the tree outlives a frame).
+#[test]
+fn element_inner_slab_recycles_unmounted_children() {
+    use crate::core::tree::{drain_element_inner_slab, element_inner_slab_len};
+
+    drain_element_inner_slab();
+    assert_eq!(element_inner_slab_len(), 0);
+    const N: usize = 64;
+    drop({
+        let mut root = Element::new();
+        for _ in 0..N {
+            root.children.push(Element::new());
+        }
+        root
+    });
+    assert_eq!(
+        element_inner_slab_len(),
+        N,
+        "each unmounted child Box<ElementInner> returns to the TLS free-list; the dropped root is not recycled"
+    );
+    let n = element_inner_slab_len();
+    let _reused: Vec<Element> = (0..n).map(|_| Element::new()).collect();
+    assert_eq!(
+        element_inner_slab_len(),
+        0,
+        "Element::new must pop recycled inners before hitting the system allocator"
+    );
 }

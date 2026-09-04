@@ -3,7 +3,7 @@
 //! System tray icon + menu. The default build is a compilable stub; enable feature `system-tray` and access it.
 //! [`tray-icon`](https://crates.io/crates/tray-icon) (contains muda menu).
 //! 菜单点击从原生线程经 [`crate::app::run_on_ui_thread`] 回到 UI 线程再调 `on_click`。
-//! See [`docs/tray.md`](../../../../docs/tray.md).
+//! See [`docs/ops/tray.md`](../../../../docs/ops/tray.md).
 
 use std::cell::RefCell;
 use std::collections::HashMap;

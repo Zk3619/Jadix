@@ -1511,18 +1511,16 @@ impl AppState {
         // sidebar hover flash). Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
-        // Second line of defense if a caller is not already on the UI path
-        // (`RedrawRequested` wraps the whole handler).
-        super::with_grown_ui_stack(|| {
-            self.render_inner(
-                mouse_pos,
-                scrollbar_update,
-                active_drag_rest,
-                text_force_fast_mode,
-                scrollbar_skip_flex_layout,
-                scroll_paint_only,
-            )
-        })
+        // Collect / Taffy / GPU do not map tree depth onto the OS stack.
+        // Construction (`app_builder`, `flush_pending` islands) grows at those sites.
+        self.render_inner(
+            mouse_pos,
+            scrollbar_update,
+            active_drag_rest,
+            text_force_fast_mode,
+            scrollbar_skip_flex_layout,
+            scroll_paint_only,
+        )
     }
 
     #[inline(never)]
@@ -3624,10 +3622,7 @@ fn normalize_anchor_template_id(id: &str) -> String {
 }
 
 fn element_contains_rui_portal(el: &Element) -> bool {
-    crate::core::tree::find_in_tree(el, |n| {
-        n.attrs.get("rui_portal").map(String::as_str) == Some("1")
-    })
-    .is_some()
+    crate::core::tree::find_by_attr(el, "rui_portal", "1").is_some()
 }
 
 /// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.
@@ -3681,9 +3676,10 @@ fn update_scrollbar_element_self(
             .unwrap_or(0.0)
             .max(0.0)
     };
-    let Some(fid) = el.focus_id.as_deref() else {
+    let Some(fid) = el.focus_id.clone() else {
         return;
     };
+    let fid = fid.as_str();
 
     let (rest, axis, is_thumb) =
         if let Some(prefix) = fid.strip_prefix(SCROLLBAR_THUMB_FOCUS_PREFIX) {
@@ -3899,120 +3895,123 @@ fn update_scrollbar_element_self(
     el.style.min_size.height = Dimension::auto();
 
     // Update thumb geometry (assumes first child is thumb).
-    let Some(thumb) = el.children.first_mut() else {
-        return;
-    };
-
-    // Cache base style once per scroll-area + axis (we will apply alpha every frame).
-    let style_key = format!("{rest}:{axis}");
-    if let Entry::Vacant(e) = base_style.entry(style_key.clone()) {
-        let track_fades = el
-            .attrs
-            .get(ATTR_SCROLLBAR_TRACK_FADES)
-            .is_none_or(|s| s != "0");
-        let mut track_bg = el.style.bg_color;
-        let mut thumb_bg = thumb.style.bg_color;
-        let mut track_border = el.style.border_color;
-        let mut thumb_border = thumb.style.border_color;
-        let track_border_width = el.style.border_width;
-        let thumb_border_width = thumb.style.border_width;
-        normalize_scrollbar_base_for_auto(
-            vis.as_str(),
-            track_fades,
-            track_border_width,
-            thumb_border_width,
-            &mut track_bg,
-            &mut track_border,
-            &mut thumb_bg,
-            &mut thumb_border,
-        );
-        e.insert(ScrollbarBaseStyle {
-            track_bg,
-            thumb_bg,
-            track_border,
-            thumb_border,
-            track_border_width,
-            thumb_border_width,
-            track_fades,
-            thumb_border_fades: thumb_border_width > 0.0,
-        });
-    }
-    if let Some(bs) = base_style.get(&style_key).copied() {
-        let mut tc = bs.track_bg;
-        let mut th = bs.thumb_bg;
-        let mut tbc = bs.track_border;
-        let mut thbc = bs.thumb_border;
-        let visible_alpha = v.clamp(0.0, 1.0);
-        apply_scrollbar_visible_alpha(
-            visible_alpha,
-            bs.track_fades,
-            bs.thumb_border_fades,
-            &mut tc,
-            &mut th,
-            &mut tbc,
-            &mut thbc,
-        );
-        el.style.bg_color = tc;
-        thumb.style.bg_color = th;
-        el.style.border_color = tbc;
-        thumb.style.border_color = thbc;
-        // 边框宽不参与 alpha：否则每帧改变盒模型，无法在无 Taffy compute 的 overlay-only 帧保持几何稳定。
-        el.style.border_width = bs.track_border_width;
-        thumb.style.border_width = bs.thumb_border_width;
-    }
-
     {
-        match axis {
-            "x" => {
-                let track =
-                    (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
-                let track_inner = (track - inset * 2.0).max(1.0);
-                let (tw, ml) = if scrollable {
-                    let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-                    let min_thumb = scrollbar_min_thumb_along_track(track_inner);
-                    let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
-                    let max_offset = (cw - vw).max(0.0);
-                    let t = if max_offset > 1e-4 {
-                        (sx / max_offset).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let ml = (track_inner - tw).max(0.0) * t;
-                    (tw, ml)
-                } else {
-                    (track_inner, 0.0)
-                };
-                thumb.style.size.width = Dimension::length(tw);
-                thumb.style.size.height = Dimension::length(thumb_cross);
-                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(ml);
-                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(inset);
-            }
-            _ => {
-                let track =
-                    (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
-                let track_inner = (track - inset * 2.0).max(1.0);
-                let (th, mt) = if scrollable {
-                    let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-                    let min_thumb = scrollbar_min_thumb_along_track(track_inner);
-                    let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
-                    let max_offset = (ch - vh).max(0.0);
-                    let t = if max_offset > 1e-4 {
-                        (sy / max_offset).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let mt = (track_inner - th).max(0.0) * t;
-                    (th, mt)
-                } else {
-                    (track_inner, 0.0)
-                };
-                thumb.style.size.width = Dimension::length(thumb_cross);
-                thumb.style.size.height = Dimension::length(th);
-                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(mt);
-                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(inset);
-            }
+        let inner = &mut *el.inner;
+        let Some(thumb) = inner.children.first_mut() else {
+            return;
+        };
+
+        // Cache base style once per scroll-area + axis (we will apply alpha every frame).
+        let style_key = format!("{rest}:{axis}");
+        if let Entry::Vacant(e) = base_style.entry(style_key.clone()) {
+            let track_fades = inner
+                .attrs
+                .get(ATTR_SCROLLBAR_TRACK_FADES)
+                .is_none_or(|s| s != "0");
+            let mut track_bg = inner.style.bg_color;
+            let mut thumb_bg = thumb.style.bg_color;
+            let mut track_border = inner.style.border_color;
+            let mut thumb_border = thumb.style.border_color;
+            let track_border_width = inner.style.border_width;
+            let thumb_border_width = thumb.style.border_width;
+            normalize_scrollbar_base_for_auto(
+                vis.as_str(),
+                track_fades,
+                track_border_width,
+                thumb_border_width,
+                &mut track_bg,
+                &mut track_border,
+                &mut thumb_bg,
+                &mut thumb_border,
+            );
+            e.insert(ScrollbarBaseStyle {
+                track_bg,
+                thumb_bg,
+                track_border,
+                thumb_border,
+                track_border_width,
+                thumb_border_width,
+                track_fades,
+                thumb_border_fades: thumb_border_width > 0.0,
+            });
         }
-        layout_tree.update_taffy_node_style(thumb);
+        if let Some(bs) = base_style.get(&style_key).copied() {
+            let mut tc = bs.track_bg;
+            let mut th = bs.thumb_bg;
+            let mut tbc = bs.track_border;
+            let mut thbc = bs.thumb_border;
+            let visible_alpha = v.clamp(0.0, 1.0);
+            apply_scrollbar_visible_alpha(
+                visible_alpha,
+                bs.track_fades,
+                bs.thumb_border_fades,
+                &mut tc,
+                &mut th,
+                &mut tbc,
+                &mut thbc,
+            );
+            inner.style.bg_color = tc;
+            thumb.style.bg_color = th;
+            inner.style.border_color = tbc;
+            thumb.style.border_color = thbc;
+            // 边框宽不参与 alpha：否则每帧改变盒模型，无法在无 Taffy compute 的 overlay-only 帧保持几何稳定。
+            inner.style.border_width = bs.track_border_width;
+            thumb.style.border_width = bs.thumb_border_width;
+        }
+
+        {
+            match axis {
+                "x" => {
+                    let track =
+                        (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
+                    let track_inner = (track - inset * 2.0).max(1.0);
+                    let (tw, ml) = if scrollable {
+                        let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
+                        let min_thumb = scrollbar_min_thumb_along_track(track_inner);
+                        let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                        let max_offset = (cw - vw).max(0.0);
+                        let t = if max_offset > 1e-4 {
+                            (sx / max_offset).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let ml = (track_inner - tw).max(0.0) * t;
+                        (tw, ml)
+                    } else {
+                        (track_inner, 0.0)
+                    };
+                    thumb.style.size.width = Dimension::length(tw);
+                    thumb.style.size.height = Dimension::length(thumb_cross);
+                    thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(ml);
+                    thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(inset);
+                }
+                _ => {
+                    let track =
+                        (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+                    let track_inner = (track - inset * 2.0).max(1.0);
+                    let (th, mt) = if scrollable {
+                        let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
+                        let min_thumb = scrollbar_min_thumb_along_track(track_inner);
+                        let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                        let max_offset = (ch - vh).max(0.0);
+                        let t = if max_offset > 1e-4 {
+                            (sy / max_offset).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let mt = (track_inner - th).max(0.0) * t;
+                        (th, mt)
+                    } else {
+                        (track_inner, 0.0)
+                    };
+                    thumb.style.size.width = Dimension::length(thumb_cross);
+                    thumb.style.size.height = Dimension::length(th);
+                    thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(mt);
+                    thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(inset);
+                }
+            }
+            layout_tree.update_taffy_node_style(thumb);
+        }
     }
 
     // Sync track style after all geometry mutations to avoid one-frame stale layout,

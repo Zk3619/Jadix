@@ -835,22 +835,9 @@ impl SecondaryWindowState {
 }
 
 fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&'a mut Element> {
-    if let Some(tid) = el.template_id.as_deref() {
-        if tid.replace('\\', "/").to_ascii_lowercase() == want_normalized {
-            return Some(el);
-        }
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_template_mut(child, want_normalized) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_by_template_id_mut(el, want_normalized)
 }
 
 fn element_contains_rui_portal(el: &Element) -> bool {
-    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
-        return true;
-    }
-    el.children.iter().any(element_contains_rui_portal)
+    crate::core::tree::find_by_attr(el, "rui_portal", "1").is_some()
 }
