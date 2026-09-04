@@ -1305,6 +1305,7 @@ fn cap_message_scroller_collect_content_h(
         };
         let origin_y = content_lay.location.y;
         let mut found_item = false;
+        let mut incomplete = false;
         let mut max_bottom = origin_y;
         walk_ms_item_bottoms(
             child,
@@ -1312,15 +1313,38 @@ fn cap_message_scroller_collect_content_h(
             origin_y,
             SLOT_ITEM,
             &mut found_item,
+            &mut incomplete,
             &mut max_bottom,
         );
-        if !found_item {
+        if incomplete {
+            // A newly grafted turn has no Taffy node yet. Do not min() content_h down to
+            // the previous items — post-render would clamp a follow jump back to the old max.
             return content_h;
+        }
+        if !found_item {
+            // scroll_only / band-cull may miss item nodes. Publishing `viewport_h` makes
+            // max_scroll=0 and post-render clamps a live nested scroller to the top —
+            // wheel then chains to the parent while glyphs stay at the previous offset.
+            if let Some(rest) = viewport_el
+                .focus_id
+                .as_deref()
+                .and_then(|f| f.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+            {
+                let anchored =
+                    use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek();
+                if anchored > viewport_h + 0.5 {
+                    return content_h.max(anchored);
+                }
+            }
+            return content_h.max(viewport_h);
         }
         let pad_b = crate::layout::lp_length_px(child.style.padding.bottom)
             .unwrap_or(0.0)
             .max(0.0);
         let capped = (max_bottom + pad_b).max(viewport_h);
+        if capped <= viewport_h + 0.5 && content_h > viewport_h + 0.5 {
+            return content_h;
+        }
         return content_h.min(capped);
     }
     content_h
@@ -1332,25 +1356,31 @@ fn walk_ms_item_bottoms(
     base_y: f32,
     item_slot: &str,
     found_item: &mut bool,
+    incomplete: &mut bool,
     max_bottom: &mut f32,
 ) {
-    let Some(nid) = el.layout_node else {
-        for child in &el.children {
-            walk_ms_item_bottoms(child, layout_tree, base_y, item_slot, found_item, max_bottom);
-        }
-        return;
-    };
-    let Ok(lay) = layout_tree.taffy.layout(nid) else {
-        return;
-    };
-    let y = base_y + lay.location.y;
-    let bottom = y + lay.size.height;
+    let lay = el
+        .layout_node
+        .and_then(|nid| layout_tree.taffy.layout(nid).ok());
+    let y = lay.map(|l| base_y + l.location.y).unwrap_or(base_y);
     if el.attrs.get("data-slot").map(String::as_str) == Some(item_slot) {
         *found_item = true;
-        *max_bottom = max_bottom.max(bottom);
+        if let Some(lay) = lay {
+            *max_bottom = max_bottom.max(y + lay.size.height);
+        } else {
+            *incomplete = true;
+        }
     }
     for child in &el.children {
-        walk_ms_item_bottoms(child, layout_tree, y, item_slot, found_item, max_bottom);
+        walk_ms_item_bottoms(
+            child,
+            layout_tree,
+            y,
+            item_slot,
+            found_item,
+            incomplete,
+            max_bottom,
+        );
     }
 }
 
@@ -1456,6 +1486,10 @@ pub struct OverlayPaintSplit {
     /// as [`Self::bands`], but within the page layer before the portal suffix).
     pub page_stack_bands: Vec<OverlayPaintBand>,
     marked: bool,
+    /// Nested overlay scrollbars (`z-index: 1000`) must not append to the same global
+    /// [`Self::page_stack_bands`] list — that mis-assigns glyphs vs rects once a nested
+    /// scroller (MessageScroller, table, …) enters the visit band.
+    page_stack_depth: u32,
 }
 
 /// Start indices (into the layout collect buffers) for one portal-layer child.
@@ -2550,6 +2584,14 @@ impl LayoutTree {
         let mut overlay_split = OverlayPaintSplit::default();
         let mut paint_rec = PaintRecorder::default();
 
+        // Taffy has assigned `layout_node`s. Jump follow *before* collect so this frame
+        // paints the new live edge. AppState used to run this after collect; the offset
+        // signal moved but paint stayed on the old offset, and `request_redraw` is a
+        // no-op while `AppState` is mutably borrowed for render.
+        crate::components::message_scroller::sync_message_scroller_follow_after_layout(
+            root, self,
+        );
+
         let t_collect_begin = Instant::now();
         #[cfg(feature = "devtools")]
         {
@@ -2862,9 +2904,24 @@ impl LayoutTree {
         }
     }
 
+    /// Band-culled siblings keep last-painted pixels out of this frame, but wheel hit-testing
+    /// still reads `layout_bounds`. Nested scroll viewports inside a skipped card must keep
+    /// fresh content-space bounds or the parent steals the wheel (glyphs freeze, page moves).
+    fn stamp_skipped_sibling_hit_bounds(
+        &self,
+        child: &mut Element,
+        node: NodeId,
+        abs: [f32; 2],
+        size: [f32; 2],
+    ) {
+        child.layout_bounds = [abs[0], abs[1], size[0], size[1]];
+        self.stamp_descendants_layout_bounds_from_taffy(child, node, abs, size);
+    }
+
     /// `ancestor_scroll_viewport_rest`: nearest ancestor `scroll:{id}` viewport id for this subtree.
     /// Used so nested ScrollAreas do not inflate parent content extents (matches
     /// `scroll_support::collect_descendant_extent`); fixes thumb math for middle layers in 3+ nesting.
+    #[inline(never)]
     fn collect_instances_mut(
         &self,
         element: &mut Element,
@@ -4180,7 +4237,21 @@ impl LayoutTree {
             == Some("1");
         // Capture before the closure so we don't borrow `element.children` across
         // `&mut element.children[i]` (E0502).
-        let enable_page_stack_bands = stacking_attr || any_z;
+        // Only the outermost in-page stacking context owns `page_stack_bands`. Nested
+        // overlay scrollbars still z-sort into the current band (tree/z order) without
+        // splitting the global list — otherwise gallery glyphs freeze while rects scroll.
+        // Portal overlay (marked) still records per-child bands on `overlay_split.bands`.
+        let any_stacking = stacking_attr || any_z;
+        // Outermost in-page stacking (ScrollArea overlay bar, Carousel) owns the global
+        // list. Nested auto `z-index` (overlay scrollbars) must not append — that
+        // mis-assigns glyphs vs rects. Nested `data-stacking-context` is an explicit
+        // opt-in so a jump control can paint above message glyphs inside an outer band.
+        let record_page_stack_bands = !overlay_split.marked
+            && ((overlay_split.page_stack_depth == 0 && any_stacking)
+                || (overlay_split.page_stack_depth > 0 && stacking_attr));
+        if record_page_stack_bands {
+            overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_add(1);
+        }
         let mut max_right = abs_x + lay_w;
         let mut max_bottom = abs_y + lay_h;
 
@@ -4228,16 +4299,14 @@ impl LayoutTree {
             };
             if is_body_portal_layer {
                 overlay_split.bands.push(band);
-            } else if enable_page_stack_bands {
-                if overlay_split.marked {
-                    // Already inside `__rui_portal_layer` (Toast / Dialog content).
-                    // `page_stack_bands` end at the portal split and clamp overlay glyphs
-                    // away — push portal bands so each z-card is rects→text in the overlay
-                    // pass (same model as stacked Modals).
-                    overlay_split.bands.push(band);
-                } else {
-                    overlay_split.page_stack_bands.push(band);
-                }
+            } else if overlay_split.marked && any_stacking {
+                // Already inside `__rui_portal_layer` (Toast / Dialog content).
+                // `page_stack_bands` end at the portal split and clamp overlay glyphs
+                // away — push portal bands so each z-card is rects→text in the overlay
+                // pass (same model as stacked Modals).
+                overlay_split.bands.push(band);
+            } else if record_page_stack_bands {
+                overlay_split.page_stack_bands.push(band);
             }
         };
 
@@ -4340,6 +4409,12 @@ impl LayoutTree {
                                                 next_scroll_acc,
                                             );
                                         }
+                                        self.stamp_skipped_sibling_hit_bounds(
+                                            &mut element.children[i],
+                                            child_nodes[i],
+                                            child_abs,
+                                            child_size,
+                                        );
                                         let extent = skipped_sibling_extent(
                                             &element.children[i],
                                             child_abs,
@@ -4368,6 +4443,12 @@ impl LayoutTree {
                                                         next_scroll_acc,
                                                     );
                                                 }
+                                                self.stamp_skipped_sibling_hit_bounds(
+                                                    &mut element.children[j],
+                                                    child_nodes[j],
+                                                    j_abs,
+                                                    j_size,
+                                                );
                                                 let extent = skipped_sibling_extent(
                                                     &element.children[j],
                                                     j_abs,
@@ -4532,6 +4613,9 @@ impl LayoutTree {
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
             }
+        }
+        if record_page_stack_bands {
+            overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_sub(1);
         }
 
         if cap_children
@@ -6401,6 +6485,109 @@ mod portal_hoist_tests {
                 .iter()
                 .any(|t| t.text == "toast-high"),
             "higher z text in last band"
+        );
+    }
+
+    #[test]
+    fn nested_overlay_z_index_does_not_append_page_stack_bands() {
+        // Gallery: outer ScrollArea overlay bar (z=1000) already owns page_stack_bands.
+        // A nested scroller with its own overlay bar must not push more splits — that
+        // mis-assigns glyphs vs rects (background scrolls, text stays).
+        let nested_bar = Element::new()
+            .w(8.0)
+            .h(40.0)
+            .absolute()
+            .right(0.0)
+            .z_index(1000)
+            .bg([0.0, 0.0, 0.0, 0.4]);
+        let nested = Element::new()
+            .w(160.0)
+            .h(80.0)
+            .relative()
+            .child(Element::new().text("inner-glyph"))
+            .child(nested_bar);
+        let outer_bar = Element::new()
+            .w(8.0)
+            .h(80.0)
+            .absolute()
+            .right(0.0)
+            .z_index(1000)
+            .bg([0.0, 0.0, 0.0, 0.4]);
+        let mut outer = Element::new()
+            .w(200.0)
+            .h(120.0)
+            .relative()
+            .child(nested)
+            .child(outer_bar);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut outer, 200.0, 120.0, [0.0, 0.0]);
+        assert_eq!(
+            result.overlay_split.page_stack_bands.len(),
+            2,
+            "nested overlay z-index must not append extra page_stack_bands, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        assert!(
+            result.text_nodes.iter().any(|t| t.text == "inner-glyph"),
+            "nested content glyphs must still collect"
+        );
+    }
+
+    #[test]
+    fn nested_stacking_context_can_split_inside_outer_page_bands() {
+        // Jump button inside a gallery ScrollArea: explicit stacking-context must
+        // subdivide the current band so later-z chrome paints after message glyphs.
+        let jump = Element::new()
+            .w(80.0)
+            .h(28.0)
+            .absolute()
+            .bottom(8.0)
+            .z_index(20)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .child(Element::new().text("Latest"));
+        let mut nested = Element::new()
+            .w(160.0)
+            .h(80.0)
+            .relative()
+            .child(Element::new().text("inner-glyph"))
+            .child(jump);
+        nested
+            .attrs
+            .insert("data-stacking-context".to_string(), "1".to_string());
+        let outer_bar = Element::new()
+            .w(8.0)
+            .h(80.0)
+            .absolute()
+            .right(0.0)
+            .z_index(1000)
+            .bg([0.0, 0.0, 0.0, 0.4]);
+        let mut outer = Element::new()
+            .w(200.0)
+            .h(120.0)
+            .relative()
+            .child(nested)
+            .child(outer_bar);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut outer, 200.0, 120.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.page_stack_bands.len() > 2,
+            "nested stacking-context must add splits, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        let ranges = result.overlay_split.page_stack_band_ranges();
+        let latest_band = ranges.iter().rposition(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "Latest")
+        });
+        let glyph_band = ranges.iter().position(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "inner-glyph")
+        });
+        assert!(
+            latest_band.is_some_and(|j| glyph_band.is_some_and(|g| j > g)),
+            "Latest must paint in a later band than inner-glyph (latest={latest_band:?} glyph={glyph_band:?})"
         );
     }
 

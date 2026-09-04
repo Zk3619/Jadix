@@ -2165,7 +2165,7 @@ impl super::App {
                 && super::scroll_support::wheel_sticky_matches_deepest(&sticky, &target_rests)
             {
                 if let Some((_, [max_x, max_y], _)) =
-                    self.scroll_metrics_cache.get(&sticky).copied()
+                    super::scroll_support::wheel_metrics_for_rest(&sticky, &self.scroll_metrics_cache)
                 {
                     let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                         &sticky,
@@ -2196,7 +2196,9 @@ impl super::App {
             self.wheel_sticky_rest = None;
         }
 
-        let metrics_for_rest = |rest: &str| self.scroll_metrics_cache.get(rest).copied();
+        let metrics_for_rest = |rest: &str| {
+            super::scroll_support::wheel_metrics_for_rest(rest, &self.scroll_metrics_cache)
+        };
 
         // When wheel happens over a scrollbar track/thumb, prioritize that target scroll area.
         // This fixes cases where hit-chain returns an unrelated ancestor (or none), causing
@@ -2911,10 +2913,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         }
                     }
                 }
-                self.scroll_metrics_cache = scroll_metrics
-                    .iter()
-                    .map(|(rest, b, max, content)| (rest.clone(), (*b, *max, *content)))
-                    .collect();
+                // Keep the previous cache until post-render so a 0-max cull sample cannot
+                // clamp a nested scroller's offset before merge_scroll_metrics_cache runs.
 
                 // Prefer hit-test over paint-order `last_hover_cursor`: layout DFS can leave a
                 // sticky Pointer from gallery scrollbars when a claiming underlay has no cursor.
@@ -3014,6 +3014,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let mut scrollbar_fade_animating = false;
                 for (rest, bounds, [max_x, max_y], [content_w, content_h]) in scroll_metrics.iter()
                 {
+                    if super::scroll_support::is_stale_zero_max_sample(
+                        [*max_x, *max_y],
+                        self.scroll_metrics_cache.get(rest).map(|e| e.1),
+                    ) {
+                        continue;
+                    }
                     let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                         rest,
                         &mut self.scroll_signal_key_cache,
@@ -3379,10 +3385,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         scrollbar_fade_animating = true;
                     }
                 }
-                self.scroll_metrics_cache = scroll_metrics
-                    .into_iter()
-                    .map(|(rest, b, max, content)| (rest, (b, max, content)))
-                    .collect();
+                super::scroll_support::merge_scroll_metrics_cache(
+                    &mut self.scroll_metrics_cache,
+                    scroll_metrics,
+                );
                 let scrollbar_visibility_pending = self
                     .scrollbar_visible_until
                     .values()

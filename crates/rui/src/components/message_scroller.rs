@@ -10,7 +10,9 @@
 //! - Viewport: `overflow-y-auto size-full min-h-0` (engine scroll viewport)
 //! - Content: `flex h-max flex-col`
 //! - Item: `min-w-0 shrink-0`; `messageId`; optional `scrollAnchor`
-//! - Button: `direction=start|end`; inert (`opacity:0`, no pointer events)
+//! - Button: labeled jump control; inert (`opacity:0`, not focusable, no pointer events)
+//!   until there is content in that direction. Nested `data-stacking-context` keeps it
+//!   above message glyphs (page bands paint all text after all rects).
 //!   until there is content in that direction
 //!
 //! ```text
@@ -89,7 +91,7 @@ use crate::core::scroll_viewport::{
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus, ATTR_POINTER_EVENTS};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::vstack;
+use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::resolve_instance_id;
@@ -227,6 +229,7 @@ impl MessageScrollerCtx {
     /// Jump (or smooth-seek) to the live end and re-engage auto-scroll.
     pub fn scroll_to_end(&self, jump: bool) {
         self.following.set(true);
+        use_signal(&stick_end_signal_key(&self.id), || false).set(true);
         let max = max_scroll_y(&self.viewport_id);
         set_scroll_y(&self.viewport_id, max, jump);
     }
@@ -315,6 +318,32 @@ fn content_and_viewport_h(viewport_id: &str) -> (f32, f32) {
     (ch, vh)
 }
 
+/// Live auto-scroll flag. Named `{id}:auto_scroll` so a Switch can toggle it without
+/// remounting a static [`MessageScrollerProvider`].
+fn auto_scroll_signal_key(id: &str) -> String {
+    format!("{id}:auto_scroll")
+}
+
+fn stick_end_signal_key(id: &str) -> String {
+    format!("{id}:stick-end")
+}
+
+fn live_auto_scroll(ctx: &MessageScrollerCtx) -> bool {
+    use_signal(&auto_scroll_signal_key(&ctx.id), || ctx.auto_scroll).peek()
+}
+
+/// After appending a turn (e.g. Gallery Send), jump to the live edge on the next
+/// measured layout — even if `following` was released by max jitter.
+///
+/// Safe to call outside [`MessageScrollerProvider`]: keys are `{id}:following` /
+/// `{id}:stick-end`.
+pub fn message_scroller_stick_to_end(id: impl AsRef<str>) {
+    let id = id.as_ref();
+    use_signal(&format!("{id}:following"), || true).set(true);
+    use_signal(&stick_end_signal_key(id), || false).set(true);
+    crate::app::runtime::request_redraw();
+}
+
 fn set_scroll_y(viewport_id: &str, y: f32, jump: bool) {
     let y = y.max(0.0);
     let ty = use_signal(&scroll_target_y_signal_key(viewport_id), || 0.0_f32);
@@ -357,10 +386,18 @@ pub(crate) fn layout_scrollable_content_height(
         let content_lay = layout_tree.taffy.layout(content_nid).ok()?;
         let origin_y = content_lay.location.y;
 
-        let mut found_item = false;
+        let mut measured_item = false;
         let mut max_bottom = origin_y;
-        walk_item_bottoms(child, layout_tree, origin_y, &mut found_item, &mut max_bottom);
-        if !found_item {
+        let mut incomplete = false;
+        walk_item_bottoms(
+            child,
+            layout_tree,
+            origin_y,
+            &mut measured_item,
+            &mut max_bottom,
+            &mut incomplete,
+        );
+        if incomplete || !measured_item {
             return None;
         }
         let pad_b = crate::layout::lp_length_px(child.style.padding.bottom)
@@ -375,26 +412,24 @@ fn walk_item_bottoms(
     el: &Element,
     layout_tree: &LayoutTree,
     base_y: f32,
-    found_item: &mut bool,
+    measured_item: &mut bool,
     max_bottom: &mut f32,
+    incomplete: &mut bool,
 ) {
-    let Some(nid) = el.layout_node else {
-        for child in &el.children {
-            walk_item_bottoms(child, layout_tree, base_y, found_item, max_bottom);
-        }
-        return;
-    };
-    let Ok(lay) = layout_tree.taffy.layout(nid) else {
-        return;
-    };
-    let y = base_y + lay.location.y;
-    let bottom = y + lay.size.height;
+    let lay = el
+        .layout_node
+        .and_then(|nid| layout_tree.taffy.layout(nid).ok());
+    let y = lay.map(|l| base_y + l.location.y).unwrap_or(base_y);
     if is_message_item(el) {
-        *found_item = true;
-        *max_bottom = max_bottom.max(bottom);
+        if let Some(lay) = lay {
+            *measured_item = true;
+            *max_bottom = max_bottom.max(y + lay.size.height);
+        } else {
+            *incomplete = true;
+        }
     }
     for child in &el.children {
-        walk_item_bottoms(child, layout_tree, y, found_item, max_bottom);
+        walk_item_bottoms(child, layout_tree, y, measured_item, max_bottom, incomplete);
     }
 }
 
@@ -450,25 +485,41 @@ fn apply_viewport_scroll(
         return LayoutStatus::Clean;
     };
 
-    // Item bottoms are the only trustworthy scroll extent (`min-h-full` inflates metrics).
+    use_signal(&scroll_viewport_h_signal_key(&ctx.viewport_id), || 0.0_f32).set_silent(viewport_h);
+
+    // `reactive_sync` runs before Taffy. After a nested rows-island graft the new
+    // `MessageScrollerItem`s have no layout_node yet — do not publish viewport_h as
+    // content_h (that zeros max_scroll / last_content_h and kills follow).
+    let prior_content_h = ctx.last_content_h.peek().max(signal_metrics.0);
+    let items_measured = item_extent_h.is_some();
     let scroll_extent_h = item_extent_h.map(|h| h.max(viewport_h));
-    let content_h = scroll_extent_h.unwrap_or(viewport_h);
+    let content_h = scroll_extent_h.unwrap_or_else(|| prior_content_h.max(viewport_h));
 
-    // Keep scroll signals aligned before collect (post-render `content_h` lags one frame).
-    use_signal(&scroll_content_h_signal_key(&ctx.viewport_id), || 0.0_f32)
-        .set_silent(content_h);
-    use_signal(&scroll_viewport_h_signal_key(&ctx.viewport_id), || 0.0_f32)
-        .set_silent(viewport_h);
+    if items_measured {
+        use_signal(&scroll_content_h_signal_key(&ctx.viewport_id), || 0.0_f32)
+            .set_silent(content_h);
+    }
 
-    let max = scroll_extent_h
-        .map(|h| (h - viewport_h).max(0.0))
-        .unwrap_or(0.0);
+    let max = (content_h - viewport_h).max(0.0);
     let threshold = ctx.scroll_edge_threshold;
     let mut changed = false;
+    let auto = live_auto_scroll(ctx);
+    let stick_end = use_signal(&stick_end_signal_key(&ctx.id), || false);
+    let want_stick = stick_end.peek();
+    let prev_ch = ctx.last_content_h.peek();
+    let prev_max = (prev_ch - viewport_h).max(0.0);
+    let offset_before = current_offset_y(&ctx.viewport_id);
+    let was_at_end = prev_ch <= 1.0 || offset_before >= (prev_max - threshold).max(0.0);
+
+    if !items_measured {
+        if auto && (want_stick || ctx.following.peek() || !ctx.initialized.peek() || was_at_end) {
+            crate::app::runtime::request_redraw();
+        }
+        return LayoutStatus::Clean;
+    }
 
     // Stale signal max can overshoot layout (min-h-full / reactive rebuild / band cull).
-    let offset = current_offset_y(&ctx.viewport_id);
-    if offset > max + 0.5 {
+    if offset_before > max + 0.5 {
         set_scroll_y(&ctx.viewport_id, max, true);
         changed = true;
     }
@@ -476,43 +527,63 @@ fn apply_viewport_scroll(
     let at_end = offset >= (max - threshold).max(0.0);
 
     if !ctx.initialized.peek() {
-        // Defer End/LastAnchor until turns are laid out — avoids scrolling into empty tail.
-        if item_extent_h.is_none() {
-            return if changed {
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::Clean
+        if offset > 0.5 {
+            // Provider remount / reactive rebuild: keep the reader's scroll offset instead of
+            // re-applying defaultScrollPosition (e.g. end) when auto_scroll is off.
+            let follow = auto
+                && ctx.default_scroll_position == MessageScrollerDefaultPosition::End
+                && at_end;
+            ctx.following.set_silent(follow);
+            ctx.initialized.set_silent(true);
+            changed = true;
+        } else {
+            let target = match ctx.default_scroll_position {
+                MessageScrollerDefaultPosition::Start => 0.0,
+                MessageScrollerDefaultPosition::End => max,
+                MessageScrollerDefaultPosition::LastAnchor => {
+                    last_anchor_scroll_y(el, layout_tree, ctx.scroll_previous_item_peek)
+                        .unwrap_or(0.0)
+                }
             };
+            set_scroll_y(&ctx.viewport_id, target.min(max), true);
+            let follow = auto && ctx.default_scroll_position == MessageScrollerDefaultPosition::End;
+            ctx.following.set_silent(follow);
+            ctx.initialized.set_silent(true);
+            changed = true;
         }
-        let target = match ctx.default_scroll_position {
-            MessageScrollerDefaultPosition::Start => 0.0,
-            MessageScrollerDefaultPosition::End => max,
-            MessageScrollerDefaultPosition::LastAnchor => {
-                last_anchor_scroll_y(el, layout_tree, ctx.scroll_previous_item_peek).unwrap_or(0.0)
+        if want_stick {
+            stick_end.set_silent(false);
+        }
+    } else if auto {
+        let grew = content_h > prev_ch + 0.5;
+        // `stick-end` is Send / jump-button: always land on the new max after measure.
+        // Otherwise stick to the live edge if we were already there *before* this growth.
+        // `following` can be false while the reader is still on the last measured end
+        // (max jitter / prior cull).
+        if want_stick || (grew && (ctx.following.peek() || was_at_end)) {
+            set_scroll_y(&ctx.viewport_id, max, true);
+            ctx.following.set_silent(true);
+            if want_stick {
+                stick_end.set_silent(false);
             }
-        };
-        set_scroll_y(&ctx.viewport_id, target.min(max), true);
-        let follow =
-            ctx.auto_scroll && ctx.default_scroll_position == MessageScrollerDefaultPosition::End;
-        ctx.following.set_silent(follow);
-        ctx.initialized.set_silent(true);
-        changed = true;
-    } else if ctx.auto_scroll {
-        let grew = content_h > ctx.last_content_h.peek() + 0.5;
-        if ctx.following.peek() {
-            if grew {
-                set_scroll_y(&ctx.viewport_id, max, true);
-                changed = true;
-            } else if !at_end {
-                ctx.following.set_silent(false);
-                changed = true;
-            }
-        } else if at_end {
+            changed = true;
+        } else if ctx.following.peek() && !at_end {
+            ctx.following.set_silent(false);
+            changed = true;
+        } else if at_end && !ctx.following.peek() {
             ctx.following.set_silent(true);
             changed = true;
         }
+    } else if ctx.following.peek() {
+        ctx.following.set_silent(false);
+        if want_stick {
+            stick_end.set_silent(false);
+        }
+        changed = true;
     }
     ctx.last_content_h.set_silent(content_h);
+
+    apply_scroll_offset_to_element(el, &ctx.viewport_id);
 
     let following = ctx.following.peek();
     let want = if following { "true" } else { "false" };
@@ -526,6 +597,43 @@ fn apply_viewport_scroll(
         LayoutStatus::StyleChanged
     } else {
         LayoutStatus::Clean
+    }
+}
+
+fn apply_scroll_offset_to_element(el: &mut Element, viewport_id: &str) {
+    let sy = current_offset_y(viewport_id);
+    if (el.scroll_offset[1] - sy).abs() > 0.01 {
+        el.scroll_offset[1] = sy;
+    }
+}
+
+/// After Taffy has assigned `layout_node`s, re-run viewport follow so a nested rows
+/// island append can jump to end **before paint collect**. Pre-layout `reactive_sync`
+/// cannot see the new item heights; post-collect follow only moved the offset signal
+/// and left this frame stuck on the old edge.
+///
+/// Iterative: this runs from inside `finish_collect` immediately before
+/// `collect_instances_mut`, whose frames are already large. A recursive walk of
+/// Gallery / calculator trees overflowed the Windows default stack.
+pub(crate) fn sync_message_scroller_follow_after_layout(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+) {
+    // Raw pointers: NLL will not let `&mut Element` children share a stack
+    // with their parent. The walk is exclusive — a node is popped before its
+    // children are pushed, so no two entries alias.
+    let mut stack: Vec<*mut Element> = vec![el];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: exclusive tree walk — parent is popped before children are pushed.
+        let node = unsafe { &mut *ptr };
+        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_VIEWPORT) {
+            if let Some(sync) = node.reactive_sync.clone() {
+                let _ = sync.run(node, layout_tree);
+            }
+        }
+        for child in &mut node.children {
+            stack.push(child);
+        }
     }
 }
 
@@ -584,6 +692,10 @@ fn apply_button_active(
         }
         changed = true;
     }
+    if el.focusable != active {
+        el.focusable = active;
+        changed = true;
+    }
 
     if changed {
         LayoutStatus::StyleChanged
@@ -638,6 +750,21 @@ fn collect_delayed(children: Vec<DelayedEl>) -> Vec<Element> {
     out
 }
 
+fn default_jump_label(direction: MessageScrollerDirection) -> Element {
+    let caption = if direction.is_end() { "Latest" } else { "Top" };
+    hstack()
+        .items("center")
+        .gap("0.375rem")
+        .child(default_arrow_icon(direction))
+        .child(
+            Element::new()
+                .text(caption.to_string())
+                .text_size(12.0)
+                .font_weight(500.0),
+        )
+        .into()
+}
+
 fn default_arrow_icon(direction: MessageScrollerDirection) -> Element {
     let mut icon = build_lucide_icon_text_node("arrow-down");
     icon = icon
@@ -684,12 +811,17 @@ pub fn message_scroller_scope(
         let following = use_signal(&format!("{id}:following"), || auto_scroll);
         let initialized = use_signal(&format!("{id}:init"), || false);
         let last_content_h = use_signal(&format!("{id}:last-ch"), || 0.0_f32);
-        // Reactive gallery rebuilds the provider while signals persist — re-run End anchoring
-        // and drop stale scroll offsets that would band-cull every turn into blank space.
-        initialized.set_silent(false);
-        last_content_h.set_silent(0.0);
-        use_signal(&scroll_offset_y_signal_key(&viewport_id), || 0.0_f32).set_silent(0.0);
-        use_signal(&scroll_target_y_signal_key(&viewport_id), || 0.0_f32).set_silent(0.0);
+        let _auto_scroll_live = use_signal(&auto_scroll_signal_key(&id), || auto_scroll);
+        let prior_offset = use_signal(&scroll_offset_y_signal_key(&viewport_id), || 0.0_f32).peek();
+        let session_started = initialized.peek() || prior_offset > 0.5;
+        if !session_started {
+            last_content_h.set_silent(0.0);
+            use_signal(&scroll_offset_y_signal_key(&viewport_id), || 0.0_f32).set_silent(0.0);
+            use_signal(&scroll_target_y_signal_key(&viewport_id), || 0.0_f32).set_silent(0.0);
+        } else if !auto_scroll {
+            // Reactive rebuilds remount the provider shell; never re-engage follow when opted out.
+            following.set_silent(false);
+        }
         provide_context(
             message_scroller_context(),
             MessageScrollerCtx {
@@ -770,6 +902,7 @@ pub fn MessageScroller(
         .children(kids)
         .into();
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
+    el.set_attr("data-stacking-context", "1");
     el = apply_base(el, base_builder);
     if !id.trim().is_empty() {
         el.template_id = Some(id);
@@ -821,7 +954,11 @@ pub fn MessageScrollerViewport(
         .top(2.0)
         .bottom(2.0)
         .right(2.0)
-        .z_index(1000)
+        // `overlay(true)` defaults z-index to 10 so the track paints over content. That
+        // opts the wrapper into `page_stack_bands` and desyncs glyphon from bubble rects
+        // when this scroller is nested in a page ScrollArea. Later-sibling tree order
+        // already stacks the overlay bar; keep z-index 0.
+        // .z_index(0)
         .into();
 
     vstack()
@@ -903,12 +1040,12 @@ pub fn MessageScrollerButton(
     let ctx = require_message_scroller("MessageScrollerButton");
     let kids = children.map(take_packed).unwrap_or_default();
     let variant = if variant.trim().is_empty() {
-        "secondary"
+        "outline"
     } else {
         variant.trim()
     };
     let size = if size.trim().is_empty() {
-        "icon-sm"
+        "sm"
     } else {
         size.trim()
     };
@@ -926,7 +1063,7 @@ pub fn MessageScrollerButton(
             }
         })
         .children(if kids.is_empty() {
-            vec![default_arrow_icon(direction)]
+            vec![default_jump_label(direction)]
         } else {
             kids
         })
@@ -935,7 +1072,8 @@ pub fn MessageScrollerButton(
         .absolute()
         .left("50%")
         .translate_pct(-0.5, 0.0)
-        .z_index(10);
+        .z_index(20)
+        .box_shadow("0 4px 14px rgba(15, 23, 42, 0.18)");
     if direction.is_end() {
         el = el.bottom(BUTTON_INSET);
     } else {
@@ -945,6 +1083,7 @@ pub fn MessageScrollerButton(
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
     el = el.opacity(0.0).pointer_events_none();
+    el.focusable = false;
     el = apply_base(el, base_builder);
     let sync_ctx = ctx.clone();
     el = el.reactive_sync(move |node, _layout_tree| apply_button_active(node, &sync_ctx, jump_dir));

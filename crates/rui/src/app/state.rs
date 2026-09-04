@@ -1480,6 +1480,32 @@ impl AppState {
         // sidebar hover flash). Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
+        // Second line of defense if a caller is not already on a grown stack
+        // (`RedrawRequested` wraps the whole handler). Unconditional grow:
+        // Windows remaining-stack probes can skip `maybe_grow` when a grow
+        // was actually required.
+        super::with_grown_ui_stack(|| {
+            self.render_inner(
+                mouse_pos,
+                scrollbar_update,
+                active_drag_rest,
+                text_force_fast_mode,
+                scrollbar_skip_flex_layout,
+                scroll_paint_only,
+            )
+        })
+    }
+
+    #[inline(never)]
+    fn render_inner(
+        &mut self,
+        mouse_pos: [f32; 2],
+        scrollbar_update: ScrollbarUpdateMode,
+        active_drag_rest: Option<&str>,
+        text_force_fast_mode: bool,
+        scrollbar_skip_flex_layout: bool,
+        scroll_paint_only: bool,
+    ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
         // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
         // Settle is deferred one frame after `inner_size` matches the last Resized event so the
@@ -2335,11 +2361,16 @@ impl AppState {
             let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             let mut caret_all = Vec::new();
             let mut needs_warmup = false;
-            let mut culled = false;
+            let mut culled_any = false;
             let text_prepare_begin = Instant::now();
             for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
                 let text_lo = band.text.0.min(overlay_text_start);
                 let text_hi = band.text.1.min(overlay_text_start);
+                if text_lo >= text_hi {
+                    underlines.push(Vec::new());
+                    shadow_bands.push(Vec::new());
+                    continue;
+                }
                 let prep_out = if band_i == 0 {
                     prepare_text_frame(
                         &mut self.text_renderer,
@@ -2365,9 +2396,15 @@ impl AppState {
                         &self.shadow_rect_cache,
                     )
                 };
+                // A band whose glyphs are all clip-culled must not abort the rest of the page:
+                // instances for other bands were already uploaded at the new scroll offset.
+                // Breaking here leaves glyphon vertices on the previous frame (background
+                // scrolls, text does not follow). Keep this band's last vertices and continue.
                 if prep_out.culled_skip_prepare {
-                    culled = true;
-                    break;
+                    culled_any = true;
+                    underlines.push(Vec::new());
+                    shadow_bands.push(Vec::new());
+                    continue;
                 }
                 for bm in &prep_out.shadow_new_bitmaps {
                     let gpu = super::image_registry::upload_rgba8(
@@ -2388,14 +2425,10 @@ impl AppState {
                 caret_all.extend(prep_out.caret_instances);
                 shadow_bands.push(prep_out.shadow_tex_draws);
             }
-            if culled {
+            if culled_any {
                 self.window.request_redraw();
-                (
-                    self.last_underline_instances.clone(),
-                    self.last_caret_instances.clone(),
-                    self.last_shadow_tex_draws.clone(),
-                )
-            } else {
+            }
+            {
                 let shadow_all: Vec<_> = shadow_bands.iter().flatten().cloned().collect();
                 self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
                 self.last_text_ui_scale = ui_scale;

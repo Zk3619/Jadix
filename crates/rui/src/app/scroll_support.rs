@@ -358,6 +358,65 @@ pub(crate) fn wheel_sticky_matches_deepest(sticky: &str, chain: &[String]) -> bo
     chain.first().map(String::as_str) == Some(sticky)
 }
 
+pub(crate) type ScrollMetricsEntry = ([f32; 4], [f32; 2], [f32; 2]);
+
+#[inline]
+pub(crate) fn is_stale_zero_max_sample(fresh_max: [f32; 2], prev_max: Option<[f32; 2]>) -> bool {
+    fresh_max[0] < 0.5
+        && fresh_max[1] < 0.5
+        && prev_max.is_some_and(|p| p[0] > 0.5 || p[1] > 0.5)
+}
+
+/// Replace cache from this frame's collect, but do not let a band-cull / clip-cull
+/// sample publish `max=0` (or drop a nested viewport) over a known-scrollable rest.
+/// That clamp-to-zero is what lets the parent steal the next wheel tick while inner
+/// glyphs stay at the previous offset.
+pub(crate) fn merge_scroll_metrics_cache(
+    cache: &mut HashMap<String, ScrollMetricsEntry>,
+    fresh: impl IntoIterator<Item = (String, [f32; 4], [f32; 2], [f32; 2])>,
+) {
+    let old = std::mem::take(cache);
+    for (rest, bounds, max, content) in fresh {
+        if is_stale_zero_max_sample(max, old.get(&rest).map(|e| e.1)) {
+            if let Some(prev) = old.get(&rest) {
+                cache.insert(rest, *prev);
+                continue;
+            }
+        }
+        cache.insert(rest, (bounds, max, content));
+    }
+    for (rest, prev) in old {
+        if prev.1[0] > 0.5 || prev.1[1] > 0.5 {
+            cache.entry(rest).or_insert(prev);
+        }
+    }
+}
+
+/// Wheel hit-chain lookup: prefer a live cache entry, else reconstruct max from
+/// content/viewport signals so a culled collect cannot make a nested scroller
+/// look unscrollable.
+pub(crate) fn wheel_metrics_for_rest(
+    rest: &str,
+    cache: &HashMap<String, ScrollMetricsEntry>,
+) -> Option<ScrollMetricsEntry> {
+    if let Some(&entry) = cache.get(rest) {
+        if entry.1[0] > 0.5 || entry.1[1] > 0.5 {
+            return Some(entry);
+        }
+    }
+    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+    let vw = crate::core::reactivity::use_signal(keys.viewport_w.as_str(), || 0.0_f32).peek();
+    let vh = crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek();
+    let cw = crate::core::reactivity::use_signal(keys.content_w.as_str(), || 0.0_f32).peek();
+    let ch = crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32).peek();
+    let max = [(cw - vw).max(0.0), (ch - vh).max(0.0)];
+    if max[0] > 0.5 || max[1] > 0.5 {
+        let bounds = cache.get(rest).map(|e| e.0).unwrap_or([0.0, 0.0, vw, vh]);
+        return Some((bounds, max, [cw, ch]));
+    }
+    cache.get(rest).copied()
+}
+
 /// Collect only scroll-area ids on the topmost hit branch (deepest first).
 /// This avoids computing extent/metrics during wheel hit-testing; callers can
 /// resolve metrics lazily (preferably from cache) only for candidate ids.
@@ -585,6 +644,95 @@ mod wheel_sticky_tests {
     #[test]
     fn empty_chain_does_not_keep_sticky() {
         assert!(!wheel_sticky_matches_deepest("outer", &[]));
+    }
+}
+
+#[cfg(test)]
+mod scroll_metrics_merge_tests {
+    use super::{
+        is_stale_zero_max_sample, merge_scroll_metrics_cache, wheel_metrics_for_rest,
+    };
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_viewport_h_signal_key,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn zero_max_cull_sample_does_not_overwrite_live_inner() {
+        let mut cache = HashMap::new();
+        cache.insert(
+            "inner".into(),
+            ([0.0, 100.0, 320.0, 384.0], [0.0, 240.0], [320.0, 624.0]),
+        );
+        cache.insert(
+            "outer".into(),
+            ([0.0, 0.0, 400.0, 800.0], [0.0, 200.0], [400.0, 1000.0]),
+        );
+        merge_scroll_metrics_cache(
+            &mut cache,
+            [
+                (
+                    "outer".into(),
+                    [0.0, 0.0, 400.0, 800.0],
+                    [0.0, 220.0],
+                    [400.0, 1020.0],
+                ),
+                (
+                    "inner".into(),
+                    [0.0, 80.0, 320.0, 384.0],
+                    [0.0, 0.0],
+                    [320.0, 384.0],
+                ),
+            ],
+        );
+        let inner = cache.get("inner").expect("inner kept");
+        assert!(
+            inner.1[1] > 8.0,
+            "cull sample max=0 must not replace live inner, got {:?}",
+            inner.1
+        );
+        assert!((cache.get("outer").unwrap().1[1] - 220.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn omitted_inner_is_retained() {
+        let mut cache = HashMap::new();
+        cache.insert(
+            "inner".into(),
+            ([0.0, 100.0, 320.0, 384.0], [0.0, 240.0], [320.0, 624.0]),
+        );
+        merge_scroll_metrics_cache(
+            &mut cache,
+            [(
+                "outer".into(),
+                [0.0, 0.0, 400.0, 800.0],
+                [0.0, 200.0],
+                [400.0, 1000.0],
+            )],
+        );
+        assert!(
+            cache.get("inner").is_some_and(|e| e.1[1] > 8.0),
+            "band-culled nested viewport must stay in the wheel cache"
+        );
+    }
+
+    #[test]
+    fn stale_zero_max_detects_cull_sample() {
+        assert!(is_stale_zero_max_sample([0.0, 0.0], Some([0.0, 100.0])));
+        assert!(!is_stale_zero_max_sample([0.0, 80.0], Some([0.0, 100.0])));
+        assert!(!is_stale_zero_max_sample([0.0, 0.0], None));
+    }
+
+    #[test]
+    fn wheel_metrics_fall_back_to_signals() {
+        let _ = create_root(|| {
+            use_signal(&scroll_viewport_h_signal_key("ms-sig"), || 0.0_f32).set_silent(384.0);
+            use_signal(&scroll_content_h_signal_key("ms-sig"), || 0.0_f32).set_silent(800.0);
+            let cache = HashMap::new();
+            let m = wheel_metrics_for_rest("ms-sig", &cache).expect("signal fallback");
+            assert!(m.1[1] > 8.0, "got max_y={}", m.1[1]);
+        });
     }
 }
 

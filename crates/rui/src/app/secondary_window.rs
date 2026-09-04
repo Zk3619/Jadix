@@ -477,11 +477,10 @@ impl SecondaryWindowState {
         }
         self.layout_status = LayoutStatus::Clean;
         self.last_render_scroll_metrics = render_result.scroll_metrics.clone();
-        self.scroll_metrics_cache = render_result
-            .scroll_metrics
-            .iter()
-            .map(|(rest, b, max, content)| (rest.clone(), (*b, *max, *content)))
-            .collect();
+        super::scroll_support::merge_scroll_metrics_cache(
+            &mut self.scroll_metrics_cache,
+            render_result.scroll_metrics.iter().cloned(),
+        );
 
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
