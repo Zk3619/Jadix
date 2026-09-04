@@ -782,31 +782,31 @@ pub(crate) fn TimelineShowcase() -> Element {
                 </Label>
 
                 <Label text_size="0.75rem" font_weight="600">"A. RSX"</Label>
-                <Timeline activeItem={active} bulletSize={16} lineSize={2}>
+                <Timeline activeItem={active}>
                     <TimelineItem>
                         <TimelineItemBullet>
-                            <Icon name="shopping-cart" size="10px" pointer_events="none" />
+                            <Icon name="shopping-cart" pointer_events="none" />
                         </TimelineItemBullet>
                         <TimelineItemTitle>"Order placed"</TimelineItemTitle>
                         <TimelineItemDescription>"We received your order."</TimelineItemDescription>
                     </TimelineItem>
                     <TimelineItem>
                         <TimelineItemBullet>
-                            <Icon name="package" size="10px" pointer_events="none" />
+                            <Icon name="package" pointer_events="none" />
                         </TimelineItemBullet>
                         <TimelineItemTitle>"Packed"</TimelineItemTitle>
                         <TimelineItemDescription>"Left the warehouse."</TimelineItemDescription>
                     </TimelineItem>
                     <TimelineItem>
                         <TimelineItemBullet>
-                            <Icon name="truck" size="10px" pointer_events="none" />
+                            <Icon name="truck" pointer_events="none" />
                         </TimelineItemBullet>
                         <TimelineItemTitle>"Shipped"</TimelineItemTitle>
                         <TimelineItemDescription>"On the way."</TimelineItemDescription>
                     </TimelineItem>
                     <TimelineItem>
                         <TimelineItemBullet>
-                            <Icon name="circle-check" size="10px" pointer_events="none" />
+                            <Icon name="circle-check" pointer_events="none" />
                         </TimelineItemBullet>
                         <TimelineItemTitle>"Delivered"</TimelineItemTitle>
                         <TimelineItemDescription>"Left at your door."</TimelineItemDescription>

@@ -683,10 +683,7 @@ fn item_values(selected: &[String], freeform: &str) -> Vec<String> {
 }
 
 fn caption_text(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    el.children.iter().find_map(caption_text)
+    crate::core::tree::first_trimmed_text(el)
 }
 
 fn unpack_children(children: Option<Element>) -> Vec<Element> {
@@ -1643,10 +1640,7 @@ fn build_choice_indicator(checkbox: bool, on: bool) -> Element {
 }
 
 fn find_indicator_mut(el: &mut Element) -> Option<&mut Element> {
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_CHOICE_INDICATOR) {
-        return Some(el);
-    }
-    el.children.iter_mut().find_map(find_indicator_mut)
+    crate::core::tree::find_by_attr_mut(el, ATTR_SLOT, SLOT_CHOICE_INDICATOR)
 }
 
 fn sync_choice_indicator(

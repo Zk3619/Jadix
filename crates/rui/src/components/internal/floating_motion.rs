@@ -16,7 +16,7 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::style::{
     animation_run_active, keyframes::KeyframeStop, keyframes_anim_entry, register_keyframes,
-    tick_element_animations, AnimationFillMode, TimingFunction,
+    AnimationFillMode, TimingFunction,
 };
 use crate::utils::motion::clear_motion;
 use crate::utils::popup::{
@@ -372,20 +372,7 @@ pub(crate) fn tick_floating_presence() -> bool {
 }
 
 fn find_template_id_mut<'a>(el: &'a mut Element, want: &str) -> Option<&'a mut Element> {
-    let want = want.replace('\\', "/").to_ascii_lowercase();
-    if el
-        .template_id
-        .as_deref()
-        .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
-    {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_template_id_mut(child, &want) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_by_template_id_mut(el, want)
 }
 
 fn fade_has_exit_anim(el: &Element) -> bool {
@@ -445,7 +432,7 @@ fn seed_expand_enter(el: &mut Element, content_height: f32) {
     )];
     reset_anim_snapshot(el);
     // dt=0: apply fill-mode backwards only (max-height:0); avoid a large first-frame dt skipping enter.
-    let _ = tick_element_animations(&mut el.style, &mut el.animation_snapshot, 0.0);
+    let _ = el.tick_css_animations(0.0);
     el.set_attr(
         ATTR_FLOATING_CONTENT_H,
         format!("{}", content_height.max(1.0)),
@@ -518,7 +505,7 @@ fn seed_expand_exit(el: &mut Element, content_height: f32) {
         AnimationFillMode::Both,
     )];
     reset_anim_snapshot(el);
-    let _ = tick_element_animations(&mut el.style, &mut el.animation_snapshot, 0.0);
+    let _ = el.tick_css_animations(0.0);
     el.set_attr(
         ATTR_FLOATING_CONTENT_H,
         format!("{}", content_height.max(1.0)),
@@ -1033,7 +1020,7 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
     if !el.style.animations.is_empty()
         || crate::style::css_animation_needs_frame(&el.style, &el.animation_snapshot)
     {
-        crate::style::tick_element_animations(&mut el.style, &mut el.animation_snapshot, dt)
+        el.tick_css_animations(dt)
     } else {
         false
     }
@@ -1114,20 +1101,7 @@ pub(crate) fn mark_floating_panels_layout_dirty(
 }
 
 fn find_template_id<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
-    let want = want.replace('\\', "/").to_ascii_lowercase();
-    if el
-        .template_id
-        .as_deref()
-        .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
-    {
-        return Some(el);
-    }
-    for child in &el.children {
-        if let Some(hit) = find_template_id(child, &want) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_by_template_id(el, want)
 }
 
 /// Skip pre-hoist CSS tick for live floating panels (parity with modal_shell_defer_css_tick).
@@ -1150,7 +1124,6 @@ pub(crate) fn floating_panel_defer_css_tick(tid: Option<&str>) -> bool {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
-    use crate::style::tick_element_animations;
 
     #[test]
     fn fade_enter_seeds_once() {
@@ -1224,7 +1197,7 @@ mod tests {
             // Settle enter.
             for _ in 0..40 {
                 let p = find_template_id_mut(&mut root, "fade-exit__floating_panel").unwrap();
-                let _ = tick_element_animations(&mut p.style, &mut p.animation_snapshot, 0.016);
+                let _ = p.tick_css_animations(0.016);
             }
             let _ = flush_floating_motion_subtree(&mut root);
 
@@ -1663,11 +1636,7 @@ mod tests {
                 let panel =
                     find_template_id_mut(&mut root, "exp-exit-hide__floating_panel").unwrap();
                 for _ in 0..20 {
-                    let _ = tick_element_animations(
-                        &mut panel.style,
-                        &mut panel.animation_snapshot,
-                        0.016,
-                    );
+                    let _ = panel.tick_css_animations(0.016);
                 }
                 assert!(
                     !animation_run_active(&panel.style, &panel.animation_snapshot),

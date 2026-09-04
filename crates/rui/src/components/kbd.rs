@@ -44,12 +44,11 @@ const ATTR_SLOT: &str = "data-slot";
 const SLOT_KBD: &str = "kbd";
 const SLOT_KBD_GROUP: &str = "kbd-group";
 fn paint_caption(el: &mut Element, color: [u8; 4]) {
-    if el.text.is_some() {
-        el.text_style.color = Some(color);
-    }
-    for child in &mut el.children {
-        paint_caption(child, color);
-    }
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.text.is_some() {
+            el.text_style.color = Some(color);
+        }
+    });
 }
 
 fn kbd_text_style() -> TextNodeConfig {

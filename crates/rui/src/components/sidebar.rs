@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! SidebarProvider              // open / defaultOpen · toggleSidebar · 键盘 Ctrl/Cmd+B
-//! └── Sidebar                  // 固定 rail（collapsible=none）或预留折叠槽位
+//! └── Sidebar                  // collapsible=none 固定宽；icon 收成图标轨；offcanvas 宽为 0
 //!     ├── SidebarHeader
 //!     ├── SidebarContent       // flex-1 · overflow-auto · 焦点环 roving
 //!     │   └── SidebarGroup
@@ -24,6 +24,10 @@
 //! 默认 `flex-shrink: 0` 且 `min-width` 与宽度一致，避免主内容区固有宽把侧栏挤扁
 //! （典型 app-shell：rail 不缩，主区 `min-width: 0`）。
 //!
+//! `collapsible="icon"` 收起对齐 ShadCN：rail 宽 200ms linear 收到 `3rem`；`SidebarGroupLabel` /
+//! `SidebarInput` 高度与透明度收掉；菜单按钮 `size-8` + `p-2`（16px 内容区只留图标）；
+//! 非图标文案淡出并宽度归零。选中只换强调色，不改 `font-weight`（cosmic-text 换字重会把标签顶下去）。
+//!
 //! `<Sidebar>` / `<SidebarMenuButton>` 等由 `#[component]` 宏展开；`ui!` camelCase 别名：
 //! `defaultOpen` · `isActive` · `showOnHover`。
 //!
@@ -32,7 +36,7 @@
 //! // A · RSX / 复合标签
 //! ui! {
 //!     <SidebarProvider id="app" defaultOpen={true}>
-//!         <Sidebar id="nav" w="13rem">
+//!         <Sidebar id="nav" w="13rem" collapsible="icon">
 //!             <SidebarHeader>
 //!                 <Label font_weight="700">"RUI Gallery"</Label>
 //!             </SidebarHeader>
@@ -68,8 +72,11 @@
 //! **Identity (WP-2.8)**: `Sidebar` / `SidebarProvider` 的 `id` 可选；空串不写 `template_id`。
 //! Gallery 测试选择器常用 `"gal-sidebar"`。
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use rui_macros::component;
 
@@ -86,7 +93,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, with_class_list};
-use crate::utils::lucide::lucide_glyph;
+use crate::utils::icon_provider::ATTR_ICON_SRC;
+use crate::utils::lucide::{lucide_glyph, ATTR_ICON_NAME};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_packed;
@@ -99,9 +107,20 @@ const ATTR_VARIANT: &str = "data-variant";
 const ATTR_STATE: &str = "data-state";
 const ATTR_PROVIDER_ID: &str = "data-sidebar-provider-id";
 const ATTR_WIDTH_STORE: &str = "data-sidebar-width";
+const ATTR_COLLAPSIBLE: &str = "data-collapsible";
+/// Stashed `flex-grow` while icon-collapse zeros label width.
+const ATTR_SAVED_GROW: &str = "data-sidebar-saved-grow";
 
 const SIDEBAR_WIDTH_DEFAULT: &str = "16rem";
 const SIDEBAR_WIDTH_ICON: &str = "3rem";
+/// ShadCN `transition-[width] duration-200 ease-linear`.
+const SIDEBAR_WIDTH_TRANSITION_MS: f32 = 200.0;
+/// ShadCN `group-data-[collapsible=icon]:size-8`.
+const SIDEBAR_MENU_BUTTON_ICON_PX: f32 = 32.0;
+/// ShadCN menu-button / group-label `p-2` / `px-2`.
+const SIDEBAR_PAD_PX: f32 = 8.0;
+const SIDEBAR_GAP_PX: f32 = 8.0;
+const SIDEBAR_GROUP_LABEL_H_PX: f32 = 32.0;
 const SIDEBAR_KEYBOARD_SHORTCUT: &str = "b";
 
 const SLOT_PROVIDER: &str = "sidebar-wrapper";
@@ -129,8 +148,10 @@ const SLOT_RAIL: &str = "sidebar-rail";
 
 const MENU_TEXT_SIZE_PX: f32 = 14.0;
 const MENU_TEXT_SIZE_SM_PX: f32 = 12.0;
-const MENU_WEIGHT: u16 = 400;
-const MENU_WEIGHT_ACTIVE: u16 = 500;
+/// Stable face for idle + active. Changing 400↔500 on select remeasures glyphs and
+/// the label appears to drop (not a ShadCN layout intent — their `h-8` + `items-center`
+/// CSS line box hides it; cosmic-text does not).
+const MENU_WEIGHT: u16 = 500;
 const GROUP_LABEL_SIZE_PX: f32 = 12.0;
 const GROUP_LABEL_WEIGHT: u16 = 500;
 /// ShadCN `SidebarSeparator` / `mx-2`：水平内缩，避免满宽贴边。
@@ -207,8 +228,11 @@ impl From<&str> for SidebarVariant {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SidebarCollapsible {
+    /// 收起时宽度为 0（滑出画布）。
     Offcanvas,
+    /// 收起时保留 3rem 图标轨，隐藏文案。
     Icon,
+    /// 不随 `open` 改宽度。
     #[default]
     None,
 }
@@ -403,6 +427,23 @@ pub fn toggle_sidebar() {
     }
 }
 
+fn bind_sidebar_toggle(on_click: Option<Handler<()>>) -> Handler<()> {
+    if let Some(h) = on_click {
+        return h;
+    }
+    if let Some(ctx) = use_sidebar() {
+        let open = ctx.open;
+        return Handler::new(move |_| {
+            if open.is_alive() {
+                let next = !open.peek();
+                let _ = open.set(next);
+                crate::app::runtime::request_redraw();
+            }
+        });
+    }
+    Handler::new(|_| toggle_sidebar())
+}
+
 /// 提供侧栏上下文（`ui!` `<SidebarProvider>` / Builder 共用）。
 pub fn sidebar_provider_scope(
     id: impl Into<String>,
@@ -457,26 +498,400 @@ fn sidebar_content_side_border(el: Element, side: SidebarSide) -> Element {
     }
 }
 
-fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> LayoutStatus {
+fn sidebar_collapsible_attr(el: &Element) -> SidebarCollapsible {
+    el.attrs
+        .get(ATTR_COLLAPSIBLE)
+        .map(|s| SidebarCollapsible::from(s.as_str()))
+        .unwrap_or_default()
+}
+
+fn rail_width_css_for_state<'a>(
+    open: bool,
+    expanded: &'a str,
+    collapsible: SidebarCollapsible,
+) -> &'a str {
+    if open {
+        return expanded;
+    }
+    match collapsible {
+        SidebarCollapsible::None => expanded,
+        SidebarCollapsible::Offcanvas => "0",
+        SidebarCollapsible::Icon => SIDEBAR_WIDTH_ICON,
+    }
+}
+
+fn is_sidebar_icon_node(el: &Element) -> bool {
+    el.attrs.get(ATTR_ICON_NAME).is_some()
+        || el.attrs.get(ATTR_ICON_SRC).is_some()
+        || el.text_style.font_family.as_deref() == Some("lucide")
+}
+
+fn subtree_has_sidebar_icon(el: &Element) -> bool {
+    crate::core::tree::any_in_tree(el, is_sidebar_icon_node)
+}
+
+fn set_sidebar_opacity(el: &mut Element, want: f32) -> bool {
+    if (el.style.opacity - want).abs() > 0.001 {
+        el.style.opacity = want;
+        true
+    } else {
+        false
+    }
+}
+
+fn set_dim_if_neq(slot: &mut taffy::style::Dimension, want: taffy::style::Dimension) -> bool {
+    if *slot != want {
+        *slot = want;
+        true
+    } else {
+        false
+    }
+}
+
+fn set_overflow_xy(el: &mut Element, x: taffy::style::Overflow, y: taffy::style::Overflow) -> bool {
+    if el.style.overflow.x != x || el.style.overflow.y != y {
+        el.style.overflow.x = x;
+        el.style.overflow.y = y;
+        true
+    } else {
+        false
+    }
+}
+
+fn set_pad_xy(el: &mut Element, x: f32, y: f32) -> bool {
+    use crate::layout::dimension::CssDim;
+    use crate::style::UnitSlot;
+    let prev = el.style.padding;
+    el.style.set_css_dim(UnitSlot::PadL, CssDim::Px(x));
+    el.style.set_css_dim(UnitSlot::PadR, CssDim::Px(x));
+    el.style.set_css_dim(UnitSlot::PadT, CssDim::Px(y));
+    el.style.set_css_dim(UnitSlot::PadB, CssDim::Px(y));
+    el.style.padding != prev
+}
+
+fn set_gap_px(el: &mut Element, px: f32) -> bool {
+    use crate::layout::dimension::CssDim;
+    use crate::style::UnitSlot;
+    let prev = el.style.gap;
+    el.style.set_css_dim(UnitSlot::GapX, CssDim::Px(px));
+    el.style.set_css_dim(UnitSlot::GapY, CssDim::Px(px));
+    el.style.gap != prev
+}
+
+fn set_gap_rem(el: &mut Element, rem: f32) -> bool {
+    use crate::layout::dimension::CssDim;
+    use crate::style::UnitSlot;
+    let prev = el.style.gap;
+    el.style.set_css_dim(UnitSlot::GapX, CssDim::Rem(rem));
+    el.style.set_css_dim(UnitSlot::GapY, CssDim::Rem(rem));
+    el.style.gap != prev
+}
+
+/// `t=0` expanded, `t=1` icon-collapsed. Follows the 200ms rail-width clock.
+fn icon_collapse_progress(provider_id: Option<&str>, want_collapsed: bool) -> f32 {
+    let rest = if want_collapsed { 1.0 } else { 0.0 };
+    let Some(id) = provider_id else {
+        return rest;
+    };
+    RAIL_WIDTH_ANIMS.with(|m| {
+        let m = m.borrow();
+        let Some(a) = m.get(id) else {
+            return rest;
+        };
+        if (a.from_px - a.to_px).abs() < 0.5 {
+            return rest;
+        }
+        let p = (a.start.elapsed().as_secs_f32() * 1000.0 / SIDEBAR_WIDTH_TRANSITION_MS)
+            .clamp(0.0, 1.0);
+        if a.to_px < a.from_px {
+            p
+        } else {
+            1.0 - p
+        }
+    })
+}
+
+/// ShadCN group-label: `transition-[margin,opa] …: -mt-8 opacity-0` (net 0 height).
+fn apply_icon_collapsed_group_label(el: &mut Element, t: f32) -> bool {
     use taffy::style::{Dimension, Overflow};
 
-    let want_state = if open { "expanded" } else { "collapsed" };
-    let want_w_css = if open { width } else { "0" };
-    let want_width = want_w_css
-        .into_css_dim()
-        .preview_dimension()
-        .unwrap_or(Dimension::length(0.0));
-    let want_overflow = if open {
-        Overflow::Visible
-    } else {
-        Overflow::Hidden
-    };
+    let mut changed = set_sidebar_opacity(el, 1.0 - t);
+    let h = SIDEBAR_GROUP_LABEL_H_PX * (1.0 - t);
+    changed |= set_dim_if_neq(&mut el.style.size.height, Dimension::length(h));
+    let clip = t > 0.001;
+    changed |= set_overflow_xy(
+        el,
+        if clip {
+            Overflow::Hidden
+        } else {
+            Overflow::Visible
+        },
+        if clip {
+            Overflow::Hidden
+        } else {
+            Overflow::Visible
+        },
+    );
+    let pad = SIDEBAR_PAD_PX * (1.0 - t);
+    changed |= set_pad_xy(el, pad, 0.0);
+    changed
+}
 
-    let mut changed = el.style.size.width != want_width || el.style.min_size.width != want_width;
-    if changed {
-        el.style.size.width = want_width;
-        el.style.min_size.width = want_width;
+fn apply_icon_text_collapse(el: &mut Element, t: f32) -> bool {
+    use taffy::style::{Dimension, Overflow};
+
+    let mut changed = set_sidebar_opacity(el, 1.0 - t);
+    let fully = t >= 0.999;
+    if fully {
+        if el.style.flex_grow > 0.001 {
+            let grow = el.style.flex_grow;
+            el.attrs.insert(ATTR_SAVED_GROW.into(), format!("{grow}"));
+            el.style.flex_grow = 0.0;
+            changed = true;
+        }
+        changed |= set_dim_if_neq(&mut el.style.size.width, Dimension::length(0.0));
+        changed |= set_dim_if_neq(&mut el.style.max_size.width, Dimension::length(0.0));
+        changed |= set_dim_if_neq(&mut el.style.min_size.width, Dimension::length(0.0));
+        changed |= set_overflow_xy(el, Overflow::Hidden, Overflow::Hidden);
+    } else {
+        if let Some(g) = el.attrs.remove(ATTR_SAVED_GROW) {
+            if let Ok(v) = g.parse::<f32>() {
+                if (el.style.flex_grow - v).abs() > 0.001 {
+                    el.style.flex_grow = v;
+                    changed = true;
+                }
+            }
+        }
+        changed |= set_dim_if_neq(&mut el.style.size.width, Dimension::auto());
+        changed |= set_dim_if_neq(&mut el.style.max_size.width, Dimension::auto());
+        changed |= set_dim_if_neq(&mut el.style.min_size.width, Dimension::length(0.0));
     }
+    changed
+}
+
+fn apply_icon_row_gap(el: &mut Element, t: f32) -> bool {
+    if t >= 0.999 {
+        set_gap_px(el, 0.0)
+    } else if t <= 0.001 {
+        set_gap_rem(el, 0.5)
+    } else {
+        set_gap_px(el, SIDEBAR_GAP_PX * (1.0 - t))
+    }
+}
+
+fn apply_icon_collapsed_menu_button(el: &mut Element, t: f32) -> bool {
+    use taffy::style::{Dimension, JustifyContent, Overflow};
+
+    let mut changed = false;
+    if el.style.justify_content != Some(JustifyContent::FLEX_START) {
+        el.style.justify_content = Some(JustifyContent::FLEX_START);
+        changed = true;
+    }
+    changed |= set_overflow_xy(el, Overflow::Hidden, Overflow::Hidden);
+    let icon_px = SIDEBAR_MENU_BUTTON_ICON_PX;
+    let fully = t >= 0.999;
+    let size = sidebar_menu_button_size(el);
+    if fully {
+        changed |= set_dim_if_neq(&mut el.style.size.width, Dimension::length(icon_px));
+        changed |= set_dim_if_neq(&mut el.style.min_size.width, Dimension::length(icon_px));
+        changed |= set_dim_if_neq(&mut el.style.max_size.width, Dimension::length(icon_px));
+        changed |= set_dim_if_neq(&mut el.style.size.height, Dimension::length(icon_px));
+        // `size-8` + `p-2` (lg: `p-0`) so the 16px icon fills the content box.
+        let pad = if size == SidebarMenuButtonSize::Lg {
+            0.0
+        } else {
+            SIDEBAR_PAD_PX
+        };
+        changed |= set_pad_xy(el, pad, pad);
+        changed |= set_gap_px(el, 0.0);
+    } else {
+        changed |= set_dim_if_neq(&mut el.style.size.width, Dimension::percent(1.0));
+        changed |= set_dim_if_neq(&mut el.style.min_size.width, Dimension::auto());
+        changed |= set_dim_if_neq(&mut el.style.max_size.width, Dimension::auto());
+        let h = size
+            .height_css()
+            .into_css_dim()
+            .preview_dimension()
+            .unwrap_or(Dimension::length(icon_px));
+        changed |= set_dim_if_neq(&mut el.style.size.height, h);
+        changed |= set_pad_xy(el, SIDEBAR_PAD_PX, SIDEBAR_PAD_PX);
+        changed |= apply_icon_row_gap(el, t);
+    }
+    for child in &mut el.children {
+        changed |= apply_icon_leaf_visibility(child, t);
+    }
+    changed
+}
+
+/// Keep Lucide / `<Icon>` nodes; fade + zero-width labels (ShadCN clips last span).
+fn apply_icon_leaf_visibility(el: &mut Element, t: f32) -> bool {
+    let mut changed = false;
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if is_sidebar_icon_node(el) {
+            changed |= set_sidebar_opacity(el, 1.0);
+            return false;
+        }
+        if subtree_has_sidebar_icon(el) {
+            changed |= apply_icon_row_gap(el, t);
+            return true;
+        }
+        changed |= apply_icon_text_collapse(el, t);
+        false
+    });
+    changed
+}
+
+fn apply_sidebar_icon_chrome(el: &mut Element, t: f32) -> bool {
+    use taffy::style::Overflow;
+
+    let mut changed = false;
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        let slot = el.attrs.get(ATTR_SLOT).map(String::as_str);
+        match slot {
+            Some(SLOT_GROUP_LABEL) | Some(SLOT_INPUT) => {
+                changed |= apply_icon_collapsed_group_label(el, t);
+                false
+            }
+            Some(SLOT_MENU_BUTTON) => {
+                changed |= apply_icon_collapsed_menu_button(el, t);
+                false
+            }
+            Some(SLOT_CONTENT) => {
+                changed |= if t > 0.001 {
+                    set_overflow_xy(el, Overflow::Hidden, Overflow::Hidden)
+                } else {
+                    set_overflow_xy(el, Overflow::Hidden, Overflow::Scroll)
+                };
+                true
+            }
+            Some(SLOT_CONTENT_HOST) => true,
+            Some(SLOT_HEADER) | Some(SLOT_FOOTER) | Some(SLOT_GROUP) => {
+                changed |= if t > 0.001 {
+                    set_overflow_xy(el, Overflow::Hidden, Overflow::Hidden)
+                } else {
+                    set_overflow_xy(el, Overflow::Visible, Overflow::Visible)
+                };
+                true
+            }
+            _ => {
+                if el.text.is_some() && !is_sidebar_icon_node(el) && !subtree_has_sidebar_icon(el) {
+                    changed |= apply_icon_text_collapse(el, t);
+                }
+                true
+            }
+        }
+    });
+    changed
+}
+
+fn snap_rail_width(el: &mut Element, px: f32) -> bool {
+    use taffy::style::Dimension;
+    let want = Dimension::length(px.max(0.0));
+    let mut changed = set_dim_if_neq(&mut el.style.size.width, want);
+    changed |= set_dim_if_neq(&mut el.style.min_size.width, want);
+    changed
+}
+
+fn preview_width_px(css: &str) -> f32 {
+    css.into_css_dim()
+        .preview_dimension()
+        .and_then(crate::layout::dim_length_px)
+        .unwrap_or(0.0)
+}
+
+fn sidebar_width_lerp(from: f32, to: f32, elapsed_ms: f32) -> f32 {
+    let t = (elapsed_ms / SIDEBAR_WIDTH_TRANSITION_MS).clamp(0.0, 1.0);
+    from + (to - from) * t
+}
+
+struct RailWidthAnim {
+    from_px: f32,
+    to_px: f32,
+    start: Instant,
+}
+
+thread_local! {
+    static RAIL_WIDTH_ANIMS: RefCell<HashMap<String, RailWidthAnim>> =
+        RefCell::new(HashMap::new());
+}
+
+fn note_or_snap_rail_width(el: &mut Element, provider_id: Option<&str>, target_px: f32) -> bool {
+    let Some(id) = provider_id else {
+        return snap_rail_width(el, target_px);
+    };
+    RAIL_WIDTH_ANIMS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.contains_key(id) {
+            let changed = snap_rail_width(el, target_px);
+            m.insert(
+                id.to_string(),
+                RailWidthAnim {
+                    from_px: target_px,
+                    to_px: target_px,
+                    start: Instant::now(),
+                },
+            );
+            return changed;
+        }
+        if let Some(anim) = m.get_mut(id) {
+            if (anim.to_px - target_px).abs() > 0.5 {
+                let current =
+                    crate::layout::dim_length_px(el.style.size.width).unwrap_or(anim.to_px);
+                anim.from_px = current;
+                anim.to_px = target_px;
+                anim.start = Instant::now();
+            }
+        }
+        false
+    })
+}
+
+/// Advance an in-flight width tween. Returns `(layout_changed, still_running)`.
+fn tick_rail_width_anim(el: &mut Element, provider_id: &str) -> (bool, bool) {
+    RAIL_WIDTH_ANIMS.with(|m| {
+        let mut m = m.borrow_mut();
+        let Some((from, to, start)) = m.get(provider_id).map(|a| (a.from_px, a.to_px, a.start))
+        else {
+            return (false, false);
+        };
+        if (from - to).abs() < 0.5 {
+            return (false, false);
+        }
+        let elapsed_ms = start.elapsed().as_secs_f32() * 1000.0;
+        let next = sidebar_width_lerp(from, to, elapsed_ms);
+        let running = elapsed_ms < SIDEBAR_WIDTH_TRANSITION_MS;
+        let changed = snap_rail_width(el, if running { next } else { to });
+        if !running {
+            if let Some(anim) = m.get_mut(provider_id) {
+                anim.from_px = to;
+                anim.to_px = to;
+            }
+        }
+        (changed, running)
+    })
+}
+
+fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> LayoutStatus {
+    use taffy::style::Overflow;
+
+    let collapsible = sidebar_collapsible_attr(el);
+    let want_state = if open { "expanded" } else { "collapsed" };
+    let want_w_css = rail_width_css_for_state(open, width, collapsible);
+    let target_px = preview_width_px(want_w_css);
+    let visually_collapsed = !open
+        && matches!(
+            collapsible,
+            SidebarCollapsible::Offcanvas | SidebarCollapsible::Icon
+        );
+
+    let provider_id = el.attrs.get(ATTR_PROVIDER_ID).cloned();
+    let mut changed = note_or_snap_rail_width(el, provider_id.as_deref(), target_px);
+
+    let want_overflow = if visually_collapsed {
+        Overflow::Hidden
+    } else {
+        Overflow::Visible
+    };
     if el.style.overflow.x != want_overflow || el.style.overflow.y != want_overflow {
         el.style.overflow.x = want_overflow;
         el.style.overflow.y = want_overflow;
@@ -484,6 +899,13 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
     }
     if el.attrs.get(ATTR_STATE).map(String::as_str) != Some(want_state) {
         el.set_attr(ATTR_STATE, want_state);
+    }
+    let icon_collapsed = !open && collapsible == SidebarCollapsible::Icon;
+    if collapsible == SidebarCollapsible::Icon {
+        let chrome_t = icon_collapse_progress(provider_id.as_deref(), icon_collapsed);
+        if apply_sidebar_icon_chrome(el, chrome_t) {
+            changed = true;
+        }
     }
     if changed {
         LayoutStatus::LayoutChanged
@@ -498,25 +920,47 @@ pub(crate) fn sync_sidebar_rail_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_ROOT) {
-        if let (Some(provider_id), Some(width)) = (
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_ROOT) {
+            return;
+        }
+        let (Some(provider_id), Some(width)) = (
             el.attrs.get(ATTR_PROVIDER_ID).cloned(),
             el.attrs.get(ATTR_WIDTH_STORE).cloned(),
-        ) {
-            let open_key = format!("{provider_id}__open");
-            let open_sig = use_signal(open_key.as_str(), || true);
-            if open_sig.is_alive() {
-                let status = apply_sidebar_rail_layout(el, open_sig.peek(), width.as_str());
-                if status == LayoutStatus::LayoutChanged && el.layout_node.is_some() {
-                    layout_tree.mark_element_layout_dirty(el);
-                }
-                *impact = impact.merge(status);
+        ) else {
+            return;
+        };
+        let open_key = format!("{provider_id}__open");
+        let open_sig = use_signal(open_key.as_str(), || true);
+        if !open_sig.is_alive() {
+            return;
+        }
+        let open = open_sig.peek();
+        let mut status = apply_sidebar_rail_layout(el, open, width.as_str());
+        let (w_changed, running) = tick_rail_width_anim(el, provider_id.as_str());
+        if running {
+            use taffy::style::Overflow;
+            el.style.overflow.x = Overflow::Hidden;
+            el.style.overflow.y = Overflow::Hidden;
+            crate::app::runtime::request_redraw();
+        }
+        if w_changed {
+            status = status.merge(LayoutStatus::LayoutChanged);
+        }
+        if sidebar_collapsible_attr(el) == SidebarCollapsible::Icon {
+            let t = icon_collapse_progress(Some(provider_id.as_str()), !open);
+            if apply_sidebar_icon_chrome(el, t) {
+                status = status.merge(LayoutStatus::LayoutChanged);
             }
         }
-    }
-    for child in &mut el.children {
-        sync_sidebar_rail_subtree(child, layout_tree, impact);
-    }
+        if status == LayoutStatus::LayoutChanged && el.layout_node.is_some() {
+            layout_tree.mark_element_layout_dirty(el);
+            crate::core::tree::walk_elements(&*el, |node| {
+                layout_tree.update_taffy_node_style(node);
+            });
+        }
+        *impact = impact.merge(status);
+    });
 }
 
 fn sidebar_menu_button_variant(el: &Element) -> SidebarMenuButtonVariant {
@@ -537,8 +981,11 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
         .unwrap_or_default()
 }
 
-fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], weight: u16, size_px: f32) {
-    if el.text.is_some() {
+fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.text.is_none() {
+            return;
+        }
         el.text_style.color = Some(fg);
         // Stamp inherit-lock attrs. Chrome writes color/weight/size without going through
         // `Element::text_color` — otherwise the next full `cascade_inheritable_text_style`
@@ -550,15 +997,10 @@ fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], weight: u16, size
             el.text_style.size = Some(16.0);
             el.attrs.insert("text_size".into(), "1".into());
         } else {
-            el.text_style.weight = Some(weight);
             el.text_style.size = Some(size_px);
-            el.attrs.insert("font_weight".into(), "1".into());
             el.attrs.insert("text_size".into(), "1".into());
         }
-    }
-    for child in &mut el.children {
-        paint_sidebar_menu_button_fg(child, fg, weight, size_px);
-    }
+    });
 }
 
 fn set_sidebar_menu_button_ring(el: &mut Element, color: [f32; 4], spread: f32) {
@@ -593,11 +1035,6 @@ fn apply_sidebar_menu_button_chrome(
         parse_text_color("sidebar-accent-foreground")
     } else {
         parse_text_color("sidebar-foreground")
-    };
-    let want_weight = if is_active {
-        MENU_WEIGHT_ACTIVE
-    } else {
-        MENU_WEIGHT
     };
     let size_px = sidebar_menu_button_size(el).text_size_px();
 
@@ -635,11 +1072,7 @@ fn apply_sidebar_menu_button_chrome(
         status = status.merge(LayoutStatus::StyleChanged);
     }
 
-    if el.text_style.weight_resolved() != want_weight {
-        el.text_style.weight = Some(want_weight);
-        status = status.merge(LayoutStatus::StyleChanged);
-    }
-    paint_sidebar_menu_button_fg(el, want_fg, want_weight, size_px);
+    paint_sidebar_menu_button_fg(el, want_fg, size_px);
     status
 }
 
@@ -649,7 +1082,10 @@ pub(crate) fn sync_sidebar_menu_button_paint_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_MENU_BUTTON) {
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_MENU_BUTTON) {
+            return;
+        }
         let variant = sidebar_menu_button_variant(el);
         let is_active = sidebar_menu_button_active(el);
         let is_hovered = el
@@ -672,10 +1108,7 @@ pub(crate) fn sync_sidebar_menu_button_paint_subtree(
             is_active,
             is_hovered,
         ));
-    }
-    for child in &mut el.children {
-        sync_sidebar_menu_button_paint_subtree(child, layout_tree, impact);
-    }
+    });
 }
 
 fn wire_sidebar_menu_button_hover(el: Element, focus_id: &str) -> Element {
@@ -752,12 +1185,10 @@ fn paint_sidebar_rail(
     el.set_attr(ATTR_SIDEBAR, "sidebar");
     el.set_attr(ATTR_SIDE, side.as_str());
     el.set_attr(ATTR_VARIANT, variant.as_str());
-    el.set_attr("data-collapsible", collapsible.as_str());
+    el.set_attr(ATTR_COLLAPSIBLE, collapsible.as_str());
     if let Some(open) = open {
         el.set_attr(ATTR_STATE, sidebar_state_attr(open).as_str());
     }
-    let _ = SIDEBAR_WIDTH_ICON;
-    let _ = collapsible;
     el
 }
 
@@ -884,6 +1315,9 @@ pub fn Sidebar(
     if !id.trim().is_empty() {
         rail.template_id = Some(id.clone());
     }
+    let inner = wrap_sidebar_inner(kids, variant, side);
+    rail.children.push(inner);
+    attach_focus_roving(&mut rail, FocusRovingAxis::Vertical);
     if let Some(ctx) = sidebar_ctx {
         rail.set_attr(ATTR_PROVIDER_ID, ctx.id.clone());
         rail.set_attr(ATTR_WIDTH_STORE, width.clone());
@@ -899,9 +1333,6 @@ pub fn Sidebar(
             );
         }
     }
-    let inner = wrap_sidebar_inner(kids, variant, side);
-    rail.children.push(inner);
-    attach_focus_roving(&mut rail, FocusRovingAxis::Vertical);
     rail
 }
 
@@ -1012,13 +1443,12 @@ pub fn SidebarGroup(class: Option<String>, children: Option<Element>) -> Element
 
 fn paint_group_label_text(el: &mut Element) {
     let fg = parse_text_color("sidebar-foreground/70");
-    if el.text.is_some() {
-        el.text_style.color = Some(fg);
-        el.attrs.insert("text_color".into(), "1".into());
-    }
-    for child in &mut el.children {
-        paint_group_label_text(child);
-    }
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.text.is_some() {
+            el.text_style.color = Some(fg);
+            el.attrs.insert("text_color".into(), "1".into());
+        }
+    });
 }
 
 /// 分组标题：`text-xs font-medium text-sidebar-foreground/70`。
@@ -1163,25 +1593,21 @@ pub fn SidebarTrigger(
     class: Option<String>,
     mut on_click: Option<Handler<()>>,
 ) -> Element {
-    let _ctx = use_sidebar();
     let glyph = lucide_glyph("panel-left").unwrap_or_else(|| "☰".into());
     let icon = build_icon_text_node(glyph)
         .text_size(16.0)
         .text_color(parse_text_color("foreground"))
         .pointer_events("none");
-    let mut btn = button(if id.trim().is_empty() {
+    let mut toggle = bind_sidebar_toggle(on_click);
+    let btn = button(if id.trim().is_empty() {
         "sidebar-trigger"
     } else {
         id.as_str()
     })
     .variant("ghost")
     .size("icon-sm")
-    .child(icon);
-    if let Some(mut h) = on_click {
-        btn = btn.on_click(move || h.call(()));
-    } else {
-        btn = btn.on_click(|| toggle_sidebar());
-    }
+    .child(icon)
+    .on_click(move || toggle.call(()));
     let mut el: Element = btn.into();
     el.set_attr(ATTR_SLOT, SLOT_TRIGGER);
     el.set_attr(ATTR_SIDEBAR, "trigger");
@@ -1221,7 +1647,7 @@ pub fn SidebarInput(id: String, class: Option<String>, placeholder: Option<Strin
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SidebarRail(class: Option<String>, mut on_click: Option<Handler<()>>) -> Element {
-    let _ctx = use_sidebar();
+    let mut toggle = bind_sidebar_toggle(on_click);
     let mut hit = r#box()
         .w("1rem")
         .h("100%")
@@ -1230,17 +1656,10 @@ pub fn SidebarRail(class: Option<String>, mut on_click: Option<Handler<()>>) -> 
         .right(-16.0)
         .cursor("col-resize")
         .into();
-    if let Some(mut h) = on_click {
-        hit = interactive(hit)
-            .focus_id("__sidebar_rail")
-            .on_click(move || h.call(()))
-            .into();
-    } else {
-        hit = interactive(hit)
-            .focus_id("__sidebar_rail")
-            .on_click(|| toggle_sidebar())
-            .into();
-    }
+    hit = interactive(hit)
+        .focus_id("__sidebar_rail")
+        .on_click(move || toggle.call(()))
+        .into();
     hit.set_attr(ATTR_SLOT, SLOT_RAIL);
     hit.set_attr(ATTR_SIDEBAR, "rail");
     hit.set_attr("aria-label", "Toggle Sidebar");
@@ -1318,11 +1737,7 @@ impl From<SidebarMenuButtonBuilder> for Element {
                 &label,
                 TextNodeConfig {
                     size_px: b.size.text_size_px(),
-                    weight: if b.is_active {
-                        MENU_WEIGHT_ACTIVE
-                    } else {
-                        MENU_WEIGHT
-                    },
+                    weight: MENU_WEIGHT,
                     color: if b.is_active {
                         parse_text_color("sidebar-accent-foreground")
                     } else {
@@ -1581,6 +1996,64 @@ mod tests {
     }
 
     #[test]
+    fn menu_button_active_keeps_stable_font_weight() {
+        fn text_weight(el: &Element) -> u16 {
+            if el.text.is_some() {
+                return el.text_style.weight_resolved();
+            }
+            el.children
+                .iter()
+                .map(text_weight)
+                .next()
+                .unwrap_or(el.text_style.weight_resolved())
+        }
+        let idle: Element = sidebar_menu_button("w-idle").text("Basics").into();
+        let active: Element = sidebar_menu_button("w-active")
+            .text("Basics")
+            .is_active(true)
+            .into();
+        assert_eq!(
+            text_weight(&idle),
+            text_weight(&active),
+            "active must not change font-weight (glyph metrics jump the label down)"
+        );
+        assert_eq!(text_weight(&idle), MENU_WEIGHT);
+    }
+
+    #[test]
+    fn menu_button_active_does_not_shift_label_y() {
+        fn find_text_y(result: &crate::layout::layout_tree::RenderResult, s: &str) -> f32 {
+            result
+                .text_nodes
+                .iter()
+                .find(|n| n.text == s)
+                .map(|n| n.y)
+                .expect("text")
+        }
+        let (_handle, _) = crate::core::reactivity::create_root(|| {
+            let mut idle: Element = sidebar_menu_button("y-idle").text("HelloNav").into();
+            let mut layout = LayoutTree::new();
+            let first = layout.build_and_layout(&mut idle, 240.0, 48.0, [-1.0, -1.0]);
+            let y0 = find_text_y(&first, "HelloNav");
+            let _ = apply_bound_sidebar_menu_button_active(&mut idle, true);
+            let second = layout.build_and_layout(&mut idle, 240.0, 48.0, [-1.0, -1.0]);
+            let y1 = find_text_y(&second, "HelloNav");
+            assert!(
+                (y0 - y1).abs() < 0.5,
+                "selecting a menu item must not move the label (idle y={y0}, active y={y1})"
+            );
+        });
+    }
+
+    #[test]
+    fn sidebar_width_lerp_is_linear_200ms() {
+        assert!((sidebar_width_lerp(256.0, 48.0, 0.0) - 256.0).abs() < 0.01);
+        assert!((sidebar_width_lerp(256.0, 48.0, 100.0) - 152.0).abs() < 0.01);
+        assert!((sidebar_width_lerp(256.0, 48.0, 200.0) - 48.0).abs() < 0.01);
+        assert!((sidebar_width_lerp(48.0, 256.0, 200.0) - 256.0).abs() < 0.01);
+    }
+
+    #[test]
     fn builder_items_wrap_in_menu_and_content() {
         let el: Element = sidebar("shell")
             .w("13rem")
@@ -1822,15 +2295,14 @@ mod tests {
     }
 
     #[test]
-    fn rail_layout_collapses_width_when_closed() {
+    fn rail_layout_offcanvas_collapses_width_when_closed() {
         let mut rail = paint_sidebar_rail(
             "16rem",
             SidebarSide::Left,
             SidebarVariant::Inset,
-            SidebarCollapsible::None,
+            SidebarCollapsible::Offcanvas,
             None,
         );
-        rail.set_attr(ATTR_SLOT, SLOT_ROOT);
         let status = apply_sidebar_rail_layout(&mut rail, false, "16rem");
         assert_eq!(status, LayoutStatus::LayoutChanged);
         assert_eq!(
@@ -1841,6 +2313,195 @@ mod tests {
             rail.attrs.get(ATTR_STATE).map(String::as_str),
             Some("collapsed")
         );
+    }
+
+    #[test]
+    fn rail_layout_icon_mode_uses_icon_width_when_closed() {
+        let mut rail = paint_sidebar_rail(
+            "16rem",
+            SidebarSide::Left,
+            SidebarVariant::Inset,
+            SidebarCollapsible::Icon,
+            None,
+        );
+        let status = apply_sidebar_rail_layout(&mut rail, false, "16rem");
+        assert_eq!(status, LayoutStatus::LayoutChanged);
+        assert_eq!(
+            crate::layout::dim_length_px(rail.style.size.width),
+            Some(48.0),
+            "icon collapse must keep a 3rem rail, not width 0"
+        );
+        assert_eq!(
+            crate::layout::dim_length_px(rail.style.min_size.width),
+            Some(48.0)
+        );
+        assert_eq!(
+            rail.attrs.get(ATTR_STATE).map(String::as_str),
+            Some("collapsed")
+        );
+    }
+
+    #[test]
+    fn rail_layout_none_keeps_width_when_closed() {
+        let mut rail = paint_sidebar_rail(
+            "16rem",
+            SidebarSide::Left,
+            SidebarVariant::Inset,
+            SidebarCollapsible::None,
+            None,
+        );
+        let _ = apply_sidebar_rail_layout(&mut rail, false, "16rem");
+        assert_eq!(
+            crate::layout::dim_length_px(rail.style.size.width),
+            Some(256.0),
+            "collapsible=none must not shrink the rail"
+        );
+    }
+
+    #[test]
+    fn icon_collapse_hides_labels_and_keeps_icons() {
+        use crate::components::label::label;
+        use crate::utils::icon_provider::build_icon_named;
+
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+        fn find_icon<'a>(el: &'a Element) -> Option<&'a Element> {
+            if is_sidebar_icon_node(el) {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_icon)
+        }
+        fn find_text_label<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.text.as_deref() == Some("Basics") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_text_label)
+        }
+
+        let mut kids = Element::new();
+        kids.set_attr("rui_fragment", "1");
+        let mut btn_kids = Element::new();
+        btn_kids.set_attr("rui_fragment", "1");
+        btn_kids = btn_kids.children(vec![
+            build_icon_named("layout-dashboard"),
+            label("").text("Basics").into(),
+        ]);
+        kids = kids.children(vec![
+            SidebarGroupLabel(SidebarGroupLabelProps {
+                class: None,
+                children: Some(Element::from("Nav")),
+                base: None,
+            }),
+            SidebarMenuButton(SidebarMenuButtonProps {
+                id: "icon-nav".into(),
+                is_active: None,
+                variant: None,
+                size: None,
+                class: None,
+                on_click: None,
+                children: Some(btn_kids),
+                base: None,
+            }),
+        ]);
+        let mut rail: Element = Sidebar(SidebarProps {
+            id: "icon-rail".into(),
+            w: Some("16rem".into()),
+            side: None,
+            variant: Some("inset".into()),
+            collapsible: Some("icon".into()),
+            class: None,
+            children: Some(kids),
+            base: None,
+        });
+        let status = apply_sidebar_rail_layout(&mut rail, false, "16rem");
+        assert_eq!(status, LayoutStatus::LayoutChanged);
+        assert_eq!(
+            crate::layout::dim_length_px(rail.style.size.width),
+            Some(48.0)
+        );
+        let group_label = find_slot(&rail, SLOT_GROUP_LABEL).expect("group label");
+        assert!(
+            group_label.style.opacity < 0.01,
+            "group label must fade like ShadCN opacity-0"
+        );
+        assert_eq!(
+            crate::layout::dim_length_px(group_label.style.size.height),
+            Some(0.0),
+            "group label must collapse height (ShadCN -mt-8)"
+        );
+        let icon = find_icon(&rail).expect("lucide icon");
+        assert!(icon.style.opacity > 0.99);
+        let text = find_text_label(&rail).expect("menu label");
+        assert!(
+            text.style.opacity < 0.01,
+            "non-icon text must hide, not Display::None"
+        );
+        assert_eq!(
+            crate::layout::dim_length_px(text.style.size.width),
+            Some(0.0),
+            "collapsed labels must drop out of flex so the 16px icon sits in p-2"
+        );
+        let btn = find_slot(&rail, SLOT_MENU_BUTTON).expect("menu button");
+        assert_eq!(
+            crate::layout::dim_length_px(btn.style.size.width),
+            Some(32.0),
+            "collapsed menu button must be size-8"
+        );
+        assert_eq!(
+            crate::layout::lp_length_px(btn.style.padding.left),
+            Some(8.0),
+            "collapsed menu button keeps p-2 (ShadCN size-8 + p-2 → 16px icon box)"
+        );
+    }
+
+    #[test]
+    fn provider_icon_collapse_lays_out_3rem_rail() {
+        use crate::core::reactivity::create_root;
+
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+
+        let (_handle, _) = create_root(|| {
+            let mut el =
+                sidebar_provider_scope("icon-prov", None, false, Some("inset"), None, || {
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![
+                        Sidebar(SidebarProps {
+                            id: "icon-nav".into(),
+                            w: Some("16rem".into()),
+                            side: None,
+                            variant: Some("inset".into()),
+                            collapsible: Some("icon".into()),
+                            class: None,
+                            children: None,
+                            base: None,
+                        }),
+                        SidebarInset(SidebarInsetProps {
+                            variant: Some("inset".into()),
+                            class: None,
+                            children: None,
+                            base: None,
+                        }),
+                    ])
+                });
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut el, 800.0, 600.0, [-1.0, -1.0]);
+            let rail = find_slot(&el, SLOT_ROOT).expect("rail");
+            let w = rail.layout_bounds[2];
+            assert!(
+                (w - 48.0).abs() < 1.5,
+                "closed icon sidebar must layout at 3rem; got {w}"
+            );
+        });
     }
 
     #[test]

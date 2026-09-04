@@ -329,7 +329,8 @@ fn normalize_defaults(panels: &mut [PanelPart]) {
 }
 
 fn apply_panel_grows(root: &mut Element, layout_tree: &mut LayoutTree, sizes: &[f32]) -> bool {
-    fn walk(el: &mut Element, layout_tree: &mut LayoutTree, sizes: &[f32], changed: &mut bool) {
+    let mut changed = false;
+    crate::core::tree::walk_elements_mut_pruned(root, |el| {
         if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_PANEL) {
             let i = el
                 .attrs
@@ -342,16 +343,12 @@ fn apply_panel_grows(root: &mut Element, layout_tree: &mut LayoutTree, sizes: &[
                 if el.layout_node.is_some() {
                     layout_tree.update_taffy_node_style(el);
                 }
-                *changed = true;
+                changed = true;
             }
-            return;
+            return false;
         }
-        for child in &mut el.children {
-            walk(child, layout_tree, sizes, changed);
-        }
-    }
-    let mut changed = false;
-    walk(root, layout_tree, sizes, &mut changed);
+        true
+    });
     changed
 }
 

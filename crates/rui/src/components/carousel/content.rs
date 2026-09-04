@@ -93,8 +93,8 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
             } else if el.style.transition.is_empty() {
                 // Just let go: pin the CSS baseline to the current visual position, and then turn on the transition to reach the target (avoiding from=to instantaneous jump).
                 crate::style::snap_element_transitions_to_current(
-                    &el.style,
-                    &mut el.transition_snapshot,
+                    &el.inner.style,
+                    &mut el.inner.transition_snapshot,
                 );
                 ensure_stack_card_css_transition(el);
             } else {
@@ -138,11 +138,10 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
             reset_stack_descendant_scales(el);
             if dragging {
                 fn clear_stack_transitions(node: &mut Element) {
-                    node.style.transition.clear();
-                    node.transition_snapshot = Default::default();
-                    for c in &mut node.children {
-                        clear_stack_transitions(c);
-                    }
+                    crate::core::tree::walk_elements_mut(node, |n| {
+                        n.style.transition.clear();
+                        n.transition_snapshot = Default::default();
+                    });
                 }
                 clear_stack_transitions(el);
             }

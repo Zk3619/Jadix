@@ -168,16 +168,7 @@ fn require_command(part: &str) -> CommandCtx {
     })
 }
 fn extract_text_leaf(el: &Element) -> String {
-    if let Some(t) = &el.text {
-        return t.clone();
-    }
-    for c in &el.children {
-        let t = extract_text_leaf(c);
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    String::new()
+    crate::core::tree::first_text_leaf(el)
 }
 
 fn label_matches_query(label: &str, query: &str) -> bool {
@@ -186,10 +177,9 @@ fn label_matches_query(label: &str, query: &str) -> bool {
 }
 
 fn has_shortcut_slot(el: &Element) -> bool {
-    if el.attrs.get("data-slot").map(|s| s.as_str()) == Some("command-shortcut") {
-        return true;
-    }
-    el.children.iter().any(has_shortcut_slot)
+    crate::core::tree::any_in_tree(el, |n| {
+        n.attrs.get("data-slot").map(|s| s.as_str()) == Some("command-shortcut")
+    })
 }
 
 fn clear_button_focus() {
@@ -1245,28 +1235,28 @@ pub fn CommandItem(
 }
 
 fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
-    if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
-        el.text_style.size = Some(12.0);
-        el.text_style.line_height_px = Some(16.0);
-        el.text_style.letter_spacing = 0.4;
-        el.text_style.color = Some(parse_text_color("muted-foreground"));
-        return;
-    }
-    if el.text.is_some() {
-        let lucide = el.text_style.font_family.as_deref() == Some("lucide");
-        if lucide {
-            el.text_style.size = Some(14.0);
-            el.text_style.line_height_px = Some(14.0);
-        } else {
-            el.text_style.size = Some(13.0);
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
+            el.text_style.size = Some(12.0);
             el.text_style.line_height_px = Some(16.0);
-            el.text_style.line_height_scale = Some(1.0);
+            el.text_style.letter_spacing = 0.4;
+            el.text_style.color = Some(parse_text_color("muted-foreground"));
+            return false;
         }
-        el.text_style.color = Some(color);
-    }
-    for child in &mut el.children {
-        style_command_item_text(child, color);
-    }
+        if el.text.is_some() {
+            let lucide = el.text_style.font_family.as_deref() == Some("lucide");
+            if lucide {
+                el.text_style.size = Some(14.0);
+                el.text_style.line_height_px = Some(14.0);
+            } else {
+                el.text_style.size = Some(13.0);
+                el.text_style.line_height_px = Some(16.0);
+                el.text_style.line_height_scale = Some(1.0);
+            }
+            el.text_style.color = Some(color);
+        }
+        true
+    });
 }
 
 /// Each frame writes highlight from `{id}__cmd_active` (`peek`, no root-effect subscription).
@@ -1275,22 +1265,21 @@ pub(crate) fn sync_command_item_paint_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
-        let disabled = el.attrs.get("rui_command_disabled").map(String::as_str) == Some("1");
-        let ix = el
-            .attrs
-            .get("rui_command_ix")
-            .and_then(|s| s.parse::<usize>().ok());
-        let id = el.attrs.get("rui_command_id").cloned();
-        if let (Some(id), Some(ix)) = (id, ix) {
-            let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize).peek();
-            let on = !disabled && active == ix;
-            apply_command_item_highlight(el, layout_tree, impact, on);
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+            let disabled = el.attrs.get("rui_command_disabled").map(String::as_str) == Some("1");
+            let ix = el
+                .attrs
+                .get("rui_command_ix")
+                .and_then(|s| s.parse::<usize>().ok());
+            let id = el.attrs.get("rui_command_id").cloned();
+            if let (Some(id), Some(ix)) = (id, ix) {
+                let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize).peek();
+                let on = !disabled && active == ix;
+                apply_command_item_highlight(el, layout_tree, impact, on);
+            }
         }
-    }
-    for child in &mut el.children {
-        sync_command_item_paint_subtree(child, layout_tree, impact);
-    }
+    });
 }
 
 fn apply_command_item_highlight(
@@ -1319,15 +1308,15 @@ fn apply_command_item_highlight(
 }
 
 fn paint_command_item_fg(el: &mut Element, fg: [u8; 4]) {
-    if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
-        return;
-    }
-    if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
-        el.text_style.color = Some(fg);
-    }
-    for child in &mut el.children {
-        paint_command_item_fg(child, fg);
-    }
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
+            return false;
+        }
+        if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
+            el.text_style.color = Some(fg);
+        }
+        true
+    });
 }
 
 /// `CommandShortcut`：`ml-auto text-xs tracking-widest text-muted-foreground`。

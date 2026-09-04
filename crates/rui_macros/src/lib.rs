@@ -1214,7 +1214,7 @@ fn expand_node(
                     let bullet_ts = if let Some(v) = bullet_expr {
                         quote_unitless_f32(v)
                     } else {
-                        quote! { 16.0f32 }
+                        quote! { 20.0f32 }
                     };
                     let line_ts = if let Some(v) = line_expr {
                         quote_unitless_f32(v)

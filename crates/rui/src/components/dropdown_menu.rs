@@ -297,16 +297,7 @@ pub fn dropdown_menu_scope(
 }
 
 fn extract_text_leaf(el: &Element) -> String {
-    if let Some(t) = &el.text {
-        return t.clone();
-    }
-    for c in &el.children {
-        let t = extract_text_leaf(c);
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    String::new()
+    crate::core::tree::first_text_leaf(el)
 }
 
 fn is_text_leaf(el: &Element) -> bool {

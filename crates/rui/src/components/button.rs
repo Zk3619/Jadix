@@ -1284,23 +1284,28 @@ fn sync_button_focus_ring_shadow(
 /// Unknown names fall back to `default` (WP-3.8 Glossary).
 pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
     let variant = ButtonVariant::from(variant.as_ref()).as_paint_key();
-    let Some(desc) = el.button_hover_paint.as_mut() else {
-        return LayoutStatus::Clean;
+    let hovered = {
+        let inner = &mut *el.inner;
+        let Some(desc) = inner.button_hover_paint.as_mut() else {
+            return LayoutStatus::Clean;
+        };
+        if desc.variant == variant {
+            return LayoutStatus::Clean;
+        }
+        desc.variant = variant.to_string();
+        // Preserve live hover — painting rest chrome (t=0) while the pointer is down
+        // on the active nav item flashes secondary↔hover every bind/rebuild.
+        let disabled = desc.disabled;
+        inner
+            .focus_id
+            .as_deref()
+            .map(|fid| {
+                let sig = use_signal(&format!("{fid}_hover"), || false);
+                sig.is_alive() && sig.peek() && !disabled
+            })
+            .unwrap_or(false)
     };
-    if desc.variant == variant {
-        return LayoutStatus::Clean;
-    }
-    desc.variant = variant.to_string();
-    // Preserve live hover — painting rest chrome (t=0) while the pointer is down
-    // on the active nav item flashes secondary↔hover every bind/rebuild.
-    let hovered = el
-        .focus_id
-        .as_deref()
-        .map(|fid| {
-            let sig = use_signal(&format!("{fid}_hover"), || false);
-            sig.is_alive() && sig.peek() && !desc.disabled
-        })
-        .unwrap_or(false);
+    let desc = el.button_hover_paint.as_ref().expect("set above");
     let hover_t = hover_t_from_bool(hovered, desc.disabled);
     let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);
     let text_color = desc.text_color.unwrap_or(variant_text_color);
@@ -1350,48 +1355,60 @@ pub(crate) fn sync_button_hover_paint_subtree(
     if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
         return;
     }
-    if let Some(desc) = el.button_hover_paint.clone() {
-        if let Some(fid) = el.focus_id.clone() {
-            let key = format!("{}_hover", fid);
-            let hover_sig = use_signal(&key, || false);
-            let is_hovered = hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
-            let focused = use_signal("__rui_button_focus_id", String::new);
-            let focus_visible = use_signal("__rui_focus_visible", || false);
-            let is_focused = !desc.disabled
-                && focus_visible.is_alive()
-                && focus_visible.peek()
-                && focused.is_alive()
-                && focused.peek() == fid;
-            paint_button_root_from_hover(
-                el,
-                layout_tree,
-                &desc,
-                &fid,
-                is_hovered,
-                is_focused,
-                impact,
-            );
-            sync_button_focus_ring_shadow(
-                el,
-                layout_tree,
-                desc.disabled,
-                is_focused,
-                &desc.variant,
-                &fid,
-                impact,
-            );
-        }
+    struct Frame {
+        el: *mut Element,
+        scroll_acc: [f32; 2],
     }
-    let child_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
-    for child in &mut el.children {
-        sync_button_hover_paint_subtree(
-            child,
-            layout_tree,
-            impact,
-            viewport_w,
-            viewport_h,
-            child_acc,
-        );
+    let mut stack = vec![Frame {
+        el: el as *mut Element,
+        scroll_acc,
+    }];
+    while let Some(frame) = stack.pop() {
+        // SAFETY: exclusive paint-sync walk of `el`'s subtree.
+        let node = unsafe { &mut *frame.el };
+        if crate::core::tree::element_is_offscreen(node, frame.scroll_acc, viewport_w, viewport_h) {
+            continue;
+        }
+        if let Some(desc) = node.button_hover_paint.clone() {
+            if let Some(fid) = node.focus_id.clone() {
+                let key = format!("{}_hover", fid);
+                let hover_sig = use_signal(&key, || false);
+                let is_hovered = hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
+                let focused = use_signal("__rui_button_focus_id", String::new);
+                let focus_visible = use_signal("__rui_focus_visible", || false);
+                let is_focused = !desc.disabled
+                    && focus_visible.is_alive()
+                    && focus_visible.peek()
+                    && focused.is_alive()
+                    && focused.peek() == fid;
+                paint_button_root_from_hover(
+                    node,
+                    layout_tree,
+                    &desc,
+                    &fid,
+                    is_hovered,
+                    is_focused,
+                    impact,
+                );
+                sync_button_focus_ring_shadow(
+                    node,
+                    layout_tree,
+                    desc.disabled,
+                    is_focused,
+                    &desc.variant,
+                    &fid,
+                    impact,
+                );
+            }
+        }
+        let child_acc = crate::core::tree::child_scroll_accumulation(node, frame.scroll_acc);
+        let n = node.children.len();
+        for i in (0..n).rev() {
+            stack.push(Frame {
+                el: std::ptr::addr_of_mut!(node.children[i]),
+                scroll_acc: child_acc,
+            });
+        }
     }
 }
 

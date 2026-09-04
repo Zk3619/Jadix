@@ -103,18 +103,9 @@ fn lucide_icon(name: &str, size_px: f32) -> Element {
 }
 
 fn extract_text_leaf(el: &Element) -> String {
-    if let Some(t) = &el.text {
-        if !t.is_empty() {
-            return t.clone();
-        }
-    }
-    for c in &el.children {
-        let t = extract_text_leaf(c);
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    String::new()
+    crate::core::tree::find_in_tree(el, |n| n.text.as_deref().is_some_and(|t| !t.is_empty()))
+        .and_then(|n| n.text.clone())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

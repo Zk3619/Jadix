@@ -66,19 +66,31 @@ pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
     if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
         return;
     }
-    if let Some(desc) = el.input_paint_sync.clone() {
-        sync_one_text_edit_paint(el, &desc, layout_tree, impact);
+    struct Frame {
+        el: *mut Element,
+        scroll_acc: [f32; 2],
     }
-    let child_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
-    for child in &mut el.children {
-        sync_text_edit_paint_subtree_in_viewport(
-            child,
-            layout_tree,
-            impact,
-            viewport_w,
-            viewport_h,
-            child_acc,
-        );
+    let mut stack = vec![Frame {
+        el: el as *mut Element,
+        scroll_acc,
+    }];
+    while let Some(frame) = stack.pop() {
+        // SAFETY: exclusive paint-sync walk of `el`'s subtree.
+        let node = unsafe { &mut *frame.el };
+        if crate::core::tree::element_is_offscreen(node, frame.scroll_acc, viewport_w, viewport_h) {
+            continue;
+        }
+        if let Some(desc) = node.input_paint_sync.clone() {
+            sync_one_text_edit_paint(node, &desc, layout_tree, impact);
+        }
+        let child_acc = crate::core::tree::child_scroll_accumulation(node, frame.scroll_acc);
+        let n = node.children.len();
+        for i in (0..n).rev() {
+            stack.push(Frame {
+                el: std::ptr::addr_of_mut!(node.children[i]),
+                scroll_acc: child_acc,
+            });
+        }
     }
 }
 
@@ -858,25 +870,9 @@ fn find_descendant_by_template_id_mut<'a>(
     el: &'a mut Element,
     tid: &str,
 ) -> Option<&'a mut Element> {
-    if el.template_id.as_deref() == Some(tid) {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(found) = find_descendant_by_template_id_mut(child, tid) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree_mut(el, |n| n.template_id.as_deref() == Some(tid))
 }
 
 fn find_descendant_by_template_id_ref<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
-    if el.template_id.as_deref() == Some(tid) {
-        return Some(el);
-    }
-    for child in &el.children {
-        if let Some(found) = find_descendant_by_template_id_ref(child, tid) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(el, |n| n.template_id.as_deref() == Some(tid))
 }

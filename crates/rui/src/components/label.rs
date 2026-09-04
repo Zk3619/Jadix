@@ -111,10 +111,7 @@ fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
 
 /// 每帧将可选 Label 的选区信号同步到 `text_style.input_caret`（`peek`，不触发 rebuild）。
 pub(crate) fn sync_label_selection_paint_subtree(el: &mut Element, impact: &mut LayoutStatus) {
-    sync_one_label_selection(el, impact);
-    for child in &mut el.children {
-        sync_label_selection_paint_subtree(child, impact);
-    }
+    crate::core::tree::walk_elements_mut(el, |n| sync_one_label_selection(n, impact));
 }
 
 /// 复制首个非空静态文本选区到剪贴板与 [`LABEL_SELECTION_COPY_SIGNAL`]。
@@ -123,35 +120,34 @@ pub fn try_copy_label_selection(root: &Element) -> bool {
 }
 
 fn try_copy_label_selection_subtree(el: &Element) -> bool {
-    if let Some(key) = selectable_text_key(el) {
+    crate::core::tree::find_in_tree(el, |n| {
+        let Some(key) = selectable_text_key(n) else {
+            return false;
+        };
         let sk = label_selection_signal_key(&key);
-        if let Some((a, b)) =
+        let Some((a, b)) =
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).peek()
-        {
-            let lo = a.min(b);
-            let hi = a.max(b);
-            if lo < hi {
-                if let Some(text) = &el.text {
-                    if hi <= text.len() {
-                        let slice = &text[lo..hi];
-                        clipboard_set_text(slice);
-                        crate::core::reactivity::use_signal(
-                            LABEL_SELECTION_COPY_SIGNAL,
-                            String::new,
-                        )
-                        .set(slice.to_string());
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    for child in &el.children {
-        if try_copy_label_selection_subtree(child) {
-            return true;
-        }
-    }
-    false
+        else {
+            return false;
+        };
+        let lo = a.min(b);
+        let hi = a.max(b);
+        lo < hi && n.text.as_ref().is_some_and(|t| hi <= t.len())
+    })
+    .is_some_and(|n| {
+        let key = selectable_text_key(n).expect("pred matched");
+        let sk = label_selection_signal_key(&key);
+        let (a, b) = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+            .peek()
+            .expect("pred matched");
+        let lo = a.min(b);
+        let hi = a.max(b);
+        let slice = &n.text.as_ref().expect("pred matched")[lo..hi];
+        clipboard_set_text(slice);
+        crate::core::reactivity::use_signal(LABEL_SELECTION_COPY_SIGNAL, String::new)
+            .set(slice.to_string());
+        true
+    })
 }
 
 /// `attrs` 键：Label → 控件关联（Solid / HTML 原生属性名 `for`）。
@@ -325,7 +321,7 @@ impl LabelBuilder {
         self.inner.el = self.inner.el.py(p);
         self
     }
-    /// 文案叶自带 padding 且 `text-align:center` 时请用 ContentBox（见 `docs/box_model.md`）。
+    /// 文案叶自带 padding 且 `text-align:center` 时请用 ContentBox（见 `docs/engine/box_model.md`）。
     pub fn content_box(mut self) -> Self {
         self.inner.el = self.inner.el.content_box();
         self

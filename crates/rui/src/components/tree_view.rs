@@ -311,14 +311,14 @@ fn rest_label_weight(chrome: TreeViewChrome) -> u16 {
 }
 
 fn paint_tree_row_fg(el: &mut Element, color: [u8; 4], weight: u16) {
-    if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CHEVRON) {
-        return;
-    }
-    el.text_style.color = Some(color);
-    el.text_style.weight = Some(weight);
-    for child in &mut el.children {
-        paint_tree_row_fg(child, color, weight);
-    }
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CHEVRON) {
+            return false;
+        }
+        el.text_style.color = Some(color);
+        el.text_style.weight = Some(weight);
+        true
+    });
 }
 
 fn row_pointer_id(tree_id: &str, node_id: &str) -> String {

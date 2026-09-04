@@ -143,10 +143,7 @@ fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {
 }
 
 fn caption_text(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    el.children.iter().find_map(caption_text)
+    crate::core::tree::first_trimmed_text(el)
 }
 
 fn is_tabs_trigger(el: &Element) -> bool {
@@ -154,13 +151,12 @@ fn is_tabs_trigger(el: &Element) -> bool {
 }
 
 fn stamp_list_variant(el: &mut Element, variant: &str) {
-    if is_tabs_trigger(el) {
-        el.attrs
-            .insert(ATTR_VARIANT.to_string(), variant.to_string());
-    }
-    for child in &mut el.children {
-        stamp_list_variant(child, variant);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        if is_tabs_trigger(node) {
+            node.attrs
+                .insert(ATTR_VARIANT.to_string(), variant.to_string());
+        }
+    });
 }
 
 fn list_variant_of(el: &Element) -> &str {
@@ -880,49 +876,49 @@ pub(crate) fn sync_tabs_trigger_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if is_tabs_trigger(el) {
-        // Heal frames where radio sync mistakenly nested a Radio Indicator under the chip
-        // (shared `radio_selected_sync` without `rui_radio_value`). That turns the text leaf
-        // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
-        let before = el.children.len();
-        el.children
-            .retain(|c| c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator"));
-        if el.children.len() != before {
-            *impact = impact.merge(LayoutStatus::StructureChanged);
-        }
-        if let Some(sel) = el.radio_selected_sync {
-            let item_value = el
-                .attrs
-                .get(ATTR_TABS_VALUE)
-                .map(|s| s.as_str())
-                .unwrap_or("");
-            let on = sel.peek() == item_value;
-            let disabled = el
-                .attrs
-                .get("disabled")
-                .map(|s| s.as_str() == "true")
-                .unwrap_or(false);
-            let (paint, lay) = apply_trigger_chrome(el, on, disabled);
-            if paint || lay {
-                if lay {
-                    if el.layout_node.is_some() {
-                        layout_tree.mark_element_layout_dirty(el);
-                        layout_tree.update_taffy_node_style(el);
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if is_tabs_trigger(el) {
+            // Heal frames where radio sync mistakenly nested a Radio Indicator under the chip
+            // (shared `radio_selected_sync` without `rui_radio_value`). That turns the text leaf
+            // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
+            let before = el.children.len();
+            el.children.retain(|c| {
+                c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator")
+            });
+            if el.children.len() != before {
+                *impact = impact.merge(LayoutStatus::StructureChanged);
+            }
+            if let Some(sel) = el.radio_selected_sync {
+                let item_value = el
+                    .attrs
+                    .get(ATTR_TABS_VALUE)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let on = sel.peek() == item_value;
+                let disabled = el
+                    .attrs
+                    .get("disabled")
+                    .map(|s| s.as_str() == "true")
+                    .unwrap_or(false);
+                let (paint, lay) = apply_trigger_chrome(el, on, disabled);
+                if paint || lay {
+                    if lay {
+                        if el.layout_node.is_some() {
+                            layout_tree.mark_element_layout_dirty(el);
+                            layout_tree.update_taffy_node_style(el);
+                        }
+                        *impact = impact.merge(LayoutStatus::LayoutChanged);
+                    } else {
+                        if el.layout_node.is_some() {
+                            layout_tree.update_taffy_node_style(el);
+                        }
+                        *impact = impact.merge(LayoutStatus::StyleChanged);
                     }
-                    *impact = impact.merge(LayoutStatus::LayoutChanged);
-                } else {
-                    if el.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(el);
-                    }
-                    *impact = impact.merge(LayoutStatus::StyleChanged);
+                    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
                 }
-                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
             }
         }
-    }
-    for child in &mut el.children {
-        sync_tabs_trigger_subtree(child, layout_tree, impact);
-    }
+    });
 }
 
 #[cfg(test)]

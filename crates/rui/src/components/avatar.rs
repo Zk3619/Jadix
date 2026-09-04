@@ -682,12 +682,11 @@ fn src_from_avatar_texture_key(key: &str) -> Option<String> {
 }
 
 fn extract_fallback_label(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_ref().filter(|s| !s.is_empty()) {
-        if el.text_style.font_family.as_deref() != Some("lucide") {
-            return Some(t.clone());
-        }
-    }
-    el.children.iter().find_map(extract_fallback_label)
+    crate::core::tree::find_in_tree(el, |n| {
+        n.text.as_ref().is_some_and(|s| !s.is_empty())
+            && n.text_style.font_family.as_deref() != Some("lucide")
+    })
+    .and_then(|n| n.text.clone())
 }
 
 fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
@@ -706,29 +705,23 @@ fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
         .unwrap_or_default();
     let mut src = None;
     let mut fallback = None;
-    fn walk(el: &Element, src: &mut Option<String>, fallback: &mut Option<String>) {
-        match el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) {
-            Some(SLOT_IMAGE) => {
-                if src.is_none() {
-                    if let Some(s) = el.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
-                        *src = Some(s.clone());
-                    } else if let Some(key) = el.image_texture.as_deref() {
-                        *src = src_from_avatar_texture_key(key);
-                    }
+    crate::core::tree::walk_elements(el, |n| match n.attrs.get(ATTR_SLOT).map(|s| s.as_str()) {
+        Some(SLOT_IMAGE) => {
+            if src.is_none() {
+                if let Some(s) = n.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
+                    src = Some(s.clone());
+                } else if let Some(key) = n.image_texture.as_deref() {
+                    src = src_from_avatar_texture_key(key);
                 }
             }
-            Some(SLOT_FALLBACK) => {
-                if fallback.is_none() {
-                    *fallback = extract_fallback_label(el);
-                }
+        }
+        Some(SLOT_FALLBACK) => {
+            if fallback.is_none() {
+                fallback = extract_fallback_label(n);
             }
-            _ => {}
         }
-        for c in &el.children {
-            walk(c, src, fallback);
-        }
-    }
-    walk(el, &mut src, &mut fallback);
+        _ => {}
+    });
     Some(AvatarFaceSpec {
         size,
         shape,

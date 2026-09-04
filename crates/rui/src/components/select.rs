@@ -644,42 +644,34 @@ impl SelectItemAlign {
 }
 
 fn find_select_item_index(el: &Element, value: &str) -> Option<usize> {
-    fn walk(el: &Element, value: &str, idx: &mut usize) -> Option<usize> {
-        if let Some(v) = el.attrs.get("rui_select_item") {
-            if v.as_str() == value {
-                return Some(*idx);
+    let mut idx = 0;
+    let mut found = None;
+    crate::core::tree::walk_elements_pruned(el, |n| {
+        if let Some(v) = n.attrs.get("rui_select_item") {
+            if found.is_none() && v.as_str() == value {
+                found = Some(idx);
             }
-            *idx += 1;
-            return None;
+            idx += 1;
+            return false;
         }
-        for c in &el.children {
-            if let Some(i) = walk(c, value, idx) {
-                return Some(i);
-            }
-        }
-        None
-    }
-    let mut i = 0;
-    walk(el, value, &mut i)
+        true
+    });
+    found
 }
 
 fn count_select_items(el: &Element) -> usize {
-    if el.attrs.contains_key("rui_select_item") {
-        return 1;
-    }
-    el.children.iter().map(count_select_items).sum()
+    let mut n = 0;
+    crate::core::tree::walk_elements_pruned(el, |node| {
+        if node.attrs.contains_key("rui_select_item") {
+            n += 1;
+            return false;
+        }
+        true
+    });
+    n
 }
 fn extract_text_leaf(el: &Element) -> String {
-    if let Some(t) = &el.text {
-        return t.clone();
-    }
-    for c in &el.children {
-        let t = extract_text_leaf(c);
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    String::new()
+    crate::core::tree::first_text_leaf(el)
 }
 
 // ---------------------------------------------------------------------------

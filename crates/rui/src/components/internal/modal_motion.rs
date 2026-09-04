@@ -18,9 +18,8 @@ use crate::app::portal_overlay::modal_stack_metrics;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry,
-    tick_element_transitions_locked, AnimationFillMode, TimingFunction, TransitionEntry,
-    TransitionProperty,
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, AnimationFillMode,
+    TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::utils::motion::{
     clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
@@ -399,32 +398,14 @@ fn overlay_motion_target(open_visual: bool) -> MotionTransform {
 }
 
 fn find_template_id_mut<'a>(el: &'a mut Element, want: &str) -> Option<&'a mut Element> {
-    let want = want.replace('\\', "/").to_ascii_lowercase();
-    if el
-        .template_id
-        .as_deref()
-        .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
-    {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_template_id_mut(child, &want) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_by_template_id_mut(el, want)
 }
 
 fn seed_modal_shell_transition_mid(el: &mut Element) {
     if el.style.transition.is_empty() {
         return;
     }
-    let _ = tick_element_transitions_locked(
-        &mut el.style,
-        &mut el.transition_snapshot,
-        el.animation_snapshot.lock(),
-        0.0,
-    );
+    let _ = el.tick_css_transitions_locked(0.0);
 }
 
 fn enter_visual_settled(
@@ -1199,7 +1180,7 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
     let anim = if !el.style.animations.is_empty()
         || crate::style::css_animation_needs_frame(&el.style, &el.animation_snapshot)
     {
-        crate::style::tick_element_animations(&mut el.style, &mut el.animation_snapshot, dt)
+        el.tick_css_animations(dt)
     } else {
         false
     };
@@ -1207,12 +1188,7 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
         || el.transition_snapshot.has_active_tweens()
         || crate::style::css_transition_needs_frame(&el.style, &el.transition_snapshot)
     {
-        crate::style::tick_element_transitions_locked(
-            &mut el.style,
-            &mut el.transition_snapshot,
-            el.animation_snapshot.lock(),
-            dt,
-        )
+        el.tick_css_transitions_locked(dt)
     } else {
         false
     };
@@ -1525,8 +1501,6 @@ mod tests {
 
     #[test]
     fn dialog_enter_settles_and_clears_needs_enter() {
-        use crate::style::tick_element_animations;
-
         create_root(|| {
             let mut root = Element::new();
             let mut overlay = Element::new();
@@ -1555,8 +1529,8 @@ mod tests {
                 let z_ptr =
                     find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
                 let (o, z) = unsafe { (&mut *o_ptr, &mut *z_ptr) };
-                let _ = tick_element_animations(&mut o.style, &mut o.animation_snapshot, 0.016);
-                let _ = tick_element_animations(&mut z.style, &mut z.animation_snapshot, 0.016);
+                let _ = o.tick_css_animations(0.016);
+                let _ = z.tick_css_animations(0.016);
             }
             let _ = flush_modal_shell_motion_subtree(&mut root);
             let overlay = find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap();
@@ -1722,8 +1696,6 @@ mod tests {
     /// scales up.
     #[test]
     fn dialog_enter_fades_overlay_and_panel_together() {
-        use crate::style::tick_element_animations;
-
         create_root(|| {
             let mut root = Element::new();
             let mut overlay = Element::new();
@@ -1753,8 +1725,8 @@ mod tests {
                 let z_ptr =
                     find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
                 let (o, z) = unsafe { (&mut *o_ptr, &mut *z_ptr) };
-                let _ = tick_element_animations(&mut o.style, &mut o.animation_snapshot, 0.016);
-                let _ = tick_element_animations(&mut z.style, &mut z.animation_snapshot, 0.016);
+                let _ = o.tick_css_animations(0.016);
+                let _ = z.tick_css_animations(0.016);
             }
 
             let o_ptr =

@@ -543,65 +543,64 @@ pub(crate) fn sync_radio_checked_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if let Some(sel) = el.radio_selected_sync {
-        if !sel.is_alive() {
-            el.radio_selected_sync = None;
-        } else if el.attrs.get(ATTR_RADIO_VALUE).is_some() {
-            // TabsTrigger / 菜单外复用 `radio_selected_sync` 只表示选中值，没有
-            // `rui_radio_value`。若仍走本分支会插入 size-4 Indicator，毁掉文案叶测宽，
-            // gallery TabsList 芯片会全部挤在左侧重叠（内容宽变成圆点宽）。
-            let item_value = el
-                .attrs
-                .get(ATTR_RADIO_VALUE)
-                .map(|s| s.as_str())
-                .unwrap_or("");
-            let on = sel.peek() == item_value;
-            let want_border = control_border();
-            let want_bg = control_bg();
-            let want_dot = indicator_dot_color(on);
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if let Some(sel) = el.radio_selected_sync {
+            if !sel.is_alive() {
+                el.radio_selected_sync = None;
+            } else if el.attrs.get(ATTR_RADIO_VALUE).is_some() {
+                // TabsTrigger / 菜单外复用 `radio_selected_sync` 只表示选中值，没有
+                // `rui_radio_value`。若仍走本分支会插入 size-4 Indicator，毁掉文案叶测宽，
+                // gallery TabsList 芯片会全部挤在左侧重叠（内容宽变成圆点宽）。
+                let item_value = el
+                    .attrs
+                    .get(ATTR_RADIO_VALUE)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let on = sel.peek() == item_value;
+                let want_border = control_border();
+                let want_bg = control_bg();
+                let want_dot = indicator_dot_color(on);
 
-            let chrome_changed = el.style.bg_color != want_bg
-                || el.style.border_color != want_border
-                || el.style.border_width != BORDER_W
-                || el.style.border_style != LineStyle::Solid;
-            if chrome_changed {
-                el.style.bg_color = want_bg;
-                el.style.border_color = want_border;
-                el.style.border_width = BORDER_W;
-                el.style.border_style = LineStyle::Solid;
-            }
-
-            let indicator_changed = if let Some(dot) = find_indicator_mut(el) {
-                let hit = (dot.style.bg_color[0] - want_dot[0]).abs() > 0.001
-                    || (dot.style.bg_color[1] - want_dot[1]).abs() > 0.001
-                    || (dot.style.bg_color[2] - want_dot[2]).abs() > 0.001
-                    || (dot.style.bg_color[3] - want_dot[3]).abs() > 0.001;
-                if hit {
-                    dot.style.bg_color = want_dot;
+                let chrome_changed = el.style.bg_color != want_bg
+                    || el.style.border_color != want_border
+                    || el.style.border_width != BORDER_W
+                    || el.style.border_style != LineStyle::Solid;
+                if chrome_changed {
+                    el.style.bg_color = want_bg;
+                    el.style.border_color = want_border;
+                    el.style.border_width = BORDER_W;
+                    el.style.border_style = LineStyle::Solid;
                 }
-                hit
-            } else {
-                el.children.insert(0, build_indicator(on));
-                true
-            };
 
-            if chrome_changed || indicator_changed {
-                if el.layout_node.is_some() {
-                    layout_tree.update_taffy_node_style(el);
-                }
-                if let Some(dot) = find_indicator_mut(el) {
-                    if dot.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(dot);
+                let indicator_changed = if let Some(dot) = find_indicator_mut(el) {
+                    let hit = (dot.style.bg_color[0] - want_dot[0]).abs() > 0.001
+                        || (dot.style.bg_color[1] - want_dot[1]).abs() > 0.001
+                        || (dot.style.bg_color[2] - want_dot[2]).abs() > 0.001
+                        || (dot.style.bg_color[3] - want_dot[3]).abs() > 0.001;
+                    if hit {
+                        dot.style.bg_color = want_dot;
                     }
+                    hit
+                } else {
+                    el.children.insert(0, build_indicator(on));
+                    true
+                };
+
+                if chrome_changed || indicator_changed {
+                    if el.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(el);
+                    }
+                    if let Some(dot) = find_indicator_mut(el) {
+                        if dot.layout_node.is_some() {
+                            layout_tree.update_taffy_node_style(dot);
+                        }
+                    }
+                    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                    *impact = impact.merge(LayoutStatus::StyleChanged);
                 }
-                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-                *impact = impact.merge(LayoutStatus::StyleChanged);
             }
         }
-    }
-    for child in &mut el.children {
-        sync_radio_checked_subtree(child, layout_tree, impact);
-    }
+    });
 }
 
 #[cfg(test)]

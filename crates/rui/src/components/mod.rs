@@ -509,10 +509,11 @@ pub use tabs::{
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
 pub use timeline::{
-    timeline, timeline_bullet_active, timeline_line_active, timeline_scope, use_timeline, Timeline,
-    TimelineBuilder, TimelineCtx, TimelineEntry, TimelineItem, TimelineItemBullet,
-    TimelineItemBulletProps, TimelineItemDescription, TimelineItemDescriptionProps,
-    TimelineItemProps, TimelineItemTitle, TimelineItemTitleProps, TimelineProps,
+    bullet_glyph_px, timeline, timeline_bullet_active, timeline_line_active, timeline_scope,
+    use_timeline, Timeline, TimelineBuilder, TimelineCtx, TimelineEntry, TimelineItem,
+    TimelineItemBullet, TimelineItemBulletProps, TimelineItemDescription,
+    TimelineItemDescriptionProps, TimelineItemProps, TimelineItemTitle, TimelineItemTitleProps,
+    TimelineProps,
 };
 pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
 pub use toast::view::{

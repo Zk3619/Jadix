@@ -511,8 +511,7 @@ mod tests {
     #[test]
     fn modal_shell_motion_preserves_enter_mid_on_hoist() {
         use crate::style::{
-            set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
-            snap_element_transitions_to_current, tick_element_transitions, TimingFunction,
+            set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,
         };
 
         set_css_transition_virtual_timeline(true);
@@ -527,11 +526,11 @@ mod tests {
             delay_ms: 0.0,
             timing: TimingFunction::EaseOut,
         });
-        snap_element_transitions_to_current(&prev.style, &mut prev.transition_snapshot);
+        prev.snap_css_transition_baseline();
         prev.style.scale = [1.0, 1.0];
-        let _ = tick_element_transitions(&mut prev.style, &mut prev.transition_snapshot, 0.0);
+        let _ = prev.tick_css_transitions(0.0);
         set_css_transition_timeline_ms(120.0);
-        let _ = tick_element_transitions(&mut prev.style, &mut prev.transition_snapshot, 0.0);
+        let _ = prev.tick_css_transitions(0.0);
         assert!(
             prev.style.scale[0] > 0.97 && prev.style.scale[0] < 0.995,
             "sanity: prev should be mid-enter scale, got {}",

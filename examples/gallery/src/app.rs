@@ -358,12 +358,15 @@ pub(crate) fn build_gallery_app() -> Element {
     ui! {
         <Box w="100%" h="100%" relative={true}>
             <SidebarProvider id="gal-shell" variant="inset" defaultOpen={true}>
-                <Sidebar id="gal-sidebar" variant="inset">
+                <Sidebar id="gal-sidebar" variant="inset" collapsible="icon">
                     <SidebarHeader>
                         <SidebarMenu>
                             <SidebarMenuItem>
                                 <SidebarMenuButton id="gal-workspace">
-                                    "RUI Gallery"
+                                    <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
+                                        <Icon name="box" size="16px" color="sidebar-foreground" pointer_events="none" />
+                                        <Label grow="1" min_w="0" text_size="0.875rem" font_weight="700" color="sidebar-foreground">"RUI Gallery"</Label>
+                                    </HStack>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                         </SidebarMenu>
@@ -377,7 +380,10 @@ pub(crate) fn build_gallery_app() -> Element {
                         <SidebarMenu>
                             <SidebarMenuItem>
                                 <SidebarMenuButton id="gal-user">
-                                    "Gallery"
+                                    <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
+                                        <Icon name="user" size="16px" color="sidebar-foreground" pointer_events="none" />
+                                        <Label grow="1" min_w="0" text_size="0.875rem" color="sidebar-foreground">"Gallery"</Label>
+                                    </HStack>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                         </SidebarMenu>

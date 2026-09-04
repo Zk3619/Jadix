@@ -24,7 +24,7 @@
 //! // A · RSX / tags (camelCase: activeItem, activeItemSignal, defaultActive,
 //! // bulletSize, lineSize)
 //! ui! {
-//!     <Timeline activeItem={step} bulletSize={16} lineSize={2}>
+//!     <Timeline activeItem={step} bulletSize={20} lineSize={2}>
 //!         <TimelineItem>
 //!             <TimelineItemBullet>
 //!                 <Icon name="shopping-cart" size="10px" />
@@ -46,7 +46,7 @@
 //! Element::from(
 //!     timeline()
 //!         .active_item_signal(step)
-//!         .bullet_size(16.0)
+//!         .bullet_size(20.0)
 //!         .line_size(2.0)
 //!         .item(("Order placed", "We received your order."))
 //!         .item(
@@ -94,10 +94,13 @@ const SLOT_TITLE: &str = "timeline-item-title";
 const SLOT_DESCRIPTION: &str = "timeline-item-description";
 const SLOT_SEPARATOR: &str = "timeline-item-separator";
 
-/// solid-ui default `bulletSize`.
-const DEFAULT_BULLET_PX: f32 = 16.0;
+/// Default disc diameter (solid-ui uses 16; RUI bumps for legible Lucide glyphs).
+const DEFAULT_BULLET_PX: f32 = 20.0;
 /// solid-ui default `lineSize`.
 const DEFAULT_LINE_PX: f32 = 2.0;
+/// Icon inside the disc as a fraction of [`DEFAULT_BULLET_PX`] (≈14px at default).
+const BULLET_GLYPH_RATIO: f32 = 0.7;
+const BULLET_GLYPH_MIN_PX: f32 = 10.0;
 /// `pb-8` between items.
 const ITEM_PB: &str = "2rem";
 /// Gap from disc to copy (`pl-8` minus half a default disc ≈ 1rem).
@@ -249,6 +252,11 @@ fn next_item_index() -> usize {
 /// solid-ui: no chrome when `activeItem == -1`; else bullet `i` if `active >= i`.
 pub fn timeline_bullet_active(active: i32, index: usize) -> bool {
     active >= 0 && active >= index as i32
+}
+
+/// Lucide glyph size inside a bullet disc.
+pub fn bullet_glyph_px(bullet_size: f32) -> f32 {
+    (bullet_size * BULLET_GLYPH_RATIO).max(BULLET_GLYPH_MIN_PX)
 }
 
 /// solid-ui: line under item `i` is primary when `active >= i + 1`.
@@ -406,7 +414,7 @@ fn paint_bullet(icon: Option<&str>, active: bool, bullet_size: f32, line_size: f
     );
     if let Some(name) = icon {
         if !name.trim().is_empty() {
-            let glyph_px = (bullet_size * 0.625).max(8.0);
+            let glyph_px = bullet_glyph_px(bullet_size);
             let color = if active {
                 parse_text_color("primary")
             } else {
@@ -480,12 +488,11 @@ fn slot_of(el: &Element) -> Option<&str> {
 }
 
 fn find_icon_name(el: &Element) -> Option<String> {
-    if let Some(n) = el.get_attr(ATTR_ICON_NAME) {
-        if !n.trim().is_empty() {
-            return Some(n.clone());
-        }
-    }
-    el.children.iter().find_map(find_icon_name)
+    crate::core::tree::find_in_tree(el, |n| {
+        n.get_attr(ATTR_ICON_NAME)
+            .is_some_and(|s| !s.trim().is_empty())
+    })
+    .and_then(|n| n.get_attr(ATTR_ICON_NAME).cloned())
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +772,12 @@ pub fn TimelineItemDescription(children: Option<Element>) -> Element {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn bullet_glyph_px_scales_with_disc() {
+        assert!((bullet_glyph_px(20.0) - 14.0).abs() < f32::EPSILON);
+        assert!((bullet_glyph_px(8.0) - BULLET_GLYPH_MIN_PX).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn active_tables_match_solid_ui() {

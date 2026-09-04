@@ -24,33 +24,31 @@ pub fn item_row_chrome(inset: bool) -> BoxBuilder {
 
 /// Recolor text leaves; skip `shortcut_slot` subtrees (`attr_slot` = usually `"data-slot"`).
 pub fn style_item_text(el: &mut Element, color: [u8; 4], attr_slot: &str, shortcut_slot: &str) {
-    if el.attrs.get(attr_slot).map(String::as_str) == Some(shortcut_slot) {
-        return;
-    }
-    if el.text.is_some() {
-        el.text_style.size = Some(14.0);
-        el.text_style.line_height_px = Some(20.0);
-        el.text_style.weight = Some(600);
-        el.text_style.color = Some(color);
-        el.attrs.insert("font_weight".to_string(), "1".to_string());
-        el.attrs.insert("text_size".to_string(), "1".to_string());
-        el.attrs.insert("text_color".to_string(), "1".to_string());
-        el.attrs.insert("line_height".to_string(), "1".to_string());
-        el.text_style.white_space = WhiteSpace::Nowrap;
-        el.attrs
-            .insert("white_space".to_string(), "nowrap".to_string());
-    }
-    for c in &mut el.children {
-        style_item_text(c, color, attr_slot, shortcut_slot);
-    }
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if el.attrs.get(attr_slot).map(String::as_str) == Some(shortcut_slot) {
+            return false;
+        }
+        if el.text.is_some() {
+            el.text_style.size = Some(14.0);
+            el.text_style.line_height_px = Some(20.0);
+            el.text_style.weight = Some(600);
+            el.text_style.color = Some(color);
+            el.attrs.insert("font_weight".to_string(), "1".to_string());
+            el.attrs.insert("text_size".to_string(), "1".to_string());
+            el.attrs.insert("text_color".to_string(), "1".to_string());
+            el.attrs.insert("line_height".to_string(), "1".to_string());
+            el.text_style.white_space = WhiteSpace::Nowrap;
+            el.attrs
+                .insert("white_space".to_string(), "nowrap".to_string());
+        }
+        true
+    });
 }
 
 pub fn has_shortcut_slot(el: &Element, attr_slot: &str, shortcut_slot: &str) -> bool {
-    el.attrs.get(attr_slot).map(|s| s.as_str()) == Some(shortcut_slot)
-        || el
-            .children
-            .iter()
-            .any(|c| has_shortcut_slot(c, attr_slot, shortcut_slot))
+    crate::core::tree::any_in_tree(el, |n| {
+        n.attrs.get(attr_slot).map(|s| s.as_str()) == Some(shortcut_slot)
+    })
 }
 
 /// Per-menu attr / slot / active-key 配置（`rui_dd_*` vs `rui_ctx_*`）。
@@ -73,25 +71,24 @@ pub fn sync_item_paint_subtree(
     impact: &mut LayoutStatus,
     cfg: &ItemPaintConfig,
 ) {
-    let slot = el.attrs.get(cfg.attr_slot).map(String::as_str);
-    if slot.is_some_and(|s| cfg.interactive_slots.iter().any(|want| *want == s)) {
-        let disabled = el.attrs.get(cfg.attr_disabled).map(String::as_str) == Some("1");
-        let destructive = el.attrs.get(cfg.attr_destructive).map(String::as_str) == Some("1");
-        let ix = el
-            .attrs
-            .get(cfg.attr_ix)
-            .and_then(|s| s.parse::<usize>().ok());
-        let id = el.attrs.get(cfg.attr_menu_id).cloned();
-        if let (Some(id), Some(ix)) = (id, ix) {
-            let key = format!("{id}{}", cfg.active_key_suffix);
-            let active = use_signal(key.as_str(), || cfg.active_none).peek();
-            let on = !disabled && active == ix;
-            apply_item_highlight(el, layout_tree, impact, on, destructive, cfg);
+    crate::core::tree::walk_elements_mut(el, |el| {
+        let slot = el.attrs.get(cfg.attr_slot).map(String::as_str);
+        if slot.is_some_and(|s| cfg.interactive_slots.iter().any(|want| *want == s)) {
+            let disabled = el.attrs.get(cfg.attr_disabled).map(String::as_str) == Some("1");
+            let destructive = el.attrs.get(cfg.attr_destructive).map(String::as_str) == Some("1");
+            let ix = el
+                .attrs
+                .get(cfg.attr_ix)
+                .and_then(|s| s.parse::<usize>().ok());
+            let id = el.attrs.get(cfg.attr_menu_id).cloned();
+            if let (Some(id), Some(ix)) = (id, ix) {
+                let key = format!("{id}{}", cfg.active_key_suffix);
+                let active = use_signal(key.as_str(), || cfg.active_none).peek();
+                let on = !disabled && active == ix;
+                apply_item_highlight(el, layout_tree, impact, on, destructive, cfg);
+            }
         }
-    }
-    for child in &mut el.children {
-        sync_item_paint_subtree(child, layout_tree, impact, cfg);
-    }
+    });
 }
 
 pub fn apply_item_highlight(
@@ -124,21 +121,21 @@ pub fn apply_item_highlight(
 }
 
 pub fn paint_item_fg(el: &mut Element, fg: [u8; 4], attr_slot: &str, shortcut_slot: &str) {
-    if el.checkbox_sync.is_some() || el.radio_selected_sync.is_some() {
-        return;
-    }
-    if el.attrs.get(attr_slot).map(String::as_str) == Some(shortcut_slot) {
-        return;
-    }
-    if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
-        el.text_style.color = Some(fg);
-        el.text_style.weight = Some(600);
-        el.text_style.white_space = WhiteSpace::Nowrap;
-        el.attrs
-            .entry("font_weight".to_string())
-            .or_insert_with(|| "1".to_string());
-    }
-    for child in &mut el.children {
-        paint_item_fg(child, fg, attr_slot, shortcut_slot);
-    }
+    crate::core::tree::walk_elements_mut_pruned(el, |el| {
+        if el.checkbox_sync.is_some() || el.radio_selected_sync.is_some() {
+            return false;
+        }
+        if el.attrs.get(attr_slot).map(String::as_str) == Some(shortcut_slot) {
+            return false;
+        }
+        if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
+            el.text_style.color = Some(fg);
+            el.text_style.weight = Some(600);
+            el.text_style.white_space = WhiteSpace::Nowrap;
+            el.attrs
+                .entry("font_weight".to_string())
+                .or_insert_with(|| "1".to_string());
+        }
+        true
+    });
 }

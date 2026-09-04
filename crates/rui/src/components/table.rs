@@ -22,7 +22,7 @@
 //! | [`table_compact`] | 紧凑行高 |
 //! | [`table_comfortable`] | 舒适行高 |
 //!
-//! 预设复用复合壳视觉契约；不承诺分组 / 列 pinning / 多列排序（见 `docs/component_inventory.md`）。
+//! 预设复用复合壳视觉契约；不承诺分组 / 列 pinning / 多列排序（见 `docs/components/component_inventory.md`）。
 //!
 //! `ui!` 中 `<Table>` / `<TableRow>` / `<TableHead>` / `<TableCell>` 走通用 `*Props`；
 //! 宏对 `selected` / `align` / `density` 做 `bind_attr`（与 Button `variant` 同模式）。
@@ -181,26 +181,24 @@ fn apply_cell_align(mut el: Element, align: TableAlign) -> Element {
 fn patch_table_text_align_recursive(el: &mut Element, align: TableAlign) -> bool {
     use crate::style::{TextAlign, TextAlignDeclaration};
 
-    if el.text.is_some() {
-        let keyword = match align {
-            TableAlign::Start => "start",
-            TableAlign::Center => "center",
-            TableAlign::End => "end",
-        };
-        if let TextAlignDeclaration::Value(want) = TextAlign::parse_declaration(keyword) {
-            if el.text_style.align != Some(want) {
-                el.text_style.align = Some(want);
-                return true;
-            }
-        }
-        return false;
-    }
+    let keyword = match align {
+        TableAlign::Start => "start",
+        TableAlign::Center => "center",
+        TableAlign::End => "end",
+    };
     let mut changed = false;
-    for child in &mut el.children {
-        if patch_table_text_align_recursive(child, align) {
-            changed = true;
+    crate::core::tree::walk_elements_mut_pruned(el, |node| {
+        if node.text.is_some() {
+            if let TextAlignDeclaration::Value(want) = TextAlign::parse_declaration(keyword) {
+                if node.text_style.align != Some(want) {
+                    node.text_style.align = Some(want);
+                    changed = true;
+                }
+            }
+            return false;
         }
-    }
+        true
+    });
     changed
 }
 
@@ -258,26 +256,17 @@ fn is_table_row_slot(el: &Element) -> bool {
 }
 
 fn find_first_table_row(el: &Element) -> Option<&Element> {
-    if is_table_row_slot(el) {
-        return Some(el);
-    }
-    for child in &el.children {
-        if let Some(row) = find_first_table_row(child) {
-            return Some(row);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(el, is_table_row_slot)
 }
 
 fn stamp_shared_column_tracks(el: &mut Element, tracks: &[crate::layout::GridTrack]) {
-    if is_table_row_slot(el) {
-        el.style.display = taffy::prelude::Display::Grid;
-        el.style.grid_template_columns = tracks.to_vec();
-        el.style.justify_items = Some(taffy::prelude::AlignItems::STRETCH);
-    }
-    for child in &mut el.children {
-        stamp_shared_column_tracks(child, tracks);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        if is_table_row_slot(node) {
+            node.style.display = taffy::prelude::Display::Grid;
+            node.style.grid_template_columns = tracks.to_vec();
+            node.style.justify_items = Some(taffy::prelude::AlignItems::STRETCH);
+        }
+    });
 }
 
 /// 用表头（否则第一行）的 `data-table-col-w` 作为整表列轨，避免各行独立 `1fr` 对不齐。

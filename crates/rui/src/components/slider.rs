@@ -261,24 +261,8 @@ fn thumb_border() -> [f32; 4] {
     parse_color("primary")
 }
 
-fn has_slot(el: &Element, slot: &str) -> bool {
-    el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot)
-        || el.children.iter().any(|c| has_slot(c, slot))
-}
-
 fn find_slot_deep_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
-        return Some(el);
-    }
-    for i in 0..el.children.len() {
-        if has_slot(&el.children[i], slot) {
-            if el.children[i].attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
-                return Some(&mut el.children[i]);
-            }
-            return find_slot_deep_mut(&mut el.children[i], slot);
-        }
-    }
-    None
+    crate::core::tree::find_by_attr_mut(el, ATTR_SLOT, slot)
 }
 
 pub struct SliderBuilder {
@@ -918,8 +902,9 @@ mod tests {
         let mut root: Element = slider("test-slider-ptr").value_signal(value).into();
         // 模拟已布局：根宽 120（含拇指），高 20
         root.layout_bounds = [0.0, 0.0, 120.0, 20.0];
+        let bounds = root.layout_bounds;
         for c in &mut root.children {
-            c.layout_bounds = root.layout_bounds;
+            c.layout_bounds = bounds;
             for g in &mut c.children {
                 g.layout_bounds = [0.0, 0.0, 40.0, 20.0];
             }

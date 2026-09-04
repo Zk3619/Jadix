@@ -548,10 +548,7 @@ fn reaction_overflow_label(text: Option<&str>) -> Option<u32> {
 }
 
 fn extract_reaction_text(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    el.children.iter().find_map(extract_reaction_text)
+    crate::core::tree::first_trimmed_text(el)
 }
 
 fn normalize_reaction_items(kids: Vec<Element>) -> Vec<String> {
@@ -1780,15 +1777,7 @@ mod tests {
     use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_GAP};
 
     fn find_desc_attr<'a>(el: &'a Element, attr: &str) -> Option<&'a Element> {
-        if el.attrs.contains_key(attr) {
-            return Some(el);
-        }
-        for c in &el.children {
-            if let Some(hit) = find_desc_attr(c, attr) {
-                return Some(hit);
-            }
-        }
-        None
+        crate::core::tree::find_in_tree(el, |n| n.attrs.contains_key(attr))
     }
 
     #[test]

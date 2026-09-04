@@ -203,18 +203,7 @@ fn is_text_leaf(el: &Element) -> bool {
 }
 
 fn extract_text_leaf(el: &Element) -> String {
-    if let Some(t) = &el.text {
-        if !t.is_empty() {
-            return t.clone();
-        }
-    }
-    for c in &el.children {
-        let t = extract_text_leaf(c);
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    String::new()
+    crate::core::tree::first_text_leaf(el)
 }
 
 fn retag_slot(mut el: Element, slot: &str) -> Element {

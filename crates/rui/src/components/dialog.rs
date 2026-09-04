@@ -514,16 +514,15 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
 }
 
 fn collect_dialog_focus_ids(el: &Element, out: &mut Vec<String>) {
-    if el.focusable {
-        if let Some(fid) = &el.focus_id {
-            if !fid.is_empty() {
-                out.push(fid.clone());
+    crate::core::tree::walk_elements(el, |n| {
+        if n.focusable {
+            if let Some(fid) = &n.focus_id {
+                if !fid.is_empty() {
+                    out.push(fid.clone());
+                }
             }
         }
-    }
-    for c in &el.children {
-        collect_dialog_focus_ids(c, out);
-    }
+    });
 }
 
 /// 固定顶栏（不滚动）。

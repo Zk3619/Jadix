@@ -1,4 +1,8 @@
 use super::*;
+use crate::app::*;
+use crate::imports::*;
+use crate::pages::*;
+use crate::shared::*;
 use rui::core::reactivity::{create_effect, create_root};
 
 /// Headless tests build one page at a time (same trees as the live `<When>` arms).
@@ -966,6 +970,30 @@ fn gallery_main_pane_uses_remaining_width() {
 }
 
 #[test]
+fn gallery_sidebar_collapses_to_icon_rail() {
+    rui::app::reactive::reset_registered_anchors();
+    let mut fs = rui::renderer::font_loader::create_font_system();
+    rui::renderer::font_loader::apply_default_families(fs.db_mut());
+    rui::text::install_shared_font_system(&mut fs);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            use_signal("gal_nav_section", || "basics".to_string());
+            use_signal("gal-shell__open", || false);
+            let mut app = build_gallery_app();
+            let mut layout = rui::core::tree::LayoutTree::new();
+            let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
+            let side = gallery_find_by_tid(&app, "gal-sidebar").expect("sidebar");
+            let w = side.layout_bounds[2];
+            assert!(
+                (w - 48.0).abs() < 1.5,
+                "SidebarTrigger collapse must keep a 3rem icon rail; got {w}"
+            );
+        });
+    });
+    rui::app::reactive::reset_registered_anchors();
+}
+
+#[test]
 fn basics_section_scrolls_when_viewport_shorter() {
     // Basics section content (~800px) must enable Y scroll when the ScrollArea
     // viewport is shorter — same failure mode as gallery after a window-height shrink
@@ -1022,6 +1050,23 @@ fn headless_layout_basics_section_does_not_overflow() {
                 let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
+    });
+}
+
+/// After `Element` heap handles: basics construction + layout must fit the PE
+/// default 1 MiB thread **without** `maybe_grow`.
+#[test]
+fn headless_layout_basics_fits_pe_stack_without_grow() {
+    run_on_pe_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = gallery_section_body("basics");
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -1116,6 +1161,25 @@ fn navigation_section_mounts_shell_router_view() {
 #[test]
 fn full_app_mount_and_layout_fits_pe_stack() {
     run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut app = build_gallery_app();
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut app, 1280.0, 800.0, [0.0, 0.0]);
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+/// Full gallery shell + default section: 1 MiB PE thread, no `maybe_grow`.
+#[test]
+fn full_app_mount_and_layout_fits_pe_stack_without_grow() {
+    run_on_pe_stack(|| {
         rui::app::reactive::reset_registered_anchors();
         let mut fs = rui::renderer::font_loader::create_font_system();
         rui::renderer::font_loader::apply_default_families(fs.db_mut());

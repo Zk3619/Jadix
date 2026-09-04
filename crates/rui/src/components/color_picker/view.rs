@@ -308,22 +308,7 @@ pub(super) const SLOT_SV_TEX: &str = "cp-sv-tex";
 pub(super) const SLOT_SV_KNOB: &str = "cp-sv-knob";
 
 pub(super) fn find_tid_mut<'a>(el: &'a mut Element, tid: &str) -> Option<&'a mut Element> {
-    if el.template_id.as_deref() == Some(tid) {
-        return Some(el);
-    }
-    for i in 0..el.children.len() {
-        if contains_tid(&el.children[i], tid) {
-            if el.children[i].template_id.as_deref() == Some(tid) {
-                return Some(&mut el.children[i]);
-            }
-            return find_tid_mut(&mut el.children[i], tid);
-        }
-    }
-    None
-}
-
-pub(super) fn contains_tid(el: &Element, tid: &str) -> bool {
-    el.template_id.as_deref() == Some(tid) || el.children.iter().any(|c| contains_tid(c, tid))
+    crate::core::tree::find_in_tree_mut(el, |n| n.template_id.as_deref() == Some(tid))
 }
 
 pub(super) fn sync_trigger_preview(
@@ -384,24 +369,8 @@ pub(super) fn follow_hue_into_rgba(
     });
 }
 
-pub(super) fn has_cp_slot(el: &Element, slot: &str) -> bool {
-    el.attrs.get(ATTR_CP_SLOT).map(|s| s.as_str()) == Some(slot)
-        || el.children.iter().any(|c| has_cp_slot(c, slot))
-}
-
 pub(super) fn find_cp_slot_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
-    if el.attrs.get(ATTR_CP_SLOT).map(|s| s.as_str()) == Some(slot) {
-        return Some(el);
-    }
-    for i in 0..el.children.len() {
-        if has_cp_slot(&el.children[i], slot) {
-            if el.children[i].attrs.get(ATTR_CP_SLOT).map(|s| s.as_str()) == Some(slot) {
-                return Some(&mut el.children[i]);
-            }
-            return find_cp_slot_mut(&mut el.children[i], slot);
-        }
-    }
-    None
+    crate::core::tree::find_by_attr_mut(el, ATTR_CP_SLOT, slot)
 }
 
 /// Half of the 0.75rem (12px) SV knob — paint offset so the *center* sits on (S, V).

@@ -1831,7 +1831,7 @@ pub(crate) fn ResizableShowcase() -> rui::core::tree::Element {
 }
 
 /// WP-2.3 Gallery 验收：嵌套 flex 加宽子项 → wrap 行增高，footer 下移（非错误裁剪）。
-/// 对照 docs/layout_subtree.md；live 路径为 mark_dirty + app-root compute。
+/// 对照 docs/engine/layout_subtree.md；live 路径为 mark_dirty + app-root compute。
 #[component]
 pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
     let wide = use_signal("gal_wp23_wide", || false);
@@ -1840,7 +1840,7 @@ pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
         <MyCard title="WP-2.3) 子树布局上溢升父">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对照 docs/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
+                    "对照 docs/engine/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap">
                     <Button variant="default" on_click={move || wide.set(true)}>
@@ -1878,7 +1878,7 @@ pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
 }
 
 /// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
-/// GPU PartialLoad 默认关（见 docs/damage.md / 计划 B8）。计数用快照，勿每帧 ReactiveSync。
+/// GPU PartialLoad 默认关（见 docs/engine/damage.md / 计划 B8）。计数用快照，勿每帧 ReactiveSync。
 #[component]
 pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
     let count = use_signal("gal_wp22_count", || 0_u32);
@@ -1897,7 +1897,7 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
         <MyCard title="WP-2.2) 细粒度 damage（策略可测）">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对照 docs/damage.md。快照为逻辑 Clear/Load 策略累计（默认 GPU 仍 FullClear）。勿每帧悬停读数。"
+                    "对照 docs/engine/damage.md。快照为逻辑 Clear/Load 策略累计（默认 GPU 仍 FullClear）。勿每帧悬停读数。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "勾选：① 重置→连点同宽+1→刷新：ΔPartialLoad↑、ΔFullClear≈0 ② 切换结构→刷新：ΔFullClear↑"
@@ -2524,7 +2524,7 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
         <MyCard title="WP-2.9 / B15) CSS 盒模型">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "手册 docs/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p rui --lib box_model_contract"
+                    "手册 docs/engine/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p rui --lib box_model_contract"
                 </Label>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">

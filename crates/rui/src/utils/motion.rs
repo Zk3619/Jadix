@@ -4,13 +4,10 @@
 //! snap 基线、ensure transition、目标去重 StyleChanged、按卡要帧。
 //!
 //! 底层引擎：[`crate::style::tick_element_transitions`] / [`css_transition_needs_frame`].
-//! 与 [`crate::style::keyframes`] / CSS `@keyframes` 路径的分工见仓库 `docs/animation_and_motion.md`。
+//! 与 [`crate::style::keyframes`] / CSS `@keyframes` 路径的分工见仓库 `docs/engine/animation_and_motion.md`。
 
 use crate::core::tree::{Element, LayoutStatus};
-use crate::style::{
-    css_transition_needs_frame, snap_element_transitions_to_current, TransitionEntry,
-    TransitionSnapshot,
-};
+use crate::style::{css_transition_needs_frame, TransitionEntry, TransitionSnapshot};
 
 /// CSS transition 目标姿态（写入 `Style`；tick 会把 style 覆写为 mid）。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -134,7 +131,7 @@ pub fn clear_motion(el: &mut Element) {
 
 /// 把当前 style 记为已 settle 基线（无缝瞬移 / exit seed）。
 pub fn snap_motion_baseline(el: &mut Element) {
-    snap_element_transitions_to_current(&el.style, &mut el.transition_snapshot);
+    el.snap_css_transition_baseline();
 }
 
 /// 本节点 CSS transition 是否仍需帧。
@@ -187,8 +184,8 @@ pub fn motion_sync_status(el: &Element, style_changed: bool, dragging: bool) -> 
 mod tests {
     use super::*;
     use crate::style::{
-        set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
-        tick_element_transitions, TimingFunction, TransitionProperty,
+        set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,
+        TransitionProperty,
     };
 
     #[test]
@@ -236,10 +233,10 @@ mod tests {
         snap_motion_baseline(&mut el);
         el.style.translate = [-300.0, 0.0];
         assert!(motion_is_animating(&el.style, &el.transition_snapshot));
-        let _ = tick_element_transitions(&mut el.style, &mut el.transition_snapshot, 0.0);
+        let _ = el.tick_css_transitions(0.0);
         set_css_transition_timeline_ms(50.0);
         el.style.translate = [-300.0, 0.0];
-        let _ = tick_element_transitions(&mut el.style, &mut el.transition_snapshot, 0.0);
+        let _ = el.tick_css_transitions(0.0);
         assert!(
             (el.style.translate[0] + 200.0).abs() < 1.0,
             "mid should be between -100 and -300, got {}",

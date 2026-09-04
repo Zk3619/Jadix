@@ -447,10 +447,7 @@ fn sync_accordion_panel_open(
 }
 
 fn caption_text(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    el.children.iter().find_map(caption_text)
+    crate::core::tree::first_trimmed_text(el)
 }
 
 fn chevron_icon() -> Element {
@@ -463,10 +460,7 @@ fn chevron_icon() -> Element {
 
 #[cfg(test)]
 fn find_slot_child<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
-        return Some(el);
-    }
-    el.children.iter().find_map(|c| find_slot_child(c, slot))
+    crate::core::tree::find_by_attr(el, ATTR_SLOT, slot)
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -1191,7 +1185,6 @@ mod tests {
 
     #[test]
     fn accordion_exit_run_inactive_after_keyframes_finish() {
-        use crate::style::tick_element_animations;
         let mut el = Element::new();
         seed_accordion_exit_anim(&mut el, 48.0);
         assert!(
@@ -1199,7 +1192,7 @@ mod tests {
             "fresh accordion-up must count as animating"
         );
         for _ in 0..20 {
-            let _ = tick_element_animations(&mut el.style, &mut el.animation_snapshot, 0.016);
+            let _ = el.tick_css_animations(0.016);
         }
         assert!(
             !animation_run_active(&el.style, &el.animation_snapshot),

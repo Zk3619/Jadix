@@ -400,11 +400,14 @@ pub(super) fn apply_enter_motion(
 /// 与 CarouselStack 相同：缩放只写在壳上，子树保持 scale=1，由 collect 的
 /// `ancestor_scale` 继承，避免子节点各自绕中心缩放导致文字脱壳。
 fn reset_toast_descendant_scales(el: &mut Element) {
-    for child in &mut el.children {
-        if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
-        {
-            child.style.scale = [1.0, 1.0];
-        }
-        reset_toast_descendant_scales(child);
+    let n = el.children.len();
+    for i in 0..n {
+        crate::core::tree::walk_elements_mut(&mut el.children[i], |child| {
+            if (child.style.scale[0] - 1.0).abs() > 0.001
+                || (child.style.scale[1] - 1.0).abs() > 0.001
+            {
+                child.style.scale = [1.0, 1.0];
+            }
+        });
     }
 }

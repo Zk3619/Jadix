@@ -349,13 +349,13 @@ fn max_height_is_auto(el: &Element) -> bool {
 }
 
 fn stamp_content_text_weight(el: &mut Element) {
-    if el.text.is_some() {
-        el.text_style.weight = Some(CONTENT_WEIGHT);
-        el.attrs.insert("font_weight".to_string(), "1".to_string());
-    }
-    for child in &mut el.children {
-        stamp_content_text_weight(child);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        if node.text.is_some() {
+            node.text_style.weight = Some(CONTENT_WEIGHT);
+            node.attrs
+                .insert("font_weight".to_string(), "1".to_string());
+        }
+    });
 }
 
 fn register_open_redraw_effect(instance_id: &str, open_sig: Signal<bool>) {
@@ -464,10 +464,7 @@ fn is_text_leaf(el: &Element) -> bool {
 }
 
 fn caption_text(el: &Element) -> Option<String> {
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    el.children.iter().find_map(caption_text)
+    crate::core::tree::first_trimmed_text(el)
 }
 
 fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {

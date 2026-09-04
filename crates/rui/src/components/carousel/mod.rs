@@ -500,15 +500,18 @@ fn ensure_stack_card_css_transition(el: &mut Element) {
 /// `ancestor_linear` inheritance (text takes `paint_scale` + glyphon matrix, shares parent transformation with shell).
 /// In this way, the rectangle and the text share the same parent scale to avoid scaling around the center and causing the text to become disconnected when dragging.
 fn reset_stack_descendant_scales(el: &mut Element) {
-    for child in &mut el.children {
-        if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
-        {
-            child.style.scale = [1.0, 1.0];
-        }
-        if child.text.is_some() {
-            child.text_style.white_space = crate::style::WhiteSpace::Nowrap;
-        }
-        reset_stack_descendant_scales(child);
+    let n = el.children.len();
+    for i in 0..n {
+        crate::core::tree::walk_elements_mut(&mut el.children[i], |child| {
+            if (child.style.scale[0] - 1.0).abs() > 0.001
+                || (child.style.scale[1] - 1.0).abs() > 0.001
+            {
+                child.style.scale = [1.0, 1.0];
+            }
+            if child.text.is_some() {
+                child.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+            }
+        });
     }
 }
 
