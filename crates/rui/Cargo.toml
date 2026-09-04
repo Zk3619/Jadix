@@ -120,6 +120,7 @@ image = { version = "0.25", default-features = false, features = [
 resvg = { version = "0.45.1", optional = true }
 # default-features off: skip Linux libxdo. gtk still required on Linux if this feature is on.
 tray-icon = { version = "0.21", optional = true, default-features = false }
+stacker = { workspace = true }
 
 [dev-dependencies]
 

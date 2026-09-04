@@ -223,8 +223,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             super::RuiUserEvent::UiWake => {
-                super::ui_bridge::drain_ui_tasks();
-                crate::app::runtime::request_redraw_all();
+                super::with_grown_ui_stack(|| {
+                    super::ui_bridge::drain_ui_tasks();
+                    crate::app::runtime::request_redraw_all();
+                });
             }
             super::RuiUserEvent::OpenWindow { options, builder } => {
                 let wants_glass = options.compositor_alpha();
@@ -319,13 +321,15 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     crate::core::reactivity::bind_current_owner_window_key_scope(token);
                     let builder_rc = builder_rc.clone();
                     let secondaries = secondaries.clone();
-                    crate::core::reactivity::create_effect(move || {
-                        let _scope = super::window_scope::enter_secondary_id(id);
-                        let new_root = (builder_rc.borrow_mut())();
-                        if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
-                            sec.replace_root(new_root);
-                            sec.window.request_redraw();
-                        }
+                    super::with_grown_ui_stack(|| {
+                        crate::core::reactivity::create_effect(move || {
+                            let _scope = super::window_scope::enter_secondary_id(id);
+                            let new_root = (builder_rc.borrow_mut())();
+                            if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
+                                sec.replace_root(new_root);
+                                sec.window.request_redraw();
+                            }
+                        });
                     });
                 });
                 if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
@@ -480,7 +484,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             if !lp.fired {
                 let deadline = lp.start + std::time::Duration::from_millis(500);
                 if now >= deadline {
-                    self.try_fire_long_press();
+                    super::with_grown_ui_stack(|| self.try_fire_long_press());
                 } else {
                     next_wake = Some(next_wake.map_or(deadline, |t| t.min(deadline)));
                 }
@@ -608,22 +612,28 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             // making the window visible cannot expose the bootstrap root.
             let builder_ref = self.app_builder.clone();
             crate::core::reactivity::mark_next_effect_as_ui_root();
-            crate::core::reactivity::create_effect(move || {
-                log::debug!("root_effect: before app_builder");
-                let new_root = (builder_ref.borrow_mut())();
-                #[cfg(feature = "devtools")]
-                let new_root = crate::app::devtools::wrap_app(new_root);
-                log::debug!(
-                    "root_effect: after app_builder children={}",
-                    new_root.children.len()
-                );
-                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
-                    log::debug!("root_effect: before rebuild_ui");
-                    st.rebuild_ui(new_root);
-                    log::debug!("root_effect: after rebuild_ui");
-                    st.window.request_redraw();
-                }
-                log::debug!("root_effect: body done (flush_deferred next)");
+            // Grow around the whole `create_effect` call, not only the closure:
+            // `run_effect` flushes deferred nested effects *after* the body
+            // returns. Wrapping the body alone left that flush on the 1 MiB
+            // PE default (calculator STATUS_STACK_OVERFLOW before first render).
+            super::with_grown_ui_stack(|| {
+                crate::core::reactivity::create_effect(move || {
+                    log::debug!("root_effect: before app_builder");
+                    let new_root = (builder_ref.borrow_mut())();
+                    #[cfg(feature = "devtools")]
+                    let new_root = crate::app::devtools::wrap_app(new_root);
+                    log::debug!(
+                        "root_effect: after app_builder children={}",
+                        new_root.children.len()
+                    );
+                    if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                        log::debug!("root_effect: before rebuild_ui");
+                        st.rebuild_ui(new_root);
+                        log::debug!("root_effect: after rebuild_ui");
+                        st.window.request_redraw();
+                    }
+                    log::debug!("root_effect: body done (flush_deferred next)");
+                });
             });
             log::debug!("lifecycle: after root create_effect");
 
@@ -721,25 +731,31 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 button,
                 ..
             } => {
-                if self.is_secondary_window(id) {
-                    self.handle_secondary_mouse_button(id, element_state, button);
-                } else {
-                    self.with_primary_input(id, |app| {
-                        app.handle_mouse_button(id, element_state, button, Some(event_loop))
-                    });
-                }
+                // `on_click` → `signal.set` → `flush_pending` (bind_/reactive_view)
+                // runs synchronously here on the PE default 1 MiB stack.
+                super::with_grown_ui_stack(|| {
+                    if self.is_secondary_window(id) {
+                        self.handle_secondary_mouse_button(id, element_state, button);
+                    } else {
+                        self.with_primary_input(id, |app| {
+                            app.handle_mouse_button(id, element_state, button, Some(event_loop))
+                        });
+                    }
+                });
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if self.is_secondary_window(id) {
-                    self.handle_secondary_mouse_wheel(id, delta);
-                } else {
-                    self.with_primary_input(id, |app| app.handle_mouse_wheel(id, delta));
-                }
+                super::with_grown_ui_stack(|| {
+                    if self.is_secondary_window(id) {
+                        self.handle_secondary_mouse_wheel(id, delta);
+                    } else {
+                        self.with_primary_input(id, |app| app.handle_mouse_wheel(id, delta));
+                    }
+                });
             }
             // Primary finger → pointer paths; second finger enables pinch scale.
             // Pinch scale is stored on App + signal `__rui_pinch_scale` (no scroll zoom yet).
             WindowEvent::Touch(touch) => {
-                match touch.phase {
+                super::with_grown_ui_stack(|| match touch.phase {
                     TouchPhase::Started => {
                         self.active_touches.insert(touch.id, touch.location);
                         if self.primary_touch_id.is_none() {
@@ -819,7 +835,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             }
                         }
                     }
-                }
+                });
             }
             WindowEvent::DroppedFile(path) => {
                 super::push_dropped_file(path);
@@ -874,13 +890,15 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if self.is_secondary_window(id) {
-                    self.handle_secondary_keyboard(id, event);
-                } else {
-                    self.with_primary_input(id, |app| {
-                        let _ = app.handle_keyboard_input(event);
-                    });
-                }
+                super::with_grown_ui_stack(|| {
+                    if self.is_secondary_window(id) {
+                        self.handle_secondary_keyboard(id, event);
+                    } else {
+                        self.with_primary_input(id, |app| {
+                            let _ = app.handle_keyboard_input(event);
+                        });
+                    }
+                });
             }
             WindowEvent::Occluded(occluded) if !occluded => {
                 if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -918,16 +936,21 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Flush any buffered file drops once per frame.
-                let paths = super::take_dropped_files();
-                if !paths.is_empty() {
-                    super::fire_file_drop(paths);
-                }
-                if self.secondaries.borrow().contains_key(&id) {
-                    self.handle_secondary_redraw(id, event_loop);
-                } else {
-                    self.handle_redraw_requested(id, event_loop);
-                }
+                // MSVC debug allocates `handle_redraw_requested`'s huge frame
+                // at entry, before `AppState::render`. Grow here so that frame
+                // and collect both run off the PE default 1 MiB stack.
+                super::with_grown_ui_stack(|| {
+                    // Flush any buffered file drops once per frame.
+                    let paths = super::take_dropped_files();
+                    if !paths.is_empty() {
+                        super::fire_file_drop(paths);
+                    }
+                    if self.secondaries.borrow().contains_key(&id) {
+                        self.handle_secondary_redraw(id, event_loop);
+                    } else {
+                        self.handle_redraw_requested(id, event_loop);
+                    }
+                });
             }
             _ => {}
         }
