@@ -598,15 +598,183 @@ impl Drop for Element {
     }
 }
 
+/// Pre-order heap DFS. Tree depth does not consume OS stack frames.
+pub(crate) fn walk_elements<'a>(root: &'a Element, mut visit: impl FnMut(&'a Element)) {
+    let mut stack: Vec<&'a Element> = vec![root];
+    while let Some(el) = stack.pop() {
+        visit(el);
+        stack.extend(el.children.iter().rev());
+    }
+}
+
+/// Mutable pre-order heap DFS. `visit` must not restructure `children` in a way
+/// that invalidates pointers still on the worklist (same constraint as recursion).
+pub(crate) fn walk_elements_mut(root: &mut Element, mut visit: impl FnMut(&mut Element)) {
+    let mut stack: Vec<*mut Element> = vec![root as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: pointers stay inside `root`'s exclusive subtree for this pass.
+        let el = unsafe { &mut *ptr };
+        visit(el);
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push(std::ptr::addr_of_mut!(el.children[i]));
+        }
+    }
+}
+
+/// Pre-order heap DFS that does not enter nested `template_id` children.
+/// `root` is always visited (hot-reload patches a template island from the island root).
+pub(crate) fn walk_within_template<'a>(root: &'a Element, mut visit: impl FnMut(&'a Element)) {
+    let mut stack: Vec<&'a Element> = vec![root];
+    while let Some(el) = stack.pop() {
+        visit(el);
+        for child in el.children.iter().rev() {
+            if child.template_id.is_some() {
+                continue;
+            }
+            stack.push(child);
+        }
+    }
+}
+
+/// Mutable pre-order heap DFS with the same nested-`template_id` boundary as
+/// [`walk_within_template`]. `visit` returning `true` stops the walk.
+pub(crate) fn walk_within_template_mut(
+    root: &mut Element,
+    mut visit: impl FnMut(&mut Element) -> bool,
+) -> bool {
+    let mut stack: Vec<*mut Element> = vec![root as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: pointers stay inside `root`'s exclusive subtree for this pass.
+        let el = unsafe { &mut *ptr };
+        if visit(el) {
+            return true;
+        }
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            if el.children[i].template_id.is_some() {
+                continue;
+            }
+            stack.push(std::ptr::addr_of_mut!(el.children[i]));
+        }
+    }
+    false
+}
+
+pub(crate) fn find_in_tree<'a>(
+    root: &'a Element,
+    mut pred: impl FnMut(&Element) -> bool,
+) -> Option<&'a Element> {
+    let mut stack: Vec<&'a Element> = vec![root];
+    while let Some(el) = stack.pop() {
+        if pred(el) {
+            return Some(el);
+        }
+        stack.extend(el.children.iter().rev());
+    }
+    None
+}
+
+pub(crate) fn find_in_tree_mut<'a>(
+    root: &'a mut Element,
+    mut pred: impl FnMut(&Element) -> bool,
+) -> Option<&'a mut Element> {
+    let mut stack: Vec<*mut Element> = vec![root as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: exclusive subtree walk; we return immediately on match.
+        let el = unsafe { &mut *ptr };
+        if pred(el) {
+            return Some(el);
+        }
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push(std::ptr::addr_of_mut!(el.children[i]));
+        }
+    }
+    None
+}
+
+/// Post-order heap DFS. Children are visited before the parent.
+pub(crate) fn walk_elements_post_order_mut(
+    root: &mut Element,
+    mut visit: impl FnMut(&mut Element),
+) {
+    enum Phase {
+        Enter,
+        Leave,
+    }
+    let mut stack: Vec<(*mut Element, Phase)> = vec![(root as *mut Element, Phase::Enter)];
+    while let Some((ptr, phase)) = stack.pop() {
+        // SAFETY: pointers stay inside `root`'s exclusive subtree for this pass.
+        let el = unsafe { &mut *ptr };
+        match phase {
+            Phase::Enter => {
+                stack.push((ptr, Phase::Leave));
+                let n = el.children.len();
+                for i in (0..n).rev() {
+                    stack.push((std::ptr::addr_of_mut!(el.children[i]), Phase::Enter));
+                }
+            }
+            Phase::Leave => visit(el),
+        }
+    }
+}
+
+/// Child-index path from `root` to the first pre-order match, or `[]` if `root` matches.
+pub(crate) fn find_path_in_tree(
+    root: &Element,
+    mut pred: impl FnMut(&Element) -> bool,
+) -> Option<Vec<usize>> {
+    if pred(root) {
+        return Some(Vec::new());
+    }
+    struct Frame<'a> {
+        el: &'a Element,
+        index: usize,
+        pop: bool,
+    }
+    let mut path = Vec::new();
+    let mut stack = vec![Frame {
+        el: root,
+        index: 0,
+        pop: false,
+    }];
+    while let Some(mut frame) = stack.pop() {
+        if frame.index >= frame.el.children.len() {
+            if frame.pop {
+                path.pop();
+            }
+            continue;
+        }
+        let i = frame.index;
+        frame.index += 1;
+        let child = &frame.el.children[i];
+        path.push(i);
+        if pred(child) {
+            return Some(path);
+        }
+        stack.push(frame);
+        stack.push(Frame {
+            el: child,
+            index: 0,
+            pop: true,
+        });
+    }
+    None
+}
+
 pub struct Element {
-    pub style: crate::style::Style,
+    /// Boxed so `Element` stays cheap to move. MSVC debug reserves stack for every
+    /// `Element` temporary in a function prologue; a 3KB+ inline `Style` overflows
+    /// the Windows ~1 MiB main thread on wide builder / `ui!` trees.
+    pub style: Box<crate::style::Style>,
     pub children: Vec<Element>,
     pub text: Option<String>,
     /// Rich-text spans; when set, prepare uses set_rich_text. `text` is concat fallback.
     pub text_spans: Option<Vec<crate::style::TextSpan>>,
     /// 仅参与 glyph 排版（`set_text` / 宽度估计），不计入 `text` 的字节长度；用于减轻纯中文 IME 下 cosmic-text 行高随拼音 bbox 抖动。
     pub text_shape_suffix: Option<String>,
-    pub text_style: TextStyle,
+    pub text_style: Box<TextStyle>,
     pub layout_bounds: [f32; 4],
     /// Last fully collected subtree extent (`max_right`, `max_bottom`) in abs layout px.
     /// `scroll_only` sibling band cull reuses this so content height / thumb geometry stay stable.
@@ -856,6 +1024,61 @@ impl IntoElementList for &str {
     }
 }
 
+/// Run one `ui!` child on its own stack frame.
+///
+/// MSVC debug reserves stack for every sibling `Element` temporary in the parent
+/// function. A one-line `#[inline(never)]` generic is still inlined; the vtable
+/// call keeps each child's expansion in a separate frame so the Windows ~1 MiB
+/// main thread does not overflow on wide RSX trees.
+pub fn build_ui_child<'a, T: IntoElementList>(f: impl FnOnce() -> T + 'a) -> Vec<Element> {
+    trait UiChildBuild {
+        fn build(self: Box<Self>) -> Vec<Element>;
+    }
+    impl<F, U> UiChildBuild for F
+    where
+        F: FnOnce() -> U,
+        U: IntoElementList,
+    {
+        #[inline(never)]
+        fn build(self: Box<Self>) -> Vec<Element> {
+            (*self)().into_element_list()
+        }
+    }
+    let boxed: Box<dyn UiChildBuild + 'a> = Box::new(f);
+    boxed.build()
+}
+
+/// Run a whole `ui!` tree on its own stack frame (parent only stores the `Element`).
+///
+/// Without this, a large RSX block is inlined into the enclosing function and MSVC
+/// debug reserves the entire tree's temporaries in that prologue.
+pub fn build_ui_root<'a>(f: impl FnOnce() -> Element + 'a) -> Element {
+    trait UiRootBuild {
+        fn build(self: Box<Self>) -> Element;
+    }
+    impl<F> UiRootBuild for F
+    where
+        F: FnOnce() -> Element,
+    {
+        #[inline(never)]
+        fn build(self: Box<Self>) -> Element {
+            (*self)()
+        }
+    }
+    let boxed: Box<dyn UiRootBuild + 'a> = Box::new(f);
+    boxed.build()
+}
+
+/// Build many independent subtrees (page sections, showcase lists) without holding
+/// every child's expansion in one MSVC-debug prologue. Prefer this over `vec![a(), b(), …]`
+/// when `a`/`b` are large `ui!` trees **not** already behind `#[component]` / `#[inline(never)]`.
+///
+/// `#[component]` functions are already `#[inline(never)]`; `vec![Foo(Default::default()), …]`
+/// is then fine (only finished `Element` values live in the parent).
+pub fn collect_ui(builders: impl IntoIterator<Item = fn() -> Element>) -> Vec<Element> {
+    builders.into_iter().flat_map(build_ui_child).collect()
+}
+
 /// Argument to [`Element::text`]: a static string, or (via impls in `app/reactive`) a
 /// [`crate::core::reactivity::Signal`] / `FnMut() -> String` live binding.
 pub trait IntoNodeText {
@@ -912,12 +1135,12 @@ impl Element {
 
     pub fn new() -> Self {
         Self {
-            style: crate::style::Style::default(),
+            style: Box::new(crate::style::Style::default()),
             children: Vec::new(),
             text: None,
             text_spans: None,
             text_shape_suffix: None,
-            text_style: TextStyle::default(),
+            text_style: Box::new(TextStyle::default()),
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
             collect_extent: [0.0, 0.0],
             collect_extent_valid: false,
@@ -3014,58 +3237,59 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
     in_portal: bool,
     collect: &mut ReactiveSyncCollect,
 ) {
-    if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
-        return;
-    }
-    let in_portal = in_portal
-        || element.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
-    if let Some(sync) = element.reactive_sync.clone() {
-        let before = element.layout_bounds;
-        let status = sync.run(element, layout_tree);
-        match status {
-            LayoutStatus::LayoutChanged => {
-                push_subtree_layout_nodes(element, &mut collect.layout_dirty);
-                if in_portal {
-                    collect.portal_layout_changed = true;
-                    crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
-                        element, before,
-                    ));
-                } else {
-                    collect.page_layout_changed = true;
-                }
-            }
-            LayoutStatus::StructureChanged => {
-                // Structure (dialog mount, list remount, …) still needs a coherent FullClear.
-                collect.page_layout_changed = true;
-                push_subtree_layout_nodes(element, &mut collect.layout_dirty);
-            }
-            LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+    let mut stack: Vec<(*mut Element, [f32; 2], bool)> =
+        vec![(element as *mut Element, scroll_acc, in_portal)];
+    while let Some((ptr, scroll_acc, in_portal)) = stack.pop() {
+        // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
+        let element = unsafe { &mut *ptr };
+        if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
+            continue;
         }
-        *impact = impact.merge(status);
-    }
-    let child_acc = child_scroll_accumulation(element, scroll_acc);
-    for child in &mut element.children {
-        sync_reactive_elements_subtree_ex(
-            child,
-            layout_tree,
-            impact,
-            viewport_w,
-            viewport_h,
-            child_acc,
-            in_portal,
-            collect,
-        );
+        let in_portal = in_portal
+            || element.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
+        if let Some(sync) = element.reactive_sync.clone() {
+            let before = element.layout_bounds;
+            let status = sync.run(element, layout_tree);
+            match status {
+                LayoutStatus::LayoutChanged => {
+                    push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                    if in_portal {
+                        collect.portal_layout_changed = true;
+                        crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
+                            element, before,
+                        ));
+                    } else {
+                        collect.page_layout_changed = true;
+                    }
+                }
+                LayoutStatus::StructureChanged => {
+                    // Structure (dialog mount, list remount, …) still needs a coherent FullClear.
+                    collect.page_layout_changed = true;
+                    push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                }
+                LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+            }
+            *impact = impact.merge(status);
+        }
+        let child_acc = child_scroll_accumulation(element, scroll_acc);
+        let n = element.children.len();
+        for i in (0..n).rev() {
+            stack.push((
+                std::ptr::addr_of_mut!(element.children[i]),
+                child_acc,
+                in_portal,
+            ));
+        }
     }
 }
 
 fn push_subtree_layout_nodes(el: &Element, out: &mut Vec<NodeId>) {
-    if let Some(n) = el.layout_node {
-        out.push(n);
-    }
-    for child in &el.children {
-        push_subtree_layout_nodes(child, out);
-    }
+    walk_elements(el, |node| {
+        if let Some(n) = node.layout_node {
+            out.push(n);
+        }
+    });
 }
 
 /// Old layout box ∪ authored length size after sync (covers expand and collapse).

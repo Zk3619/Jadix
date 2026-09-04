@@ -109,6 +109,15 @@ pub struct SignalId(usize);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct EffectId(usize);
 
+thread_local! {
+    /// Effects that missed `try_reconcile_subtree` during an in-flight flush.
+    /// Drained on the next idle turn (AppState not borrowed) — never re-queued into the
+    /// same `flush_deferred` drain (that 100k-looped: miss → schedule → miss).
+    static IDLE_EFFECT_RETRIES: RefCell<Vec<EffectId>> = const { RefCell::new(Vec::new()) };
+    static IDLE_EFFECT_RETRY_COUNTS: RefCell<HashMap<EffectId, u8>> =
+        RefCell::new(HashMap::new());
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct OwnerId(usize);
 
@@ -595,8 +604,13 @@ fn flush_deferred_effects(rt: &Runtime) {
     }
     rt.flushing_deferred.set(true);
     let mut rounds = 0usize;
+    // Each id at most once per drain. `reactive_anchor` reconcile-miss used to
+    // `schedule_effect` into this same Vec; with `flushing_deferred` true that
+    // re-ran forever (`flush_deferred_effects exceeded 100k rounds`).
+    let mut ran: HashSet<EffectId> = HashSet::new();
     loop {
         let mut ids: Vec<EffectId> = std::mem::take(&mut *rt.deferred_effects.borrow_mut());
+        ids.retain(|id| ran.insert(*id));
         if ids.is_empty() {
             break;
         }
@@ -622,6 +636,61 @@ fn enqueue_pending_effect(rt: &Runtime, id: EffectId) {
     let mut set = rt.pending_effect_set.borrow_mut();
     if set.insert(id) {
         rt.pending_effects.borrow_mut().push_back(id);
+    }
+}
+
+const MAX_IDLE_EFFECT_RETRIES: u8 = 8;
+
+/// Retry an in-flight effect after the current flush (and AppState borrow) ends.
+///
+/// Used when `try_reconcile_subtree` misses (borrow held / placeholder not in the live
+/// tree yet). Must not use [`schedule_effect`] during `flush_deferred` — that re-queues
+/// the same id into the drain that is already running.
+pub(crate) fn queue_running_effect_for_idle_retry() {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let Some(id) = *rt.current_effect.borrow() else {
+            return;
+        };
+        let allow = IDLE_EFFECT_RETRY_COUNTS.with(|c| {
+            let mut c = c.borrow_mut();
+            let n = c.entry(id).or_insert(0);
+            if *n >= MAX_IDLE_EFFECT_RETRIES {
+                return false;
+            }
+            *n = n.saturating_add(1);
+            true
+        });
+        if !allow {
+            log::debug!("idle effect retry cap reached effect_id={}", id.0);
+            return;
+        }
+        IDLE_EFFECT_RETRIES.with(|q| {
+            let mut q = q.borrow_mut();
+            if !q.contains(&id) {
+                q.push(id);
+            }
+        });
+    });
+}
+
+pub(crate) fn clear_idle_effect_retry(effect_id: EffectId) {
+    IDLE_EFFECT_RETRY_COUNTS.with(|c| {
+        c.borrow_mut().remove(&effect_id);
+    });
+}
+
+pub(crate) fn clear_idle_effect_retry_queues() {
+    IDLE_EFFECT_RETRIES.with(|q| q.borrow_mut().clear());
+    IDLE_EFFECT_RETRY_COUNTS.with(|c| c.borrow_mut().clear());
+}
+
+/// Run effects queued by [`queue_running_effect_for_idle_retry`]. Call only when AppState
+/// is not borrowed (same sites as `drain_deferred_view_remounts`).
+pub fn drain_idle_effect_retries() {
+    let ids = IDLE_EFFECT_RETRIES.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for id in ids {
+        schedule_effect(id);
     }
 }
 
@@ -1260,6 +1329,7 @@ pub fn clear_effects() {
         rt.pending_memo_set.borrow_mut().clear();
         rt.deferred_effects.borrow_mut().clear();
         rt.deferred_fns.borrow_mut().clear();
+        clear_idle_effect_retry_queues();
         rt.flushing_deferred.set(false);
         rt.flushing_pending.set(false);
         rt.effect_run_depth.set(0);
@@ -1363,6 +1433,23 @@ impl Drop for OwnerHandle {
     }
 }
 
+/// Ensure the current thread can host a large MSVC-debug `ui!` / `app_builder` frame.
+///
+/// Windows GUI threads default to ~1 MiB. Debug prologues reserve space for every
+/// `Element` temporary in a function; a page-sized RSX tree overflows that. This
+/// grows **only for `f`** (typically 8 MiB) when remaining stack is below 1 MiB —
+/// not a PE `/STACK` bump and not a process-lifetime grow.
+///
+/// The framework already wraps `run` / redraw / input. Headless tests that spawn a
+/// 1 MiB thread should call this around UI construction (gallery uses
+/// `run_on_gallery_build_stack`).
+#[inline(never)]
+pub fn with_ui_build_stack<R>(f: impl FnOnce() -> R) -> R {
+    const RED_ZONE: usize = 1024 * 1024;
+    const GROW: usize = 8 * 1024 * 1024;
+    stacker::maybe_grow(RED_ZONE, GROW, f)
+}
+
 /// Create a detached owner, run `f` under it, and return a handle that disposes the whole tree.
 pub fn create_root<F, R>(f: F) -> (OwnerHandle, R)
 where
@@ -1413,6 +1500,11 @@ where
 /// Current owner id, if any.
 pub fn current_owner() -> Option<OwnerId> {
     RUNTIME.with(|rt_rc| *rt_rc.borrow().current_owner.borrow())
+}
+
+/// Effect currently executing, if any.
+pub(crate) fn current_effect_id() -> Option<EffectId> {
+    RUNTIME.with(|rt_rc| *rt_rc.borrow().current_effect.borrow())
 }
 
 /// Live owner nodes in the runtime graph (WP-R.5 / leak diagnostics).

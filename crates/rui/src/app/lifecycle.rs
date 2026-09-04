@@ -16,14 +16,13 @@ fn collect_scroll_rests(
     el: &crate::core::tree::Element,
     out: &mut std::collections::HashSet<String>,
 ) {
-    if let Some(fid) = el.focus_id.as_deref() {
-        if let Some(rest) = crate::core::scroll_viewport::strip_scroll_viewport_focus_id(fid) {
-            out.insert(rest.to_string());
+    crate::core::tree::walk_elements(el, |el| {
+        if let Some(fid) = el.focus_id.as_deref() {
+            if let Some(rest) = crate::core::scroll_viewport::strip_scroll_viewport_focus_id(fid) {
+                out.insert(rest.to_string());
+            }
         }
-    }
-    for child in &el.children {
-        collect_scroll_rests(child, out);
-    }
+    });
 }
 
 impl super::App {
@@ -612,10 +611,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             // making the window visible cannot expose the bootstrap root.
             let builder_ref = self.app_builder.clone();
             crate::core::reactivity::mark_next_effect_as_ui_root();
-            // Grow around the whole `create_effect` call, not only the closure:
+            // Wrap the whole `create_effect` call (not only the closure):
             // `run_effect` flushes deferred nested effects *after* the body
-            // returns. Wrapping the body alone left that flush on the 1 MiB
-            // PE default (calculator STATUS_STACK_OVERFLOW before first render).
+            // returns. Calculator used to overflow here when collect kept a
+            // ~21 KiB paint frame at every tree depth.
             super::with_grown_ui_stack(|| {
                 crate::core::reactivity::create_effect(move || {
                     log::debug!("root_effect: before app_builder");
@@ -936,9 +935,9 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // MSVC debug allocates `handle_redraw_requested`'s huge frame
-                // at entry, before `AppState::render`. Grow here so that frame
-                // and collect both run off the PE default 1 MiB stack.
+                // MSVC debug allocates `handle_redraw_requested`'s locals
+                // at entry, before `AppState::render`. Collect paint no longer
+                // stays live during child recursion.
                 super::with_grown_ui_stack(|| {
                     // Flush any buffered file drops once per frame.
                     let paths = super::take_dropped_files();

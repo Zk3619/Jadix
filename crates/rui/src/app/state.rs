@@ -780,19 +780,15 @@ impl AppState {
     fn scroll_offset_fingerprint(root: &Element) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         let mut hasher = DefaultHasher::new();
-        fn walk(el: &Element, hasher: &mut DefaultHasher) {
+        crate::core::tree::walk_elements(root, |el| {
             if let Some(fid) = el.focus_id.as_deref() {
                 if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                    rest.hash(hasher);
-                    el.scroll_offset[0].to_bits().hash(hasher);
-                    el.scroll_offset[1].to_bits().hash(hasher);
+                    rest.hash(&mut hasher);
+                    el.scroll_offset[0].to_bits().hash(&mut hasher);
+                    el.scroll_offset[1].to_bits().hash(&mut hasher);
                 }
             }
-            for child in &el.children {
-                walk(child, hasher);
-            }
-        }
-        walk(root, &mut hasher);
+        });
         hasher.finish()
     }
 
@@ -997,91 +993,120 @@ impl AppState {
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
-        let id_match = new_el.template_id == old_el.template_id;
+        let mut status = LayoutStatus::Clean;
+        let mut stack: Vec<(*mut Element, *mut Element)> =
+            vec![(new_el as *mut Element, old_el as *mut Element)];
+        // Keyed / identity pairing moves old children out of the live tree; Boxes keep
+        // their addresses stable while the worklist still points at them.
+        let mut old_keepalive: Vec<Box<Element>> = Vec::new();
 
-        if id_match {
-            new_el.layout_node = old_el.layout_node;
-            // Keep dispose hooks alive across root rebuilds that recreate the same template_id.
-            if new_el.on_unmount.is_none() {
-                new_el.on_unmount = old_el.on_unmount.clone();
-            }
-            // Keyed overlay：同 template_id 保留 transition mid（见 utils/keyed_overlay）。
-            let _ = crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(new_el, old_el);
-            let is_reactive_placeholder = new_el.template_hash.as_deref()
-                == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
-            if is_reactive_placeholder {
-                // Root rebuilds emit a placeholder shell for reactive anchors; this shell is only a
-                // marker and must never overwrite already mounted fine-grained subtree content.
-                let old_is_placeholder = old_el.template_hash.as_deref()
-                    == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
-                if old_is_placeholder {
-                    // Still waiting for the anchor effect, or another placeholder: merge children only.
-                    new_el.children = std::mem::take(&mut old_el.children);
-                    new_el.text = old_el.text.clone();
-                    new_el.style = old_el.style.clone();
-                    new_el.text_style = old_el.text_style.clone();
-                } else {
-                    // Mounted subtree is the real reactive root (e.g. inner `VStack` with gap/flex).
-                    // Moving only `children` would flatten them under this shell and break layout
-                    // until the anchor effect runs again — but updates that only rerun the root
-                    // effect (e.g. unrelated `use_signal` in `main`) never rerun that anchor.
-                    let tid = new_el.template_id.clone();
-                    let promoted = std::mem::take(old_el);
-                    *new_el = promoted;
-                    new_el.template_id = tid;
-                }
-                return LayoutStatus::Clean;
-            }
-
-            let mut status = if new_el.text != old_el.text
-                || new_el.style != old_el.style
-                || new_el.image_texture != old_el.image_texture
-            {
-                if let Some(n) = new_el.layout_node {
-                    dirty.push(n);
-                }
-                LayoutStatus::LayoutChanged
-            } else if new_el.text_style != old_el.text_style {
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::Clean
-            };
-
-            let new_all_keyed = Self::children_all_keyed(&new_el.children);
-            let old_all_keyed = Self::children_all_keyed(&old_el.children);
-            if new_all_keyed && old_all_keyed {
-                status = Self::merge_layout_status(
-                    status,
-                    Self::reconcile_keyed_children(new_el, old_el, dirty),
-                );
-            } else if new_el.children.len() == old_el.children.len() {
-                for (n_child, o_child) in new_el.children.iter_mut().zip(old_el.children.iter_mut())
-                {
-                    let child_status = Self::reconcile_elements(n_child, o_child, dirty);
-                    status = Self::merge_layout_status(status, child_status);
-                }
-            } else {
-                log::warn!(
-                    "[reconcile] children len mismatch new={} old={} tid={:?} keyed=({},{})",
-                    new_el.children.len(),
-                    old_el.children.len(),
-                    new_el.template_id,
-                    new_all_keyed,
-                    old_all_keyed
-                );
-                // Do not drop the whole child list. Gallery's live root is
-                // `[chrome, toast_host, __rui_portal_layer]` while `app_builder()`
-                // only emits `[chrome, toast_host]`. Wiping here replaces the
-                // filled `switch_reactive` island with an empty placeholder.
-                status = Self::merge_layout_status(
-                    status,
-                    Self::reconcile_children_by_identity(new_el, old_el, dirty),
-                );
-            }
-            status
-        } else {
-            LayoutStatus::StructureChanged
+        while let Some((new_ptr, old_ptr)) = stack.pop() {
+            // SAFETY: `new_ptr` is in the caller's new tree (or a child we just
+            // assigned). `old_ptr` is in the caller's old tree or `old_keepalive`.
+            let new_el = unsafe { &mut *new_ptr };
+            let old_el = unsafe { &mut *old_ptr };
+            status = Self::merge_layout_status(
+                status,
+                Self::reconcile_pair(new_el, old_el, dirty, &mut stack, &mut old_keepalive),
+            );
         }
+        status
+    }
+
+    fn reconcile_pair(
+        new_el: &mut Element,
+        old_el: &mut Element,
+        dirty: &mut Vec<taffy::prelude::NodeId>,
+        stack: &mut Vec<(*mut Element, *mut Element)>,
+        old_keepalive: &mut Vec<Box<Element>>,
+    ) -> crate::core::tree::LayoutStatus {
+        use crate::core::tree::LayoutStatus;
+
+        if new_el.template_id != old_el.template_id {
+            return LayoutStatus::StructureChanged;
+        }
+
+        new_el.layout_node = old_el.layout_node;
+        // Keep dispose hooks alive across root rebuilds that recreate the same template_id.
+        if new_el.on_unmount.is_none() {
+            new_el.on_unmount = old_el.on_unmount.clone();
+        }
+        // Keyed overlay：同 template_id 保留 transition mid（见 utils/keyed_overlay）。
+        let _ = crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(new_el, old_el);
+        let is_reactive_placeholder = new_el.template_hash.as_deref()
+            == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
+        if is_reactive_placeholder {
+            // Root rebuilds emit a placeholder shell for reactive anchors; this shell is only a
+            // marker and must never overwrite already mounted fine-grained subtree content.
+            let old_is_placeholder = old_el.template_hash.as_deref()
+                == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
+            if old_is_placeholder {
+                // Still waiting for the anchor effect, or another placeholder: merge children only.
+                new_el.children = std::mem::take(&mut old_el.children);
+                new_el.text = old_el.text.clone();
+                new_el.style = old_el.style.clone();
+                new_el.text_style = old_el.text_style.clone();
+            } else {
+                // Mounted subtree is the real reactive root (e.g. inner `VStack` with gap/flex).
+                // Moving only `children` would flatten them under this shell and break layout
+                // until the anchor effect runs again — but updates that only rerun the root
+                // effect (e.g. unrelated `use_signal` in `main`) never rerun that anchor.
+                let tid = new_el.template_id.clone();
+                let promoted = std::mem::take(old_el);
+                *new_el = promoted;
+                new_el.template_id = tid;
+            }
+            return LayoutStatus::Clean;
+        }
+
+        let mut status = if new_el.text != old_el.text
+            || new_el.style != old_el.style
+            || new_el.image_texture != old_el.image_texture
+        {
+            if let Some(n) = new_el.layout_node {
+                dirty.push(n);
+            }
+            LayoutStatus::LayoutChanged
+        } else if new_el.text_style != old_el.text_style {
+            LayoutStatus::StyleChanged
+        } else {
+            LayoutStatus::Clean
+        };
+
+        let new_all_keyed = Self::children_all_keyed(&new_el.children);
+        let old_all_keyed = Self::children_all_keyed(&old_el.children);
+        if new_all_keyed && old_all_keyed {
+            status = Self::merge_layout_status(
+                status,
+                Self::reconcile_keyed_children(new_el, old_el, stack, old_keepalive),
+            );
+        } else if new_el.children.len() == old_el.children.len() {
+            let n = new_el.children.len();
+            for i in (0..n).rev() {
+                stack.push((
+                    std::ptr::addr_of_mut!(new_el.children[i]),
+                    std::ptr::addr_of_mut!(old_el.children[i]),
+                ));
+            }
+        } else {
+            log::warn!(
+                "[reconcile] children len mismatch new={} old={} tid={:?} keyed=({},{})",
+                new_el.children.len(),
+                old_el.children.len(),
+                new_el.template_id,
+                new_all_keyed,
+                old_all_keyed
+            );
+            // Do not drop the whole child list. Gallery's live root is
+            // `[chrome, toast_host, __rui_portal_layer]` while `app_builder()`
+            // only emits `[chrome, toast_host]`. Wiping here replaces the
+            // filled `switch_reactive` island with an empty placeholder.
+            status = Self::merge_layout_status(
+                status,
+                Self::reconcile_children_by_identity(new_el, old_el, stack, old_keepalive),
+            );
+        }
+        status
     }
 
     #[cfg(test)]
@@ -1210,17 +1235,15 @@ impl AppState {
     }
 
     fn find_template_path(root: &Element, template_id: &str, out: &mut Vec<usize>) -> bool {
-        if root.template_id.as_deref() == Some(template_id) {
-            return true;
-        }
-        for (index, child) in root.children.iter().enumerate() {
-            out.push(index);
-            if Self::find_template_path(child, template_id, out) {
-                return true;
+        match crate::core::tree::find_path_in_tree(root, |el| {
+            el.template_id.as_deref() == Some(template_id)
+        }) {
+            Some(path) => {
+                *out = path;
+                true
             }
-            out.pop();
+            None => false,
         }
-        false
     }
 
     fn children_all_keyed(children: &[Element]) -> bool {
@@ -1232,7 +1255,8 @@ impl AppState {
     fn reconcile_keyed_children(
         new_el: &mut Element,
         old_el: &mut Element,
-        dirty: &mut Vec<taffy::prelude::NodeId>,
+        stack: &mut Vec<(*mut Element, *mut Element)>,
+        old_keepalive: &mut Vec<Box<Element>>,
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
@@ -1246,17 +1270,19 @@ impl AppState {
         }
 
         let mut next_children = Vec::with_capacity(new_el.children.len());
-        for mut new_child in std::mem::take(&mut new_el.children) {
+        let mut matched_old: Vec<Option<Element>> = Vec::with_capacity(new_el.children.len());
+        for new_child in std::mem::take(&mut new_el.children) {
             let Some(id) = new_child.template_id.clone() else {
                 status = LayoutStatus::StructureChanged;
                 next_children.push(new_child);
+                matched_old.push(None);
                 continue;
             };
-            if let Some(mut old_child) = old_by_id.remove(&id) {
-                let child_status = Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
-                status = Self::merge_layout_status(status, child_status);
+            if let Some(old_child) = old_by_id.remove(&id) {
+                matched_old.push(Some(old_child));
             } else {
                 status = LayoutStatus::StructureChanged;
+                matched_old.push(None);
             }
             next_children.push(new_child);
         }
@@ -1265,6 +1291,13 @@ impl AppState {
             status = LayoutStatus::StructureChanged;
         }
         new_el.children = next_children;
+        for i in (0..new_el.children.len()).rev() {
+            if let Some(old_child) = matched_old[i].take() {
+                old_keepalive.push(Box::new(old_child));
+                let old_ptr = old_keepalive.last_mut().unwrap().as_mut() as *mut Element;
+                stack.push((std::ptr::addr_of_mut!(new_el.children[i]), old_ptr));
+            }
+        }
         status
     }
 
@@ -1275,11 +1308,12 @@ impl AppState {
     fn reconcile_children_by_identity(
         new_el: &mut Element,
         old_el: &mut Element,
-        dirty: &mut Vec<taffy::prelude::NodeId>,
+        stack: &mut Vec<(*mut Element, *mut Element)>,
+        old_keepalive: &mut Vec<Box<Element>>,
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
-        let mut status = LayoutStatus::StructureChanged;
+        let status = LayoutStatus::StructureChanged;
         let mut old_by_id: std::collections::HashMap<String, Element> =
             std::collections::HashMap::new();
         for old_child in std::mem::take(&mut old_el.children) {
@@ -1289,37 +1323,34 @@ impl AppState {
         }
 
         let mut next_children = Vec::with_capacity(new_el.children.len());
-        for mut new_child in std::mem::take(&mut new_el.children) {
-            if let Some(id) = new_child.template_id.clone() {
-                if let Some(mut old_child) = old_by_id.remove(&id) {
-                    let child_status =
-                        Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
-                    status = Self::merge_layout_status(status, child_status);
-                }
-            }
+        let mut matched_old: Vec<Option<Element>> = Vec::with_capacity(new_el.children.len());
+        for new_child in std::mem::take(&mut new_el.children) {
+            let matched = new_child
+                .template_id
+                .as_ref()
+                .and_then(|id| old_by_id.remove(id));
+            matched_old.push(matched);
             next_children.push(new_child);
         }
         new_el.children = next_children;
+        for i in (0..new_el.children.len()).rev() {
+            if let Some(old_child) = matched_old[i].take() {
+                old_keepalive.push(Box::new(old_child));
+                let old_ptr = old_keepalive.last_mut().unwrap().as_mut() as *mut Element;
+                stack.push((std::ptr::addr_of_mut!(new_el.children[i]), old_ptr));
+            }
+        }
         status
     }
 
     pub(super) fn update_scroll_offset_in_place(&mut self, target_id: &str, offset: [f32; 2]) {
-        fn recurse(el: &mut Element, target: &str, offset: [f32; 2], prefix: &str) {
+        crate::core::tree::walk_elements_mut(&mut self.root_element, |el| {
             if let Some(fid) = el.focus_id.as_deref() {
-                if fid.strip_prefix(prefix) == Some(target) {
+                if fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) == Some(target_id) {
                     el.scroll_offset = offset;
                 }
             }
-            for child in &mut el.children {
-                recurse(child, target, offset, prefix);
-            }
-        }
-        recurse(
-            &mut self.root_element,
-            target_id,
-            offset,
-            SCROLL_VIEWPORT_FOCUS_PREFIX,
-        );
+        });
     }
 
     #[cfg(debug_assertions)]
@@ -1480,10 +1511,8 @@ impl AppState {
         // sidebar hover flash). Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
-        // Second line of defense if a caller is not already on a grown stack
-        // (`RedrawRequested` wraps the whole handler). Unconditional grow:
-        // Windows remaining-stack probes can skip `maybe_grow` when a grow
-        // was actually required.
+        // Second line of defense if a caller is not already on the UI path
+        // (`RedrawRequested` wraps the whole handler).
         super::with_grown_ui_stack(|| {
             self.render_inner(
                 mouse_pos,
@@ -3571,20 +3600,22 @@ pub(crate) fn hoist_portal_subtrees_refreshing_scroll_flags(root: &mut Element) 
 }
 
 pub(crate) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
-    let self_is = el
-        .focus_id
-        .as_deref()
-        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
-    let mut any_child = false;
-    let mut vp_count = u32::from(self_is);
-    for child in &mut el.children {
-        if recompute_scroll_viewport_flags(child) {
-            any_child = true;
+    crate::core::tree::walk_elements_post_order_mut(el, |el| {
+        let self_is = el
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
+        let mut any_child = false;
+        let mut vp_count = u32::from(self_is);
+        for child in &el.children {
+            if child.contains_scroll_viewport {
+                any_child = true;
+            }
+            vp_count = vp_count.saturating_add(child.scroll_viewport_subtree_count);
         }
-        vp_count = vp_count.saturating_add(child.scroll_viewport_subtree_count);
-    }
-    el.scroll_viewport_subtree_count = vp_count;
-    el.contains_scroll_viewport = self_is || any_child;
+        el.scroll_viewport_subtree_count = vp_count;
+        el.contains_scroll_viewport = self_is || any_child;
+    });
     el.contains_scroll_viewport
 }
 
@@ -3593,10 +3624,10 @@ fn normalize_anchor_template_id(id: &str) -> String {
 }
 
 fn element_contains_rui_portal(el: &Element) -> bool {
-    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
-        return true;
-    }
-    el.children.iter().any(element_contains_rui_portal)
+    crate::core::tree::find_in_tree(el, |n| {
+        n.attrs.get("rui_portal").map(String::as_str) == Some("1")
+    })
+    .is_some()
 }
 
 /// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.
@@ -3604,17 +3635,11 @@ fn find_reactive_subtree_by_anchor_id_mut<'a>(
     el: &'a mut Element,
     want_normalized: &str,
 ) -> Option<&'a mut Element> {
-    if let Some(tid) = el.template_id.as_deref() {
-        if normalize_anchor_template_id(tid) == want_normalized {
-            return Some(el);
-        }
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_reactive_subtree_by_anchor_id_mut(child, want_normalized) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree_mut(el, |n| {
+        n.template_id
+            .as_deref()
+            .is_some_and(|tid| normalize_anchor_template_id(tid) == want_normalized)
+    })
 }
 
 /// Copy scroll-offset signals onto every `scroll:` viewport **before** chrome sync.
@@ -3622,30 +3647,33 @@ fn find_reactive_subtree_by_anchor_id_mut<'a>(
 /// Cheap walk (flags prune non-scroll subtrees). The later scrollbar prepass still runs for
 /// track/thumb styling; this only keeps `Element.scroll_offset` current for `:hover` / paint.
 fn sync_viewport_scroll_offsets_from_signals(el: &mut Element) {
-    if !el.contains_scroll_viewport {
-        return;
-    }
-    if let Some(fid) = el.focus_id.as_deref() {
-        if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-            let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
-            let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
-            el.scroll_offset = [sx, sy];
-            if el.scroll_viewport_subtree_count <= 1 {
-                return;
+    let mut stack: Vec<*mut Element> = vec![el as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        let el = unsafe { &mut *ptr };
+        if !el.contains_scroll_viewport {
+            continue;
+        }
+        if let Some(fid) = el.focus_id.as_deref() {
+            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
+                let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+                el.scroll_offset = [sx, sy];
+                if el.scroll_viewport_subtree_count <= 1 {
+                    continue;
+                }
             }
         }
-    }
-    for child in &mut el.children {
-        sync_viewport_scroll_offsets_from_signals(child);
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push(std::ptr::addr_of_mut!(el.children[i]));
+        }
     }
 }
 
-fn update_scrollbar_elements(
+fn update_scrollbar_element_self(
     el: &mut Element,
     base_style: &mut std::collections::HashMap<String, ScrollbarBaseStyle>,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
-    mode: ScrollbarUpdateMode,
-    active_drag_rest: Option<&str>,
 ) {
     let inset_len_px = |v: &taffy::style::LengthPercentageAuto| {
         crate::layout::lpa_length_px(*v)
@@ -3653,98 +3681,6 @@ fn update_scrollbar_elements(
             .unwrap_or(0.0)
             .max(0.0)
     };
-    fn subtree_contains_scroll_rest(el: &Element, target_rest: &str) -> bool {
-        if let Some(fid) = el.focus_id.as_deref() {
-            if fid
-                .strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX)
-                .is_some_and(|rest| rest == target_rest)
-            {
-                return true;
-            }
-        }
-        el.children
-            .iter()
-            .any(|child| subtree_contains_scroll_rest(child, target_rest))
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        SCROLL_PREPASS_RECURSE_COUNT.fetch_add(1, Ordering::Relaxed);
-        match mode {
-            ScrollbarUpdateMode::ViewportsOnly => {
-                SCROLL_PREPASS_RECURSE_VIEWPORTS_ONLY.fetch_add(1, Ordering::Relaxed);
-            }
-            ScrollbarUpdateMode::Full => {
-                SCROLL_PREPASS_RECURSE_FULL.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    if mode == ScrollbarUpdateMode::ViewportsOnly {
-        if !el.contains_scroll_viewport {
-            return;
-        }
-        // Fast path: on a ScrollArea viewport, sync offset. Skip descending only when there are
-        // no nested `scroll:` viewports — otherwise inner tracks stop receiving
-        // `update_scrollbar_elements` every frame (parent scroll uses ViewportsOnly), and stale
-        // `vw`/corner math makes nested bars look doubly reserved / too short.
-        if let Some(fid) = el.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
-                let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
-                el.scroll_offset = [sx, sy];
-                if el.scroll_viewport_subtree_count > 1 {
-                    for child in &mut el.children {
-                        update_scrollbar_elements(
-                            child,
-                            base_style,
-                            layout_tree,
-                            mode,
-                            active_drag_rest,
-                        );
-                    }
-                }
-                return;
-            }
-        }
-        for child in &mut el.children {
-            update_scrollbar_elements(child, base_style, layout_tree, mode, active_drag_rest);
-        }
-        return;
-    }
-
-    // Drag optimization: when actively dragging one scrollbar thumb, keep Full-mode updates
-    // for the target subtree. For unrelated subtrees we only sync viewport offsets.
-    // NOTE: do not early-return on an ancestor of `target_rest`, otherwise nested target
-    // scrollbar geometry freezes during drag and jumps on release.
-    if let Some(target_rest) = active_drag_rest {
-        if let Some(fid) = el.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                if rest != target_rest && !subtree_contains_scroll_rest(el, target_rest) {
-                    let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
-                    let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
-                    el.scroll_offset = [sx, sy];
-                    return;
-                }
-            }
-        }
-    }
-
-    // Update children first so nested scrollbars also work.
-    // Full mode pruning: When there is no ScrollArea subtree and the child node itself is not the scroll/scrollbar focus, it will no longer drop.
-    // (Avoid 612 meaningless recursions on a purely static UI large subtree; the track/thumb is still logically processed by "this node" below.)
-    for child in &mut el.children {
-        let descend = child.scroll_viewport_subtree_count > 0
-            || child.focus_id.as_deref().is_some_and(|f| {
-                f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
-                    || f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
-                    || f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX)
-            });
-        if descend {
-            update_scrollbar_elements(child, base_style, layout_tree, mode, active_drag_rest);
-        }
-    }
-
     let Some(fid) = el.focus_id.as_deref() else {
         return;
     };
@@ -4084,6 +4020,113 @@ fn update_scrollbar_elements(
     layout_tree.update_taffy_node_style(el);
 }
 
+fn update_scrollbar_elements(
+    el: &mut Element,
+    base_style: &mut std::collections::HashMap<String, ScrollbarBaseStyle>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    mode: ScrollbarUpdateMode,
+    active_drag_rest: Option<&str>,
+) {
+    enum Phase {
+        Enter,
+        Leave,
+    }
+    fn subtree_contains_scroll_rest(el: &Element, target_rest: &str) -> bool {
+        crate::core::tree::find_in_tree(el, |n| {
+            n.focus_id
+                .as_deref()
+                .and_then(|fid| fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+                .is_some_and(|rest| rest == target_rest)
+        })
+        .is_some()
+    }
+    let mut stack: Vec<(*mut Element, Phase)> = vec![(el as *mut Element, Phase::Enter)];
+    while let Some((ptr, phase)) = stack.pop() {
+        // SAFETY: exclusive walk of the tree passed to this function.
+        let el = unsafe { &mut *ptr };
+        match phase {
+            Phase::Enter => {
+                #[cfg(debug_assertions)]
+                {
+                    SCROLL_PREPASS_RECURSE_COUNT.fetch_add(1, Ordering::Relaxed);
+                    match mode {
+                        ScrollbarUpdateMode::ViewportsOnly => {
+                            SCROLL_PREPASS_RECURSE_VIEWPORTS_ONLY.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ScrollbarUpdateMode::Full => {
+                            SCROLL_PREPASS_RECURSE_FULL.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+
+                if mode == ScrollbarUpdateMode::ViewportsOnly {
+                    if !el.contains_scroll_viewport {
+                        continue;
+                    }
+                    if let Some(fid) = el.focus_id.as_deref() {
+                        if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                            let sx =
+                                use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
+                            let sy =
+                                use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+                            el.scroll_offset = [sx, sy];
+                            if el.scroll_viewport_subtree_count > 1 {
+                                let n = el.children.len();
+                                for i in (0..n).rev() {
+                                    stack.push((
+                                        std::ptr::addr_of_mut!(el.children[i]),
+                                        Phase::Enter,
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    let n = el.children.len();
+                    for i in (0..n).rev() {
+                        stack.push((std::ptr::addr_of_mut!(el.children[i]), Phase::Enter));
+                    }
+                    continue;
+                }
+
+                if let Some(target_rest) = active_drag_rest {
+                    if let Some(fid) = el.focus_id.as_deref() {
+                        if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                            if rest != target_rest && !subtree_contains_scroll_rest(el, target_rest)
+                            {
+                                let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32)
+                                    .peek();
+                                let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                                    .peek();
+                                el.scroll_offset = [sx, sy];
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                stack.push((ptr, Phase::Leave));
+                let n = el.children.len();
+                for i in (0..n).rev() {
+                    let child = &el.children[i];
+                    let descend = child.scroll_viewport_subtree_count > 0
+                        || child.focus_id.as_deref().is_some_and(|f| {
+                            f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
+                                || f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
+                                || f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX)
+                        });
+                    if descend {
+                        stack.push((std::ptr::addr_of_mut!(el.children[i]), Phase::Enter));
+                    }
+                }
+            }
+            Phase::Leave => {
+                update_scrollbar_element_self(el, base_style, layout_tree);
+            }
+        }
+    }
+}
+
 #[cfg(debug_assertions)]
 mod hot_reload_inject {
     use std::path::{Path, PathBuf};
@@ -4344,49 +4387,56 @@ mod hot_reload_inject {
         target_idx: usize,
         current_idx: &mut usize,
     ) -> Option<&'a mut Element> {
-        if hot_reload_style_omit(el) {
-            return None;
+        enum Kind {
+            Full,
+            CountLeaf,
         }
-        if hot_reload_style_transparent(el) {
-            for child in &mut el.children {
-                if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
-                    return Some(found);
+        let mut stack: Vec<(*mut Element, Kind)> = vec![(el as *mut Element, Kind::Full)];
+        let mut found: Option<*mut Element> = None;
+        while let Some((ptr, kind)) = stack.pop() {
+            // SAFETY: exclusive subtree walk of `el`.
+            let node = unsafe { &mut *ptr };
+            let expand = match kind {
+                Kind::Full => {
+                    if hot_reload_style_omit(node) {
+                        continue;
+                    }
+                    if hot_reload_style_transparent(node) {
+                        let n = node.children.len();
+                        for i in (0..n).rev() {
+                            stack.push((std::ptr::addr_of_mut!(node.children[i]), Kind::Full));
+                        }
+                        continue;
+                    }
+                    true
                 }
+                Kind::CountLeaf => false,
+            };
+            if *current_idx == target_idx {
+                found = Some(ptr);
+                break;
             }
-            return None;
-        }
-
-        let self_idx = *current_idx;
-        if self_idx == target_idx {
-            return Some(el);
-        }
-        *current_idx += 1;
-
-        for child in &mut el.children {
-            if hot_reload_style_omit(child) {
+            *current_idx += 1;
+            if !expand {
                 continue;
             }
-            if hot_reload_style_transparent(child) {
-                if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
-                    return Some(found);
+            let n = node.children.len();
+            for i in (0..n).rev() {
+                if hot_reload_style_omit(&node.children[i]) {
+                    continue;
                 }
-                continue;
-            }
-            if child.template_id.is_some() {
-                // Count the nested `ui!` root as one leaf (CLI DFS counts `<Foo/>` as
-                // an element) but do not walk into it.
-                let child_idx = *current_idx;
-                if child_idx == target_idx {
-                    return Some(child);
+                if hot_reload_style_transparent(&node.children[i]) {
+                    stack.push((std::ptr::addr_of_mut!(node.children[i]), Kind::Full));
+                    continue;
                 }
-                *current_idx += 1;
-                continue;
-            }
-            if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
-                return Some(found);
+                if node.children[i].template_id.is_some() {
+                    stack.push((std::ptr::addr_of_mut!(node.children[i]), Kind::CountLeaf));
+                    continue;
+                }
+                stack.push((std::ptr::addr_of_mut!(node.children[i]), Kind::Full));
             }
         }
-        None
+        found.map(|ptr| unsafe { &mut *ptr })
     }
 
     fn parse_length_px(raw: &str) -> Option<f32> {
@@ -4507,27 +4557,29 @@ mod hot_reload_inject {
     }
 
     fn replace_first_text(el: &mut Element, from: &str, to: &str) -> bool {
-        if let Some(text) = el.text.as_mut() {
-            if text == from {
-                *text = to.to_string();
-                return true;
+        crate::core::tree::walk_within_template_mut(el, |node| {
+            if let Some(text) = node.text.as_mut() {
+                if text == from {
+                    *text = to.to_string();
+                    return true;
+                }
             }
-        }
-        for child in &mut el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
-            }
-            if replace_first_text(child, from, to) {
-                return true;
-            }
-        }
-        false
+            false
+        })
     }
 
     fn replace_text_at_index(el: &mut Element, target_index: usize, to: &str) -> bool {
         let mut idx = 0usize;
-        replace_text_at_index_inner(el, target_index, to, &mut idx)
+        crate::core::tree::walk_within_template_mut(el, |node| {
+            if let Some(text) = node.text.as_mut() {
+                if idx == target_index {
+                    *text = to.to_string();
+                    return true;
+                }
+                idx += 1;
+            }
+            false
+        })
     }
 
     fn replace_text_at_index_checked(
@@ -4537,75 +4589,30 @@ mod hot_reload_inject {
         to: &str,
     ) -> bool {
         let mut idx = 0usize;
-        replace_text_at_index_checked_inner(el, target_index, from, to, &mut idx)
-    }
-
-    fn replace_text_at_index_inner(
-        el: &mut Element,
-        target_index: usize,
-        to: &str,
-        idx: &mut usize,
-    ) -> bool {
-        if let Some(text) = el.text.as_mut() {
-            if *idx == target_index {
-                *text = to.to_string();
-                return true;
-            }
-            *idx += 1;
-        }
-        for child in &mut el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
-            }
-            if replace_text_at_index_inner(child, target_index, to, idx) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn replace_text_at_index_checked_inner(
-        el: &mut Element,
-        target_index: usize,
-        from: &str,
-        to: &str,
-        idx: &mut usize,
-    ) -> bool {
-        if let Some(text) = el.text.as_mut() {
-            if *idx == target_index {
-                if text == from {
-                    *text = to.to_string();
+        let mut ok = false;
+        crate::core::tree::walk_within_template_mut(el, |node| {
+            if let Some(text) = node.text.as_mut() {
+                if idx == target_index {
+                    if text == from {
+                        *text = to.to_string();
+                        ok = true;
+                    }
                     return true;
                 }
-                return false;
+                idx += 1;
             }
-            *idx += 1;
-        }
-        for child in &mut el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
-            }
-            if replace_text_at_index_checked_inner(child, target_index, from, to, idx) {
-                return true;
-            }
-        }
-        false
+            false
+        });
+        ok
     }
 
     fn count_text_occurrences(el: &Element, needle: &str) -> usize {
         let mut n = 0usize;
-        if el.text.as_deref() == Some(needle) {
-            n += 1;
-        }
-        for child in &el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
+        crate::core::tree::walk_within_template(el, |node| {
+            if node.text.as_deref() == Some(needle) {
+                n += 1;
             }
-            n += count_text_occurrences(child, needle);
-        }
+        });
         n
     }
 
@@ -4684,30 +4691,24 @@ mod hot_reload_inject {
 
     #[allow(dead_code)]
     fn apply_text_literals_dfs(el: &mut Element, literals: &[String], cursor: &mut usize) {
-        if let Some(text) = el.text.as_mut() {
-            if *cursor < literals.len() {
-                *text = literals[*cursor].clone();
-                *cursor += 1;
+        crate::core::tree::walk_within_template_mut(el, |node| {
+            if let Some(text) = node.text.as_mut() {
+                if *cursor < literals.len() {
+                    *text = literals[*cursor].clone();
+                    *cursor += 1;
+                }
             }
-        }
-        for child in &mut el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
-            }
-            apply_text_literals_dfs(child, literals, cursor);
-        }
+            false
+        });
     }
 
     fn count_text_nodes(el: &Element) -> usize {
-        let mut n = if el.text.is_some() { 1 } else { 0 };
-        for child in &el.children {
-            // Stop at nested template boundaries
-            if child.template_id.is_some() {
-                continue;
+        let mut n = 0usize;
+        crate::core::tree::walk_within_template(el, |node| {
+            if node.text.is_some() {
+                n += 1;
             }
-            n += count_text_nodes(child);
-        }
+        });
         n
     }
 

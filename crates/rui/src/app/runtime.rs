@@ -217,27 +217,19 @@ fn test_reconcile_subtree(
 
 #[cfg(test)]
 fn element_contains_rui_portal(el: &Element) -> bool {
-    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
-        return true;
-    }
-    el.children.iter().any(element_contains_rui_portal)
+    crate::core::tree::find_in_tree(el, |n| {
+        n.attrs.get("rui_portal").map(String::as_str) == Some("1")
+    })
+    .is_some()
 }
 
 #[cfg(test)]
 fn find_template_id_mut<'a>(el: &'a mut Element, want: &str) -> Option<&'a mut Element> {
-    if el
-        .template_id
-        .as_deref()
-        .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
-    {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_template_id_mut(child, want) {
-            return Some(hit);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree_mut(el, |n| {
+        n.template_id
+            .as_deref()
+            .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
+    })
 }
 
 pub fn request_redraw() {

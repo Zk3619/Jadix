@@ -50,37 +50,36 @@ impl AppTreeStats {
 
 pub fn count_element_tree(root: &Element) -> ElementTreeStats {
     let mut stats = ElementTreeStats::default();
-    walk_element(root, 0, &mut stats);
-    stats
-}
-
-fn walk_element(el: &Element, depth: usize, stats: &mut ElementTreeStats) {
-    stats.nodes += 1;
-    stats.max_depth = stats.max_depth.max(depth);
-    if let Some(ref t) = el.text {
-        stats.text_bytes += t.len();
-    }
-    if let Some(ref spans) = el.text_spans {
-        for sp in spans {
-            stats.text_bytes += sp.text.len();
+    let mut stack: Vec<(&Element, usize)> = vec![(root, 0)];
+    while let Some((el, depth)) = stack.pop() {
+        stats.nodes += 1;
+        stats.max_depth = stats.max_depth.max(depth);
+        if let Some(ref t) = el.text {
+            stats.text_bytes += t.len();
+        }
+        if let Some(ref spans) = el.text_spans {
+            for sp in spans {
+                stats.text_bytes += sp.text.len();
+            }
+        }
+        if let Some(ref sfx) = el.text_shape_suffix {
+            stats.text_bytes += sfx.len();
+        }
+        stats.attr_entries += el.attrs.len();
+        if el.image_texture.is_some() {
+            stats.image_texture_nodes += 1;
+        }
+        if element_has_handlers(el) {
+            stats.handler_nodes += 1;
+        }
+        if element_has_signals(el) {
+            stats.signal_nodes += 1;
+        }
+        for child in el.children.iter().rev() {
+            stack.push((child, depth + 1));
         }
     }
-    if let Some(ref sfx) = el.text_shape_suffix {
-        stats.text_bytes += sfx.len();
-    }
-    stats.attr_entries += el.attrs.len();
-    if el.image_texture.is_some() {
-        stats.image_texture_nodes += 1;
-    }
-    if element_has_handlers(el) {
-        stats.handler_nodes += 1;
-    }
-    if element_has_signals(el) {
-        stats.signal_nodes += 1;
-    }
-    for child in &el.children {
-        walk_element(child, depth + 1, stats);
-    }
+    stats
 }
 
 #[inline]
@@ -106,33 +105,8 @@ fn element_has_signals(el: &Element) -> bool {
         || el.radio_selected_sync.is_some()
 }
 
-#[cfg(windows)]
 pub fn process_private_mb() -> f64 {
-    use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
-    };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-    let mut counters = PROCESS_MEMORY_COUNTERS_EX {
-        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let ok = unsafe {
-        GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            std::ptr::addr_of_mut!(counters).cast::<PROCESS_MEMORY_COUNTERS>(),
-            counters.cb,
-        )
-    };
-    if ok == 0 {
-        return 0.0;
-    }
-    counters.PrivateUsage as f64 / (1024.0 * 1024.0)
-}
-
-#[cfg(not(windows))]
-pub fn process_private_mb() -> f64 {
-    0.0
+    crate::platform::process_private_mb()
 }
 
 pub fn tree_stats_enabled() -> bool {

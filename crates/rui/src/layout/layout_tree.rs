@@ -26,6 +26,88 @@ use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 
+/// Heap DFS so dirty/measure walks do not map element-tree depth onto the OS stack.
+fn for_each_element<'a>(root: &'a Element, visit: impl FnMut(&'a Element)) {
+    crate::core::tree::walk_elements(root, visit);
+}
+
+/// Test-only stack watermark for Windows PE ~1 MiB overflow diagnosis.
+/// `mark_*` samples a local; consecutive DFS entries approximate one frame.
+#[cfg(test)]
+pub(crate) mod stack_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static BASE: Cell<usize> = const { Cell::new(0) };
+        static MIN: Cell<usize> = const { Cell::new(usize::MAX) };
+        static COLLECT: Cell<(u32, usize, usize)> = const { Cell::new((0, 0, 0)) };
+        static BUILD: Cell<(u32, usize, usize)> = const { Cell::new((0, 0, 0)) };
+        static CASCADE: Cell<(u32, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    }
+
+    #[inline(never)]
+    fn sp() -> usize {
+        let x = 0u8;
+        &x as *const u8 as usize
+    }
+
+    fn note(slot: &'static std::thread::LocalKey<Cell<(u32, usize, usize)>>) {
+        let p = sp();
+        BASE.with(|b| {
+            if b.get() == 0 {
+                b.set(p);
+            }
+        });
+        MIN.with(|m| m.set(m.get().min(p)));
+        slot.with(|c| {
+            let (n, last, max_d) = c.get();
+            let d = if n > 0 && last > p { last - p } else { 0 };
+            c.set((n + 1, p, max_d.max(d)));
+        });
+    }
+
+    pub fn reset() {
+        BASE.with(|c| c.set(0));
+        MIN.with(|c| c.set(usize::MAX));
+        COLLECT.with(|c| c.set((0, 0, 0)));
+        BUILD.with(|c| c.set((0, 0, 0)));
+        CASCADE.with(|c| c.set((0, 0, 0)));
+    }
+
+    pub fn mark_collect() {
+        note(&COLLECT);
+    }
+    pub fn mark_build() {
+        note(&BUILD);
+    }
+    pub fn mark_cascade() {
+        note(&CASCADE);
+    }
+
+    pub fn used() -> usize {
+        let base = BASE.with(|c| c.get());
+        let min = MIN.with(|c| c.get());
+        if base == 0 || min == usize::MAX || base < min {
+            0
+        } else {
+            base - min
+        }
+    }
+
+    pub fn collect_max_frame() -> usize {
+        COLLECT.with(|c| c.get().2)
+    }
+    pub fn build_max_frame() -> usize {
+        BUILD.with(|c| c.get().2)
+    }
+    pub fn cascade_max_frame() -> usize {
+        CASCADE.with(|c| c.get().2)
+    }
+    pub fn collect_marks() -> u32 {
+        COLLECT.with(|c| c.get().0)
+    }
+}
+
 /// SolidJS-style portal mount: default overlays live on a dedicated absolute layer at the
 /// app root (analogous to `document.body`), never as flex/grid siblings of the app shell.
 pub const PORTAL_LAYER_ID: &str = "__rui_portal_layer";
@@ -184,20 +266,20 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
 }
 
 fn count_rui_portal_nodes(node: &Element) -> usize {
-    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
-        return 0;
-    }
     let mut n = 0;
-    for c in &node.children {
-        if c.attrs.get(ATTR_PORTAL_SLOT).is_some() {
+    let mut stack: Vec<&Element> = vec![node];
+    while let Some(node) = stack.pop() {
+        if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
             continue;
         }
-        // Match `hoist_portal_rec_with_slots`: nested `rui_portal` nodes are lifted
-        // out of their parent before the parent itself is lifted.
-        if c.attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
-            n += 1 + count_rui_portal_nodes(c);
-        } else {
-            n += count_rui_portal_nodes(c);
+        for c in node.children.iter().rev() {
+            if c.attrs.get(ATTR_PORTAL_SLOT).is_some() {
+                continue;
+            }
+            if c.attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
+                n += 1;
+            }
+            stack.push(c);
         }
     }
     n
@@ -229,27 +311,31 @@ fn prune_hoisted_from_hosts(
     node: &mut Element,
     wanted: &std::collections::HashSet<String>,
 ) -> usize {
-    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
-        return 0;
-    }
     let mut dropped = 0usize;
-    let mut i = 0;
-    while i < node.children.len() {
-        if node.children[i]
-            .attrs
-            .get(ATTR_HOISTED_PORTAL)
-            .map(|s| s.as_str())
-            == Some("1")
-        {
-            if wanted.contains(&portal_key_of(&node.children[i])) {
-                i += 1;
+    let mut stack: Vec<*mut Element> = vec![node as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        let node = unsafe { &mut *ptr };
+        if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            continue;
+        }
+        let mut i = 0;
+        while i < node.children.len() {
+            if node.children[i]
+                .attrs
+                .get(ATTR_HOISTED_PORTAL)
+                .map(|s| s.as_str())
+                == Some("1")
+            {
+                if wanted.contains(&portal_key_of(&node.children[i])) {
+                    i += 1;
+                } else {
+                    node.children.remove(i);
+                    dropped += 1;
+                }
             } else {
-                node.children.remove(i);
-                dropped += 1;
+                stack.push(std::ptr::addr_of_mut!(node.children[i]));
+                i += 1;
             }
-        } else {
-            dropped += prune_hoisted_from_hosts(&mut node.children[i], wanted);
-            i += 1;
         }
     }
     dropped
@@ -334,17 +420,14 @@ fn make_portal_slot(key: &str) -> Element {
 }
 
 fn collect_portal_slot_keys(node: &Element, out: &mut std::collections::HashSet<String>) {
-    // Walk the portal layer too: nested menus leave slots *inside* already-hoisted
-    // Dialog/Popover stages; skipping the layer would prune those menus next frame.
-    if let Some(k) = node.attrs.get(ATTR_PORTAL_SLOT) {
-        let t = k.trim();
-        if !t.is_empty() {
-            out.insert(t.to_string());
+    crate::core::tree::walk_elements(node, |n| {
+        if let Some(k) = n.attrs.get(ATTR_PORTAL_SLOT) {
+            let t = k.trim();
+            if !t.is_empty() {
+                out.insert(t.to_string());
+            }
         }
-    }
-    for c in &node.children {
-        collect_portal_slot_keys(c, out);
-    }
+    });
 }
 
 /// Promote `rui_portal=1` nodes that were inserted under already-hoisted overlays.
@@ -510,16 +593,41 @@ fn find_template_id_path(node: &Element, id: &str, path: &mut Vec<usize>) -> boo
     if node.template_id.as_deref() == Some(id) {
         return true;
     }
-    for (i, c) in node.children.iter().enumerate() {
-        // Do not search inside the root portal layer — hosts live in the app tree.
+    struct Frame {
+        ptr: *const Element,
+        index: usize,
+        pop_path: bool,
+    }
+    let mut stack = vec![Frame {
+        ptr: node as *const Element,
+        index: 0,
+        pop_path: false,
+    }];
+    while let Some(mut frame) = stack.pop() {
+        let n = unsafe { &*frame.ptr };
+        if frame.index >= n.children.len() {
+            if frame.pop_path {
+                path.pop();
+            }
+            continue;
+        }
+        let i = frame.index;
+        frame.index += 1;
+        let c = &n.children[i];
         if c.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            stack.push(frame);
             continue;
         }
         path.push(i);
-        if find_template_id_path(c, id, path) {
+        if c.template_id.as_deref() == Some(id) {
             return true;
         }
-        path.pop();
+        stack.push(frame);
+        stack.push(Frame {
+            ptr: c as *const Element,
+            index: 0,
+            pop_path: true,
+        });
     }
     false
 }
@@ -533,25 +641,65 @@ fn element_mut_by_path<'a>(root: &'a mut Element, path: &[usize]) -> &'a mut Ele
 }
 
 fn hoist_portal_rec_with_slots(node: &mut Element, lifted: &mut Vec<Element>) {
-    let mut i = 0;
-    while i < node.children.len() {
-        if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID) {
-            i += 1;
-            continue;
-        }
-        if node.children[i].attrs.get(ATTR_PORTAL_SLOT).is_some() {
-            i += 1;
-            continue;
-        }
-        hoist_portal_rec_with_slots(&mut node.children[i], lifted);
-        if node.children[i].attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
-            let n = node.children.remove(i);
-            let key = portal_key_of(&n);
-            node.children.insert(i, make_portal_slot(&key));
-            lifted.push(n);
-            i += 1;
-        } else {
-            i += 1;
+    enum Phase {
+        Enter,
+        AfterChild,
+    }
+    struct Frame {
+        ptr: *mut Element,
+        index: usize,
+        phase: Phase,
+    }
+    let mut stack = vec![Frame {
+        ptr: node as *mut Element,
+        index: 0,
+        phase: Phase::Enter,
+    }];
+    while let Some(frame) = stack.pop() {
+        // SAFETY: AfterChild runs only after the child's subtree frame has finished.
+        let node = unsafe { &mut *frame.ptr };
+        match frame.phase {
+            Phase::Enter => {
+                let i = frame.index;
+                if i >= node.children.len() {
+                    continue;
+                }
+                if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID)
+                    || node.children[i].attrs.get(ATTR_PORTAL_SLOT).is_some()
+                {
+                    stack.push(Frame {
+                        ptr: frame.ptr,
+                        index: i + 1,
+                        phase: Phase::Enter,
+                    });
+                    continue;
+                }
+                let child_ptr = std::ptr::addr_of_mut!(node.children[i]);
+                stack.push(Frame {
+                    ptr: frame.ptr,
+                    index: i,
+                    phase: Phase::AfterChild,
+                });
+                stack.push(Frame {
+                    ptr: child_ptr,
+                    index: 0,
+                    phase: Phase::Enter,
+                });
+            }
+            Phase::AfterChild => {
+                let i = frame.index;
+                if node.children[i].attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
+                    let n = node.children.remove(i);
+                    let key = portal_key_of(&n);
+                    node.children.insert(i, make_portal_slot(&key));
+                    lifted.push(n);
+                }
+                stack.push(Frame {
+                    ptr: frame.ptr,
+                    index: i + 1,
+                    phase: Phase::Enter,
+                });
+            }
         }
     }
 }
@@ -906,7 +1054,7 @@ fn push_border_image_draws(
     }
 }
 
-/// Minimum cross-axis size for an `auto` scrollbar at spring?; must match `app::state`.
+/// Minimum cross-axis size for an `auto` scrollbar at spring≈0 so track/thumb stay hittable; must match `app::state`.
 const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
@@ -923,10 +1071,8 @@ const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 /// `parent.color` into `Some(...)`). Snapshotting would pin underlines to the parent's
 /// RGB when a child overrides `color` (e.g. Button `link` / `text-primary` under a
 /// white-default root), which is the desync authors hit in practice.
-fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextStyle>) {
-    let parent = parent_style.unwrap_or_else(crate::style::TextStyle::cascade_root);
+fn apply_inheritable_text_fields(node: &mut Element, parent: &TextStyle) {
     let ts = &mut node.text_style;
-
     if ts.color.is_none() {
         ts.color = parent.color;
     }
@@ -974,24 +1120,37 @@ fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextS
         ts.line_height_px = parent.line_height_px;
         ts.line_height_scale = parent.line_height_scale;
     }
+}
 
-    let inherit_attrs: Vec<(String, String)> = crate::renderer::SHIMMER_INHERIT_ATTRS
-        .iter()
-        .filter_map(|key| {
-            node.attrs
-                .get(*key)
-                .map(|v| ((*key).to_string(), v.clone()))
-        })
-        .collect();
-    let child_parent = ts.effective_ancestry(&parent);
-    for child in &mut node.children {
-        for (key, value) in &inherit_attrs {
-            child
-                .attrs
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
+fn cascade_inheritable_text_style(root: &mut Element, parent_style: Option<TextStyle>) {
+    #[cfg(test)]
+    stack_probe::mark_cascade();
+    let parent = parent_style.unwrap_or_else(crate::style::TextStyle::cascade_root);
+    // Heap worklist: style inherit must not map tree depth onto the OS call stack.
+    let mut stack: Vec<(*mut Element, TextStyle)> = Vec::new();
+    stack.push((root as *mut Element, parent));
+    while let Some((ptr, parent)) = stack.pop() {
+        // SAFETY: pointers are into `root`'s exclusive subtree for this pass.
+        let node = unsafe { &mut *ptr };
+        apply_inheritable_text_fields(node, &parent);
+        let inherit_attrs: Vec<(String, String)> = crate::renderer::SHIMMER_INHERIT_ATTRS
+            .iter()
+            .filter_map(|key| {
+                node.attrs
+                    .get(*key)
+                    .map(|v| ((*key).to_string(), v.clone()))
+            })
+            .collect();
+        let child_parent = node.text_style.effective_ancestry(&parent);
+        for child in node.children.iter_mut().rev() {
+            for (key, value) in &inherit_attrs {
+                child
+                    .attrs
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
+            }
+            stack.push((child as *mut Element, child_parent.clone()));
         }
-        cascade_inheritable_text_style(child, Some(child_parent.clone()));
     }
 }
 
@@ -1330,8 +1489,7 @@ fn cap_message_scroller_collect_content_h(
                 .as_deref()
                 .and_then(|f| f.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
             {
-                let anchored =
-                    use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek();
+                let anchored = use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek();
                 if anchored > viewport_h + 0.5 {
                     return content_h.max(anchored);
                 }
@@ -1394,12 +1552,8 @@ pub(crate) fn scroll_viewport_content_metrics(
     if layout.size.height <= 1.0 {
         return None;
     }
-    let [_, mut ch] = scroll_viewport_taffy_content_size(
-        &layout_tree.taffy,
-        viewport_el,
-        nid,
-        layout.size,
-    );
+    let [_, mut ch] =
+        scroll_viewport_taffy_content_size(&layout_tree.taffy, viewport_el, nid, layout.size);
     ch = cap_message_scroller_collect_content_h(
         layout_tree,
         viewport_el,
@@ -1917,8 +2071,15 @@ fn dimension_is_content_sized(d: Dimension) -> bool {
     d.is_auto()
 }
 
-fn element_tree_has_deferred_units(el: &Element) -> bool {
-    el.style.has_deferred_units() || el.children.iter().any(element_tree_has_deferred_units)
+fn element_tree_has_deferred_units(root: &Element) -> bool {
+    let mut stack = vec![root];
+    while let Some(el) = stack.pop() {
+        if el.style.has_deferred_units() {
+            return true;
+        }
+        stack.extend(el.children.iter());
+    }
+    false
 }
 
 #[inline]
@@ -1933,7 +2094,11 @@ fn pack_avail_space(d: taffy::style::AvailableSpace) -> u64 {
     }
 }
 
-#[inline]
+/// Taffy 0.13's flex/grid/block algorithms recurse through `compute_child_layout`.
+/// That is algorithmic (parent needs child sizes mid-pass), not a tree walk we can
+/// turn into a heap queue without forking Taffy. Keep the deep-chain stack test at
+/// 128 wrappers until an upstream iterative compute exists. Do not grow the PE stack.
+#[inline(never)]
 fn measure_leaf_cached(
     cache: &RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
     tm: &HashMap<NodeId, TextMeasureMeta>,
@@ -2082,9 +2247,139 @@ impl Default for LayoutTree {
     }
 }
 
+/// Geometry/paint snapshot returned by the non-recursive paint helper.
+/// Kept small so the recursive child walk does not inherit the paint function's
+/// MSVC-debug frame (Windows PE default stack is ~1 MiB).
+struct CollectPainted {
+    abs_x: f32,
+    abs_y: f32,
+    lay_w: f32,
+    lay_h: f32,
+    opacity: f32,
+    clip: Option<[f32; 4]>,
+    parent_clip: Option<[f32; 4]>,
+    render_rect: [f32; 4],
+    visible_rect: [f32; 4],
+    paint_sx: f32,
+    paint_sy: f32,
+    world_linear: crate::style::Mat2d,
+    local_linear: crate::style::Mat2d,
+    transform: crate::style::Mat2d,
+    filter_capture: bool,
+    filter_cap_inst0: usize,
+    filter_cap_tex0: usize,
+    is_body_portal_layer: bool,
+    thumb_rect_for_child: Option<[f32; 4]>,
+    layout_size: taffy::geometry::Size<f32>,
+    scroll_acc: [f32; 2],
+}
+
+enum CollectPaintOutcome {
+    Done([f32; 2]),
+    Ready(CollectPainted),
+}
+
+/// Heap-stack state for walking children after a node has been painted.
+struct CollectWalk {
+    painted: CollectPainted,
+    child_nodes: Vec<NodeId>,
+    cursor: usize,
+    z_order: Option<Vec<usize>>,
+    max_right: f32,
+    max_bottom: f32,
+    next_scroll_acc: [f32; 2],
+    pass_to_children: Option<String>,
+    ancestor_scroll_viewport_rest: Option<String>,
+    record_page_stack_bands: bool,
+    cap_children: bool,
+    cap_inst0: usize,
+    cap_tex0: usize,
+    parent_tl: [f32; 2],
+    child_ancestor_scale: [f32; 2],
+    child_ancestor_linear: crate::style::Mat2d,
+    child_sticky_xform: bool,
+    parent_scales: bool,
+    parent_rotates: bool,
+    parent_translates: bool,
+    is_carousel_track: bool,
+    skip_scroll_band_cull: bool,
+    any_stacking: bool,
+    opacity: f32,
+    clip: Option<[f32; 4]>,
+    stopped: bool,
+}
+
+struct CollectChildJob {
+    index: usize,
+    node: NodeId,
+    abs_offset: [f32; 2],
+    thumb_ov: Option<[f32; 4]>,
+}
+
+enum CollectWalkStart {
+    Done([f32; 2]),
+    Ready(CollectWalk),
+}
+
+struct CollectFrame {
+    element: *mut Element,
+    node: NodeId,
+    abs_offset: [f32; 2],
+    scroll_acc: [f32; 2],
+    parent_clip: Option<[f32; 4]>,
+    ancestor_scroll_viewport_rest: Option<String>,
+    ancestor_opacity: f32,
+    ancestor_scale: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_sticky_xform: bool,
+    scrollbar_overlay_collect: bool,
+    thumb_geometry_override: Option<[f32; 4]>,
+    walk: Option<CollectWalk>,
+}
+
+fn collect_commit_extent(
+    stack: &mut Vec<CollectFrame>,
+    extent: [f32; 2],
+    root_extent: &mut [f32; 2],
+) {
+    if let Some(parent) = stack.last_mut() {
+        if let Some(walk) = parent.walk.as_mut() {
+            walk.max_right = walk.max_right.max(extent[0]);
+            walk.max_bottom = walk.max_bottom.max(extent[1]);
+        }
+    } else {
+        *root_extent = extent;
+    }
+}
+
+impl CollectWalk {
+    fn child_pass_offset_for(&self, clx: f32, cly: f32, cw: f32, ch: f32) -> [f32; 2] {
+        if !self.parent_scales && !self.parent_rotates {
+            return self.parent_tl;
+        }
+        let lay_w = self.painted.lay_w;
+        let lay_h = self.painted.lay_h;
+        let mut dx = (clx + cw * 0.5 - lay_w * 0.5) * self.painted.paint_sx;
+        let mut dy = (cly + ch * 0.5 - lay_h * 0.5) * self.painted.paint_sy;
+        if self.parent_rotates {
+            let (rx, ry) = crate::style::mat2d_transform_vec(&self.painted.local_linear, dx, dy);
+            dx = rx;
+            dy = ry;
+        }
+        let pcx = self.parent_tl[0] + lay_w * 0.5;
+        let pcy = self.parent_tl[1] + lay_h * 0.5;
+        [pcx + dx - cw * 0.5 - clx, pcy + dy - ch * 0.5 - cly]
+    }
+}
+
 impl LayoutTree {
     /// Shared Taffy measure callback wrapper to avoid repeating closure
     /// monomorphizations at multiple compute callsites.
+    ///
+    /// Taffy's `compute_layout_with_measure` still recurses with tree depth
+    /// (flex/grid/block). Rounding is disabled here; `round_layout` is not on
+    /// this path. Deep-chain tests stay at 128 wrappers so the default ~1 MiB
+    /// stack covers Taffy's frames.
     #[inline(never)]
     fn compute_layout_cached_measure(
         &mut self,
@@ -2322,17 +2617,13 @@ impl LayoutTree {
         if dirty.is_empty() {
             return;
         }
-        fn walk(tree: &mut LayoutTree, el: &Element, dirty: &std::collections::HashSet<NodeId>) {
+        for_each_element(root, |el| {
             if let Some(n) = el.layout_node {
                 if dirty.contains(&n) {
-                    tree.mark_element_layout_dirty(el);
+                    self.mark_element_layout_dirty(el);
                 }
             }
-            for child in &el.children {
-                walk(tree, child, dirty);
-            }
-        }
-        walk(self, root, dirty);
+        });
     }
 
     /// Mark every text leaf dirty so `compute_layout` re-runs measure (FIT_CACHE / settle).
@@ -2341,15 +2632,11 @@ impl LayoutTree {
     /// `glyphon_fit` (paint spill → `note_fit_needs_relayout`, or post-resize settle).
     /// Without this, Taffy keeps the previous one-line cache and labels stay clipped / stacked.
     pub fn mark_all_text_leaves_dirty(&mut self, root: &Element) {
-        fn walk(tree: &mut LayoutTree, el: &Element) {
+        for_each_element(root, |el| {
             if el.text.is_some() && el.children.is_empty() && el.layout_node.is_some() {
-                tree.mark_element_layout_dirty(el);
+                self.mark_element_layout_dirty(el);
             }
-            for child in &el.children {
-                walk(tree, child);
-            }
-        }
-        walk(self, root);
+        });
     }
 
     pub fn build_and_layout(
@@ -2429,7 +2716,7 @@ impl LayoutTree {
     /// When `scroll_only` is true, skip [`TaffyTree::compute_layout`]: `Element.scroll_offset` does
     /// not participate in flex/grid sizing (only affects collect-time drawing). Use after
     /// `update_scrollbar_elements` synced only `scroll:` offsets and no scrollbar styles changed
-    /// ?avoids O(nested) full layout each frame when many `ScrollArea`s are nested.
+    /// — avoids O(nested) full layout each frame when many `ScrollArea`s are nested.
     ///
     /// When `scrollbar_overlay_collect` is true, track/thumb draw rects use live scroll signals
     /// (same contract as a `ViewportsOnly` prepass without Full). Use whenever that prepass did not
@@ -2588,9 +2875,7 @@ impl LayoutTree {
         // paints the new live edge. AppState used to run this after collect; the offset
         // signal moved but paint stayed on the old offset, and `request_redraw` is a
         // no-op while `AppState` is mutably borrowed for render.
-        crate::components::message_scroller::sync_message_scroller_follow_after_layout(
-            root, self,
-        );
+        crate::components::message_scroller::sync_message_scroller_follow_after_layout(root, self);
 
         let t_collect_begin = Instant::now();
         #[cfg(feature = "devtools")]
@@ -2710,32 +2995,33 @@ impl LayoutTree {
         t0.elapsed().as_secs_f32() * 1000.0
     }
 
-    fn relayout_deferred_units_walk(&mut self, element: &Element, dirty: &mut bool) {
-        if element.style.has_deferred_units() {
-            if let Some(node_id) = element.layout_node {
-                let ctx = self.unit_ctx_from_parent_layout(element);
-                let new_style = element
-                    .style
-                    .to_taffy_style_with_parent(&ctx, self.parent_flex_direction(element));
-                let changed = self.taffy.style(node_id).ok().map_or(true, |old| {
-                    old.size != new_style.size
-                        || old.min_size != new_style.min_size
-                        || old.max_size != new_style.max_size
-                        || old.flex_basis != new_style.flex_basis
-                        || old.padding != new_style.padding
-                        || old.margin != new_style.margin
-                        || old.gap != new_style.gap
-                        || old.inset != new_style.inset
-                });
-                if changed {
-                    let _ = self.taffy.set_style(node_id, new_style);
-                    *dirty = true;
-                }
+    fn relayout_deferred_units_walk(&mut self, root: &Element, dirty: &mut bool) {
+        for_each_element(root, |element| {
+            if !element.style.has_deferred_units() {
+                return;
             }
-        }
-        for child in &element.children {
-            self.relayout_deferred_units_walk(child, dirty);
-        }
+            let Some(node_id) = element.layout_node else {
+                return;
+            };
+            let ctx = self.unit_ctx_from_parent_layout(element);
+            let new_style = element
+                .style
+                .to_taffy_style_with_parent(&ctx, self.parent_flex_direction(element));
+            let changed = self.taffy.style(node_id).ok().map_or(true, |old| {
+                old.size != new_style.size
+                    || old.min_size != new_style.min_size
+                    || old.max_size != new_style.max_size
+                    || old.flex_basis != new_style.flex_basis
+                    || old.padding != new_style.padding
+                    || old.margin != new_style.margin
+                    || old.gap != new_style.gap
+                    || old.inset != new_style.inset
+            });
+            if changed {
+                let _ = self.taffy.set_style(node_id, new_style);
+                *dirty = true;
+            }
+        });
     }
 
     fn parent_flex_direction(&self, element: &Element) -> Option<FlexDirection> {
@@ -2752,70 +3038,107 @@ impl LayoutTree {
         cb_h: Option<f32>,
         parent_flex_direction: Option<FlexDirection>,
     ) -> NodeId {
-        let ctx = self.unit_ctx_with_cb(element, cb_w, cb_h);
-        let (child_cb_w, child_cb_h) = element.style.estimate_content_box(&ctx);
-        let child_parent_dir =
-            matches!(element.style.display, Display::Flex).then_some(element.style.flex_direction);
-
-        let mut child_nodes = Vec::new();
-        for child in &mut element.children {
-            child_nodes.push(self.build_taffy_node_mut(
-                child,
-                child_cb_w,
-                child_cb_h,
-                child_parent_dir,
-            ));
+        enum Phase {
+            Enter,
+            Leave,
+        }
+        struct Frame {
+            element: *mut Element,
+            cb_w: Option<f32>,
+            cb_h: Option<f32>,
+            parent_flex_direction: Option<FlexDirection>,
+            phase: Phase,
         }
 
-        let style = element
-            .style
-            .to_taffy_style_with_parent(&ctx, parent_flex_direction);
-        let is_text_leaf = element.text.is_some() && child_nodes.is_empty();
+        let mut stack = vec![Frame {
+            element: element as *mut Element,
+            cb_w,
+            cb_h,
+            parent_flex_direction,
+            phase: Phase::Enter,
+        }];
+        let mut root_id: Option<NodeId> = None;
 
-        let node_id = if let Some(existing_id) = element.layout_node {
-            if self.total_nodes.contains(&existing_id) {
-                // Reuse existing node and update its children/style.
-                self.taffy.set_style(existing_id, style).unwrap();
-                self.taffy.set_children(existing_id, &child_nodes).unwrap();
-                existing_id
-            } else {
-                // Node was somehow lost from taffy (should not happen if we don't clear), create new.
-                if is_text_leaf {
-                    let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
-                    self.total_nodes.insert(id);
-                    id
-                } else {
-                    let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
-                    self.total_nodes.insert(id);
-                    id
+        while let Some(mut frame) = stack.pop() {
+            // SAFETY: exclusive subtree walk; Leave runs after all descendants have nodes.
+            let element = unsafe { &mut *frame.element };
+            match frame.phase {
+                Phase::Enter => {
+                    #[cfg(test)]
+                    stack_probe::mark_build();
+                    let ctx = self.unit_ctx_with_cb(element, frame.cb_w, frame.cb_h);
+                    let (child_cb_w, child_cb_h) = element.style.estimate_content_box(&ctx);
+                    let child_parent_dir = matches!(element.style.display, Display::Flex)
+                        .then_some(element.style.flex_direction);
+                    frame.phase = Phase::Leave;
+                    stack.push(frame);
+                    for child in element.children.iter_mut().rev() {
+                        stack.push(Frame {
+                            element: child as *mut Element,
+                            cb_w: child_cb_w,
+                            cb_h: child_cb_h,
+                            parent_flex_direction: child_parent_dir,
+                            phase: Phase::Enter,
+                        });
+                    }
+                }
+                Phase::Leave => {
+                    let child_nodes: Vec<NodeId> = element
+                        .children
+                        .iter()
+                        .filter_map(|c| c.layout_node)
+                        .collect();
+                    let ctx = self.unit_ctx_with_cb(element, frame.cb_w, frame.cb_h);
+                    let style = element
+                        .style
+                        .to_taffy_style_with_parent(&ctx, frame.parent_flex_direction);
+                    let is_text_leaf = element.text.is_some() && child_nodes.is_empty();
+
+                    let node_id = if let Some(existing_id) = element.layout_node {
+                        if self.total_nodes.contains(&existing_id) {
+                            self.taffy.set_style(existing_id, style).unwrap();
+                            self.taffy.set_children(existing_id, &child_nodes).unwrap();
+                            existing_id
+                        } else if is_text_leaf {
+                            let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
+                            self.total_nodes.insert(id);
+                            id
+                        } else {
+                            let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
+                            self.total_nodes.insert(id);
+                            id
+                        }
+                    } else if is_text_leaf {
+                        let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
+                        self.total_nodes.insert(id);
+                        id
+                    } else {
+                        let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
+                        self.total_nodes.insert(id);
+                        id
+                    };
+
+                    element.layout_node = Some(node_id);
+                    self.visited_nodes.insert(node_id);
+
+                    if let Some(text) = &element.text {
+                        if child_nodes.is_empty() {
+                            let text_clone = text.clone();
+                            let is_icon =
+                                element.text_style.font_family.as_deref() == Some("lucide");
+                            self.text_measurements
+                                .insert(node_id, text_measure_meta(element, text_clone, is_icon));
+                        }
+                    }
+
+                    if stack.is_empty() {
+                        root_id = Some(node_id);
+                    }
                 }
             }
-        } else {
-            // Brand new element
-            if is_text_leaf {
-                let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
-                self.total_nodes.insert(id);
-                id
-            } else {
-                let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
-                self.total_nodes.insert(id);
-                id
-            }
-        };
-
-        element.layout_node = Some(node_id);
-        self.visited_nodes.insert(node_id);
-
-        if let Some(text) = &element.text {
-            if child_nodes.is_empty() {
-                let text_clone = text.clone();
-                let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
-                self.text_measurements
-                    .insert(node_id, text_measure_meta(element, text_clone, is_icon));
-            }
         }
 
-        node_id
+        root_id.expect("build_taffy_node_mut produced a root")
     }
 
     /// Refresh abs + paint-visual for a collect-skipped subtree from live Taffy geometry.
@@ -2832,8 +3155,38 @@ impl LayoutTree {
         size: [f32; 2],
         scroll_acc: [f32; 2],
     ) {
-        crate::app::devtools::note_element_paint_visual_from_abs(element, abs, size, scroll_acc);
-        self.sync_devtools_descendants_from_taffy(element, node, abs, size, scroll_acc);
+        let mut stack: Vec<(*mut Element, NodeId, [f32; 2], [f32; 2], [f32; 2])> =
+            vec![(element as *mut Element, node, abs, size, scroll_acc)];
+        while let Some((ptr, node, abs, size, scroll_acc)) = stack.pop() {
+            // SAFETY: exclusive subtree rooted at the original `element`.
+            let element = unsafe { &mut *ptr };
+            crate::app::devtools::note_element_paint_visual_from_abs(
+                element, abs, size, scroll_acc,
+            );
+            let Ok(child_nodes) = self.taffy.children(node) else {
+                continue;
+            };
+            let child_scroll = next_scroll_acc_for_children(element, scroll_acc);
+            let pass = [
+                abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
+                abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
+            ];
+            let n = element.children.len().min(child_nodes.len());
+            for i in (0..n).rev() {
+                let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+                    continue;
+                };
+                let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
+                let child_size = [cl.size.width, cl.size.height];
+                stack.push((
+                    std::ptr::addr_of_mut!(element.children[i]),
+                    child_nodes[i],
+                    child_abs,
+                    child_size,
+                    child_scroll,
+                ));
+            }
+        }
     }
 
     #[cfg(feature = "devtools")]
@@ -2879,28 +3232,34 @@ impl LayoutTree {
         abs: [f32; 2],
         size: [f32; 2],
     ) {
-        let Ok(child_nodes) = self.taffy.children(node) else {
-            return;
-        };
-        let pass = [
-            abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
-            abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
-        ];
-        let n = element.children.len().min(child_nodes.len());
-        for i in 0..n {
-            let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+        let mut stack: Vec<(*mut Element, NodeId, [f32; 2], [f32; 2])> =
+            vec![(element as *mut Element, node, abs, size)];
+        while let Some((ptr, node, abs, size)) = stack.pop() {
+            // SAFETY: pointers are into the exclusive subtree rooted at `element`.
+            let element = unsafe { &mut *ptr };
+            let Ok(child_nodes) = self.taffy.children(node) else {
                 continue;
             };
-            let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
-            let child_size = [cl.size.width, cl.size.height];
-            element.children[i].layout_bounds =
-                [child_abs[0], child_abs[1], child_size[0], child_size[1]];
-            self.stamp_descendants_layout_bounds_from_taffy(
-                &mut element.children[i],
-                child_nodes[i],
-                child_abs,
-                child_size,
-            );
+            let pass = [
+                abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
+                abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
+            ];
+            let n = element.children.len().min(child_nodes.len());
+            for i in (0..n).rev() {
+                let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+                    continue;
+                };
+                let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
+                let child_size = [cl.size.width, cl.size.height];
+                element.children[i].layout_bounds =
+                    [child_abs[0], child_abs[1], child_size[0], child_size[1]];
+                stack.push((
+                    &mut element.children[i] as *mut Element,
+                    child_nodes[i],
+                    child_abs,
+                    child_size,
+                ));
+            }
         }
     }
 
@@ -2932,6 +3291,164 @@ impl LayoutTree {
         ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
         ancestor_opacity: f32,
+        ancestor_scale: [f32; 2],
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_sticky_xform: bool,
+        instances: &mut Vec<InstanceInput>,
+        textured_draws: &mut Vec<TexturedDraw>,
+        text_nodes: &mut Vec<TextLayoutInfo>,
+        input_chrome_instances: &mut Vec<InstanceInput>,
+        scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
+        hover_cursor: &mut Option<crate::core::tree::CursorValue>,
+        _scroll_only: bool,
+        scrollbar_overlay_collect: bool,
+        thumb_geometry_override: Option<[f32; 4]>,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+        overlay_split: &mut OverlayPaintSplit,
+        paint_rec: &mut PaintRecorder,
+    ) -> [f32; 2] {
+        let mut stack = vec![CollectFrame {
+            element: element as *mut Element,
+            node,
+            abs_offset,
+            scroll_acc,
+            parent_clip,
+            ancestor_scroll_viewport_rest: ancestor_scroll_viewport_rest.map(str::to_string),
+            ancestor_opacity,
+            ancestor_scale,
+            ancestor_linear,
+            ancestor_sticky_xform,
+            scrollbar_overlay_collect,
+            thumb_geometry_override,
+            walk: None,
+        }];
+        let mut root_extent = [0.0_f32, 0.0];
+
+        while let Some(mut frame) = stack.pop() {
+            // SAFETY: exclusive collect walk of the tree passed to this function.
+            let element = unsafe { &mut *frame.element };
+            if frame.walk.is_none() {
+                #[cfg(test)]
+                stack_probe::mark_collect();
+                match self.collect_paint_node(
+                    element,
+                    frame.node,
+                    frame.abs_offset,
+                    frame.scroll_acc,
+                    frame.parent_clip,
+                    frame.ancestor_scroll_viewport_rest.as_deref(),
+                    mouse_pos,
+                    frame.ancestor_opacity,
+                    frame.ancestor_scale,
+                    frame.ancestor_linear,
+                    frame.ancestor_sticky_xform,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    scroll_metrics,
+                    hover_cursor,
+                    _scroll_only,
+                    frame.scrollbar_overlay_collect,
+                    frame.thumb_geometry_override,
+                    scroll_signals_cache,
+                    overlay_split,
+                    paint_rec,
+                ) {
+                    CollectPaintOutcome::Done(extent) => {
+                        collect_commit_extent(&mut stack, extent, &mut root_extent);
+                        continue;
+                    }
+                    CollectPaintOutcome::Ready(painted) => {
+                        match self.collect_begin_walk(
+                            element,
+                            frame.node,
+                            frame.ancestor_scroll_viewport_rest.as_deref(),
+                            frame.ancestor_linear,
+                            frame.ancestor_sticky_xform,
+                            instances,
+                            textured_draws,
+                            overlay_split,
+                            painted,
+                        ) {
+                            CollectWalkStart::Done(extent) => {
+                                collect_commit_extent(&mut stack, extent, &mut root_extent);
+                                continue;
+                            }
+                            CollectWalkStart::Ready(walk) => {
+                                frame.walk = Some(walk);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let job = {
+                let walk = frame.walk.as_mut().expect("walk ready");
+                self.collect_take_child(
+                    element,
+                    walk,
+                    _scroll_only,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    overlay_split,
+                    paint_rec,
+                )
+            };
+            if let Some(job) = job {
+                let walk = frame.walk.as_ref().expect("walk ready");
+                let child_frame = CollectFrame {
+                    element: std::ptr::addr_of_mut!(element.children[job.index]),
+                    node: job.node,
+                    abs_offset: job.abs_offset,
+                    scroll_acc: walk.next_scroll_acc,
+                    parent_clip: walk.clip,
+                    ancestor_scroll_viewport_rest: walk.pass_to_children.clone(),
+                    ancestor_opacity: walk.opacity,
+                    ancestor_scale: walk.child_ancestor_scale,
+                    ancestor_linear: walk.child_ancestor_linear,
+                    ancestor_sticky_xform: walk.child_sticky_xform,
+                    scrollbar_overlay_collect: frame.scrollbar_overlay_collect,
+                    thumb_geometry_override: job.thumb_ov,
+                    walk: None,
+                };
+                stack.push(frame);
+                stack.push(child_frame);
+            } else {
+                let walk = frame.walk.take().expect("walk ready");
+                let extent = self.collect_finish_walk(
+                    element,
+                    frame.node,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    scroll_metrics,
+                    overlay_split,
+                    paint_rec,
+                    walk,
+                );
+                collect_commit_extent(&mut stack, extent, &mut root_extent);
+            }
+        }
+        root_extent
+    }
+
+    /// Paint this node only. `#[inline(never)]` so MSVC debug keeps this frame
+    /// off the heap-stack collect driver.
+    #[inline(never)]
+    fn collect_paint_node(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        abs_offset: [f32; 2],
+        scroll_acc: [f32; 2],
+        parent_clip: Option<[f32; 4]>,
+        _ancestor_scroll_viewport_rest: Option<&str>,
+        mouse_pos: [f32; 2],
+        ancestor_opacity: f32,
         // Parent CSS `scale` product (CarouselStack shell → children). Default `[1,1]`.
         ancestor_scale: [f32; 2],
         // Parent 2×2 linear cascade (rotate/skew). Default identity. Composed with local
@@ -2951,7 +3468,7 @@ impl LayoutTree {
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
-    ) -> [f32; 2] {
+    ) -> CollectPaintOutcome {
         // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
         // Reset clip + scroll accumulation when entering the root portal layer so hoisted
         // overlays never inherit ScrollArea (or other overflow) clips from page ancestors.
@@ -2986,7 +3503,7 @@ impl LayoutTree {
             Ok(l) => *l,
             Err(err) => {
                 log::error!("taffy.layout({node:?}) failed: {err:?}");
-                return [abs_offset[0], abs_offset[1]];
+                return CollectPaintOutcome::Done([abs_offset[0], abs_offset[1]]);
             }
         };
         let base_abs_x = abs_offset[0] + layout.location.x;
@@ -3200,12 +3717,7 @@ impl LayoutTree {
                         // post-render would clamp their offset to 0 (table/tree/masonry
                         // snap to top while the page scrolls).
                         let content = if rest.ends_with("__ta_scroll") {
-                            textarea_scrollport_content_size(
-                                element,
-                                abs_x,
-                                abs_y,
-                                layout.size,
-                            )
+                            textarea_scrollport_content_size(element, abs_x, abs_y, layout.size)
                         } else {
                             let mut content = scroll_viewport_taffy_content_size(
                                 &self.taffy,
@@ -3271,7 +3783,7 @@ impl LayoutTree {
                     [lay_w, lay_h],
                     scroll_for_render,
                 );
-                return extent;
+                return CollectPaintOutcome::Done(extent);
             }
         }
 
@@ -3743,7 +4255,7 @@ impl LayoutTree {
         }
 
         if let Some(text) = &element.text {
-            let mut text_style = element.text_style.clone();
+            let mut text_style = element.text_style.as_ref().clone();
             if opacity < 1.0 - f32::EPSILON {
                 let mut c = text_style.color_resolved();
                 let a = ((f32::from(c[3]) * opacity).round() as u16).min(255) as u8;
@@ -4194,10 +4706,48 @@ impl LayoutTree {
 
         paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
 
-        // Recurse children
-        let mut next_scroll_acc = scroll_acc;
-        // `scroll:` viewports always contribute offset (even if overflow was cleared to Visible).
-        // `overflow: hidden`/`clip` clip but do not scroll — match hit-test `next_hit_scroll_acc`.
+        CollectPaintOutcome::Ready(CollectPainted {
+            abs_x,
+            abs_y,
+            lay_w,
+            lay_h,
+            opacity,
+            clip,
+            parent_clip,
+            render_rect,
+            visible_rect,
+            paint_sx,
+            paint_sy,
+            world_linear,
+            local_linear,
+            transform,
+            filter_capture,
+            filter_cap_inst0,
+            filter_cap_tex0,
+            is_body_portal_layer,
+            thumb_rect_for_child,
+            layout_size: layout.size,
+            scroll_acc,
+        })
+    }
+
+    fn collect_begin_walk(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        ancestor_scroll_viewport_rest: Option<&str>,
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_sticky_xform: bool,
+        instances: &Vec<InstanceInput>,
+        textured_draws: &Vec<TexturedDraw>,
+        overlay_split: &mut OverlayPaintSplit,
+        painted: CollectPainted,
+    ) -> CollectWalkStart {
+        let abs_x = painted.abs_x;
+        let abs_y = painted.abs_y;
+        let lay_w = painted.lay_w;
+        let lay_h = painted.lay_h;
+        let mut next_scroll_acc = painted.scroll_acc;
         let is_scroll_viewport = element
             .focus_id
             .as_deref()
@@ -4217,7 +4767,8 @@ impl LayoutTree {
             .focus_id
             .as_deref()
             .and_then(|fid| fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
-            .or(ancestor_scroll_viewport_rest);
+            .or(ancestor_scroll_viewport_rest)
+            .map(str::to_string);
 
         let child_nodes = match self.taffy.children(node) {
             Ok(c) => c,
@@ -4226,7 +4777,7 @@ impl LayoutTree {
                 let own = [abs_x + lay_w, abs_y + lay_h];
                 element.collect_extent = own;
                 element.collect_extent_valid = true;
-                return own;
+                return CollectWalkStart::Done(own);
             }
         };
         let any_z = element.children.iter().any(|c| c.style.z_index != 0);
@@ -4235,303 +4786,52 @@ impl LayoutTree {
             .get("data-stacking-context")
             .map(|s| s.as_str())
             == Some("1");
-        // Capture before the closure so we don't borrow `element.children` across
-        // `&mut element.children[i]` (E0502).
-        // Only the outermost in-page stacking context owns `page_stack_bands`. Nested
-        // overlay scrollbars still z-sort into the current band (tree/z order) without
-        // splitting the global list — otherwise gallery glyphs freeze while rects scroll.
-        // Portal overlay (marked) still records per-child bands on `overlay_split.bands`.
         let any_stacking = stacking_attr || any_z;
-        // Outermost in-page stacking (ScrollArea overlay bar, Carousel) owns the global
-        // list. Nested auto `z-index` (overlay scrollbars) must not append — that
-        // mis-assigns glyphs vs rects. Nested `data-stacking-context` is an explicit
-        // opt-in so a jump control can paint above message glyphs inside an outer band.
         let record_page_stack_bands = !overlay_split.marked
             && ((overlay_split.page_stack_depth == 0 && any_stacking)
                 || (overlay_split.page_stack_depth > 0 && stacking_attr));
         if record_page_stack_bands {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_add(1);
         }
-        let mut max_right = abs_x + lay_w;
-        let mut max_bottom = abs_y + lay_h;
 
         let fx_capture_children = element
             .attrs
             .get(crate::renderer::ATTR_EFFECT_CAPTURE_CHILDREN)
             .map(|s| s.as_str())
             == Some("1");
-        // `rui_fx` captures children only (own chrome stays on the main pass).
-        // CSS filter already recorded `filter_cap_*` before own paint.
-        let fx_cap_inst0 = if fx_capture_children && !filter_capture {
+        let fx_cap_inst0 = if fx_capture_children && !painted.filter_capture {
             instances.len()
         } else {
             0
         };
-        let fx_cap_tex0 = if fx_capture_children && !filter_capture {
+        let fx_cap_tex0 = if fx_capture_children && !painted.filter_capture {
             textured_draws.len()
         } else {
             0
         };
-        let (cap_inst0, cap_tex0, cap_children) = if filter_capture {
-            (filter_cap_inst0, filter_cap_tex0, true)
+        let (cap_inst0, cap_tex0, cap_children) = if painted.filter_capture {
+            (painted.filter_cap_inst0, painted.filter_cap_tex0, true)
         } else if fx_capture_children {
             (fx_cap_inst0, fx_cap_tex0, true)
         } else {
             (0, 0, false)
         };
 
-        let push_portal_band = |overlay_split: &mut OverlayPaintSplit,
-                                instances: &Vec<InstanceInput>,
-                                textured_draws: &Vec<TexturedDraw>,
-                                text_nodes: &Vec<TextLayoutInfo>,
-                                input_chrome_instances: &Vec<InstanceInput>,
-                                paint_ops_len: usize,
-                                band_root: &Element,
-                                ancestor_opacity: f32| {
-            let band = OverlayPaintBand {
-                instance_start: instances.len(),
-                textured_start: textured_draws.len(),
-                text_start: text_nodes.len(),
-                chrome_start: input_chrome_instances.len(),
-                paint_op_start: paint_ops_len,
-                backdrop_blur: band_root.style.backdrop_blur.max(0.0),
-                underlay_opacity: (ancestor_opacity * band_root.style.opacity).clamp(0.0, 1.0),
-            };
-            if is_body_portal_layer {
-                overlay_split.bands.push(band);
-            } else if overlay_split.marked && any_stacking {
-                // Already inside `__rui_portal_layer` (Toast / Dialog content).
-                // `page_stack_bands` end at the portal split and clamp overlay glyphs
-                // away — push portal bands so each z-card is rects→text in the overlay
-                // pass (same model as stacked Modals).
-                overlay_split.bands.push(band);
-            } else if record_page_stack_bands {
-                overlay_split.page_stack_bands.push(band);
-            }
-        };
-
         let parent_tl = [
             abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
             abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
         ];
-        let child_ancestor_scale = [paint_sx, paint_sy];
-        let child_ancestor_linear = world_linear;
-        let child_sticky_xform =
-            ancestor_sticky_xform || crate::renderer::element_wants_sticky_xform(element);
-        let parent_scales = (paint_sx - 1.0).abs() > 1e-4 || (paint_sy - 1.0).abs() > 1e-4;
-        let parent_rotates = !crate::style::mat2d_is_axis_aligned(&local_linear)
+        let parent_scales =
+            (painted.paint_sx - 1.0).abs() > 1e-4 || (painted.paint_sy - 1.0).abs() > 1e-4;
+        let parent_rotates = !crate::style::mat2d_is_axis_aligned(&painted.local_linear)
             || !crate::style::mat2d_is_axis_aligned(&ancestor_linear);
-        // Parent CSS scale about center: place each child's layout box so its center
-        // lands on the transformed point (then child bakes paint_sx via ancestor_scale).
-        // With rotate/skew, also apply the parent's local 2×2 to the offset vector so
-        // children orbit with the shell (text + nested rects follow).
-        //
-        // Must use `parent_tl` (pre-scroll layout space), NOT `render_x`/`render_y`.
-        // `abs_offset` is always pre-scroll; children subtract `scroll_acc` when computing
-        // their own `render_*`. Using post-scroll coords here double-subtracts scroll and
-        // shoves scaled subtrees (CarouselStack side cards / mid-tween) off the stage clip
-        // — blank autoplay + missing stack sides once the page is scrolled.
-        let child_pass_offset_for = |clx: f32, cly: f32, cw: f32, ch: f32| -> [f32; 2] {
-            if !parent_scales && !parent_rotates {
-                return parent_tl;
-            }
-            let pcx = parent_tl[0] + lay_w * 0.5;
-            let pcy = parent_tl[1] + lay_h * 0.5;
-            let mut dx = (clx + cw * 0.5 - lay_w * 0.5) * paint_sx;
-            let mut dy = (cly + ch * 0.5 - lay_h * 0.5) * paint_sy;
-            if parent_rotates {
-                let (rx, ry) = crate::style::mat2d_transform_vec(&local_linear, dx, dy);
-                dx = rx;
-                dy = ry;
-            }
-            let ccx = pcx + dx;
-            let ccy = pcy + dy;
-            [ccx - cw * 0.5 - clx, ccy - ch * 0.5 - cly]
-        };
-        let child_pass_offset = parent_tl;
-
-        if !any_z {
-            let n = element.children.len();
-            let mut i = 0;
-            while i < n {
-                if i >= child_nodes.len() {
-                    log::error!(
-                        "layout/taffy child desync: element has {} children, taffy node {:?} has {} — skip (portal hoist must full-rebuild)",
-                        element.children.len(),
-                        node,
-                        child_nodes.len()
-                    );
-                    break;
-                }
-                // Carousel 等「父级 translate 带动整轨」：后卡会滑入视口。scroll_only 的
-                // StopAfter 会跳过尚未入屏的兄弟，留下陈旧 layout_bounds/实例，表现为前卡
-                // 消失后后卡突然以完整态出现再跟弹簧滑（而非前后卡同时对向擦肩）。
-                let parent_translates = element.style.translate[0].abs() > 0.05
-                    || element.style.translate[1].abs() > 0.05
-                    || element.style.translate_pct[0].abs() > 0.001
-                    || element.style.translate_pct[1].abs() > 0.001
-                    || parent_scales
-                    || parent_rotates;
-                let is_carousel_track =
-                    element.attrs.get("data-carousel-track").map(|s| s.as_str()) == Some("1");
-                let skip_scroll_band_cull = element
-                    .attrs
-                    .get("data-slot")
-                    .map(|s| s.as_str())
-                    == Some("message-scroller-content");
-                if _scroll_only && !skip_scroll_band_cull && !parent_translates && !is_carousel_track {
-                    if let Some(clip_rect) = clip {
-                        if !element.children[i].style.position_fixed
-                            && element.children[i].style.position != Position::Absolute
-                        {
-                            if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
-                                let child_abs = [
-                                    child_pass_offset[0] + cl.location.x,
-                                    child_pass_offset[1] + cl.location.y,
-                                ];
-                                let child_size = [cl.size.width, cl.size.height];
-                                match scroll_sibling_band_action(
-                                    child_abs,
-                                    child_size,
-                                    next_scroll_acc,
-                                    clip_rect,
-                                    element.style.flex_direction,
-                                    element.style.flex_wrap,
-                                ) {
-                                    ScrollSiblingBandAction::SkipBefore => {
-                                        #[cfg(feature = "devtools")]
-                                        {
-                                            self.sync_devtools_subtree_from_taffy(
-                                                &mut element.children[i],
-                                                child_nodes[i],
-                                                child_abs,
-                                                child_size,
-                                                next_scroll_acc,
-                                            );
-                                        }
-                                        self.stamp_skipped_sibling_hit_bounds(
-                                            &mut element.children[i],
-                                            child_nodes[i],
-                                            child_abs,
-                                            child_size,
-                                        );
-                                        let extent = skipped_sibling_extent(
-                                            &element.children[i],
-                                            child_abs,
-                                            child_size,
-                                        );
-                                        max_right = max_right.max(extent[0]);
-                                        max_bottom = max_bottom.max(extent[1]);
-                                        i += 1;
-                                        continue;
-                                    }
-                                    ScrollSiblingBandAction::StopAfter => {
-                                        for j in i..n.min(child_nodes.len()) {
-                                            if let Ok(jl) = self.taffy.layout(child_nodes[j]) {
-                                                let j_abs = [
-                                                    child_pass_offset[0] + jl.location.x,
-                                                    child_pass_offset[1] + jl.location.y,
-                                                ];
-                                                let j_size = [jl.size.width, jl.size.height];
-                                                #[cfg(feature = "devtools")]
-                                                {
-                                                    self.sync_devtools_subtree_from_taffy(
-                                                        &mut element.children[j],
-                                                        child_nodes[j],
-                                                        j_abs,
-                                                        j_size,
-                                                        next_scroll_acc,
-                                                    );
-                                                }
-                                                self.stamp_skipped_sibling_hit_bounds(
-                                                    &mut element.children[j],
-                                                    child_nodes[j],
-                                                    j_abs,
-                                                    j_size,
-                                                );
-                                                let extent = skipped_sibling_extent(
-                                                    &element.children[j],
-                                                    j_abs,
-                                                    j_size,
-                                                );
-                                                max_right = max_right.max(extent[0]);
-                                                max_bottom = max_bottom.max(extent[1]);
-                                            }
-                                        }
-                                        break;
-                                    }
-                                    ScrollSiblingBandAction::Visit => {}
-                                }
-                            }
-                        }
-                    }
-                }
-                let child = &mut element.children[i];
-                paint_rec.split_here();
-                push_portal_band(
-                    overlay_split,
-                    instances,
-                    textured_draws,
-                    text_nodes,
-                    input_chrome_instances,
-                    paint_rec.ops.len(),
-                    child,
-                    opacity,
-                );
-                let thumb_ov = if thumb_rect_for_child.is_some() {
-                    if child
-                        .focus_id
-                        .as_deref()
-                        .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
-                    {
-                        thumb_rect_for_child.take()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let [cr, cb] = self.collect_instances_mut(
-                    child,
-                    child_nodes[i],
-                    {
-                        if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
-                            child_pass_offset_for(
-                                cl.location.x,
-                                cl.location.y,
-                                cl.size.width,
-                                cl.size.height,
-                            )
-                        } else {
-                            child_pass_offset
-                        }
-                    },
-                    next_scroll_acc,
-                    clip,
-                    pass_to_children,
-                    mouse_pos,
-                    opacity,
-                    child_ancestor_scale,
-                    child_ancestor_linear,
-                    child_sticky_xform,
-                    instances,
-                    textured_draws,
-                    text_nodes,
-                    input_chrome_instances,
-                    scroll_metrics,
-                    hover_cursor,
-                    _scroll_only,
-                    scrollbar_overlay_collect,
-                    thumb_ov,
-                    scroll_signals_cache,
-                    overlay_split,
-                    paint_rec,
-                );
-                max_right = max_right.max(cr);
-                max_bottom = max_bottom.max(cb);
-                i += 1;
-            }
-        } else {
+        let parent_translates = element.style.translate[0].abs() > 0.05
+            || element.style.translate[1].abs() > 0.05
+            || element.style.translate_pct[0].abs() > 0.001
+            || element.style.translate_pct[1].abs() > 0.001
+            || parent_scales
+            || parent_rotates;
+        let z_order = if any_z {
             let mut order: Vec<usize> = (0..element.children.len()).collect();
             order.sort_by(|&a, &b| {
                 element.children[a]
@@ -4540,80 +4840,328 @@ impl LayoutTree {
                     .cmp(&element.children[b].style.z_index)
                     .then(a.cmp(&b))
             });
-            for i in order {
-                if i >= child_nodes.len() {
+            Some(order)
+        } else {
+            None
+        };
+
+        CollectWalkStart::Ready(CollectWalk {
+            child_ancestor_scale: [painted.paint_sx, painted.paint_sy],
+            child_ancestor_linear: painted.world_linear,
+            child_sticky_xform: ancestor_sticky_xform
+                || crate::renderer::element_wants_sticky_xform(element),
+            opacity: painted.opacity,
+            clip: painted.clip,
+            parent_tl,
+            parent_scales,
+            parent_rotates,
+            parent_translates,
+            is_carousel_track: element.attrs.get("data-carousel-track").map(|s| s.as_str())
+                == Some("1"),
+            skip_scroll_band_cull: element.attrs.get("data-slot").map(|s| s.as_str())
+                == Some("message-scroller-content"),
+            any_stacking,
+            z_order,
+            max_right: abs_x + lay_w,
+            max_bottom: abs_y + lay_h,
+            next_scroll_acc,
+            pass_to_children,
+            ancestor_scroll_viewport_rest: ancestor_scroll_viewport_rest.map(str::to_string),
+            record_page_stack_bands,
+            cap_children,
+            cap_inst0,
+            cap_tex0,
+            child_nodes,
+            cursor: 0,
+            stopped: false,
+            painted,
+        })
+    }
+
+    fn collect_push_portal_band(
+        overlay_split: &mut OverlayPaintSplit,
+        instances: &Vec<InstanceInput>,
+        textured_draws: &Vec<TexturedDraw>,
+        text_nodes: &Vec<TextLayoutInfo>,
+        input_chrome_instances: &Vec<InstanceInput>,
+        paint_ops_len: usize,
+        band_root: &Element,
+        ancestor_opacity: f32,
+        is_body_portal_layer: bool,
+        any_stacking: bool,
+        record_page_stack_bands: bool,
+    ) {
+        let band = OverlayPaintBand {
+            instance_start: instances.len(),
+            textured_start: textured_draws.len(),
+            text_start: text_nodes.len(),
+            chrome_start: input_chrome_instances.len(),
+            paint_op_start: paint_ops_len,
+            backdrop_blur: band_root.style.backdrop_blur.max(0.0),
+            underlay_opacity: (ancestor_opacity * band_root.style.opacity).clamp(0.0, 1.0),
+        };
+        if is_body_portal_layer {
+            overlay_split.bands.push(band);
+        } else if overlay_split.marked && any_stacking {
+            overlay_split.bands.push(band);
+        } else if record_page_stack_bands {
+            overlay_split.page_stack_bands.push(band);
+        }
+    }
+
+    fn collect_emit_child_job(
+        &self,
+        element: &mut Element,
+        walk: &mut CollectWalk,
+        i: usize,
+        instances: &Vec<InstanceInput>,
+        textured_draws: &Vec<TexturedDraw>,
+        text_nodes: &Vec<TextLayoutInfo>,
+        input_chrome_instances: &Vec<InstanceInput>,
+        overlay_split: &mut OverlayPaintSplit,
+        paint_rec: &mut PaintRecorder,
+    ) -> CollectChildJob {
+        paint_rec.split_here();
+        Self::collect_push_portal_band(
+            overlay_split,
+            instances,
+            textured_draws,
+            text_nodes,
+            input_chrome_instances,
+            paint_rec.ops.len(),
+            &element.children[i],
+            walk.opacity,
+            walk.painted.is_body_portal_layer,
+            walk.any_stacking,
+            walk.record_page_stack_bands,
+        );
+        let thumb_ov = if walk.painted.thumb_rect_for_child.is_some() {
+            if element.children[i]
+                .focus_id
+                .as_deref()
+                .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
+            {
+                walk.painted.thumb_rect_for_child.take()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let abs_offset = if let Ok(cl) = self.taffy.layout(walk.child_nodes[i]) {
+            walk.child_pass_offset_for(cl.location.x, cl.location.y, cl.size.width, cl.size.height)
+        } else {
+            walk.parent_tl
+        };
+        CollectChildJob {
+            index: i,
+            node: walk.child_nodes[i],
+            abs_offset,
+            thumb_ov,
+        }
+    }
+
+    fn collect_take_child(
+        &self,
+        element: &mut Element,
+        walk: &mut CollectWalk,
+        _scroll_only: bool,
+        instances: &mut Vec<InstanceInput>,
+        textured_draws: &mut Vec<TexturedDraw>,
+        text_nodes: &mut Vec<TextLayoutInfo>,
+        input_chrome_instances: &mut Vec<InstanceInput>,
+        overlay_split: &mut OverlayPaintSplit,
+        paint_rec: &mut PaintRecorder,
+    ) -> Option<CollectChildJob> {
+        if walk.stopped {
+            return None;
+        }
+        if let Some(order) = walk.z_order.clone() {
+            while walk.cursor < order.len() {
+                let i = order[walk.cursor];
+                walk.cursor += 1;
+                if i >= walk.child_nodes.len() {
                     log::error!(
-                        "layout/taffy child desync (z-ordered): element has {} children, taffy node {:?} has {}",
+                        "layout/taffy child desync (z-ordered): element has {} children, taffy node has {}",
                         element.children.len(),
-                        node,
-                        child_nodes.len()
+                        walk.child_nodes.len()
                     );
                     continue;
                 }
-                paint_rec.split_here();
-                push_portal_band(
-                    overlay_split,
+                return Some(self.collect_emit_child_job(
+                    element,
+                    walk,
+                    i,
                     instances,
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
-                    paint_rec.ops.len(),
-                    &element.children[i],
-                    opacity,
-                );
-                let thumb_ov = if thumb_rect_for_child.is_some() {
-                    let c = &element.children[i];
-                    if c.focus_id
-                        .as_deref()
-                        .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
-                    {
-                        thumb_rect_for_child.take()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let [cr, cb] = self.collect_instances_mut(
-                    &mut element.children[i],
-                    child_nodes[i],
-                    {
-                        if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
-                            child_pass_offset_for(
-                                cl.location.x,
-                                cl.location.y,
-                                cl.size.width,
-                                cl.size.height,
-                            )
-                        } else {
-                            child_pass_offset
-                        }
-                    },
-                    next_scroll_acc,
-                    clip,
-                    pass_to_children,
-                    mouse_pos,
-                    opacity,
-                    child_ancestor_scale,
-                    child_ancestor_linear,
-                    child_sticky_xform,
-                    instances,
-                    textured_draws,
-                    text_nodes,
-                    input_chrome_instances,
-                    scroll_metrics,
-                    hover_cursor,
-                    _scroll_only,
-                    scrollbar_overlay_collect,
-                    thumb_ov,
-                    scroll_signals_cache,
                     overlay_split,
                     paint_rec,
-                );
-                max_right = max_right.max(cr);
-                max_bottom = max_bottom.max(cb);
+                ));
             }
+            return None;
         }
+
+        let n = element.children.len();
+        while walk.cursor < n {
+            let i = walk.cursor;
+            if i >= walk.child_nodes.len() {
+                log::error!(
+                    "layout/taffy child desync: element has {} children, taffy node {:?} has {} — skip (portal hoist must full-rebuild)",
+                    element.children.len(),
+                    element.layout_node,
+                    walk.child_nodes.len()
+                );
+                walk.stopped = true;
+                return None;
+            }
+            if _scroll_only
+                && !walk.skip_scroll_band_cull
+                && !walk.parent_translates
+                && !walk.is_carousel_track
+            {
+                if let Some(clip_rect) = walk.clip {
+                    if !element.children[i].style.position_fixed
+                        && element.children[i].style.position != Position::Absolute
+                    {
+                        if let Ok(cl) = self.taffy.layout(walk.child_nodes[i]) {
+                            let child_abs = [
+                                walk.parent_tl[0] + cl.location.x,
+                                walk.parent_tl[1] + cl.location.y,
+                            ];
+                            let child_size = [cl.size.width, cl.size.height];
+                            match scroll_sibling_band_action(
+                                child_abs,
+                                child_size,
+                                walk.next_scroll_acc,
+                                clip_rect,
+                                element.style.flex_direction,
+                                element.style.flex_wrap,
+                            ) {
+                                ScrollSiblingBandAction::SkipBefore => {
+                                    #[cfg(feature = "devtools")]
+                                    {
+                                        self.sync_devtools_subtree_from_taffy(
+                                            &mut element.children[i],
+                                            walk.child_nodes[i],
+                                            child_abs,
+                                            child_size,
+                                            walk.next_scroll_acc,
+                                        );
+                                    }
+                                    self.stamp_skipped_sibling_hit_bounds(
+                                        &mut element.children[i],
+                                        walk.child_nodes[i],
+                                        child_abs,
+                                        child_size,
+                                    );
+                                    let extent = skipped_sibling_extent(
+                                        &element.children[i],
+                                        child_abs,
+                                        child_size,
+                                    );
+                                    walk.max_right = walk.max_right.max(extent[0]);
+                                    walk.max_bottom = walk.max_bottom.max(extent[1]);
+                                    walk.cursor += 1;
+                                    continue;
+                                }
+                                ScrollSiblingBandAction::StopAfter => {
+                                    for j in i..n.min(walk.child_nodes.len()) {
+                                        if let Ok(jl) = self.taffy.layout(walk.child_nodes[j]) {
+                                            let j_abs = [
+                                                walk.parent_tl[0] + jl.location.x,
+                                                walk.parent_tl[1] + jl.location.y,
+                                            ];
+                                            let j_size = [jl.size.width, jl.size.height];
+                                            #[cfg(feature = "devtools")]
+                                            {
+                                                self.sync_devtools_subtree_from_taffy(
+                                                    &mut element.children[j],
+                                                    walk.child_nodes[j],
+                                                    j_abs,
+                                                    j_size,
+                                                    walk.next_scroll_acc,
+                                                );
+                                            }
+                                            self.stamp_skipped_sibling_hit_bounds(
+                                                &mut element.children[j],
+                                                walk.child_nodes[j],
+                                                j_abs,
+                                                j_size,
+                                            );
+                                            let extent = skipped_sibling_extent(
+                                                &element.children[j],
+                                                j_abs,
+                                                j_size,
+                                            );
+                                            walk.max_right = walk.max_right.max(extent[0]);
+                                            walk.max_bottom = walk.max_bottom.max(extent[1]);
+                                        }
+                                    }
+                                    walk.stopped = true;
+                                    return None;
+                                }
+                                ScrollSiblingBandAction::Visit => {}
+                            }
+                        }
+                    }
+                }
+            }
+            walk.cursor += 1;
+            return Some(self.collect_emit_child_job(
+                element,
+                walk,
+                i,
+                instances,
+                textured_draws,
+                text_nodes,
+                input_chrome_instances,
+                overlay_split,
+                paint_rec,
+            ));
+        }
+        None
+    }
+
+    fn collect_finish_walk(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        instances: &mut Vec<InstanceInput>,
+        textured_draws: &mut Vec<TexturedDraw>,
+        _text_nodes: &mut Vec<TextLayoutInfo>,
+        input_chrome_instances: &mut Vec<InstanceInput>,
+        scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
+        overlay_split: &mut OverlayPaintSplit,
+        paint_rec: &mut PaintRecorder,
+        walk: CollectWalk,
+    ) -> [f32; 2] {
+        let CollectWalk {
+            painted,
+            max_right,
+            max_bottom,
+            record_page_stack_bands,
+            cap_children,
+            cap_inst0,
+            cap_tex0,
+            ancestor_scroll_viewport_rest,
+            ..
+        } = walk;
+        let CollectPainted {
+            abs_x,
+            abs_y,
+            opacity,
+            parent_clip,
+            render_rect,
+            visible_rect,
+            transform,
+            filter_capture,
+            layout_size,
+            clip,
+            ..
+        } = painted;
+
         if record_page_stack_bands {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_sub(1);
         }
@@ -4628,8 +5176,6 @@ impl LayoutTree {
             instances.truncate(cap_inst0);
             textured_draws.truncate(cap_tex0);
             paint_rec.truncate_from(cap_inst0, cap_tex0);
-            // Filter SourceGraphic should cover the element's paint box (not only the
-            // clip-intersected visible slice), so leaf `bg` / text ascent are not empty.
             let filter_bounds = if filter_capture {
                 [
                     render_rect[0],
@@ -4671,68 +5217,54 @@ impl LayoutTree {
             }
         }
 
-        // If this is a ScrollArea, record its metrics (content size vs viewport size)
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let [content_w, content_h] = if rest.ends_with("__ta_scroll") {
-                    // Floor content size by the text leaf + scrollport padding. A flex-sized
-                    // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
-                    // still holds the real field-sizing-content height; wrap=off width must
-                    // not collapse to the viewport or post-render clamps sx to 0.
-                    textarea_scrollport_content_size(element, abs_x, abs_y, layout.size)
+                    textarea_scrollport_content_size(element, abs_x, abs_y, layout_size)
                 } else {
-                    // Taffy overflow is cull-independent. Paint-collect `max_right`/`max_bottom`
-                    // grow when overflow:visible abspos/charts enter the visit band (gallery
-                    // data page: overflow_x=auto → X bar appears → Y viewport shrinks → thumb jumps).
-                    let mut content = scroll_viewport_taffy_content_size(
-                        &self.taffy,
-                        element,
-                        node,
-                        layout.size,
-                    );
+                    let mut content =
+                        scroll_viewport_taffy_content_size(&self.taffy, element, node, layout_size);
                     content[1] = cap_message_scroller_collect_content_h(
                         self,
                         element,
                         node,
                         content[1],
-                        layout.size.height,
+                        layout_size.height,
                     );
                     content
                 };
                 scroll_metrics.push((
                     rest.to_string(),
-                    [abs_x, abs_y, layout.size.width, layout.size.height],
+                    [abs_x, abs_y, layout_size.width, layout_size.height],
                     [
-                        (content_w - layout.size.width).max(0.0),
-                        (content_h - layout.size.height).max(0.0),
+                        (content_w - layout_size.width).max(0.0),
+                        (content_h - layout_size.height).max(0.0),
                     ],
                     [content_w, content_h],
                 ));
             }
         }
 
-        // Do not leak inner scrollable descendants' height/width past a nested scroll
-        // viewport or any non-visible overflow box (Table overflow:auto without `scroll:`).
         let mut extent_r = max_right;
         let mut extent_b = max_bottom;
         let mut nested_scroll_viewport = false;
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                if ancestor_scroll_viewport_rest.is_some_and(|a| a != rest) {
+                if ancestor_scroll_viewport_rest
+                    .as_deref()
+                    .is_some_and(|a| a != rest)
+                {
                     nested_scroll_viewport = true;
                 }
             }
         }
         if nested_scroll_viewport || overflow_contains_axis(element.style.overflow.x) {
-            extent_r = abs_x + layout.size.width;
+            extent_r = abs_x + layout_size.width;
         }
         if nested_scroll_viewport || overflow_contains_axis(element.style.overflow.y) {
-            extent_b = abs_y + layout.size.height;
+            extent_b = abs_y + layout_size.height;
         }
 
-        // After children/glyphs: `shimmer-box` is a container overlay (chrome band,
-        // above glyphon). Streaming text uses `class="shimmer"` only — do not also
-        // put `shimmer-box` on the same node or the sheen double-paints the glyphs.
         push_shimmer_box_overlay(
             input_chrome_instances,
             element,
@@ -7111,7 +7643,10 @@ mod text_cascade_tests {
         let child = Element::new().text("x").text_color([0, 0, 0, 255]);
         root.children.push(child);
 
-        cascade_inheritable_text_style(&mut root.children[0], Some(root.text_style.clone()));
+        cascade_inheritable_text_style(
+            &mut root.children[0],
+            Some(root.text_style.as_ref().clone()),
+        );
         assert_eq!(
             root.children[0].text_style.decoration_color,
             Some([239, 68, 68, 255])

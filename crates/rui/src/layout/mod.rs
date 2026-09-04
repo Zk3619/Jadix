@@ -8,6 +8,7 @@ pub use dimension::{
     lpa_length_px, DimKind,
 };
 pub use grid::{cols_equal_fr, track_fr_1, tracks_fr, GridTrack};
+pub use layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 
 /// 兼容路径 `crate::layout::style::Style`（实现见 [`crate::style`]）。
 pub mod style {

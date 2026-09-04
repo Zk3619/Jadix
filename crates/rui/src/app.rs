@@ -92,7 +92,7 @@ pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
 pub mod ui_bridge;
-mod window_chrome;
+pub(crate) mod window_chrome;
 mod window_events;
 pub mod window_keys;
 pub(crate) mod window_scope;
@@ -119,22 +119,11 @@ use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
 type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
-/// Windows PE default stack is ~1 MiB. MSVC debug allocates the full local
-/// frame of huge functions (`handle_redraw_requested`, `collect_instances_mut`,
-/// `handle_mouse_button`) at every call. Root `create_effect` then
-/// `flush_deferred`, and pointer `on_click` → `signal.set` → `flush_pending`,
-/// also run nested bind_/Select effects on that same stack. Switch onto a
-/// fresh stack for bootstrap / redraw / input — not the whole winit event
-/// loop (Windows COM / message pump).
-///
-/// Unconditional [`stacker::grow`] (not `maybe_grow`): the remaining-stack
-/// probe is unreliable on Windows, so the red-zone check can skip a grow
-/// that was actually required.
-pub(crate) const UI_STACK_GROW: usize = 8 * 1024 * 1024;
+pub use crate::core::reactivity::with_ui_build_stack;
 
-#[inline]
+#[inline(never)]
 pub(crate) fn with_grown_ui_stack<R>(f: impl FnOnce() -> R) -> R {
-    stacker::grow(UI_STACK_GROW, f)
+    with_ui_build_stack(f)
 }
 
 /// Textarea bottom-right resize-grip drag state.
