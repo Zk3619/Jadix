@@ -137,11 +137,11 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 | 参考 | 该学 | 不该搬 | 优先级 |
 |------|------|--------|--------|
-| **GPUI** | IME/光标区契约；多窗生命周期；Scene/view 缓存思路；`#[test]` harness；Actions 键位分层 | 弃 winit 换全原生平台分叉；Entity 取代 Signal；Metal/DX 双栈 | P0 原生 |
+| **GPUI** | IME/光标区契约；多窗生命周期；Scene/view 缓存思路；`#[test]` harness；Actions 键位分层；**arena 子节点 + `stacksafe` 热点换栈**（见 [`stack_and_element_model.md`](stack_and_element_model.md)） | 弃 winit 换全原生平台分叉；Entity 取代 Signal；Metal/DX 双栈；只抄递归不抄指针化 | P0 原生 |
 | **Slint** | 行为用例矩阵；主题/控件验收表；partial dirty 策略文档化；发布 feature 门 | `.slint` DSL / AOT 主路径；换 FemtoVG/Skia 默认；三许可模型 | P1 工程 |
 | **Xilem** | Pass 语义（event→layout→paint→a11y）；TestHarness + 截图；WidgetMut 式元数据一致；IME signal 边界 | View-diff 取代 Signal；弃 taffy/glyphon 换 Parley/Vello 全家桶 | P0/P1 |
 | **EUI-NEO** | Gallery 驱动；脏矩形合并策略；静态层缓存；图表/MD/Picker 密度清单 | 整页 compose DSL；GLFW/GL 换栈；FreeType 独占文本 | P1 产品 |
-| **Iced** | 同栈工程成熟度：IME、无头/e2e、devtools、reactive rendering、layer 合并；widget 能力清单（table/editor/markdown）；feature 拆分与 CHANGELOG 节奏 | Elm TEA 取代 Signal；弃 taffy；为对齐 Iced 砍 AccessKit；整树 view 重建主路径 | P0/P1 同栈 |
+| **Iced** | 同栈工程成熟度：IME、无头/e2e、devtools、reactive rendering、layer 合并；widget 能力清单（table/editor/markdown）；feature 拆分与 CHANGELOG 节奏；**`Box<dyn Widget>` 构建帧**（见 [`stack_and_element_model.md`](stack_and_element_model.md)） | Elm TEA 取代 Signal；弃 taffy；为对齐 Iced 砍 AccessKit；整树 view 重建主路径 | P0/P1 同栈 |
 | **egui** | `egui_kittest` + AccessKit 验收形态；极简集成边界；「工具 UI」与「产品 UI」市场切割话术 | 即时模式主路径；为体积/上手度放弃保留树与无头组件；epaint 换 glyphon | P1 对照 / **架构禁区** |
 
 ### 决策卡片
@@ -149,7 +149,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | 类别 | 内容 |
 |------|------|
 | **坚持** | Solid Owner/Signal；winit + wgpu；taffy；glyphon；`ui!` + Builder 双面；AccessKit |
-| **优先偷师** | Xilem 截图门禁；GPUI IME/多窗契约；EUI 密度与脏绘文档；Slint 用例矩阵；**Iced 同栈测试/DevTools/IME**；egui kittest 形态 |
+| **优先偷师** | Xilem 截图门禁；GPUI IME/多窗契约 + arena/`stacksafe`；Floem 绘制迭代 DFS；EUI 密度与脏绘文档；Slint 用例矩阵；**Iced 同栈测试/DevTools/IME**；egui kittest 形态；栈预算见 [`stack_and_element_model.md`](stack_and_element_model.md) |
 | **明确避免** | VDOM；EUI 命令式主模型；**egui 即时模式**；弃 wgpu 追体积；Slint DSL 主路径；GPUI 全平台自写窗口；**Iced TEA 换核** |
 | **观察不跟** | Parley/Vello 生态（Xilem）；FemtoVG-wgpu（Slint）；GPUI Linux wgpu 文本栈；Iced tiny-skia 默认双渲染器——仅在 glyphon/体积瓶颈时再评估 |
 

@@ -181,6 +181,7 @@ crates/
 | P1 渲染 | 逻辑细粒度 damage 正式默认；GPU retain / 树级 DL → B8 | 见 [`damage.md`](damage.md) ADR；勿用「只重绘组件」替代脏区 |
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
 | P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
+| P1 内核 | Windows 默认 ~1 MiB 栈下可构建/布局；`Element` 子节点指针化（对标 GPUI/Iced） | collect 已小帧 + `stack_budget` ☑；构建帧仍按值巨树 → [`stack_and_element_model.md`](stack_and_element_model.md) |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | backdrop-blur 缓存、移动/鸿蒙一等公民 | Inspector P0–P2 已落地（`devtools` feature）；选择器级联 / 样式表仍不做 |
 
@@ -245,7 +246,7 @@ component_inventory.md              ← 分桶数据表
 ├─ 冻结展开：ENGINEERING_IMPLEMENTATION_PLAN · COMPONENT_LIBRARY_PLAN · REACTIVITY_PLAN
 ├─ 从属手册：reactivity_and_hot_reload · headless · custom_components
 │            keyboard_nav · ime · desktop_smoke · a11y_smoke · color · font_strategy · font
-│            multi_window · tray · glyphon_audit · size_and_memory
+│            multi_window · tray · glyphon_audit · size_and_memory · stack_and_element_model
 │            PUBLISH · emoji_gpu_compat_matrix · site/README
 ├─ 历史审计（非执行源）：gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
 └─ archive/                         ← 选型过程 / 早期随笔（已冻结，仅供追溯）
@@ -314,6 +315,7 @@ flowchart LR
 - 移动端 / 鸿蒙作为一等公民（仅保留 `PlatformWindow` 扩展点）  
 - 为对标 egui 体积而砍文本栈或 SDF 管线  
 - 无验收标准的「大重构」  
+- 用默认 PE `/STACK` 或无条件 `stacker::grow` 替代 `Element` 子节点指针化（见 ADR-10、[`stack_and_element_model.md`](stack_and_element_model.md)）  
 - HTML-in-canvas / Chrome flag / 换 Skia 主线做公开自绘（见 [`drawing.md`](drawing.md)）
 
 ---
@@ -331,6 +333,7 @@ flowchart LR
 | ADR-7 | 热重载基于 `template_id`，不承诺逻辑热替换；`template_id` ≠ 全局 a11y/焦点主键（见 [`element_identity.md`](element_identity.md)） | 接受 |
 | ADR-8 | 工程级以原生+发布为准，不以 Solid API 百分百对齐为准 | 接受 |
 | ADR-9 | **双书写面**：`ui!` 标签与 Builder 纯 Rust 一等公民、互嵌兼容；禁止只保留其一 | 接受 |
+| ADR-10 | **栈预算**：框架不 emit PE `/STACK`；默认以 Windows ~1 MiB 主线程为测基线；`Element` 子节点边界指针化为主路径，`with_ui_build_stack` 为过渡保险；应用 opt-in 见 `platform/windows/stack.rs` | 接受（2026-09-05）；详见 [`stack_and_element_model.md`](stack_and_element_model.md) |
 
 ---
 
@@ -374,6 +377,7 @@ flowchart LR
 | [glyphon_audit.md](glyphon_audit.md) | 文本管线核对（坚持 glyphon 中期） |
 | [PUBLISH.md](PUBLISH.md) | crates.io 清单 |
 | [size_and_memory.md](size_and_memory.md) | 体积与内存事实 |
+| [stack_and_element_model.md](stack_and_element_model.md) | **Windows 默认栈、`Element` 按值树与对标框架**（ADR-10） |
 | [font_strategy.md](font_strategy.md) | 字体打包策略 |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
 | [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |

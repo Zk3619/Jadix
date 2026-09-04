@@ -135,7 +135,7 @@ experimental 备注（不挡本包）：Toggle `default`/`outline` + `sm`/`defau
 | Dialog | 复合标签 | `open` | Builder：`dialog` / `open_signal`；壳走 WP-3.4 |
 | Tooltip | 标签 + fn | `open_signal` | |
 | HoverCard | 复合标签 + fn | `open` ↔ `open_signal` | 悬停；`side`+`align`+`sideOffset` |
-| Toast / Toaster | 标签 + `toast()` / `toaster()` | 队列全局 | **命令式** `toast("…").show()` 是产品面，不是「仅 RSX」；条目 `variant` ≠ 宿主 `variant` |
+| Toast / Toaster | 标签 + `toast()` / `toaster()` | 队列全局 | **根上只挂一份** `<Toaster/>`（或 `toaster()`）；`toast("…").show()` 是命令面，不是树节点；条目 `variant` ≠ 宿主 `variant` |
 | Tabs | 复合标签 + fn | `value_signal` | |
 | ScrollArea / Scrollbar | 标签 + fn | — | Scrollbar `variant` 见 §2 |
 

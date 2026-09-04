@@ -22,7 +22,7 @@
 - 浮层编排壳（设计）：[overlay_shells.md](overlay_shells.md)（`anchored_overlay` / `viewport_modal` · WP-OVL）
 - 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
-- 页面栈缓存大小过大，尤其是计算器，从原本的默认1MB 增长到需要 8MB
+- ~~页面栈缓存大小过大，尤其是计算器，从原本的默认1MB 增长到需要 8MB~~ collect 小帧 + 堆 DFS + `stack_budget` 门禁；框架不强制 PE `/STACK`；构建帧按值 `Element` 见 [`stack_and_element_model.md`](stack_and_element_model.md)
 
 ## Bugs
 

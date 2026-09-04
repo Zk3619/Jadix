@@ -81,11 +81,11 @@ run_on_ui_thread(|| {
 - [x] 次窗 AccessKit adapter（读屏）
 - [x] 次窗 IME 绑到次窗 HWND（组字 / 候选窗跟次窗 Input，不打进主窗）
 - [x] 次窗独立 glyphon overlay 文本带（复杂 Dialog 与主窗同一套 hoist 已可用）
-- [x] 无边框 / 透明 / 系统模糊（[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)）
+- [x] 无边框 / 透明 / 系统模糊（[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)；Win32 DWM 在 [`platform/windows`](../crates/rui/src/platform/windows/)）
 
 ## 无边框 · 透明 · 模糊
 
-创建时用 [`WindowOptions`](../crates/rui/src/app/window_chrome.rs)：`decorations(false)` 去掉 OS 标题栏；`transparent(true)` 让未填满的像素透出桌面；`blur(true)` 开系统 backdrop（Windows 11 Acrylic、macOS vibrancy、Wayland kwin）。`blur` 会同时打开 compositor alpha。
+创建时用 [`WindowOptions`](../crates/rui/src/app/window_chrome.rs)：`decorations(false)` 去掉 OS 标题栏；`transparent(true)` 让未填满的像素透出桌面；`blur(true)` 开系统 backdrop（Windows 11 Acrylic、macOS vibrancy、Wayland kwin）。`blur` 会同时打开 compositor alpha。Windows 具体实现（圆角无边框、DWM 扩展框、桌面 punch-through）在 [`platform/windows`](../crates/rui/src/platform/windows/)。
 
 ```rust,ignore
 use rui::app::{

@@ -565,7 +565,7 @@ Gallery 比 Calculator 多 **48 个 Element 节点**，Private 仅增 **~1.2 MiB
 | Element ↔ Taffy 映射 | 每 Element 一个 `layout_node`；`total_nodes` 与 Element 计数同步 | ✅ 无「幽灵 Taffy 节点」泄漏 |
 | `text_measurements` | 文本叶 layout 元数据；随 rebuild 修剪 | ✅ 规模 ≤ 文本叶数 |
 | `measure_layout_cache` | 单次 `compute_layout` 内 memo，帧末清空 | ✅ 不跨帧膨胀 |
-| Element 单节点体积 | `size_of::<Element>()` ≈ 数百字节 + 堆上 `text`/`attrs`/闭包 | ⚠️ 闭包节点（handlers）重于纯 div |
+| Element 单节点体积 | `size_of::<Element>()` ≈ **3.6 KiB**（`style`/`text_style` 已 `Box`；子树仍 `Vec<Element>` 按值）+ 堆上 `text`/`attrs`/闭包 | ⚠️ 宽 `ui!` 构建帧吃 OS 栈，见 [`stack_and_element_model.md`](stack_and_element_model.md) |
 | 结构虚拟化 | VirtualList / VirtualMasonry（experimental）减少 **mounted** 节点 | ✅ 大数据场景已走路径 |
 | Portal hoist | Dialog/Toast 子树提升到 portal 层，不复制 Taffy | ✅ 不双倍计数 |
 
