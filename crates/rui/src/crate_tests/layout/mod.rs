@@ -20,6 +20,7 @@ mod showcase_collapse;
 mod sidebar_content_scrollbar;
 mod sidebar_header_footer_text;
 mod sidebar_shell_width;
+mod stack_budget;
 mod subtree_promote;
 mod svg_scene;
 mod virtual_list_scroll;

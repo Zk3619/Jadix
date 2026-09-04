@@ -16,6 +16,8 @@ pub mod app;
 pub mod components;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
 pub mod logging;
+/// OS hooks: Windows DWM / optional stack helpers, macOS-linux blur.
+pub mod platform;
 /// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。
 pub mod prelude;
 pub mod primitives;
@@ -221,7 +223,7 @@ pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
-pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled};
+pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled, with_ui_build_stack};
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
     visible_item_range, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,

@@ -2,8 +2,9 @@
 //!
 //! Creation-time options live on [`WindowOptions`] (primary [`super::run_with`], secondary
 //! [`open_secondary_window_with`](super::multi_window::open_secondary_window_with)).
-//! Runtime helpers ([`start_window_drag`], [`close_window`], …) act on the **active**
-//! window (the one whose UI tree is dispatching the event).
+//! Win32 DWM / PE stack live in `crate::platform::windows`. Runtime helpers
+//! ([`start_window_drag`], [`close_window`], …) act on the **active** window
+//! (the one whose UI tree is dispatching the event).
 
 use winit::dpi::LogicalSize;
 use winit::window::{Window, WindowAttributes};
@@ -153,38 +154,8 @@ impl WindowOptions {
             }
         }
 
-        #[cfg(target_os = "windows")]
-        {
-            use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
-            if !self.decorations {
-                attrs = attrs
-                    .with_undecorated_shadow(true)
-                    .with_corner_preference(CornerPreference::Round);
-            }
-            if self.windows_extends_dwm_frame() {
-                attrs = attrs.with_system_backdrop(backdrop_type(self.backdrop));
-            }
-            if composition_swapchain {
-                attrs = attrs.with_no_redirection_bitmap(true);
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        let _ = composition_swapchain;
-
+        attrs = crate::platform::decorate_window_attributes(attrs, self, composition_swapchain);
         attrs
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType {
-    use winit::platform::windows::BackdropType;
-    match kind {
-        WindowBackdrop::Auto => BackdropType::Auto,
-        WindowBackdrop::None => BackdropType::None,
-        WindowBackdrop::Mica => BackdropType::MainWindow,
-        WindowBackdrop::Acrylic => BackdropType::TransientWindow,
-        WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,
     }
 }
 
@@ -200,102 +171,7 @@ pub(crate) fn apply_created_window(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
-    #[cfg(not(target_os = "windows"))]
-    if options.windows_extends_dwm_frame() {
-        window.set_blur(true);
-    }
-    #[cfg(target_os = "windows")]
-    apply_windows_glass(window, options, composition_swapchain);
-}
-
-#[cfg(target_os = "windows")]
-fn apply_windows_glass(window: &Window, options: &WindowOptions, composition_swapchain: bool) {
-    use winit::platform::windows::WindowExtWindows;
-
-    let Some(hwnd) = win32_hwnd(window) else {
-        return;
-    };
-    if options.windows_extends_dwm_frame() {
-        set_use_host_backdrop_brush(hwnd, false);
-        window.set_system_backdrop(backdrop_type(options.backdrop));
-        extend_dwm_frame(hwnd, true);
-        if !composition_swapchain {
-            enable_dwm_punch_through(hwnd);
-        }
-    } else if options.windows_punch_through_desktop() && !composition_swapchain {
-        set_use_host_backdrop_brush(hwnd, true);
-        window.set_system_backdrop(winit::platform::windows::BackdropType::Auto);
-        extend_dwm_frame(hwnd, false);
-        enable_dwm_punch_through(hwnd);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn win32_hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let handle = window.window_handle().ok()?;
-    let RawWindowHandle::Win32(h) = handle.as_raw() else {
-        return None;
-    };
-    Some(h.hwnd.get() as windows_sys::Win32::Foundation::HWND)
-}
-
-#[cfg(target_os = "windows")]
-fn extend_dwm_frame(hwnd: windows_sys::Win32::Foundation::HWND, into_client: bool) {
-    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
-    use windows_sys::Win32::UI::Controls::MARGINS;
-
-    let m = if into_client { -1 } else { 0 };
-    let margins = MARGINS {
-        cxLeftWidth: m,
-        cxRightWidth: m,
-        cyTopHeight: m,
-        cyBottomHeight: m,
-    };
-    unsafe {
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-    }
-}
-
-/// Empty blur region: DWM treats the window as glass so unpainted / alpha-0 pixels
-/// composite over the desktop (or the system backdrop). Same trick winit uses for
-/// `with_transparent(true)` — re-applied after WGL/DXGI surface creation, which
-/// otherwise drops the region.
-#[cfg(target_os = "windows")]
-fn enable_dwm_punch_through(hwnd: windows_sys::Win32::Foundation::HWND) {
-    use windows_sys::Win32::Foundation::TRUE;
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
-    };
-    use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
-
-    let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
-    let bb = DWM_BLURBEHIND {
-        dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-        fEnable: TRUE,
-        hRgnBlur: region,
-        fTransitionOnMaximized: 0,
-    };
-    unsafe {
-        let _ = DwmEnableBlurBehindWindow(hwnd, &bb);
-        let _ = DeleteObject(region);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn set_use_host_backdrop_brush(hwnd: windows_sys::Win32::Foundation::HWND, enable: bool) {
-    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_HOSTBACKDROPBRUSH};
-
-    let value: i32 = if enable { 1 } else { 0 };
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_HOSTBACKDROPBRUSH as u32,
-            &value as *const i32 as *const _,
-            std::mem::size_of::<i32>() as u32,
-        );
-    }
+    crate::platform::apply_created_window(window, options, composition_swapchain);
 }
 
 fn with_active_window<R>(f: impl FnOnce(&Window) -> R) -> Option<R> {
