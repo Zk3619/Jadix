@@ -116,6 +116,17 @@ pub fn is_vacuous_element(el: &Element) -> bool {
     if is_preserved_shell(el) || el.focusable {
         return false;
     }
+    // Reconcile identity: `reactive_view` placeholders are empty shells whose only job is
+    // to keep `template_id` in the tree so `try_reconcile_subtree` can graft. `ui!`
+    // runs `children_none_if_vacuous` on component children; dropping those placeholders
+    // blanks nested islands (Gallery MessageScroller rows-only split).
+    if el
+        .template_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty())
+    {
+        return false;
+    }
     if is_text_content_leaf(el) {
         return false;
     }
@@ -279,5 +290,23 @@ mod tests {
         let el = Element::new().text("OK");
         let out = children_none_if_vacuous(Some(el));
         assert_eq!(out.unwrap().text.as_deref(), Some("OK"));
+    }
+
+    #[test]
+    fn reactive_placeholder_is_not_vacuous() {
+        let ph = Element::new()
+            .template_id("examples/gallery/MessageScrollerShowcase:rows")
+            .template_hash("__rui_reactive_placeholder_v1")
+            .w("100%")
+            .h("max-content");
+        assert!(
+            !is_vacuous_element(&ph),
+            "empty reactive placeholder must survive ui! children_none_if_vacuous"
+        );
+        let kept = children_none_if_vacuous(Some(ph)).expect("placeholder dropped");
+        assert_eq!(
+            kept.template_id.as_deref(),
+            Some("examples/gallery/MessageScrollerShowcase:rows")
+        );
     }
 }

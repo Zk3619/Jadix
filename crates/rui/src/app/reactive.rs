@@ -250,6 +250,19 @@ fn mounted_anchor_hook(id: &str) -> Option<Rc<UnmountHook>> {
     })
 }
 
+/// Re-run a registered reactive-island effect (parent rebuild recreated an empty placeholder).
+fn schedule_registered_anchor_effect(registry_key: &str) {
+    let effect_id = REGISTERED_ANCHORS.with(|registry| {
+        registry
+            .borrow()
+            .get(registry_key)
+            .and_then(|registration| registration.effect_id)
+    });
+    if let Some(effect_id) = effect_id {
+        crate::core::reactivity::schedule_effect(effect_id);
+    }
+}
+
 /// Empty subtree root used only to reserve a stable [`Element::template_id`] in the declarative tree.
 /// Must use the **same** string as [`reactive_anchor`].
 pub fn reactive_placeholder(anchor_id: impl Into<String>) -> Element {
@@ -317,10 +330,9 @@ where
     });
     if already_registered {
         // Island already registered but the live tree may have a fresh empty placeholder
-        // (Show / switch_reactive section remount). Queue a remount so the effect reconciles.
-        if id.ends_with("__view") {
-            defer_view_remount(&id);
-        }
+        // (Show / switch_reactive section remount). Re-run the island effect so it reconciles
+        // into the new shell — not only `{sid}__view` menu panels.
+        schedule_registered_anchor_effect(&registry_key);
         return;
     }
 
@@ -380,12 +392,15 @@ where
             clear_view_remount_retries(&effect_anchor_id);
             runtime::request_redraw();
         } else {
-            // Miss: borrow held, or `{sid}__view` not in the live tree yet. Defer remount so
-            // hover-open menus (Share) are not stuck with highlight and no panel.
-            defer_view_remount(&effect_anchor_id);
+            // Miss: borrow held, or anchor not in the live tree yet. Re-queue this effect and,
+            // for menu `{sid}__view` islands, also bump `{sid}__remount` after AppState releases.
+            schedule_registered_anchor_effect(&effect_registry_key);
+            if effect_anchor_id.ends_with("__view") {
+                defer_view_remount(&effect_anchor_id);
+            }
             log::debug!(
-                target: "rui::menu_sub",
-                "reconcile MISS anchor={effect_anchor_id} (deferred remount)"
+                target: "rui::reconcile",
+                "reconcile MISS anchor={effect_anchor_id} (scheduled remount)"
             );
         }
     });

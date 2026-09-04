@@ -17,7 +17,8 @@ use crate::core::reactivity::{
 use crate::core::tree::{Element, UnmountHook};
 
 use super::reactive::{
-    reactive_anchor, reactive_placeholder, reactive_view, window_scoped_registry_key,
+    reactive_anchor, reactive_placeholder, reactive_placeholder_sized, reactive_view,
+    reactive_view_sized, window_scoped_registry_key,
 };
 
 thread_local! {
@@ -303,7 +304,7 @@ where
     let registry_for_effect = registry_key.clone();
     let render = Rc::new(RefCell::new(render));
 
-    reactive_view(list_id.clone(), move || {
+    reactive_view_sized(list_id.clone(), "100%", "max-content", move || {
         let items = list_source();
         sync_keyed_list(
             &registry_for_effect,
@@ -321,7 +322,7 @@ where
                 .iter()
                 .map(|item| {
                     let key = keyed_item_id(&scope_for_effect, &key_of(item).to_string());
-                    reactive_placeholder(key)
+                    reactive_placeholder_sized(key, "100%", "max-content")
                 })
                 .collect();
         }

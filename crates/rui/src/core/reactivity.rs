@@ -625,6 +625,29 @@ fn enqueue_pending_effect(rt: &Runtime, id: EffectId) {
     }
 }
 
+/// Re-queue an effect for the next flush (e.g. remount a reactive island).
+pub(crate) fn schedule_effect(effect_id: EffectId) {
+    if !effect_is_alive(effect_id) {
+        return;
+    }
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        if rt.current_effect.borrow().is_some()
+            || rt.flushing_deferred.get()
+            || rt.flushing_pending.get()
+            || rt.effect_run_depth.get() > 0
+        {
+            // Nested under an in-flight effect: run after the current effect finishes
+            // (same path as `create_render_effect` registration during mount).
+            rt.deferred_effects.borrow_mut().push(effect_id);
+        } else {
+            enqueue_pending_effect(&rt, effect_id);
+            drop(rt);
+            flush_pending(&rt_rc.borrow());
+        }
+    });
+}
+
 fn enqueue_pending_memo(rt: &Runtime, id: MemoId) {
     let mut set = rt.pending_memo_set.borrow_mut();
     if set.insert(id) {

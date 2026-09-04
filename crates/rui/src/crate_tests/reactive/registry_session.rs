@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::registry_owner::registry_totals;
-use crate::app::reactive::{reactive_anchor, reset_registered_anchors, switch_reactive};
-use crate::core::reactivity::{create_effect, create_root, reactivity_debug_snapshot, use_signal};
+use crate::app::reactive::{reactive_anchor, reactive_view_sized, reset_registered_anchors, switch_reactive};
+use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+use crate::core::reactivity::{create_effect, create_root, mark_next_effect_as_ui_root, reactivity_debug_snapshot, use_signal};
 use crate::core::tree::Element;
 
 #[test]
@@ -74,6 +75,74 @@ fn switch_reactive_section_cycles_do_not_grow_registry() {
         baseline,
         "dispose must restore registry baseline"
     );
+}
+
+fn subtree_contains_text(el: &Element, needle: &str) -> bool {
+    if el
+        .text
+        .as_deref()
+        .is_some_and(|t| t.contains(needle))
+    {
+        return true;
+    }
+    el.children.iter().any(|c| subtree_contains_text(c, needle))
+}
+
+/// Gallery basics rebuilds the section body while nested `reactive_view_sized` islands
+/// stay registered — the island effect must re-run into the fresh placeholder shell.
+#[test]
+fn nested_reactive_island_survives_parent_switch_rebuild() {
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let live_check = Rc::clone(&live);
+
+    let section = use_signal("wp243_nested_section", || "basics".to_string());
+    let noise = use_signal("wp243_nested_noise", || 0u32);
+
+    mark_next_effect_as_ui_root();
+    let (_owner, _) = create_root(|| {
+        create_effect({
+            let live = Rc::clone(&live);
+            move || {
+                let _ = noise.get();
+                let body = switch_reactive(
+                    "wp243_nested_switch",
+                    move || section.get(),
+                    move |key| {
+                        if key != "basics" {
+                            return Element::new().text("other");
+                        }
+                        let rows = reactive_view_sized(
+                            "wp243_nested_rows",
+                            "100%",
+                            "max-content",
+                            || Element::new().text("Hello from nested island"),
+                        );
+                        Element::new().child(rows)
+                    },
+                );
+                *live.borrow_mut() = body;
+            }
+        });
+    });
+
+    assert!(
+        subtree_contains_text(&live_check.borrow(), "Hello from nested island"),
+        "nested island must reconcile on first mount"
+    );
+
+    noise.set(1);
+
+    assert!(
+        subtree_contains_text(&live_check.borrow(), "Hello from nested island"),
+        "parent switch rebuild must not leave nested island empty"
+    );
+
+    clear_test_reconcile_root();
+    reset_registered_anchors();
 }
 
 #[test]
