@@ -5,7 +5,7 @@
 > **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**；**2026-08-18 2D/3D 能力层 Phase 1–6 ☑**（RenderGraph / TexturePool / Canvas2D 正式面 / GPU 2D 可选 / 子树 effect / scene3d camera·light / Timeline·glyph_fx）。**B16/B17 产品目录仍不挡 Beta**。  
 > **对照**：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（包住子树的 shader/paint）· [react-bits](https://github.com/DavidHDev/react-bits)（文字动效 / 背景 / 动画 UI）；**禁止**搬 HTML-in-canvas / Chrome flag / DOM 纹理 / CSS-in-JS 运行时。
 
-交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](component_inventory.md) · [`damage.md`](damage.md) · [`box_model.md`](box_model.md) · Chart → WP-3.2
+交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](components/component_inventory.md) · [`damage.md`](engine/damage.md) · [`box_model.md`](engine/box_model.md) · Chart → WP-3.2
 
 ---
 

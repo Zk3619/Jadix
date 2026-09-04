@@ -2,7 +2,7 @@
 //!
 //! Layout/centering (invisible slots + optical quads) is always on — see
 //! [`super::emoji_layout::custom_glyph_layout_enabled`]. This module only chooses the
-//! bitmap source. See `docs/assets_and_icons_architecture.md` §11.
+//! bitmap source. See `docs/engine/assets_and_icons_architecture.md` §11.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

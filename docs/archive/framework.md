@@ -7,6 +7,6 @@
 其核心结论（混合架构：声明式 API × 保留模式内核；`winit`/`wgpu`/`taffy`/`glyphon`）已吸收进：
 
 - [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) §2
-- [gap_analysis.md](../gap_analysis.md) §1.1
+- [gap_analysis.md](../comparison/gap_analysis.md) §1.1
 
 请勿再将本文件当作架构规范引用。

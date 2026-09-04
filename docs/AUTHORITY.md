@@ -34,35 +34,41 @@
 
 ### 1.1 层级
 
+根目录只放权威规范 + changelog；其余按域进子目录（地图见 [`README.md`](README.md)）。
+
 ```text
-AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文）
+docs/                                ★ 根目录 = 权威 + changelog
+│  AUTHORITY.md                      唯一入口 + 唯一勾选源（本文）
+│  CHANGELOG.md
+│  ENGINEERING_GRADE_FRAMEWORK.md    工程门槛 · ADR · 锁定栈
+│  COMPONENT_LIBRARY.md              组件产品面 · 双书写 · API 契约
+│  REACTIVITY.md                     细粒度模型 · 三档更新 · 缺口事实
+│  element_identity.md               身份四轴（跨组件 / 宏 / 运行时）
+│  drawing.md                        Svg / Canvas / 2D·3D 公开自绘面
 │
-├─ 领域规范（只写「是什么 / 禁区」，不写排期）
-│   ENGINEERING_GRADE_FRAMEWORK.md   工程门槛 · ADR · 锁定栈
-│   COMPONENT_LIBRARY.md             组件产品面 · 双书写 · API 契约
-│   REACTIVITY.md                    细粒度模型 · 三档更新 · 缺口事实
-│   element_identity.md              身份四轴（跨组件 / 宏 / 运行时）
-│   drawing.md                       Svg / Canvas / 2D·3D 公开自绘面
-│
-├─ 数据表（随代码改，不另开计划）
+├─ components/                       数据表 + 组件手册（随代码改，不另开计划）
 │   component_inventory.md           分桶 + id 策略 + planned
-│   component_variants.md            variant/size/受控命名（WP-3.8）；§0 为 COMPONENT_LIBRARY §3.1.1 实例
+│   component_variants.md            variant/size/受控命名（WP-3.8）
+│   custom_components · headless · overlay_shells · COMPONENT_LAYERING
 │
-├─ 操作手册（验收步骤，不是第二套 WP）
+├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算
+│   box_model · layout_subtree · stack_and_element_model · color · font* · text_align
+│   animation_and_motion · css_animation_max_alignment · damage · glyphon_audit
+│
+├─ ops/                              验收手册（不是第二套 WP）
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
-│   reactivity_and_hot_reload · headless · custom_components · devtools
-│   color · font* · damage · layout_subtree · text_align · box_model
-│   animation_and_motion · css_animation_max_alignment · drawing（自绘面规范，亦作手册入口）
-│   glyphon_audit · PUBLISH · size_and_memory · multi_window · tray
-   scroll_cpu（[`size_and_memory.md`](size_and_memory.md) §7 · AUTHORITY §5.6 审计）
+│   reactivity_and_hot_reload · PUBLISH · W4_PRELAUNCH_CHECKLIST
+│   multi_window · tray · devtools · size_and_memory
+│   scroll_cpu（[`size_and_memory.md`](ops/size_and_memory.md) §7 · 本文 §5.6）
 │
-└─ 非执行源
-    三份 *_PLAN.md                   冻结展开（历史 WP 细则；勾选作废）
-    gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
-    GPUI_ECOSYSTEM_COMPARISON（× gpui / gpui-component / gpui-vue / gpuix；非执行源）
-    COMPONENT_LAYERING（组件体量 × gpui-component 分层；非执行源）
-    FREYA_COMPARISON（× reference/freya-main；非执行源）
-    archive/ · rui.md · bugs.md · site/README
+├─ comparison/                       对照审计（非执行源）
+│   gap_analysis · REFERENCE_COMPARISON · GPUI_ECOSYSTEM_COMPARISON · FREYA_COMPARISON
+│
+├─ archive/                          冻结计划 / 愿景 / 早期随笔（勾选作废）
+│   *_PLAN.md · PROJECT · STAGE7_ROADMAP · NAMING_DECISION · bugs · rui.md
+│
+├─ plans/                            进行中的专题计划
+└─ site/                             文档站 stub（WP-4.4）
 ```
 
 ### 1.2 争议路由
@@ -74,19 +80,19 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 | 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid；**Solid × 原生 GUI 终极目标** | `REACTIVITY.md`（§0.1 / **§0.2** / §5.7 / **§5.9 记分牌** / **§5.10 源码对照**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
 | `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
-| 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
-| `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](animation_and_motion.md) | 在组件里重复实现 tick；把 presence 塞进 `keyframes` |
-| CSS 动画最大对齐范围、ANIM 波次、Specified/Used 模型 | [`css_animation_max_alignment.md`](css_animation_max_alignment.md) | 创作时按组件补丁 `KeyframeStop`；跳过 ANIM DoD |
+| 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](components/custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
+| `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) | 在组件里重复实现 tick；把 presence 塞进 `keyframes` |
+| CSS 动画最大对齐范围、ANIM 波次、Specified/Used 模型 | [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) | 创作时按组件补丁 `KeyframeStop`；跳过 ANIM DoD |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
-| 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2.1） | 只改 Gallery 文案 |
+| 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
 ### 1.3 旧计划处置
 
 | 文件 | 即日起 | 后续（可选） |
 |------|--------|----------------|
-| `ENGINEERING_IMPLEMENTATION_PLAN.md` | 文首标明「展开附录；勾选以本文为准」 | 正文吸收完毕后迁 `archive/` |
-| `COMPONENT_LIBRARY_PLAN.md` | 同上；**CV 门禁并入本文 Wave CV** | 同上 |
-| `REACTIVITY_PLAN.md` | 同上；R-WP 映射为本文 WP 别名 | 同上 |
+| `archive/ENGINEERING_IMPLEMENTATION_PLAN.md` | 已迁 `archive/`；勾选以本文为准 | — |
+| `archive/COMPONENT_LIBRARY_PLAN.md` | 同上；**CV 门禁并入本文 Wave CV** | — |
+| `archive/REACTIVITY_PLAN.md` | 同上；R-WP 映射为本文 WP 别名 | — |
 
 旧编号（`C-WP-*` / `R-WP-*`）仅作别名，见 §5.0。手册里已写的 `WP-1.1` 等**保持不变**。
 
@@ -104,7 +110,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage 逻辑策略正式默认 ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | GPU PartialLoad / 树级 DL → B8；glyph 级 golden 可加深 |
 | 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**WP-R.5 ☑**（I-7/I-11）；**WP-R.3 ☑**（I-8）；**WP-R.9 ☑**（I-12 分相）；**WP-R.7 ☑**（G8 宏漏绑，含 `<Match>` RSX）；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；**北极星：Solid 机制 × 原生 GUI**（§0.2 / §5.10） | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 机制可宣称（G8 ☑）；**不挡** Win-first 0.1；**G7 ☑ / G9 ☑ 2026-08-18** |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
-| 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io；**主名已锁 `jadix`（琢玉），重命名未执行** | `cargo add jadix` + 文档站 · [`NAMING_DECISION.md`](NAMING_DECISION.md) |
+| 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io；**主名已锁 `jadix`（琢玉），重命名未执行** | `cargo add jadix` + 文档站 · [`NAMING_DECISION.md`](archive/NAMING_DECISION.md) |
 | 性能（WP-P） | **Wave P ☑ 已退出（2026-08-20）**：包体 ≈8.6 MiB；满载 RSS **≤85 MiB**；release 滚动 CPU~1% / profile p99≈7 ms | W4；layer cache / B8 → **≥B3 backlog** |
 
 ---
@@ -198,7 +204,7 @@ flowchart TB
 | **D0.1** | 本文落地；根 README / `docs/` 入口改指本文 | ☑ 2026-08-12 |
 | **D0.2** | 三份 `*_PLAN.md` 文首冻结声明；三规范「执行源」改指本文 | ☑ 2026-08-12 |
 | **D0.3** | 手册与历史文（gap / STAGE7 / PROJECT / REFERENCE / identity）改链 | ☑ 2026-08-12 |
-| **D0.4** | （可选）吸收旧计划正文后迁 `archive/` | ☐ |
+| **D0.4** | 吸收旧计划正文后迁 `archive/`；根目录只留权威 + changelog | ☑ 2026-09-05 |
 
 ### 5.2 Wave 1 — 原生可信
 
@@ -238,14 +244,15 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 - [x] Button · Input · Dialog · Tabs · Checkbox|Switch 有 layout/行为测 **或** 冒烟勾选（CV.2 ☑ 2026-08-12）  
 - [x] 行为控件 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`（CV.4 ☑ 2026-08-12）  
 
-分桶真源：[`component_inventory.md`](component_inventory.md) §2（控件）。  
-**当前 `verified`（控件）**：Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar。  
+分桶真源：[`component_inventory.md`](components/component_inventory.md) §2（控件）。  
+**当前 `verified`（控件）**：Gallery 产品面已走查（2026-09-05）；CV.1 核心集仍为 Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar（含 smoke / `cv_*` 测）。完整名单见 inventory §1–§2。  
+**仍 `experimental`（不进 SemVer 0.1）**：Form helpers、Chart grammar、VirtualMasonry、Scene3d（feature）、块级 markdown。  
 **Form**：降出 §5.2.1（Context helpers → `experimental`）；**WP-3.9 ☑** 校验路径已加深，仍不升稳定面。  
 **CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。  
 **CV.3**（2026-08-12）：稳定面 inventory 文档手工验证修错后签署；无未分类 P0，不降级。  
 **CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → **WP-2.8 ☑**。  
 **CV.5**：不单独开工；golden 五场景 → **WP-2.6**。  
-**样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](color.md)。
+**样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](engine/color.md)。
 
 ### 5.4 Wave 2 — 文本、像素与内核硬化
 
@@ -261,9 +268,9 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | **WP-2.6** | 组件 golden 五场景 | C-WP-3.3 | ☑ 2026-08-13；Button/Input/Dialog/Tabs/ScrollArea；`golden_component_*` + `tests/golden/golden_*.rgba` |
 | **WP-2.7** | 双路径 / 根裸 `get()` 可观测 | R-WP-2 | ☑ 2026-08-13；建议进 Beta；0.1 Win-first 可注明已知限制 |
 | **WP-2.8** | 身份 API 收敛（展示型去必填；空串；试点 scoped） | C-WP-2.6 | ☑ 2026-08-13；前置 CV.4 ☑；框架能力来自 2.4 |
-| **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☑ 2026-08-13；**不挡 Beta**；细则 [`box_model.md`](box_model.md) |
+| **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☑ 2026-08-13；**不挡 Beta**；细则 [`box_model.md`](engine/box_model.md) |
 
-WP-2.4 任务要点（已签）：注册表随 Owner dispose（Anchors + Bindings + COMPONENT_*）；`scoped_template_id` / `scoped_focus_id`；长会话无膨胀测 `crate_tests/reactive/registry_owner.rs`；Gallery「布局 → WP-2.4」。文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7。细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
+WP-2.4 任务要点（已签）：注册表随 Owner dispose（Anchors + Bindings + COMPONENT_*）；`scoped_template_id` / `scoped_focus_id`；长会话无膨胀测 `crate_tests/reactive/registry_owner.rs`；Gallery「布局 → WP-2.4」。文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7。细则见冻结 [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md) R-WP-1。
 
 WP-2.5 任务要点（已签）：`Store::produce` ≡ `update` + 切片 `PartialEq` 契约测；Resource Err→EB 经**显式** `throw_resource_error`（巩固期不自动桥）；`docs/CHANGELOG.md` 实验面草案；Gallery「布局 → WP-2.5」。细则见 R-WP-4。
 
@@ -316,7 +323,7 @@ WP-2.6 任务要点（已签）：稳定面五场景像素 golden（**Button / I
 
 **签署规则**：A+A′+A″ 绿即可勾 WP-2.6；名单以稳定面为准，禁止把 experimental 写回 Beta 门禁。
 
-WP-2.7 任务要点（已签）：lifecycle `mark_next_effect_as_ui_root`；诊断钩子 `ui_root_effect_dep_count` / `root_bare_get_count`；debug 构建根订阅非空时 warn 一次；库测 `crate_tests/reactive/root_bare_get.rs`；Gallery「布局 → WP-2.7」。细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-2。
+WP-2.7 任务要点（已签）：lifecycle `mark_next_effect_as_ui_root`；诊断钩子 `ui_root_effect_dep_count` / `root_bare_get_count`；debug 构建根订阅非空时 warn 一次；库测 `crate_tests/reactive/root_bare_get.rs`；Gallery「布局 → WP-2.7」。细则见冻结 [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md) R-WP-2。
 
 #### WP-2.7 验收（可判定）
 
@@ -335,7 +342,7 @@ WP-2.7 任务要点（已签）：lifecycle `mark_next_effect_as_ui_root`；诊�
 
 **签署规则**：A 绿即可勾 WP-2.7；B 用于人工抽查与回归演示，不替代库测。不消除双路径（bind vs 结构岛仍为设计）。
 
-WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_chart()` / `progress()` 去必填 id；空串不写 `Some("")`（Progress/Toggle → `resolve_instance_id`）；Toggle 非受控 `use_scoped_signal` 试点；Gallery 减噪 +「布局 → WP-2.8」。细则见冻结 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md) C-WP-2.6。
+WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_chart()` / `progress()` 去必填 id；空串不写 `Some("")`（Progress/Toggle → `resolve_instance_id`）；Toggle 非受控 `use_scoped_signal` 试点；Gallery 减噪 +「布局 → WP-2.8」。细则见冻结 [`COMPONENT_LIBRARY_PLAN.md`](archive/COMPONENT_LIBRARY_PLAN.md) C-WP-2.6。
 
 #### WP-2.8 验收（可判定）
 
@@ -351,11 +358,11 @@ WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_c
 
 **目标**：把「Taffy + BorderBox 默认 + 百分比 content-box」收成可承诺、可测、可写 utility 的契约；**不**追求完整 CSSOM。
 
-| 子项 | 任务 | 映射 [`box_model.md`](box_model.md) | 状态 |
+| 子项 | 任务 | 映射 [`box_model.md`](engine/box_model.md) | 状态 |
 |------|------|--------------------------------------|------|
 | **2.9.1** | 手册落地；纲领/文档站/README 互链；Gallery「布局」区链到契约摘要 | BM1 | ☑ 手册 2026-08-12；入口链 + Gallery「WP-2.9)」2026-08-13 |
 | **2.9.2** | Builder `.border_box()` + utility `box-border` / `box-content`（`rui_style_tokens` + 宏映射） | BM2 | ☑ |
-| **2.9.3** | 稳定面「单节点文案 + padding」审计：该 ContentBox 的改 ContentBox 或拆叶；表进 inventory 或本手册附录 | BM3 | ☑ [`box_model.md`](box_model.md) 附录 A |
+| **2.9.3** | 稳定面「单节点文案 + padding」审计：该 ContentBox 的改 ContentBox 或拆叶；表进 inventory 或本手册附录 | BM3 | ☑ [`box_model.md`](engine/box_model.md) 附录 A |
 | **2.9.4** | 库测：outline 不扩大 hit；overflow+padding 裁剪边；（回归）percent_content_box 保持绿 | BM7 | ☑ `box_model_contract` + `percent_content_box` |
 | **2.9.5** | `em` 语义：文档标明「现相对根 16px」；可选试点「相对本节点 font-size」并加测 | BM4 | ☑ 局部 em（`CssDim` + `text_style.size`）；`IntoDimension`/`IntoF32` 仍根 16px |
 | **2.9.6** | （P2）分边 border API + 绘制 | BM6 | ☑ 2026-08-13 **B15** |
@@ -364,7 +371,7 @@ WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_c
 **退出**：2.9.1–2.9.7 ☑（含分边 border）。  
 **禁区**：换 Taffy；outline/shadow 进布局；块级 margin collapse。
 
-WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`；测宽叶审计表（Tabs=ContentBox，Button/Input 等拆叶）；命中/裁剪库测；局部 `em` + 真视口 `vw`/`vh`/`dvh` + `calc`；分边 `border-left` 等（B15）。Gallery「布局 → WP-2.9 / B15」。细则 [`box_model.md`](box_model.md)。
+WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`；测宽叶审计表（Tabs=ContentBox，Button/Input 等拆叶）；命中/裁剪库测；局部 `em` + 真视口 `vw`/`vh`/`dvh` + `calc`；分边 `border-left` 等（B15）。Gallery「布局 → WP-2.9 / B15」。细则 [`box_model.md`](engine/box_model.md)。
 
 #### WP-2.9 验收（可判定）
 
@@ -397,7 +404,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☑ 2026-08-17；导航区外壳卡；次窗键不进主窗 |
 | **WP-3.6** | 系统托盘原生接线（feature） | — | ☑ 2026-08-17；`tray-icon` + `request_exit`；默认 feature 仍关 |
 | **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☑ 2026-08-17；`utils/toggle_state`；前置 CV ☑ · 3.14 Owner ☑ |
-| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☑ 2026-08-17；[`component_variants.md`](component_variants.md)；仅 `verified` |
+| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☑ 2026-08-17；[`component_variants.md`](components/component_variants.md)；仅 `verified` |
 | **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☑ 2026-08-18；错误文案与 Input invalid 环同源；Gallery「表单」卡 |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☑ 2026-08-18；变高瀑布流虚拟化；Gallery「数据」卡；仍 experimental |
 | **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
@@ -422,7 +429,7 @@ WP-3.12 任务要点（已签）：`primitives/canvas` 叶 + `paint` / `Canvas2D
 
 WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。**能力层加深（2026-08-18，不挡 Beta）**：`RenderGraph` / `TexturePool`；Canvas2D 曲线/图像/命中；`RUI_GPU_2D=1` 可选 tessellate；`effect_wrap` 子树捕获+shader；`scene3d` camera/light/material；`Timeline` + `glyph_fx`。B16/B17 **产品目录**仍 backlog。
 
-WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](keyboard_nav.md)。
+WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](ops/keyboard_nav.md)。
 
 #### WP-3.14 复合控件作者面（进入 3.4 / 再扩复合控件前）
 
@@ -432,7 +439,7 @@ WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、�
 |------|------|------|
 | **3.14.1** | `#[component]` **默认**实例 `component_root`（Solid 式执行域）；纯 Builder 根同一 helper | ☑ |
 | **3.14.2** | 跟踪纪律可测：`isolate_reads` 注册 anchor，`untrack` 不注册；测升格 `crate_tests/reactive/component_authoring.rs` | ☑ |
-| **3.14.3** | 手册 [`custom_components.md`](custom_components.md) 复合控件配方（Owner / 跟踪 / 浮层 / 实例信号） | ☑ |
+| **3.14.3** | 手册 [`custom_components.md`](components/custom_components.md) 复合控件配方（Owner / 跟踪 / 浮层 / 实例信号） | ☑ |
 | **3.14.4** | 与 **WP-3.4** 分界：本包未改 Dialog / placement 产品化 | ☑ |
 
 **禁区**：换 VDOM；让 `#[component]` 默认整树 `get()` 重跑；把 Owner 默认做成 opt-in 而文档继续假装「组件即实例」。
@@ -448,7 +455,7 @@ WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、�
 
 **签署规则**：A+A′+A″ 绿且手册 3.14.3 即可勾 WP-3.14（**已签 2026-08-17**）。**不挡** 3.11/3.12。
 
-WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crates/rui/src/core/reactivity.rs)；Builder 同 helper（`with_child_owner` 为别名）；库测 `crate_tests/reactive/component_authoring.rs`（宏兄弟 Context、Builder 根、untrack vs isolate_reads）；手册配方 [`custom_components.md`](custom_components.md)。未改 Dialog。
+WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crates/rui/src/core/reactivity.rs)；Builder 同 helper（`with_child_owner` 为别名）；库测 `crate_tests/reactive/component_authoring.rs`（宏兄弟 Context、Builder 根、untrack vs isolate_reads）；手册配方 [`custom_components.md`](components/custom_components.md)。未改 Dialog。
 
 #### WP-3.4 浮层单一路径
 
@@ -461,7 +468,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **3.4.3** | 存量迁入：Select / Combobox / Date / Color / Tooltip / 有锚 Popover / Dropdown / ContextMenu / Menubar；Dialog / Sheet / CommandOverlay 走视口舞台 | ☑ |
 | **3.4.4** | Esc 顶层单测保持；Dropdown 关闭不占布局；Sheet 不嵌套 `rui_portal` | ☑ |
 
-**标注例外（不是第二套 placement）**：无锚点 Popover（仅 portal 面板）；NavigationMenu `viewport` 槽（仍 `mark_floating`）；Toast pinned host；CommandOverlay chrome 为 top-1/3（舞台 helper 与 Dialog 相同）。焦点陷阱产品化仍归 **C-WP-1.3**（Tab 已约束在顶层 Stacked，见 [`keyboard_nav.md`](keyboard_nav.md)）。
+**标注例外（不是第二套 placement）**：无锚点 Popover（仅 portal 面板）；NavigationMenu `viewport` 槽（仍 `mark_floating`）；Toast pinned host；CommandOverlay chrome 为 top-1/3（舞台 helper 与 Dialog 相同）。焦点陷阱产品化仍归 **C-WP-1.3**（Tab 已约束在顶层 Stacked，见 [`keyboard_nav.md`](ops/keyboard_nav.md)）。
 
 #### WP-3.4 验收（可判定）
 
@@ -470,7 +477,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **A helper** | `cargo test -p rui --lib mount_anchored_overlay_is_zero_anchor`；`mount_viewport_stage_does_not_nest_portal` | passed | 调用点继续 `portal_panel` 当 flex 兄弟 |
 | **A′ 存量** | `nested_portal_panel_is_the_old_sheet_bug`；`mount_viewport_stage_does_not_nest_portal`；Command overlay hoist 测仍绿 | passed | 视口舞台内再 `panel_block_clicks` |
 | **B Esc** | `push_two_esc_closes_top_only`；`three_layers_esc_closes_top_only_each_time` | passed | Esc 关错层 |
-| **C smoke** | [`desktop_smoke.md`](desktop_smoke.md) #6 Combobox、#7 Escape 顶层 | Win 已 ☑ 2026-08-09 | 新组件再发明 0×0 配方 |
+| **C smoke** | [`desktop_smoke.md`](ops/desktop_smoke.md) #6 Combobox、#7 Escape 顶层 | Win 已 ☑ 2026-08-09 | 新组件再发明 0×0 配方 |
 
 **签署规则**：A+A′+B 绿即可勾 WP-3.4（**已签 2026-08-17**）。禁区：第二套 `left/top` sync；`panel_block_clicks` 再包 `portal_panel`；用 `untrack` 包浮层体（仍归 3.14 纪律）。
 
@@ -481,7 +488,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **3.5.1** | Gallery **导航**区外壳卡：Inbox / Settings + Back / Forward（[`Router`](../crates/rui/src/app/router.rs)） | ☑ |
 | **3.5.2** | 次窗独立树（不共用主窗 Router / Navigator id）；打开/关闭不拆主窗 | ☑ |
 | **3.5.3** | 次窗 Keyboard / IME 不写入主窗焦点与 Esc 栈 | ☑ |
-| **3.5.4** | [`multi_window.md`](multi_window.md) 主↔次协作图 | ☑ |
+| **3.5.4** | [`multi_window.md`](ops/multi_window.md) 主↔次协作图 | ☑ |
 
 #### WP-3.5 验收（可判定）
 
@@ -491,7 +498,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **A′ Gallery** | `cargo test -p gallery navigation_section_mounts_shell_router_view` | 导航区有 `gal_shell_router__router_view` | 仍只有 Navigator 卡 |
 | **B 手工** | Gallery → 导航 → Inbox→Settings→Back；Open secondary 后主窗 Dialog/输入仍在 | 两页可回退；关次窗主窗存活（smoke #8） | 次窗按键关掉主窗浮层或打字进主窗 |
 
-**签署规则**：A+A′ 绿即可勾 WP-3.5（**已签 2026-08-17**）。次窗完整 pointer / per-window overlay / `shared_slot` 见 [`multi_window.md`](multi_window.md)（2026-08-17 已接）。
+**签署规则**：A+A′ 绿即可勾 WP-3.5（**已签 2026-08-17**）。次窗完整 pointer / per-window overlay / `shared_slot` 见 [`multi_window.md`](ops/multi_window.md)（2026-08-17 已接）。
 
 #### WP-3.6 系统托盘原生接线（可选 feature）
 
@@ -534,7 +541,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 |------|-------------|----------|----------|
 | **A 原语（权威）** | `cargo test -p rui --lib toggle_state` | 原语测 + 三控件共享测全绿（受控 click、disabled、Owner 隔离） | 任一 `FAILED`；Checkbox 仍 `use_signal("{id}__checkbox")` |
 | **A′ 回归** | `cargo test -p rui --lib` 含 `cv_checkbox` / `cv_switch` / `toggle_empty_id` | layout + 受控 sync / click 仍绿；空 id 不写 `Some("")` | `FAILED` |
-| **B 规范** | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.1；[`headless.md`](headless.md) | 不再写「尚未抽出 toggle_state」 | 缺口段仍允许永久扩散 |
+| **B 规范** | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.1；[`headless.md`](components/headless.md) | 不再写「尚未抽出 toggle_state」 | 缺口段仍允许永久扩散 |
 
 **签署规则**：A+A′ 绿且 B 缺口关闭即可勾 WP-3.7（**已签 2026-08-17**）。外观变体归一 **WP-3.8 ☑**。
 
@@ -544,12 +551,12 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 | 子项 | 任务 | 状态 |
 |------|------|------|
-| **3.8.1** | 词汇表 [`component_variants.md`](component_variants.md)；Button 标杆；Scrollbar/Toast/Label 差异登记 | ☑ |
-| **3.8.2** | Token：Toast success/warning → `chart-*`；焦点环 theme `ring`；[`color.md`](color.md) 换肤冒烟 | ☑ |
+| **3.8.1** | 词汇表 [`component_variants.md`](components/component_variants.md)；Button 标杆；Scrollbar/Toast/Label 差异登记 | ☑ |
+| **3.8.2** | Token：Toast success/warning → `chart-*`；焦点环 theme `ring`；[`color.md`](engine/color.md) 换肤冒烟 | ☑ |
 | **3.8.3** | 受控命名 `value_signal` / `checked_signal` / `open_signal`；Button variant + Input 外部 set 测 | ☑ |
 | **3.8.4** | 双书写审计表；Input RSX `value`；site README Button/Input 双片段 | ☑ |
 
-**禁区**：把 experimental Toggle/ColorPicker 强行并进 Button 词汇；Scrollbar `variant` 解析成 `outline`；**废除 Builder/RSX 字符串 `variant` 只留枚举**（`Into` 双收见 [`component_variants.md`](component_variants.md) §0，非 Freya 式纯枚举迁移）。
+**禁区**：把 experimental Toggle/ColorPicker 强行并进 Button 词汇；Scrollbar `variant` 解析成 `outline`；**废除 Builder/RSX 字符串 `variant` 只留枚举**（`Into` 双收见 [`component_variants.md`](components/component_variants.md) §0，非 Freya 式纯枚举迁移）。
 
 #### WP-3.8 验收（可判定）
 
@@ -622,9 +629,9 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **P.0.1** | `release` 编译：`cargo build -p gallery --release` 产物体积；各 `--features` 组合增量 | ☑ 2026-08-20 |
 | **P.0.2** | 运行内存基线：空窗口 RSS / Gallery 满载 RSS（Win Task Manager / `process_info`） | ☑ 2026-08-20（Gallery 默认 idle；真·空窗见 `gpu_probe` §8.1） |
 | **P.0.3** | 帧率 + **CPU/GPU 基线**：Gallery ScrollArea 连续滚动 p50/p99；总 CPU % / 单核 %；核显引擎占用（见 §5.6 审计 P.0.3 补充） | ☑ 2026-08-20 |
-| **P.0.4** | 数据记入 [`size_and_memory.md`](size_and_memory.md) §7；后续每项优化前后对比写同一文档 | ☑ 2026-08-20 |
+| **P.0.4** | 数据记入 [`size_and_memory.md`](ops/size_and_memory.md) §7；后续每项优化前后对比写同一文档 | ☑ 2026-08-20 |
 
-> **P.0.1 快照（2026-08-20）**：`gallery.exe` **9,041,408 B（≈8.62 MiB）**，`cargo build -p gallery --release --features runtime-logging`（含 `env_logger`，便于 `RUI_RENDER_PROFILE`）。默认 feature（`bundled-lucide` + `svg`）与 P.1 快照 **9,177,600 B** 同量级；feature 增量见 [`size_and_memory.md`](size_and_memory.md) §7.7。
+> **P.0.1 快照（2026-08-20）**：`gallery.exe` **9,041,408 B（≈8.62 MiB）**，`cargo build -p gallery --release --features runtime-logging`（含 `env_logger`，便于 `RUI_RENDER_PROFILE`）。默认 feature（`bundled-lucide` + `svg`）与 P.1 快照 **9,177,600 B** 同量级；feature 增量见 [`size_and_memory.md`](ops/size_and_memory.md) §7.7。
 
 #### WP-P.1 包体瘦身
 
@@ -658,7 +665,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 #### WP-P 架构审计（滚动 CPU · 2026-08-20）
 
-> 对照现代 GUI 滚动性能五维排查（事件驱动 / 布局解耦 / GPU 合成 / 输入节流 / Rust 热路径），对 `crates/rui` 源码的**事实审计**。展开与诊断命令见 [`size_and_memory.md`](size_and_memory.md) §7；damage 语义见 [`damage.md`](damage.md)。
+> 对照现代 GUI 滚动性能五维排查（事件驱动 / 布局解耦 / GPU 合成 / 输入节流 / Rust 热路径），对 `crates/rui` 源码的**事实审计**。展开与诊断命令见 [`size_and_memory.md`](ops/size_and_memory.md) §7；damage 语义见 [`damage.md`](engine/damage.md)。
 
 **背景**：Gallery `release` 约 **8.62–8.76 MiB**（P.1 ☑）。**双环境 CPU 口径**（2026-08-20）：关核显机器开发期 ScrollArea **总 CPU 5%–7%**；本机 release + 核显连续滚动 **总 CPU ~1%**、**核显 GPU ~40%**、独显 idle——合成在 GPU 上，符合 ADR-3 GL 集显路径。Wave P 退出门看 **p99 帧时间**，不单看 CPU/GPU %。
 
@@ -676,7 +683,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 - `scroll_only` 跳过 Taffy；滚动条 thumb 走 overlay collect（`ViewportsOnly` prepass）。
 - **P.3.3**：`scroll_only` 下对 `flex-wrap: nowrap` 的 Column/Row **sibling band 剪枝**（clip 外兄弟不 `collect`；extent 仍用 Taffy size）。
 - Canvas 叶 dirty 缓存（WP-3.12：滚动不重跑 `paint`）；VirtualList/Masonry 结构虚拟化（experimental）。
-- WP-2.2 damage：**逻辑策略正式默认**（paint-only → 逻辑 PartialLoad；**滚动强制逻辑 + GPU FullClear 为有意设计**）。GPU retain / 树级 DL 剪枝 = B8 实验→升默认。禁区：用「只重绘脏组件」替代脏区。细则 [`damage.md`](damage.md)。
+- WP-2.2 damage：**逻辑策略正式默认**（paint-only → 逻辑 PartialLoad；**滚动强制逻辑 + GPU FullClear 为有意设计**）。GPU retain / 树级 DL 剪枝 = B8 实验→升默认。禁区：用「只重绘脏组件」替代脏区。细则 [`damage.md`](engine/damage.md)。
 
 **主要瓶颈（解释观测占用）**
 
@@ -704,7 +711,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 - 记录 **总 CPU %** 与 **单逻辑处理器 %**（任务管理器 → 详细信息 → 右键列 → CPU）。
 - 同场景记录 **GPU 引擎**（3D / Compute 哪条在涨；独显是否 idle）。
 - release：`RUI_RENDER_PROFILE=1` + `scripts/p03_scroll_profile.ps1` 或手工 ScrollArea 连续滚 10s。
-- 数据写入 [`size_and_memory.md`](size_and_memory.md) §7.7–§7.8。
+- 数据写入 [`size_and_memory.md`](ops/size_and_memory.md) §7.7–§7.8。
 
 #### Wave P 退出门（量化 · 可判定 · 2026-08-20 签署）
 
@@ -728,7 +735,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 > 在 WP-3.4 / 3.7 浮层与布尔态底座之上，把 **≥2 组件重复** 的交互抽进 `utils/` / `components/internal/`。**不挡** W4 / Beta。
 >
-> **纠偏**：SI.9 / SI.10「单组件引擎进 internal」已判定为假下沉，代码折回 `components/{toast,carousel}/`。后续原语波见 **§5.6c Wave Prim**（对位 [`custom_components_suggestions.md`](custom_components_suggestions.md)）。
+> **纠偏**：SI.9 / SI.10「单组件引擎进 internal」已判定为假下沉，代码折回 `components/{toast,carousel}/`。后续原语波见 **§5.6c Wave Prim**（对位 [`custom_components_suggestions.md`](components/custom_components_suggestions.md)）。
 
 | ID | 主题 | 状态 |
 |----|------|------|
@@ -747,7 +754,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 ### 5.6c Wave Prim — 自定义组件原语（**不挡 Beta**）
 
-> 厚逻辑沉成框架面 API，让自定义浮层变薄。顺序见 [`custom_components_suggestions.md`](custom_components_suggestions.md) 与计划 [`plans/组件交互下沉_145e4c9e.plan.md`](plans/组件交互下沉_145e4c9e.plan.md)。
+> 厚逻辑沉成框架面 API，让自定义浮层变薄。顺序见 [`custom_components_suggestions.md`](components/custom_components_suggestions.md) 与计划 [`plans/组件交互下沉_145e4c9e.plan.md`](plans/组件交互下沉_145e4c9e.plan.md)。
 
 | ID | 主题 | 状态 |
 |----|------|------|
@@ -772,7 +779,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **WP-STY.0** | 主题令牌文件加载 + patch merge（`.toml`/`.json`/`.css` 变量） | — | ☐ **挡 4.7**；见 [`plans/global-stylesheet-loader.md`](plans/global-stylesheet-loader.md) |
 | **WP-STY.1** | 库内颜色令牌化 + CI 门禁 | — | ☐ **挡 4.7** |
 
-开工执行清单见 [`W4_PRELAUNCH_CHECKLIST.md`](W4_PRELAUNCH_CHECKLIST.md)。**Step 0**：命名已锁定 **`jadix`（琢玉）**，见 [`NAMING_DECISION.md`](NAMING_DECISION.md)；**重命名尚未执行**，仍阻塞 publish。热重载为 **`jadix_hot_reload`**（无 `_cli`）。
+开工执行清单见 [`W4_PRELAUNCH_CHECKLIST.md`](ops/W4_PRELAUNCH_CHECKLIST.md)。**Step 0**：命名已锁定 **`jadix`（琢玉）**，见 [`NAMING_DECISION.md`](archive/NAMING_DECISION.md)；**重命名尚未执行**，仍阻塞 publish。热重载为 **`jadix_hot_reload`**（无 `_cli`）。
 W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_style_tokens` + `jadix_hot_reload` 四 crate 同步发布（热重载策略 A）。
 底层架构口径：当前 `layout` / `renderer` 等仍在主 crate 内；Beta 后按门槛评估拆分为 `jadix_layout` / `jadix_renderer` / `jadix_core` 等独立 crate（仍由伞形入口重导出）。
 
@@ -806,7 +813,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 
 全部为真才可将对外叙事从 **Alpha / 工程级 MVP** 改为 **Beta / 工程可用**：
 
-- [x] 主 crate 名锁定 **`jadix`**（crates.io 无硬冲突）；☐ workspace 重命名完成（Step 0 · [`NAMING_DECISION.md`](NAMING_DECISION.md)）
+- [x] 主 crate 名锁定 **`jadix`**（crates.io 无硬冲突）；☐ workspace 重命名完成（Step 0 · [`NAMING_DECISION.md`](archive/NAMING_DECISION.md)）
 - [ ] `cargo publish` 四 crate（主 crate + `_macros` + `_style_tokens` + `_hot_reload_cli`）成功；干净环境最小窗口可跑（WP-4.3）  
 - [ ] 文档站：Getting Started（含双写法）+ 更新契约 + 组件索引（WP-4.4）  
 - [ ] 三平台真窗口冒烟 #1–#8（WP-1.4；**Win 已签**，macOS/Linux ☐）  
@@ -814,7 +821,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 - [x] damage 策略可测（WP-2.2；逻辑正式默认；GPU PartialLoad / 树级 DL = B8）  
 - [x] 测宽对齐测 + ≥5 组件 golden CI（WP-2.1 ☑，**WP-2.6 ☑ 2026-08-13**；WP-4.5 CI 矩阵仍可加深）  
 - [x] WP-2.4：Owner 注册表无泄漏测（2026-08-13；`registry_owner`）  
-- [x] Wave P 性能退出门已过（WP-P.0–P.3 ☑ **2026-08-20**；[`size_and_memory.md`](size_and_memory.md) §7.7）  
+- [x] Wave P 性能退出门已过（WP-P.0–P.3 ☑ **2026-08-20**；[`size_and_memory.md`](ops/size_and_memory.md) §7.7）  
 - [ ] 开放 P0 = 0（冒烟列、crates、文档站、CHANGELOG）  
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1 / 4.7）  
 
@@ -826,7 +833,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 
 | ID | 项 | 来源 |
 |----|-----|------|
-| B1 | **DevTools / Inspector**（`devtools` feature）：Elements + Layout + Reactivity + 样式 live edit + 声明列表 CSSOM 编辑 + `template_id` 源码定位。**P0/P1/P2 ☑ 2026-08-19**。**不**做选择器级联 / 样式表；不挡 Beta | 工程 · [`devtools.md`](devtools.md) |
+| B1 | **DevTools / Inspector**（`devtools` feature）：Elements + Layout + Reactivity + 样式 live edit + 声明列表 CSSOM 编辑 + `template_id` 源码定位。**P0/P1/P2 ☑ 2026-08-19**。**不**做选择器级联 / 样式表；不挡 Beta | 工程 · [`devtools.md`](ops/devtools.md) |
 | B2 | `mergeProps` / `splitProps` / `children()` | 反应性 · ☑ 2026-08-18 Rust 语义糖（非 JS Proxy） |
 | B3 | backdrop-blur 离屏缓存 | 工程 · **滚动 layer cache 不早于本项**（共用 offscreen / retain 管线） |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
@@ -835,14 +842,14 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 | B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI | 工程 |
-| B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list（树级剪枝）+ draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；ADR 见 [`damage.md`](damage.md)；[`size_and_memory.md`](size_and_memory.md) §7 |
+| B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list（树级剪枝）+ draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；ADR 见 [`damage.md`](engine/damage.md)；[`size_and_memory.md`](ops/size_and_memory.md) §7 |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
 | B10 | 块级 markdown 编辑控件 | 组件 CB3 |
 | B11 | 组件视觉回归（多 DPI / dark） | 组件 CB4 |
 | B12 | 非默认 brand 主题包 | 组件 CB5 |
 | B13 | 实验面批量升 verified | 组件 CB6；须走 CV 流程 |
 | B14 | ShadCN planned P1（Badge/Avatar/Skeleton/…） | inventory §1.9；落地先 `experimental` |
-| B15 | 盒模型加深：分边 border（`border-left` 等） | [`box_model.md`](box_model.md) BM6；☑ 2026-08-13 `border_width_sides` / `border_color_sides` + Taffy `Rect` + 非均匀四边条；`box_model_contract`；Gallery「WP-2.9 / B15」 |
+| B15 | 盒模型加深：分边 border（`border-left` 等） | [`box_model.md`](engine/box_model.md) BM6；☑ 2026-08-13 `border_width_sides` / `border_color_sides` + Taffy `Rect` + 非均匀四边条；`box_model_contract`；Gallery「WP-2.9 / B15」 |
 
 ---
 

@@ -1,8 +1,8 @@
 # 全局样式表加载器与主题令牌治理
 
-> **文档地位**：样式承诺面（[`component_inventory.md`](../component_inventory.md) §1.8）的**发版前 P0** + **发版后深化**计划。  
+> **文档地位**：样式承诺面（[`component_inventory.md`](../components/component_inventory.md) §1.8）的**发版前 P0** + **发版后深化**计划。  
 > **约束**：[`AUTHORITY.md`](../AUTHORITY.md) 巩固期明确**不实现完整 CSSOM**（选择器级联 / 浏览器样式表）；本计划是**受控子集**，不是 CSS 引擎。  
-> **关联**：[`color.md`](../color.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5.2.2 · [`devtools.md`](../devtools.md)  
+> **关联**：[`color.md`](../engine/color.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5.2.2 · [`devtools.md`](../ops/devtools.md)  
 > **日期**：2026-08-29
 
 ---
@@ -146,7 +146,7 @@ destructive = "oklch(0.704 0.191 22.216)"
 
 #### 2.1.6 文档
 
-- [`color.md`](../color.md) 增 §「应用级主题覆盖」
+- [`color.md`](../engine/color.md) 增 §「应用级主题覆盖」
 - Gallery 增 **Theme** 分区子页：`theme.toml` 热加载演示（可选 `jadix_hot_reload` 监听）
 
 ---
@@ -402,7 +402,7 @@ flowchart LR
 | **WP-STY.3** | Phase 2 | 否 | 选择器匹配 + `apply_stylesheet_rules` |
 | **WP-STY.4** | Phase 3 | 否 | 热重载 + DevTools + CSS 声明降级 |
 
-建议写入 [`AUTHORITY.md`](../AUTHORITY.md) §5 末尾「发版后 backlog」；**WP-STY.0/1** 链入 [`W4_PRELAUNCH_CHECKLIST.md`](../W4_PRELAUNCH_CHECKLIST.md) 新小节 **A3. 主题与颜色治理**。
+建议写入 [`AUTHORITY.md`](../AUTHORITY.md) §5 末尾「发版后 backlog」；**WP-STY.0/1** 链入 [`W4_PRELAUNCH_CHECKLIST.md`](../ops/W4_PRELAUNCH_CHECKLIST.md) 新小节 **A3. 主题与颜色治理**。
 
 ---
 
@@ -452,7 +452,7 @@ gantt
 ## 10. 交叉引用更新清单（合入时勾选）
 
 - [ ] [`AUTHORITY.md`](../AUTHORITY.md) — WP-STY.0–4 + 发版前挡板
-- [ ] [`W4_PRELAUNCH_CHECKLIST.md`](../W4_PRELAUNCH_CHECKLIST.md) — §A3
-- [ ] [`component_inventory.md`](../component_inventory.md) — §1.8 增样式表行（Phase 1 后）
-- [ ] [`color.md`](../color.md) — 应用主题覆盖 §
+- [ ] [`W4_PRELAUNCH_CHECKLIST.md`](../ops/W4_PRELAUNCH_CHECKLIST.md) — §A3
+- [ ] [`component_inventory.md`](../components/component_inventory.md) — §1.8 增样式表行（Phase 1 后）
+- [ ] [`color.md`](../engine/color.md) — 应用主题覆盖 §
 - [ ] [`CHANGELOG.md`](../CHANGELOG.md) — Phase 0 条目

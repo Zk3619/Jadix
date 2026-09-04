@@ -11,14 +11,14 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4
 | Authority + unified plan | 唯一入口与执行计划 | [AUTHORITY.md](../AUTHORITY.md) |
 | Engineering-grade charter | 工程级门槛与 ADR | [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) |
 | Component library | 组件库领域规范 | [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) |
-| Variant / size / controlled API | 稳定面词汇与双书写审计 | [component_variants.md](../component_variants.md) |
+| Variant / size / controlled API | 稳定面词汇与双书写审计 | [component_variants.md](../components/component_variants.md) |
 | Reactivity | 细粒度响应式规范 | [REACTIVITY.md](../REACTIVITY.md) |
-| Vision | 愿景与分层初衷 | [PROJECT.md](../PROJECT.md) |
-| Custom components | 自定义组件 | [custom_components.md](../custom_components.md) |
-| Reactivity & hot reload | 响应式与热重载 | [reactivity_and_hot_reload.md](../reactivity_and_hot_reload.md) |
-| Headless patterns | Headless 模式 | [headless.md](../headless.md) |
-| Color tokens | 颜色与混色 | [color.md](../color.md) |
-| Box model | 类 CSS 盒模型 | [box_model.md](../box_model.md) |
+| Vision | 愿景与分层初衷 | [PROJECT.md](../archive/PROJECT.md) |
+| Custom components | 自定义组件 | [custom_components.md](../components/custom_components.md) |
+| Reactivity & hot reload | 响应式与热重载 | [reactivity_and_hot_reload.md](../ops/reactivity_and_hot_reload.md) |
+| Headless patterns | Headless 模式 | [headless.md](../components/headless.md) |
+| Color tokens | 颜色与混色 | [color.md](../engine/color.md) |
+| Box model | 类 CSS 盒模型 | [box_model.md](../engine/box_model.md) |
 | Drawing (Svg/Canvas/3D) | 公开自绘面 | [drawing.md](../drawing.md) |
 
 ### Dual writing · 双书写（Button / Input）
@@ -34,25 +34,25 @@ ui! { <Input id="name" value={name} /> }
 let _: Element = input("name").value_signal(name).into();
 ```
 
-完整词汇与审计表：[component_variants.md](../component_variants.md)。
+完整词汇与审计表：[component_variants.md](../components/component_variants.md)。
 
 ## Desktop shell · 桌面外壳
 
 | EN | 中文 | Link |
 |----|------|------|
-| Multi-window | 多窗口 / 无边框 / 透明模糊 | [multi_window.md](../multi_window.md) |
-| System tray | 系统托盘 | [tray.md](../tray.md) |
-| Desktop smoke | 真窗口冒烟 | [desktop_smoke.md](../desktop_smoke.md) |
-| IME | 输入法 | [ime.md](../ime.md) |
-| Publish to crates.io | 发布清单 | [PUBLISH.md](../PUBLISH.md) |
-| Size & memory | 体积与内存 | [size_and_memory.md](../size_and_memory.md) |
+| Multi-window | 多窗口 / 无边框 / 透明模糊 | [multi_window.md](../ops/multi_window.md) |
+| System tray | 系统托盘 | [tray.md](../ops/tray.md) |
+| Desktop smoke | 真窗口冒烟 | [desktop_smoke.md](../ops/desktop_smoke.md) |
+| IME | 输入法 | [ime.md](../ops/ime.md) |
+| Publish to crates.io | 发布清单 | [PUBLISH.md](../ops/PUBLISH.md) |
+| Size & memory | 体积与内存 | [size_and_memory.md](../ops/size_and_memory.md) |
 
 ## Historical · 历史（非执行源）
 
 | EN | 中文 | Link |
 |----|------|------|
-| Gap analysis | 差距审计底稿 | [gap_analysis.md](../gap_analysis.md) |
-| Stage 7–12 roadmap | 阶段七～十二历史排期 | [STAGE7_ROADMAP.md](../STAGE7_ROADMAP.md) |
+| Gap analysis | 差距审计底稿 | [gap_analysis.md](../comparison/gap_analysis.md) |
+| Stage 7–12 roadmap | 阶段七～十二历史排期 | [STAGE7_ROADMAP.md](../archive/STAGE7_ROADMAP.md) |
 | Archived notes | 选型与早期随笔 | [archive/README.md](../archive/README.md) |
 
 ## Examples · 示例
@@ -64,4 +64,4 @@ cargo run -p calculator
 
 ## Bilingual note
 
-本目录为双语索引 stub：正文仍以各 `docs/*.md` 为准（中文为主、代码注释英/中混合）。
+本目录为双语索引 stub：正文以 [`../README.md`](../README.md) 地图为准（根目录权威规范；专题在 `components/` / `engine/` / `ops/` / `comparison/` / `archive/`）。

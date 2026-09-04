@@ -21,12 +21,19 @@
 | `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
 | `virtual_masonry` / `VirtualMasonryBuilder` | `components/virtual_masonry.rs` · `utils/virtual_masonry.rs` | WP-3.10；变高瀑布流虚拟化；`item_height` + 测宽缓存；未进 SemVer |
 
-### Added
+- **2026-09-05 Sidebar `collapsible="icon"`**：rail 宽 200ms linear 收到 3rem 图标轨；分组标题/搜索框按 ShadCN `-mt-8 opacity-0` 收高度；菜单按钮 `size-8` + `p-2`，非图标文案淡出并退出 flex。选中项不再切换字重（400↔500 会让 cosmic-text 重测字形、标签下跳）。
+- **2026-09-05 文档收口**：`docs/` 根目录只留权威规范 + changelog；手册进 `docs/components` / `engine` / `ops` / `comparison`；冻结计划与 scratch 进 `docs/archive`。Gallery 产品面走查后 inventory 升 `verified`（SemVer 0.1 名单不自动扩大，见 `COMPONENT_LIBRARY.md` §5.2.1）。
+- Timeline 默认圆点 20px、图标按圆点 70% 缩放（约 14px），避免指示过小。
+- **2026-09-05 ADR-10 第 1 档**：`Element` 改为 `Box<ElementInner>` 堆句柄（`size_of` = 指针）；TLS 回收卸载的 `ElementInner`（保留树对应 GPUI arena，**不是**每帧 bump）；`stack_budget` 断言句柄契约与 slab 回收。
+- **2026-09-05 ADR-10 第 2 档**：每帧 `sync_class_variants_subtree` / `tick_active_css_transitions_subtree` / `class_variant_hover_needs_frame` 改为堆 DFS（LTR `peer` 语义不变）；layout collect/build/cascade 先前已迭代。见 [`stack_and_element_model.md`](engine/stack_and_element_model.md)。
+- **2026-09-05 ADR-10 第 3 档**：`with_ui_build_stack` 改为 GPUI `stacksafe` 同构（**64 KiB 红区 / 1 MiB 段**），打在用户闭包边界（`run_effect` / `component_root` / 每条 UI 任务 / file-drop）与 Taffy `compute_layout`；click/key/touch/redraw 不再整段 grow。HMR `app_builder` 仍显式包。overlay `template_id` 查找与副窗 portal 探测改为堆 DFS。见 [`stack_and_element_model.md`](engine/stack_and_element_model.md)。
+- **2026-09-05 ADR-10**：保持上游 taffy（不 fork）；Taffy 内部递归 + 深链帽 128 为接受差距。组件壳 find / 每帧 subtree sync（含 Button hover、Sidebar rail / icon chrome）改堆 DFS；Floem 式扁平 `paint_order` **不做**（`OverlayPaintSplit` 已覆盖 stacking）。规范**已冻结**。
+- **2026-09-05 sticky-bake**：`hover:scale-*` / `hover:rotate-*` / `hover:skew-*`（及 `group-hover:`）在静止帧即 sticky Bake，避免指针进入时 Coverage→Bake 跳变（Bubble 表情芯片 / Twemoji）。Toast / Dialog 的内联 `transition: transform` + 程序化 scale **仍不** sticky。可选 `rui_sticky_xform=1`。
 
-- 图形栈升到 glyphon **0.12** / wgpu **30** / cosmic-text **0.19**（`swash` 0.2 / `fontdb` 0.23 / `ttf-parser` 0.25 / `pollster` 0.4）。wgpu 30 起 DX12 可正确映射 compositor alpha；玻璃窗仍优先独立 Vulkan 预乘交换链，`backend-dx12` 时再试 DX12。手册 [`multi_window.md`](multi_window.md)。
-- WP-3.6：可选 feature `system-tray` 接入 `tray-icon`；菜单点击经 `run_on_ui_thread`；[`request_exit`](../crates/rui/src/app/ui_bridge.rs) 退出事件循环；默认仍 stub。手册 [`tray.md`](tray.md)。
-- 窗口 chrome：[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)（`frameless` / `transparent` / `blur`）+ [`open_secondary_window_with`](../crates/rui/src/app/multi_window.rs) / [`run_with`](../crates/rui/src/app.rs)；自定义标题栏 [`start_window_drag`](../crates/rui/src/app/window_chrome.rs)。手册 [`multi_window.md`](multi_window.md)。
-- WP-3.8：稳定面 [`component_variants.md`](component_variants.md)（Button 词汇 + 差异表 + 受控命名 + 双书写审计）；未知 variant/size → default；Input RSX `value`；Toast success/warning 走 `chart-*` token。
+- 图形栈升到 glyphon **0.12** / wgpu **30** / cosmic-text **0.19**（`swash` 0.2 / `fontdb` 0.23 / `ttf-parser` 0.25 / `pollster` 0.4）。wgpu 30 起 DX12 可正确映射 compositor alpha；玻璃窗仍优先独立 Vulkan 预乘交换链，`backend-dx12` 时再试 DX12。手册 [`multi_window.md`](ops/multi_window.md)。
+- WP-3.6：可选 feature `system-tray` 接入 `tray-icon`；菜单点击经 `run_on_ui_thread`；[`request_exit`](../crates/rui/src/app/ui_bridge.rs) 退出事件循环；默认仍 stub。手册 [`tray.md`](ops/tray.md)。
+- 窗口 chrome：[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)（`frameless` / `transparent` / `blur`）+ [`open_secondary_window_with`](../crates/rui/src/app/multi_window.rs) / [`run_with`](../crates/rui/src/app.rs)；自定义标题栏 [`start_window_drag`](../crates/rui/src/app/window_chrome.rs)。手册 [`multi_window.md`](ops/multi_window.md)。
+- WP-3.8：稳定面 [`component_variants.md`](components/component_variants.md)（Button 词汇 + 差异表 + 受控命名 + 双书写审计）；未知 variant/size → default；Input RSX `value`；Toast success/warning 走 `chart-*` token。
 - WP-3.9：Form helpers 校验路径（仍 `experimental`）：`FormState::set_field_error` / `clear_*` / `validate`；`form_field` 错误文案与 Input invalid 环同源；Gallery「表单」卡。点击回调须 clone `FormState`，勿在事件里 `use_form()`。
 - WP-3.10：VirtualMasonry（仍 `experimental`）：最短列优先装箱 + 视口虚拟化；行高 `item_height(index, col_w)` / `height_from_cache`；Gallery「数据」千级卡。
 
@@ -48,7 +55,7 @@
 - WP-R.9：`flush_pending` 分相 Computed → `bind_*` → 用户 `create_effect`（I-12）；可选 [`create_computed`](../crates/rui/src/core/reactivity.rs)。同帧、顺序固定，无 SSR tick。
 - WP-R.3：`Store::field` / `store_field` 路径触发器；兄字段 `set` 不重跑弟 compute（I-8）。`store_select`+`produce` 仍为整根过渡。
 - WP-2.5：`throw_resource_error`；Resource `from_signal` / `set_error`；`produce` 切片契约测；Resource Err→EB e2e 测。
-- WP-2.9：Builder `.border_box()`；utility `box-border` / `box-content`；命中/裁剪库测；测宽叶审计见 `docs/box_model.md` 附录 A。
+- WP-2.9：Builder `.border_box()`；utility `box-border` / `box-content`；命中/裁剪库测；测宽叶审计见 `docs/engine/box_model.md` 附录 A。
 - 盒模型单位：布局期真 `vw`/`vh`/`dvh`、局部 `em`、`calc(A ± B)`（含 `calc(100% - Npx)` 相对父 content box）；逻辑 `*-inline`/`*-block` 双值；`row-gap`/`column-gap`。
 - B15 分边 border：`border_left` / `border_top_width` / `borderWidth="4px 8px"`（1–4 值）；Taffy 分边；均匀 SDF、非均匀四边条绘制。
 - 窗口缩放 fast 布局会重烘焙 `vw`/`vh`/`em`/`calc`，视口单位随窗口实时变化。
@@ -56,5 +63,5 @@
 ### Notes
 
 - 稳定面控件 API 仍见 inventory / COMPONENT_LIBRARY；本文件只标反应性异步与 Store 实验边界。
-- 盒模型默认仍为 BorderBox；禁止静默改默认。见 [`box_model.md`](box_model.md)。
+- 盒模型默认仍为 BorderBox；禁止静默改默认。见 [`box_model.md`](engine/box_model.md)。
 - **W2 退出（2026-08-13）** → Wave 3。公开自绘面（`<svg>` / `<canvas>` / 2D·3D）与未来创意库见 [`drawing.md`](drawing.md)：B16 canvas-ui · B17 react-bits；执行 WP-3.11–3.13，尚未进 SemVer。

@@ -2,7 +2,7 @@
 
 > **文档地位**：工程门槛、ADR、锁定栈与禁区的**领域规范**（「是什么」）。  
 > **执行源**：巩固期勾选 / 排期 / DoD 以 [`AUTHORITY.md`](AUTHORITY.md) 为准。本文**不**再充当入口或第二套计划。  
-> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
+> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](comparison/gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](archive/STAGE7_ROADMAP.md)、[`PROJECT.md`](archive/PROJECT.md)、[`PUBLISH.md`](ops/PUBLISH.md)，以及对标参考库（见 §3）。  
 > **审计日期**：2026-08-09（基线）；治理收口 2026-08-12；**2026-08-13** 公开自绘叶（Svg/Canvas/2D·3D）挂 ADR-3  
 > **版本口径**：阶段一～十二 **MVP 已落地**。本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
 
@@ -71,7 +71,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 持久保留树 | `layout_tree::build_and_layout` 复用 `NodeId`；`reconcile_elements` | 禁止每帧清树重建 |
 | 细粒度直达 | `bind_text` / `bind_prop` / `bind_class` / `template_paths` | 计数器类更新不应整树 diff |
 | Layout ≠ Paint | `LayoutStatus`；同宽文本 → `StyleChanged` | 滚动与换色廉价 |
-| 子树布局 | `mark_dirty` + `resolve_layout_compute_root`（上溢升父）；live 从 app root compute | 见 [layout_subtree.md](layout_subtree.md)；非换引擎 |
+| 子树布局 | `mark_dirty` + `resolve_layout_compute_root`（上溢升父）；live 从 app root compute | 见 [layout_subtree.md](engine/layout_subtree.md)；非换引擎 |
 
 **明确不做的替代路线**（已否决，见 gap §1）：
 
@@ -80,7 +80,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | Dioxus / React 式 VDOM | 自绘无 DOM；多一层 diff，与细粒度更新目标冲突 |
 | EUI 式命令式 / DSL | 丢掉已投入的 Solid 内核与 `ui!` DX |
 | 纯 egui 即时模式 | 难撑无头组件库、Portal、无障碍树与复杂产品面 |
-| 弃 wgpu 追体积 | 与「跨平台像素级自绘」冲突；内存差主要来自 GPU 驱动（见 [`size_and_memory.md`](size_and_memory.md)） |
+| 弃 wgpu 追体积 | 与「跨平台像素级自绘」冲突；内存差主要来自 GPU 驱动（见 [`size_and_memory.md`](ops/size_and_memory.md)） |
 
 ### 2.2 分层栈（实现 = 选型）
 
@@ -93,7 +93,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 响应式 | 自研 Solid 式（`core/reactivity`、`store`、`resource`） | Signal / Owner / Effect | 不对齐 DOM/SSR |
 | 样式 | `rui_style_tokens` + utility 变体引擎 | Tailwind/Uno 心智、theme、dark | 不实现完整 CSSOM |
 | 组件 | primitives → tokens → components；行为工具在 `utils/` | ShadCN 式无头骨架 + 样式产品面 | 交互状态机不永久粘在样式层；浮层几何走 `utils/popup` |
-| 颜色 | `style/color_space` + `theme`（OKLCH 令牌 → display sRGB） | 与 shadcn v4 语义色同源；CPU 混色用 linear / Oklab | 不接完整 ICC / HDR（见 [`color.md`](color.md)） |
+| 颜色 | `style/color_space` + `theme`（OKLCH 令牌 → display sRGB） | 与 shadcn v4 语义色同源；CPU 混色用 linear / Oklab | 不接完整 ICC / HDR（见 [`color.md`](engine/color.md)） |
 | DX | `rui_macros` + `rui_hot_reload_cli` + 公开 `*Builder` | `ui!` 与纯 Rust Builder **双书写面**；热补丁 `template_id` | 热重载不替代正确性测试；**不废弃无标签写法** |
 
 **锁定栈（不可再开选型分叉）**：`winit` + `accesskit_winit` · `wgpu` · `taffy` · `glyphon`/`cosmic-text` · `palette`（OKLCH）。否决：Skia 主线、弃 wgpu 追体积、stretch、完整 CSSOM。选型过程见 [`archive/Tech-Select.md`](archive/Tech-Select.md)。
@@ -133,7 +133,7 @@ crates/
 
 ### 4.1 已闭环（阶段一～六 + 七～十二 MVP）
 
-摘要（细节与勾选清单见 [`gap_analysis.md`](gap_analysis.md) §7、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)）：
+摘要（细节与勾选清单见 [`gap_analysis.md`](comparison/gap_analysis.md) §7、[`STAGE7_ROADMAP.md`](archive/STAGE7_ROADMAP.md)）：
 
 | 域 | 已落地要点 |
 |----|------------|
@@ -176,12 +176,12 @@ crates/
 | 优先级 | 主题 | 说明 |
 |--------|------|------|
 | P0 发布 | crates.io 实发 + 文档站正文 + CHANGELOG | stub / checklist 已有；缺真实 `cargo publish` |
-| P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
-| P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
-| P1 渲染 | 逻辑细粒度 damage 正式默认；GPU retain / 树级 DL → B8 | 见 [`damage.md`](damage.md) ADR；勿用「只重绘组件」替代脏区 |
+| P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](ops/desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
+| P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](engine/glyphon_audit.md) |
+| P1 渲染 | 逻辑细粒度 damage 正式默认；GPU retain / 树级 DL → B8 | 见 [`damage.md`](engine/damage.md) ADR；勿用「只重绘组件」替代脏区 |
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
-| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
-| P1 内核 | Windows 默认 ~1 MiB 栈下可构建/布局；`Element` 子节点指针化（对标 GPUI/Iced） | collect 已小帧 + `stack_budget` ☑；构建帧仍按值巨树 → [`stack_and_element_model.md`](stack_and_element_model.md) |
+| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](engine/box_model.md)；P2 加深 = B15 |
+| P1 内核 | Windows 默认 ~1 MiB 栈下可构建/布局；`Element` 子节点指针化（对标 GPUI/Iced） | ☑ 冻结：句柄 + TLS slab + 堆 DFS；64 KiB 红区热点；不 fork taffy → [`stack_and_element_model.md`](engine/stack_and_element_model.md) |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | backdrop-blur 缓存、移动/鸿蒙一等公民 | Inspector P0–P2 已落地（`devtools` feature）；选择器级联 / 样式表仍不做 |
 
@@ -189,7 +189,7 @@ crates/
 
 ## 5. 三档更新契约（开发者必须遵守）
 
-权威口径：[`REACTIVITY.md`](REACTIVITY.md) §3；用法细则：[`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)。纲领级摘要：
+权威口径：[`REACTIVITY.md`](REACTIVITY.md) §3；用法细则：[`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md)。纲领级摘要：
 
 | 档位 | API | 允许做什么 | 禁止 |
 |------|-----|------------|------|
@@ -199,7 +199,7 @@ crates/
 
 热重载：`template_id`（文件 + 宏行）命中后局部注入；结构岛需显式稳定 id。热补丁**不替代**单元测试与 golden。
 
-无头分层：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) + [`headless.md`](headless.md) — primitives（状态） / tokens（语义值） / components（外观）；默认交付面为 ShadCN 样式组件；书写面为 `ui!` 与 Builder **双轨兼容**（ADR-9）。
+无头分层：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) + [`headless.md`](components/headless.md) — primitives（状态） / tokens（语义值） / components（外观）；默认交付面为 ShadCN 样式组件；书写面为 `ui!` 与 Builder **双轨兼容**（ADR-9）。
 
 ---
 
@@ -217,7 +217,7 @@ crates/
 
 ### 6.2 发布契约（待实发）
 
-权威清单：[`PUBLISH.md`](PUBLISH.md)。
+权威清单：[`PUBLISH.md`](ops/PUBLISH.md)。
 
 - 发布顺序：`rui_style_tokens` → `rui_macros` → `rui`
 - 默认 feature **空集**（无大字体嵌入、无 resvg）；`tracing` / `system-tray` / `backend-dx12` / `bundled-*` / `emoji-svg` 按需开启
@@ -225,7 +225,7 @@ crates/
 
 ### 6.3 体积与内存的正确叙事
 
-[`size_and_memory.md`](size_and_memory.md) 已证伪「Rust UI 必然比 EUI 肥」：
+[`size_and_memory.md`](ops/size_and_memory.md) 已证伪「Rust UI 必然比 EUI 肥」：
 
 - 计算器 release ≈ **4.4 MB** 量级可执行文件
 - 空白 `wgpu` 窗口的 Private Bytes 大头在 **GPU 用户态驱动**（DX12 ≫ GL）
@@ -282,11 +282,11 @@ flowchart LR
   trackC --> Gate
 ```
 
-工作包拆解、依赖、工期与勾选清单见 **[AUTHORITY.md](AUTHORITY.md)**（统一 Wave / WP）。细则可对照冻结的 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
+工作包拆解、依赖、工期与勾选清单见 **[AUTHORITY.md](AUTHORITY.md)**（统一 Wave / WP）。细则可对照冻结的 [ENGINEERING_IMPLEMENTATION_PLAN.md](archive/ENGINEERING_IMPLEMENTATION_PLAN.md)。
 
 ### 轨道 A — 原生可信（桌面「像系统控件」）→ Wave 1
 
-1. 按 [`desktop_smoke.md`](desktop_smoke.md) 在 Win / macOS / Linux 签署：打开示例 → 中文 IME → Tab 移焦 → Escape 关浮层。  
+1. 按 [`desktop_smoke.md`](ops/desktop_smoke.md) 在 Win / macOS / Linux 签署：打开示例 → 中文 IME → Tab 移焦 → Escape 关浮层。  
 2. Combobox / Menu / Tabs 的 roving 与 AccessKit Role 回归用例入库。  
 3. 输入框滚动/缩放下 `set_ime_cursor_area` 不漂移。
 
@@ -302,7 +302,7 @@ flowchart LR
 
 ### 轨道 C — 发布与产品面 → Wave 3–4
 
-1. 按 [`PUBLISH.md`](PUBLISH.md) 完成首次 crates.io（或 0.1 预发布）。  
+1. 按 [`PUBLISH.md`](ops/PUBLISH.md) 完成首次 crates.io（或 0.1 预发布）。  
 2. 文档站从 stub 升级为可浏览 Getting Started + 组件索引（mdBook / VitePress 任选）。  
 3. Gallery：每公开组件至少一页可运行示例；Chart/Path、Date/Time 补齐键盘与格式；**Svg/Canvas 公开自绘面起步**（WP-3.11 / 3.12）。
 
@@ -315,7 +315,7 @@ flowchart LR
 - 移动端 / 鸿蒙作为一等公民（仅保留 `PlatformWindow` 扩展点）  
 - 为对标 egui 体积而砍文本栈或 SDF 管线  
 - 无验收标准的「大重构」  
-- 用默认 PE `/STACK` 或无条件 `stacker::grow` 替代 `Element` 子节点指针化（见 ADR-10、[`stack_and_element_model.md`](stack_and_element_model.md)）  
+- 用默认 PE `/STACK`、无条件 `stacker::grow`、或 **fork taffy** 替代 `Element` 指针化与走树迭代（见 ADR-10、[`stack_and_element_model.md`](engine/stack_and_element_model.md)）  
 - HTML-in-canvas / Chrome flag / 换 Skia 主线做公开自绘（见 [`drawing.md`](drawing.md)）
 
 ---
@@ -333,7 +333,7 @@ flowchart LR
 | ADR-7 | 热重载基于 `template_id`，不承诺逻辑热替换；`template_id` ≠ 全局 a11y/焦点主键（见 [`element_identity.md`](element_identity.md)） | 接受 |
 | ADR-8 | 工程级以原生+发布为准，不以 Solid API 百分百对齐为准 | 接受 |
 | ADR-9 | **双书写面**：`ui!` 标签与 Builder 纯 Rust 一等公民、互嵌兼容；禁止只保留其一 | 接受 |
-| ADR-10 | **栈预算**：框架不 emit PE `/STACK`；默认以 Windows ~1 MiB 主线程为测基线；`Element` 子节点边界指针化为主路径，`with_ui_build_stack` 为过渡保险；应用 opt-in 见 `platform/windows/stack.rs` | 接受（2026-09-05）；详见 [`stack_and_element_model.md`](stack_and_element_model.md) |
+| ADR-10 | **栈预算**：框架不 emit PE `/STACK`；Windows ~1 MiB 为测基线；`Element` 堆句柄 + TLS `ElementInner` slab + RUI 走树堆 DFS；`with_ui_build_stack` = GPUI `stacksafe` 同构（64 KiB 红区）；**不 fork taffy**（内部递归 + 128 帽为接受差距）；应用 opt-in 见 `platform/windows/stack.rs` | 接受；[`stack_and_element_model.md`](engine/stack_and_element_model.md) **已冻结** |
 
 ---
 
@@ -358,27 +358,27 @@ flowchart LR
 | 文档 | 用途 |
 |------|------|
 | [AUTHORITY.md](AUTHORITY.md) | **巩固期唯一入口与执行源**（统一 WP / DoD） |
-| [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) | 工程 WP 冻结展开（勾选作废） |
+| [ENGINEERING_IMPLEMENTATION_PLAN.md](archive/ENGINEERING_IMPLEMENTATION_PLAN.md) | 工程 WP 冻结展开（勾选作废） |
 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) | **组件库权威规范**（默认 shadcn 面 + headless 骨架） |
-| [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) | 组件 WP 冻结展开（勾选作废） |
+| [COMPONENT_LIBRARY_PLAN.md](archive/COMPONENT_LIBRARY_PLAN.md) | 组件 WP 冻结展开（勾选作废） |
 | [REACTIVITY.md](REACTIVITY.md) | **细粒度响应式领域规范** |
 | [element_identity.md](element_identity.md) | **跨层身份契约**（`id` / `focus_id` / `template_id` / AccessKit） |
-| [box_model.md](box_model.md) | 类 CSS 盒模型契约与缺口（WP-2.9） |
-| [gap_analysis.md](gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
-| [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
-| [PROJECT.md](PROJECT.md) | 愿景与分层初衷 |
-| [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) | 三档更新与热重载契约 |
-| [headless.md](headless.md) | 无头三层契约（从属组件规范） |
-| [custom_components.md](custom_components.md) | 用户自定义组件指南 |
-| [color.md](color.md) | OKLCH 令牌 / 线性混色 / outline≠CSS outline |
-| [keyboard_nav.md](keyboard_nav.md) | Tab / Escape / focus_trap / roving |
-| [desktop_smoke.md](desktop_smoke.md) | 真窗口冒烟 |
-| [ime.md](ime.md) | WP-1.1 IME 验收与诊断 |
-| [glyphon_audit.md](glyphon_audit.md) | 文本管线核对（坚持 glyphon 中期） |
-| [PUBLISH.md](PUBLISH.md) | crates.io 清单 |
-| [size_and_memory.md](size_and_memory.md) | 体积与内存事实 |
-| [stack_and_element_model.md](stack_and_element_model.md) | **Windows 默认栈、`Element` 按值树与对标框架**（ADR-10） |
-| [font_strategy.md](font_strategy.md) | 字体打包策略 |
+| [box_model.md](engine/box_model.md) | 类 CSS 盒模型契约与缺口（WP-2.9） |
+| [gap_analysis.md](comparison/gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
+| [STAGE7_ROADMAP.md](archive/STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
+| [PROJECT.md](archive/PROJECT.md) | 愿景与分层初衷 |
+| [reactivity_and_hot_reload.md](ops/reactivity_and_hot_reload.md) | 三档更新与热重载契约 |
+| [headless.md](components/headless.md) | 无头三层契约（从属组件规范） |
+| [custom_components.md](components/custom_components.md) | 用户自定义组件指南 |
+| [color.md](engine/color.md) | OKLCH 令牌 / 线性混色 / outline≠CSS outline |
+| [keyboard_nav.md](ops/keyboard_nav.md) | Tab / Escape / focus_trap / roving |
+| [desktop_smoke.md](ops/desktop_smoke.md) | 真窗口冒烟 |
+| [ime.md](ops/ime.md) | WP-1.1 IME 验收与诊断 |
+| [glyphon_audit.md](engine/glyphon_audit.md) | 文本管线核对（坚持 glyphon 中期） |
+| [PUBLISH.md](ops/PUBLISH.md) | crates.io 清单 |
+| [size_and_memory.md](ops/size_and_memory.md) | 体积与内存事实 |
+| [stack_and_element_model.md](engine/stack_and_element_model.md) | **Windows 默认栈、`Element` 堆句柄与对标框架**（ADR-10） |
+| [font_strategy.md](engine/font_strategy.md) | 字体打包策略 |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
 | [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |
 

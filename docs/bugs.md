@@ -1,6 +1,7 @@
 # 已知缺口 / 产品愿望（非正式 tracker）
 
-> **非权威**。巩固期 Backlog 以 [AUTHORITY.md](AUTHORITY.md) §7 为准；缺陷请开 issue。本文仅作随手备忘。
+> **已归档（2026-09-05）**。非正式 scratch，**不是**权威 backlog。巩固期 Backlog 以 [`AUTHORITY.md`](../AUTHORITY.md) §7 为准；缺陷请开 issue。  
+> 下文后半混入了前端动画科普，仅作历史备忘，勿当规范。
 
 ## Components
 
@@ -17,12 +18,13 @@
 - 并考虑：增加 popup_window 能力，为桌面端实现可超出视口的独立菜单/弹窗/通知等能力
 - 平台能力特化
 - 缺的主要是 steps / jump-* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
-- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — 设计拆分见 [overlay_shells.md](overlay_shells.md) §9
+- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — 设计拆分见 [overlay_shells.md](../components/overlay_shells.md) §9
 - orientation="vertical"  自动检测屏幕方向 auto、始终水平、始终垂直
-- 浮层编排壳（设计）：[overlay_shells.md](overlay_shells.md)（`anchored_overlay` / `viewport_modal` · WP-OVL）
+- 浮层编排壳（设计）：[overlay_shells.md](../components/overlay_shells.md)（`anchored_overlay` / `viewport_modal` · WP-OVL）
 - 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
-- ~~页面栈缓存大小过大，尤其是计算器，从原本的默认1MB 增长到需要 8MB~~ collect 小帧 + 堆 DFS + `stack_budget` 门禁；框架不强制 PE `/STACK`；构建帧按值 `Element` 见 [`stack_and_element_model.md`](stack_and_element_model.md)
+- sidebar 展开/收起时常发生卡顿、突变的问题
+- 程序启动时首屏白屏的问题
 
 ## Bugs
 

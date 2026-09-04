@@ -5,7 +5,7 @@
 > **事实来源**：`core/tree.rs`（`Element` 字段）、`a11y/bridge.rs`、`app/hot_reload.rs`、`app/reactive.rs`、`rui_macros`、`components/*` Builder。  
 > **日期**：2026-08-09  
 
-交叉：[`a11y_smoke.md`](a11y_smoke.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`custom_components.md`](custom_components.md)
+交叉：[`a11y_smoke.md`](ops/a11y_smoke.md) · [`keyboard_nav.md`](ops/keyboard_nav.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md) · [`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md) · [`custom_components.md`](components/custom_components.md)
 
 ---
 
@@ -92,7 +92,7 @@
 ### I-4 · 前缀即契约
 
 - 角色推断依赖前缀时须稳定：`input:`、`textarea:`（若有）、`tabstrip:`、`scroll:` 等。  
-- 新增前缀：同时改 `a11y/bridge` + [`keyboard_nav.md`](keyboard_nav.md) + 本文件 §5 表。
+- 新增前缀：同时改 `a11y/bridge` + [`keyboard_nav.md`](ops/keyboard_nav.md) + 本文件 §5 表。
 
 ### I-5 · 自动 id 的寿命
 
@@ -127,7 +127,7 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 | 仅展示文本节点 | 可无 `focus_id`；用 path / 消歧后的 template 键 |
 | 重复子 id | **框架 bug**；库测必须锁死 |
 
-手工验收步骤：[`a11y_smoke.md`](a11y_smoke.md)。桥防御**不豁免**组件 I-1～I-3。
+手工验收步骤：[`a11y_smoke.md`](ops/a11y_smoke.md)。桥防御**不豁免**组件 I-1～I-3。
 
 ---
 
@@ -141,7 +141,7 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 | `scroll:` | ScrollArea 焦点 | 滚动容器 |
 | 无前缀 / 组件自定 | Button、菜单项等 | `accesskit_role` 或推断 |
 
-完整键盘行为见 [`keyboard_nav.md`](keyboard_nav.md)；本表只约束**身份字符串形状**。
+完整键盘行为见 [`keyboard_nav.md`](ops/keyboard_nav.md)；本表只约束**身份字符串形状**。
 
 ---
 
@@ -180,7 +180,7 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 | 项 | 状态 |
 |----|------|
 | 规范摘要 | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4.2 已纠偏「过度 id」 |
-| 稳定面空 id | 审计表 [`component_inventory.md`](component_inventory.md) §2.1；统一 [`resolve_instance_id`](../crates/rui/src/utils/instance_id.rs)；Label 空 id **不写** `template_id` |
+| 稳定面空 id | 审计表 [`component_inventory.md`](components/component_inventory.md) §2.1；统一 [`resolve_instance_id`](../crates/rui/src/utils/instance_id.rs)；Label 空 id **不写** `template_id` |
 | Button / Input / Textarea / Checkbox / Switch / Slider | 既有 `btn-N` / `__rui_*_rt_N` |
 | Select / Combobox / Dialog / Tooltip / Tabs / Radio / ScrollArea | CV.4 补 auto（同 `resolve_instance_id`） |
 | 大量 Builder | 展示型已去必填入口（`navbar()` / `bar_chart()` / `line_chart()` / `progress()`）；有状态仍可空→`resolve_instance_id` |

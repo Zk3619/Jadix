@@ -1,11 +1,11 @@
 # RUI Solid 细粒度响应式（权威规范）
 
 > **文档地位**：细粒度响应式编程模型与实现口径的**领域规范**。衡量「组件挂载一次 + Signal 局部更新」的**机制覆盖度**与工程卫生，**不是** solid-main / Leptos / Floem 整仓或 API 表面对齐度。  
-> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区（ADR-1）；**执行勾选**以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为准。冻结细则 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。  
-> **事实来源**：`crates/rui/src/core/{reactivity,store,resource}.rs`、`crates/rui/src/app/{reactive,resource,error_boundary,state}.rs`、`rui_macros`；对照 [`Reference/SolidJS`](../Reference/SolidJS)、[`Reference/leptos-main`](../Reference/leptos-main)（`reactive_graph` / `reactive_stores` / `tachys`）、[`Reference/floem-main`](../Reference/floem-main)（`floem_reactive`）、[`Reference/dioxus`](../Reference/dioxus)（`dioxus-signals` + 组件 VNode）。  
+> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区（ADR-1）；**执行勾选**以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为准。冻结细则 [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md)。  
+> **事实来源**：`crates/rui/src/core/{reactivity,store,resource}.rs`、`crates/rui/src/app/{reactive,resource,error_boundary,state}.rs`、`rui_macros`；对照 [`Reference/SolidJS`](../reference/SolidJS)、[`Reference/leptos-main`](../reference/leptos-main)（`reactive_graph` / `reactive_stores` / `tachys`）、[`Reference/floem-main`](../reference/floem-main)（`floem_reactive`）、[`Reference/dioxus`](../reference/dioxus)（`dioxus-signals` + 组件 VNode）。  
 > **日期**：2026-08-13（四框架机制对照 + 完整细粒度不变量；**战略：超过 Floem、逼近 Solid 机制**）；**2026-08-17** G11 closed（WP-3.14）；**2026-08-18** §0.2 终极目标路线图 + §5.10 三参考框架源码审计（Solid / Leptos / Floem × RUI）  
 
-交叉：[`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)（开发者手册）· [`element_identity.md`](element_identity.md) · [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) · [`REFERENCE_COMPARISON.md`](REFERENCE_COMPARISON.md) · [`gap_analysis.md`](gap_analysis.md) §5（历史镜像）
+交叉：[`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md)（开发者手册）· [`element_identity.md`](element_identity.md) · [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) · [`REFERENCE_COMPARISON.md`](comparison/REFERENCE_COMPARISON.md) · [`gap_analysis.md`](comparison/gap_analysis.md) §5（历史镜像）
 
 ---
 
@@ -145,7 +145,7 @@ SolidJS（Web 标尺）          Leptos（可移植图协议）       Floem（�
 
 ## 3. 三档更新契约
 
-权威用法示例见 [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)。纲领级摘要：
+权威用法示例见 [`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md)。纲领级摘要：
 
 | 档位 | API | 允许 | 禁止 |
 |------|-----|------|------|
@@ -435,7 +435,7 @@ RUI 用 **memo depth flush + `PartialEq`**：值未变不向下游传播——�
 
 ## 6. 已知缺口（权威开放面）
 
-> 执行勾选见 [`AUTHORITY.md`](AUTHORITY.md)。此处只列**事实**。冻结细则 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。
+> 执行勾选见 [`AUTHORITY.md`](AUTHORITY.md)。此处只列**事实**。冻结细则 [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md)。
 
 | ID | 缺口 | 优先级 | 映射 |
 |----|------|--------|------|

@@ -14,7 +14,7 @@
 //!
 //! Promote this spike only after Bake/Msdf stabilize and a Gallery golden shows
 //! outline quality clearly better than SDF at ≥4×. See [`docs/drawing.md`](../../../../docs/drawing.md)
-//! and [`docs/glyphon_audit.md`](../../../../docs/glyphon_audit.md).
+//! and [`docs/engine/glyphon_audit.md`](../../../../docs/engine/glyphon_audit.md).
 
 use crate::primitives::path::PathCommand;
 

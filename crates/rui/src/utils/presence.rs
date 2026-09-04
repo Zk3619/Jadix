@@ -1,6 +1,6 @@
 //! Presence / ExitGate — 退场播完再卸树（自定义组件原语 · Wave Prim）。
 //!
-//! 目标见仓库 `docs/custom_components_suggestions.md`：复杂浮层不应各自手搓
+//! 目标见仓库 `docs/components/custom_components_suggestions.md`：复杂浮层不应各自手搓
 //! `exiting` + 墙钟；先消费本模块，再写产品壳。
 //!
 //! # 心智

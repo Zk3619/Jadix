@@ -1,6 +1,6 @@
 //! LayoutGroup / slot_list — rank → 位移（+ 可选 scale）。
 //!
-//! 对齐 [`docs/custom_components_suggestions.md`]：Stack/List Toast、部分列表浮层
+//! 对齐 [`docs/components/custom_components_suggestions.md`]：Stack/List Toast、部分列表浮层
 //! 不应各自手算 `rank * peek` / 展开步长 / scale 原点补偿。
 //!
 //! CSS mid 仍由 [`crate::utils::motion`] + `transition_snapshot` 推进；本模块只算**目标**。

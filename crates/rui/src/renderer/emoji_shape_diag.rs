@@ -365,7 +365,7 @@ mod tests {
         println!("twemoji_dir={dir:?}");
         let Some(dir) = dir else {
             println!(
-                "[warn] Twemoji PNG dir missing — gallery color emoji needs assets/twemoji/72x72 (docs/emoji_gpu_compat_matrix.md §9). Font-fallback isolation test still guards the Color-leak bug."
+                "[warn] Twemoji PNG dir missing — gallery color emoji needs assets/twemoji/72x72 (docs/engine/emoji_gpu_compat_matrix.md §9). Font-fallback isolation test still guards the Color-leak bug."
             );
             return;
         };

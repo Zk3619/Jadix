@@ -69,10 +69,10 @@ rui/
 │  └─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
 ├─ examples/
 │  └─ gallery/              # 组件与能力展示 | Component gallery
-└─ docs/                    # 权威纲领 / 计划 / 从属手册（见下）
+└─ docs/                    # 权威规范 + changelog；专题见子目录（AUTHORITY.md）
 ```
 
-**文档入口 | Docs entry**：[AUTHORITY.md](docs/AUTHORITY.md)（唯一执行源；**W2 已退出 → W3**）· [ENGINEERING_GRADE_FRAMEWORK.md](docs/ENGINEERING_GRADE_FRAMEWORK.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [REACTIVITY.md](docs/REACTIVITY.md) · [box_model.md](docs/box_model.md) · [drawing.md](docs/drawing.md)（`<svg>` / `<canvas>` / 2D·3D）
+**文档入口 | Docs entry**：[AUTHORITY.md](docs/AUTHORITY.md)（唯一执行源）· [文档地图](docs/README.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [REACTIVITY.md](docs/REACTIVITY.md) · [CHANGELOG.md](docs/CHANGELOG.md)
 
 ---
 
@@ -158,7 +158,7 @@ fn toolbar() -> Element {
 
 ## 细粒度原语（阶段 3/4）| Fine-grained Primitives (Stage 3/4)
 
-设计与热重载约定见 **[docs/reactivity_and_hot_reload.md](docs/reactivity_and_hot_reload.md)**。
+设计与热重载约定见 **[docs/ops/reactivity_and_hot_reload.md](docs/ops/reactivity_and_hot_reload.md)**。
 
 - **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
   Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.
