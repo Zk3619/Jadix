@@ -426,6 +426,85 @@ fn mutate(eng: Signal<Engine>, mut f: impl FnMut(&mut Engine) + 'static) -> impl
     }
 }
 
+fn calc_key_fn(
+    id: &str,
+    caption: &str,
+    eng: Signal<Engine>,
+    f: impl FnMut(&mut Engine) + 'static,
+) -> Element {
+    ui! {
+        <Button
+            id={id}
+            variant="outline"
+            w="100%"
+            h="100%"
+            min_h="3rem"
+            min_w="0"
+            rounded="0.25rem"
+            border_style="solid"
+            border_width=1.0
+            border_color="#d4d4d4"
+            bg="#f2f2f2"
+            on_click={mutate(eng, f)}
+        >
+            { caption }
+        </Button>
+    }
+}
+
+fn calc_key_num(
+    id: &str,
+    caption: &str,
+    eng: Signal<Engine>,
+    f: impl FnMut(&mut Engine) + 'static,
+) -> Element {
+    ui! {
+        <Button
+            id={id}
+            variant="secondary"
+            w="100%"
+            h="100%"
+            min_h="3rem"
+            min_w="0"
+            rounded="0.25rem"
+            border_style="solid"
+            border_width=1.0
+            border_color="#d4d4d4"
+            bg="#ffffff"
+            on_click={mutate(eng, f)}
+        >
+            { caption }
+        </Button>
+    }
+}
+
+fn calc_key_eq(
+    id: &str,
+    caption: &str,
+    eng: Signal<Engine>,
+    f: impl FnMut(&mut Engine) + 'static,
+) -> Element {
+    ui! {
+        <Button
+            id={id}
+            variant="default"
+            w="100%"
+            h="100%"
+            min_h="3rem"
+            min_w="0"
+            rounded="0.25rem"
+            border_style="solid"
+            border_width=1.0
+            border_color="#0067c0"
+            bg="#0067c0"
+            on_click={mutate(eng, f)}
+        >
+            { caption }
+        </Button>
+    }
+}
+
+#[inline(never)]
 fn calc_key(
     id: &str,
     caption: &str,
@@ -434,60 +513,9 @@ fn calc_key(
     f: impl FnMut(&mut Engine) + 'static,
 ) -> Element {
     match tone {
-        KeyTone::Fn => ui! {
-            <Button
-                id={id}
-                variant="outline"
-                w="100%"
-                h="100%"
-                min_h="3rem"
-                min_w="0"
-                rounded="0.25rem"
-                border_style="solid"
-                border_width=1.0
-                border_color="#d4d4d4"
-                bg="#f2f2f2"
-                on_click={mutate(eng, f)}
-            >
-                { caption }
-            </Button>
-        },
-        KeyTone::Num => ui! {
-            <Button
-                id={id}
-                variant="secondary"
-                w="100%"
-                h="100%"
-                min_h="3rem"
-                min_w="0"
-                rounded="0.25rem"
-                border_style="solid"
-                border_width=1.0
-                border_color="#d4d4d4"
-                bg="#ffffff"
-                on_click={mutate(eng, f)}
-            >
-                { caption }
-            </Button>
-        },
-        KeyTone::Eq => ui! {
-            <Button
-                id={id}
-                variant="default"
-                w="100%"
-                h="100%"
-                min_h="3rem"
-                min_w="0"
-                rounded="0.25rem"
-                border_style="solid"
-                border_width=1.0
-                border_color="#0067c0"
-                bg="#0067c0"
-                on_click={mutate(eng, f)}
-            >
-                { caption }
-            </Button>
-        },
+        KeyTone::Fn => calc_key_fn(id, caption, eng, f),
+        KeyTone::Num => calc_key_num(id, caption, eng, f),
+        KeyTone::Eq => calc_key_eq(id, caption, eng, f),
     }
 }
 
@@ -531,17 +559,15 @@ fn mem_key(
     }
 }
 
-fn key_flex_row(children: Vec<Element>) -> Element {
-    let cells: Vec<Element> = children
-        .into_iter()
-        .map(|c| {
-            ui! {
-                <Box grow="1" flex_basis="0" min_w="0" h="100%">
-                    { c }
-                </Box>
-            }
-        })
-        .collect();
+fn key_flex_row(mut children: Vec<Element>) -> Element {
+    let mut cells = Vec::with_capacity(children.len());
+    for c in children.drain(..) {
+        cells.push(ui! {
+            <Box grow="1" flex_basis="0" min_w="0" h="100%">
+                { c }
+            </Box>
+        });
+    }
     ui! {
         <HStack gap="0.25rem" w="100%" grow="1">
             { cells }
@@ -614,32 +640,68 @@ fn apply_key(eng: Signal<Engine>, key: &winit::event::KeyEvent) -> bool {
 }
 
 fn standard_pad(eng: Signal<Engine>) -> Element {
+    let mut keys = Vec::with_capacity(24);
+    keys.push(calc_key("k-%", "%", KeyTone::Fn, eng, |e| e.percent()));
+    keys.push(calc_key("k-ce", "CE", KeyTone::Fn, eng, |e| {
+        e.clear_entry()
+    }));
+    keys.push(calc_key("k-c", "C", KeyTone::Fn, eng, |e| e.clear_all()));
+    keys.push(calc_key("k-bs", "⌫", KeyTone::Fn, eng, |e| e.backspace()));
+    keys.push(calc_key("k-inv", "1/x", KeyTone::Fn, eng, |e| {
+        e.reciprocal()
+    }));
+    keys.push(calc_key("k-sq", "x²", KeyTone::Fn, eng, |e| e.square()));
+    keys.push(calc_key("k-sqrt", "√x", KeyTone::Fn, eng, |e| e.sqrt()));
+    keys.push(calc_key("k-div", "÷", KeyTone::Fn, eng, |e| {
+        e.set_op(Op::Div)
+    }));
+    keys.push(calc_key("k-7", "7", KeyTone::Num, eng, |e| {
+        e.input_digit('7')
+    }));
+    keys.push(calc_key("k-8", "8", KeyTone::Num, eng, |e| {
+        e.input_digit('8')
+    }));
+    keys.push(calc_key("k-9", "9", KeyTone::Num, eng, |e| {
+        e.input_digit('9')
+    }));
+    keys.push(calc_key("k-mul", "×", KeyTone::Fn, eng, |e| {
+        e.set_op(Op::Mul)
+    }));
+    keys.push(calc_key("k-4", "4", KeyTone::Num, eng, |e| {
+        e.input_digit('4')
+    }));
+    keys.push(calc_key("k-5", "5", KeyTone::Num, eng, |e| {
+        e.input_digit('5')
+    }));
+    keys.push(calc_key("k-6", "6", KeyTone::Num, eng, |e| {
+        e.input_digit('6')
+    }));
+    keys.push(calc_key("k-sub", "−", KeyTone::Fn, eng, |e| {
+        e.set_op(Op::Sub)
+    }));
+    keys.push(calc_key("k-1", "1", KeyTone::Num, eng, |e| {
+        e.input_digit('1')
+    }));
+    keys.push(calc_key("k-2", "2", KeyTone::Num, eng, |e| {
+        e.input_digit('2')
+    }));
+    keys.push(calc_key("k-3", "3", KeyTone::Num, eng, |e| {
+        e.input_digit('3')
+    }));
+    keys.push(calc_key("k-add", "+", KeyTone::Fn, eng, |e| {
+        e.set_op(Op::Add)
+    }));
+    keys.push(calc_key("k-sign", "+/−", KeyTone::Num, eng, |e| {
+        e.toggle_sign()
+    }));
+    keys.push(calc_key("k-0", "0", KeyTone::Num, eng, |e| {
+        e.input_digit('0')
+    }));
+    keys.push(calc_key("k-dot", ".", KeyTone::Num, eng, |e| e.input_dot()));
+    keys.push(calc_key("k-eq", "=", KeyTone::Eq, eng, |e| e.equals()));
     ui! {
         <GStack cols="4" rows="6" gap="0.25rem" w="100%" h="100%">
-            { calc_key("k-%", "%", KeyTone::Fn, eng, |e| e.percent()) }
-            { calc_key("k-ce", "CE", KeyTone::Fn, eng, |e| e.clear_entry()) }
-            { calc_key("k-c", "C", KeyTone::Fn, eng, |e| e.clear_all()) }
-            { calc_key("k-bs", "⌫", KeyTone::Fn, eng, |e| e.backspace()) }
-            { calc_key("k-inv", "1/x", KeyTone::Fn, eng, |e| e.reciprocal()) }
-            { calc_key("k-sq", "x²", KeyTone::Fn, eng, |e| e.square()) }
-            { calc_key("k-sqrt", "√x", KeyTone::Fn, eng, |e| e.sqrt()) }
-            { calc_key("k-div", "÷", KeyTone::Fn, eng, |e| e.set_op(Op::Div)) }
-            { calc_key("k-7", "7", KeyTone::Num, eng, |e| e.input_digit('7')) }
-            { calc_key("k-8", "8", KeyTone::Num, eng, |e| e.input_digit('8')) }
-            { calc_key("k-9", "9", KeyTone::Num, eng, |e| e.input_digit('9')) }
-            { calc_key("k-mul", "×", KeyTone::Fn, eng, |e| e.set_op(Op::Mul)) }
-            { calc_key("k-4", "4", KeyTone::Num, eng, |e| e.input_digit('4')) }
-            { calc_key("k-5", "5", KeyTone::Num, eng, |e| e.input_digit('5')) }
-            { calc_key("k-6", "6", KeyTone::Num, eng, |e| e.input_digit('6')) }
-            { calc_key("k-sub", "−", KeyTone::Fn, eng, |e| e.set_op(Op::Sub)) }
-            { calc_key("k-1", "1", KeyTone::Num, eng, |e| e.input_digit('1')) }
-            { calc_key("k-2", "2", KeyTone::Num, eng, |e| e.input_digit('2')) }
-            { calc_key("k-3", "3", KeyTone::Num, eng, |e| e.input_digit('3')) }
-            { calc_key("k-add", "+", KeyTone::Fn, eng, |e| e.set_op(Op::Add)) }
-            { calc_key("k-sign", "+/−", KeyTone::Num, eng, |e| e.toggle_sign()) }
-            { calc_key("k-0", "0", KeyTone::Num, eng, |e| e.input_digit('0')) }
-            { calc_key("k-dot", ".", KeyTone::Num, eng, |e| e.input_dot()) }
-            { calc_key("k-eq", "=", KeyTone::Eq, eng, |e| e.equals()) }
+            { keys }
         </GStack>
     }
 }
@@ -651,63 +713,139 @@ fn scientific_pad(eng: Signal<Engine>) -> Element {
     let tan_l = if snap.second { "tan⁻¹" } else { "tan" };
     let deg_l = if snap.deg { "DEG" } else { "RAD" };
 
+    let mut rows = Vec::with_capacity(8);
+    {
+        let mut r = Vec::with_capacity(4);
+        r.push(calc_key("s-deg", deg_l, KeyTone::Fn, eng, |e| {
+            e.deg = !e.deg
+        }));
+        r.push(calc_key("s-sin", sin_l, KeyTone::Fn, eng, |e| {
+            if e.second {
+                e.asin()
+            } else {
+                e.sin()
+            }
+        }));
+        r.push(calc_key("s-cos", cos_l, KeyTone::Fn, eng, |e| {
+            if e.second {
+                e.acos()
+            } else {
+                e.cos()
+            }
+        }));
+        r.push(calc_key("s-tan", tan_l, KeyTone::Fn, eng, |e| {
+            if e.second {
+                e.atan()
+            } else {
+                e.tan()
+            }
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-2nd", "2ⁿᵈ", KeyTone::Fn, eng, |e| {
+            e.second = !e.second
+        }));
+        r.push(calc_key("s-pi", "π", KeyTone::Fn, eng, |e| e.const_pi()));
+        r.push(calc_key("s-e", "e", KeyTone::Fn, eng, |e| e.const_e()));
+        r.push(calc_key("s-c", "C", KeyTone::Fn, eng, |e| e.clear_all()));
+        r.push(calc_key("s-bs", "⌫", KeyTone::Fn, eng, |e| e.backspace()));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-sq", "x²", KeyTone::Fn, eng, |e| e.square()));
+        r.push(calc_key("s-inv", "1/x", KeyTone::Fn, eng, |e| {
+            e.reciprocal()
+        }));
+        r.push(calc_key("s-abs", "|x|", KeyTone::Fn, eng, |e| e.abs()));
+        r.push(calc_key("s-exp", "exp", KeyTone::Fn, eng, |e| e.exp_e()));
+        r.push(calc_key("s-mod", "mod", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Mod)
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-sqrt", "√x", KeyTone::Fn, eng, |e| e.sqrt()));
+        r.push(calc_key("s-lp", "(", KeyTone::Fn, eng, |_| {}));
+        r.push(calc_key("s-rp", ")", KeyTone::Fn, eng, |_| {}));
+        r.push(calc_key("s-fac", "n!", KeyTone::Fn, eng, |e| e.factorial()));
+        r.push(calc_key("s-div", "÷", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Div)
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-pow", "xʸ", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Pow)
+        }));
+        r.push(calc_key("s-7", "7", KeyTone::Num, eng, |e| {
+            e.input_digit('7')
+        }));
+        r.push(calc_key("s-8", "8", KeyTone::Num, eng, |e| {
+            e.input_digit('8')
+        }));
+        r.push(calc_key("s-9", "9", KeyTone::Num, eng, |e| {
+            e.input_digit('9')
+        }));
+        r.push(calc_key("s-mul", "×", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Mul)
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-10x", "10ˣ", KeyTone::Fn, eng, |e| e.exp10()));
+        r.push(calc_key("s-4", "4", KeyTone::Num, eng, |e| {
+            e.input_digit('4')
+        }));
+        r.push(calc_key("s-5", "5", KeyTone::Num, eng, |e| {
+            e.input_digit('5')
+        }));
+        r.push(calc_key("s-6", "6", KeyTone::Num, eng, |e| {
+            e.input_digit('6')
+        }));
+        r.push(calc_key("s-sub", "−", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Sub)
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-log", "log", KeyTone::Fn, eng, |e| e.log10()));
+        r.push(calc_key("s-1", "1", KeyTone::Num, eng, |e| {
+            e.input_digit('1')
+        }));
+        r.push(calc_key("s-2", "2", KeyTone::Num, eng, |e| {
+            e.input_digit('2')
+        }));
+        r.push(calc_key("s-3", "3", KeyTone::Num, eng, |e| {
+            e.input_digit('3')
+        }));
+        r.push(calc_key("s-add", "+", KeyTone::Fn, eng, |e| {
+            e.set_op(Op::Add)
+        }));
+        rows.push(key_flex_row(r));
+    }
+    {
+        let mut r = Vec::with_capacity(5);
+        r.push(calc_key("s-ln", "ln", KeyTone::Fn, eng, |e| e.ln()));
+        r.push(calc_key("s-sign", "+/−", KeyTone::Num, eng, |e| {
+            e.toggle_sign()
+        }));
+        r.push(calc_key("s-0", "0", KeyTone::Num, eng, |e| {
+            e.input_digit('0')
+        }));
+        r.push(calc_key("s-dot", ".", KeyTone::Num, eng, |e| e.input_dot()));
+        r.push(calc_key("s-eq", "=", KeyTone::Eq, eng, |e| e.equals()));
+        rows.push(key_flex_row(r));
+    }
     ui! {
         <VStack gap="0.25rem" w="100%" h="100%" grow="1">
-            { key_flex_row(vec![
-                calc_key("s-deg", deg_l, KeyTone::Fn, eng, |e| e.deg = !e.deg),
-                calc_key("s-sin", sin_l, KeyTone::Fn, eng, |e| if e.second { e.asin() } else { e.sin() }),
-                calc_key("s-cos", cos_l, KeyTone::Fn, eng, |e| if e.second { e.acos() } else { e.cos() }),
-                calc_key("s-tan", tan_l, KeyTone::Fn, eng, |e| if e.second { e.atan() } else { e.tan() }),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-2nd", "2ⁿᵈ", KeyTone::Fn, eng, |e| e.second = !e.second),
-                calc_key("s-pi", "π", KeyTone::Fn, eng, |e| e.const_pi()),
-                calc_key("s-e", "e", KeyTone::Fn, eng, |e| e.const_e()),
-                calc_key("s-c", "C", KeyTone::Fn, eng, |e| e.clear_all()),
-                calc_key("s-bs", "⌫", KeyTone::Fn, eng, |e| e.backspace()),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-sq", "x²", KeyTone::Fn, eng, |e| e.square()),
-                calc_key("s-inv", "1/x", KeyTone::Fn, eng, |e| e.reciprocal()),
-                calc_key("s-abs", "|x|", KeyTone::Fn, eng, |e| e.abs()),
-                calc_key("s-exp", "exp", KeyTone::Fn, eng, |e| e.exp_e()),
-                calc_key("s-mod", "mod", KeyTone::Fn, eng, |e| e.set_op(Op::Mod)),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-sqrt", "√x", KeyTone::Fn, eng, |e| e.sqrt()),
-                calc_key("s-lp", "(", KeyTone::Fn, eng, |_| {}),
-                calc_key("s-rp", ")", KeyTone::Fn, eng, |_| {}),
-                calc_key("s-fac", "n!", KeyTone::Fn, eng, |e| e.factorial()),
-                calc_key("s-div", "÷", KeyTone::Fn, eng, |e| e.set_op(Op::Div)),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-pow", "xʸ", KeyTone::Fn, eng, |e| e.set_op(Op::Pow)),
-                calc_key("s-7", "7", KeyTone::Num, eng, |e| e.input_digit('7')),
-                calc_key("s-8", "8", KeyTone::Num, eng, |e| e.input_digit('8')),
-                calc_key("s-9", "9", KeyTone::Num, eng, |e| e.input_digit('9')),
-                calc_key("s-mul", "×", KeyTone::Fn, eng, |e| e.set_op(Op::Mul)),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-10x", "10ˣ", KeyTone::Fn, eng, |e| e.exp10()),
-                calc_key("s-4", "4", KeyTone::Num, eng, |e| e.input_digit('4')),
-                calc_key("s-5", "5", KeyTone::Num, eng, |e| e.input_digit('5')),
-                calc_key("s-6", "6", KeyTone::Num, eng, |e| e.input_digit('6')),
-                calc_key("s-sub", "−", KeyTone::Fn, eng, |e| e.set_op(Op::Sub)),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-log", "log", KeyTone::Fn, eng, |e| e.log10()),
-                calc_key("s-1", "1", KeyTone::Num, eng, |e| e.input_digit('1')),
-                calc_key("s-2", "2", KeyTone::Num, eng, |e| e.input_digit('2')),
-                calc_key("s-3", "3", KeyTone::Num, eng, |e| e.input_digit('3')),
-                calc_key("s-add", "+", KeyTone::Fn, eng, |e| e.set_op(Op::Add)),
-            ]) }
-            { key_flex_row(vec![
-                calc_key("s-ln", "ln", KeyTone::Fn, eng, |e| e.ln()),
-                calc_key("s-sign", "+/−", KeyTone::Num, eng, |e| e.toggle_sign()),
-                calc_key("s-0", "0", KeyTone::Num, eng, |e| e.input_digit('0')),
-                calc_key("s-dot", ".", KeyTone::Num, eng, |e| e.input_dot()),
-                calc_key("s-eq", "=", KeyTone::Eq, eng, |e| e.equals()),
-            ]) }
+            { rows }
         </VStack>
     }
 }
@@ -818,4 +956,30 @@ fn main() {
             </VStack>
         }
     });
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+    use rui::core::reactivity::{create_effect, create_root};
+    use rui::core::tree::LayoutTree;
+
+    #[test]
+    fn calculator_app_mount_and_layout_fits_default_stack() {
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = ui! {
+                    <VStack w="100%" h="100%">
+                        <CalculatorApp />
+                    </VStack>
+                };
+                let mut layout = LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 380.0, 620.0, [0.0, 0.0]);
+                assert!(
+                    !tree.children.is_empty(),
+                    "calculator root should have children"
+                );
+            });
+        });
+    }
 }
