@@ -17,6 +17,7 @@ mod scroll_clip_border;
 mod scroll_content_shrink;
 mod scrollbar_thumb_overlay;
 mod showcase_collapse;
+mod sidebar_content_scrollbar;
 mod sidebar_header_footer_text;
 mod sidebar_shell_width;
 mod subtree_promote;

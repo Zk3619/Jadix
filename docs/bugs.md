@@ -22,6 +22,7 @@
 - 浮层编排壳（设计）：[overlay_shells.md](overlay_shells.md)（`anchored_overlay` / `viewport_modal` · WP-OVL）
 - 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
+- 页面栈缓存大小过大，尤其是计算器，从原本的默认1MB 增长到需要 8MB
 
 ## Bugs
 

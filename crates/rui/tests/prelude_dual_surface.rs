@@ -144,6 +144,34 @@ fn prelude_message_scroller_dual_surface_compiles() {
 }
 
 #[test]
+fn ui_message_scroller_keeps_nested_reactive_placeholder() {
+    use rui::app::reactive::reactive_view_sized;
+
+    fn find_tid(el: &Element, id: &str) -> bool {
+        el.template_id.as_deref() == Some(id) || el.children.iter().any(|c| find_tid(c, id))
+    }
+
+    let rows = reactive_view_sized("ui-ms-rows-placeholder", "100%", "max-content", || {
+        Element::new().text("row")
+    });
+    let el = ui! {
+        <MessageScrollerProvider id="ui-ms-static">
+            <MessageScroller h="12rem">
+                <MessageScrollerViewport>
+                    <MessageScrollerContent>
+                        { rows }
+                    </MessageScrollerContent>
+                </MessageScrollerViewport>
+            </MessageScroller>
+        </MessageScrollerProvider>
+    };
+    assert!(
+        find_tid(&el, "ui-ms-rows-placeholder"),
+        "ui! must not drop a nested reactive_view placeholder inside MessageScrollerContent"
+    );
+}
+
+#[test]
 fn prelude_kbd_dual_surface_compiles() {
     let _b: Element = kbd().text("⌘").into();
     let _g: Element = kbd_group().kbd("Ctrl").kbd("K").into();

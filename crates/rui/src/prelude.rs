@@ -257,6 +257,7 @@ pub use crate::components::{
     message_scroller_item,
     message_scroller_provider,
     message_scroller_scope,
+    message_scroller_stick_to_end,
     message_scroller_viewport,
     // Navbar / NavigationMenu / Pagination / Sidebar
     navbar,

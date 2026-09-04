@@ -75,6 +75,7 @@ use rui_macros::component;
 
 use crate::components::button::button;
 use crate::components::input::input;
+use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
 use crate::components::tree_view::{tree_view, TreeViewBuilder, TreeViewChrome, TreeViewVariant};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -109,6 +110,11 @@ const SLOT_INNER: &str = "sidebar-inner";
 const SLOT_HEADER: &str = "sidebar-header";
 const SLOT_FOOTER: &str = "sidebar-footer";
 const SLOT_CONTENT: &str = "sidebar-content";
+/// Host around the content viewport + overlay bar. Must carry `data-slot` so
+/// [`crate::utils::element_pack::take_packed`] (used by [`Sidebar`]) does not peel
+/// this anonymous two-child shell — that would make the bar a sibling of Header
+/// and position it against the full rail (top at Header, height = content).
+const SLOT_CONTENT_HOST: &str = "sidebar-content-host";
 const SLOT_GROUP: &str = "sidebar-group";
 const SLOT_GROUP_LABEL: &str = "sidebar-group-label";
 const SLOT_GROUP_CONTENT: &str = "sidebar-group-content";
@@ -933,7 +939,8 @@ pub fn SidebarFooter(class: Option<String>, children: Option<Element>) -> Elemen
     el
 }
 
-/// 可滚动主体：`flex-1 min-h-0` + 引擎 [`activate_scroll_viewport`]（滚轮 / 触控板）。
+/// 可滚动主体：`flex-1 min-h-0` + 引擎 [`activate_scroll_viewport`]（滚轮 / 触控板）
+/// + overlay 滚动条（项溢出时可见；`z-index: 0` 以免嵌套进页面 stacking bands）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SidebarContent(class: Option<String>, children: Option<Element>) -> Element {
@@ -941,24 +948,56 @@ pub fn SidebarContent(class: Option<String>, children: Option<Element>) -> Eleme
     let scroll_id = use_sidebar()
         .map(|c| format!("{}__sidebar-content", c.id))
         .unwrap_or_else(|| "sidebar-content".to_string());
-    let mut el = slot_children(class, SLOT_CONTENT, "content", kids);
-    el = el
+    let mut inner = slot_children(class, SLOT_CONTENT, "content", kids);
+    inner = inner
+        .w("100%")
+        .h("100%")
         .flex_grow(1.0)
         .min_h(0.0)
         .min_w(0.0)
         .gap("0.5rem")
         .flex_shrink(1.0);
-    el = activate_scroll_viewport(
-        el,
+    inner = activate_scroll_viewport(
+        inner,
         &scroll_id,
         "hidden",
         "auto",
         DEFAULT_SCROLL_BEHAVIOR,
         "content",
     );
-    el.set_attr(ATTR_SLOT, SLOT_CONTENT);
-    el.set_attr(ATTR_SIDEBAR, "content");
-    el
+    inner.set_attr(ATTR_SLOT, SLOT_CONTENT);
+    inner.set_attr(ATTR_SIDEBAR, "content");
+
+    let bar: Element = scrollbar(&format!("__rui_sidebar_sb_{scroll_id}"))
+        .target(scroll_id)
+        .orientation(ScrollbarOrientation::Vertical)
+        .visibility("auto")
+        .overlay(true)
+        .absolute()
+        .top(2.0)
+        .bottom(2.0)
+        .right(2.0)
+        // `overlay(true)` defaults z-index to 10. Nested page stacking would
+        // desync glyphs vs rects (same as MessageScroller overlay bars).
+        .z_index(0)
+        .into();
+
+    // Flex leftover under Header/Footer — do not `h(100%)` (that sizes to the
+    // full rail and fights the column). Slot the host so `take_packed` keeps it.
+    let mut host: Element = vstack()
+        .relative(true)
+        .w("100%")
+        .min_w(0.0)
+        .min_h(0.0)
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .overflow("hidden")
+        .child(inner)
+        .child(bar)
+        .into();
+    host.set_attr(ATTR_SLOT, SLOT_CONTENT_HOST);
+    host.set_attr(ATTR_SIDEBAR, "content-host");
+    host
 }
 
 /// 分组容器：`relative flex w-full min-w-0 flex-col p-2`。
@@ -1559,6 +1598,43 @@ mod tests {
     }
 
     #[test]
+    fn content_host_survives_take_packed_beside_header() {
+        let el: Element = sidebar("shell-host")
+            .w("13rem")
+            .header(Element::new().text("HeaderChrome"))
+            .item(sidebar_menu_button("a").text("One"))
+            .footer(Element::new().text("FooterChrome"))
+            .into();
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+        let inner = find_slot(&el, SLOT_INNER).expect("inner");
+        assert!(
+            inner
+                .children
+                .iter()
+                .any(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_HEADER)),
+            "header must remain a sibling of the content host"
+        );
+        assert!(
+            inner.children.iter().all(|c| c
+                .focus_id
+                .as_deref()
+                .is_none_or(|f| !f.starts_with("scrollbar-track:"))),
+            "take_packed must not hoist the overlay track next to Header"
+        );
+        let host = find_slot(&el, SLOT_CONTENT_HOST).expect("content host");
+        assert!(find_slot(host, SLOT_CONTENT).is_some());
+        assert!(host.children.iter().any(|c| c
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with("scrollbar-track:"))));
+    }
+
+    #[test]
     fn builder_tree_hosts_tree_view_in_content() {
         use crate::components::tree_view::TreeNode;
         use crate::core::reactivity::create_root;
@@ -1862,6 +1938,35 @@ mod tests {
         assert_eq!(
             content.focus_id.as_deref(),
             Some("scroll:prov-scroll__sidebar-content")
+        );
+        fn find_scrollbar_for(el: &Element, target: &str) -> bool {
+            if el
+                .focus_id
+                .as_deref()
+                .is_some_and(|f| f.starts_with(&format!("scrollbar-track:{target}:")))
+            {
+                return true;
+            }
+            el.children.iter().any(|c| find_scrollbar_for(c, target))
+        }
+        assert!(
+            find_scrollbar_for(&el, "prov-scroll__sidebar-content"),
+            "SidebarContent overflow must mount an overlay scrollbar"
+        );
+        let inner = find_slot(&el, SLOT_INNER).expect("inner");
+        let track_is_inner_child = inner.children.iter().any(|c| {
+            c.focus_id
+                .as_deref()
+                .is_some_and(|f| f.starts_with("scrollbar-track:"))
+        });
+        assert!(
+            !track_is_inner_child,
+            "overlay track must live on the content host, not as a Header sibling"
+        );
+        let host = find_slot(&el, SLOT_CONTENT_HOST).expect("content host");
+        assert!(
+            find_scrollbar_for(host, "prov-scroll__sidebar-content"),
+            "overlay track must be a descendant of the content host"
         );
     }
 

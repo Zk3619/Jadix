@@ -374,7 +374,8 @@ pub use message::{
 };
 pub use message_scroller::{
     message_scroller, message_scroller_button, message_scroller_content, message_scroller_item,
-    message_scroller_provider, message_scroller_scope, message_scroller_viewport,
+    message_scroller_provider, message_scroller_scope, message_scroller_stick_to_end,
+    message_scroller_viewport,
     use_message_scroller, use_message_scroller_scrollable, use_message_scroller_visibility,
     MessageScroller, MessageScrollerBuilder, MessageScrollerButton, MessageScrollerButtonBuilder,
     MessageScrollerButtonProps, MessageScrollerContent, MessageScrollerContentBuilder,

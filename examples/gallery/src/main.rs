@@ -808,10 +808,6 @@ fn gal_ms_item(m: &GalMsMsg) -> rui::core::tree::Element {
     }
 }
 
-fn gal_ms_rows(items: &[GalMsMsg]) -> Vec<rui::core::tree::Element> {
-    items.iter().map(gal_ms_item).collect()
-}
-
 fn MessageScrollerShowcase() -> rui::core::tree::Element {
     let thread = use_signal("gal_ms_thread", gal_ms_script);
     let extra = use_signal("gal_ms_extra", || 0u32);
@@ -821,19 +817,38 @@ fn MessageScrollerShowcase() -> rui::core::tree::Element {
     let extra_reset = extra;
     let thread_scroll = thread;
     let extra_preview = extra;
+    // Same key as MessageScrollerProvider `{id}:auto_scroll` — Switch toggles without remount.
+    let auto_scroll = use_signal("gal-ms-showcase:auto_scroll", || true);
 
-    // `max-content` placeholder — default `100%×100%` reactive shells inflate scroll metrics
-    // inside MessageScrollerContent and end-anchoring scrolls into blank tail space.
     let rows_live = rui::app::reactive::reactive_view_sized(
         "examples/gallery/MessageScrollerShowcase:rows",
         "100%",
         "max-content",
         move || {
-            let mut frag = rui::core::tree::Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children(gal_ms_rows(&thread_scroll.get()))
+            let mut col = vstack().w("100%").min_w(0.0).h("max-content").gap("1.5rem");
+            for m in thread_scroll.get() {
+                col = col.child(gal_ms_item(&m));
+            }
+            col.into()
         },
     );
+
+    let chat = ui! {
+        <MessageScrollerProvider
+            id="gal-ms-showcase"
+            autoScroll={true}
+            defaultScrollPosition="end"
+        >
+            <MessageScroller h="100%">
+                <MessageScrollerViewport>
+                    <MessageScrollerContent p="1.5rem">
+                        { rows_live }
+                    </MessageScrollerContent>
+                </MessageScrollerViewport>
+                <MessageScrollerButton direction="end" />
+            </MessageScroller>
+        </MessageScrollerProvider>
+    };
 
     let preview_live = rui::reactive!("examples/gallery/MessageScrollerShowcase:preview", move || {
         let extra_n = extra_preview.get() as usize;
@@ -866,6 +881,12 @@ fn MessageScrollerShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Official chat card: New Chat header, muted user bubbles (align=end, scrollAnchor), ghost assistant text, composer preview + send. autoScroll follows only at the live edge."
                 </Label>
+                <HStack w="100%" max_w="24rem" items="center" justify="between" gap="0.75rem">
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "Auto-scroll on new messages (live edge only)"
+                    </Label>
+                    <Switch id="gal-ms-autoscroll" checked={auto_scroll} />
+                </HStack>
                 <VStack w="100%" max_w="24rem" min_w="0" gap="1rem" items="center">
                         <Card w="100%" gap="0" py="0">
                             <CardHeader py="1rem" gap="0.25rem">
@@ -888,20 +909,7 @@ fn MessageScrollerShowcase() -> rui::core::tree::Element {
                             <Separator />
                             <CardContent p="0">
                                 <Box w="100%" h="24rem" min_h="24rem" min_w="0" overflow="hidden">
-                                    <MessageScrollerProvider
-                                        id="gal-ms-showcase"
-                                        autoScroll={true}
-                                        defaultScrollPosition="end"
-                                    >
-                                        <MessageScroller h="100%">
-                                            <MessageScrollerViewport>
-                                                <MessageScrollerContent p="1.5rem">
-                                                    { rows_live }
-                                                </MessageScrollerContent>
-                                            </MessageScrollerViewport>
-                                            <MessageScrollerButton direction="end" />
-                                        </MessageScroller>
-                                    </MessageScrollerProvider>
+                                    { chat }
                                 </Box>
                             </CardContent>
                             <CardFooter py="1rem">
@@ -927,6 +935,9 @@ fn MessageScrollerShowcase() -> rui::core::tree::Element {
                                                         v.push(next);
                                                         thread_send.set(v);
                                                         extra_send.set((n as u32) + 1);
+                                                        rui::components::message_scroller_stick_to_end(
+                                                            "gal-ms-showcase",
+                                                        );
                                                     }
                                                 }}
                                             >
