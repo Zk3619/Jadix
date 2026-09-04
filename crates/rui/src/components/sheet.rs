@@ -613,16 +613,15 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
 }
 
 fn collect_sheet_focus_ids(el: &Element, out: &mut Vec<String>) {
-    if el.focusable {
-        if let Some(fid) = &el.focus_id {
-            if !fid.is_empty() {
-                out.push(fid.clone());
+    crate::core::tree::walk_elements(el, |el| {
+        if el.focusable {
+            if let Some(fid) = &el.focus_id {
+                if !fid.is_empty() {
+                    out.push(fid.clone());
+                }
             }
         }
-    }
-    for c in &el.children {
-        collect_sheet_focus_ids(c, out);
-    }
+    });
 }
 
 /// 固定顶栏（不滚动）；对齐 `cn-sheet-header` / `p-4 gap-1.5`。

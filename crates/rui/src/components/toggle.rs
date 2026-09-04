@@ -105,7 +105,7 @@ impl ToggleBuilder {
     }
 }
 
-fn size_pad(size: &str) -> (&'static str, &'static str, f32) {
+pub(crate) fn toggle_size_pad(size: &str) -> (&'static str, &'static str, f32) {
     match size {
         "sm" => ("0.5rem", "0.25rem", 12.0),
         "lg" => ("1rem", "0.5rem", 16.0),
@@ -126,7 +126,7 @@ impl From<ToggleBuilder> for Element {
         let disabled = builder.disabled;
         let outline = builder.variant == "outline";
 
-        let (px, py, text_px) = size_pad(&builder.size);
+        let (px, py, text_px) = toggle_size_pad(&builder.size);
         let mut bg = if pressed {
             parse_color("accent")
         } else {

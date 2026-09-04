@@ -42,7 +42,8 @@
 //!     </VStack>
 //! };
 //!
-//! // 互嵌：Builder 树里嵌入 ui!
+//! // 互嵌：Builder 树里嵌入 ui!（拆文件 / 深嵌套同样安全：
+//! // 每个 `ui!` 与 `#[component]` 在独立栈帧上构建，`run` 按需扩栈。）
 //! let _d: Element = vstack()
 //!     .gap("0.5rem")
 //!     .child(ui! { <Label>"内嵌标签"</Label> })
@@ -68,10 +69,11 @@ pub use crate::{
 pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
+pub use crate::app::with_ui_build_stack;
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
-pub use crate::core::tree::{Element, LayoutStatus};
+pub use crate::core::tree::{collect_ui, Element, LayoutStatus};
 
 // ---------------------------------------------------------------------------
 // 布局 / 叶子原语（Builder 面常用）
@@ -270,6 +272,7 @@ pub use crate::components::{
     pagination_range_simple,
     parse_snap_point_token,
     parse_snap_points,
+    parse_toggle_group_spacing,
     pie,
     pie_chart,
     // Popover（复合标签 + Builder；低层面板见 popover_panel）
@@ -331,8 +334,9 @@ pub use crate::components::{
     sidebar_tree,
     skeleton,
     slider,
-    // Stepper
+    // Stepper（复合标签 + Builder；非官方 ShadCN 控件）
     stepper,
+    stepper_scope,
     switch,
     table,
     table_comfortable,
@@ -346,6 +350,11 @@ pub use crate::components::{
     // Textarea
     textarea,
     time_picker,
+    // Timeline（solid-ui / ShadCN-style；非官方 ShadCN 控件）
+    timeline,
+    timeline_bullet_active,
+    timeline_line_active,
+    timeline_scope,
     // Toast / Toaster（默认 stack 堆叠；list 为逐条展开）
     toast,
     toast_dismiss,
@@ -360,6 +369,7 @@ pub use crate::components::{
     toaster,
     toggle,
     toggle_group,
+    toggle_group_scope,
     toggle_sidebar,
     // Tooltip
     tooltip,
@@ -396,7 +406,10 @@ pub use crate::components::{
     use_resizable,
     use_select,
     use_sheet,
+    use_stepper,
     use_tabs,
+    use_timeline,
+    use_toggle_group,
     use_tree_view,
     use_tree_view_item,
     virtual_list,
@@ -979,7 +992,20 @@ pub use crate::components::{
     Slider,
     SliderBuilder,
     SliderProps,
+    Stepper,
     StepperBuilder,
+    StepperCtx,
+    StepperDescription,
+    StepperDescriptionProps,
+    StepperIndicator,
+    StepperIndicatorProps,
+    StepperItem,
+    StepperItemProps,
+    StepperOrientation,
+    StepperProps,
+    StepperStep,
+    StepperTitle,
+    StepperTitleProps,
     Switch,
     SwitchBuilder,
     SwitchProps,
@@ -1024,6 +1050,19 @@ pub use crate::components::{
     TimePicker,
     TimePickerBuilder,
     TimePickerProps,
+    Timeline,
+    TimelineBuilder,
+    TimelineCtx,
+    TimelineEntry,
+    TimelineItem,
+    TimelineItemBullet,
+    TimelineItemBulletProps,
+    TimelineItemDescription,
+    TimelineItemDescriptionProps,
+    TimelineItemProps,
+    TimelineItemTitle,
+    TimelineItemTitleProps,
+    TimelineProps,
     Toast,
     ToastBuilder,
     ToastClose,
@@ -1045,7 +1084,14 @@ pub use crate::components::{
     ToggleBuilder,
     ToggleGroup,
     ToggleGroupBuilder,
+    ToggleGroupCtx,
+    ToggleGroupItem,
+    ToggleGroupItemProps,
+    ToggleGroupLayout,
+    ToggleGroupOrientation,
     ToggleGroupProps,
+    ToggleGroupSize,
+    ToggleGroupVariant,
     ToggleProps,
     TooltipBuilder,
     TooltipContentOpts,

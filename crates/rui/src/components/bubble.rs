@@ -77,12 +77,12 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::style::{is_dark_theme, with_class_list};
 use crate::tokens;
+use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
     ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
     ATTR_FLOATING_STRATEGY,
 };
-use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
@@ -477,12 +477,11 @@ fn bubble_content_chrome(variant: BubbleVariant) -> ([f32; 4], [u8; 4], Option<[
 }
 
 fn paint_descendant_text(el: &mut Element, color: [u8; 4]) {
-    if el.text.is_some() {
-        el.text_style.color = Some(color);
-    }
-    for child in &mut el.children {
-        paint_descendant_text(child, color);
-    }
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.text.is_some() {
+            el.text_style.color = Some(color);
+        }
+    });
 }
 
 /// Reaction glyph：走与文本页相同的 [`label`] 路径（彩色 emoji）。
@@ -1032,12 +1031,17 @@ fn walk_bubble_reactions_sync(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    let child_constraint = tighten_horizontal_constraint(el, constraint_w);
-    if is_bubble_reactions(el) {
-        let _ = sync_bubble_reactions_row(el, child_constraint, layout_tree, impact);
-    }
-    for child in &mut el.children {
-        walk_bubble_reactions_sync(child, child_constraint, layout_tree, impact);
+    let mut stack: Vec<(*mut Element, Option<f32>)> = vec![(el as *mut Element, constraint_w)];
+    while let Some((ptr, constraint_w)) = stack.pop() {
+        let el = unsafe { &mut *ptr };
+        let child_constraint = tighten_horizontal_constraint(el, constraint_w);
+        if is_bubble_reactions(el) {
+            let _ = sync_bubble_reactions_row(el, child_constraint, layout_tree, impact);
+        }
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push((std::ptr::addr_of_mut!(el.children[i]), child_constraint));
+        }
     }
 }
 
@@ -1066,6 +1070,7 @@ fn apply_reactions_shell_placement(
     }
 }
 
+#[inline(never)]
 fn build_bubble_reactions_element(
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
@@ -1446,6 +1451,7 @@ fn take_packed(mut el: Element) -> Vec<Element> {
 // ---------------------------------------------------------------------------
 
 /// 提供 Bubble 上下文并构建根容器（`ui!` `<Bubble>` / Builder 共用）。
+#[inline(never)]
 pub fn bubble_scope(
     variant: BubbleVariant,
     align: BubbleAlign,
@@ -1757,7 +1763,8 @@ pub fn BubbleReactions(
             }
         }
     };
-    let mut el = build_bubble_reactions_element(side, align, layout, expand_class, max_visible, kids);
+    let mut el =
+        build_bubble_reactions_element(side, align, layout, expand_class, max_visible, kids);
     if inherit {
         el.set_attr(ATTR_ALIGN_INHERIT, "1");
     }
@@ -2409,7 +2416,7 @@ mod tests {
 
     #[test]
     fn bubble_reactions_width_collapses_visible_chips() {
-        let mut el: Element = bubble()
+        let el: Element = bubble()
             .child(bubble_content().text("x"))
             .child(
                 bubble_reactions()
@@ -2615,7 +2622,10 @@ mod tests {
                 .attrs
                 .get(ATTR_FLOATING_EXPAND_FROM_W)
                 .and_then(|s| s.parse::<f32>().ok()),
-            Some(collapsed_reaction_bar_width(5, DEFAULT_MAX_VISIBLE_REACTIONS)),
+            Some(collapsed_reaction_bar_width(
+                5,
+                DEFAULT_MAX_VISIBLE_REACTIONS
+            )),
             "expand must pin width to the collapsed pill so extra chips wrap instead of popping in"
         );
         assert_eq!(

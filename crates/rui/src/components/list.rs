@@ -5,20 +5,20 @@
 //! title / actions.
 //!
 //! Aligns with ShadCN navigation-menu `ListItem` patterns and community list panels that stack
-//! `ItemGroup` rows Ã¯Â¿Â½?here the outer shell carries `role="list"` / `role="listitem"`.
+//! `ItemGroup` rows — here the outer shell carries `role="list"` / `role="listitem"`.
 //!
 //! ```text
-//! List                          // ul ÃÂ· role=list ÃÂ· flex flex-col gap-1 text-sm
-//! Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ ListHeader?               // section title (font-medium ÃÂ· foreground)
-//! Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ ListDescription?          // muted helper under header
-//! Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ ListItem                  // li ÃÂ· role=listitem ÃÂ· optional marker
-//!     Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ plain text / link
-//!     Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Item?                 // rich row (reuse item.rs)
+//! List                          // ul · role=list · flex flex-col gap-1 text-sm
+//! ├── ListHeader?               // section title (font-medium · foreground)
+//! ├── ListDescription?          // muted helper under header
+//! └── ListItem                  // li · role=listitem · optional marker
+//!     ├── plain text / link
+//!     └── Item?                 // rich row (reuse item.rs)
 //! ```
 //!
-//! ## Usage (dual style ÃÂ· ADR-9)
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A ÃÂ· RSX / tags
+//! // A · RSX / tags
 //! <List marker="disc">
 //!     <ListHeader>"Features"</ListHeader>
 //!     <ListDescription>"Everything included in this plan."</ListDescription>
@@ -34,7 +34,7 @@
 //!     </ListItem>
 //! </List>
 //!
-//! // B ÃÂ· Builder
+//! // B · Builder
 //! Element::from(
 //!     list()
 //!         .header("Features")
@@ -52,9 +52,9 @@
 //!
 //! ## Notes
 //! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
-//! - `<List>` / `<ListItem>` use the generic PascalCase Ã¯Â¿Â½?`*Props` path (same as Empty / Item).
+//! - `<List>` / `<ListItem>` use the generic PascalCase `*Props` path (same as Empty / Item).
 //! - `marker` on `<List>` sets the default for child `<ListItem>`; per-item `marker` overrides.
-//! - Ã¥ÂÂÃ¨Â¡Â¨Ã¨Â¯Â­Ã¤Â¹ÂÃ§Â»ÂÃ¤Â»Â¶Ã¯Â¼Â`List` Ã¤Â¸ÂºÃ§ÂºÂµÃ¯Â¿Â½?`ul`Ã¯Â¼Â`ListItem` Ã¯Â¿Â½?`li`Ã¯Â¼ÂÃ¥Â¤ÂÃ¦ÂÂÃ¨Â¡ÂÃ¨Â¯Â·Ã¥ÂµÂÃ¯Â¿Â½?`Item`Ã¯Â¿Â½?
+//! - Semantic list shell: `List` is a vertical `ul`, `ListItem` is an `li`; nest [`Item`] for rich rows.
 
 use std::sync::OnceLock;
 
@@ -126,7 +126,7 @@ impl ListMarker {
     fn glyph(self, _index: usize) -> Option<&'static str> {
         match self {
             Self::None => None,
-            Self::Disc => Some("Ã¢ÂÂ¢"),
+            Self::Disc => Some("\u{2022}"),
             Self::Decimal => None, // rendered via format! in build_list_item
         }
     }
@@ -529,7 +529,7 @@ impl ListBuilder {
         }))
     }
 
-    /// Rich row Ã¯Â¿Â½?wraps an [`Item`] builder inside [`ListItem`].
+    /// Rich row — wraps an [`Item`] builder inside [`ListItem`].
     pub fn item_row(self, row: ItemBuilder) -> Self {
         self.item(row)
     }
@@ -595,7 +595,7 @@ mod tests {
         assert!(el
             .children
             .iter()
-            .any(|c| c.text.as_deref() == Some("Ã¢ÂÂ¢")));
+            .any(|c| c.text.as_deref() == Some("\u{2022}")));
     }
 
     #[test]

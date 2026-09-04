@@ -98,12 +98,12 @@ use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
+use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
     ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
-use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -1354,12 +1354,17 @@ fn walk_avatar_group_sync(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    let child_constraint = tighten_horizontal_constraint(el, constraint_w);
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP) {
-        let _ = sync_avatar_group_shell(el, child_constraint, layout_tree, impact);
-    }
-    for child in &mut el.children {
-        walk_avatar_group_sync(child, child_constraint, layout_tree, impact);
+    let mut stack: Vec<(*mut Element, Option<f32>)> = vec![(el as *mut Element, constraint_w)];
+    while let Some((ptr, constraint_w)) = stack.pop() {
+        let el = unsafe { &mut *ptr };
+        let child_constraint = tighten_horizontal_constraint(el, constraint_w);
+        if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP) {
+            let _ = sync_avatar_group_shell(el, child_constraint, layout_tree, impact);
+        }
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push((std::ptr::addr_of_mut!(el.children[i]), child_constraint));
+        }
     }
 }
 
@@ -1943,9 +1948,7 @@ pub fn AvatarGroup(
         .as_deref()
         .map(expand_placement_from_attr)
         .unwrap_or(PopupPlacement::BottomStart);
-    let max_visible = max_visible
-        .map(|n| n.max(1) as usize)
-        .unwrap_or(usize::MAX);
+    let max_visible = max_visible.map(|n| n.max(1) as usize).unwrap_or(usize::MAX);
     build_avatar_group(kids, placement, expand_class, max_visible)
 }
 
@@ -2502,7 +2505,7 @@ mod tests {
     fn avatar_group_width_collapses_visible_faces() {
         use crate::core::reactivity::create_root;
 
-        let (_owner, mut group) = create_root(|| {
+        let (_owner, group) = create_root(|| {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag = frag.children(vec![

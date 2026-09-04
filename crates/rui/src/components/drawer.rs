@@ -1041,16 +1041,15 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
 }
 
 fn collect_drawer_focus_ids(el: &Element, out: &mut Vec<String>) {
-    if el.focusable {
-        if let Some(fid) = &el.focus_id {
-            if !fid.is_empty() {
-                out.push(fid.clone());
+    crate::core::tree::walk_elements(el, |el| {
+        if el.focusable {
+            if let Some(fid) = &el.focus_id {
+                if !fid.is_empty() {
+                    out.push(fid.clone());
+                }
             }
         }
-    }
-    for c in &el.children {
-        collect_drawer_focus_ids(c, out);
-    }
+    });
 }
 
 /// 固定顶栏；对齐 `cn-drawer-header` / `p-4 gap-1.5`。

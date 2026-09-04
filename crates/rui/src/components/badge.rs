@@ -171,13 +171,12 @@ pub fn apply_badge_variant_paint(el: &mut Element, variant: impl AsRef<str>) -> 
 }
 
 fn paint_descendant_text(el: &mut Element, color: [u8; 4], underline: bool) {
-    if el.text.is_some() {
-        el.text_style.color = Some(color);
-        el.text_style.underline = Some(underline);
-    }
-    for child in &mut el.children {
-        paint_descendant_text(child, color, underline);
-    }
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if el.text.is_some() {
+            el.text_style.color = Some(color);
+            el.text_style.underline = Some(underline);
+        }
+    });
 }
 
 pub struct BadgeBuilder {

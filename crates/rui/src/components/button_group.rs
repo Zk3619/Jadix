@@ -253,6 +253,11 @@ fn nest_group_separator(el: &mut Element, orientation: ButtonGroupOrientation) {
     el.style.translate = [0.0, 0.0];
 }
 
+/// Apply fused rounded corners / shared-edge paint nudge (ToggleGroup `spacing=0` reuses this).
+pub(crate) fn apply_button_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
+    apply_group_join(kids, orientation);
+}
+
 fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
     let segment_idx: Vec<usize> = kids
         .iter()

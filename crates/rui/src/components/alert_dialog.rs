@@ -160,23 +160,21 @@ fn stamp_alert_dialog_text_paint(el: &mut Element, color: [u8; 4], size_px: f32,
 }
 
 fn paint_title_node_on_place(el: &mut Element, fg: [u8; 4]) {
-    el.text_style.color = Some(fg);
-    if el.text.is_some() {
-        stamp_alert_dialog_text_paint(el, fg, TITLE_SIZE_PX, TITLE_WEIGHT);
-    }
-    for child in &mut el.children {
-        paint_title_node_on_place(child, fg);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        node.text_style.color = Some(fg);
+        if node.text.is_some() {
+            stamp_alert_dialog_text_paint(node, fg, TITLE_SIZE_PX, TITLE_WEIGHT);
+        }
+    });
 }
 
 fn paint_description_node_on_place(el: &mut Element, fg: [u8; 4]) {
-    el.text_style.color = Some(fg);
-    if el.text.is_some() {
-        stamp_alert_dialog_text_paint(el, fg, DESC_SIZE_PX, DESC_WEIGHT);
-    }
-    for child in &mut el.children {
-        paint_description_node_on_place(child, fg);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        node.text_style.color = Some(fg);
+        if node.text.is_some() {
+            stamp_alert_dialog_text_paint(node, fg, DESC_SIZE_PX, DESC_WEIGHT);
+        }
+    });
 }
 
 fn paint_title_node(mut el: Element, fg: [u8; 4]) -> Element {
@@ -244,11 +242,17 @@ fn paint_alert_dialog_child(el: Element, chrome: &SemanticChrome) -> Element {
 }
 
 fn paint_alert_dialog_tree(el: &mut Element, chrome: &SemanticChrome) {
-    if is_title(el) || is_description(el) || is_icon_child(el) {
-        *el = paint_alert_dialog_child(std::mem::take(el), chrome);
-    } else {
-        for child in &mut el.children {
-            paint_alert_dialog_tree(child, chrome);
+    let mut stack: Vec<*mut Element> = vec![el as *mut Element];
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: exclusive subtree of `el`.
+        let node = unsafe { &mut *ptr };
+        if is_title(node) || is_description(node) || is_icon_child(node) {
+            *node = paint_alert_dialog_child(std::mem::take(node), chrome);
+            continue;
+        }
+        let n = node.children.len();
+        for i in (0..n).rev() {
+            stack.push(std::ptr::addr_of_mut!(node.children[i]));
         }
     }
 }
@@ -261,29 +265,28 @@ fn alert_dialog_filled_from_attrs(attrs: &std::collections::HashMap<String, Stri
 }
 
 fn repaint_alert_dialog_descendants(el: &mut Element, chrome: &SemanticChrome) {
-    if is_title(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            paint_title_node_on_place(el, chrome.fg);
-        }
-    } else if is_description(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            paint_description_node_on_place(el, chrome.muted_fg);
-        }
-    } else if is_icon_child(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            if el.text.is_some() {
-                el.text_style.color = Some(chrome.fg);
+    crate::core::tree::walk_elements_mut(el, |node| {
+        if is_title(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                paint_title_node_on_place(node, chrome.fg);
             }
-            for child in &mut el.children {
-                if child.text.is_some() {
-                    child.text_style.color = Some(chrome.fg);
+        } else if is_description(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                paint_description_node_on_place(node, chrome.muted_fg);
+            }
+        } else if is_icon_child(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                if node.text.is_some() {
+                    node.text_style.color = Some(chrome.fg);
+                }
+                for child in &mut node.children {
+                    if child.text.is_some() {
+                        child.text_style.color = Some(chrome.fg);
+                    }
                 }
             }
         }
-    }
-    for child in &mut el.children {
-        repaint_alert_dialog_descendants(child, chrome);
-    }
+    });
 }
 
 fn sync_alert_dialog_variant_chrome(el: &mut Element, variant: AlertDialogVariant) {
@@ -337,15 +340,7 @@ fn overlay_scrim_from_shell_attrs(el: &Element, variant: AlertDialogVariant) -> 
 }
 
 fn find_alert_dialog_content_mut<'a>(el: &'a mut Element) -> Option<&'a mut Element> {
-    if slot_of(el) == Some(SLOT_CONTENT) {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(found) = find_alert_dialog_content_mut(child) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree_mut(el, |n| slot_of(n) == Some(SLOT_CONTENT))
 }
 
 fn find_alert_dialog_content_by_template<'a>(
@@ -353,15 +348,7 @@ fn find_alert_dialog_content_by_template<'a>(
     modal_id: &str,
 ) -> Option<&'a mut Element> {
     let tid = format!("{modal_id}__modal_zoom");
-    if el.template_id.as_deref() == Some(tid.as_str()) {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(found) = find_alert_dialog_content_by_template(child, modal_id) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree_mut(el, |n| n.template_id.as_deref() == Some(tid.as_str()))
 }
 
 /// Apply variant chroming to an alert-dialog content shell and repaint title/description/icon slots.
@@ -631,16 +618,15 @@ fn alert_shell_overlay_opts(
 }
 
 fn collect_focus_ids(el: &Element, out: &mut Vec<String>) {
-    if el.focusable {
-        if let Some(fid) = &el.focus_id {
-            if !fid.is_empty() {
-                out.push(fid.clone());
+    crate::core::tree::walk_elements(el, |el| {
+        if el.focusable {
+            if let Some(fid) = &el.focus_id {
+                if !fid.is_empty() {
+                    out.push(fid.clone());
+                }
             }
         }
-    }
-    for c in &el.children {
-        collect_focus_ids(c, out);
-    }
+    });
 }
 
 /// Portal subtree runs in a reactive island — re-provide dialog ctx so Cancel/Action see the right `open`.

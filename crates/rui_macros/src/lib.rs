@@ -206,6 +206,7 @@ fn is_boolish_attr(name: &str) -> bool {
             | "autoScroll"
             | "scroll_anchor"
             | "scrollAnchor"
+            | "clickable"
     )
 }
 
@@ -415,16 +416,28 @@ pub fn ui(input: TokenStream) -> TokenStream {
             let template_hash_lit =
                 syn::LitStr::new(&template_hash, proc_macro2::Span::call_site());
 
-            quote! {
-                {
-                    let __rui_root: rui::core::tree::Element = (#expanded).into();
-                    let __rui_root = __rui_root.template_hash(#template_hash_lit);
-                    let __rui_root = __rui_root.template_id(format!("{}:{}:{}", file!(), line!(), column!()));
-                    __rui_root
-                }
-            }.into()
+            wrap_ui_expansion(expanded, template_hash_lit).into()
         }
         Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn wrap_ui_expansion(
+    expanded: proc_macro2::TokenStream,
+    template_hash_lit: syn::LitStr,
+) -> proc_macro2::TokenStream {
+    // `build_ui_root` keeps the RSX expansion off the caller's MSVC-debug prologue.
+    // Keep an explicit component `id` (Sidebar / ScrollArea / …): overwriting it with
+    // `file:line` made splitting `ui!` across files change identity and broke lookups.
+    quote! {
+        rui::core::tree::build_ui_root(|| {
+            let mut __rui_root: rui::core::tree::Element = (#expanded).into();
+            __rui_root = __rui_root.template_hash(#template_hash_lit);
+            if __rui_root.template_id.is_none() {
+                __rui_root = __rui_root.template_id(format!("{}:{}:{}", file!(), line!(), column!()));
+            }
+            __rui_root
+        })
     }
 }
 
@@ -664,6 +677,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         #(#fn_docs)*
+        #[inline(never)]
         #vis fn #name #impl_generics (props: #props_name #ty_generics) -> #crate_path::core::tree::Element
         #where_clause
         {
@@ -877,6 +891,8 @@ fn expand_node(
                 && !el.attributes.iter().any(|(k, _)| k == "actions");
             let radio_group_is_compound =
                 name_str == "RadioGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
+            let toggle_group_is_compound =
+                name_str == "ToggleGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
             let tabs_is_compound =
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             let accordion_is_compound = name_str == "Accordion";
@@ -892,6 +908,7 @@ fn expand_node(
             // Presentational shells that only need `*Props` (no scope): Pagination / Navbar /
             // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup / Skeleton / Empty / Alert / Item / Attachment / List / Table* / MessageScroller (parts) — use the generic
             // PascalCase expansion below; do not add them to this special-case list.
+            // ToggleGroup without `options` is compound (scope before Item); with `options` uses ToggleGroupProps.
             // MessageScrollerProvider is compound (scope before Viewport / Button).
             if name_str == "Reactive"
                 || name_str == "Show"
@@ -900,6 +917,8 @@ fn expand_node(
                 || name_str == "HoverCard"
                 || name_str == "HoverCardContent"
                 || name_str == "Progress"
+                || name_str == "Stepper"
+                || name_str == "Timeline"
                 || name_str == "Bubble"
                 || name_str == "Avatar"
                 || name_str == "Accordion"
@@ -946,6 +965,7 @@ fn expand_node(
                 || combobox_is_compound
                 || name_str == "ComboboxContent"
                 || radio_group_is_compound
+                || toggle_group_is_compound
                 || tabs_is_compound
                 || name_str == "TabsContent"
                 || name_str == "AccordionContent"
@@ -992,9 +1012,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1038,6 +1057,183 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "Stepper" {
+                    // Provide context *before* Item / Indicator / Title (eager props order).
+                    let id_expr = get_attr("id");
+                    let current_sig = get_attr("current_signal")
+                        .or_else(|| get_attr("currentSignal"))
+                        .or_else(|| get_attr("current"));
+                    let default_expr = get_attr("default_step").or_else(|| get_attr("defaultStep"));
+                    let class_expr = get_attr("class");
+                    let orientation_expr = get_attr("orientation");
+                    let clickable_expr = get_attr("clickable");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Stepper#{}", file!(), line!(), #idx) }
+                    };
+                    let current_ts = if let Some(sig) = current_sig {
+                        quote! { Some(#sig) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        if let Some(n) = expr_as_u16(d) {
+                            let n = n as usize;
+                            quote! { #n }
+                        } else {
+                            quote! { (#d) as usize }
+                        }
+                    } else {
+                        quote! { 0usize }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let orientation_ts = if let Some(o) = orientation_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
+                    let clickable_ts = if let Some(c) = clickable_expr {
+                        if let Some(b) = expr_as_bool_compat(c) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#c) }
+                        }
+                    } else {
+                        quote! { true }
+                    };
+                    return quote! {
+                        rui::components::stepper_scope(
+                            #id_ts,
+                            #current_ts,
+                            #default_ts,
+                            #orientation_ts,
+                            #clickable_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "Timeline" {
+                    let id_expr = get_attr("id");
+                    let active_sig = get_attr("active_item_signal")
+                        .or_else(|| get_attr("activeItemSignal"))
+                        .or_else(|| get_attr("active_item"))
+                        .or_else(|| get_attr("activeItem"))
+                        .or_else(|| get_attr("active"));
+                    let default_expr =
+                        get_attr("default_active").or_else(|| get_attr("defaultActive"));
+                    let class_expr = get_attr("class");
+                    let bullet_expr = get_attr("bullet_size").or_else(|| get_attr("bulletSize"));
+                    let line_expr = get_attr("line_size").or_else(|| get_attr("lineSize"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Timeline#{}", file!(), line!(), #idx) }
+                    };
+                    let (active_ts, default_ts) = if let Some(e) = active_sig {
+                        if let Some(n) = expr_as_i32(e) {
+                            (quote! { None }, quote! { #n })
+                        } else {
+                            let fallback = if let Some(d) = default_expr {
+                                if let Some(n) = expr_as_i32(d) {
+                                    quote! { #n }
+                                } else {
+                                    quote! { (#d) as i32 }
+                                }
+                            } else {
+                                quote! { -1i32 }
+                            };
+                            (quote! { Some(#e) }, fallback)
+                        }
+                    } else if let Some(d) = default_expr {
+                        if let Some(n) = expr_as_i32(d) {
+                            (quote! { None }, quote! { #n })
+                        } else {
+                            (quote! { None }, quote! { (#d) as i32 })
+                        }
+                    } else {
+                        (quote! { None }, quote! { -1i32 })
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let bullet_ts = if let Some(v) = bullet_expr {
+                        quote_unitless_f32(v)
+                    } else {
+                        quote! { 16.0f32 }
+                    };
+                    let line_ts = if let Some(v) = line_expr {
+                        quote_unitless_f32(v)
+                    } else {
+                        quote! { 2.0f32 }
+                    };
+                    return quote! {
+                        rui::components::timeline_scope(
+                            #id_ts,
+                            #active_ts,
+                            #default_ts,
+                            #bullet_ts,
+                            #line_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "Bubble" {
                     let variant_expr = get_attr("variant");
                     let align_expr = get_attr("align");
@@ -1056,9 +1252,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1110,9 +1305,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1174,9 +1368,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1245,8 +1438,8 @@ fn expand_node(
                     let items_expr = get_attr("items");
                     let class_expr = get_attr("class");
                     let on_submit_expr = get_attr("on_submit").or_else(|| get_attr("onSubmit"));
-                    let on_item_change_expr = get_attr("on_item_change")
-                        .or_else(|| get_attr("onItemChange"));
+                    let on_item_change_expr =
+                        get_attr("on_item_change").or_else(|| get_attr("onItemChange"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -1262,9 +1455,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1350,9 +1542,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1462,9 +1653,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1560,9 +1750,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1644,9 +1833,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1735,9 +1923,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1802,9 +1989,8 @@ fn expand_node(
                         // Fragment so Trigger can sit beside Content without an extra column.
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1846,9 +2032,8 @@ fn expand_node(
                         // Fragment so Trigger can sit beside Content without an extra column.
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1890,9 +2075,8 @@ fn expand_node(
                         // Fragment so Trigger can sit in parent HStack/VStack without an extra column.
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1932,9 +2116,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -1976,9 +2159,8 @@ fn expand_node(
                         // Fragment so Trigger can sit in parent HStack/VStack without an extra column.
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2018,9 +2200,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2066,9 +2247,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2120,9 +2300,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2173,9 +2352,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2227,9 +2405,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2274,9 +2451,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2342,9 +2518,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2385,9 +2560,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2426,9 +2600,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2463,9 +2636,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2509,9 +2681,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2549,9 +2720,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2599,9 +2769,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2679,9 +2848,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2723,6 +2891,155 @@ fn expand_node(
                     };
                 }
 
+                if toggle_group_is_compound {
+                    // ShadCN compound ToggleGroup: provide context before ToggleGroupItem.
+                    let id_expr = get_attr("id");
+                    let value_expr = get_attr("value");
+                    let values_expr = get_attr("values")
+                        .or_else(|| get_attr("value_multi"))
+                        .or_else(|| get_attr("valueMulti"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
+                    let type_expr = get_attr("type").or_else(|| get_attr("selection"));
+                    let multiple_expr = get_attr("multiple");
+                    let disabled_expr = get_attr("disabled");
+                    let variant_expr = get_attr("variant");
+                    let size_expr = get_attr("size");
+                    let orientation_expr = get_attr("orientation");
+                    let spacing_expr = get_attr("spacing");
+                    let joined_expr = get_attr("joined");
+                    let layout_expr = get_attr("layout");
+                    let required_expr = get_attr("required");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:ToggleGroup#{}", file!(), line!(), #idx) }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let values_ts = if let Some(values) = values_expr {
+                        quote! { Some(#values) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { (#d).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let multiple_ts = if let Some(t) = type_expr {
+                        quote! { (#t).to_string().eq_ignore_ascii_case("multiple") }
+                    } else if let Some(m) = multiple_expr {
+                        if let Some(b) = expr_as_bool_compat(m) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#m) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let variant_ts = if let Some(v) = variant_expr {
+                        quote! { (#v).to_string() }
+                    } else {
+                        quote! { "default".to_string() }
+                    };
+                    let size_ts = if let Some(s) = size_expr {
+                        quote! { (#s).to_string() }
+                    } else {
+                        quote! { "default".to_string() }
+                    };
+                    let orientation_ts = if let Some(o) = orientation_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
+                    let spacing_ts = if let Some(s) = spacing_expr {
+                        quote! { rui::components::parse_toggle_group_spacing(#s) }
+                    } else {
+                        quote! { 2u8 }
+                    };
+                    let joined_ts = if let Some(j) = joined_expr {
+                        if let Some(b) = expr_as_bool_compat(j) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#j) }
+                        }
+                    } else if let Some(l) = layout_expr {
+                        quote! { rui::components::ToggleGroupLayout::from((#l).to_string()).is_joined() }
+                    } else {
+                        quote! { false }
+                    };
+                    let required_ts = if let Some(r) = required_expr {
+                        if let Some(b) = expr_as_bool_compat(r) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#r) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::toggle_group_scope(
+                            #id_ts,
+                            #value_ts,
+                            #values_ts,
+                            #default_ts,
+                            #multiple_ts,
+                            #disabled_ts,
+                            #variant_ts,
+                            #size_ts,
+                            #orientation_ts,
+                            #spacing_ts,
+                            #joined_ts,
+                            false,
+                            #required_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if tabs_is_compound {
                     // solid-ui / ShadCN compound Tabs：先 provide context 再构建 List/Trigger/Content。
                     let id_expr = get_attr("id");
@@ -2746,9 +3063,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -2871,9 +3187,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -3031,9 +3346,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3059,9 +3373,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3087,9 +3400,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3125,9 +3437,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -3184,9 +3495,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -3229,8 +3539,8 @@ fn expand_node(
                     let disabled_expr = get_attr("disabled");
                     let invalid_expr = get_attr("invalid");
                     let class_expr = get_attr("class");
-                    let on_status_expr = get_attr("on_status_change")
-                        .or_else(|| get_attr("onStatusChange"));
+                    let on_status_expr =
+                        get_attr("on_status_change").or_else(|| get_attr("onStatusChange"));
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3244,9 +3554,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -3356,9 +3665,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3449,9 +3757,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3537,9 +3844,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3650,9 +3956,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3703,9 +4008,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3759,9 +4063,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3816,9 +4119,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3859,9 +4161,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3900,9 +4201,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3953,9 +4253,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -3994,9 +4293,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4047,9 +4345,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4088,9 +4385,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4144,9 +4440,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4185,9 +4480,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4223,9 +4517,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4260,9 +4553,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4296,9 +4588,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4330,9 +4621,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4364,9 +4654,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4428,9 +4717,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4483,9 +4771,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 let mut __frag = rui::core::tree::Element::new();
                                 __frag.set_attr("rui_fragment", "1");
                                 __frag.children(__list)
@@ -4580,9 +4867,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4621,9 +4907,8 @@ fn expand_node(
                     // Flat multi-child wrapper; runtime unpacks via `rui_fragment`.
                     return quote! {
                         {
-                            use rui::core::tree::IntoElementList;
                             let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                            #( __list.extend((#expanded_children).into_element_list()); )*
+                            #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                             let mut __frag = rui::core::tree::Element::new();
                             __frag.set_attr("rui_fragment", "1");
                             __frag.children(__list)
@@ -4656,7 +4941,7 @@ fn expand_node(
                             use rui::core::tree::{IntoDynamicComponent, IntoElementList};
                             let mut __rui_dyn = (#component_expr).into_dynamic_component();
                             let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                            #( __list.extend((#expanded_children).into_element_list()); )*
+                            #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                             __rui_dyn = __rui_dyn.children(__list);
                             __rui_dyn
                         }
@@ -4676,9 +4961,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4711,9 +4995,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -4752,9 +5035,16 @@ fn expand_node(
                 }
 
                 if name_str == "Match" {
-                    let idx = *node_counter;
-                    *node_counter += 1;
-                    let scope_ts = quote! { format!("{}:{}:Match#{}", file!(), line!(), #idx) };
+                    // Same contract as `<For scope={...}>`: an explicit island id must not drift
+                    // with `file:line` (hot reload / gallery section body).
+                    let scope_ts =
+                        if let Some(scope_expr) = get_attr("scope").or_else(|| get_attr("id")) {
+                            quote! { #scope_expr }
+                        } else {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            quote! { format!("{}:{}:Match#{}", file!(), line!(), #idx) }
+                        };
                     let maybe_fallback_ts = get_attr("fallback").map(|e| quote! { #e });
                     let maybe_key = get_attr("key");
 
@@ -4772,9 +5062,8 @@ fn expand_node(
                         } else {
                             quote! {
                                 {
-                                    use rui::core::tree::IntoElementList;
                                     let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                    #( __list.extend((#expanded_children).into_element_list()); )*
+                                    #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                     if __list.len() == 1 {
                                         __list.remove(0)
                                     } else {
@@ -4894,9 +5183,8 @@ fn expand_node(
                     } else {
                         quote! {
                             {
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -5119,14 +5407,59 @@ fn expand_node(
                         continue;
                     }
 
+                    // SidebarMenuButton `isActive={sig.get() == id}` ≡ builder
+                    // `bind_prop(..., apply_bound_sidebar_menu_button_active)` (live chrome, no
+                    // sidebar rebuild). Plain `untrack` snapshot is not equivalent.
+                    if name_str == "SidebarMenuButton"
+                        && matches!(attr_name, "isActive" | "is_active")
+                        && expr_reads_get(value)
+                    {
+                        let idx = *node_counter;
+                        *node_counter += 1;
+                        prop_names.push(syn::Ident::new("is_active", attr.span()));
+                        prop_values.push(quote! {
+                            Some(rui::core::reactivity::untrack(|| #value))
+                        });
+                        chrome_binds.push(quote! {
+                            __rui_el = rui::app::reactive::bind_attr(
+                                __rui_el,
+                                format!("{}:{}:bind_sidebar_menu_button_active#{}", file!(), line!(), #idx),
+                                move || #value,
+                                |el, active| {
+                                    rui::components::apply_bound_sidebar_menu_button_active(el, active)
+                                },
+                            );
+                        });
+                        continue;
+                    }
+
                     // Button / Badge / Avatar / Bubble / Input chrome attrs → bind_attr (Solid-style, no rebuild).
                     if matches!(
                         name_str.as_str(),
-                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Alert" | "Item" | "Attachment" | "Input"
-                            | "TableRow" | "TableHead" | "TableCell" | "Marker" | "Message"
+                        "Button"
+                            | "Badge"
+                            | "Avatar"
+                            | "AvatarBadge"
+                            | "Bubble"
+                            | "Alert"
+                            | "Item"
+                            | "Attachment"
+                            | "Input"
+                            | "TableRow"
+                            | "TableHead"
+                            | "TableCell"
+                            | "Marker"
+                            | "Message"
                     ) && matches!(
                         attr_name,
-                        "variant" | "disabled" | "invalid" | "size" | "shape" | "align" | "state" | "orientation"
+                        "variant"
+                            | "disabled"
+                            | "invalid"
+                            | "size"
+                            | "shape"
+                            | "align"
+                            | "state"
+                            | "orientation"
                     ) && expr_reads_get(value)
                     {
                         let idx = *node_counter;
@@ -5346,7 +5679,9 @@ fn expand_node(
                             });
                             continue;
                         }
-                        if (name_str == "TableHead" || name_str == "TableCell") && attr_name == "align" {
+                        if (name_str == "TableHead" || name_str == "TableCell")
+                            && attr_name == "align"
+                        {
                             prop_names.push(attr.clone());
                             let is_reactive = expr_reads_get(value);
                             prop_values.push(if is_reactive {
@@ -5520,12 +5855,18 @@ fn expand_node(
                         name_str == "Textarea" && matches!(attr_name, "wrap" | "rows");
 
                     // TableHead/TableCell：`w` / `align` 是列 prop，不是根节点 base。
-                    let table_cell_own_prop = matches!(name_str.as_str(), "TableHead" | "TableCell")
-                        && matches!(attr_name, "w" | "width" | "align");
+                    let table_cell_own_prop =
+                        matches!(name_str.as_str(), "TableHead" | "TableCell")
+                            && matches!(attr_name, "w" | "width" | "align");
+
+                    // Toaster `position` is the Sonner anchor (`top-center`…), not CSS `position`.
+                    let toaster_own_prop = name_str == "Toaster"
+                        && matches!(attr_name, "position" | "variant" | "overflow" | "limit");
 
                     let is_base = !chart_plot_height
                         && !textarea_own_prop
                         && !table_cell_own_prop
+                        && !toaster_own_prop
                         && matches!(
                             attr_name,
                             "w" | "width"
@@ -5590,6 +5931,7 @@ fn expand_node(
                                 | "left"
                                 | "inset"
                                 | "z_index"
+                                | "zIndex"
                                 | "cols"
                                 | "grid_cols"
                                 | "rows"
@@ -5905,6 +6247,17 @@ fn expand_node(
                                 });
                                 continue;
                             }
+                            if matches!(attr_name, "z_index" | "zIndex") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_z_index#{}", file!(), line!(), #idx),
+                                        move || (#value) as i32,
+                                        |el, z| rui::app::reactive::apply_bound_z_index(el, z),
+                                    );
+                                });
+                                continue;
+                            }
                         }
                         if attr_name == "class"
                             || attr_name == "className"
@@ -6039,6 +6392,7 @@ fn expand_node(
                                 "textShadowOffsetY" => "text_shadow_offset_y",
                                 "pointerEvents" => "pointer_events",
                                 "aspect-ratio" | "aspectRatio" => "aspect_ratio",
+                                "zIndex" => "z_index",
                                 _ => attr_name,
                             };
                             let method_ident = syn::Ident::new(method, attr.span());
@@ -6095,6 +6449,9 @@ fn expand_node(
                         let final_attr = if name_str == "Input" && attr_str == "type" {
                             // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
                             syn::Ident::new("input_type", attr.span())
+                        } else if name_str == "ToggleGroup" && attr_str == "type" {
+                            // ShadCN `type="single|multiple"` → prop `selection`（避免 Rust 关键字）。
+                            syn::Ident::new("selection", attr.span())
                         } else if matches!(name_str.as_str(), "TableHead" | "TableCell")
                             && matches!(attr_str.as_str(), "width")
                         {
@@ -6116,6 +6473,15 @@ fn expand_node(
                                 // Calendar / DatePicker / ColorPicker / Command（Aria + Reader）
                                 "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
                                 "valueSignal" => syn::Ident::new("value_signal", attr.span()),
+                                "currentSignal" => syn::Ident::new("current_signal", attr.span()),
+                                "defaultStep" => syn::Ident::new("default_step", attr.span()),
+                                "activeItem" => syn::Ident::new("active_item", attr.span()),
+                                "activeItemSignal" => {
+                                    syn::Ident::new("active_item_signal", attr.span())
+                                }
+                                "defaultActive" => syn::Ident::new("default_active", attr.span()),
+                                "bulletSize" => syn::Ident::new("bullet_size", attr.span()),
+                                "lineSize" => syn::Ident::new("line_size", attr.span()),
                                 "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
                                 "showAnimation" => syn::Ident::new("show_animation", attr.span()),
                                 "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
@@ -6140,7 +6506,9 @@ fn expand_node(
                                 "itemSignal" => syn::Ident::new("item_signal", attr.span()),
                                 "onItemChange" => syn::Ident::new("on_item_change", attr.span()),
                                 "onSubmit" => syn::Ident::new("on_submit", attr.span()),
-                                "onStatusChange" => syn::Ident::new("on_status_change", attr.span()),
+                                "onStatusChange" => {
+                                    syn::Ident::new("on_status_change", attr.span())
+                                }
                                 "isActive" => syn::Ident::new("is_active", attr.span()),
                                 // MessageScroller (ShadCN base)
                                 "autoScroll" => syn::Ident::new("auto_scroll", attr.span()),
@@ -6271,8 +6639,7 @@ fn expand_node(
                         let first = &expanded_children[0];
                         children_expr = quote! {
                             Some({
-                                use rui::core::tree::IntoElementList;
-                                let mut __list = (#first).into_element_list();
+                                let mut __list = rui::core::tree::build_ui_child(|| (#first));
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -6285,9 +6652,8 @@ fn expand_node(
                     } else {
                         children_expr = quote! {
                             Some({
-                                use rui::core::tree::IntoElementList;
                                 let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
@@ -6547,6 +6913,56 @@ fn expand_node(
                         rui::core::tree::Element::from(__b)
                     }
                 };
+            }
+
+            if matches!(
+                name_str.as_str(),
+                "Box" | "VStack" | "HStack" | "GStack" | "Grid"
+            ) {
+                let mut handle_expr: Option<&syn::Expr> = None;
+                let mut index_expr: Option<&syn::Expr> = None;
+                for (attr, value) in &el.attributes {
+                    match attr.to_string().as_str() {
+                        "drag_reorder_handle" | "dragReorderHandle" => {
+                            handle_expr = Some(value);
+                        }
+                        "drag_reorder_index" | "dragReorderIndex" => {
+                            index_expr = Some(value);
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(handle) = handle_expr {
+                    if let syn::Expr::Tuple(tuple) = handle {
+                        if tuple.elems.len() == 2 {
+                            let list = &tuple.elems[0];
+                            let index = &tuple.elems[1];
+                            element = quote! {
+                                #element.drag_reorder_handle(#list, (#index) as usize)
+                            };
+                        } else {
+                            return quote! {
+                                compile_error!(
+                                    "`drag_reorder_handle={(list_id, index)}` needs exactly two tuple elements"
+                                )
+                            };
+                        }
+                    } else if let Some(index) = index_expr {
+                        element = quote! {
+                            #element.drag_reorder_handle(#handle, (#index) as usize)
+                        };
+                    } else {
+                        return quote! {
+                            compile_error!(
+                                "`drag_reorder_handle` requires `(list_id, index)` or a sibling `drag_reorder_index`"
+                            )
+                        };
+                    }
+                } else if index_expr.is_some() {
+                    return quote! {
+                        compile_error!("`drag_reorder_index` requires `drag_reorder_handle`")
+                    };
+                }
             }
 
             let mut utility_calls: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -7513,8 +7929,21 @@ fn expand_node(
                         element = quote! { #element.inset_block(#value) }
                     }
                     "z_index" | "zIndex" => {
-                        if let Some(z) = expr_as_i32(value) {
+                        if expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_z_index#{}", file!(), line!(), #idx),
+                                    move || (#value) as i32,
+                                    |el, z| rui::app::reactive::apply_bound_z_index(el, z),
+                                );
+                            });
+                        } else if let Some(z) = expr_as_i32(value) {
                             element = quote! { #element.z_index(#z) };
+                        } else {
+                            element = quote! { #element.z_index((#value) as i32) };
                         }
                     }
 
@@ -7534,6 +7963,10 @@ fn expand_node(
                     // be a false "unknown attribute" report.
                     "name" if name_str == "Icon" || name_str == "AnimatedIcon" => {}
                     "src" if name_str == "Icon" => {}
+                    "drag_reorder_handle"
+                    | "dragReorderHandle"
+                    | "drag_reorder_index"
+                    | "dragReorderIndex" => {}
                     _ => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;
@@ -7564,6 +7997,7 @@ fn expand_node(
                 }
             }
 
+            let mut kid_extends = Vec::new();
             for child in &el.children {
                 match child {
                     RsxNode::Expr(expr)
@@ -7596,33 +8030,27 @@ fn expand_node(
                         } else {
                             let expanded_child =
                                 expand_node(child, node_counter, in_reactive_boundary);
-                            element = quote! {
-                                {
-                                    use rui::core::tree::IntoElementList;
-                                    #element.children((#expanded_child).into_element_list())
-                                }
-                            };
+                            kid_extends.push(quote! {
+                                __rui_kids.extend(rui::core::tree::build_ui_child(|| (#expanded_child)));
+                            });
                         }
                     }
-                    RsxNode::Expr(_expr) => {
+                    RsxNode::Expr(_) | RsxNode::Element(_) => {
                         let expanded_child = expand_node(child, node_counter, in_reactive_boundary);
-                        element = quote! {
-                            {
-                                use rui::core::tree::IntoElementList;
-                                #element.children((#expanded_child).into_element_list())
-                            }
-                        };
-                    }
-                    RsxNode::Element(_) => {
-                        let expanded_child = expand_node(child, node_counter, in_reactive_boundary);
-                        element = quote! {
-                            {
-                                use rui::core::tree::IntoElementList;
-                                #element.children((#expanded_child).into_element_list())
-                            }
-                        };
+                        kid_extends.push(quote! {
+                            __rui_kids.extend(rui::core::tree::build_ui_child(|| (#expanded_child)));
+                        });
                     }
                 }
+            }
+            if !kid_extends.is_empty() {
+                element = quote! {
+                    {
+                        let mut __rui_kids: Vec<rui::core::tree::Element> = Vec::new();
+                        #(#kid_extends)*
+                        #element.children(__rui_kids)
+                    }
+                };
             }
 
             // Apply flex row/col explicitly if tag is known
@@ -7760,10 +8188,66 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn toaster_position_is_host_prop_not_css() {
+        let s = expand(
+            r#"<Toaster variant="stack" overflow="displace" limit={3} position="top-center"></Toaster>"#,
+        );
+        assert!(s.contains("position"), "{s}");
+        assert!(
+            !s.contains("b = b . position") && !s.contains("b = b.position"),
+            "Toaster position must not go through BaseComponentBuilder: {s}"
+        );
+    }
+
+    #[test]
     fn match_key_emits_switch_reactive() {
         let s = expand("<Match key={tab.get()}>{ |k| k }</Match>");
         assert!(s.contains("switch_reactive"), "{s}");
         assert!(s.contains("Match #") || s.contains("Match#"), "{s}");
+    }
+
+    #[test]
+    fn match_scope_uses_explicit_anchor() {
+        let s = expand(r#"<Match scope={"stable-island"} key={tab.get()}>{ |k| k }</Match>"#);
+        assert!(s.contains("switch_reactive"), "{s}");
+        assert!(s.contains("stable-island"), "{s}");
+        assert!(!s.contains("Match#"), "{s}");
+    }
+
+    #[test]
+    fn match_id_alias_uses_explicit_anchor() {
+        let s = expand(r#"<Match id={"stable-island"} key={tab.get()}>{ |k| k }</Match>"#);
+        assert!(s.contains("switch_reactive"), "{s}");
+        assert!(s.contains("stable-island"), "{s}");
+    }
+
+    #[test]
+    fn sidebar_menu_button_is_active_get_emits_live_bind() {
+        let s = expand(r#"<SidebarMenuButton isActive={tab.get() == "a"}></SidebarMenuButton>"#);
+        assert!(s.contains("apply_bound_sidebar_menu_button_active"), "{s}");
+        assert!(s.contains("bind_attr"), "{s}");
+        assert!(s.contains("untrack"), "{s}");
+    }
+
+    #[test]
+    fn z_index_if_expr_emits_cast() {
+        let s = expand(r#"<Box z_index={if hl { 1 } else { 0 }}></Box>"#);
+        assert!(s.contains("z_index"), "{s}");
+        assert!(s.contains("as i32"), "{s}");
+    }
+
+    #[test]
+    fn drag_reorder_handle_tuple_emits_builder() {
+        let s = expand(r#"<Box drag_reorder_handle={(list_id, i)}></Box>"#);
+        assert!(s.contains("drag_reorder_handle"), "{s}");
+        assert!(s.contains("as usize"), "{s}");
+    }
+
+    #[test]
+    fn drag_reorder_handle_split_attrs_emit_builder() {
+        let s = expand(r#"<Box drag_reorder_handle={list_id} drag_reorder_index={i}></Box>"#);
+        assert!(s.contains("drag_reorder_handle"), "{s}");
+        assert!(s.contains("as usize"), "{s}");
     }
 
     #[test]
@@ -7810,6 +8294,21 @@ mod rsx_lowering_tests {
         assert!(with_s.contains("bind_text"), "{with_s}");
         let peek_s = expand("<Box>{ label.peek() }</Box>");
         assert!(!peek_s.contains("bind_text"), "{peek_s}");
+    }
+
+    #[test]
+    fn sibling_children_emit_build_ui_child() {
+        let s = expand("<HStack><Box></Box><Box></Box></HStack>");
+        assert!(s.contains("build_ui_child"), "{s}");
+    }
+
+    #[test]
+    fn ui_macro_wraps_build_ui_root() {
+        let expanded = quote! { rui::core::tree::Element::new() };
+        let hash = syn::LitStr::new("h", proc_macro2::Span::call_site());
+        let s = wrap_ui_expansion(expanded, hash).to_string();
+        assert!(s.contains("build_ui_root"), "{s}");
+        assert!(s.contains("is_none"), "{s}");
     }
 
     #[test]

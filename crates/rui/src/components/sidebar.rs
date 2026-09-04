@@ -40,7 +40,7 @@
 //!             <SidebarContent>
 //!                 <SidebarMenu>
 //!                     <SidebarMenuItem>
-//!                         <SidebarMenuButton isActive={true} on_click={|| {}}>
+//!                         <SidebarMenuButton isActive={section.get() == "basics"} on_click={|| {}}>
 //!                             "Basics"
 //!                         </SidebarMenuButton>
 //!                     </SidebarMenuItem>
@@ -810,7 +810,7 @@ fn slot_children(
     el
 }
 
-/// Reactive bind：Gallery 导航项 `isActive` 对位（避免整棵侧栏 rebuild）。
+/// Reactive bind：RSX `isActive={sig.get() == id}` 与手动 `bind_prop` 对位（避免整棵侧栏 rebuild）。
 pub fn apply_bound_sidebar_menu_button_active(el: &mut Element, active: bool) -> LayoutStatus {
     let want = if active { "true" } else { "false" };
     if el.attrs.get("data-active").map(String::as_str) == Some(want) {
@@ -1628,10 +1628,11 @@ mod tests {
         );
         let host = find_slot(&el, SLOT_CONTENT_HOST).expect("content host");
         assert!(find_slot(host, SLOT_CONTENT).is_some());
-        assert!(host.children.iter().any(|c| c
-            .focus_id
-            .as_deref()
-            .is_some_and(|f| f.starts_with("scrollbar-track:"))));
+        assert!(host.children.iter().any(|c| {
+            c.focus_id
+                .as_deref()
+                .is_some_and(|f| f.starts_with("scrollbar-track:"))
+        }));
     }
 
     #[test]

@@ -74,6 +74,13 @@ impl crate::core::tree::IntoElementList for ToasterBuilder {
 
 impl From<ToasterBuilder> for Element {
     fn from(builder: ToasterBuilder) -> Self {
+        if crate::app::reactive::reactive_anchor_is_live(TOAST_HOST_VIEW) {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "rui: <Toaster> / toaster() is a singleton — mount once at the application root \
+                 (sibling of the shell), like Sonner. Extra hosts share the same queue and 0×0 anchor."
+            );
+        }
         layout_signal().set(builder.variant.as_str().to_string());
         position_signal().set(ToastPosition::parse(&builder.position).as_str().to_string());
         overflow_signal().set(builder.overflow.as_str().to_string());
@@ -138,6 +145,8 @@ fn mount_toast_host() -> Element {
 }
 
 /// RSX `<Toaster variant="stack" overflow="displace" limit={3} position="top-right" />`。
+///
+/// 在应用根上与壳兄弟挂 **一份**；`toaster()` 是同一宿主。`toast("…").show()` 从任意处调用。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Toaster(

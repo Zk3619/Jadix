@@ -25,6 +25,7 @@
 //! - DropdownMenu: `<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub (macro `dropdown_menu_scope`); Builder [`dropdown_menu`].
 //! - Menubar: `<Menubar>` / Menu / Trigger / Content / Item… (macro `menubar_scope` / `menubar_menu`; content reuse DropdownMenu); Builder [`menubar`].
 //! - Tabs: Composite `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent` (macro `tabs_scope`); headless bands are still available [`tabs_headless`] + `<Show>`.
+//! - ToggleGroup: `<ToggleGroup>` / `ToggleGroupItem` (macro `toggle_group_scope`); `type=single|multiple`; `spacing=0` / `joined` reuses ButtonGroup fused corners. Builder [`toggle_group`].
 //! - Avatar: `<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>` (macro → [`avatar_scope`]); Builder [`avatar`].
 //! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
 //! - Breadcrumb：`<Breadcrumb>` / `BreadcrumbList` / `BreadcrumbItem` / `BreadcrumbLink` / `BreadcrumbPage` / `BreadcrumbSeparator` / `BreadcrumbEllipsis`；Builder [`breadcrumb`]。
@@ -49,7 +50,9 @@
 //! - Carousel: `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots (macro `carousel_scope`); Builder [`.slide`](carousel::CarouselBuilder::slide).
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令；
-//! [`pagination`] Data paging navigation (ShadCN). The page stack host is [`crate::app::navigator::navigation_host`].
+//! - Pagination: Data paging navigation (ShadCN). The page stack host is [`crate::app::navigator::navigation_host`].
+//! - Stepper: numbered step indicator (RUI, not an official ShadCN primitive) — `<Stepper>` / `StepperItem` / Indicator / Title / Description (macro `stepper_scope`); Builder [`stepper`].
+//! - Timeline: vertical event list (solid-ui `timeline.tsx`, ShadCN-style; not an official ShadCN primitive) — `<Timeline>` / `TimelineItem` / Bullet / Title / Description (macro `timeline_scope`); Builder [`timeline`].
 #![allow(non_snake_case)]
 
 /// 组件库私有实现（不进产品面）。
@@ -118,6 +121,7 @@ pub mod switch;
 pub mod table;
 pub mod tabs;
 pub mod textarea;
+pub mod timeline;
 pub mod toast;
 pub mod toggle;
 pub mod toggle_group;
@@ -375,16 +379,15 @@ pub use message::{
 pub use message_scroller::{
     message_scroller, message_scroller_button, message_scroller_content, message_scroller_item,
     message_scroller_provider, message_scroller_scope, message_scroller_stick_to_end,
-    message_scroller_viewport,
-    use_message_scroller, use_message_scroller_scrollable, use_message_scroller_visibility,
-    MessageScroller, MessageScrollerBuilder, MessageScrollerButton, MessageScrollerButtonBuilder,
-    MessageScrollerButtonProps, MessageScrollerContent, MessageScrollerContentBuilder,
-    MessageScrollerContentProps, MessageScrollerCtx, MessageScrollerDefaultPosition,
-    MessageScrollerDirection, MessageScrollerItem, MessageScrollerItemBuilder,
-    MessageScrollerItemProps, MessageScrollerProps, MessageScrollerProvider,
-    MessageScrollerProviderBuilder, MessageScrollerProviderProps, MessageScrollerScrollable,
-    MessageScrollerViewport, MessageScrollerViewportBuilder, MessageScrollerViewportProps,
-    MessageScrollerVisibility,
+    message_scroller_viewport, use_message_scroller, use_message_scroller_scrollable,
+    use_message_scroller_visibility, MessageScroller, MessageScrollerBuilder,
+    MessageScrollerButton, MessageScrollerButtonBuilder, MessageScrollerButtonProps,
+    MessageScrollerContent, MessageScrollerContentBuilder, MessageScrollerContentProps,
+    MessageScrollerCtx, MessageScrollerDefaultPosition, MessageScrollerDirection,
+    MessageScrollerItem, MessageScrollerItemBuilder, MessageScrollerItemProps,
+    MessageScrollerProps, MessageScrollerProvider, MessageScrollerProviderBuilder,
+    MessageScrollerProviderProps, MessageScrollerScrollable, MessageScrollerViewport,
+    MessageScrollerViewportBuilder, MessageScrollerViewportProps, MessageScrollerVisibility,
 };
 pub use navbar::{
     navbar, Navbar, NavbarActions, NavbarActionsProps, NavbarBrand, NavbarBrandProps,
@@ -483,7 +486,12 @@ pub use sidebar::{
 };
 pub use skeleton::{skeleton, Skeleton, SkeletonBuilder, SkeletonProps};
 pub use slider::{slider, Slider, SliderBuilder, SliderOrientation, SliderProps};
-pub use stepper::{stepper, StepperBuilder};
+pub use stepper::{
+    stepper, stepper_scope, use_stepper, Stepper, StepperBuilder, StepperCtx, StepperDescription,
+    StepperDescriptionProps, StepperIndicator, StepperIndicatorProps, StepperItem,
+    StepperItemProps, StepperOrientation, StepperProps, StepperStep, StepperTitle,
+    StepperTitleProps,
+};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
 pub use table::{
     apply_bound_table_align, apply_bound_table_row_selected, data_table, table, table_comfortable,
@@ -500,6 +508,12 @@ pub use tabs::{
     TABSTRIP_FOCUS_PREFIX,
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
+pub use timeline::{
+    timeline, timeline_bullet_active, timeline_line_active, timeline_scope, use_timeline, Timeline,
+    TimelineBuilder, TimelineCtx, TimelineEntry, TimelineItem, TimelineItemBullet,
+    TimelineItemBulletProps, TimelineItemDescription, TimelineItemDescriptionProps,
+    TimelineItemProps, TimelineItemTitle, TimelineItemTitleProps, TimelineProps,
+};
 pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
 pub use toast::view::{
     Toast, ToastClose, ToastCloseProps, ToastDescription, ToastDescriptionProps, ToastProps,
@@ -511,7 +525,11 @@ pub use toast::{
     ToastOverflow, ToastPosition, ToastTone,
 };
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
-pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};
+pub use toggle_group::{
+    parse_toggle_group_spacing, toggle_group, toggle_group_scope, use_toggle_group, ToggleGroup,
+    ToggleGroupBuilder, ToggleGroupCtx, ToggleGroupItem, ToggleGroupItemProps, ToggleGroupLayout,
+    ToggleGroupOrientation, ToggleGroupProps, ToggleGroupSize, ToggleGroupVariant,
+};
 pub use tooltip::{
     tooltip, tooltip_bubble, tooltip_content, tooltip_scope, tooltip_side_to_placement,
     use_tooltip, TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger,

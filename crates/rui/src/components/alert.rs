@@ -43,12 +43,13 @@
 //!
 //! ## Notes
 //! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
-//! - `<Alert>` uses generic PascalCase �?`AlertProps`; dynamic `variant={sig.get()}` binds via
+//! - `<Alert>` uses generic PascalCase `AlertProps`; dynamic `variant={sig.get()}` binds via
 //!   [`apply_bound_alert_variant`] (same pattern as Badge / Bubble).
-//! - `error` �?`destructive`. `info` / `success` / `warning` via [`SemanticTone`].
-//! - 语义配色�?[`crate::style::semantic_chrome`]；默�?**不填�?*背景（主�?`card` + 语义边框/字色，同 Toast）�?
-//! - `.filled(true)` / `filled={true}` 启用 Badge �?soft tint 底�?
-//! - 展示型提示条：无受控开关；`role="alert"` + `accesskit_role="alert"` 供读屏播报�?
+//! - `error` maps to `destructive`. `info` / `success` / `warning` via [`SemanticTone`].
+//! - Semantic chrome via [`crate::style::semantic_chrome`]; default **no fill** (surface `card` +
+//!   semantic border/text, same as Toast).
+//! - `.filled(true)` / `filled={true}` enables Badge-style soft tint fill.
+//! - Presentational callout: no controlled open state; `role="alert"` + `accesskit_role="alert"` for screen readers.
 
 use crate::components::base::BaseComponentBuilder;
 use crate::core::tree::{Element, IntoF32, LayoutStatus};
@@ -192,23 +193,21 @@ fn stamp_alert_text_paint(el: &mut Element, color: [u8; 4], size_px: f32, weight
 }
 
 fn paint_title_node_on_place(el: &mut Element, fg: [u8; 4]) {
-    el.text_style.color = Some(fg);
-    if el.text.is_some() {
-        stamp_alert_text_paint(el, fg, TITLE_SIZE_PX, TITLE_WEIGHT);
-    }
-    for child in &mut el.children {
-        paint_title_node_on_place(child, fg);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        node.text_style.color = Some(fg);
+        if node.text.is_some() {
+            stamp_alert_text_paint(node, fg, TITLE_SIZE_PX, TITLE_WEIGHT);
+        }
+    });
 }
 
 fn paint_description_node_on_place(el: &mut Element, fg: [u8; 4]) {
-    el.text_style.color = Some(fg);
-    if el.text.is_some() {
-        stamp_alert_text_paint(el, fg, DESC_SIZE_PX, DESC_WEIGHT);
-    }
-    for child in &mut el.children {
-        paint_description_node_on_place(child, fg);
-    }
+    crate::core::tree::walk_elements_mut(el, |node| {
+        node.text_style.color = Some(fg);
+        if node.text.is_some() {
+            stamp_alert_text_paint(node, fg, DESC_SIZE_PX, DESC_WEIGHT);
+        }
+    });
 }
 
 fn paint_title_node(mut el: Element, fg: [u8; 4]) -> Element {
@@ -368,22 +367,21 @@ fn alert_filled_from_attrs(attrs: &std::collections::HashMap<String, String>) ->
 }
 
 fn repaint_alert_descendants(el: &mut Element, chrome: &SemanticChrome) {
-    if is_title(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            paint_title_node_on_place(el, chrome.fg);
+    crate::core::tree::walk_elements_mut(el, |node| {
+        if is_title(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                paint_title_node_on_place(node, chrome.fg);
+            }
+        } else if is_description(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                paint_description_node_on_place(node, chrome.muted_fg);
+            }
+        } else if is_icon_child(node) {
+            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
+                paint_icon_node_on_place(node, chrome.fg);
+            }
         }
-    } else if is_description(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            paint_description_node_on_place(el, chrome.muted_fg);
-        }
-    } else if is_icon_child(el) {
-        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
-            paint_icon_node_on_place(el, chrome.fg);
-        }
-    }
-    for child in &mut el.children {
-        repaint_alert_descendants(child, chrome);
-    }
+    });
 }
 
 fn paint_icon_node_on_place(el: &mut Element, fg: [u8; 4]) {
@@ -568,7 +566,7 @@ impl AlertBuilder {
         self
     }
 
-    /// 启用 Badge �?soft tint 语义底；默认 `false`（主�?`card` + 语义边框/字色）�?
+    /// Enable Badge-style soft tint semantic fill; default `false` (`card` surface + semantic border/text).
     pub fn filled(mut self, filled: bool) -> Self {
         self.filled = filled;
         self

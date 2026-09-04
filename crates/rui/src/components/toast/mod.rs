@@ -22,11 +22,19 @@
 //! - 拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)
 //!
 //! ## Usage
+//!
+//! Mount **one** [`Toaster`] at the application root (Sonner / shadcn). Then call [`toast`] from
+//! anywhere. Builder `toaster()` is the same host as the tag.
+//!
 //! ```ignore
-//! ui! { <Toaster variant="stack" overflow="displace" limit={3} /> }
-//! ui! { <Toaster variant="list" overflow="wait" limit={5} /> }
-//! toast_set_overflow("wait");
-//! toast_set_limit(3);
+//! fn app() -> Element {
+//!     ui! {
+//!         <Box w="100%" h="100%" relative>
+//!             <AppShell />
+//!             <Toaster variant="stack" overflow="displace" limit={3} position="top-center" />
+//!         </Box>
+//!     }
+//! }
 //!
 //! toast("Profile updated")
 //!     .description("Your changes are live.")
@@ -34,9 +42,12 @@
 //!     .show();
 //! ```
 //!
+//! Runtime overrides ([`toast_set_overflow`] / [`toast_set_limit`] / …) patch the same global
+//! host signals; they do **not** replace mounting a Toaster.
+//!
 //! ## Notes
 //! - 宿主锚点 0×0（不进 flex 分栏）；舞台提升到窗口根 portal 层（与 Dialog / Command 同层）。
-//!   `ui! { <Toaster/> }` 会盖掉根 `template_id`，因此锚点必须是子节点。
+//!   把 `<Toaster/>` 放在应用根上与壳兄弟即可；不要在每个页面再挂一份。
 //! - 队列项 id 仅内部递增；关闭：关闭钮，或朝靠近边缘方向拖拽松手（四角两边、中位垂直反向）。
 //! - 点击通知本体**不会**关闭；悬停时暂停自动消失计时。
 //! - `position`：`top-left` / `top-center` / `top-right` / `bottom-left` / `bottom-center` / `bottom-right`。
@@ -1597,6 +1608,160 @@ mod tests {
         el.template_id.as_deref() == Some(id) || el.children.iter().any(|c| find_tid(c, id))
     }
 
+    fn collect_node_texts(el: &Element, out: &mut Vec<String>) {
+        if let Some(t) = &el.text {
+            if !t.is_empty() {
+                out.push(t.clone());
+            }
+        }
+        for c in &el.children {
+            collect_node_texts(c, out);
+        }
+    }
+
+    fn find_toast_cards<'a>(el: &'a Element, out: &mut Vec<&'a Element>) {
+        if el
+            .template_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("toast-card-"))
+        {
+            out.push(el);
+        }
+        for c in &el.children {
+            find_toast_cards(c, out);
+        }
+    }
+
+    fn seed_collapsed_stack() {
+        toast_set_layout("stack");
+        toast_set_overflow("displace");
+        toast_set_limit(3);
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        expanded_signal().set(false);
+        let _ = toast("Stack-A")
+            .description("body-A")
+            .duration(10_000)
+            .show();
+        let _ = toast("Stack-B")
+            .description("body-B")
+            .duration(10_000)
+            .show();
+        let _ = toast("Stack-C")
+            .description("body-C")
+            .duration(10_000)
+            .show();
+    }
+
+    fn assert_collapsed_stack_paint(
+        label: &str,
+        root: &Element,
+        result: &crate::layout::layout_tree::RenderResult,
+    ) {
+        let mut cards = Vec::new();
+        find_toast_cards(root, &mut cards);
+        assert_eq!(
+            cards.len(),
+            3,
+            "{label}: expected 3 toast-card nodes, got {}",
+            cards.len()
+        );
+
+        for card in &cards {
+            let mut texts = Vec::new();
+            collect_node_texts(card, &mut texts);
+            assert!(
+                texts.iter().any(|t| t.starts_with("Stack-")),
+                "{label}: {} lost inner text (got {texts:?}), bg={:?} radii={:?} overflow={:?} z={} scale={:?} bounds={:?}",
+                card.template_id.as_deref().unwrap_or("?"),
+                card.style.bg_color,
+                card.style.radii,
+                card.style.overflow,
+                card.style.z_index,
+                card.style.scale,
+                card.layout_bounds
+            );
+            assert!(
+                card.style.bg_color[3] > 0.5,
+                "{label}: {} lost opaque bg {:?}",
+                card.template_id.as_deref().unwrap_or("?"),
+                card.style.bg_color
+            );
+            assert!(
+                card.style.radii.iter().any(|r| *r > 0.5),
+                "{label}: {} lost radii {:?}",
+                card.template_id.as_deref().unwrap_or("?"),
+                card.style.radii
+            );
+            let bw = card.style.resolved_border_widths();
+            assert!(
+                bw.iter().any(|w| *w > 0.0),
+                "{label}: {} lost border stroke {bw:?} style={:?}",
+                card.template_id.as_deref().unwrap_or("?"),
+                card.style.border_style
+            );
+
+            let [cx, cy, cw, ch] = card.layout_bounds;
+            let painted = result.instances[result.overlay_split.instance_start..]
+                .iter()
+                .find(|inst| {
+                    let ix = inst.rect_pos[0];
+                    let iy = inst.rect_pos[1];
+                    let iw = inst.rect_size[0];
+                    let ih = inst.rect_size[1];
+                    ix < cx + cw
+                        && ix + iw > cx
+                        && iy < cy + ch
+                        && iy + ih > cy
+                        && inst.color[3] > 0.5
+                });
+            let Some(painted) = painted else {
+                panic!(
+                    "{label}: {} has no opaque overlay instance at bounds {:?}; overlay inst={:?}",
+                    card.template_id.as_deref().unwrap_or("?"),
+                    card.layout_bounds,
+                    result.instances[result.overlay_split.instance_start..]
+                        .iter()
+                        .map(|i| (i.rect_pos, i.rect_size, i.color, i.radii, i.clip_size))
+                        .collect::<Vec<_>>()
+                );
+            };
+            assert!(
+                painted.radii[0] > 0.5 && painted.border_width > 0.0,
+                "{label}: {} overlay instance lost chrome radii={:?} border_w={} size={:?} clip={:?}",
+                card.template_id.as_deref().unwrap_or("?"),
+                painted.radii,
+                painted.border_width,
+                painted.rect_size,
+                painted.clip_size
+            );
+        }
+
+        let overlay_texts: Vec<&str> = result.text_nodes[result.overlay_split.text_start..]
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect();
+        for title in ["Stack-A", "Stack-B", "Stack-C"] {
+            let node = result.text_nodes[result.overlay_split.text_start..]
+                .iter()
+                .find(|t| t.text == title);
+            let Some(node) = node else {
+                panic!(
+                    "{label}: {title} missing from overlay glyphon text (collapsed stack must not drop labels).\n\
+                     overlay={overlay_texts:?} bands={} page_stack={}",
+                    result.overlay_split.bands.len(),
+                    result.overlay_split.page_stack_bands.len()
+                );
+            };
+            if let Some(clip) = node.clip_bounds {
+                assert!(
+                    clip[2] > 1.0 && clip[3] > 1.0,
+                    "{label}: {title} clip collapsed to {clip:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn toast_host_root_is_a_box_none_shell_not_the_portal() {
         toast_queue().set(vec![]);
@@ -1626,6 +1791,40 @@ mod tests {
         assert!(
             find_tid(&stamped, TOAST_HOST_VIEW),
             "toast reactive placeholder must remain a descendant after ui! root stamp"
+        );
+        crate::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn toaster_singleton_registers_anchor_after_tracked_mount() {
+        crate::app::reactive::reset_registered_anchors();
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, (before, after_first, after_second)) =
+            crate::core::reactivity::create_root(|| {
+                let pair = std::rc::Rc::new(std::cell::Cell::new((false, false, false)));
+                let pair2 = pair.clone();
+                crate::core::reactivity::create_effect(move || {
+                    let before = crate::app::reactive::reactive_anchor_is_live(TOAST_HOST_VIEW);
+                    let first: Element = toaster().into();
+                    let after_first =
+                        crate::app::reactive::reactive_anchor_is_live(TOAST_HOST_VIEW);
+                    let _second: Element = toaster().into();
+                    let after_second =
+                        crate::app::reactive::reactive_anchor_is_live(TOAST_HOST_VIEW);
+                    let _keep = first;
+                    pair2.set((before, after_first, after_second));
+                });
+                pair.get()
+            });
+        assert!(!before, "host must not be live before the first toaster()");
+        assert!(
+            after_first,
+            "first toaster() must keep the host anchor alive"
+        );
+        assert!(
+            after_second,
+            "a second toaster() in the same tree still shares the live host"
         );
         crate::app::reactive::reset_registered_anchors();
     }
@@ -1665,6 +1864,43 @@ mod tests {
             "toast stage must fill the window portal layer, got {:?}",
             stage.layout_bounds
         );
+    }
+
+    #[test]
+    fn collapsed_stack_keeps_chrome_and_text_on_plain_host() {
+        use crate::layout::layout_tree::LayoutTree;
+        let (_owner, mut root) = crate::core::reactivity::create_root(|| {
+            seed_collapsed_stack();
+            Element::new().w(800.0).h(600.0).child(paint_toast_host())
+        });
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+        assert_collapsed_stack_paint("plain-host", &root, &result);
+    }
+
+    #[test]
+    fn collapsed_stack_keeps_chrome_and_text_inside_ui_relative_box() {
+        // Gallery 根：`ui! { <Box relative> 壳 + Toaster }`。wrap_ui_expansion 会给
+        // Box 盖 template_id/hash；壳上的 z-index 会打开 page_stack_bands。
+        // 本 crate 内不能写 `ui!`（宏展开走 `rui::`），用等价 builder + stamp。
+        use crate::layout::layout_tree::LayoutTree;
+        let (_owner, mut root) = crate::core::reactivity::create_root(|| {
+            seed_collapsed_stack();
+            let host: Element = r#box()
+                .w(800.0)
+                .h(600.0)
+                .relative(true)
+                .child(r#box().w("100%").h("100%").z_index(1).child(text("shell")))
+                .child(paint_toast_host())
+                .into();
+            host
+        });
+        root = root
+            .template_hash("gallery-root-hash")
+            .template_id("examples/gallery/src/app.rs:1:1");
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+        assert_collapsed_stack_paint("ui-relative-box", &root, &result);
     }
 
     #[test]

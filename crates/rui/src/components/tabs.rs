@@ -11,7 +11,7 @@
 //!
 //! 另保留：
 //! - [`tabs_headless`]：无头 index + ←/→（自绘标签行）
-//! - [`tabs_list`]：`options` 便捷条（内部 ToggleGroup `joined`）
+//! - [`tabs_list`]：`options` 便捷条（内部 ToggleGroup `segmented`）
 //!
 //! ## Usage
 //! ```ignore
@@ -812,7 +812,7 @@ pub fn tabs_headless_root(id: impl Into<String>, tab_count: usize) -> Element {
 
 // ── options 便捷条（ToggleGroup joined）──────────────────────────────────────
 
-/// 可见 TabsList 样式壳：单选连体条带（ToggleGroup `joined` + outline）。
+/// 可见 TabsList 样式壳：单选连体条带（ToggleGroup `segmented` + outline）。
 pub struct TabsListBuilder {
     id: String,
     options: Vec<(String, String)>,
@@ -863,7 +863,7 @@ impl From<TabsListBuilder> for Element {
             .default_value(default_value)
             .options(options)
             .variant("outline")
-            .joined(true);
+            .segmented(true);
         if let Some(sig) = value {
             b = b.value_signal(sig);
         }

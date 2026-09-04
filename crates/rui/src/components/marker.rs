@@ -95,9 +95,7 @@ use taffy::style::Display;
 use crate::components::base::BaseComponentBuilder;
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, r#box};
-use crate::style::{
-    is_variant_style_overridden, with_class_list, VariantStyleField,
-};
+use crate::style::{is_variant_style_overridden, with_class_list, VariantStyleField};
 use crate::tokens;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
