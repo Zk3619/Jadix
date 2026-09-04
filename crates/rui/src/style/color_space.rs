@@ -1,4 +1,4 @@
-//! OKLCH 令牌转换与线性 sRGB / Oklab 混合（见仓库根目录 `docs/color.md`）。
+//! OKLCH 令牌转换与线性 sRGB / Oklab 混合（见仓库根目录 `docs/engine/color.md`）。
 //! OKLab/OKLCH 矩阵来自 CSS Color Level 4 / color.js 64-bit 精度（内联，无 `palette` 依赖）。
 //!
 //! 路径：linear sRGB ↔ XYZ D65 ↔ LMS^(1/3) ↔ OKLab（与浏览器 `oklch()` / `color-mix(in oklab)` 一致）。
@@ -189,7 +189,7 @@ pub fn mix_display_srgb_in_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 }
 
 // ---------------------------------------------------------------------------
-// ① Mix / lerp primitives (see `docs/color.md` §B)
+// ① Mix / lerp primitives (see `docs/engine/color.md` §B)
 // ---------------------------------------------------------------------------
 
 /// Straight-channel α blend: `fg` at opacity `alpha` over `surface`, opaque result (`α=1`).

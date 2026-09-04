@@ -5,7 +5,7 @@
 //! - CSS [`keyframes`] 曲线 + [`animation`] 运行时（transition / `@keyframes` tick）。
 //!
 //! Element 侧 **transition 配方**（`MotionStyle` / `prepare_motion_sync`）在
-//! [`crate::utils::motion`]；分层决策见仓库 `docs/animation_and_motion.md`。
+//! [`crate::utils::motion`]；分层决策见仓库 `docs/engine/animation_and_motion.md`。
 //!
 //! 布局遍历见 [`crate::layout::layout_tree`]。
 

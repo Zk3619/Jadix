@@ -136,10 +136,24 @@ pub fn element_wants_sticky_xform(el: &Element) -> bool {
     if el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin") {
         return true;
     }
+    if el.attrs.get("rui_sticky_xform").map(|v| v.as_str()) == Some("1") {
+        return true;
+    }
     if s.animations.iter().any(|a| {
         let n = a.name.to_ascii_lowercase();
         n.contains("spin") || n.contains("rotate")
     }) {
+        return true;
+    }
+    // Hover linear xform (scale/rotate/skew) must sticky-bake at rest so the
+    // first pointer-enter does not pop Coverage→Bake (Twemoji reaction chips).
+    // Toast / Dialog zoom uses inline `transition: transform` + programmatic
+    // scale — no hover:scale class — and must stay Coverage.
+    if el
+        .class_set
+        .as_ref()
+        .is_some_and(|cs| cs.has_hover_linear_xform())
+    {
         return true;
     }
     // `transition: transform` alone is not sticky. Toast / Dialog zoom only tween
@@ -266,6 +280,44 @@ mod tests {
         assert!(element_wants_sticky_xform(&el));
         el.style.rotate_deg = 0.0;
         el.style.transform = Some(vec![TransformFunction::Rotate(CssAngle::Deg(12.0))]);
+        assert!(element_wants_sticky_xform(&el));
+    }
+
+    #[test]
+    fn hover_scale_class_is_sticky_at_rest() {
+        let mut el = Element::new();
+        crate::style::apply_class_list(
+            &mut el,
+            "cursor-pointer transition-transform duration-150 hover:scale-125",
+        );
+        assert!(
+            element_wants_sticky_xform(&el),
+            "hover:scale must sticky-bake so the first hover does not pop Coverage→Bake"
+        );
+    }
+
+    #[test]
+    fn hover_rotate_class_is_sticky_at_rest() {
+        let mut el = Element::new();
+        crate::style::apply_class_list(&mut el, "transition-transform hover:rotate-12");
+        assert!(element_wants_sticky_xform(&el));
+    }
+
+    #[test]
+    fn transition_transform_class_alone_is_not_sticky() {
+        let mut el = Element::new();
+        crate::style::apply_class_list(&mut el, "transition-transform duration-150 ease-out");
+        el.style.scale = [0.95, 0.95];
+        assert!(
+            !element_wants_sticky_xform(&el),
+            "Toast/Dialog zoom: transition-transform without hover:scale stays Coverage"
+        );
+    }
+
+    #[test]
+    fn sticky_xform_attr_opts_in() {
+        let mut el = Element::new();
+        el.attrs.insert("rui_sticky_xform".into(), "1".into());
         assert!(element_wants_sticky_xform(&el));
     }
 

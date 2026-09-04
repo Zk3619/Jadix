@@ -83,6 +83,28 @@ pub struct ClassSet {
     last_pointer_hover: Option<bool>,
 }
 
+impl ClassSet {
+    /// `hover:scale-*` / `hover:rotate-*` / `hover:skew-*` (and `group-hover:`).
+    /// Idle nodes will apply a linear xform on pointer enter; sticky Bake avoids a
+    /// Coverage→Bake pop (Twemoji chips, gallery rotate tiles).
+    pub fn has_hover_linear_xform(&self) -> bool {
+        self.variants.iter().any(|(sels, util)| {
+            let hover = sels.iter().any(|s| {
+                matches!(
+                    s,
+                    VariantSelector::Hover | VariantSelector::GroupHover { .. }
+                )
+            });
+            hover && is_linear_xform_utility(util)
+        })
+    }
+}
+
+fn is_linear_xform_utility(util: &str) -> bool {
+    let u = util.trim();
+    u.starts_with("scale") || u.starts_with("rotate") || u.starts_with("skew")
+}
+
 /// Interaction / theme context used to resolve variant utilities each frame.
 #[derive(Clone, Debug)]
 pub struct VariantContext<'a> {
@@ -238,18 +260,21 @@ pub fn reapply_class_color_overrides(el: &mut Element) -> LayoutStatus {
 
 /// Restore base snapshot and apply currently-matching variant utilities.
 pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
-    let Some(cs) = el.class_set.as_ref() else {
-        return LayoutStatus::Clean;
-    };
-    if cs.variants.is_empty() {
-        return LayoutStatus::Clean;
-    }
+    {
+        let inner = &mut *el.inner;
+        let Some(cs) = inner.class_set.as_ref() else {
+            return LayoutStatus::Clean;
+        };
+        if cs.variants.is_empty() {
+            return LayoutStatus::Clean;
+        }
 
-    if let Some(s) = cs.base_style.as_ref() {
-        *el.style = s.clone();
-    }
-    if let Some(t) = cs.base_text_style.as_ref() {
-        *el.text_style = t.clone();
+        if let Some(s) = cs.base_style.as_ref() {
+            *inner.style = s.clone();
+        }
+        if let Some(t) = cs.base_text_style.as_ref() {
+            *inner.text_style = t.clone();
+        }
     }
 
     let mut impact = LayoutStatus::Clean;
@@ -363,78 +388,89 @@ pub fn tick_active_css_transitions_subtree(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    let is_portal = el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    let scroll_acc = if el.style.position_fixed || is_portal {
-        [0.0_f32, 0.0]
-    } else {
-        scroll_acc
-    };
-
-    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
-        return;
+    struct Frame {
+        ptr: *mut Element,
+        scroll_acc: [f32; 2],
     }
+    let mut stack = vec![Frame {
+        ptr: el as *mut Element,
+        scroll_acc,
+    }];
+    while let Some(frame) = stack.pop() {
+        // SAFETY: exclusive subtree walk of the `el` passed to this function.
+        let el = unsafe { &mut *frame.ptr };
+        let is_portal =
+            el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        let scroll_acc = if el.style.position_fixed || is_portal {
+            [0.0_f32, 0.0]
+        } else {
+            frame.scroll_acc
+        };
 
-    let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
-    let has_css_anim = !el.style.animations.is_empty()
-        || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
-    let has_active_css = el.transition_snapshot.has_active_tweens();
-    let css_needs =
-        super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    let defer_shell_css = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
-        el.template_id.as_deref(),
-    )
-        || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+        if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+            continue;
+        }
+
+        let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
+        let has_css_anim = !el.style.animations.is_empty()
+            || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
+        let has_active_css = el.transition_snapshot.has_active_tweens();
+        let css_needs =
+            super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+        let defer_shell_css = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
             el.template_id.as_deref(),
-        );
+        )
+            || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+                el.template_id.as_deref(),
+            );
 
-    if has_spin || has_css_anim || has_active_css || css_needs {
-        let before = el.style.clone();
-        let spun = tick_animate_spin(el);
-        let css_anim = if !defer_shell_css && (has_css_anim || !el.style.animations.is_empty()) {
-            super::animation::tick_element_animations(
-                &mut el.style,
-                &mut el.animation_snapshot,
-                frame_dt(),
-            )
-        } else {
-            false
-        };
-        let css_trans = if !defer_shell_css
-            && (has_active_css || css_needs || !el.style.transition.is_empty())
-        {
-            super::animation::tick_element_transitions_locked(
-                &mut el.style,
-                &mut el.transition_snapshot,
-                el.animation_snapshot.lock(),
-                frame_dt(),
-            )
-        } else {
-            false
-        };
-        if spun || css_anim || css_trans || el.style != before {
-            *impact = impact.merge(LayoutStatus::StyleChanged);
-            mark_hover_paint_dirty();
-            let need_taffy = style_needs_taffy_sync(&before, &el.style);
-            if need_taffy && el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
+        if has_spin || has_css_anim || has_active_css || css_needs {
+            let before = el.style.clone();
+            let spun = tick_animate_spin(el);
+            let css_anim = if !defer_shell_css && (has_css_anim || !el.style.animations.is_empty())
+            {
+                super::animation::tick_element_animations(
+                    &mut el.inner.style,
+                    &mut el.inner.animation_snapshot,
+                    frame_dt(),
+                )
+            } else {
+                false
+            };
+            let css_trans = if !defer_shell_css
+                && (has_active_css || css_needs || !el.style.transition.is_empty())
+            {
+                super::animation::tick_element_transitions_locked(
+                    &mut el.inner.style,
+                    &mut el.inner.transition_snapshot,
+                    el.inner.animation_snapshot.lock(),
+                    frame_dt(),
+                )
+            } else {
+                false
+            };
+            if spun || css_anim || css_trans || el.style != before {
+                *impact = impact.merge(LayoutStatus::StyleChanged);
+                mark_hover_paint_dirty();
+                let need_taffy = style_needs_taffy_sync(&before, &el.style);
+                if need_taffy && el.layout_node.is_some() {
+                    layout_tree.update_taffy_node_style(el);
+                }
             }
         }
-    }
 
-    let child_acc = if is_portal {
-        scroll_acc
-    } else {
-        crate::core::tree::child_scroll_accumulation(el, scroll_acc)
-    };
-    for child in &mut el.children {
-        tick_active_css_transitions_subtree(
-            child,
-            viewport_w,
-            viewport_h,
-            child_acc,
-            layout_tree,
-            impact,
-        );
+        let child_acc = if is_portal {
+            scroll_acc
+        } else {
+            crate::core::tree::child_scroll_accumulation(el, scroll_acc)
+        };
+        let n = el.children.len();
+        for i in (0..n).rev() {
+            stack.push(Frame {
+                ptr: std::ptr::addr_of_mut!(el.children[i]),
+                scroll_acc: child_acc,
+            });
+        }
     }
 }
 
@@ -453,46 +489,62 @@ fn class_variant_hover_needs_frame_inner(
     scroll_acc: [f32; 2],
     clip: Option<[f32; 4]>,
 ) -> bool {
-    let is_portal = el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
-        ([0.0_f32, 0.0], None)
-    } else {
-        (scroll_acc, clip)
-    };
+    struct Frame<'a> {
+        el: &'a Element,
+        scroll_acc: [f32; 2],
+        clip: Option<[f32; 4]>,
+    }
+    let mut stack = vec![Frame {
+        el,
+        scroll_acc,
+        clip,
+    }];
+    while let Some(frame) = stack.pop() {
+        let el = frame.el;
+        let is_portal =
+            el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
+            ([0.0_f32, 0.0], None)
+        } else {
+            (frame.scroll_acc, frame.clip)
+        };
 
-    let b = el.layout_bounds;
-    let lx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
-    let ly = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
-    let layout_box = [lx, ly, b[2], b[3]];
-    let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-    let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
+        let b = el.layout_bounds;
+        let lx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
+        let ly = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
+        let layout_box = [lx, ly, b[2], b[3]];
+        let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+        let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
 
-    if let Some(cs) = el.class_set.as_ref() {
-        if !cs.variants.is_empty() {
-            match cs.last_pointer_hover {
-                Some(prev) if prev == inside => {}
-                Some(_) => return true,
-                None if inside => return true,
-                None => {}
+        if let Some(cs) = el.class_set.as_ref() {
+            if !cs.variants.is_empty() {
+                match cs.last_pointer_hover {
+                    Some(prev) if prev == inside => {}
+                    Some(_) => return true,
+                    None if inside => return true,
+                    None => {}
+                }
             }
         }
-    }
 
-    let child_clip = if is_portal {
-        None
-    } else if node_clips_pointer(el) {
-        intersect_clip(clip, layout_box)
-    } else {
-        clip
-    };
-    let child_scroll_acc = if is_portal {
-        scroll_acc
-    } else {
-        crate::core::tree::child_scroll_accumulation(el, scroll_acc)
-    };
-    for child in &el.children {
-        if class_variant_hover_needs_frame_inner(child, mouse_pos, child_scroll_acc, child_clip) {
-            return true;
+        let child_clip = if is_portal {
+            None
+        } else if node_clips_pointer(el) {
+            intersect_clip(clip, layout_box)
+        } else {
+            clip
+        };
+        let child_scroll_acc = if is_portal {
+            scroll_acc
+        } else {
+            crate::core::tree::child_scroll_accumulation(el, scroll_acc)
+        };
+        for child in el.children.iter().rev() {
+            stack.push(Frame {
+                el: child,
+                scroll_acc: child_scroll_acc,
+                clip: child_clip,
+            });
         }
     }
     false
@@ -539,6 +591,31 @@ fn node_clips_pointer(el: &Element) -> bool {
     crate::core::tree::element_clips_overflow(el)
 }
 
+fn record_peer_hover(
+    prev_peer_owned: &mut Vec<Option<String>>,
+    child: &Element,
+    mouse_pos: [f32; 2],
+    child_scroll_acc: [f32; 2],
+    child_clip: Option<[f32; 4]>,
+) {
+    prev_peer_owned.clear();
+    let child_paint = crate::core::tree::visual_paint_aabb(child, child_scroll_acc);
+    let child_hovered = crate::core::tree::point_in_aabb(mouse_pos, child_paint)
+        && child_clip.map_or(true, |c| {
+            c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
+        });
+    if !child_hovered {
+        return;
+    }
+    if let Some(name) = child.attrs.get("rui_peer") {
+        if name == "1" {
+            prev_peer_owned.push(None);
+        } else if !name.is_empty() {
+            prev_peer_owned.push(Some(name.clone()));
+        }
+    }
+}
+
 fn sync_class_variants_subtree_inner(
     el: &mut Element,
     mouse_pos: [f32; 2],
@@ -553,217 +630,266 @@ fn sync_class_variants_subtree_inner(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    // Reset accumulated scroll for fixed-position or portal-layer elements,
-    // mirroring the behaviour in pick_hover_target / hit_path.
-    let is_portal = el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
-        ([0.0_f32, 0.0], None)
-    } else {
-        (scroll_acc, clip)
-    };
-
-    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
-        return;
+    struct Frame {
+        ptr: *mut Element,
+        scroll_acc: [f32; 2],
+        clip: Option<[f32; 4]>,
+        ancestor_groups: Vec<Option<String>>,
+        peer: Vec<Option<String>>,
+        next_child: usize,
+        started: bool,
+        child_scroll_acc: [f32; 2],
+        child_clip: Option<[f32; 4]>,
+        group_for_children: Vec<Option<String>>,
+        prev_peer_owned: Vec<Option<String>>,
     }
-
-    let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
-    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
-    let layout_box = [vx, vy, b[2], b[3]];
-    let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-    // Clip `:hover` to ancestor overflow / scroll viewports (layout border box).
-    // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
-    // while the pointer is on the scaled ink (not the unscaled Taffy box).
-    // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
-    let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
-
-    let child_clip = if is_portal {
-        None
-    } else if node_clips_pointer(el) {
-        intersect_clip(clip, layout_box)
-    } else {
-        clip
-    };
-
-    let has_variants = el
-        .class_set
-        .as_ref()
-        .is_some_and(|cs| !cs.variants.is_empty());
-    let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
-    // Only wake the per-frame resolve/tick path while a tween is actually running,
-    // variants may match, or spin / CSS animation needs a tick.
-    // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
-    // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
-    let has_css_anim = !el.style.animations.is_empty()
-        || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
-    let has_active_css = el.transition_snapshot.has_active_tweens();
-    let css_needs =
-        super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    if has_variants || has_spin || has_css_anim || has_active_css || css_needs {
-        let hovered = inside;
-        if has_variants {
-            if let Some(cs) = el.class_set.as_mut() {
-                cs.last_pointer_hover = Some(hovered);
-            }
-        }
-        let focused = el
-            .focus_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty() && id == focused_id);
-        let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
-            || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
-        let ctx_fp = variant_ctx_fingerprint(
-            hovered,
-            focused,
-            disabled,
-            dark,
-            viewport_w,
-            ancestor_group_hovered,
-            peer_hovered,
-            &el.attrs,
-        );
-        let ctx_unchanged = el
-            .class_set
-            .as_ref()
-            .and_then(|cs| cs.last_ctx_fp)
-            .is_some_and(|fp| fp == ctx_fp);
-        // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or spin still need a tick.
-        if !ctx_unchanged || has_spin || has_css_anim || has_active_css || css_needs {
-            let attrs_snapshot = el.attrs.clone();
-            let ctx = VariantContext {
-                hovered,
-                focused,
-                disabled,
-                active: false,
-                dark,
-                viewport_w,
-                group_hovered: ancestor_group_hovered,
-                peer_hovered,
-                attrs: Some(&attrs_snapshot),
+    let mut stack = vec![Frame {
+        ptr: el as *mut Element,
+        scroll_acc,
+        clip,
+        ancestor_groups: ancestor_group_hovered
+            .iter()
+            .map(|n| n.map(str::to_string))
+            .collect(),
+        peer: peer_hovered.iter().map(|n| n.map(str::to_string)).collect(),
+        next_child: 0,
+        started: false,
+        child_scroll_acc: [0.0, 0.0],
+        child_clip: None,
+        group_for_children: Vec::new(),
+        prev_peer_owned: Vec::new(),
+    }];
+    while let Some(mut frame) = stack.pop() {
+        let ptr = frame.ptr;
+        if !frame.started {
+            // SAFETY: exclusive subtree walk of the `el` passed to this function.
+            let el = unsafe { &mut *ptr };
+            // Clone names so later `frame.*` writes do not fight borrows into the Frame.
+            let ancestor_owned = frame.ancestor_groups.clone();
+            let peer_owned = frame.peer.clone();
+            let ancestor_group_hovered: Vec<Option<&str>> =
+                ancestor_owned.iter().map(|n| n.as_deref()).collect();
+            let peer_hovered: Vec<Option<&str>> = peer_owned.iter().map(|n| n.as_deref()).collect();
+            // Reset accumulated scroll for fixed-position or portal-layer elements,
+            // mirroring the behaviour in pick_hover_target / hit_path.
+            let is_portal =
+                el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+            let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
+                ([0.0_f32, 0.0], None)
+            } else {
+                (frame.scroll_acc, frame.clip)
             };
-            let before = el.style.clone();
-            let before_text = el.text_style.clone();
-            let local = resolve_class_variants(el, &ctx);
-            let spun = tick_animate_spin(el);
-            let defer_shell_css =
+
+            if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+                continue;
+            }
+
+            let b = el.layout_bounds;
+            let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
+            let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
+            let layout_box = [vx, vy, b[2], b[3]];
+            let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+            // Clip `:hover` to ancestor overflow / scroll viewports (layout border box).
+            // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
+            // while the pointer is on the scaled ink (not the unscaled Taffy box).
+            // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
+            let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
+
+            let child_clip = if is_portal {
+                None
+            } else if node_clips_pointer(el) {
+                intersect_clip(clip, layout_box)
+            } else {
+                clip
+            };
+
+            let has_variants = el
+                .class_set
+                .as_ref()
+                .is_some_and(|cs| !cs.variants.is_empty());
+            let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
+            // Only wake the per-frame resolve/tick path while a tween is actually running,
+            // variants may match, or spin / CSS animation needs a tick.
+            // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
+            // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
+            let has_css_anim = !el.style.animations.is_empty()
+                || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
+            let has_active_css = el.transition_snapshot.has_active_tweens();
+            let css_needs =
+                super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+            if has_variants || has_spin || has_css_anim || has_active_css || css_needs {
+                let hovered = inside;
+                if has_variants {
+                    if let Some(cs) = el.class_set.as_mut() {
+                        cs.last_pointer_hover = Some(hovered);
+                    }
+                }
+                let focused = el
+                    .focus_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty() && id == focused_id);
+                let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
+                    || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
+                let ctx_fp = variant_ctx_fingerprint(
+                    hovered,
+                    focused,
+                    disabled,
+                    dark,
+                    viewport_w,
+                    &ancestor_group_hovered,
+                    &peer_hovered,
+                    &el.attrs,
+                );
+                let ctx_unchanged = el
+                    .class_set
+                    .as_ref()
+                    .and_then(|cs| cs.last_ctx_fp)
+                    .is_some_and(|fp| fp == ctx_fp);
+                // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or spin still need a tick.
+                if !ctx_unchanged || has_spin || has_css_anim || has_active_css || css_needs {
+                    let attrs_snapshot = el.attrs.clone();
+                    let ctx = VariantContext {
+                        hovered,
+                        focused,
+                        disabled,
+                        active: false,
+                        dark,
+                        viewport_w,
+                        group_hovered: &ancestor_group_hovered,
+                        peer_hovered: &peer_hovered,
+                        attrs: Some(&attrs_snapshot),
+                    };
+                    let before = el.style.clone();
+                    let before_text = el.text_style.clone();
+                    let local = resolve_class_variants(el, &ctx);
+                    let spun = tick_animate_spin(el);
+                    let defer_shell_css =
                 crate::components::internal::modal_motion::modal_shell_defer_css_tick(
                     el.template_id.as_deref(),
                 ) || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
                     el.template_id.as_deref(),
                 );
-            let css_anim = if !defer_shell_css {
-                super::animation::tick_element_animations(
-                    &mut el.style,
-                    &mut el.animation_snapshot,
-                    frame_dt(),
-                )
-            } else {
-                false
-            };
-            let css_trans = if !defer_shell_css {
-                super::animation::tick_element_transitions_locked(
-                    &mut el.style,
-                    &mut el.transition_snapshot,
-                    el.animation_snapshot.lock(),
-                    frame_dt(),
-                )
-            } else {
-                false
-            };
-            if let Some(cs) = el.class_set.as_mut() {
-                cs.last_ctx_fp = Some(ctx_fp);
-            }
-            if local != LayoutStatus::Clean
-                || spun
-                || css_anim
-                || css_trans
-                || el.style != before
-                || el.text_style != before_text
-            {
-                *impact = impact.merge(if spun || css_anim || css_trans {
-                    local.merge(LayoutStatus::StyleChanged)
-                } else {
-                    local
-                });
-                mark_hover_paint_dirty();
-                // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
-                // transition frame dirties flex geometry and can make sidebar hit-test flicker.
-                let need_taffy = matches!(
-                    local,
-                    LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
-                ) || style_needs_taffy_sync(&before, &el.style);
-                if need_taffy && el.layout_node.is_some() {
-                    layout_tree.update_taffy_node_style(el);
+                    let css_anim = if !defer_shell_css {
+                        super::animation::tick_element_animations(
+                            &mut el.inner.style,
+                            &mut el.inner.animation_snapshot,
+                            frame_dt(),
+                        )
+                    } else {
+                        false
+                    };
+                    let css_trans = if !defer_shell_css {
+                        super::animation::tick_element_transitions_locked(
+                            &mut el.inner.style,
+                            &mut el.inner.transition_snapshot,
+                            el.inner.animation_snapshot.lock(),
+                            frame_dt(),
+                        )
+                    } else {
+                        false
+                    };
+                    if let Some(cs) = el.class_set.as_mut() {
+                        cs.last_ctx_fp = Some(ctx_fp);
+                    }
+                    if local != LayoutStatus::Clean
+                        || spun
+                        || css_anim
+                        || css_trans
+                        || el.style != before
+                        || el.text_style != before_text
+                    {
+                        *impact = impact.merge(if spun || css_anim || css_trans {
+                            local.merge(LayoutStatus::StyleChanged)
+                        } else {
+                            local
+                        });
+                        mark_hover_paint_dirty();
+                        // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
+                        // transition frame dirties flex geometry and can make sidebar hit-test flicker.
+                        let need_taffy = matches!(
+                            local,
+                            LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+                        ) || style_needs_taffy_sync(&before, &el.style);
+                        if need_taffy && el.layout_node.is_some() {
+                            layout_tree.update_taffy_node_style(el);
+                        }
+                    }
                 }
             }
-        }
-    }
 
-    let mut pushed_group: Option<Option<String>> = None;
-    if inside {
-        if let Some(name) = el.attrs.get("rui_group") {
-            if name == "1" {
-                pushed_group = Some(None);
-            } else if !name.is_empty() {
-                pushed_group = Some(Some(name.clone()));
-            }
-        }
-    }
-    let owned_group_names: Vec<Option<String>> = if let Some(pushed) = pushed_group {
-        let mut names: Vec<Option<String>> = ancestor_group_hovered
-            .iter()
-            .map(|n| n.map(|s| s.to_string()))
-            .collect();
-        names.push(pushed);
-        names
-    } else {
-        Vec::new()
-    };
-    let child_group_refs_owned: Vec<Option<&str>> =
-        owned_group_names.iter().map(|n| n.as_deref()).collect();
-    let child_group_refs: &[Option<&str>] = if owned_group_names.is_empty() {
-        ancestor_group_hovered
-    } else {
-        &child_group_refs_owned
-    };
-
-    let mut child_scroll_acc = scroll_acc;
-    if !is_portal {
-        child_scroll_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
-    }
-
-    let mut prev_peer_owned: Vec<Option<String>> = Vec::new();
-    for child in &mut el.children {
-        let peer_refs: Vec<Option<&str>> = prev_peer_owned.iter().map(|n| n.as_deref()).collect();
-        sync_class_variants_subtree_inner(
-            child,
-            mouse_pos,
-            focused_id,
-            dark,
-            viewport_w,
-            viewport_h,
-            &child_group_refs,
-            &peer_refs,
-            child_scroll_acc,
-            child_clip,
-            layout_tree,
-            impact,
-        );
-        let child_paint = crate::core::tree::visual_paint_aabb(child, child_scroll_acc);
-        let child_hovered = crate::core::tree::point_in_aabb(mouse_pos, child_paint)
-            && child_clip.map_or(true, |c| {
-                c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
-            });
-        prev_peer_owned.clear();
-        if child_hovered {
-            if let Some(name) = child.attrs.get("rui_peer") {
-                if name == "1" {
-                    prev_peer_owned.push(None);
-                } else if !name.is_empty() {
-                    prev_peer_owned.push(Some(name.clone()));
+            let mut pushed_group: Option<Option<String>> = None;
+            if inside {
+                if let Some(name) = el.attrs.get("rui_group") {
+                    if name == "1" {
+                        pushed_group = Some(None);
+                    } else if !name.is_empty() {
+                        pushed_group = Some(Some(name.clone()));
+                    }
                 }
             }
+            frame.group_for_children = if let Some(pushed) = pushed_group {
+                let mut names: Vec<Option<String>> = ancestor_group_hovered
+                    .iter()
+                    .map(|n| n.map(|s| s.to_string()))
+                    .collect();
+                names.push(pushed);
+                names
+            } else {
+                Vec::new()
+            };
+
+            let mut child_scroll_acc = scroll_acc;
+            if !is_portal {
+                child_scroll_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
+            }
+            frame.child_scroll_acc = child_scroll_acc;
+            frame.child_clip = child_clip;
+            frame.prev_peer_owned.clear();
+            frame.next_child = 0;
+            frame.started = true;
         }
+
+        // SAFETY: exclusive subtree walk; LTR peer is recorded after the previous
+        // sibling's frame has fully unwound (same order as the old recursive walk).
+        let el = unsafe { &mut *ptr };
+        let n = el.inner.children.len();
+        if frame.next_child >= n {
+            continue;
+        }
+        if frame.next_child > 0 {
+            record_peer_hover(
+                &mut frame.prev_peer_owned,
+                &el.inner.children[frame.next_child - 1],
+                mouse_pos,
+                frame.child_scroll_acc,
+                frame.child_clip,
+            );
+        }
+        let i = frame.next_child;
+        frame.next_child += 1;
+        let ancestor_groups = if frame.group_for_children.is_empty() {
+            frame.ancestor_groups.clone()
+        } else {
+            frame.group_for_children.clone()
+        };
+        let peer = frame.prev_peer_owned.clone();
+        let child_scroll_acc = frame.child_scroll_acc;
+        let child_clip = frame.child_clip;
+        let child_ptr = std::ptr::addr_of_mut!(el.inner.children[i]);
+        stack.push(frame);
+        stack.push(Frame {
+            ptr: child_ptr,
+            scroll_acc: child_scroll_acc,
+            clip: child_clip,
+            ancestor_groups,
+            peer,
+            next_child: 0,
+            started: false,
+            child_scroll_acc: [0.0, 0.0],
+            child_clip: None,
+            group_for_children: Vec::new(),
+            prev_peer_owned: Vec::new(),
+        });
     }
 }
 
@@ -2192,6 +2318,68 @@ mod p1_utility_tests {
         assert!(
             !tile.transition_snapshot.has_active_tweens(),
             "must not start a transform tween from a clipped false-hover"
+        );
+    }
+
+    #[test]
+    fn peer_hover_applies_to_next_ltr_sibling_only() {
+        let mut marker = Element::new();
+        apply_class_list(&mut marker, "peer");
+        marker.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        let mut follower = Element::new();
+        apply_class_list(&mut follower, "bg-transparent peer-hover:bg-accent");
+        follower.layout_bounds = [50.0, 0.0, 40.0, 40.0];
+        let base_bg = follower.style.bg_color;
+        let mut root = Element::new()
+            .w(100.0)
+            .h(40.0)
+            .child(marker)
+            .child(follower);
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            [20.0, 20.0],
+            "",
+            false,
+            200.0,
+            80.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_ne!(
+            root.children[1].style.bg_color, base_bg,
+            "pointer on the previous LTR sibling must match peer-hover on the next"
+        );
+
+        let mut marker = Element::new();
+        apply_class_list(&mut marker, "peer");
+        marker.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        let mut follower = Element::new();
+        apply_class_list(&mut follower, "bg-transparent peer-hover:bg-accent");
+        follower.layout_bounds = [50.0, 0.0, 40.0, 40.0];
+        let base_bg = follower.style.bg_color;
+        let mut root = Element::new()
+            .w(100.0)
+            .h(40.0)
+            .child(marker)
+            .child(follower);
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            [70.0, 20.0],
+            "",
+            false,
+            200.0,
+            80.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            root.children[1].style.bg_color, base_bg,
+            "pointer on the follower itself is not a previous-sibling peer hover"
         );
     }
 

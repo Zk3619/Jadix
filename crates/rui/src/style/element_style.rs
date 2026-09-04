@@ -1,6 +1,6 @@
 //! 元素盒模型与 Taffy 映射。
 //!
-//! 契约与缺口总览见 [`docs/box_model.md`](../../../../docs/box_model.md)；执行 [`AUTHORITY.md`](../../../../docs/AUTHORITY.md) WP-2.9。
+//! 契约与缺口总览见 [`docs/engine/box_model.md`](../../../../docs/engine/box_model.md)；执行 [`AUTHORITY.md`](../../../../docs/AUTHORITY.md) WP-2.9。
 //!
 //! ## 百分比尺寸（对齐 CSS）
 //! - `width/height: N%` 相对**包含块的 content box**（父级内容区），不含父级 padding / border / margin。
