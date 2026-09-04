@@ -14,7 +14,6 @@
 
 use crate::core::tree::Element;
 use crate::style::transform::{mat2d_is_axis_aligned, Mat2d};
-use crate::style::TransitionProperty;
 
 /// How a text leaf reaches the GPU when ancestors may rotate / scale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,12 +142,11 @@ pub fn element_wants_sticky_xform(el: &Element) -> bool {
     }) {
         return true;
     }
-    s.transition.iter().any(|e| {
-        matches!(
-            e.property,
-            TransitionProperty::Transform | TransitionProperty::All
-        )
-    })
+    // `transition: transform` alone is not sticky. Toast / Dialog zoom only tween
+    // independent `translate`/`scale` (already baked into the rect + `paint_scale`).
+    // Treating the transition list as sticky forced Bake on every descendant label,
+    // so stacked overflow-clipped cards painted as empty white shells.
+    false
 }
 
 /// Average absolute scale from a 2×2 linear matrix.
@@ -245,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn sticky_from_transition_transform() {
+    fn transform_transition_alone_is_not_sticky() {
         let mut el = Element::new();
         el.style.transition.push(TransitionEntry {
             property: TransitionProperty::Transform,
@@ -253,7 +251,12 @@ mod tests {
             delay_ms: 0.0,
             timing: TimingFunction::Ease,
         });
-        assert!(element_wants_sticky_xform(&el));
+        el.style.scale = [0.95, 0.95];
+        el.style.translate = [0.0, 14.0];
+        assert!(
+            !element_wants_sticky_xform(&el),
+            "translate/scale tweens must keep Coverage; rotate/transform-list still opt in"
+        );
     }
 
     #[test]

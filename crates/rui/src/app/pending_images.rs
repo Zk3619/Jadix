@@ -3,6 +3,7 @@
 //! [`SrcLoadState`] 供 [`crate::components::AvatarImage`] 等在解码失败或 `src` 为空时回退到
 //! [`crate::components::AvatarFallback`]。
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -17,9 +18,12 @@ static DECODED_SRC: Mutex<Option<HashMap<String, CachedSrcImage>>> = Mutex::new(
 static SRC_NEEDED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// Per-贴图键解码结果（Avatar 失败回退 / 避免重复解码）。
 static SRC_LOAD_STATE: Mutex<Option<HashMap<String, SrcLoadState>>> = Mutex::new(None);
-/// 状态变更时同步更新的 Signal（`AvatarImage` 注册）。
-static SRC_LOAD_LISTENERS: Mutex<Option<HashMap<String, Vec<Signal<SrcLoadState>>>>> =
-    Mutex::new(None);
+// Signal ids live in the current runtime. A process-global list would `set`
+// handles from other test threads / disposed roots.
+thread_local! {
+    static SRC_LOAD_LISTENERS: RefCell<HashMap<String, Vec<Signal<SrcLoadState>>>> =
+        RefCell::new(HashMap::new());
+}
 /// GIF 播放状态（帧索引 + 累积时间）。
 static GIF_PLAY: Mutex<Option<HashMap<String, GifPlayState>>> = Mutex::new(None);
 /// 动态贴图内容世代：同一 `texture_key` 像素变了（canvas 重绘 / scene3d 旋转 / GIF 帧）
@@ -69,14 +73,21 @@ fn publish_src_load_state(key: &str, state: SrcLoadState) {
         }
         map.insert(key.to_string(), state);
     }
-    let listeners = SRC_LOAD_LISTENERS.lock().unwrap();
-    if let Some(map) = listeners.as_ref() {
-        if let Some(sigs) = map.get(key) {
-            for sig in sigs {
-                sig.set(state);
+    SRC_LOAD_LISTENERS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let empty = if let Some(sigs) = map.get_mut(key) {
+            sigs.retain(|sig| sig.is_alive());
+            for sig in sigs.iter() {
+                let _ = sig.try_set(state);
             }
+            sigs.is_empty()
+        } else {
+            false
+        };
+        if empty {
+            map.remove(key);
         }
-    }
+    });
 }
 
 fn cached_src_load_state(key: &str) -> Option<SrcLoadState> {
@@ -107,13 +118,12 @@ pub fn src_load_state_for_src(src: &str) -> SrcLoadState {
 
 /// 注册 Signal，在 [`publish_src_load_state`] 时同步更新（供 Avatar bind 使用）。
 pub(crate) fn track_src_load_signal(key: &str, sig: Signal<SrcLoadState>) {
-    SRC_LOAD_LISTENERS
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .entry(key.to_string())
-        .or_default()
-        .push(sig);
+    SRC_LOAD_LISTENERS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let list = map.entry(key.to_string()).or_default();
+        list.retain(|s| s.is_alive());
+        list.push(sig);
+    });
 }
 
 /// 确保 `src` 已尝试解码并返回最终状态；成功时排队 GPU 上传。

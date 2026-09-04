@@ -367,15 +367,7 @@ pub fn snapshot_hover_anchor(
 
 #[allow(dead_code)]
 pub fn find_element_by_template<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
-    if root.template_id.as_deref() == Some(id) {
-        return Some(root);
-    }
-    for child in &root.children {
-        if let Some(found) = find_element_by_template(child, id) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(root, |el| el.template_id.as_deref() == Some(id))
 }
 
 pub fn find_element_by_template_mut<'a>(
@@ -390,17 +382,13 @@ pub fn find_element_by_template_mut<'a>(
 }
 
 fn find_template_path(el: &Element, id: &str, acc: &mut Vec<usize>) -> bool {
-    if el.template_id.as_deref() == Some(id) {
-        return true;
-    }
-    for (i, child) in el.children.iter().enumerate() {
-        acc.push(i);
-        if find_template_path(child, id, acc) {
-            return true;
+    match crate::core::tree::find_path_in_tree(el, |n| n.template_id.as_deref() == Some(id)) {
+        Some(path) => {
+            *acc = path;
+            true
         }
-        acc.pop();
+        None => false,
     }
-    false
 }
 
 fn length_pct_to_px(lp: LengthPercentage, _base: f32) -> f32 {
@@ -517,7 +505,7 @@ pub fn inspector_authored_style(el: &Element) -> Style {
         }
     }
     if let Some(desc) = el.button_hover_paint.as_ref() {
-        let mut style = el.style.clone();
+        let mut style = el.style.as_ref().clone();
         let (bg, _, border) =
             crate::components::button::button_chrome_for_variant(&desc.variant, 0.0);
         style.bg_color = bg;
@@ -537,11 +525,11 @@ pub fn inspector_authored_style(el: &Element) -> Style {
         .as_deref()
         .is_some_and(|id| id.starts_with("dt-row-"))
     {
-        let mut style = el.style.clone();
+        let mut style = el.style.as_ref().clone();
         style.bg_color = [0.0, 0.0, 0.0, 0.0];
         return style;
     }
-    el.style.clone()
+    el.style.as_ref().clone()
 }
 
 /// Like [`style_snapshot`] but reads authored/rest chrome, not live hover paint.
@@ -671,14 +659,17 @@ fn collect_tree(
     depth: usize,
     out: &mut Vec<InspectorNodeSnapshot>,
 ) {
-    if is_inspector_chrome(el) {
-        return;
-    }
-    out.push(snapshot_node(el, path.clone(), depth));
-    for (i, child) in el.children.iter().enumerate() {
-        let mut child_path = path.clone();
-        child_path.push(i);
-        collect_tree(child, child_path, depth + 1, out);
+    let mut stack: Vec<(&Element, ElementPath, usize)> = vec![(el, path, depth)];
+    while let Some((el, path, depth)) = stack.pop() {
+        if is_inspector_chrome(el) {
+            continue;
+        }
+        out.push(snapshot_node(el, path.clone(), depth));
+        for (i, child) in el.children.iter().enumerate().rev() {
+            let mut child_path = path.clone();
+            child_path.push(i);
+            stack.push((child, child_path, depth + 1));
+        }
     }
 }
 

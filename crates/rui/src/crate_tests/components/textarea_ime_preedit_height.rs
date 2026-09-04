@@ -57,15 +57,15 @@ fn textarea_ime_preedit_does_not_inflate_soft_wrap_leaf_height() {
     let anchor = committed.len();
     use_signal(&input_ime_anchor_signal_key(id), || None::<usize>).set(Some(anchor));
     use_signal(&input_preedit_signal_key(id), String::new).set("nihaoshijie".into());
-    use_signal(&input_preedit_sel_signal_key(id), || {
-        None::<(usize, usize)>
-    })
-    .set(Some((0, "nihaoshijie".len())));
+    use_signal(&input_preedit_sel_signal_key(id), || None::<(usize, usize)>)
+        .set(Some((0, "nihaoshijie".len())));
 
     impact = LayoutStatus::Clean;
     sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
     let _ = tree.build_and_layout_fast(&mut root, 72.0, 200.0, [-1.0, -1.0], false, false);
-    let h_preedit = find_tid(&root, &tid).expect("text leaf after preedit").layout_bounds[3];
+    let h_preedit = find_tid(&root, &tid)
+        .expect("text leaf after preedit")
+        .layout_bounds[3];
 
     assert!(
         (h_preedit - h_committed).abs() <= 0.5,

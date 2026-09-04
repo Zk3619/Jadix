@@ -8,7 +8,7 @@
 //! 别名：`error`≡`destructive` · `warn`≡`warning` · 未知→[`SemanticTone::Default`].
 
 use crate::core::tree::Element;
-use crate::style::{is_dark_theme, parse_color, parse_text_color};
+use crate::style::{is_dark_theme, parse_color, parse_text_color, LineStyle};
 
 /// 语义语气（非 Button `outline`/`ghost` 等产品 variant）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -456,10 +456,14 @@ pub fn semantic_chrome(opts: SemanticChromeOpts) -> SemanticChrome {
 /// 仅当 chrome 配置了边框时写入 Element 盒模型。
 pub fn apply_semantic_border(el: &mut Element, border: Option<SemanticBorder>) {
     if let Some(b) = border {
+        // Match [`Element::border`]: width/color without `Solid` keeps
+        // [`Style::resolved_border_widths`] at 0 (default `LineStyle::None`).
+        el.style.border_style = LineStyle::Solid;
         el.style.border_color = b.color;
-        el.style.border_width = b.width;
+        el.style.set_uniform_border_width(b.width);
     } else {
-        el.style.border_width = 0.0;
+        el.style.border_style = LineStyle::None;
+        el.style.set_uniform_border_width(0.0);
         el.style.border_color = [0.0, 0.0, 0.0, 0.0];
     }
 }
@@ -642,5 +646,29 @@ mod tests {
             "success shadow must be green-tinted, got {:?}",
             s.color
         );
+    }
+
+    #[test]
+    fn apply_semantic_border_enables_solid_stroke() {
+        let mut el = Element::new();
+        apply_semantic_border(
+            &mut el,
+            Some(SemanticBorder {
+                color: [0.1, 0.1, 0.1, 1.0],
+                width: 1.0,
+            }),
+        );
+        assert!(
+            !el.style.border_style.is_invisible(),
+            "semantic border must stroke, not leave LineStyle::None"
+        );
+        assert!(
+            el.style.resolved_border_widths().iter().any(|w| *w > 0.0),
+            "resolved widths {:?}",
+            el.style.resolved_border_widths()
+        );
+        apply_semantic_border(&mut el, None);
+        assert!(el.style.border_style.is_invisible());
+        assert!(el.style.resolved_border_widths().iter().all(|w| *w == 0.0));
     }
 }

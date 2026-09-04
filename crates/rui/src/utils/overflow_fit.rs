@@ -73,6 +73,9 @@ mod tests {
     fn definite_width_tightens_budget() {
         let mut panel = Element::new().w(60.0);
         panel.layout_bounds[2] = 60.0;
-        assert_eq!(tighten_horizontal_constraint(&panel, Some(200.0)), Some(60.0));
+        assert_eq!(
+            tighten_horizontal_constraint(&panel, Some(200.0)),
+            Some(60.0)
+        );
     }
 }

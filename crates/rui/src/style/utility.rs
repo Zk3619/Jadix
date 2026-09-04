@@ -197,8 +197,8 @@ fn apply_parsed_class_list(
     let class_set = ClassSet {
         base: parsed.base,
         variants: parsed.variants,
-        base_style: Some(el.style.clone()),
-        base_text_style: Some(el.text_style.clone()),
+        base_style: Some(el.style.as_ref().clone()),
+        base_text_style: Some(el.text_style.as_ref().clone()),
         last_ctx_fp: None,
         last_pointer_hover: None,
     };
@@ -246,10 +246,10 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     }
 
     if let Some(s) = cs.base_style.as_ref() {
-        el.style = s.clone();
+        *el.style = s.clone();
     }
     if let Some(t) = cs.base_text_style.as_ref() {
-        el.text_style = t.clone();
+        *el.text_style = t.clone();
     }
 
     let mut impact = LayoutStatus::Clean;

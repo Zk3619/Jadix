@@ -11,7 +11,9 @@ use crate::components::message_scroller::{
     sync_message_scroller_follow_after_layout,
 };
 use crate::components::scroll_area::scroll_area;
-use crate::core::reactivity::{create_effect, create_root, mark_next_effect_as_ui_root, use_signal};
+use crate::core::reactivity::{
+    create_effect, create_root, mark_next_effect_as_ui_root, use_signal,
+};
 use crate::core::scroll_viewport::scroll_offset_y_signal_key;
 use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
 use std::cell::RefCell;
@@ -31,23 +33,14 @@ const GAL_MS_TEXTS: &[&str] = &[
 fn tall_message_scroller_root() -> Element {
     let mut content = message_scroller_content();
     for i in 0..8 {
-        content = content.child(
-            message_scroller_item()
-                .message_id(format!("m{i}"))
-                .child(
-                    Element::new()
-                        .flex_col()
-                        .w("100%")
-                        .min_w(0.0)
-                        .child(
-                            Element::new()
-                                .w("100%")
-                                .text(format!(
-                                    "Turn {i}: enough text to wrap across multiple lines in a narrow chat column."
-                                )),
-                        ),
+        content =
+            content.child(message_scroller_item().message_id(format!("m{i}")).child(
+                Element::new().flex_col().w("100%").min_w(0.0).child(
+                    Element::new().w("100%").text(format!(
+                    "Turn {i}: enough text to wrap across multiple lines in a narrow chat column."
+                )),
                 ),
-        );
+            ));
     }
     let scroller: Element = message_scroller_provider()
         .id("ms-layout-test")
@@ -76,19 +69,15 @@ fn gallery_like_message_scroller_root() -> Element {
             message_scroller_item()
                 .message_id(format!("m{i}"))
                 .scroll_anchor(true)
-                .child(
-                    message()
-                        .align("end")
-                        .child(message_content().child(bubble().variant("muted").align("end").child(body))),
-                )
+                .child(message().align("end").child(
+                    message_content().child(bubble().variant("muted").align("end").child(body)),
+                ))
         } else {
-            message_scroller_item()
-                .message_id(format!("m{i}"))
-                .child(
-                    message()
-                        .align("start")
-                        .child(message_content().child(bubble().variant("ghost").align("start").child(body))),
-                )
+            message_scroller_item().message_id(format!("m{i}")).child(
+                message().align("start").child(
+                    message_content().child(bubble().variant("ghost").align("start").child(body)),
+                ),
+            )
         };
         content = content.child(bubble_child);
     }
@@ -106,7 +95,12 @@ fn gallery_like_message_scroller_root() -> Element {
         .w(400.0)
         .h(900.0)
         .flex_col()
-        .child(Element::new().h(400.0).w("100%").bg([0.95, 0.95, 0.95, 1.0]))
+        .child(
+            Element::new()
+                .h(400.0)
+                .w("100%")
+                .bg([0.95, 0.95, 0.95, 1.0]),
+        )
         .child(
             Element::new()
                 .w(400.0)
@@ -136,7 +130,11 @@ fn run_gallery_like_scroll_only() -> (f32, f32, f32, usize, Vec<f32>) {
         let _ = tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
     }
     let result = tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
-    let sy = use_signal(&scroll_offset_y_signal_key("ms-gallery-like:viewport"), || 0.0_f32).peek();
+    let sy = use_signal(
+        &scroll_offset_y_signal_key("ms-gallery-like:viewport"),
+        || 0.0_f32,
+    )
+    .peek();
     let metrics = result
         .scroll_metrics
         .iter()
@@ -155,19 +153,17 @@ fn bubble_turn(i: usize, text: &str) -> Element {
             .message_id(format!("m{i}"))
             .scroll_anchor(true)
             .child(
-                message()
-                    .align("end")
-                    .child(message_content().child(bubble().variant("muted").align("end").child(body))),
+                message().align("end").child(
+                    message_content().child(bubble().variant("muted").align("end").child(body)),
+                ),
             )
             .into()
     } else {
         message_scroller_item()
             .message_id(format!("m{i}"))
-            .child(
-                message()
-                    .align("start")
-                    .child(message_content().child(bubble().variant("ghost").align("start").child(body))),
-            )
+            .child(message().align("start").child(
+                message_content().child(bubble().variant("ghost").align("start").child(body)),
+            ))
             .into()
     }
 }
@@ -188,7 +184,12 @@ fn gallery_reactive_island_nested_root(rows: Element) -> Element {
         .w(400.0)
         .h(900.0)
         .flex_col()
-        .child(Element::new().h(400.0).w("100%").bg([0.95, 0.95, 0.95, 1.0]))
+        .child(
+            Element::new()
+                .h(400.0)
+                .w("100%")
+                .bg([0.95, 0.95, 0.95, 1.0]),
+        )
         .child(
             Element::new()
                 .w(400.0)
@@ -226,9 +227,11 @@ fn message_scroller_end_scroll_paints_visible_rows() {
                 );
                 last_result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
                 let result = &last_result;
-                last_sy =
-                    crate::core::reactivity::use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32)
-                        .peek();
+                last_sy = crate::core::reactivity::use_signal(
+                    &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
 
                 let metrics = result
                     .scroll_metrics
@@ -289,10 +292,13 @@ fn message_scroller_scroll_only_band_cull_keeps_end_edge_visible() {
                 384.0,
                 [0.0, 0.0],
             );
-            let result = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, false);
-            let sy =
-                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32)
-                    .peek();
+            let result =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, false);
+            let sy = crate::core::reactivity::use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek();
             let visible: Vec<f32> = result
                 .text_nodes
                 .iter()
@@ -396,7 +402,10 @@ fn message_scroller_jump_button_layers_above_message_glyphs() {
                     .iter()
                     .any(|t| t.text == "Latest")
             });
-            assert!(!earlier_has_latest, "jump label must not share the message band");
+            assert!(
+                !earlier_has_latest,
+                "jump label must not share the message band"
+            );
         });
     });
 }
@@ -422,9 +431,11 @@ fn gallery_like_outer_scroll_only_keeps_inner_wheel_target() {
                     800.0,
                     [0.0, 0.0],
                 );
-                let _ = tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
+                let _ =
+                    tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
             }
-            let result = tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
+            let result =
+                tree.build_and_layout_fast(&mut root, 400.0, 800.0, [-1.0, -1.0], true, false);
             let inner_id = "ms-gallery-like:viewport";
             let metrics = result
                 .scroll_metrics
@@ -457,7 +468,11 @@ fn gallery_like_outer_scroll_only_keeps_inner_wheel_target() {
 
 fn count_slot(el: &Element, slot: &str) -> usize {
     let here = usize::from(el.attrs.get("data-slot").map(String::as_str) == Some(slot));
-    here + el.children.iter().map(|c| count_slot(c, slot)).sum::<usize>()
+    here + el
+        .children
+        .iter()
+        .map(|c| count_slot(c, slot))
+        .sum::<usize>()
 }
 
 fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
@@ -483,14 +498,10 @@ fn message_scroller_reactive_fragment_island_paints_rows() {
         create_effect({
             let live = Rc::clone(&live);
             move || {
-                let rows = reactive_view_sized(
-                    "ms-frag-rows__view",
-                    "100%",
-                    "max-content",
-                    || {
-                        let mut frag = Element::new();
-                        frag.set_attr("rui_fragment", "1");
-                        let kids: Vec<Element> = (0..8)
+                let rows = reactive_view_sized("ms-frag-rows__view", "100%", "max-content", || {
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    let kids: Vec<Element> = (0..8)
                             .map(|i| {
                                 message_scroller_item()
                                     .message_id(format!("m{i}"))
@@ -500,20 +511,15 @@ fn message_scroller_reactive_fragment_island_paints_rows() {
                                     .into()
                             })
                             .collect();
-                        frag.children(kids)
-                    },
-                );
+                    frag.children(kids)
+                });
                 let scroller: Element = message_scroller_provider()
                     .id("ms-frag-test")
                     .auto_scroll(true)
                     .default_scroll_position("end")
-                    .child(
-                        message_scroller()
-                            .h("100%")
-                            .child(message_scroller_viewport().child(
-                                message_scroller_content().child(rows),
-                            )),
-                    )
+                    .child(message_scroller().h("100%").child(
+                        message_scroller_viewport().child(message_scroller_content().child(rows)),
+                    ))
                     .into();
                 *live.borrow_mut() = Element::new()
                     .w(320.0)
@@ -569,11 +575,8 @@ fn gallery_nested_reactive_island_keeps_end_edge_visible() {
         create_effect({
             let live = Rc::clone(&live);
             move || {
-                let rows = reactive_view_sized(
-                    "ms-gal-island-rows__view",
-                    "100%",
-                    "max-content",
-                    || {
+                let rows =
+                    reactive_view_sized("ms-gal-island-rows__view", "100%", "max-content", || {
                         let mut col = crate::primitives::r#box::vstack()
                             .w("100%")
                             .min_w(0.0)
@@ -583,8 +586,7 @@ fn gallery_nested_reactive_island_keeps_end_edge_visible() {
                             col = col.child(bubble_turn(i, text));
                         }
                         col.into()
-                    },
-                );
+                    });
                 *live.borrow_mut() = gallery_reactive_island_nested_root(rows);
             }
         });
@@ -614,15 +616,17 @@ fn gallery_nested_reactive_island_keeps_end_edge_visible() {
             .map(|t| (t.text.chars().take(24).collect::<String>(), t.y))
             .collect();
     }
-    let sy = use_signal(&scroll_offset_y_signal_key("ms-gal-island:viewport"), || 0.0_f32).peek();
+    let sy = use_signal(
+        &scroll_offset_y_signal_key("ms-gal-island:viewport"),
+        || 0.0_f32,
+    )
+    .peek();
     assert!(
         last_visible.len() >= 2,
         "end-anchored gallery island must show multiple message lines (sy={sy} text={last_text} visible={last_visible:?})"
     );
     let end_edge = last_visible.iter().any(|(t, _)| {
-        t.contains("assistive")
-            || t.contains("screen readers")
-            || t.contains("Auto-scroll")
+        t.contains("assistive") || t.contains("screen readers") || t.contains("Auto-scroll")
     });
     assert!(
         end_edge,
@@ -661,23 +665,18 @@ fn message_scroller_for_keyed_island_paints_rows() {
                     |(i, _)| i.to_string(),
                     |(i, text)| bubble_turn(*i, &text),
                 );
-                *live.borrow_mut() = Element::new()
-                    .w(320.0)
-                    .h(384.0)
-                    .overflow("hidden")
-                    .child(
-                        message_scroller_provider()
-                            .id("ms-keyed-test")
-                            .auto_scroll(true)
-                            .default_scroll_position("end")
-                            .child(
-                                message_scroller()
-                                    .h("100%")
-                                    .child(message_scroller_viewport().child(
-                                        message_scroller_content().child(rows),
-                                    )),
+                *live.borrow_mut() = Element::new().w(320.0).h(384.0).overflow("hidden").child(
+                    message_scroller_provider()
+                        .id("ms-keyed-test")
+                        .auto_scroll(true)
+                        .default_scroll_position("end")
+                        .child(
+                            message_scroller().h("100%").child(
+                                message_scroller_viewport()
+                                    .child(message_scroller_content().child(rows)),
                             ),
-                    );
+                        ),
+                );
             }
         });
     });
@@ -694,8 +693,7 @@ fn message_scroller_for_keyed_island_paints_rows() {
     let mut last_text = 0usize;
     for _ in 0..6 {
         sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
-        let result =
-            tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, false);
+        let result = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, false);
         last_text = result.text_nodes.len();
     }
     assert!(
@@ -728,13 +726,12 @@ fn message_scroller_remount_preserves_scroll_when_auto_scroll_off() {
                 let _ = bump.get();
                 let mut content = message_scroller_content();
                 for i in 0..8 {
-                    content = content.child(
-                        message_scroller_item()
-                            .message_id(format!("m{i}"))
-                            .child(Element::new().text(format!(
+                    content =
+                        content.child(message_scroller_item().message_id(format!("m{i}")).child(
+                            Element::new().text(format!(
                                 "Turn {i}: enough text to overflow the viewport when stacked."
-                            ))),
-                    );
+                            )),
+                        ));
                 }
                 let scroller: Element = message_scroller_provider()
                     .id("ms-remount-test")
@@ -760,7 +757,14 @@ fn message_scroller_remount_preserves_scroll_when_auto_scroll_off() {
         let mut tree = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         for _ in 0..4 {
-            sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
         }
         use_signal(&sy_key, || 0.0_f32).set_silent(120.0);
@@ -773,7 +777,14 @@ fn message_scroller_remount_preserves_scroll_when_auto_scroll_off() {
         let mut tree = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         for _ in 0..4 {
-            sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
         }
     }
@@ -805,7 +816,11 @@ fn ui_like_vacuous_filter_keeps_nested_rows_placeholder() {
 
     let section = use_signal("ms-ui-vacuous-section", || "basics".to_string());
     let thread = use_signal("ms-ui-vacuous-thread", || {
-        GAL_MS_TEXTS.iter().take(3).map(|s| (*s).to_string()).collect::<Vec<_>>()
+        GAL_MS_TEXTS
+            .iter()
+            .take(3)
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
     });
 
     mark_next_effect_as_ui_root();
@@ -856,7 +871,13 @@ fn ui_like_vacuous_filter_keeps_nested_rows_placeholder() {
         "rows island inside static Provider must graft after ui!-style vacuous filtering"
     );
 
-    thread.set(GAL_MS_TEXTS.iter().take(4).map(|s| (*s).to_string()).collect());
+    thread.set(
+        GAL_MS_TEXTS
+            .iter()
+            .take(4)
+            .map(|s| (*s).to_string())
+            .collect(),
+    );
     assert_eq!(
         count_slot(&live_check.borrow(), "message-scroller-item"),
         4,
@@ -929,11 +950,10 @@ fn message_scroller_nested_rows_island_auto_scrolls_on_append() {
                                 .auto_scroll(true)
                                 .default_scroll_position("end")
                                 .child(
-                                    message_scroller()
-                                        .h("100%")
-                                        .child(message_scroller_viewport().child(
-                                            message_scroller_content().child(rows),
-                                        )),
+                                    message_scroller().h("100%").child(
+                                        message_scroller_viewport()
+                                            .child(message_scroller_content().child(rows)),
+                                    ),
                                 )
                                 .into();
                             Element::new()
@@ -955,7 +975,14 @@ fn message_scroller_nested_rows_island_auto_scrolls_on_append() {
         let mut root = live_check.borrow_mut();
         let mut impact = LayoutStatus::Clean;
         for _ in 0..6 {
-            sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
             sync_message_scroller_follow_after_layout(&mut root, &mut tree);
         }
@@ -1083,9 +1110,10 @@ fn message_scroller_send_follows_when_following_flag_was_released() {
                                 .child(
                                     message_scroller()
                                         .h("100%")
-                                        .child(message_scroller_viewport().child(
-                                            message_scroller_content().child(rows),
-                                        ))
+                                        .child(
+                                            message_scroller_viewport()
+                                                .child(message_scroller_content().child(rows)),
+                                        )
                                         .child(message_scroller_button().direction("end")),
                                 )
                                 .into();
@@ -1108,12 +1136,22 @@ fn message_scroller_send_follows_when_following_flag_was_released() {
         let mut root = live_check.borrow_mut();
         let mut impact = LayoutStatus::Clean;
         for _ in 0..6 {
-            sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
             sync_message_scroller_follow_after_layout(&mut root, &mut tree);
         }
         sy_before = use_signal(&scroll_offset_y_signal_key(viewport), || 0.0_f32).peek();
-        assert!(sy_before > 8.0, "must start at the live edge (sy={sy_before})");
+        assert!(
+            sy_before > 8.0,
+            "must start at the live edge (sy={sy_before})"
+        );
         use_signal("ms-send-follow:following", || true).set_silent(false);
     }
 
@@ -1142,9 +1180,7 @@ fn message_scroller_send_follows_when_following_flag_was_released() {
             result
                 .text_nodes
                 .iter()
-                .any(|t| t.text.contains("turn anchoring")
-                    && t.y + t.height > 0.0
-                    && t.y < 384.0),
+                .any(|t| t.text.contains("turn anchoring") && t.y + t.height > 0.0 && t.y < 384.0),
             "send follow must paint the new turn this frame (sy={sy} max={max_y})"
         );
         assert!(
@@ -1227,11 +1263,10 @@ fn message_scroller_stick_to_end_jumps_from_mid_list() {
                                 .auto_scroll(true)
                                 .default_scroll_position("end")
                                 .child(
-                                    message_scroller()
-                                        .h("100%")
-                                        .child(message_scroller_viewport().child(
-                                            message_scroller_content().child(rows),
-                                        )),
+                                    message_scroller().h("100%").child(
+                                        message_scroller_viewport()
+                                            .child(message_scroller_content().child(rows)),
+                                    ),
                                 )
                                 .into();
                             Element::new()
@@ -1252,7 +1287,14 @@ fn message_scroller_stick_to_end_jumps_from_mid_list() {
         let mut root = live_check.borrow_mut();
         let mut impact = LayoutStatus::Clean;
         for _ in 0..6 {
-            sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
         }
         let sy = use_signal(&scroll_offset_y_signal_key(viewport), || 0.0_f32).peek();
@@ -1290,9 +1332,7 @@ fn message_scroller_stick_to_end_jumps_from_mid_list() {
             result
                 .text_nodes
                 .iter()
-                .any(|t| t.text.contains("turn anchoring")
-                    && t.y + t.height > 0.0
-                    && t.y < 384.0),
+                .any(|t| t.text.contains("turn anchoring") && t.y + t.height > 0.0 && t.y < 384.0),
             "Send stick-to-end must paint the new turn this frame (sy={sy} max={max_y})"
         );
     }

@@ -453,27 +453,11 @@ pub fn find_by_focus_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
 }
 
 fn find_by_focus_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
-    if el.focus_id.as_deref() == Some(id) {
-        return Some(el);
-    }
-    for c in &el.children {
-        if let Some(found) = find_by_focus_id_exact(c, id) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(el, |n| n.focus_id.as_deref() == Some(id))
 }
 
 fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
-    if el.template_id.as_deref() == Some(id) {
-        return Some(el);
-    }
-    for c in &el.children {
-        if let Some(found) = find_by_template_id_exact(c, id) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(el, |n| n.template_id.as_deref() == Some(id))
 }
 
 /// Dispatch pointer event along `path` (capture → target → bubble).

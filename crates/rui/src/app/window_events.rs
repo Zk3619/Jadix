@@ -680,15 +680,8 @@ impl super::App {
         let line_full = &display[line_start..line_end];
 
         fn first_text_style(el: &crate::core::tree::Element) -> Option<crate::style::TextStyle> {
-            if el.text.is_some() {
-                return Some(el.text_style.clone());
-            }
-            for c in &el.children {
-                if let Some(s) = first_text_style(c) {
-                    return Some(s);
-                }
-            }
-            None
+            crate::core::tree::find_in_tree(el, |n| n.text.is_some())
+                .map(|n| n.text_style.as_ref().clone())
         }
 
         let text_style = super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
@@ -734,15 +727,7 @@ impl super::App {
         el: &'a crate::core::tree::Element,
         template_id: &str,
     ) -> Option<&'a crate::core::tree::Element> {
-        if el.template_id.as_deref() == Some(template_id) {
-            return Some(el);
-        }
-        for child in &el.children {
-            if let Some(found) = Self::find_element_by_template_id(child, template_id) {
-                return Some(found);
-            }
-        }
-        None
+        crate::core::tree::find_in_tree(el, |n| n.template_id.as_deref() == Some(template_id))
     }
 
     fn scrollbar_axis_key(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
@@ -2164,9 +2149,10 @@ impl super::App {
             if cursor_stable
                 && super::scroll_support::wheel_sticky_matches_deepest(&sticky, &target_rests)
             {
-                if let Some((_, [max_x, max_y], _)) =
-                    super::scroll_support::wheel_metrics_for_rest(&sticky, &self.scroll_metrics_cache)
-                {
+                if let Some((_, [max_x, max_y], _)) = super::scroll_support::wheel_metrics_for_rest(
+                    &sticky,
+                    &self.scroll_metrics_cache,
+                ) {
                     let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                         &sticky,
                         &mut self.scroll_signal_key_cache,
@@ -3754,6 +3740,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             if let Some(cb) = cb_to_run {
                                 (*cb.borrow_mut())();
                             }
+                            crate::app::reactive::drain_deferred_view_remounts();
                         }
                     }
                     // Use the pre-click path. Re-hitting after on_click is wrong: opening is

@@ -189,6 +189,8 @@ fn show_scoped_toggle_keeps_unkeyed_sibling_intact() {
 
 #[test]
 fn show_reactive_when_does_not_subscribe_parent_effect() {
+    // No `install_test_reconcile_root`: island reconcile misses. Must not
+    // `schedule_effect` into the in-flight deferred flush (100k-round loop).
     reset_registered_anchors();
     let flag = use_signal("__rui_test_show_reactive_when", || false);
     flag.set_silent(false);

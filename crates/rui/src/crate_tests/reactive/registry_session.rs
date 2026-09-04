@@ -4,9 +4,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::registry_owner::registry_totals;
-use crate::app::reactive::{reactive_anchor, reactive_view_sized, reset_registered_anchors, switch_reactive};
+use crate::app::reactive::{
+    reactive_anchor, reactive_view_sized, reset_registered_anchors, switch_reactive,
+};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
-use crate::core::reactivity::{create_effect, create_root, mark_next_effect_as_ui_root, reactivity_debug_snapshot, use_signal};
+use crate::core::reactivity::{
+    create_effect, create_root, mark_next_effect_as_ui_root, reactivity_debug_snapshot, use_signal,
+};
 use crate::core::tree::Element;
 
 #[test]
@@ -78,11 +82,7 @@ fn switch_reactive_section_cycles_do_not_grow_registry() {
 }
 
 fn subtree_contains_text(el: &Element, needle: &str) -> bool {
-    if el
-        .text
-        .as_deref()
-        .is_some_and(|t| t.contains(needle))
-    {
+    if el.text.as_deref().is_some_and(|t| t.contains(needle)) {
         return true;
     }
     el.children.iter().any(|c| subtree_contains_text(c, needle))
@@ -115,12 +115,10 @@ fn nested_reactive_island_survives_parent_switch_rebuild() {
                         if key != "basics" {
                             return Element::new().text("other");
                         }
-                        let rows = reactive_view_sized(
-                            "wp243_nested_rows",
-                            "100%",
-                            "max-content",
-                            || Element::new().text("Hello from nested island"),
-                        );
+                        let rows =
+                            reactive_view_sized("wp243_nested_rows", "100%", "max-content", || {
+                                Element::new().text("Hello from nested island")
+                            });
                         Element::new().child(rows)
                     },
                 );

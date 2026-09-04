@@ -200,12 +200,15 @@ fn effective_bounds(el: &Element) -> Option<Rect> {
         return Some(r);
     }
     let mut acc: Option<Rect> = None;
-    for child in &el.children {
-        if let Some(cb) = effective_bounds(child) {
+    let mut stack: Vec<&Element> = el.children.iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        if let Some(r) = bounds_from_layout(node.layout_bounds) {
             acc = Some(match acc {
-                None => cb,
-                Some(a) => union_rect(a, cb),
+                None => r,
+                Some(a) => union_rect(a, r),
             });
+        } else {
+            stack.extend(node.children.iter().rev());
         }
     }
     acc
@@ -219,12 +222,16 @@ fn collect_visible_text(el: &Element) -> String {
 }
 
 fn collect_visible_text_into(el: &Element, parts: &mut Vec<String>) {
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        parts.push(t.to_string());
-    }
-    for child in &el.children {
-        collect_visible_text_into(child, parts);
-    }
+    crate::core::tree::walk_elements(el, |node| {
+        if let Some(t) = node
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            parts.push(t.to_string());
+        }
+    });
 }
 
 /// Controls that expose a name from descendant text (ARIA name-from-contents).
@@ -364,38 +371,46 @@ fn collect_label_caption(el: &Element) -> Option<String> {
 }
 
 fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bool) {
-    if !is_root
-        && (el.checkbox_sync.is_some()
-            || el.switch_checked_sync.is_some()
-            || el.radio_selected_sync.is_some()
-            || el.on_click.is_some())
-    {
-        return;
-    }
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        if el.text_style.font_family.as_deref() != Some("lucide") {
-            parts.push(t.to_string());
+    let mut stack: Vec<(&Element, bool)> = vec![(el, is_root)];
+    while let Some((node, root)) = stack.pop() {
+        if !root
+            && (node.checkbox_sync.is_some()
+                || node.switch_checked_sync.is_some()
+                || node.radio_selected_sync.is_some()
+                || node.on_click.is_some())
+        {
+            continue;
         }
-    }
-    for child in &el.children {
-        collect_label_caption_into(child, parts, false);
+        if let Some(t) = node
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if node.text_style.font_family.as_deref() != Some("lucide") {
+                parts.push(t.to_string());
+            }
+        }
+        for child in node.children.iter().rev() {
+            stack.push((child, false));
+        }
     }
 }
 
 fn collect_visible_text_skip_lucide(el: &Element, parts: &mut Vec<String>) {
-    if el.text_style.font_family.as_deref() == Some("lucide") {
-        // Check/icon glyphs must not be the accessible name; still walk non-lucide children.
-        for child in &el.children {
-            collect_visible_text_skip_lucide(child, parts);
+    crate::core::tree::walk_elements(el, |node| {
+        if node.text_style.font_family.as_deref() == Some("lucide") {
+            return;
         }
-        return;
-    }
-    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        parts.push(t.to_string());
-    }
-    for child in &el.children {
-        collect_visible_text_skip_lucide(child, parts);
-    }
+        if let Some(t) = node
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            parts.push(t.to_string());
+        }
+    });
 }
 
 fn collect_visible_text_excluding_lucide_root(el: &Element) -> String {
@@ -551,63 +566,110 @@ fn walk_subtree(
     under_name_from_contents: bool,
     for_map: &HashMap<String, String>,
 ) {
-    // Fold plain caption text into the ancestor control name (avoid "button" + nested Label).
-    if under_name_from_contents && is_plain_text_name_leaf(el) {
-        return;
+    struct Frame<'a> {
+        el: &'a Element,
+        path: String,
+        under: bool,
+        next_child: usize,
+        child_ids: Vec<NodeId>,
+        skipped: bool,
+        absorb: bool,
+        started: bool,
     }
-
-    let absorb = under_name_from_contents || uses_name_from_contents(el);
-    let mut child_ids: Vec<NodeId> = Vec::new();
-    for (i, child) in el.children.iter().enumerate() {
-        let child_path = if path.is_empty() {
-            i.to_string()
+    let mut stack = vec![Frame {
+        el,
+        path: path.to_string(),
+        under: under_name_from_contents,
+        next_child: 0,
+        child_ids: Vec::new(),
+        skipped: false,
+        absorb: false,
+        started: false,
+    }];
+    while !stack.is_empty() {
+        let last = stack.len() - 1;
+        if !stack[last].started {
+            stack[last].started = true;
+            if stack[last].under && is_plain_text_name_leaf(stack[last].el) {
+                stack[last].skipped = true;
+            } else {
+                stack[last].absorb = stack[last].under || uses_name_from_contents(stack[last].el);
+            }
+        }
+        if stack[last].skipped {
+            stack.pop();
+            continue;
+        }
+        let child_ptr = if stack[last].next_child < stack[last].el.children.len() {
+            let i = stack[last].next_child;
+            stack[last].next_child += 1;
+            let child_path = if stack[last].path.is_empty() {
+                i.to_string()
+            } else {
+                format!("{}/{}", stack[last].path, i)
+            };
+            let under = stack[last].absorb;
+            Some((
+                &stack[last].el.children[i] as *const Element,
+                child_path,
+                under,
+            ))
         } else {
-            format!("{path}/{i}")
+            None
         };
-        walk_subtree(
-            child,
-            &child_path,
-            nodes,
-            &mut child_ids,
-            used,
-            absorb,
-            for_map,
-        );
-    }
-
-    if should_be_accesskit_node(el) {
-        let preferred = stable_node_key(el, path);
-        let (_key, id) = alloc_unique_node_id(&preferred, path, used);
-        let mut node = build_node(el, for_map);
-        node.set_children(child_ids);
-        nodes.push((id, node));
-        parent_child_ids.push(id);
-    } else {
-        parent_child_ids.extend(child_ids);
+        if let Some((child_ptr, child_path, under)) = child_ptr {
+            stack.push(Frame {
+                el: unsafe { &*child_ptr },
+                path: child_path,
+                under,
+                next_child: 0,
+                child_ids: Vec::new(),
+                skipped: false,
+                absorb: false,
+                started: false,
+            });
+            continue;
+        }
+        let frame = stack.pop().unwrap();
+        if should_be_accesskit_node(frame.el) {
+            let preferred = stable_node_key(frame.el, &frame.path);
+            let (_key, id) = alloc_unique_node_id(&preferred, &frame.path, used);
+            let mut node = build_node(frame.el, for_map);
+            node.set_children(frame.child_ids);
+            nodes.push((id, node));
+            if let Some(parent) = stack.last_mut() {
+                parent.child_ids.push(id);
+            } else {
+                parent_child_ids.push(id);
+            }
+        } else if let Some(parent) = stack.last_mut() {
+            parent.child_ids.extend(frame.child_ids);
+        } else {
+            parent_child_ids.extend(frame.child_ids);
+        }
     }
 }
 
 /// Collect `Label[for=target] → accesskit_id` so sibling controls get `labelled_by` without attrs.
 fn collect_label_for_map(el: &Element, map: &mut HashMap<String, String>) {
-    if let Some(for_id) = el
-        .attrs
-        .get(ATTR_LABEL_FOR)
-        .map(|s| s.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let lbl_key = el
+    crate::core::tree::walk_elements(el, |node| {
+        if let Some(for_id) = node
             .attrs
-            .get("accesskit_id")
+            .get(ATTR_LABEL_FOR)
             .map(|s| s.as_str())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("lbl:for:{for_id}"));
-        map.entry(for_id.to_string()).or_insert(lbl_key);
-    }
-    for child in &el.children {
-        collect_label_for_map(child, map);
-    }
+        {
+            let lbl_key = node
+                .attrs
+                .get("accesskit_id")
+                .map(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("lbl:for:{for_id}"));
+            map.entry(for_id.to_string()).or_insert(lbl_key);
+        }
+    });
 }
 
 /// Hierarchical tree: Window → Document → element a11y nodes.
@@ -701,25 +763,74 @@ fn find_element_by_node_id<'a>(
     under_name_from_contents: bool,
 ) -> Option<&'a Element> {
     // Must mirror [`walk_subtree`] folding so NodeId allocation stays aligned.
-    if under_name_from_contents && is_plain_text_name_leaf(el) {
-        return None;
+    struct Frame<'a> {
+        el: &'a Element,
+        path: String,
+        under: bool,
+        next_child: usize,
+        skipped: bool,
+        absorb: bool,
+        started: bool,
     }
-    let absorb = under_name_from_contents || uses_name_from_contents(el);
-    for (i, child) in el.children.iter().enumerate() {
-        let child_path = if path.is_empty() {
-            i.to_string()
-        } else {
-            format!("{path}/{i}")
-        };
-        if let Some(found) = find_element_by_node_id(child, target, &child_path, used, absorb) {
-            return Some(found);
+    let mut stack = vec![Frame {
+        el,
+        path: path.to_string(),
+        under: under_name_from_contents,
+        next_child: 0,
+        skipped: false,
+        absorb: false,
+        started: false,
+    }];
+    while !stack.is_empty() {
+        let last = stack.len() - 1;
+        if !stack[last].started {
+            stack[last].started = true;
+            if stack[last].under && is_plain_text_name_leaf(stack[last].el) {
+                stack[last].skipped = true;
+            } else {
+                stack[last].absorb = stack[last].under || uses_name_from_contents(stack[last].el);
+            }
         }
-    }
-    if should_be_accesskit_node(el) {
-        let preferred = stable_node_key(el, path);
-        let (_key, id) = alloc_unique_node_id(&preferred, path, used);
-        if id == target {
-            return Some(el);
+        if stack[last].skipped {
+            stack.pop();
+            continue;
+        }
+        let child_ptr = if stack[last].next_child < stack[last].el.children.len() {
+            let i = stack[last].next_child;
+            stack[last].next_child += 1;
+            let child_path = if stack[last].path.is_empty() {
+                i.to_string()
+            } else {
+                format!("{}/{}", stack[last].path, i)
+            };
+            let under = stack[last].absorb;
+            Some((
+                &stack[last].el.children[i] as *const Element,
+                child_path,
+                under,
+            ))
+        } else {
+            None
+        };
+        if let Some((child_ptr, child_path, under)) = child_ptr {
+            stack.push(Frame {
+                el: unsafe { &*child_ptr },
+                path: child_path,
+                under,
+                next_child: 0,
+                skipped: false,
+                absorb: false,
+                started: false,
+            });
+            continue;
+        }
+        let frame = stack.pop().unwrap();
+        if should_be_accesskit_node(frame.el) {
+            let preferred = stable_node_key(frame.el, &frame.path);
+            let (_key, id) = alloc_unique_node_id(&preferred, &frame.path, used);
+            if id == target {
+                return Some(frame.el);
+            }
         }
     }
     None

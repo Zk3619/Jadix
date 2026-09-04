@@ -755,29 +755,32 @@ fn parse_len_vs_trigger(raw: &str, trigger_w: f32) -> f32 {
 /// Must match paint / hit-test: `scroll:` viewports still contribute offset when overflow was
 /// cleared to `Visible`, and the portal layer / `position: fixed` resets accumulation.
 fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(String, [f32; 4])>) {
-    let scroll_acc =
-        if el.template_id.as_deref() == Some(PORTAL_LAYER_ID) || el.style.position_fixed {
-            [0.0_f32, 0.0_f32]
-        } else {
-            scroll_acc
-        };
-    if let Some(fid) = &el.focus_id {
-        let b = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-        out.push((fid.clone(), b));
-    }
-    let mut next_acc = scroll_acc;
-    let is_scroll_viewport = el
-        .focus_id
-        .as_deref()
-        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
-    if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
-    for c in &el.children {
-        collect_focus_bounds(c, next_acc, out);
+    let mut stack: Vec<(&Element, [f32; 2])> = vec![(el, scroll_acc)];
+    while let Some((el, scroll_acc)) = stack.pop() {
+        let scroll_acc =
+            if el.template_id.as_deref() == Some(PORTAL_LAYER_ID) || el.style.position_fixed {
+                [0.0_f32, 0.0_f32]
+            } else {
+                scroll_acc
+            };
+        if let Some(fid) = &el.focus_id {
+            let b = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+            out.push((fid.clone(), b));
+        }
+        let mut next_acc = scroll_acc;
+        let is_scroll_viewport = el
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
+        if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
+        for c in el.children.iter().rev() {
+            stack.push((c, next_acc));
+        }
     }
 }
 
@@ -1038,15 +1041,11 @@ pub fn sync_floating_placement(root: &mut Element, viewport_w: f32, viewport_h: 
 
 /// 遍历已标记的浮层面板（含兼容 `rui_select_menu`）。
 pub fn visit_floating_panels(root: &Element, mut f: impl FnMut(&Element)) {
-    fn walk(el: &Element, f: &mut impl FnMut(&Element)) {
+    crate::core::tree::walk_elements(root, |el| {
         if floating_id_of(el).is_some() {
             f(el);
         }
-        for c in &el.children {
-            walk(c, f);
-        }
-    }
-    walk(root, &mut f);
+    });
 }
 
 /// 标记 `rui_portal=1`，布局时提升到根 portal 叠层（Solid `<Portal>` / `document.body`）。
@@ -1113,26 +1112,25 @@ pub fn path_hits_floating_trigger(
 }
 
 fn collect_floating_triggers(el: &Element, out: &mut std::collections::HashSet<String>) {
-    if el
-        .attrs
-        .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
-        .map(|s| s.as_str())
-        == Some("1")
-    {
-        if let Some(t) = el
+    crate::core::tree::walk_elements(el, |el| {
+        if el
             .attrs
-            .get(ATTR_FLOATING_TRIGGER)
-            .or_else(|| el.attrs.get("rui_select_trigger"))
+            .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1")
         {
-            let t = t.trim();
-            if !t.is_empty() {
-                out.insert(t.to_string());
+            if let Some(t) = el
+                .attrs
+                .get(ATTR_FLOATING_TRIGGER)
+                .or_else(|| el.attrs.get("rui_select_trigger"))
+            {
+                let t = t.trim();
+                if !t.is_empty() {
+                    out.insert(t.to_string());
+                }
             }
         }
-    }
-    for c in &el.children {
-        collect_floating_triggers(c, out);
-    }
+    });
 }
 
 /// 吞掉点击，避免事件落到 underlay / 下层页面（不 portal；用于已在 portal 舞台内的面板）。

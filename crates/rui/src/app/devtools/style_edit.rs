@@ -176,10 +176,10 @@ pub fn apply_style_patch(el: &mut Element, patch: &StylePatch) -> LayoutStatus {
 fn sync_class_set_base_from_live(el: &mut Element) {
     if let Some(cs) = el.class_set.as_mut() {
         if cs.base_style.is_some() {
-            cs.base_style = Some(el.style.clone());
+            cs.base_style = Some(el.style.as_ref().clone());
         }
         if cs.base_text_style.is_some() {
-            cs.base_text_style = Some(el.text_style.clone());
+            cs.base_text_style = Some(el.text_style.as_ref().clone());
         }
     }
 }
@@ -1310,7 +1310,7 @@ mod tests {
         // Simulate chrome / variant restore wiping live style back to class base.
         if let Some(cs) = root.children[0].class_set.as_ref() {
             if let Some(base) = cs.base_style.as_ref() {
-                root.children[0].style = base.clone();
+                root.children[0].style = Box::new(base.clone());
             }
         }
         let mut layout = crate::layout::layout_tree::LayoutTree::new();

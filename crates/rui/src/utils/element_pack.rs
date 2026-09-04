@@ -120,11 +120,7 @@ pub fn is_vacuous_element(el: &Element) -> bool {
     // to keep `template_id` in the tree so `try_reconcile_subtree` can graft. `ui!`
     // runs `children_none_if_vacuous` on component children; dropping those placeholders
     // blanks nested islands (Gallery MessageScroller rows-only split).
-    if el
-        .template_id
-        .as_deref()
-        .is_some_and(|id| !id.is_empty())
-    {
+    if el.template_id.as_deref().is_some_and(|id| !id.is_empty()) {
         return false;
     }
     if is_text_content_leaf(el) {

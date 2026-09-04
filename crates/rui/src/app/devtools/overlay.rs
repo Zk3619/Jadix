@@ -214,25 +214,7 @@ fn resolve_highlight_element<'a>(tree_root: &'a Element, path: &[usize]) -> Opti
 }
 
 fn path_of_element(root: &Element, target: &Element) -> Option<Vec<usize>> {
-    fn walk(el: &Element, target: &Element, acc: &mut Vec<usize>) -> bool {
-        if std::ptr::eq(el, target) {
-            return true;
-        }
-        for (i, child) in el.children.iter().enumerate() {
-            acc.push(i);
-            if walk(child, target, acc) {
-                return true;
-            }
-            acc.pop();
-        }
-        false
-    }
-    let mut path = Vec::new();
-    if walk(root, target, &mut path) {
-        Some(path)
-    } else {
-        None
-    }
+    crate::core::tree::find_path_in_tree(root, |el| std::ptr::eq(el, target))
 }
 
 /// Persistent highlight rects (mutated after layout so they follow resize).
@@ -513,24 +495,23 @@ fn patch_row_bgs(
     transparent: [f32; 4],
 ) -> bool {
     let mut changed = false;
-    if let Some(id) = el.template_id.as_deref() {
-        if let Some(row_key) = id.strip_prefix("dt-row-") {
-            let want = if !selected_key.is_empty() && row_key == selected_key {
-                accent
-            } else if !hover_key.is_empty() && row_key == hover_key {
-                muted
-            } else {
-                transparent
-            };
-            if el.style.bg_color != want {
-                el.style.bg_color = want;
-                changed = true;
+    crate::core::tree::walk_elements_mut(el, |el| {
+        if let Some(id) = el.template_id.as_deref() {
+            if let Some(row_key) = id.strip_prefix("dt-row-") {
+                let want = if !selected_key.is_empty() && row_key == selected_key {
+                    accent
+                } else if !hover_key.is_empty() && row_key == hover_key {
+                    muted
+                } else {
+                    transparent
+                };
+                if el.style.bg_color != want {
+                    el.style.bg_color = want;
+                    changed = true;
+                }
             }
         }
-    }
-    for child in &mut el.children {
-        changed |= patch_row_bgs(child, hover_key, selected_key, muted, accent, transparent);
-    }
+    });
     changed
 }
 
@@ -606,15 +587,7 @@ pub(crate) fn scroll_elements_tree_row_into_center(root: &Element, path_key: &st
 }
 
 fn find_element_by_focus_id<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
-    if root.focus_id.as_deref() == Some(id) {
-        return Some(root);
-    }
-    for child in &root.children {
-        if let Some(found) = find_element_by_focus_id(child, id) {
-            return Some(found);
-        }
-    }
-    None
+    crate::core::tree::find_in_tree(root, |el| el.focus_id.as_deref() == Some(id))
 }
 
 /// Invalidate cached box-model ring fills after the inspector panel rebuilds.

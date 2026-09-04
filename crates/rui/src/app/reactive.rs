@@ -115,6 +115,21 @@ pub fn registered_anchor_count() -> usize {
     REGISTERED_ANCHORS.with(|registry| registry.borrow().len())
 }
 
+/// Whether a [`reactive_anchor`] for `anchor_id` is registered and its effect is still alive.
+///
+/// Singleton hosts (Toaster) use this so a second mount in the same tree can warn, without a
+/// process-wide counter that would leak across `create_root` tests.
+pub fn reactive_anchor_is_live(anchor_id: &str) -> bool {
+    let registry_key = window_scoped_registry_key(anchor_id);
+    REGISTERED_ANCHORS.with(|registry| {
+        registry
+            .borrow()
+            .get(&registry_key)
+            .and_then(|registration| registration.effect_id)
+            .is_some_and(effect_is_alive)
+    })
+}
+
 /// Queue a remount for a menu/submenu content island (`{sid}__view` → `{sid}__remount`).
 ///
 /// Used when `try_reconcile_subtree` misses (borrow contention, or anchor not yet in the live
@@ -158,17 +173,17 @@ fn clear_view_remount_retries(view_anchor_id: &str) {
     }
 }
 
-/// Drain [`defer_view_remount`] bumps. Call only when `AppState` is not borrowed.
+/// Drain [`defer_view_remount`] bumps and idle island retries. Call only when `AppState` is not borrowed.
 pub fn drain_deferred_view_remounts() {
     let ids = DEFERRED_VIEW_REMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    if ids.is_empty() {
-        return;
+    if !ids.is_empty() {
+        for sid in ids {
+            let bump = use_signal(format!("{sid}__remount").as_str(), || 0u32);
+            bump.set(bump.peek().wrapping_add(1));
+        }
+        runtime::request_redraw();
     }
-    for sid in ids {
-        let bump = use_signal(format!("{sid}__remount").as_str(), || 0u32);
-        bump.set(bump.peek().wrapping_add(1));
-    }
-    runtime::request_redraw();
+    crate::core::reactivity::drain_idle_effect_retries();
 }
 
 /// Current size of [`REGISTERED_BINDINGS`] (WP-2.4 diagnostics / leak tests).
@@ -222,6 +237,7 @@ pub fn reset_registered_anchors() {
 
     DEFERRED_VIEW_REMOUNTS.with(|q| q.borrow_mut().clear());
     DEFERRED_VIEW_RETRY_COUNTS.with(|c| c.borrow_mut().clear());
+    crate::core::reactivity::clear_idle_effect_retry_queues();
 
     COMPONENT_PROPS.with(|store| store.borrow_mut().clear());
     COMPONENT_CHILDREN.with(|store| store.borrow_mut().clear());
@@ -390,17 +406,22 @@ where
         }
         if runtime::try_reconcile_subtree(&effect_anchor_id, fragment).is_some() {
             clear_view_remount_retries(&effect_anchor_id);
+            if let Some(id) = crate::core::reactivity::current_effect_id() {
+                crate::core::reactivity::clear_idle_effect_retry(id);
+            }
             runtime::request_redraw();
         } else {
-            // Miss: borrow held, or anchor not in the live tree yet. Re-queue this effect and,
-            // for menu `{sid}__view` islands, also bump `{sid}__remount` after AppState releases.
-            schedule_registered_anchor_effect(&effect_registry_key);
+            // Miss: borrow held, or anchor not in the live tree yet. Do **not**
+            // `schedule_effect` into the in-flight `flush_deferred` drain — that
+            // 100k-looped (gallery overlays page, `show_reactive` tests).
+            crate::core::reactivity::queue_running_effect_for_idle_retry();
             if effect_anchor_id.ends_with("__view") {
                 defer_view_remount(&effect_anchor_id);
             }
+            runtime::request_redraw();
             log::debug!(
                 target: "rui::reconcile",
-                "reconcile MISS anchor={effect_anchor_id} (scheduled remount)"
+                "reconcile MISS anchor={effect_anchor_id} (idle retry)"
             );
         }
     });
@@ -1055,6 +1076,16 @@ pub fn apply_bound_animation_play_state(el: &mut Element, value: String) -> Layo
         LayoutStatus::StyleChanged
     } else {
         LayoutStatus::Clean
+    }
+}
+
+/// Fine-grained `z-index` update (`ui!` `z_index={…get()…}` ≡ Builder `.z_index(n)` + bind).
+pub fn apply_bound_z_index(el: &mut Element, z: i32) -> LayoutStatus {
+    if el.style.z_index == z {
+        LayoutStatus::Clean
+    } else {
+        el.style.z_index = z;
+        LayoutStatus::StyleChanged
     }
 }
 

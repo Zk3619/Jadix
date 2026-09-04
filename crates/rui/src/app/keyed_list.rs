@@ -130,12 +130,11 @@ fn retain_unmount_hooks(el: &Element) -> Vec<Rc<UnmountHook>> {
 }
 
 fn collect_unmount_hooks(el: &Element, out: &mut Vec<Rc<UnmountHook>>) {
-    if let Some(hook) = &el.on_unmount {
-        out.push(Rc::clone(hook));
-    }
-    for child in &el.children {
-        collect_unmount_hooks(child, out);
-    }
+    crate::core::tree::walk_elements(el, |el| {
+        if let Some(hook) = &el.on_unmount {
+            out.push(Rc::clone(hook));
+        }
+    });
 }
 
 /// Keep item `bind_*` `template_id`s intact: `reactive_anchor` overwrites the fragment root id.

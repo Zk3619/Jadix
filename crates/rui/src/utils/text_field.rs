@@ -852,7 +852,13 @@ mod tests {
             caret + TEXT_EDIT_CARET_W - from_zero <= vw + 0.01,
             "caret must sit fully inside the viewport"
         );
-        assert_eq!(hard_line_body_at_y("short\nlong line here", 5.0, 21.0), "short");
-        assert_eq!(hard_line_body_at_y("short\nlong line here", 25.0, 21.0), "long line here");
+        assert_eq!(
+            hard_line_body_at_y("short\nlong line here", 5.0, 21.0),
+            "short"
+        );
+        assert_eq!(
+            hard_line_body_at_y("short\nlong line here", 25.0, 21.0),
+            "long line here"
+        );
     }
 }

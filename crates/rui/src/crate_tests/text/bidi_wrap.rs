@@ -264,14 +264,7 @@ fn gallery_ascii_marker_description_wraps_without_section_overlap() {
             .child(desc)
             .child(header),
     );
-    let card = Element::from(
-        r#box()
-            .flex_col()
-            .w("100%")
-            .min_w(0.0)
-            .p(16.0)
-            .child(inner),
-    );
+    let card = Element::from(r#box().flex_col().w("100%").min_w(0.0).p(16.0).child(inner));
     let mut root = Element::new().w("100%").h("100%").min_w(0.0).child(card);
 
     let viewport_w = 280.0_f32;

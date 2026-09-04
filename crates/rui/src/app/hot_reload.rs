@@ -262,15 +262,10 @@ pub(super) fn has_any_template_id(
 
 #[cfg(debug_assertions)]
 fn has_any_template_id_inner(el: &crate::core::tree::Element, expected_ids: &[String]) -> bool {
-    if element_matches_any_template_id(el, expected_ids) {
-        return true;
-    }
-    for child in &el.children {
-        if has_any_template_id_inner(child, expected_ids) {
-            return true;
-        }
-    }
-    false
+    crate::core::tree::find_in_tree(el, |node| {
+        element_matches_any_template_id(node, expected_ids)
+    })
+    .is_some()
 }
 
 #[cfg(debug_assertions)]
@@ -452,23 +447,66 @@ fn score_template_paths(
     best_score: &mut i32,
     best_count: &mut u32,
 ) {
-    let mut keys = Vec::new();
-    collect_element_template_keys(el, &mut keys);
-    for id in &keys {
-        if let Some(score) = template_id_rank(incoming_id, id) {
-            if score > *best_score {
-                *best_score = score;
-                *best_path = Some(path.clone());
-                *best_count = 1;
-            } else if score == *best_score {
-                *best_count += 1;
+    struct Frame<'a> {
+        el: &'a crate::core::tree::Element,
+        next_child: usize,
+    }
+    fn consider(
+        el: &crate::core::tree::Element,
+        incoming_id: &str,
+        path: &[usize],
+        best_path: &mut Option<Vec<usize>>,
+        best_score: &mut i32,
+        best_count: &mut u32,
+    ) {
+        let mut keys = Vec::new();
+        collect_element_template_keys(el, &mut keys);
+        for id in &keys {
+            if let Some(score) = template_id_rank(incoming_id, id) {
+                if score > *best_score {
+                    *best_score = score;
+                    *best_path = Some(path.to_vec());
+                    *best_count = 1;
+                } else if score == *best_score {
+                    *best_count += 1;
+                }
             }
         }
     }
-    for (i, child) in el.children.iter().enumerate() {
+
+    consider(el, incoming_id, path, best_path, best_score, best_count);
+    let mut stack = vec![Frame { el, next_child: 0 }];
+    loop {
+        let next = {
+            let Some(frame) = stack.last_mut() else {
+                break;
+            };
+            if frame.next_child >= frame.el.children.len() {
+                None
+            } else {
+                let i = frame.next_child;
+                frame.next_child += 1;
+                Some((
+                    i,
+                    &frame.el.children[i] as *const crate::core::tree::Element,
+                ))
+            }
+        };
+        let Some((i, child_ptr)) = next else {
+            stack.pop();
+            if !stack.is_empty() {
+                path.pop();
+            }
+            continue;
+        };
         path.push(i);
-        score_template_paths(child, incoming_id, path, best_path, best_score, best_count);
-        path.pop();
+        // SAFETY: child lives in the caller's tree; Frames only store that borrow.
+        let child = unsafe { &*child_ptr };
+        consider(child, incoming_id, path, best_path, best_score, best_count);
+        stack.push(Frame {
+            el: child,
+            next_child: 0,
+        });
     }
 }
 
