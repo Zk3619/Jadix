@@ -5,7 +5,7 @@
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
 //! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 关于。
-//! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`cargo run -p gallery --features system-tray`
+//! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
 //!
 //! 应用结构（与前端「入口 + 页面」相同）：[`main`] 只做启动；壳在 [`app`]；分区页面在 [`pages`]。
 
@@ -25,6 +25,27 @@ fn main() {
     });
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
+
+    #[cfg(feature = "remote-asset")]
+    {
+        let png = rui::image_ops::encode_png(&rui::media::DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![
+                59, 130, 246, 255, 59, 130, 246, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            ],
+            intrinsic_hotspot: None,
+            animation: None,
+        })
+        .expect("gallery demo png");
+        rui::set_remote_asset_fetcher(move |url: &str| {
+            if url == shared::GALLERY_REMOTE_PNG {
+                Ok(png.clone())
+            } else {
+                Err(format!("gallery demo fetcher has no mapping for {url}"))
+            }
+        });
+    }
 
     #[cfg(feature = "devtools")]
     rui::app::run_with(

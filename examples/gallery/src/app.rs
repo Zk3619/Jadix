@@ -178,6 +178,9 @@ pub(crate) fn GallerySectionOverlays() -> Element {
         ui! {
             <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
+                    <ViewportModalShowcase />
+                    <LocalOverlayShowcase />
+                    <AnchoredOverlayShowcase />
                     <OverlayFeedbackShowcase />
                     <PrimitivesShowcase />
                 </VStack>
@@ -253,6 +256,7 @@ pub(crate) fn GallerySectionLayout() -> Element {
                     <RootBareGetShowcase />
                     <IdentityApiShowcase />
                     <BoxModelShowcase />
+                    <WritingModeShowcase />
                     <ScrollShowcase />
                     <AccordionShowcase />
                     <CollapsibleShowcase />
@@ -266,6 +270,7 @@ pub(crate) fn GallerySectionLayout() -> Element {
                     <BorderStyleShowcase />
                     <OutlineShowcase />
                     <TransitionShowcase />
+                    <AnimAlignmentShowcase />
                     <ScaleZoomShowcase />
                     <RotateTranslateShowcase />
                     <TransformShowcase />
@@ -281,7 +286,9 @@ pub(crate) fn GallerySectionText() -> Element {
         ui! {
             <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
+                    <FontOverrideShowcase />
                     <TextAlignShowcase />
+                    <WritingModeShowcase />
                     <TextCompatibilityShowcase />
                     <EmojiRealtimeRegressionShowcase />
                     <TypographyShowcase />
@@ -341,7 +348,9 @@ pub(crate) fn GallerySectionBasics() -> Element {
                     <BreadcrumbShowcase />
                     <ButtonGroupShowcase />
                     <AspectRatioShowcase />
+                    <RemoteAssetShowcase />
                     <AnimationShowcase />
+                    <WaapiShowcase />
                     <TypographyShowcase />
                 </VStack>
             </ScrollArea>
@@ -447,7 +456,7 @@ pub(crate) fn build_gallery_app() -> Element {
                                 </When>
                                 <When when={section.get() == "basics"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
-                                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Marker · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰"
+                                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Marker · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 编程式句柄 · 排版装饰"
                                     </Label>
                                 </When>
                             </Match>

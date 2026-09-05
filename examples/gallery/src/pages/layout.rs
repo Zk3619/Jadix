@@ -306,8 +306,8 @@ pub(crate) fn GradientShowcase() -> rui::core::tree::Element {
             .h("8rem")
             .rounded("0.5rem")
             .overflow("hidden")
-            // Each stacked layer must also carry the same radii: overflow clip is
-            // axis-aligned, so corner masking comes from the gradient texture bake.
+            // Overflow clip follows border-radius (SDF round-box). Nested gradient
+            // layers still carry matching radii so textured fills mask their own corners.
             .background_image("linear-gradient(217deg, #ff0000cc, transparent 70.71%)")
             .child(Element::from(
                 r#box()
@@ -516,30 +516,37 @@ pub(crate) fn GradientShowcase() -> rui::core::tree::Element {
 pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
     use rui::style::CornerShape;
 
-    fn demo_box(label: &str, style_name: &str, color: [f32; 4]) -> Element {
+    fn caption(label: &str) -> Element {
+        ui! {
+            <Label text_size="0.6rem" color="muted-foreground" leading="normal">{ label }</Label>
+        }
+    }
+
+    fn demo_box(label: &str, style_name: &str, color: [f32; 4], width: f32) -> Element {
+        // 直角 + 对比填充：dotted/dashed 的间隙才能从底色里露出来，3D 样式也需要足够线宽。
         let el = Element::from(
             r#box()
-                .w("7rem")
-                .h("4rem")
-                .bg(parse_color("background"))
-                .border(color, 4.0)
-                .border_style(style_name)
-                .rounded(8.0),
+                .w("6.5rem")
+                .h("3.5rem")
+                .bg(parse_color("muted"))
+                .border(color, width)
+                .border_style(style_name),
         );
         ui! {
             <VStack gap="0.25rem" items="center">
                 { el }
-                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+                { caption(label) }
             </VStack>
         }
     }
 
     fn per_side_box() -> Element {
+        // 有圆角时引擎走单色 SDF 描边，分边 style/color/width 会被丢掉；showcase 必须直角。
         Element::from(
             r#box()
-                .w("9rem")
-                .h("5rem")
-                .bg(parse_color("background"))
+                .w("10rem")
+                .h("5.5rem")
+                .bg(parse_color("muted"))
                 .border_top(parse_color("destructive"), 6.0)
                 .border_right(parse_color("primary"), 3.0)
                 .border_bottom(parse_color("chart-1"), 8.0)
@@ -547,27 +554,36 @@ pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
                 .border_top_style("dashed")
                 .border_right_style("dotted")
                 .border_bottom_style("double")
-                .border_left_style("solid")
-                .rounded(6.0),
+                .border_left_style("solid"),
         )
     }
 
     fn corner_shape_box(label: &str, shape: CornerShape) -> Element {
         let el = Element::from(
             r#box()
-                .w("7rem")
-                .h("4rem")
-                .bg(parse_color("secondary"))
-                .border(parse_color("primary"), 3.0)
-                .rounded(16.0)
+                .w("5.5rem")
+                .h("5.5rem")
+                .bg(parse_color("primary"))
+                .border(parse_color("foreground"), 3.0)
+                .rounded(26.0)
                 .border_shape(shape),
         );
         ui! {
             <VStack gap="0.25rem" items="center">
                 { el }
-                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+                { caption(label) }
             </VStack>
         }
+    }
+
+    fn spacing_cell() -> Element {
+        Element::from(
+            r#box()
+                .w("2.75rem")
+                .h("2.75rem")
+                .bg(parse_color("muted"))
+                .border(parse_color("primary"), 2.0),
+        )
     }
 
     let bc = parse_color("primary");
@@ -576,28 +592,29 @@ pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
         <MyCard title="13) CSS Border 全能力">
             <VStack gap="1rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "border-style 全 8 种样式 · 四边独立样式/宽度/颜色 · border-shape/corner-shape（round/angle/superellipse/notch/scoop）。"
+                    "border-style（实线/点/虚线/双线/3D）· 四边独立宽/色/样式（直角才能分边绘制）· corner-shape（大圆角才看得出）。"
                 </Label>
 
                 <Label font_weight="700" text_size="0.875rem">"border-style 样式"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
-                    { demo_box("solid", "solid", bc) }
-                    { demo_box("dotted", "dotted", bc) }
-                    { demo_box("dashed", "dashed", bc) }
-                    { demo_box("double", "double", bc) }
-                    { demo_box("groove", "groove", bc) }
-                    { demo_box("ridge", "ridge", bc) }
-                    { demo_box("inset", "inset", bc) }
-                    { demo_box("outset", "outset", bc) }
-                    { demo_box("none", "none", bc) }
-                    { demo_box("hidden", "hidden", bc) }
+                    { demo_box("solid", "solid", bc, 6.0) }
+                    { demo_box("dotted", "dotted", bc, 6.0) }
+                    { demo_box("dashed", "dashed", bc, 6.0) }
+                    { demo_box("double", "double", bc, 8.0) }
+                    { demo_box("groove", "groove", bc, 10.0) }
+                    { demo_box("ridge", "ridge", bc, 10.0) }
+                    { demo_box("inset", "inset", bc, 10.0) }
+                    { demo_box("outset", "outset", bc, 10.0) }
+                    { demo_box("none", "none", bc, 6.0) }
+                    { demo_box("hidden", "hidden", bc, 6.0) }
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"四边独立 width / color / style"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
                         { per_side_box() }
-                        <Label text_size="0.6rem" color="muted-foreground">"T:dashed R:dotted B:double L:solid"</Label>
+                        { caption("上 dashed 红 · 右 dotted 主色") }
+                        { caption("下 double chart · 左 solid accent") }
                     </VStack>
                 </HStack>
 
@@ -607,55 +624,66 @@ pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
                         {
                             Element::from(
                                 r#box()
-                                    .w("7rem").h("4rem")
+                                    .w("6rem").h("6rem")
                                     .bg(parse_color("muted"))
-                                    .border(parse_color("primary"), 2.0)
-                                    .border_top_left_radius(20.0)
-                                    .border_top_right_radius(4.0)
-                                    .border_bottom_right_radius(16.0)
+                                    .border(parse_color("primary"), 3.0)
+                                    .border_top_left_radius(28.0)
+                                    .border_top_right_radius(2.0)
+                                    .border_bottom_right_radius(28.0)
                                     .border_bottom_left_radius(0.0)
                             )
                         }
-                        <Label text_size="0.6rem" color="muted-foreground">"TL:20 TR:4 BR:16 BL:0"</Label>
+                        { caption("TL 28 · TR 2 · BR 28 · BL 0") }
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         {
                             Element::from(
                                 r#box()
-                                    .w("4rem").h("4rem")
+                                    .w("5.5rem").h("5.5rem")
                                     .bg(parse_color("muted"))
-                                    .border(parse_color("accent"), 2.0)
-                                    .rounded(32.0)
+                                    .border(parse_color("accent"), 3.0)
+                                    .rounded_full()
                             )
                         }
-                        <Label text_size="0.6rem" color="muted-foreground">"圆形 (r=32)"</Label>
+                        { caption("rounded-full 正圆") }
                     </VStack>
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"corner-shape（CSS Level 4）"</Label>
+                <Label text_size="0.65rem" color="muted-foreground" leading="normal">
+                    "同一 border-radius=26：round 圆弧 · angle 斜切 · superellipse 更方 · notch 切角 · scoop 内凹。"
+                </Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
-                    { corner_shape_box("round（默认）", CornerShape::Round) }
-                    { corner_shape_box("angle（斜切）", CornerShape::Angle) }
+                    { corner_shape_box("round 圆弧", CornerShape::Round) }
+                    { corner_shape_box("angle 斜切", CornerShape::Angle) }
                     { corner_shape_box("superellipse(4)", CornerShape::Superellipse(4.0)) }
                     { corner_shape_box("superellipse(8)", CornerShape::Superellipse(8.0)) }
-                    { corner_shape_box("notch（切口）", CornerShape::Notch) }
-                    { corner_shape_box("scoop（内凹）", CornerShape::Scoop) }
+                    { corner_shape_box("notch 切口", CornerShape::Notch) }
+                    { corner_shape_box("scoop 内凹", CornerShape::Scoop) }
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"border-collapse / border-spacing"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                <Label text_size="0.65rem" color="muted-foreground" leading="normal">
+                    "布局尚未把 table 的 collapse/spacing 接入 Taffy；下面用格子 gap 对照 separate vs 贴合。"
+                </Label>
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        {
-                            Element::from(
-                                r#box()
-                                    .w("8rem").h("4rem")
-                                    .bg(parse_color("background"))
-                                    .border(parse_color("border"), 2.0)
-                                    .border_spacing(4.0, 4.0)
-                                    .rounded(4.0)
-                            )
-                        }
-                        <Label text_size="0.6rem" color="muted-foreground">"spacing: 4px 4px"</Label>
+                        <GStack cols="2" gap="0.5rem">
+                            { spacing_cell() }
+                            { spacing_cell() }
+                            { spacing_cell() }
+                            { spacing_cell() }
+                        </GStack>
+                        { caption("separate · gap 8px") }
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <GStack cols="2" gap="0">
+                            { spacing_cell() }
+                            { spacing_cell() }
+                            { spacing_cell() }
+                            { spacing_cell() }
+                        </GStack>
+                        { caption("collapse 视觉 · gap 0") }
                     </VStack>
                 </HStack>
 
@@ -665,29 +693,27 @@ pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
                         {
                             Element::from(
                                 r#box()
-                                    .w("8rem").h("4rem")
-                                    .bg(parse_color("background"))
-                                    .border_inline(parse_color("primary"), 4.0)
-                                    .border_block(parse_color("destructive"), 2.0)
-                                    .rounded(4.0)
+                                    .w("8rem").h("4.5rem")
+                                    .bg(parse_color("muted"))
+                                    .border_inline(parse_color("primary"), 6.0)
+                                    .border_block(parse_color("destructive"), 3.0)
                             )
                         }
-                        <Label text_size="0.6rem" color="muted-foreground">"inline:4+primary block:2+red"</Label>
+                        { caption("左右 primary 6 · 上下 red 3") }
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         {
                             Element::from(
                                 r#box()
-                                    .w("8rem").h("4rem")
-                                    .bg(parse_color("background"))
+                                    .w("8rem").h("4.5rem")
+                                    .bg(parse_color("muted"))
                                     .border_inline_start(parse_color("chart-1"), 6.0)
                                     .border_inline_end(parse_color("accent"), 2.0)
                                     .border_block_start(parse_color("primary"), 4.0)
                                     .border_block_end(parse_color("destructive"), 8.0)
-                                    .rounded(4.0)
                             )
                         }
-                        <Label text_size="0.6rem" color="muted-foreground">"四向独立逻辑"</Label>
+                        { caption("上主色4 · 右accent2 · 下红8 · 左chart6") }
                     </VStack>
                 </HStack>
             </VStack>
@@ -706,18 +732,21 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
         offset: f32,
         rounded: f32,
     ) -> Element {
+        // outline 画出 border-box 之外且不占布局；用 padding 把描边+offset 从邻居里隔开。
+        let pad = (width + offset + 10.0).max(12.0);
+        let pad_s = format!("{pad}px");
         let el: Element = Element::from(
             r#box()
                 .w("7rem")
                 .h("4rem")
-                .bg(parse_color("background"))
+                .bg(parse_color("muted"))
                 .outline(color, width)
                 .outline_style(style)
                 .rounded(rounded),
         )
         .outline_offset(offset);
         ui! {
-            <VStack gap="0.25rem" items="center">
+            <VStack gap="0.25rem" items="center" p={pad_s.as_str()} overflow="visible">
                 { el }
                 <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
             </VStack>
@@ -729,13 +758,13 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
             r#box()
                 .w("7rem")
                 .h("4rem")
-                .bg(parse_color("background"))
+                .bg(parse_color("muted"))
                 .rounded(8.0),
         )
         .apply_outline_shorthand(shorthand);
         let label = shorthand.to_string();
         ui! {
-            <VStack gap="0.25rem" items="center">
+            <VStack gap="0.25rem" items="center" p="14px" overflow="visible">
                 { el }
                 <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
             </VStack>
@@ -746,34 +775,34 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
 
     ui! {
         <MyCard title="14) CSS Outline 全能力">
-            <VStack gap="1rem" w="100%">
+            <VStack gap="1rem" w="100%" overflow="visible">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "outline 不占布局空间 · outline-style（solid/dashed/dotted/double/…） · outline-offset · outline 简写。"
+                    "outline 不占布局空间，会画出盒子外沿；示例用 padding 预留描边+offset，避免相邻描边重叠。圆角上的 dotted/dashed 沿周长取样。"
                 </Label>
 
                 <Label font_weight="700" text_size="0.875rem">"outline-style 样式"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
                     { outline_box("solid", oc, 3.0, "solid", 0.0, 8.0) }
                     { outline_box("dotted", oc, 3.0, "dotted", 0.0, 8.0) }
                     { outline_box("dashed", oc, 3.0, "dashed", 0.0, 8.0) }
-                    { outline_box("double", oc, 4.0, "double", 0.0, 8.0) }
-                    { outline_box("groove", oc, 4.0, "groove", 0.0, 8.0) }
-                    { outline_box("ridge", oc, 4.0, "ridge", 0.0, 8.0) }
-                    { outline_box("inset", oc, 4.0, "inset", 0.0, 8.0) }
-                    { outline_box("outset", oc, 4.0, "outset", 0.0, 8.0) }
+                    { outline_box("double", oc, 5.0, "double", 0.0, 8.0) }
+                    { outline_box("groove", oc, 8.0, "groove", 0.0, 8.0) }
+                    { outline_box("ridge", oc, 8.0, "ridge", 0.0, 8.0) }
+                    { outline_box("inset", oc, 8.0, "inset", 0.0, 8.0) }
+                    { outline_box("outset", oc, 8.0, "outset", 0.0, 8.0) }
                     { outline_box("none", oc, 3.0, "none", 0.0, 8.0) }
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"outline-width"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
-                    { outline_box("1px", oc, 1.0, "solid", 0.0, 6.0) }
-                    { outline_box("2px", oc, 2.0, "solid", 0.0, 6.0) }
-                    { outline_box("4px", oc, 4.0, "solid", 0.0, 6.0) }
-                    { outline_box("8px", oc, 8.0, "solid", 0.0, 6.0) }
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
+                    { outline_box("1px", oc, 1.0, "solid", 0.0, 8.0) }
+                    { outline_box("2px", oc, 2.0, "solid", 0.0, 8.0) }
+                    { outline_box("4px", oc, 4.0, "solid", 0.0, 8.0) }
+                    { outline_box("8px", oc, 8.0, "solid", 0.0, 8.0) }
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"outline-offset"</Label>
-                <HStack gap="1.5rem" wrap="wrap" items="start" justify="start">
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
                     { outline_box("offset: 0", oc, 3.0, "solid", 0.0, 8.0) }
                     { outline_box("offset: 4px", oc, 3.0, "solid", 4.0, 8.0) }
                     { outline_box("offset: 8px", oc, 3.0, "solid", 8.0, 8.0) }
@@ -781,7 +810,7 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"outline-color"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
                     { outline_box("primary", parse_color("primary"), 3.0, "solid", 0.0, 8.0) }
                     { outline_box("destructive", parse_color("destructive"), 3.0, "solid", 0.0, 8.0) }
                     { outline_box("chart-1", parse_color("chart-1"), 3.0, "solid", 0.0, 8.0) }
@@ -789,19 +818,130 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"outline 简写"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
                     { shorthand_box("3px solid red") }
                     { shorthand_box("4px dashed blue") }
                     { shorthand_box("2px dotted green") }
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"utility class"</Label>
-                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
-                    <VStack gap="0.25rem" items="center">
-                        <Box w="7rem" h="4rem" bg="background" rounded="0.5rem" class="outline outline-2 outline-offset-4" />
+                <HStack gap="1.25rem" wrap="wrap" items="start" justify="start" overflow="visible">
+                    <VStack gap="0.25rem" items="center" p="16px" overflow="visible">
+                        <Box w="7rem" h="4rem" bg="muted" rounded="0.5rem" class="outline outline-2 outline-offset-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"outline outline-2 outline-offset-4"</Label>
                     </VStack>
                 </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
+fn ensure_gallery_motion_extras() {
+    use rui::style::{
+        parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
+        PropertyId,
+    };
+    register_keyframes(
+        "gal-linear-slide",
+        vec![
+            KeyframeStop::at(0.0).translate([0.0, 0.0]),
+            KeyframeStop::at(1.0).translate([88.0, 0.0]),
+        ],
+    );
+    register_keyframes(
+        "gal-offset-run",
+        vec![
+            KeyframeStop::at(0.0).set(PropertyId::OffsetDistance, AnimatableValue::Scalar(0.0)),
+            KeyframeStop::at(1.0).set(PropertyId::OffsetDistance, AnimatableValue::Scalar(1.0)),
+        ],
+    );
+    register_keyframes(
+        "gal-origin-swing",
+        vec![
+            KeyframeStop::at(0.0)
+                .set(
+                    PropertyId::TransformOrigin,
+                    AnimatableValue::Vec2([0.0, 0.0]),
+                )
+                .rotate_deg(-18.0),
+            KeyframeStop::at(1.0)
+                .set(
+                    PropertyId::TransformOrigin,
+                    AnimatableValue::Vec2([1.0, 1.0]),
+                )
+                .rotate_deg(18.0),
+        ],
+    );
+    if let Some(clip) = parse_clip_path("polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)") {
+        register_clip_path("gal-diamond", clip);
+    }
+}
+
+#[component]
+pub(crate) fn AnimAlignmentShowcase() -> rui::core::tree::Element {
+    ensure_gallery_motion_extras();
+    ui! {
+        <MyCard title="ANIM 对齐（CSS animation / transition / keyframes）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "完整对齐面：steps() 步进、transition-colors 文本色、padding 布局动画、will-change 提示。`transition: transform spring()` 是原生弹簧腿（可中断、不靠 duration）。系统 RUI_REDUCED_MOTION=1 时时长归零。Accordion 备选：RUI_ACCORDION_GRID_FR=1 走 grid-template-rows 0fr→1fr（默认仍是 accordion-down max-height）。"
+                </Label>
+                <Label text_size="0.7rem" font_weight="600">"steps(4, jump-end) opacity"</Label>
+                <Box w="6rem" h="3rem" bg="primary" rounded="0.5rem"
+                    class="will-change-opacity"
+                    animation="1s steps(4, jump-end) infinite fade-in-0" />
+                <Label text_size="0.7rem" font_weight="600">"linear() 分段 easing（停住 → 冲刺 → 停住）"</Label>
+                <Box w="8rem" h="2.5rem" relative={true} bg="muted" rounded="0.5rem" overflow="hidden">
+                    <Box w="1.5rem" h="1.5rem" bg="primary" rounded="0.25rem"
+                        absolute={true} top="0.5rem" left="0.5rem"
+                        animation="2.4s linear(0, 0 30%, 1 70%, 1) infinite alternate gal-linear-slide" />
+                </Box>
+                <Label text_size="0.7rem" font_weight="600">"clip-path: path() / url(#id) / 两层相交"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="end">
+                    <VStack gap="0.2rem" items="center">
+                        <Box w="4rem" h="4rem" bg="primary"
+                            clip_path={r#"path("M 0 64 L 32 0 L 64 64 Z")"#} />
+                        <Label text_size="0.55rem" color="muted-foreground">"path()"</Label>
+                    </VStack>
+                    <VStack gap="0.2rem" items="center">
+                        <Box w="4rem" h="4rem" bg="destructive" clip_path="url(#gal-diamond)" />
+                        <Label text_size="0.55rem" color="muted-foreground">"url(#gal-diamond)"</Label>
+                    </VStack>
+                    <VStack gap="0.2rem" items="center">
+                        <Box w="4.5rem" h="4.5rem" bg="muted" clip_path="polygon(0% 0%, 100% 0%, 80% 100%, 20% 100%)">
+                            <Box w="100%" h="100%" bg="primary" clip_path="circle(45% at 50% 50%)" />
+                        </Box>
+                        <Label text_size="0.55rem" color="muted-foreground">"祖先∩本地"</Label>
+                    </VStack>
+                </HStack>
+                <Label text_size="0.7rem" font_weight="600">"offset-path + transform-origin 动画"</Label>
+                <HStack gap="1.25rem" wrap="wrap" items="center">
+                    <Box w="8rem" h="3rem" relative={true} bg="muted" rounded="0.5rem">
+                        <Box w="1.25rem" h="1.25rem" bg="primary" rounded="0.25rem"
+                            offset_path={r#"path("M 8 12 L 112 12")"#}
+                            animation="2.4s linear infinite gal-offset-run" />
+                    </Box>
+                    <Box w="3rem" h="3rem" bg="accent" rounded="0.35rem"
+                        animation="1.6s ease-in-out infinite alternate gal-origin-swing" />
+                </HStack>
+                <Label text_size="0.7rem" font_weight="600">"extra_shadows 双层 box-shadow"</Label>
+                <Box w="7rem" h="3rem" bg="background" rounded="0.5rem"
+                    box_shadow="6px 6px 0 0 hsl(222 47% 11% / 0.22), 12px 12px 0 0 hsl(222 47% 11% / 0.1)" />
+                <Label text_size="0.7rem" font_weight="600">"transition-colors（含 color）"</Label>
+                <Label class="transition-colors duration-300 hover:text-destructive" text_size="0.875rem">
+                    "悬停变色"
+                </Label>
+                <Label text_size="0.7rem" font_weight="600">"padding 布局动画"</Label>
+                <Box w="8rem" h="3.5rem" bg="muted" rounded="0.5rem" overflow="hidden">
+                    <Box w="100%" h="100%" class="p-1 transition-padding duration-300 hover:p-4">
+                        <Label text_size="0.65rem">"hover padding"</Label>
+                    </Box>
+                </Box>
+                <Label text_size="0.7rem" font_weight="600">"spring() 可中断 hover"</Label>
+                <Box w="4rem" h="4rem" bg="primary" rounded="0.375rem"
+                    class="hover:scale-125"
+                    transition="transform spring()" />
             </VStack>
         </MyCard>
     }
@@ -2451,12 +2591,42 @@ pub(crate) fn IdentityApiShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// Light zinc: `muted` ≈ `secondary` ≈ `accent` (oklch 0.97). Adjacent onion
+/// layers must use `chart-*` / `destructive` or padding/border disappear.
+/// Keep tokens in sync with `crate_tests/layout/box_model_gallery_colors.rs`.
+const GAL_BM_MARGIN: &str = "muted";
+const GAL_BM_PADDING: &str = "chart-1";
+const GAL_BM_CONTENT: &str = "chart-4";
+const GAL_BM_BORDER_T: &str = "destructive";
+const GAL_BM_BORDER_R: &str = "chart-2";
+const GAL_BM_BORDER_B: &str = "chart-5";
+const GAL_BM_BORDER_L: &str = "chart-3";
+
+fn gal_legend_chip(token: &'static str, caption: &'static str) -> Element {
+    ui! {
+        <HStack gap="0.25rem" items="center">
+            <Box
+                w="0.75rem"
+                h="0.75rem"
+                min_w="0.75rem"
+                min_h="0.75rem"
+                rounded="0.125rem"
+                bg={token}
+                borderStyle="solid"
+                borderColor="border"
+                borderWidth={1.0}
+            />
+            <Label text_size="0.75rem">{ caption }</Label>
+        </HStack>
+    }
+}
+
 pub(crate) fn gal_box_model_onion() -> Element {
     let content = Element::from(
         r#box()
             .w("100%")
             .h("3rem")
-            .bg(parse_color("primary"))
+            .bg(parse_color(GAL_BM_CONTENT))
             .rounded("0.25rem")
             .items_center()
             .justify_center()
@@ -2471,24 +2641,24 @@ pub(crate) fn gal_box_model_onion() -> Element {
         r#box()
             .w("100%")
             .p("1rem")
-            .bg(parse_color("secondary"))
+            .bg(parse_color(GAL_BM_PADDING))
             .child(content),
     );
     let border_box = Element::from(
         r#box()
             .w("100%")
             .border_style("solid")
-            .border_top(parse_color("destructive"), 8.0)
-            .border_right(parse_color("primary"), 4.0)
-            .border_bottom(parse_color("accent"), 12.0)
-            .border_left(parse_color("chart-1"), 16.0)
+            .border_top(parse_color(GAL_BM_BORDER_T), 8.0)
+            .border_right(parse_color(GAL_BM_BORDER_R), 4.0)
+            .border_bottom(parse_color(GAL_BM_BORDER_B), 12.0)
+            .border_left(parse_color(GAL_BM_BORDER_L), 16.0)
             .child(padding),
     );
     Element::from(
         r#box()
             .w("22rem")
             .p("1.25rem")
-            .bg(parse_color("muted"))
+            .bg(parse_color(GAL_BM_MARGIN))
             .rounded("0.5rem")
             .child(border_box),
     )
@@ -2502,9 +2672,9 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
         r#box()
             .w("10rem")
             .h("3rem")
-            .bg(parse_color("primary"))
+            .bg(parse_color("chart-2"))
             .rounded("0.375rem")
-            .outline(parse_color("destructive"), 12.0)
+            .outline(parse_color("destructive"), 8.0)
             .items_center()
             .justify_center()
             .child(Element::from(
@@ -2537,10 +2707,10 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                             "外层 padding 模拟 margin；border 为 T8/R4/B12/L16 且四边异色（B15）。"
                         </Label>
                         <HStack gap="0.5rem" wrap="wrap">
-                            <Label text_size="0.75rem">"■ muted = margin"</Label>
-                            <Label text_size="0.75rem">"■ 彩边 = border"</Label>
-                            <Label text_size="0.75rem">"■ secondary = padding"</Label>
-                            <Label text_size="0.75rem">"■ primary = content"</Label>
+                            { gal_legend_chip(GAL_BM_MARGIN, "muted = margin") }
+                            { gal_legend_chip(GAL_BM_BORDER_T, "彩边 = border") }
+                            { gal_legend_chip(GAL_BM_PADDING, "chart-1 = padding") }
+                            { gal_legend_chip(GAL_BM_CONTENT, "chart-4 = content") }
                         </HStack>
                     </VStack>
                 </HStack>
@@ -2555,12 +2725,12 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                     <Label text_size="0.75rem" font_weight="600">"卡片宽 100%"</Label>
                     <Box w="100%" h="0.5rem" bg="border" rounded="0.25rem" />
                     <Label text_size="0.75rem" font_weight="600">"25vw"</Label>
-                    <Box w="25vw" h="2rem" bg="primary" rounded="0.375rem" items="center" justify="center">
+                    <Box w="25vw" h="2rem" bg="chart-2" rounded="0.375rem" items="center" justify="center">
                         <Label text_size="0.75rem" text_color="primary-foreground">"25vw"</Label>
                     </Box>
                     <Label text_size="0.75rem" font_weight="600">"25dvw"</Label>
-                    <Box w="25dvw" h="2rem" bg="accent" rounded="0.375rem" items="center" justify="center">
-                        <Label text_size="0.75rem" text_color="accent-foreground">"25dvw"</Label>
+                    <Box w="25dvw" h="2rem" bg="chart-1" rounded="0.375rem" items="center" justify="center">
+                        <Label text_size="0.75rem" text_color="primary-foreground">"25dvw"</Label>
                     </Box>
                     <HStack gap="0.75rem" wrap="wrap" items="end">
                         <VStack gap="0.25rem">
@@ -2571,21 +2741,21 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                         </VStack>
                         <VStack gap="0.25rem">
                             <Label text_size="0.75rem" font_weight="600">"10dvh"</Label>
-                            <Box w="4.5rem" h="10dvh" bg="secondary" rounded="0.375rem" items="center" justify="center">
-                                <Label text_size="0.75rem" text_color="secondary-foreground">"10dvh"</Label>
+                            <Box w="4.5rem" h="10dvh" bg="chart-3" rounded="0.375rem" items="center" justify="center">
+                                <Label text_size="0.75rem" text_color="primary-foreground">"10dvh"</Label>
                             </Box>
                         </VStack>
                         <VStack gap="0.25rem">
                             <Label text_size="0.75rem" font_weight="600">"padding 1em @ 20px"</Label>
-                            <Box w="8rem" text_size={20.0} p="1em" bg="secondary" rounded="0.375rem" items="center" justify="center">
-                                <Label text_size="0.75rem" text_color="secondary-foreground">"1em pad"</Label>
+                            <Box w="8rem" text_size={20.0} p="1em" bg="chart-1" rounded="0.375rem" items="center" justify="center">
+                                <Label text_size="0.75rem" text_color="primary-foreground">"1em pad"</Label>
                             </Box>
                         </VStack>
                     </HStack>
                     <Label text_size="0.75rem" font_weight="600">"calc(100% - 2rem)（相对卡片 content，不是视口）"</Label>
                     <Box w="100%" p="0.5rem" bg="muted" rounded="0.375rem">
-                        <Box w="calc(100% - 2rem)" h="2.5rem" bg="secondary" rounded="0.25rem" items="center" justify="center">
-                            <Label text_size="0.75rem" text_color="secondary-foreground">"100% - 2rem"</Label>
+                        <Box w="calc(100% - 2rem)" h="2.5rem" bg="chart-2" rounded="0.25rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"100% - 2rem"</Label>
                         </Box>
                     </Box>
                 </VStack>
@@ -2596,14 +2766,14 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                 <HStack gap="0.75rem" wrap="wrap" items="end">
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"box-border（默认）"</Label>
-                        <Box class="box-border" w="8rem" px="1rem" py="0.5rem" bg="secondary" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                            <Label text_size="0.75rem" text_color="secondary-foreground">"w=8rem + px"</Label>
+                        <Box class="box-border" w="8rem" px="1rem" py="0.5rem" bg="chart-2" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"w=8rem + px"</Label>
                         </Box>
                     </VStack>
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"box-content"</Label>
-                        <Box class="box-content" w="8rem" px="1rem" py="0.5rem" bg="accent" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                            <Label text_size="0.75rem" text_color="accent-foreground">"padding 在外侧"</Label>
+                        <Box class="box-content" w="8rem" px="1rem" py="0.5rem" bg="chart-1" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"padding 在外侧"</Label>
                         </Box>
                     </VStack>
                 </HStack>
@@ -2624,9 +2794,9 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                             borderBottomWidth={12.0}
                             borderLeftWidth={16.0}
                             borderTopColor="destructive"
-                            borderRightColor="primary"
-                            borderBottomColor="accent"
-                            borderLeftColor="chart-1"
+                            borderRightColor="chart-2"
+                            borderBottomColor="chart-5"
+                            borderLeftColor="chart-3"
                             items="center"
                             justify="center"
                         >
@@ -2670,6 +2840,126 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
                     { format!("5 · outline 不占命中（点内部 +1，点外侧红描边不加）：{}", hits.get()) }
                 </Label>
                 { outline_box }
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "6 · overflow + border-radius：子块探出圆角父级应被切掉（clip 边仍是 border-box）"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="center">
+                    <Box
+                        w="8rem"
+                        h="8rem"
+                        rounded="2rem"
+                        overflow="hidden"
+                        bg="muted"
+                        relative={true}
+                    >
+                        <Box
+                            w="10rem"
+                            h="10rem"
+                            bg="destructive"
+                            absolute={true}
+                            left="-1.25rem"
+                            top="-1.25rem"
+                        />
+                    </Box>
+                    <Label text_size="0.75rem" color="muted-foreground" w="14rem" leading="normal">
+                        "红块比圆角父级大并偏移到角外；可见轮廓应是圆角，不是方裁。"
+                    </Label>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn writing_mode_sample(
+    mode: &'static str,
+    sample: &'static str,
+    w: &'static str,
+    h: &'static str,
+) -> Element {
+    ui! {
+        <VStack items="center" gap="0.35rem">
+            <Label text_size="0.75rem" font_weight="600" leading="normal">{ mode }</Label>
+            <Box
+                writing_mode={mode}
+                w={w}
+                h={h}
+                bg="muted"
+                rounded="0.5rem"
+                p="0.5rem"
+                items="center"
+                justify="center"
+            >
+                <Label text_size="0.875rem" font_weight="600" leading="normal">{ sample }</Label>
+            </Box>
+        </VStack>
+    }
+}
+
+/// CSS `writing-mode` 五值：关键字在盒外横排，盒内文案随模式旋转。
+#[component]
+pub(crate) fn WritingModeShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="writing-mode（CSS）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "MDN：horizontal-tb / vertical-rl / vertical-lr / sideways-rl / sideways-lr（含 SVG 别名）。垂直模式把 flex 主轴映到物理列，文本 sideways 旋转。text-orientation: mixed 的直立汉字尚未做。"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="end">
+                    { writing_mode_sample("horizontal-tb", "横排 Hello", "9.5rem", "3.25rem") }
+                    { writing_mode_sample("vertical-rl", "竖排文字", "3.25rem", "10rem") }
+                    { writing_mode_sample("vertical-lr", "竖排文字", "3.25rem", "10rem") }
+                    { writing_mode_sample("sideways-rl", "侧转 Abc", "3.25rem", "10rem") }
+                    { writing_mode_sample("sideways-lr", "侧转 Abc", "3.25rem", "10rem") }
+                </HStack>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "vertical-rl + flex-direction: row → 子项沿块轴（竖向）排列"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="center">
+                    <Box
+                        writing_mode="vertical-rl"
+                        class="flex-row"
+                        w="4.25rem"
+                        h="11rem"
+                        bg="muted"
+                        rounded="0.5rem"
+                        p="0.4rem"
+                        gap="0.35rem"
+                    >
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-1" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"1"</Label>
+                        </Box>
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-2" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"2"</Label>
+                        </Box>
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-3" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"3"</Label>
+                        </Box>
+                    </Box>
+                    <Label text_size="0.75rem" color="muted-foreground" w="16rem" leading="normal">
+                        "三个色块应上下叠，而不是左右排。对照：同样 flex-row 在 horizontal-tb 下是横排。"
+                    </Label>
+                    <Box
+                        writing_mode="horizontal-tb"
+                        class="flex-row"
+                        w="11rem"
+                        h="4.25rem"
+                        bg="muted"
+                        rounded="0.5rem"
+                        p="0.4rem"
+                        gap="0.35rem"
+                    >
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-1" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"1"</Label>
+                        </Box>
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-2" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"2"</Label>
+                        </Box>
+                        <Box w="2.4rem" h="2.4rem" min_w="2.4rem" min_h="2.4rem" bg="chart-3" rounded="0.35rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="primary-foreground">"3"</Label>
+                        </Box>
+                    </Box>
+                </HStack>
             </VStack>
         </MyCard>
     }
@@ -2698,6 +2988,9 @@ pub(crate) fn LogicalShowcase() -> rui::core::tree::Element {
                     <Box bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></Box>
                     <Box bg="background" rounded="0.4rem" margin_inline="0.5rem" padding_block="0.5rem"><Label>"m-inline / p-block"</Label></Box>
                 </HStack>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "完整五值展示见上方「writing-mode（CSS）」卡片。此处只留逻辑盒属性。"
+                </Label>
             </VStack>
         </MyCard>
     }
@@ -2707,6 +3000,10 @@ pub(crate) fn LogicalShowcase() -> rui::core::tree::Element {
 
 #[component]
 pub(crate) fn UtilityClassShowcase() -> rui::core::tree::Element {
+    let tone = use_signal("gal-util-class-tone", || "bg-secondary".to_string());
+    let busy = use_signal("gal-util-class-busy", || false);
+    let loud = use_signal("gal-util-class-loud", || false);
+    let forwarded = "p-3 rounded-md bg-muted";
     ui! {
         <MyCard title="7) Utility Classes (class / tw / uno)">
             <VStack gap="1rem">
@@ -2719,6 +3016,49 @@ pub(crate) fn UtilityClassShowcase() -> rui::core::tree::Element {
                             <Label class="mt-2 text-xs">"mt-2 applied here"</Label>
                         </VStack>
                     </Box>
+                </VStack>
+
+                <VStack gap="0.5rem" w="100%" min_w="0">
+                    <Label font_weight="700">"D) class={{变量}} / classes!"</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "局部 &str 构建期一次应用；classes! 拼接 + (token, bool) 当 classList；含 .get() 走 bind_class（本页 isolate_reads 下仍会更新）。点色板：底色应变；busy：图标旋转；outline：描边。"
+                    </Label>
+                    <HStack gap="0.5rem" wrap="wrap" items="center">
+                        <Box class={forwarded}>
+                            <Label text_size="0.75rem">"Box class={{forwarded}}"</Label>
+                        </Box>
+                        <Button class={forwarded} variant="outline" size="sm">"Button class={{变量}}"</Button>
+                    </HStack>
+                    <HStack gap="0.5rem" wrap="wrap">
+                        <Button size="sm" variant="outline" on_click={move || tone.set("bg-secondary".into())}>"secondary"</Button>
+                        <Button size="sm" variant="outline" on_click={move || tone.set("bg-primary".into())}>"primary"</Button>
+                        <Button size="sm" variant="outline" on_click={move || tone.set("bg-destructive".into())}>"destructive"</Button>
+                        <Button size="sm" variant="outline" on_click={move || busy.set(!busy.get())}>"busy"</Button>
+                        <Button size="sm" variant="outline" on_click={move || loud.set(!loud.get())}>"outline"</Button>
+                    </HStack>
+                    <VStack
+                        w="100%"
+                        min_w="0"
+                        gap="0.35rem"
+                        class={classes!("p-4 rounded-lg", tone.get(), ("outline outline-2 outline-offset-2", loud.get()))}
+                    >
+                        <HStack gap="0.5rem" items="center">
+                            <Icon
+                                name="loader-circle"
+                                size="1rem"
+                                class={classes!(("animate-spin", busy.get()))}
+                            />
+                            <Label class={classes!("text-sm", ("font-semibold", loud.get()), ("opacity-50", busy.get()))}>
+                                { if busy.get() { "处理中…" } else { "空闲" } }
+                            </Label>
+                        </HStack>
+                        <Label text_size="0.7rem" color="muted-foreground" leading="normal" w="100%" min_w="0">
+                            "下面是拼合后的 class 字符串（说明，不是漏画的样式）："
+                        </Label>
+                        <Label class="font-mono text-xs" w="100%" min_w="0">
+                            { classes!("p-4 rounded-lg", tone.get(), ("outline outline-2 outline-offset-2", loud.get())) }
+                        </Label>
+                    </VStack>
                 </VStack>
 
                 <VStack gap="0.5rem">

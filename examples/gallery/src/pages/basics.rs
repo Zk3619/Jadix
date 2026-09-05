@@ -1985,6 +1985,45 @@ pub(crate) fn AspectRatioShowcase() -> rui::core::tree::Element {
     }
 }
 
+#[component]
+pub(crate) fn RemoteAssetShowcase() -> rui::core::tree::Element {
+    const REMOTE_PNG: &str = crate::shared::GALLERY_REMOTE_PNG;
+    #[cfg(feature = "remote-asset")]
+    const HINT: &str =
+        "remote-asset：http(s) src 走 set_remote_asset_fetcher（本 Gallery 用进程内映射，无外网）。换 reqwest/ureq 即可接真 HTTP。";
+    #[cfg(not(feature = "remote-asset"))]
+    const HINT: &str =
+        "默认拒绝 http(s) src。cargo run -p gallery --features remote-asset 并在 main 安装 fetcher。";
+    ui! {
+        <MyCard title="1g) Remote Image src（remote-asset）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    {HINT}
+                </Label>
+                <HStack w="100%" min_w="0" gap="0.75rem" items="center" wrap="wrap">
+                    <VStack gap="0.25rem">
+                        <Label font_weight="700" text_size="0.75rem">"Image https"</Label>
+                        <Image
+                            src={REMOTE_PNG}
+                            w="6rem"
+                            h="4rem"
+                            rounded="0.375rem"
+                            class="bg-muted"
+                        />
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        <Label font_weight="700" text_size="0.75rem">"Avatar https"</Label>
+                        <Avatar>
+                            <AvatarImage src={REMOTE_PNG} />
+                            <AvatarFallback>"RA"</AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 pub(crate) fn animation_showcase_demos(
     play: Signal<bool>,
     play_btn: Signal<bool>,
@@ -2067,6 +2106,52 @@ pub(crate) fn AnimationShowcase() -> rui::core::tree::Element {
                     "utility：animate-spin / ping / pulse / bounce；属性：animation / animation_play_state / fill-mode；Icon+spin 走字形贴图+transform（非 glyphon）；fade 用 infinite alternate"
                 </Label>
                 { demos }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+pub(crate) fn WaapiShowcase() -> rui::core::tree::Element {
+    let alice = use_signal("gal_waapi_alice", || {
+        rui::style::Animation::animate(
+            vec![
+                rui::style::Keyframe::new()
+                    .transform("rotate(0deg)")
+                    .color("#18181b"),
+                rui::style::Keyframe::new().color("#431236").offset(0.3),
+                rui::style::Keyframe::new()
+                    .transform("rotate(360deg)")
+                    .color("#18181b"),
+            ],
+            rui::style::KeyframeEffect::new()
+                .duration(3000.0)
+                .iterations(f32::INFINITY),
+        )
+    });
+    let anim = alice.get();
+    let stage = {
+        let el: Element = ui! {
+            <Box w="3.5rem" h="3.5rem" bg="primary" class="rounded-md" />
+        };
+        el.animate(anim)
+    };
+    ui! {
+        <MyCard title="1h) 编程式动画句柄">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "关键帧对象 + play / pause / reverse / set_rate；cancel 不触发 finish。句柄 + 注册表，不是 WAAPI 规范对象。finished 是 Signal。布局分区还有 spring() / linear() / clip-path。"
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    { stage }
+                    <Button size="sm" variant="outline" on_click={move || anim.pause()}>"pause"</Button>
+                    <Button size="sm" variant="outline" on_click={move || anim.play()}>"play"</Button>
+                    <Button size="sm" variant="outline" on_click={move || anim.reverse()}>"reverse"</Button>
+                    <Button size="sm" variant="outline" on_click={move || {
+                        anim.set_rate(anim.playback_rate() * 1.25);
+                    }}>"faster"</Button>
+                    <Button size="sm" variant="outline" on_click={move || anim.update_playback_rate(1.0)}>"rate=1"</Button>
+                </HStack>
             </VStack>
         </MyCard>
     }

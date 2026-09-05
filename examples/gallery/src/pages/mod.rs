@@ -5,6 +5,7 @@ pub(crate) mod events;
 pub(crate) mod forms;
 pub(crate) mod layout;
 pub(crate) mod navigation;
+pub(crate) mod overlay_shells;
 pub(crate) mod overlays;
 pub(crate) mod text;
 
@@ -15,5 +16,6 @@ pub(crate) use events::*;
 pub(crate) use forms::*;
 pub(crate) use layout::*;
 pub(crate) use navigation::*;
+pub(crate) use overlay_shells::*;
 pub(crate) use overlays::*;
 pub(crate) use text::*;

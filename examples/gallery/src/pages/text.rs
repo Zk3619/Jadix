@@ -3,6 +3,266 @@
 use crate::imports::*;
 use crate::shared::*;
 
+const FONT_SAMPLE: &str = "The quick brown fox 中文字重 Ag 0123";
+
+/// Constrained sample leaf. `<Box>` is flex-row; percent-width labels in a row
+/// become N× parent width (gallery inherit demo overflow). Always wrap in VStack.
+fn font_sample_label(id: &str, text: &str, class: &str) -> Element {
+    let el: Element = label(id).text(text).w("100%").class(class).into();
+    el.min_w("0")
+}
+
+fn font_family_tile(id: &str, caption: &str, class: &str) -> Element {
+    let sample = font_sample_label(id, FONT_SAMPLE, class);
+    ui! {
+        <VStack gap="0.25rem" min_w="0" w="100%" shrink="1">
+            <Label font_weight="700" text_size="0.75rem" leading="none" w="100%" min_w="0">{ caption }</Label>
+            <VStack bg="muted" rounded="0.375rem" p="0.5rem" w="100%" min_w="0">
+                { sample }
+            </VStack>
+        </VStack>
+    }
+}
+
+fn font_weight_chip(token: &str) -> Element {
+    let sample = font_sample_label(
+        &format!("gal-{token}"),
+        "Ag 字",
+        &format!("font-sans {token} leading-normal"),
+    );
+    ui! {
+        <VStack gap="0.15rem" items="start" min_w="0" shrink="1">
+            <Label text_size="0.6875rem" color="muted-foreground" leading="none">{ token }</Label>
+            { sample }
+        </VStack>
+    }
+}
+
+fn font_size_chip(token: &str) -> Element {
+    let sample = font_sample_label(
+        &format!("gal-{token}"),
+        FONT_SAMPLE,
+        &format!("font-sans font-normal leading-normal {token}"),
+    );
+    ui! {
+        <HStack gap="0.5rem" items="start" w="100%" min_w="0">
+            <Label text_size="0.6875rem" color="muted-foreground" w="4.5rem" leading="none">{ token }</Label>
+            <VStack grow="1" min_w="0" shrink="1">
+                { sample }
+            </VStack>
+        </HStack>
+    }
+}
+
+fn font_leading_tile(id: &str, caption: &str, class: &str) -> Element {
+    let sample = font_sample_label(id, "中文顶底笔画 gyp 行盒裁切对照", class);
+    ui! {
+        <VStack gap="0.25rem" min_w="0" w="100%" shrink="1">
+            <Label font_weight="700" text_size="0.75rem" leading="none" w="100%" min_w="0">{ caption }</Label>
+            <VStack bg="muted" rounded="0.375rem" p="0.5rem" w="100%" min_w="0" overflow="hidden">
+                { sample }
+            </VStack>
+        </VStack>
+    }
+}
+
+fn font_rsx_family_tile(_id: &str, caption: &str, sample: Element) -> Element {
+    ui! {
+        <VStack gap="0.25rem" min_w="0" w="100%" shrink="1">
+            <Label font_weight="700" text_size="0.75rem" leading="none" w="100%" min_w="0">{ caption }</Label>
+            <VStack bg="muted" rounded="0.375rem" p="0.5rem" w="100%" min_w="0">
+                { sample }
+            </VStack>
+        </VStack>
+    }
+}
+
+/// 族 / 字重 / 字号 / 行高覆盖验收（对照 `docs/engine/font.md`）。
+#[component]
+pub(crate) fn FontOverrideShowcase() -> rui::core::tree::Element {
+    let family_sans = font_family_tile(
+        "gal-font-sans",
+        "class=\"font-sans\"",
+        "font-sans font-normal",
+    );
+    let family_serif = font_family_tile(
+        "gal-font-serif",
+        "class=\"font-serif\"",
+        "font-serif font-normal",
+    );
+    let family_mono = font_family_tile(
+        "gal-font-mono",
+        "class=\"font-mono\"",
+        "font-mono font-normal",
+    );
+    let weights: Vec<Element> = [
+        "font-100",
+        "font-200",
+        "font-300",
+        "font-normal",
+        "font-medium",
+        "font-semibold",
+        "font-bold",
+        "font-extrabold",
+        "font-black",
+    ]
+    .into_iter()
+    .map(font_weight_chip)
+    .collect();
+    let sizes: Vec<Element> = [
+        "text-xs",
+        "text-sm",
+        "text-base",
+        "text-lg",
+        "text-xl",
+        "text-2xl",
+    ]
+    .into_iter()
+    .map(font_size_chip)
+    .collect();
+    let lead_none = font_leading_tile(
+        "gal-font-leading-none",
+        "leading-none（1.0 · Label 默认）",
+        "font-sans font-normal leading-none",
+    );
+    let lead_tight = font_leading_tile(
+        "gal-font-leading-tight",
+        "leading-tight",
+        "font-sans font-normal leading-tight",
+    );
+    let lead_normal = font_leading_tile(
+        "gal-font-leading-normal",
+        "leading-normal",
+        "font-sans font-normal leading-normal",
+    );
+    let lead_arb = font_leading_tile(
+        "gal-font-leading-arb",
+        "leading-[1.15]",
+        "font-sans font-normal leading-[1.15]",
+    );
+    let rsx_segoe = font_rsx_family_tile(
+        "gal-font-family-segoe",
+        "font_family=\"Segoe UI, sans-serif\"",
+        label("gal-font-family-segoe")
+            .text(FONT_SAMPLE)
+            .font_family("Segoe UI, sans-serif")
+            .font_weight(400.0)
+            .leading(1.5)
+            .w("100%")
+            .into(),
+    );
+    let rsx_consolas = font_rsx_family_tile(
+        "gal-font-family-consolas",
+        "font_family=\"Consolas, ui-monospace\"",
+        label("gal-font-family-consolas")
+            .text(FONT_SAMPLE)
+            .font_family("Consolas, Cascadia Mono, ui-monospace, monospace")
+            .font_weight(400.0)
+            .leading(1.5)
+            .w("100%")
+            .into(),
+    );
+    let rsx_times = font_rsx_family_tile(
+        "gal-font-family-times",
+        "text_font=\"Times New Roman, Georgia, serif\"",
+        label("gal-font-family-times")
+            .text(FONT_SAMPLE)
+            .font_family("Times New Roman, Georgia, serif")
+            .font_weight(400.0)
+            .leading(1.5)
+            .w("100%")
+            .into(),
+    );
+
+    ui! {
+        <MyCard title="7) 字体族 / 字重 / 行高覆盖（验收）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对照 docs/engine/font.md · font_strategy.md。默认栈 Inter → Inter Variable → Segoe/SF → CJK 后段。进程级 RUI_FONT_FAMILY / WindowOptions::default_font* 不在本卡切换。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "勾选：① sans/serif/mono 字形可辨 ② RSX font_family 覆盖 class ③ 400 < 500 ≤ 700（无 Medium 面时 500 为 Regular+伪粗）④ 字号阶梯 ⑤ leading-none 比 normal 更易裁切 CJK ⑥ 子级可覆盖父级族"
+                </Label>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"默认 cascade（无 class）"</Label>
+                <VStack bg="muted" rounded="0.375rem" p="0.5rem" w="100%" min_w="0">
+                    <Label id="gal-font-default" font_weight="400" leading="normal" w="100%">
+                        { FONT_SAMPLE }
+                    </Label>
+                </VStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"泛型族 class"</Label>
+                <VStack w="100%" min_w="0" gap="0.75rem">
+                    { family_sans }
+                    { family_serif }
+                    { family_mono }
+                </VStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"RSX font_family / text_font"</Label>
+                <VStack w="100%" min_w="0" gap="0.75rem">
+                    { rsx_segoe }
+                    { rsx_consolas }
+                    { rsx_times }
+                </VStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"字重阶梯（class font-* · 同族 sans）"</Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "可变字体：500 为真 wght 轴。静态 Segoe：500 匹配 Regular 400 + synthetic bold（略重于 font-normal，轻于 font-bold）。"
+                </Label>
+                <HStack w="100%" min_w="0" gap="0.75rem" items="end" wrap="wrap">
+                    { weights }
+                </HStack>
+                <HStack w="100%" min_w="0" gap="1rem" items="end" wrap="wrap">
+                    <Label id="gal-font-w400" class="font-sans font-normal" leading="normal" text_size="1.25rem">
+                        "400 Regular"
+                    </Label>
+                    <Label id="gal-font-w500" class="font-sans font-medium" leading="normal" text_size="1.25rem">
+                        "500 Medium"
+                    </Label>
+                    <Label id="gal-font-w700" class="font-sans font-bold" leading="normal" text_size="1.25rem">
+                        "700 Bold"
+                    </Label>
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"字号 class text-*"</Label>
+                <VStack w="100%" min_w="0" gap="0.35rem">
+                    { sizes }
+                </VStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"行高 leading-*（CJK 裁切对照）"</Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Label 默认 leading-none。盒外墨水会被 prepare_text / overflow 裁掉；验收时看「字」顶底是否缺笔，而不是和 Chrome 像素对齐。"
+                </Label>
+                <VStack w="100%" min_w="0" gap="0.75rem">
+                    { lead_none }
+                    { lead_tight }
+                    { lead_normal }
+                    { lead_arb }
+                </VStack>
+
+                <Label font_weight="700" text_size="0.875rem" leading="none">"子树继承与局部覆盖"</Label>
+                <VStack class="font-mono text-sm" p="0.75rem" bg="muted" rounded="0.5rem" gap="0.35rem" w="100%" min_w="0">
+                    <Label id="gal-font-inherit-mono" leading="normal" font_weight="400" w="100%">
+                        "父级 font-mono text-sm：code 继承 代码"
+                    </Label>
+                    <Label id="gal-font-inherit-sans" class="font-sans" leading="normal" font_weight="400" w="100%">
+                        "子级 class=\"font-sans\" 覆盖族"
+                    </Label>
+                    <Label
+                        id="gal-font-inherit-serif"
+                        font_family="Georgia, Times New Roman, serif"
+                        leading="normal"
+                        font_weight="400"
+                        w="100%"
+                    >
+                        "子级 font_family=Georgia, serif"
+                    </Label>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 pub(crate) fn typography_showcase_buttons() -> Element {
     ui! {
         <VStack w="100%" min_w="0" gap="0.75rem">

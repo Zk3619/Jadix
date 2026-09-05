@@ -47,9 +47,17 @@ pub(crate) fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     </Button>
                                 </HStack>
                                 <Box id="prim-portal-host" relative=true w="100%" min_h="6.5rem" p="0.75rem" bg="muted" rounded="0.5rem" overflow="hidden">
-                                    <Label text_size="0.75rem" color="muted-foreground">
-                                        "局部宿主 prim-portal-host（mount 叠层裁剪在此框内）"
-                                    </Label>
+                                    <VStack gap="0.2rem">
+                                        <Label text_size="0.75rem" color="muted-foreground">
+                                            "局部宿主 prim-portal-host（mount 叠层裁剪在此框内）"
+                                        </Label>
+                                        <Label text_size="0.7rem" color="foreground">
+                                            "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789"
+                                        </Label>
+                                        <Label text_size="0.7rem" color="foreground">
+                                            "打开后遮罩应模糊这些文字，而不是整块纯色。"
+                                        </Label>
+                                    </VStack>
                                 </Box>
                                 <HStack gap="0.5rem" items="center" wrap="wrap">
                                     <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
@@ -97,16 +105,20 @@ pub(crate) fn PrimitivesShowcase() -> rui::core::tree::Element {
             <Portal id="prim-portal-local" mount="prim-portal-host">
                 <Reactive id="examples/gallery/PrimitivesShowcase:portal_local">
                     <Show when={local_open.get()}>
-                        <Box absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="40">
-                            <VStack gap="0.5rem" p="0.75rem" bg="secondary" rounded="0.5rem" m="0.5rem">
-                                <Label font_weight="700" text_size="0.875rem">"局部 Portal"</Label>
-                                <Label text_size="0.75rem" color="muted-foreground">
-                                    "mount=\"prim-portal-host\"：挂在子容器叠层内。"
-                                </Label>
-                                <Button size="sm" variant="default" on_click={move || local_open.set(false)}>
-                                    "关闭"
-                                </Button>
-                            </VStack>
+                        <Box absolute=true inset="0" w="100%" h="100%" items="center" justify="center">
+                            <Box w="85%" h="85%" rounded="0.5rem"
+                                 bg="rgba(15,23,42,0.55)" backdrop_blur="12"
+                                 items="center" justify="center">
+                                <VStack gap="0.5rem" p="0.75rem" bg="secondary" rounded="0.5rem" m="0.5rem">
+                                    <Label font_weight="700" text_size="0.875rem">"局部 Portal"</Label>
+                                    <Label text_size="0.75rem" color="muted-foreground">
+                                        "mount=\"prim-portal-host\"：局部 backdrop_blur 应模糊宿主背景。"
+                                    </Label>
+                                    <Button size="sm" variant="default" on_click={move || local_open.set(false)}>
+                                        "关闭"
+                                    </Button>
+                                </VStack>
+                            </Box>
                         </Box>
                     </Show>
                 </Reactive>
@@ -715,6 +727,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             side_offset: 4.0,
                             class: Some("w-64".into()),
                             width: None,
+                            style: None,
                         },
                         || {
                             Element::from(

@@ -20,6 +20,8 @@ runtime-logging = ["rui/runtime-logging"]
 # Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
 #   cargo run -p gallery --features system-tray
 system-tray = ["rui/system-tray"]
+# Remote http(s) Image/Avatar src via app fetcher. cargo run -p gallery --features remote-asset
+remote-asset = ["rui/remote-asset"]
 # B1 Inspector (F12). cargo run -p gallery --features devtools
 devtools = ["rui/devtools"]
 # WP-3.13 rotating cube. Off by default.

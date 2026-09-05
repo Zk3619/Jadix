@@ -6,14 +6,15 @@ pub(crate) use rui::app::{
     run_on_ui_thread, set_window_minimized, shared_slot, start_window_drag, system_tray_native,
     toggle_window_maximized, tray_icon, Router, TrayMenuItem, WindowOptions,
 };
+pub(crate) use rui::classes;
 pub(crate) use rui::component;
 pub(crate) use rui::components::*;
 pub(crate) use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
 pub(crate) use rui::core::reactivity::{batch, use_signal, Signal};
 pub(crate) use rui::core::tree::{Element, LayoutStatus};
 pub(crate) use rui::primitives::{
-    canvas, circle, hstack, interactive, polyline, r#box, scene3d, svg, svg_path, vstack, Canvas2D,
-    CanvasSize, Portal, PortalProps,
+    boxed, canvas, circle, hstack, interactive, polyline, r#box, scene3d, svg, svg_path, vstack,
+    Canvas2D, CanvasSize, Portal, PortalProps,
 };
 pub(crate) use rui::style::{parse_color, parse_text_color, TextSpan};
 pub(crate) use rui::ui;

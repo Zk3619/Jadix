@@ -16,13 +16,16 @@ pub(crate) fn gal_sample_tree_roots() -> Vec<TreeNode> {
                         id: "main".into(),
                         label: "main.rs".into(),
                         children: vec![],
+                        chrome: Default::default(),
                     },
                     TreeNode {
                         id: "lib".into(),
                         label: "lib.rs".into(),
                         children: vec![],
+                        chrome: Default::default(),
                     },
                 ],
+                chrome: Default::default(),
             },
             TreeNode {
                 id: "docs".into(),
@@ -31,9 +34,12 @@ pub(crate) fn gal_sample_tree_roots() -> Vec<TreeNode> {
                     id: "readme".into(),
                     label: "README.md".into(),
                     children: vec![],
+                    chrome: Default::default(),
                 }],
+                chrome: Default::default(),
             },
         ],
+        chrome: Default::default(),
     }]
 }
 

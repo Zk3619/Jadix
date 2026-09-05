@@ -22,6 +22,8 @@ pub(crate) const GAL_SHELL_BLUR: &str = "gal_shell_blur";
 pub(crate) const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 pub(crate) const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
 pub(crate) const GAL_GRID_LIST_ID: &str = "gal-grid-sort";
+/// Demo remote `src` for `remote-asset`（main 里用 fetcher 映射成本地 PNG，不访问外网）。
+pub(crate) const GALLERY_REMOTE_PNG: &str = "https://rui.test/gallery-demo.png";
 
 pub(crate) fn gal_grid_sort_row(row_label: &str, i: usize, _items: &[String], hl: bool) -> Element {
     ui! {

@@ -1,4 +1,4 @@
-﻿//! 导航、路由、托盘、窗口外壳。
+//! 导航、路由、托盘、窗口外壳。
 
 use crate::imports::*;
 use crate::shared::*;
@@ -575,13 +575,16 @@ pub(crate) fn SidebarShowcase() -> Element {
                                 id: "overview".into(),
                                 label: "Overview".into(),
                                 children: vec![],
+                                chrome: Default::default(),
                             },
                             TreeNode {
                                 id: "team".into(),
                                 label: "Team".into(),
                                 children: vec![],
+                                chrome: Default::default(),
                             },
                         ],
+                        chrome: Default::default(),
                     }]),
             )
             .into()
