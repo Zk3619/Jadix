@@ -15,7 +15,7 @@ use crate::core::reactivity::{
     create_effect, create_root, mark_next_effect_as_ui_root, use_signal,
 };
 use crate::core::scroll_viewport::scroll_offset_y_signal_key;
-use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
+use crate::core::tree::{Element, LayoutStatus, LayoutTree, sync_reactive_elements_subtree};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -33,14 +33,17 @@ const GAL_MS_TEXTS: &[&str] = &[
 fn tall_message_scroller_root() -> Element {
     let mut content = message_scroller_content();
     for i in 0..8 {
-        content =
-            content.child(message_scroller_item().message_id(format!("m{i}")).child(
-                Element::new().flex_col().w("100%").min_w(0.0).child(
-                    Element::new().w("100%").text(format!(
+        content = content.child(
+            message_scroller_item().message_id(format!("m{i}")).child(
+                Element::new()
+                    .flex_col()
+                    .w("100%")
+                    .min_w(0.0)
+                    .child(Element::new().w("100%").text(format!(
                     "Turn {i}: enough text to wrap across multiple lines in a narrow chat column."
-                )),
-                ),
-            ));
+                ))),
+            ),
+        );
     }
     let scroller: Element = message_scroller_provider()
         .id("ms-layout-test")

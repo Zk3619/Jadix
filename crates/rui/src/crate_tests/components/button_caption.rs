@@ -2,8 +2,7 @@
 //!
 //! Guards measure/render mismatches that clipped trailing glyphs:
 //! 1. Taffy integer rounding (disabled in `LayoutTree::new`)
-//! 2. Layout measure using raw weight 500 / `Family::SansSerif` while paint uses
-//!    normalized Semibold + `best_font_family`
+//! 2. Layout measure using the same family/weight match as paint (`resolve_face_weight`)
 
 use crate::components::button::button;
 use crate::core::tree::Element;
@@ -12,7 +11,7 @@ use crate::primitives::hstack;
 use crate::renderer::font_loader;
 use crate::renderer::text_hit::best_font_family;
 use crate::text::{install_shared_font_system, intrinsic_width, prepare};
-use crate::utils::font::normalize_weight_for_family;
+use crate::utils::font::resolve_face_weight;
 
 #[test]
 fn button_captions_stay_single_line_after_layout() {
@@ -120,11 +119,8 @@ fn measure_uses_normalized_weight_so_captions_fit() {
 
     let family = best_font_family(&fs);
     let raw = 500_u16;
-    let norm = normalize_weight_for_family(fs.db(), family, raw);
-    assert_ne!(
-        norm, raw,
-        "precondition: Segoe-like stacks should remap 500 → nearest face (often 600)"
-    );
+    let resolved = resolve_face_weight(fs.db(), family, raw);
+    let norm = resolved.attrs_weight;
 
     let labels = [
         "Ghost",

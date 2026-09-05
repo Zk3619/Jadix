@@ -664,6 +664,143 @@ fn per_side_border_content_box_adds_outside() {
 }
 
 #[test]
+fn padding_top_percent_resolves_against_containing_block_width() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            // CSS: padding-top % uses containing-block **width**. Parent 400×200
+            // → 10% = 40, not 20 (height). ContentBox so padding adds outside height.
+            let child = Element::from(
+                r#box()
+                    .w(50.0)
+                    .h(20.0)
+                    .content_box()
+                    .pt("10%")
+                    .flex_shrink(0.0),
+            );
+            let parent = Element::from(r#box().flex_col().w(400.0).h(200.0).child(child));
+            let mut root = Element::new().w(400.0).h(200.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+            let node = root.children[0].children[0].layout_node.expect("laid out");
+            let style = layout.taffy.style(node).expect("taffy style");
+            let pad_t = taffy_len(style.padding.top);
+            assert!(
+                (pad_t - 40.0).abs() < 0.5,
+                "pt 10% of parent content width 400 → 40, got {pad_t}"
+            );
+            let h = root.children[0].children[0].layout_bounds[3];
+            assert!(
+                (h - 60.0).abs() < 1.0,
+                "ContentBox h=20 + pt 40 → 60 outer, got {h}"
+            );
+        });
+    });
+}
+
+#[test]
+fn margin_top_percent_resolves_against_containing_block_width() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let a = Element::from(r#box().w(40.0).h(20.0).flex_shrink(0.0));
+            let b = Element::from(r#box().w(40.0).h(20.0).mt("10%").flex_shrink(0.0));
+            let parent = Element::from(r#box().flex_col().w(400.0).h(200.0).child(a).child(b));
+            let mut root = Element::new().w(400.0).h(200.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+            let first = &root.children[0].children[0].layout_bounds;
+            let second = &root.children[0].children[1].layout_bounds;
+            let gap = second[1] - (first[1] + first[3]);
+            assert!(
+                (gap - 40.0).abs() < 1.5,
+                "mt 10% of parent content width 400 → 40 between siblings, got {gap}"
+            );
+        });
+    });
+}
+
+#[test]
+fn negative_margin_pulls_following_sibling() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let a = Element::from(r#box().w(40.0).h(20.0).flex_shrink(0.0));
+            let b = Element::from(r#box().w(40.0).h(20.0).mt(-8.0).flex_shrink(0.0));
+            let parent = Element::from(r#box().flex_col().w(200.0).h(100.0).child(a).child(b));
+            let mut root = Element::new().w(200.0).h(100.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let first = &root.children[0].children[0].layout_bounds;
+            let second = &root.children[0].children[1].layout_bounds;
+            let gap = second[1] - (first[1] + first[3]);
+            assert!(
+                (gap + 8.0).abs() < 1.5,
+                "mt(-8) must overlap previous sibling by 8, gap={gap}"
+            );
+        });
+    });
+}
+
+#[test]
+fn zoom_scales_border_box_and_padding() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let el = Element::from(r#box().w(100.0).h(40.0).px(10.0).border_box()).zoom(2.0);
+            let mut root = Element::new().w(400.0).h(200.0).child(el);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+            let b = root.children[0].layout_bounds;
+            assert!(
+                (b[2] - 200.0).abs() < 1.0 && (b[3] - 80.0).abs() < 1.0,
+                "zoom 2 × BorderBox 100×40 → 200×80, got {:?}",
+                b
+            );
+            let node = root.children[0].layout_node.expect("laid out");
+            let style = layout.taffy.style(node).expect("taffy style");
+            let pad = taffy_len(style.padding.left);
+            assert!((pad - 20.0).abs() < 0.5, "zoom 2 × px 10 → 20, got {pad}");
+        });
+    });
+}
+
+#[test]
+fn logical_padding_inline_start_maps_to_physical_right_with_rtl() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let ltr = Element::from(r#box().w(80.0).h(40.0).padding_inline_start(12.0));
+            let rtl = Element::from(r#box().w(80.0).h(40.0).padding_inline_start(12.0))
+                .text_direction(crate::style::TextDirection::Rtl);
+            let mut root = Element::new()
+                .flex_col()
+                .w(200.0)
+                .h(120.0)
+                .child(ltr)
+                .child(rtl);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 120.0, [-1.0, -1.0]);
+            let ltr_style = layout
+                .taffy
+                .style(root.children[0].layout_node.expect("ltr"))
+                .expect("ltr");
+            let rtl_style = layout
+                .taffy
+                .style(root.children[1].layout_node.expect("rtl"))
+                .expect("rtl");
+            assert!(
+                (taffy_len(ltr_style.padding.left) - 12.0).abs() < 0.5,
+                "ltr: padding-inline-start → left, got {}",
+                taffy_len(ltr_style.padding.left)
+            );
+            assert!(taffy_len(ltr_style.padding.right).abs() < 0.5);
+            assert!(
+                (taffy_len(rtl_style.padding.right) - 12.0).abs() < 0.5,
+                "rtl: padding-inline-start → right, got {}",
+                taffy_len(rtl_style.padding.right)
+            );
+            assert!(taffy_len(rtl_style.padding.left).abs() < 0.5);
+        });
+    });
+}
+
+#[test]
 fn uniform_border_still_uses_sdf_stroke() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
@@ -684,6 +821,243 @@ fn uniform_border_still_uses_sdf_stroke() {
                 .expect("uniform border uses SDF border_width");
             assert!((stroke.rect_size[0] - 80.0).abs() < 1.5);
             assert!((stroke.rect_size[1] - 40.0).abs() < 1.5);
+        });
+    });
+}
+
+#[test]
+fn overflow_radius_emits_clip_poly_and_cuts_hit_corners() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut child: Element = r#box()
+                .w(80.0)
+                .h(80.0)
+                .flex_shrink(0.0)
+                .bg([0.9, 0.1, 0.1, 1.0])
+                .into();
+            child = child.on_click(|| {});
+            let parent: Element = r#box()
+                .w(80.0)
+                .h(80.0)
+                .rounded(24.0)
+                .overflow("hidden")
+                .child(child)
+                .into();
+            let mut root = Element::new().w(200.0).h(200.0).p(16.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let pb = root.children[0].layout_bounds;
+            let child_idx = result
+                .instances
+                .iter()
+                .position(|i| {
+                    (i.color[0] - 0.9).abs() < 0.05
+                        && i.color[3] > 0.5
+                        && (i.rect_size[0] - 80.0).abs() < 2.0
+                })
+                .expect("overflow child instance");
+            assert!(
+                result
+                    .clip_polys
+                    .get(child_idx)
+                    .is_some_and(|p| p.is_active()),
+                "rounded overflow must stamp a clip poly on the child instance"
+            );
+            let corner = [pb[0] + 2.0, pb[1] + 2.0];
+            assert!(
+                !crate::style::rounded_rect_contains(pb, [24.0; 4], corner),
+                "corner of a 24px-radius 80px box must be outside the rounded clip"
+            );
+            assert!(
+                find_click(&root, corner[0], corner[1], [0.0, 0.0]).is_none(),
+                "click in the rounded notch must miss"
+            );
+            assert!(
+                find_click(&root, pb[0] + 40.0, pb[1] + 40.0, [0.0, 0.0]).is_some(),
+                "click in the rounded box center must hit"
+            );
+        });
+    });
+}
+
+#[test]
+fn writing_mode_vertical_rl_maps_padding_inline_start_to_top() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let el: Element = r#box()
+                .w(80.0)
+                .h(80.0)
+                .writing_mode("vertical-rl")
+                .padding_inline_start(12.0)
+                .into();
+            let mut root = Element::new().w(200.0).h(200.0).child(el);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let style = layout
+                .taffy
+                .style(root.children[0].layout_node.expect("wm"))
+                .expect("wm");
+            assert!(
+                (taffy_len(style.padding.top) - 12.0).abs() < 0.5,
+                "vertical-rl padding-inline-start → top, got {}",
+                taffy_len(style.padding.top)
+            );
+            assert!(taffy_len(style.padding.left).abs() < 0.5);
+        });
+    });
+}
+
+#[test]
+fn writing_mode_vertical_rl_flex_row_stacks_on_block_axis() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let parent: Element = r#box()
+                .w(120.0)
+                .h(120.0)
+                .writing_mode("vertical-rl")
+                .flex_row()
+                .child(r#box().w(20.0).h(20.0).flex_shrink(0.0))
+                .child(r#box().w(20.0).h(20.0).flex_shrink(0.0))
+                .child(r#box().w(20.0).h(20.0).flex_shrink(0.0))
+                .into();
+            let mut root = Element::new().w(200.0).h(200.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let kids = &root.children[0].children;
+            assert!(
+                kids[0].layout_bounds[1] < kids[1].layout_bounds[1]
+                    && kids[1].layout_bounds[1] < kids[2].layout_bounds[1],
+                "vertical-rl + flex-row must stack children on Y, got y=[{}, {}, {}]",
+                kids[0].layout_bounds[1],
+                kids[1].layout_bounds[1],
+                kids[2].layout_bounds[1]
+            );
+        });
+    });
+}
+
+#[test]
+fn unspecified_direction_stays_auto_after_cascade() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let child: Element = r#box()
+                .w(40.0)
+                .h(24.0)
+                .text("1) Button Variants + State")
+                .into();
+            let mut root = Element::new().w(200.0).h(80.0).child(child);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
+            assert_eq!(
+                root.style.direction,
+                crate::style::TextDirection::Auto,
+                "cascade root must not invent explicit Ltr"
+            );
+            assert_eq!(root.text_style.direction, crate::style::TextDirection::Auto);
+            assert_eq!(
+                root.children[0].style.direction,
+                crate::style::TextDirection::Auto
+            );
+            assert_eq!(
+                root.children[0].text_style.direction,
+                crate::style::TextDirection::Auto,
+                "ordinary LTR copy must stay Auto so prepare_text injects no LRM"
+            );
+        });
+    });
+}
+
+#[test]
+fn explicit_rtl_direction_inherits_to_text_style() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let child: Element = r#box().w(40.0).h(24.0).text("مرحبا").into();
+            let parent: Element = Element::from(r#box().w(80.0).h(40.0).child(child))
+                .text_direction(crate::style::TextDirection::Rtl);
+            let mut root = Element::new().w(200.0).h(80.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
+            assert_eq!(
+                root.children[0].children[0].text_style.direction,
+                crate::style::TextDirection::Rtl
+            );
+        });
+    });
+}
+
+#[test]
+fn writing_mode_inherits_to_unspecified_child() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let child: Element = r#box().w(40.0).h(40.0).into();
+            let parent: Element = r#box()
+                .w(80.0)
+                .h(80.0)
+                .writing_mode("vertical-lr")
+                .child(child)
+                .into();
+            let mut root = Element::new().w(200.0).h(200.0).child(parent);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            assert_eq!(
+                root.children[0].children[0].style.writing_mode,
+                crate::style::WritingMode::VerticalLr
+            );
+        });
+    });
+}
+
+#[test]
+fn vertical_writing_mode_bake_does_not_cpu_clip_against_overflow() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let text: Element = r#box()
+                .w(40.0)
+                .h(120.0)
+                .writing_mode("vertical-rl")
+                .text("竖排文字")
+                .into();
+            let clipper: Element = r#box()
+                .w(50.0)
+                .h(200.0)
+                .overflow("hidden")
+                .child(text)
+                .into();
+            let mut root = Element::new().w(400.0).h(300.0).child(clipper);
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut root, 400.0, 300.0, [-1.0, -1.0]);
+            let bake = result.textured_draws.iter().find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            });
+            let Some(draw) = bake else {
+                panic!(
+                    "vertical-rl text must Bake; textured_draws={:?}",
+                    result
+                        .textured_draws
+                        .iter()
+                        .map(|d| d.texture_key.as_str())
+                        .collect::<Vec<_>>()
+                );
+            };
+            assert!(
+                draw.rect[2] > 80.0,
+                "pre-rotation bake width must stay the swapped inline size (~120+pad), not the 50px overflow slit; got {:?}",
+                draw.rect
+            );
+            assert!(
+                (draw.uv_scale[0] - 1.0).abs() < 0.05 && (draw.uv_scale[1] - 1.0).abs() < 0.05,
+                "must not UV-crop the bake into the overflow AABB, uv_scale={:?}",
+                draw.uv_scale
+            );
+            assert!(
+                draw.clip_size[0] > 0.0 && draw.clip_size[0] < 60.0 && draw.clip_size[1] > 150.0,
+                "GPU clip must be the overflow parent AABB, got pos={:?} size={:?}",
+                draw.clip_pos,
+                draw.clip_size
+            );
         });
     });
 }

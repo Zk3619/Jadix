@@ -368,3 +368,71 @@ fn bind_prop_applies_initial_width() {
     assert_eq!(el.style.size.width, IntoDimension::into_dimension("3.5rem"));
     reset_registered_anchors();
 }
+
+#[test]
+fn bind_prop_rebuild_does_not_seed_from_paint_when_effect_alive() {
+    use taffy::style::Dimension;
+    reset_registered_anchors();
+    let open = use_signal("__rui_test_bind_prop_skip_paint", || false);
+    open.set_silent(false);
+    let applies = Rc::new(Cell::new(0_u32));
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+
+    let applies_a = Rc::clone(&applies);
+    let mounted_a = Rc::clone(&mounted);
+    let root = create_effect(move || {
+        let applies_a = Rc::clone(&applies_a);
+        let el = bind_prop(
+            Element::new().w("16rem"),
+            "bind:skip-paint-width",
+            move || open.get(),
+            move |el, is_open| {
+                applies_a.set(applies_a.get() + 1);
+                el.style.size.width = Dimension::length(if is_open { 256.0 } else { 48.0 });
+                LayoutStatus::LayoutChanged
+            },
+        );
+        *mounted_a.borrow_mut() = Some(el);
+    });
+
+    let after_first = applies.get();
+    assert!(after_first >= 1, "first mount must apply");
+    assert_eq!(
+        crate::layout::dim_length_px(mounted.borrow().as_ref().unwrap().style.size.width),
+        Some(48.0)
+    );
+
+    // Sibling tracking scope: the original bind effect stays alive (parent is not
+    // re-run). Rebuild must not apply paint 16rem onto the fragment.
+    let applies_b = Rc::clone(&applies);
+    let mounted_b = Rc::clone(&mounted);
+    let rebuild = create_effect(move || {
+        let applies_b = Rc::clone(&applies_b);
+        let el = bind_prop(
+            Element::new().w("16rem"),
+            "bind:skip-paint-width",
+            move || open.get(),
+            move |el, is_open| {
+                applies_b.set(applies_b.get() + 1);
+                el.style.size.width = Dimension::length(if is_open { 256.0 } else { 48.0 });
+                LayoutStatus::LayoutChanged
+            },
+        );
+        *mounted_b.borrow_mut() = Some(el);
+    });
+    assert_eq!(
+        applies.get(),
+        after_first,
+        "rebuild fragment must not re-apply (paint would seed the tween)"
+    );
+    assert_eq!(
+        crate::layout::dim_length_px(mounted.borrow().as_ref().unwrap().style.size.width),
+        Some(256.0),
+        "skipped apply leaves paint 16rem on the fragment"
+    );
+
+    drop(mounted.borrow_mut().take());
+    dispose_effect(rebuild);
+    dispose_effect(root);
+    reset_registered_anchors();
+}

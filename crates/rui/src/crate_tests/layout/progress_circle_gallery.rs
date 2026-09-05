@@ -3,7 +3,7 @@
 use crate::app::reactive::reset_registered_anchors;
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
 use crate::components::{
-    progress_circle, progress_circle_svg, ProgressCircle, ProgressCircleProps, ProgressCircleSize,
+    ProgressCircle, ProgressCircleProps, ProgressCircleSize, progress_circle, progress_circle_svg,
 };
 use crate::core::reactivity::{
     create_effect, create_root, mark_next_effect_as_ui_root, use_signal,

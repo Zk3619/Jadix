@@ -6,7 +6,7 @@
 
 use crate::components::button::button;
 use crate::core::tree::{Element, ElementInner};
-use crate::layout::layout_tree::{stack_probe, LayoutTree, TextLayoutInfo};
+use crate::layout::layout_tree::{LayoutTree, TextLayoutInfo, stack_probe};
 use crate::primitives::{hstack, vstack};
 use crate::renderer::InstanceInput;
 use crate::style::{AnimationSnapshot, Style, TextStyle, TransitionSnapshot};
@@ -278,6 +278,9 @@ fn class_variant_walks_stay_on_heap() {
     );
     tick_active_css_transitions_subtree(
         &mut root,
+        [0.0, 0.0],
+        "",
+        false,
         320.0,
         240.0,
         [0.0, 0.0],

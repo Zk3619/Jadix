@@ -51,10 +51,7 @@ fn radio_group_selection_sync_updates_indicator_without_rebuilding_component() {
     selected.set_silent("free".to_string());
     let mut root: Element = radio_group("test-radio-sync")
         .selected_signal(selected)
-        .options(vec![
-            ("free".into(), "Free".into()),
-            ("pro".into(), "Pro".into()),
-        ])
+        .options(vec![("free", "Free"), ("pro", "Pro")])
         .into();
 
     let free_ctrl = root.children[0]
@@ -110,10 +107,7 @@ fn toggle_group_selection_sync_updates_chips_without_rebuilding_component() {
     selected.set_silent("left".to_string());
     let mut root: Element = toggle_group("test-toggle-sync")
         .value_signal(selected)
-        .options(vec![
-            ("left".into(), "L".into()),
-            ("right".into(), "R".into()),
-        ])
+        .options(vec![("left", "L"), ("right", "R")])
         .into();
     let left_before = root.children[0].style.bg_color;
 

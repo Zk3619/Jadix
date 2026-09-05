@@ -7,7 +7,8 @@ use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
+    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
+    escapes_ancestor_overflow, hoist_portal_subtrees,
 };
 use crate::renderer::pipeline::InstanceInput;
 use crate::utils::popup::panel_block_clicks;
@@ -262,4 +263,106 @@ fn hoist_refreshing_flags_marks_portal_layer_scroll_viewport() {
         "hoisted DialogBody viewport must count on the portal layer, got {}",
         layer.scroll_viewport_subtree_count
     );
+}
+
+#[test]
+fn local_mount_portal_clips_to_host_and_follows_scroll() {
+    // Host-mounted portal must not viewport-fix: overflow:hidden on the host clips
+    // oversized children, and ancestor scroll offsets the paint (unlike body portals).
+    let mut blob = Element::new()
+        .bg([1.0, 0.0, 0.0, 1.0])
+        .w(180.0)
+        .h(160.0)
+        .template_id("overflow-blob");
+    blob.style.position = taffy::style::Position::Absolute;
+    blob = blob.left(0.0).top(0.0);
+
+    let mut portal = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("local-scrim");
+    portal.set_attr("rui_portal", "1");
+    portal.set_attr(ATTR_PORTAL_KEY, "local-scrim");
+    portal.set_attr(ATTR_PORTAL_MOUNT, "clip-host");
+    portal.children.push(blob);
+
+    let host = Element::new()
+        .relative()
+        .w(120.0)
+        .h(100.0)
+        .overflow_x("hidden")
+        .overflow_y("hidden")
+        .template_id("clip-host")
+        .child(portal);
+
+    let mut root = Element::new()
+        .flex_col()
+        .w(400.0)
+        .h(240.0)
+        .overflow_y("scroll")
+        .child(Element::new().w(400.0).h(80.0))
+        .child(host)
+        .child(Element::new().w(400.0).h(400.0));
+    assert_eq!(hoist_portal_subtrees(&mut root), 1);
+    let host = find_tid(&root, "clip-host").expect("host");
+    let local = host
+        .children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some("local-scrim"))
+        .expect("local portal on host");
+    assert!(
+        !local.style.position_fixed,
+        "local mount must not stay viewport-fixed"
+    );
+    assert_eq!(
+        local.attrs.get(ATTR_HOISTED_MOUNT).map(String::as_str),
+        Some("clip-host")
+    );
+    assert!(
+        !escapes_ancestor_overflow(local),
+        "local mount must inherit host clip + scroll"
+    );
+
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut root, 400.0, 240.0, [0.0, 0.0]);
+    let blob_inst = result
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.color[1] < 0.1 && i.color[3] > 0.5)
+        .expect("overflow blob instance");
+    assert!(
+        blob_inst.clip_size != InstanceInput::NO_CLIP_SIZE && blob_inst.clip_size[0] > 0.0,
+        "local mount must inherit host overflow clip; clip_size={:?}",
+        blob_inst.clip_size
+    );
+    let clip_r = blob_inst.clip_pos[0] + blob_inst.clip_size[0];
+    let host_el = find_tid(&root, "clip-host").expect("host after layout");
+    let hb = host_el.layout_bounds;
+    assert!(
+        clip_r <= hb[0] + hb[2] + 1.5,
+        "clip must not extend past the host; clip_r={clip_r} host_r={}",
+        hb[0] + hb[2]
+    );
+    let y0 = blob_inst.rect_pos[1];
+
+    root.scroll_offset = [0.0, 40.0];
+    let mut tree = LayoutTree::new();
+    let scrolled = tree.build_and_layout(&mut root, 400.0, 240.0, [0.0, 0.0]);
+    let blob_scrolled = scrolled
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.color[1] < 0.1 && i.color[3] > 0.5)
+        .expect("overflow blob after scroll");
+    assert!(
+        blob_scrolled.rect_pos[1] < y0 - 20.0,
+        "local mount must move with host scroll; y0={y0} y1={}",
+        blob_scrolled.rect_pos[1]
+    );
+}
+
+fn find_tid<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+    if el.template_id.as_deref() == Some(id) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_tid(c, id))
 }

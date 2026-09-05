@@ -68,7 +68,7 @@ fn label_base_text_shadow_reaches_layout_text_nodes() {
         color: None,
         weight: None,
         center: None,
-        r#for: None,
+        for_target: None,
         truncate: None,
         text_overflow: None,
         children: Some(Element::new().text("子属性覆盖")),

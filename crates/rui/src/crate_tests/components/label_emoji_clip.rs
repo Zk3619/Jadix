@@ -50,7 +50,7 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
         color: None,
         weight: None,
         center: Some(false),
-        r#for: None,
+        for_target: None,
         truncate: None,
         text_overflow: None,
         children: Some(Element::new().text(text)),

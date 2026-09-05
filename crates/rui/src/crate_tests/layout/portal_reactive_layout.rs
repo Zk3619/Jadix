@@ -1,7 +1,7 @@
 //! Portal-local `reactive_sync` LayoutChanged must not remasure every page text leaf.
 
 use crate::core::tree::{
-    dim_kind, DimKind, Element, LayoutStatus, LayoutTree, ReactiveSyncCollect, UnitSlot,
+    DimKind, Element, LayoutStatus, LayoutTree, ReactiveSyncCollect, UnitSlot, dim_kind,
 };
 use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::PORTAL_LAYER_ID;

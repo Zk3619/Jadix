@@ -3,8 +3,8 @@
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT,
-    ATTR_PORTAL_SLOT, PORTAL_LAYER_ID,
+    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
+    PORTAL_LAYER_ID, escapes_ancestor_overflow, hoist_portal_subtrees,
 };
 
 fn portal_layer(root: &Element) -> Option<&Element> {
@@ -170,6 +170,7 @@ fn hoist_mount_attr_attaches_to_named_host() {
         .w("100%")
         .h("100%")
         .template_id("local-portal");
+    portal.style.position_fixed = true;
     portal.set_attr("rui_portal", "1");
     portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
 
@@ -199,6 +200,23 @@ fn hoist_mount_attr_attaches_to_named_host() {
         })
         .count();
     assert_eq!(hoisted, 1);
+    let local = host
+        .children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some("local-portal"))
+        .expect("local portal");
+    assert!(
+        !local.style.position_fixed,
+        "local mount must stay host-absolute, not viewport-fixed"
+    );
+    assert_eq!(
+        local.attrs.get(ATTR_HOISTED_MOUNT).map(String::as_str),
+        Some("card-host")
+    );
+    assert!(
+        !escapes_ancestor_overflow(local),
+        "local mount must clip and scroll with the host"
+    );
     assert!(
         host.children
             .iter()
@@ -228,9 +246,11 @@ fn hoist_unknown_mount_falls_back_to_root_layer() {
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(count_in_layer(&root), 1);
-    assert!(find_by_tid(&root, "orphan-portal")
-        .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
-        .unwrap_or(false));
+    assert!(
+        find_by_tid(&root, "orphan-portal")
+            .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
+            .unwrap_or(false)
+    );
 }
 
 #[test]
@@ -439,3 +459,4 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
     assert_eq!(hoist_portal_subtrees(&mut root), 0);
     assert_eq!(count_in_layer(&root), 2);
 }
+

@@ -2,7 +2,7 @@
 
 use crate::components::scroll_area::scroll_area;
 use crate::components::sidebar::{
-    sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps,
+    SidebarInset, SidebarInsetProps, sidebar, sidebar_provider_scope,
 };
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};

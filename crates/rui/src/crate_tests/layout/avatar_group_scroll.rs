@@ -5,7 +5,7 @@ use crate::components::avatar::{
     AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps,
 };
 use crate::core::reactivity::create_root;
-use crate::core::scroll_viewport::{activate_scroll_viewport, SCROLL_VIEWPORT_FOCUS_PREFIX};
+use crate::core::scroll_viewport::{SCROLL_VIEWPORT_FOCUS_PREFIX, activate_scroll_viewport};
 use crate::core::tree::{Element, IntoElementList, LayoutTree};
 use crate::layout::layout_tree::hoist_portal_subtrees;
 use crate::renderer::font_loader;
