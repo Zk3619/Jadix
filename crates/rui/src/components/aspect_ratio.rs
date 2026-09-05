@@ -30,6 +30,7 @@
 //! - 容器设 `w`（或父级定宽）且另一轴为 auto 时，比例才会约束盒子（MDN）。
 //! - 子节点宜 `w/h=100%`（或 absolute 铺满）以填满裁剪区；组件会把子节点铺满。
 
+use crate::components::base::SlotChrome;
 use crate::core::tree::{parse_css_aspect_ratio, Element, IntoAspectRatioValue};
 use crate::primitives::r#box::r#box;
 use crate::utils::take_packed;
@@ -87,6 +88,7 @@ impl From<String> for AspectRatioValue {
 pub struct AspectRatioBuilder {
     ratio: f32,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// Builder entry (ADR-9 surface B).
@@ -94,10 +96,13 @@ pub fn aspect_ratio() -> AspectRatioBuilder {
     AspectRatioBuilder {
         ratio: 1.0,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl AspectRatioBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn ratio(mut self, ratio: impl IntoAspectRatioValue) -> Self {
         if let Some(r) = ratio.into_aspect_ratio_value() {
             self.ratio = r;
@@ -124,7 +129,8 @@ impl crate::core::tree::IntoElementList for AspectRatioBuilder {
 
 impl From<AspectRatioBuilder> for Element {
     fn from(builder: AspectRatioBuilder) -> Self {
-        build_aspect_ratio(None, builder.ratio, builder.children)
+        let chrome = builder.chrome;
+        chrome.apply(build_aspect_ratio(None, builder.ratio, builder.children))
     }
 }
 

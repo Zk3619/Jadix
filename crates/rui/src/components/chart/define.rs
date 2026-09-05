@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
+use crate::components::base::{paint_slot, SlotChrome, SlotMap};
 use crate::core::reactivity::{use_scoped_signal, use_signal, Signal, SignalId};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
 use crate::primitives::path::{
@@ -77,6 +78,7 @@ pub struct ChartBuilder {
     /// `h="full"` / `100%`：占位与绘图区吃满父级高度。
     height_fluid: bool,
     on_select: Option<Rc<dyn Fn(usize)>>,
+    slots: SlotMap,
 }
 
 /// Entry: combine marks instead of selecting a fixed chart type.
@@ -111,10 +113,13 @@ pub fn define_chart() -> ChartBuilder {
         overlay_key: None,
         height_fluid: false,
         on_select: None,
+        slots: SlotMap::default(),
     }
 }
 
 impl ChartBuilder {
+    crate::impl_slot_map_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -651,6 +656,7 @@ struct TooltipScene {
     polar_end: f32,
     polar_inner: f32,
     round_bar_base: bool,
+    tooltip_chrome: SlotChrome,
 }
 
 impl From<ChartBuilder> for Element {
@@ -939,7 +945,7 @@ fn tooltip_indicator_el(indicator: TooltipIndicator, color: [f32; 4]) -> Element
 }
 
 /// shadcn `ChartTooltipContent` 外壳：紧凑圆角矩形。不用 path 直角贴图盖住 radii。
-fn chart_tooltip_bubble(body: Element) -> Element {
+fn chart_tooltip_bubble(body: Element, chrome: &SlotChrome) -> Element {
     let mut panel: Element = r#box()
         .px("0.5rem")
         .py("0.25rem")
@@ -954,7 +960,7 @@ fn chart_tooltip_bubble(body: Element) -> Element {
         .border_width(1.0)
         .border_color(parse_color("border/50"))
         .shadow([0.0, 0.0, 0.0, 0.12], 12.0);
-    panel.child(body)
+    paint_slot(panel.child(body), "chart-tooltip", chrome)
 }
 
 /// shadcn `ChartTooltipContent`：可选顶栏 + indicator + muted label + mono value。
@@ -1029,6 +1035,7 @@ fn pin_overlay_layer(
     tooltip_indicator: TooltipIndicator,
     crosshair: bool,
     polar: bool,
+    tooltip_chrome: &SlotChrome,
 ) -> Element {
     let mut layer: Element = r#box()
         .w("100%")
@@ -1083,7 +1090,7 @@ fn pin_overlay_layer(
         let place = tooltip_pin_place(lx, ly, logic_w, logic_h, &pin.item);
         let gap = TOOLTIP_GAP_PX;
         let body = chart_tooltip_content(&pin.item, pin.color, tooltip_indicator);
-        let mut tip = chart_tooltip_bubble(body);
+        let mut tip = chart_tooltip_bubble(body, tooltip_chrome);
         tip = tip.absolute().pointer_events("none");
         if place.flip_x {
             let from_right = (100.0 - x_pct).clamp(0.0, 100.0);
@@ -1120,6 +1127,7 @@ fn attach_pin_overlay(
     tooltip_indicator: TooltipIndicator,
     crosshair: bool,
     polar: bool,
+    tooltip_chrome: &SlotChrome,
 ) -> Element {
     if pin.is_none() && !crosshair {
         return plot;
@@ -1133,6 +1141,7 @@ fn attach_pin_overlay(
         tooltip_indicator,
         crosshair,
         polar,
+        tooltip_chrome,
     ))
 }
 
@@ -1197,6 +1206,7 @@ fn overlay_from_pointer(hov: ChartHover, selected: Option<usize>, sc: &TooltipSc
         sc.tooltip_indicator,
         sc.crosshair,
         sc.polar,
+        &sc.tooltip_chrome,
     )
 }
 
@@ -1492,6 +1502,8 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
     let hover_signal = builder.hover_signal;
     let tooltip_scene = builder.tooltip_scene.clone();
     let overlay_key = builder.overlay_key.clone();
+    let tooltip_chrome = builder.slots.get("chart-tooltip");
+    let axis_chrome = builder.slots.get("chart-axis");
     let ChartBuilder {
         id,
         marks,
@@ -1599,6 +1611,7 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
             polar_end,
             polar_inner,
             round_bar_base,
+            tooltip_chrome: tooltip_chrome.clone(),
         },
     );
     let pin_index = if overlay_key.is_some() {
@@ -1651,6 +1664,7 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
             tooltip_indicator,
             crosshair,
             false,
+            &tooltip_chrome,
         );
     }
 
@@ -1671,7 +1685,9 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
             .enumerate()
             .map(|(i, lab)| (scales.x_center(i), lab.clone()))
             .collect();
-        let labels = tick_label_row(&ticks, scales.plot_w);
+        let mut labels = tick_label_row(&ticks, scales.plot_w);
+        labels.set_attr("data-slot", "chart-axis");
+        let labels = axis_chrome.apply(labels);
         root = vstack()
             .w("100%")
             .h(if height_fluid { "100%" } else { "auto" })
@@ -1690,7 +1706,9 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
                     (scales.x_time(t), format_time_label(t, span))
                 })
                 .collect();
-            let labels = tick_label_row(&ticks, scales.plot_w);
+            let mut labels = tick_label_row(&ticks, scales.plot_w);
+            labels.set_attr("data-slot", "chart-axis");
+            let labels = axis_chrome.apply(labels);
             root = vstack()
                 .w("100%")
                 .flex_shrink(0.0)
@@ -1707,6 +1725,8 @@ fn compile_polar(builder: ChartBuilder) -> Element {
     let hover_signal = builder.hover_signal;
     let tooltip_scene = builder.tooltip_scene.clone();
     let overlay_key = builder.overlay_key.clone();
+    let tooltip_chrome = builder.slots.get("chart-tooltip");
+    let legend_chrome = builder.slots.get("chart-legend");
     let ChartBuilder {
         id,
         marks,
@@ -1783,6 +1803,7 @@ fn compile_polar(builder: ChartBuilder) -> Element {
             polar_end,
             polar_inner,
             round_bar_base: false,
+            tooltip_chrome: tooltip_chrome.clone(),
         },
     );
     let pin_index = if overlay_key.is_some() {
@@ -1857,6 +1878,7 @@ fn compile_polar(builder: ChartBuilder) -> Element {
             tooltip_indicator,
             crosshair,
             true,
+            &tooltip_chrome,
         );
     }
 
@@ -1873,7 +1895,9 @@ fn compile_polar(builder: ChartBuilder) -> Element {
                 .collect()
         })
         .unwrap_or_default();
-    let legend_el = pie_legend_rows(&pairs, &theme, &config, selected);
+    let mut legend_el = pie_legend_rows(&pairs, &theme, &config, selected);
+    legend_el.set_attr("data-slot", "chart-legend");
+    let legend_el = legend_chrome.apply(legend_el);
     // shadcn ChartLegendContent: Horizontal legend below the chart (not sidebar).
     let root: Element = vstack()
         .gap("0.75rem")

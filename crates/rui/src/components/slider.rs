@@ -27,11 +27,12 @@
 //! - 值变化经 [`ReactiveSync`](crate::core::tree::ReactiveSync) 原位同步，不订阅根 UI effect。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
+use crate::components::base::{SlotChrome, SlotMap};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::use_ui_transition_cubic;
+use crate::style::{is_variant_style_overridden, use_ui_transition_cubic, VariantStyleField};
 use crate::utils::controlled::resolve_f32_signal;
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
@@ -282,6 +283,8 @@ pub struct SliderBuilder {
     /// Extra work during the existing slider paint sync (no extra tree subscribe).
     on_sync: Option<Rc<dyn Fn()>>,
     children: Vec<Element>,
+    chrome: SlotChrome,
+    slots: SlotMap,
 }
 
 /// RSX `<Slider>`。数值类 props 用 `Option`，省略时走 builder 默认（`default≈0.35`、`max=1`、`step=0.05`）。
@@ -358,10 +361,15 @@ pub fn slider(id: impl Into<String>) -> SliderBuilder {
         thumb_fill: None,
         on_sync: None,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
     }
 }
 
 impl SliderBuilder {
+    crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+
     pub fn value_signal(mut self, s: Signal<f32>) -> Self {
         self.value = Some(s);
         self
@@ -434,6 +442,8 @@ impl SliderBuilder {
 
 impl From<SliderBuilder> for Element {
     fn from(builder: SliderBuilder) -> Self {
+        let chrome = builder.chrome.clone();
+        let slots = builder.slots.clone();
         let id = builder.id;
         let min = builder.min;
         let max = if builder.max <= builder.min {
@@ -471,7 +481,7 @@ impl From<SliderBuilder> for Element {
         let track_texture_fn = builder.track_texture_fn.clone();
 
         let fill = if textured.is_none() {
-            let mut fill: Element = if vertical {
+            let fill: Element = if vertical {
                 r#box()
                     .w("100%")
                     .h(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
@@ -486,9 +496,7 @@ impl From<SliderBuilder> for Element {
                     .bg(fill_bg())
                     .into()
             };
-            fill.attrs
-                .insert(ATTR_SLOT.to_string(), SLOT_FILL.to_string());
-            Some(fill)
+            Some(slots.paint(SLOT_FILL, fill))
         } else {
             None
         };
@@ -497,7 +505,7 @@ impl From<SliderBuilder> for Element {
         let thumb_fill = builder.thumb_fill.clone();
         let on_sync = builder.on_sync.clone();
         let thumb0 = thumb_fill.as_ref().map(|f| f()).unwrap_or_else(thumb_bg);
-        let mut thumb: Element = r#box()
+        let thumb: Element = r#box()
             .w(THUMB_PX)
             .h(THUMB_PX)
             .min_w(THUMB_PX)
@@ -508,9 +516,7 @@ impl From<SliderBuilder> for Element {
             .shadow(rest_c, rest_blur)
             .flex_shrink(0.0)
             .into();
-        thumb
-            .attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_THUMB.to_string());
+        let thumb = slots.paint(SLOT_THUMB, thumb);
 
         let hovered = Rc::new(Cell::new(false));
         let _ = use_ui_transition_cubic(&slider_shadow_anim_key(&id), 0.0);
@@ -601,12 +607,10 @@ impl From<SliderBuilder> for Element {
             }
             track
         };
-        track
-            .attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_TRACK.to_string());
         if let Some(key) = textured {
             track.image_texture = Some(key);
         }
+        let track = slots.paint(SLOT_TRACK, track);
 
         let mut root: Element = if vertical {
             r#box()
@@ -809,10 +813,12 @@ impl From<SliderBuilder> for Element {
 
             if let Some(thumb) = find_slot_deep_mut(root, SLOT_THUMB) {
                 if let Some(fill) = &thumb_fill {
-                    let c = fill();
-                    if thumb.style.bg_color != c {
-                        thumb.style.bg_color = c;
-                        paint_changed = true;
+                    if !is_variant_style_overridden(&thumb.attrs, VariantStyleField::Bg) {
+                        let c = fill();
+                        if thumb.style.bg_color != c {
+                            thumb.style.bg_color = c;
+                            paint_changed = true;
+                        }
                     }
                 }
                 let want = if thumb_shadow_elevated(sync_hover.get(), is_slider_dragging()) {
@@ -842,7 +848,7 @@ impl From<SliderBuilder> for Element {
 
         el = el.accesskit_role("slider");
         el.template_id = Some(id);
-        el
+        chrome.apply(el)
     }
 }
 
@@ -858,6 +864,12 @@ mod tests {
     use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
     use crate::app::test_support::sync_reactive_elements_subtree;
     use crate::core::tree::LayoutTree;
+
+    fn has_slot(el: &Element, slot: &str) -> bool {
+        crate::core::tree::any_in_tree(el, |n| {
+            n.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot)
+        })
+    }
 
     #[test]
     fn track_texture_omits_primary_fill() {
@@ -983,5 +995,21 @@ mod tests {
             value.peek()
         );
         clear_slider_drag_if_any();
+    }
+
+    #[test]
+    fn builder_thumb_style_reaches_thumb_slot() {
+        let el: Element = slider("thumb-chrome")
+            .slot(SLOT_THUMB, |c| c.style(|b| b.text_size(20.0)))
+            .into();
+        fn find_thumb_size(el: &Element, want: f32) -> bool {
+            let is_thumb = el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_THUMB);
+            (is_thumb && el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01))
+                || el.children.iter().any(|c| find_thumb_size(c, want))
+        }
+        assert!(
+            find_thumb_size(&el, 20.0),
+            "slider .slot(slider-thumb) style must land on data-slot=slider-thumb"
+        );
     }
 }

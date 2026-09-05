@@ -379,9 +379,14 @@ pub fn navigation_menu_scope(
 }
 
 /// `NavigationMenuContent` 选项（`ui!` / [`navigation_menu_content`] 共用）。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct NavigationMenuContentOpts {
     pub class: Option<String>,
+    pub style: Option<crate::components::base::SlotStyleFn>,
+}
+
+impl NavigationMenuContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// shadcn `NavigationMenuContent`：Portal + floating 面板。
@@ -398,7 +403,7 @@ pub fn navigation_menu_content(
     let value = item.value.clone();
     let overlay_key = format!("{menu_id}:{value}");
     let trigger_fid = item.trigger_fid;
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let _ = menu.viewport;
     let view_id = format!("{overlay_key}__nm_content_view");
     let presence = use_floating_presence(&overlay_key, FloatingMotionKind::Expand);
@@ -467,9 +472,7 @@ pub fn navigation_menu_content(
             .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
             .absolute(true)
             .into();
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
         let anchor = trigger_fid.peek();
         mark_floating(

@@ -42,8 +42,10 @@
 //!   Hover must go through [`apply_button_group_join_chrome`] to refill the corners after writing the color.
 //! - `<ButtonGroup>` / Text / Separator takes the general PascalCase → `*Props` (same as Pagination, no special scope is required).
 
+use crate::components::base::{packed_children, SlotChrome};
 use crate::components::separator::separator;
 use crate::core::tree::{CssDim, Element, UnitSlot};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::utils::take_packed;
@@ -444,38 +446,113 @@ pub fn ButtonGroupSeparator(
 // Builder (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
-enum ButtonGroupPart {
-    Child(Element),
-    Separator { vertical: bool },
-    Text(String),
+pub struct ButtonGroupTextBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn button_group_text() -> ButtonGroupTextBuilder {
+    ButtonGroupTextBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ButtonGroupTextBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ButtonGroupTextBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ButtonGroupTextBuilder> for Element {
+    fn from(builder: ButtonGroupTextBuilder) -> Self {
+        let el = ButtonGroupText(ButtonGroupTextProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ButtonGroupSeparatorBuilder {
+    chrome: SlotChrome,
+    vertical: bool,
+}
+
+pub fn button_group_separator() -> ButtonGroupSeparatorBuilder {
+    ButtonGroupSeparatorBuilder {
+        chrome: SlotChrome::default(),
+        vertical: true,
+    }
+}
+
+impl ButtonGroupSeparatorBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn vertical(mut self, vertical: bool) -> Self {
+        self.vertical = vertical;
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ButtonGroupSeparatorBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ButtonGroupSeparatorBuilder> for Element {
+    fn from(builder: ButtonGroupSeparatorBuilder) -> Self {
+        let orient = if builder.vertical {
+            "vertical"
+        } else {
+            "horizontal"
+        };
+        let el = ButtonGroupSeparator(ButtonGroupSeparatorProps {
+            orientation: Some(orient.into()),
+            class: None,
+            children: None,
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
 }
 
 /// Builder state.
 pub struct ButtonGroupBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
     orientation: ButtonGroupOrientation,
-    parts: Vec<ButtonGroupPart>,
+    parts: Vec<Element>,
 }
 
 /// Builder entry.
 pub fn button_group() -> ButtonGroupBuilder {
     ButtonGroupBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         orientation: ButtonGroupOrientation::Horizontal,
         parts: Vec::new(),
     }
 }
 
 impl ButtonGroupBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, class: impl Into<String>) -> Self {
-        self.class = class.into();
         self
     }
 
@@ -485,19 +562,42 @@ impl ButtonGroupBuilder {
     }
 
     pub fn child(mut self, el: impl Into<Element>) -> Self {
-        self.parts.push(ButtonGroupPart::Child(el.into()));
+        self.parts.push(el.into());
         self
     }
 
     pub fn text(mut self, label: impl Into<String>) -> Self {
-        self.parts.push(ButtonGroupPart::Text(label.into()));
+        self.parts.push(
+            button_group_text()
+                .child(Element::new().text(label.into()))
+                .into(),
+        );
+        self
+    }
+
+    pub fn text_with(
+        mut self,
+        f: impl FnOnce(ButtonGroupTextBuilder) -> ButtonGroupTextBuilder,
+    ) -> Self {
+        self.parts.push(f(button_group_text()).into());
         self
     }
 
     /// Insert dividing line. When not specified: horizontal group → vertical line, vertical group → horizontal line.
     pub fn separator(mut self) -> Self {
         let vertical = !self.orientation.is_vertical();
-        self.parts.push(ButtonGroupPart::Separator { vertical });
+        self.parts
+            .push(button_group_separator().vertical(vertical).into());
+        self
+    }
+
+    pub fn separator_with(
+        mut self,
+        f: impl FnOnce(ButtonGroupSeparatorBuilder) -> ButtonGroupSeparatorBuilder,
+    ) -> Self {
+        let vertical = !self.orientation.is_vertical();
+        self.parts
+            .push(f(button_group_separator().vertical(vertical)).into());
         self
     }
 
@@ -506,7 +606,8 @@ impl ButtonGroupBuilder {
             o.as_ref().trim().to_ascii_lowercase().as_str(),
             "horizontal" | "row"
         );
-        self.parts.push(ButtonGroupPart::Separator { vertical });
+        self.parts
+            .push(button_group_separator().vertical(vertical).into());
         self
     }
 
@@ -519,7 +620,7 @@ impl ButtonGroupBuilder {
             .text(label)
             .on_click(move || click())
             .into();
-        self.parts.push(ButtonGroupPart::Child(el));
+        self.parts.push(el);
         self
     }
 }
@@ -532,35 +633,8 @@ impl crate::core::tree::IntoElementList for ButtonGroupBuilder {
 
 impl From<ButtonGroupBuilder> for Element {
     fn from(builder: ButtonGroupBuilder) -> Self {
-        let mut kids = Vec::new();
-        for part in builder.parts {
-            match part {
-                ButtonGroupPart::Child(el) => kids.push(el),
-                ButtonGroupPart::Text(label) => {
-                    kids.push(ButtonGroupText(ButtonGroupTextProps {
-                        class: None,
-                        children: Some(Element::new().text(label)),
-                        base: None,
-                        ..Default::default()
-                    }));
-                }
-                ButtonGroupPart::Separator { vertical } => {
-                    kids.push(ButtonGroupSeparator(ButtonGroupSeparatorProps {
-                        orientation: Some(if vertical { "vertical" } else { "horizontal" }.into()),
-                        class: None,
-                        children: None,
-                        base: None,
-                        ..Default::default()
-                    }));
-                }
-            }
-        }
-        let class = if builder.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.class)
-        };
-        build_button_group(&builder.id, builder.orientation, class, kids)
+        let el = build_button_group(&builder.id, builder.orientation, None, builder.parts);
+        builder.chrome.apply(el)
     }
 }
 
@@ -1001,5 +1075,21 @@ mod tests {
             rsx.attrs.get(ATTR_SLOT).map(String::as_str),
             built.attrs.get(ATTR_SLOT).map(String::as_str)
         );
+    }
+
+    #[test]
+    fn text_with_style_text_size() {
+        let el: Element = button_group()
+            .text_with(|t| {
+                t.style(|s| s.text_size(16.0))
+                    .child(Element::new().text("Archive"))
+            })
+            .into();
+        let text_slot = &el.children[0];
+        assert_eq!(
+            text_slot.attrs.get(ATTR_SLOT).map(String::as_str),
+            Some(SLOT_TEXT)
+        );
+        assert_eq!(text_slot.text_style.size_resolved(), 16.0);
     }
 }

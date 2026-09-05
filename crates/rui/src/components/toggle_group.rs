@@ -31,8 +31,8 @@
 //!         .value_signal(align)
 //!         .variant("outline")
 //!         .options(vec![
-//!             ("left".into(), "Left".into()),
-//!             ("center".into(), "Center".into()),
+//!             ("left", "Left"),
+//!             ("center", "Center"),
 //!         ]),
 //! )
 //! toggle_group("fmt").multiple(true).spacing(0).item("bold", "B").item("italic", "I")
@@ -51,6 +51,7 @@
 
 use std::sync::OnceLock;
 
+use crate::components::base::{BaseComponentBuilder, SlotChrome};
 use crate::components::button_group::{
     apply_button_group_join, apply_button_group_join_chrome, ButtonGroupOrientation,
 };
@@ -62,7 +63,10 @@ use crate::core::reactivity::{
 use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::{control_focus_ring_active, focus_ring_color, with_class_list, FOCUS_RING_BLUR};
+use crate::style::{
+    control_focus_ring_active, focus_ring_color, is_variant_style_overridden, with_class_list,
+    VariantStyleField, FOCUS_RING_BLUR,
+};
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
@@ -796,15 +800,21 @@ fn sync_toggle_group_pressed(
         };
         let (want_bg, want_border, want_fg) =
             toggle_chip_colors(pressed, disabled, outline, segmented);
-        if option.style.bg_color != want_bg {
+        if !is_variant_style_overridden(&option.attrs, VariantStyleField::Bg)
+            && option.style.bg_color != want_bg
+        {
             option.style.bg_color = want_bg;
             changed = true;
         }
-        if option.style.border_color != want_border {
+        if !is_variant_style_overridden(&option.attrs, VariantStyleField::Border)
+            && option.style.border_color != want_border
+        {
             option.style.border_color = want_border;
             changed = true;
         }
-        if option.style.border_width != border_w {
+        if !is_variant_style_overridden(&option.attrs, VariantStyleField::Border)
+            && option.style.border_width != border_w
+        {
             option.style.border_width = border_w;
             changed = true;
         }
@@ -831,11 +841,12 @@ fn sync_toggle_group_pressed(
             } else {
                 ([0.0, 0.0, 0.0, 0.0], 0.0)
             };
-            if (option.style.shadow_blur - want_blur).abs() > 0.01
-                || (option.style.shadow_color[0] - want_shadow[0]).abs() > 0.001
-                || (option.style.shadow_color[1] - want_shadow[1]).abs() > 0.001
-                || (option.style.shadow_color[2] - want_shadow[2]).abs() > 0.001
-                || (option.style.shadow_color[3] - want_shadow[3]).abs() > 0.001
+            if !is_variant_style_overridden(&option.attrs, VariantStyleField::Shadow)
+                && ((option.style.shadow_blur - want_blur).abs() > 0.01
+                    || (option.style.shadow_color[0] - want_shadow[0]).abs() > 0.001
+                    || (option.style.shadow_color[1] - want_shadow[1]).abs() > 0.001
+                    || (option.style.shadow_color[2] - want_shadow[2]).abs() > 0.001
+                    || (option.style.shadow_color[3] - want_shadow[3]).abs() > 0.001)
             {
                 option.style.shadow_color = want_shadow;
                 option.style.shadow_blur = want_blur;
@@ -846,7 +857,9 @@ fn sync_toggle_group_pressed(
         } else if option.attrs.contains_key("rui_button_group_edge") {
             apply_button_group_join_chrome(option);
         }
-        paint_descendant_fg(option, want_fg, &mut changed);
+        if !is_variant_style_overridden(&option.attrs, VariantStyleField::Fg) {
+            paint_descendant_fg(option, want_fg, &mut changed);
+        }
         item_index += 1;
     }
     if changed {
@@ -944,13 +957,54 @@ pub fn ToggleGroupItem(value: String, disabled: bool, children: Option<Element>)
 // Builder (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+/// One chip for Builder `.options()` sugar. Default chrome; per-item class/style → [`toggle_option`].
+#[derive(Clone, Debug, Default)]
+pub struct ToggleOption {
+    pub value: String,
+    pub label: String,
+    pub chrome: SlotChrome,
+}
+
+/// Sugar entry: `toggle_group("align").options([toggle_option("left", "Left").class("ring-2")])`.
+pub fn toggle_option(value: impl Into<String>, label: impl Into<String>) -> ToggleOption {
+    ToggleOption {
+        value: value.into(),
+        label: label.into(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ToggleOption {
+    crate::impl_slot_chrome_methods!();
+}
+
+impl From<(String, String)> for ToggleOption {
+    fn from((value, label): (String, String)) -> Self {
+        Self {
+            value,
+            label,
+            chrome: SlotChrome::default(),
+        }
+    }
+}
+
+impl From<(&str, &str)> for ToggleOption {
+    fn from((value, label): (&str, &str)) -> Self {
+        Self {
+            value: value.to_string(),
+            label: label.to_string(),
+            chrome: SlotChrome::default(),
+        }
+    }
+}
+
 pub struct ToggleGroupBuilder {
     id: String,
     multiple: bool,
     value_single: Option<Signal<String>>,
     value_multi: Option<Signal<Vec<String>>>,
     default_value: String,
-    options: Vec<(String, String)>,
+    options: Vec<ToggleOption>,
     disabled: bool,
     variant: ToggleGroupVariant,
     size: ToggleGroupSize,
@@ -960,7 +1014,8 @@ pub struct ToggleGroupBuilder {
     /// TabsList muted pill (not the public ButtonGroup-join variant).
     segmented: bool,
     required: bool,
-    class: String,
+    chrome: SlotChrome,
+    child: Option<Box<dyn FnOnce() -> Element>>,
 }
 
 pub fn toggle_group(id: impl Into<String>) -> ToggleGroupBuilder {
@@ -979,19 +1034,17 @@ pub fn toggle_group(id: impl Into<String>) -> ToggleGroupBuilder {
         joined: false,
         segmented: false,
         required: false,
-        class: String::new(),
+        chrome: SlotChrome::default(),
+        child: None,
     }
 }
 
 impl ToggleGroupBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn multiple(mut self, v: bool) -> Self {
         self.multiple = v;
         self
-    }
-
-    /// ShadCN / Radix `type="single" | "multiple"`.
-    pub fn r#type(self, t: impl AsRef<str>) -> Self {
-        self.multiple(t.as_ref().trim().eq_ignore_ascii_case("multiple"))
     }
 
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
@@ -1009,13 +1062,15 @@ impl ToggleGroupBuilder {
         self
     }
 
-    pub fn options(mut self, opts: Vec<(String, String)>) -> Self {
-        self.options = opts;
+    /// Data-driven sugar: [`toggle_option`] or `(value, label)` tuples.
+    pub fn options(mut self, opts: impl IntoIterator<Item = impl Into<ToggleOption>>) -> Self {
+        self.options = opts.into_iter().map(Into::into).collect();
         self
     }
 
     pub fn item(mut self, value: impl Into<String>, label: impl Into<String>) -> Self {
-        self.options.push((value.into(), label.into()));
+        self.options
+            .push(ToggleOption::from((value.into(), label.into())));
         self
     }
 
@@ -1068,8 +1123,8 @@ impl ToggleGroupBuilder {
         self
     }
 
-    pub fn class(mut self, class: impl Into<String>) -> Self {
-        self.class = class.into();
+    pub fn child(mut self, body: impl FnOnce() -> Element + 'static) -> Self {
+        self.child = Some(Box::new(body));
         self
     }
 
@@ -1085,13 +1140,15 @@ impl ToggleGroupBuilder {
 
 impl From<ToggleGroupBuilder> for Element {
     fn from(builder: ToggleGroupBuilder) -> Self {
-        let class = if builder.class.trim().is_empty() {
+        let class = if builder.chrome.class.trim().is_empty() {
             None
         } else {
-            Some(builder.class)
+            Some(builder.chrome.class.clone())
         };
+        let style = builder.chrome.style.clone();
         let options = builder.options;
-        toggle_group_scope(
+        let child = builder.child;
+        let mut el = toggle_group_scope(
             builder.id,
             builder.value_single,
             builder.value_multi,
@@ -1109,25 +1166,85 @@ impl From<ToggleGroupBuilder> for Element {
             move || {
                 let ctx = require_toggle_group("toggle_group options");
                 let mut list = Vec::with_capacity(options.len());
-                for (value, label) in options {
-                    list.push(build_toggle_group_item(
+                for opt in options {
+                    let el = build_toggle_group_item(
                         &ctx,
-                        &value,
-                        &label,
+                        &opt.value,
+                        &opt.label,
                         Vec::new(),
                         false,
                         ctx.segmented,
-                    ));
+                    );
+                    list.push(opt.chrome.apply(el));
+                }
+                if let Some(body) = child {
+                    list.extend(take_packed(body()));
                 }
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
                 frag.children(list)
             },
-        )
+        );
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
 impl crate::core::tree::IntoElementList for ToggleGroupBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct ToggleGroupItemBuilder {
+    value: String,
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn toggle_group_item(value: impl Into<String>) -> ToggleGroupItemBuilder {
+    ToggleGroupItemBuilder {
+        value: value.into(),
+        disabled: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ToggleGroupItemBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<ToggleGroupItemBuilder> for Element {
+    fn from(builder: ToggleGroupItemBuilder) -> Self {
+        let el = ToggleGroupItem(ToggleGroupItemProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for ToggleGroupItemBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -1188,11 +1305,7 @@ mod tests {
         let el: Element = toggle_group("tg-join")
             .spacing(0)
             .variant("outline")
-            .options(vec![
-                ("a".into(), "A".into()),
-                ("b".into(), "B".into()),
-                ("c".into(), "C".into()),
-            ])
+            .options(vec![("a", "A"), ("b", "B"), ("c", "C")])
             .into();
         assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(el.attrs.get("data-spacing").map(String::as_str), Some("0"));
@@ -1222,7 +1335,7 @@ mod tests {
     #[test]
     fn separated_has_no_group_edge() {
         let el: Element = toggle_group("tg-sep")
-            .options(vec![("a".into(), "A".into()), ("b".into(), "B".into())])
+            .options(vec![("a", "A"), ("b", "B")])
             .into();
         assert!(el.children[0].attrs.get("rui_button_group_edge").is_none());
         assert_eq!(el.attrs.get("data-spacing").map(String::as_str), Some("2"));
@@ -1244,15 +1357,55 @@ mod tests {
         let built: Element = toggle_group("tg-dual")
             .default_value("left")
             .variant("outline")
-            .options(vec![
-                ("left".into(), "L".into()),
-                ("right".into(), "R".into()),
-            ])
+            .options(vec![("left", "L"), ("right", "R")])
             .into();
         assert_eq!(
             rsx.attrs.get(ATTR_SLOT).map(String::as_str),
             built.attrs.get(ATTR_SLOT).map(String::as_str)
         );
         assert_eq!(rsx.children.len(), built.children.len());
+    }
+
+    #[test]
+    fn builder_item_style() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            toggle_group("tg-chrome")
+                .child(|| {
+                    toggle_group_item("left")
+                        .style(|b| b.text_size(20.0))
+                        .text("Left")
+                        .into()
+                })
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "toggle_group_item .style(|b| b.text_size(20)) must land on the chip"
+        );
+    }
+
+    #[test]
+    fn builder_option_style_reaches_chip() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            toggle_group("tg-opt-chrome")
+                .options([toggle_option("left", "Left").style(|b| b.text_size(20.0))])
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "toggle_option .style must land on the assembled chip"
+        );
     }
 }

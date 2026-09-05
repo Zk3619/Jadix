@@ -41,11 +41,13 @@
 //! - Addon 点击（非 Button）会把焦点交给组内 control（对位 shadcn）。
 //! - `<InputAdornment*>` uses general PascalCase → `*Props`, no need for dedicated macro scope.
 
+use crate::components::base::{data_slot, ensure_data_slot, packed_children, SlotChrome};
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_color, focus_ring_destructive_color, parse_color,
@@ -630,10 +632,101 @@ pub fn InputAdornmentTextarea(
 // Builder (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+pub struct InputAdornmentAddonBuilder {
+    align: InputAdornmentAlign,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn input_adornment_addon() -> InputAdornmentAddonBuilder {
+    InputAdornmentAddonBuilder {
+        align: InputAdornmentAlign::default(),
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl InputAdornmentAddonBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn align(mut self, align: impl Into<InputAdornmentAlign>) -> Self {
+        self.align = align.into();
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for InputAdornmentAddonBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<InputAdornmentAddonBuilder> for Element {
+    fn from(builder: InputAdornmentAddonBuilder) -> Self {
+        let el = InputAdornmentAddon(InputAdornmentAddonProps {
+            align: Some(builder.align.as_str().to_string()),
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct InputAdornmentTextBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn input_adornment_text() -> InputAdornmentTextBuilder {
+    InputAdornmentTextBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl InputAdornmentTextBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, label: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(label.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for InputAdornmentTextBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<InputAdornmentTextBuilder> for Element {
+    fn from(builder: InputAdornmentTextBuilder) -> Self {
+        let el = InputAdornmentText(InputAdornmentTextProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 /// Builder state.
 pub struct InputAdornmentBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
     parts: Vec<Element>,
 }
 
@@ -641,19 +734,16 @@ pub struct InputAdornmentBuilder {
 pub fn input_adornment() -> InputAdornmentBuilder {
     InputAdornmentBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         parts: Vec::new(),
     }
 }
 
 impl InputAdornmentBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, class: impl Into<String>) -> Self {
-        self.class = class.into();
         self
     }
 
@@ -670,36 +760,50 @@ impl InputAdornmentBuilder {
     ) -> Self {
         let align = align.into();
         let body = body.into();
-        let addon = InputAdornmentAddon(InputAdornmentAddonProps {
-            align: Some(align.as_str().to_string()),
-            class: None,
-            children: Some(body),
-            base: None,
-            ..Default::default()
-        });
+        let addon = if data_slot(&body) == Some(SLOT_ADDON) {
+            body
+        } else {
+            input_adornment_addon().align(align).child(body).into()
+        };
         self.parts.push(addon);
         self
     }
 
-    pub fn text(self, label: impl Into<String>) -> Self {
-        let t = InputAdornmentText(InputAdornmentTextProps {
-            class: None,
-            children: Some(Element::new().text(label.into())),
-            base: None,
-            ..Default::default()
-        });
-        self.child(t)
+    pub fn addon_with(
+        mut self,
+        align: impl Into<InputAdornmentAlign>,
+        f: impl FnOnce(InputAdornmentAddonBuilder) -> InputAdornmentAddonBuilder,
+    ) -> Self {
+        let addon = f(input_adornment_addon().align(align)).into();
+        self.parts
+            .push(ensure_data_slot(addon, SLOT_ADDON, |el| el));
+        self
+    }
+
+    pub fn text(mut self, label: impl Into<String>) -> Self {
+        let el = input_adornment_text()
+            .child(Element::new().text(label.into()))
+            .into();
+        self.parts
+            .push(ensure_data_slot(el, SLOT_TEXT, |inner| inner));
+        self
+    }
+
+    pub fn text_with(
+        mut self,
+        f: impl FnOnce(InputAdornmentTextBuilder) -> InputAdornmentTextBuilder,
+    ) -> Self {
+        let el = f(input_adornment_text()).into();
+        self.parts
+            .push(ensure_data_slot(el, SLOT_TEXT, |inner| inner));
+        self
     }
 }
 
 impl From<InputAdornmentBuilder> for Element {
     fn from(b: InputAdornmentBuilder) -> Self {
-        let class = if b.class.trim().is_empty() {
-            None
-        } else {
-            Some(b.class)
-        };
-        build_input_adornment(&b.id, class, b.parts)
+        let el = build_input_adornment(&b.id, None, b.parts);
+        b.chrome.apply(el)
     }
 }
 

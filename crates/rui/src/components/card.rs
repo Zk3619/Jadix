@@ -39,7 +39,9 @@
 //! }
 //! ```
 
+use crate::components::base::{packed_children, SlotChrome};
 use crate::core::tree::{parse_color, Element};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
@@ -47,6 +49,9 @@ use crate::tokens;
 use crate::utils::take_packed;
 use rui_macros::component;
 
+const ATTR_SLOT: &str = "data-slot";
+const SLOT_TITLE: &str = "card-title";
+const SLOT_DESCRIPTION: &str = "card-description";
 const ATTR_CARD_SLOT: &str = "rui_card_slot";
 const SLOT_ACTION: &str = "action";
 fn is_card_action(el: &Element) -> bool {
@@ -127,14 +132,17 @@ pub fn CardHeader(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn CardTitle(children: Option<Element>) -> Element {
     let fg = parse_text_color("card-foreground");
-    match children {
+    let body = match children {
         Some(c) => c
             .text_size(18.0)
             .font_weight(600.0)
             .text_color(fg)
             .min_w(0.0),
         None => Element::from(text("").size(18.0).weight(600.0).color(fg)).min_w(0.0),
-    }
+    };
+    let mut el: Element = vstack().w("100%").min_w(0.0).child(body).into();
+    el.set_attr(ATTR_SLOT, SLOT_TITLE);
+    el
 }
 
 /// 说明文案（`text-sm` / muted-foreground）。
@@ -142,14 +150,17 @@ pub fn CardTitle(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn CardDescription(children: Option<Element>) -> Element {
     let muted = parse_text_color("muted-foreground");
-    match children {
+    let body = match children {
         Some(c) => c
             .text_size(14.0)
             .font_weight(400.0)
             .text_color(muted)
             .min_w(0.0),
         None => Element::from(text("").size(14.0).weight(400.0).color(muted)).min_w(0.0),
-    }
+    };
+    let mut el: Element = vstack().w("100%").min_w(0.0).child(body).into();
+    el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
+    el
 }
 
 /// Header 右侧动作区（对齐 shadcn `CardAction`）。
@@ -198,4 +209,384 @@ pub fn CardFooter(children: Option<Element>) -> Element {
             .px(tokens::SPACE_6)
             .children(kids),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Builder (ADR-9 surface B)
+// ---------------------------------------------------------------------------
+
+pub struct CardTitleBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_title() -> CardTitleBuilder {
+    CardTitleBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardTitleBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardTitleBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardTitleBuilder> for Element {
+    fn from(builder: CardTitleBuilder) -> Self {
+        let el = CardTitle(CardTitleProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_description() -> CardDescriptionBuilder {
+    CardDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardDescriptionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardDescriptionBuilder> for Element {
+    fn from(builder: CardDescriptionBuilder) -> Self {
+        let el = CardDescription(CardDescriptionProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardActionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_action() -> CardActionBuilder {
+    CardActionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardActionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardActionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardActionBuilder> for Element {
+    fn from(builder: CardActionBuilder) -> Self {
+        let el = CardAction(CardActionProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardHeaderBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_header() -> CardHeaderBuilder {
+    CardHeaderBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardHeaderBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+
+    pub fn title(mut self, text: impl Into<String>) -> Self {
+        self.children.push(card_title().text(text).into());
+        self
+    }
+
+    pub fn title_with(mut self, f: impl FnOnce(CardTitleBuilder) -> CardTitleBuilder) -> Self {
+        self.children.push(f(card_title()).into());
+        self
+    }
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.children.push(card_description().text(text).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(CardDescriptionBuilder) -> CardDescriptionBuilder,
+    ) -> Self {
+        self.children.push(f(card_description()).into());
+        self
+    }
+
+    pub fn action(mut self, child: impl Into<Element>) -> Self {
+        let el = child.into();
+        let el = if is_card_action(&el) {
+            el
+        } else {
+            card_action().child(el).into()
+        };
+        self.children.push(el);
+        self
+    }
+
+    pub fn action_with(mut self, f: impl FnOnce(CardActionBuilder) -> CardActionBuilder) -> Self {
+        self.children.push(f(card_action()).into());
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardHeaderBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardHeaderBuilder> for Element {
+    fn from(builder: CardHeaderBuilder) -> Self {
+        let el = CardHeader(CardHeaderProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardContentBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_content() -> CardContentBuilder {
+    CardContentBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardContentBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardContentBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardContentBuilder> for Element {
+    fn from(builder: CardContentBuilder) -> Self {
+        let el = CardContent(CardContentProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardFooterBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card_footer() -> CardFooterBuilder {
+    CardFooterBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardFooterBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardFooterBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardFooterBuilder> for Element {
+    fn from(builder: CardFooterBuilder) -> Self {
+        let el = CardFooter(CardFooterProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct CardBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn card() -> CardBuilder {
+    CardBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CardBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+
+    pub fn header(mut self, header: impl Into<Element>) -> Self {
+        self.children.push(header.into());
+        self
+    }
+
+    pub fn header_with(mut self, f: impl FnOnce(CardHeaderBuilder) -> CardHeaderBuilder) -> Self {
+        self.children.push(f(card_header()).into());
+        self
+    }
+
+    pub fn content(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(card_content().child(child).into());
+        self
+    }
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(CardContentBuilder) -> CardContentBuilder,
+    ) -> Self {
+        self.children.push(f(card_content()).into());
+        self
+    }
+
+    pub fn footer(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+
+    pub fn footer_with(mut self, f: impl FnOnce(CardFooterBuilder) -> CardFooterBuilder) -> Self {
+        self.children.push(f(card_footer()).into());
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for CardBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<CardBuilder> for Element {
+    fn from(builder: CardBuilder) -> Self {
+        let el = Card(CardProps {
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_header_title_class_and_style() {
+        let el: Element = card()
+            .class("w-full")
+            .style(|b| b.gap(8.0))
+            .header_with(|h| {
+                h.class("px-2")
+                    .title_with(|t| t.class("font-bold").style(|b| b.text_size(20.0)).text("Hi"))
+            })
+            .into();
+        assert!(!el.children.is_empty());
+        let header = &el.children[0];
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(header, 20.0),
+            "title slot .style(|b| b.text_size(20)) must land on the title tree"
+        );
+    }
 }

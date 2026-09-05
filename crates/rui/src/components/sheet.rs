@@ -69,6 +69,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::text::text;
@@ -272,6 +273,8 @@ impl From<SheetBuilder> for Element {
             overlay_blur: None,
             width,
             height,
+            class: None,
+            style: None,
         };
         sheet_scope(id, open, move || {
             sheet_content(opts, move || {
@@ -395,12 +398,14 @@ fn sheet_shell_frame(
     chrome_close: Option<Element>,
     presence: &ModalPresenceHandle,
     phase: PresencePhase,
+    panel_chrome: crate::components::base::SlotChrome,
 ) -> Element {
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     // Swallow clicks only — nesting `panel_block_clicks` under stage nests `rui_portal`.
     let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
     panel = apply_sheet_shell_surface(panel, side, width, height);
+    panel = panel_chrome.apply(panel);
     // Keep `position: absolute` so the sheet docks on `side` and slides in from
     // that edge (`relative()` would lay it out at flex-start / the opposite edge).
     panel = swallow_clicks(panel);
@@ -497,7 +502,7 @@ pub fn SheetClose(children: Option<Element>) -> Element {
 }
 
 /// `SheetContent` 遮罩 / 贴边 / chrome 选项（`ui!` / [`sheet_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SheetContentOpts {
     /// 贴边方向；默认 [`SheetSide::Right`]。
     pub side: SheetSide,
@@ -515,6 +520,10 @@ pub struct SheetContentOpts {
     pub width: Option<String>,
     /// 顶 / 底高；`None` → `auto`（`max-h: 50dvh`）。
     pub height: Option<String>,
+    /// Utility class on the sheet panel (after default surface).
+    pub class: Option<String>,
+    /// Layout/paint on the sheet panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for SheetContentOpts {
@@ -528,8 +537,14 @@ impl Default for SheetContentOpts {
             overlay_blur: None,
             width: None,
             height: None,
+            class: None,
+            style: None,
         }
     }
+}
+
+impl SheetContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// shadcn `SheetContent`：Portal + Overlay + 贴边面板壳。
@@ -549,6 +564,7 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     let side = opts.side;
     let width = opts.width;
     let height = opts.height;
+    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let presence = use_modal_presence(&id);
     let mounted = mounted_signal(&presence);
 
@@ -608,6 +624,7 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
             chrome_close,
             &presence,
             phase,
+            panel_chrome.clone(),
         )
     })
 }
@@ -696,6 +713,73 @@ pub fn SheetFooter(children: Option<Element>) -> Element {
             .flex_shrink(0.0)
             .children(kids),
     )
+}
+
+impl_simple_slot_builder!(
+    SheetTriggerBuilder,
+    sheet_trigger,
+    SheetTrigger,
+    SheetTriggerProps
+);
+impl_simple_slot_builder!(
+    SheetCloseBuilder,
+    sheet_close_part,
+    SheetClose,
+    SheetCloseProps
+);
+impl_simple_slot_builder!(
+    SheetHeaderBuilder,
+    sheet_header,
+    SheetHeader,
+    SheetHeaderProps
+);
+impl_simple_slot_builder!(SheetTitleBuilder, sheet_title, SheetTitle, SheetTitleProps);
+impl_simple_slot_builder!(
+    SheetDescriptionBuilder,
+    sheet_description,
+    SheetDescription,
+    SheetDescriptionProps
+);
+impl_simple_slot_builder!(SheetBodyBuilder, sheet_body, SheetBody, SheetBodyProps);
+impl_simple_slot_builder!(
+    SheetFooterBuilder,
+    sheet_footer,
+    SheetFooter,
+    SheetFooterProps
+);
+
+pub struct SheetContentSlotBuilder {
+    opts: SheetContentOpts,
+}
+
+pub fn sheet_content_slot() -> SheetContentSlotBuilder {
+    SheetContentSlotBuilder {
+        opts: SheetContentOpts::default(),
+    }
+}
+
+impl SheetContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn side(mut self, side: impl Into<SheetSide>) -> Self {
+        self.opts.side = side.into();
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        sheet_content(self.opts, body)
+    }
 }
 
 #[cfg(test)]

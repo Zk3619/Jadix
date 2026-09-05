@@ -33,6 +33,7 @@
 //! - 状态用 `peek` + 每帧 style sync；Indicator 始终保留勾选字形，未选中仅字色透明。
 //! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
+use crate::components::base::SlotChrome;
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
@@ -183,7 +184,7 @@ fn wire_checkbox_captions(
     for child in children {
         let caption = if is_caption_text_leaf(&child) {
             let text = child.text.clone().unwrap_or_default();
-            label("").text(text).r#for(control_id).into()
+            label("").text(text).for_target(control_id).into()
         } else if is_label_element(&child) {
             let mut lbl = child;
             let existing_for = lbl
@@ -234,6 +235,7 @@ pub struct CheckboxBuilder {
     disabled: bool,
     invalid: bool,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// RSX `<Checkbox>`。
@@ -296,10 +298,13 @@ pub fn checkbox(id: impl Into<String>) -> CheckboxBuilder {
         disabled: false,
         invalid: false,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl CheckboxBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn checked_signal(mut self, s: Signal<bool>) -> Self {
         self.checked = Some(s);
         self
@@ -335,6 +340,7 @@ impl CheckboxBuilder {
 
 impl From<CheckboxBuilder> for Element {
     fn from(builder: CheckboxBuilder) -> Self {
+        let chrome = builder.chrome;
         let id = resolve_instance_id(builder.id, "checkbox");
         let sig = resolve_bool_signal(builder.checked, &id, SLOT_CHECKBOX, builder.default_checked);
         let on = sig.peek();
@@ -390,7 +396,7 @@ impl From<CheckboxBuilder> for Element {
         control.template_id = Some(id.clone());
 
         if !has_caption {
-            return control;
+            return chrome.apply(control);
         }
 
         let (captions, labelled_by) = wire_checkbox_captions(&id, captions_raw);
@@ -413,7 +419,7 @@ impl From<CheckboxBuilder> for Element {
         if disabled {
             root = root.opacity(0.5).cursor_not_allowed();
         }
-        root
+        chrome.apply(root)
     }
 }
 

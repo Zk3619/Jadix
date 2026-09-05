@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::components::base::SlotChrome;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
@@ -38,6 +39,7 @@ pub struct VirtualMasonryBuilder {
     scrollbar_visibility: String,
     item_height: Rc<dyn Fn(usize, f32) -> f32>,
     render_item: Rc<dyn Fn(usize, f32, f32) -> Element>,
+    chrome: SlotChrome,
 }
 
 pub fn virtual_masonry(id: impl Into<String>) -> VirtualMasonryBuilder {
@@ -53,10 +55,12 @@ pub fn virtual_masonry(id: impl Into<String>) -> VirtualMasonryBuilder {
         render_item: Rc::new(|i, w, h| {
             Element::from(r#box().w(w).h(h).min_h(h).text(format!("item {i}")))
         }),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl VirtualMasonryBuilder {
+    crate::impl_slot_chrome_methods!();
     pub fn item_count(mut self, n: usize) -> Self {
         self.item_count = n;
         self
@@ -266,6 +270,7 @@ impl From<VirtualMasonryBuilder> for Element {
             scrollbar_visibility,
             item_height,
             render_item,
+            chrome,
         } = builder;
         let scroll_id = id.clone();
         let list_id_sync = scroll_id.clone();
@@ -315,15 +320,17 @@ impl From<VirtualMasonryBuilder> for Element {
             apply_body_window(root, &list_id_sync, &layout, &vis, render_for_sync.as_ref())
         });
 
-        scroll_area(&id)
-            .overflow_y("auto")
-            .overflow_x("hidden")
-            .scroll_behavior("jump")
-            .scrollbar_visibility(scrollbar_visibility)
-            .w("100%")
-            .h(height)
-            .child(body)
-            .into()
+        chrome.apply(
+            scroll_area(&id)
+                .overflow_y("auto")
+                .overflow_x("hidden")
+                .scroll_behavior("jump")
+                .scrollbar_visibility(scrollbar_visibility)
+                .w("100%")
+                .h(height)
+                .child(body)
+                .into(),
+        )
     }
 }
 
@@ -339,6 +346,26 @@ mod tests {
             .item_height(|i, _| 40.0 + (i % 3) as f32 * 10.0)
             .render_item(|i, w, h| Element::from(r#box().w(w).h(h).text(format!("#{i}"))))
             .into();
+    }
+
+    #[test]
+    fn builder_style_reaches_masonry_root() {
+        let el: Element = virtual_masonry("vm-chrome")
+            .item_count(4)
+            .columns(2)
+            .item_height(|i, _| 40.0 + (i % 2) as f32 * 10.0)
+            .style(|b| b.text_size(20.0))
+            .render_item(|i, w, h| Element::from(r#box().w(w).h(h).text(format!("#{i}"))))
+            .into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "virtual_masonry .style must land on the scroll root"
+        );
     }
 
     #[test]

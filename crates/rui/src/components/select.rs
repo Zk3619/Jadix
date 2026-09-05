@@ -37,6 +37,7 @@ use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{
     bind_style, bind_text, reactive_anchor, reactive_placeholder_sized, StylePatch,
 };
+use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
 use crate::components::internal::floating_motion::{
     apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
@@ -49,6 +50,7 @@ use crate::core::reactivity::{
     Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
@@ -339,7 +341,7 @@ pub fn SelectValue(placeholder: Option<String>, children: Option<Element>) -> El
 // ---------------------------------------------------------------------------
 
 /// `<SelectContent>` / [`select_content`] 选项。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct SelectContentOpts {
     pub class: Option<String>,
     pub match_trigger: Option<bool>,
@@ -350,6 +352,27 @@ pub struct SelectContentOpts {
     pub placement: Option<PopupPlacement>,
     /// `none` | `start` | `center`；空则用根 [`SelectCtx::scroll_selected`]。
     pub scroll_selected: Option<String>,
+    pub style: Option<crate::components::base::SlotStyleFn>,
+}
+
+impl Default for SelectContentOpts {
+    fn default() -> Self {
+        Self {
+            class: None,
+            match_trigger: None,
+            menu_width: None,
+            menu_height: None,
+            min_height: None,
+            max_height: None,
+            placement: None,
+            scroll_selected: None,
+            style: None,
+        }
+    }
+}
+
+impl SelectContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// ShadCN `SelectContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
@@ -370,6 +393,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         .class
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.content_class.clone());
+    let content_style = opts.style.clone();
     let scroll_mode = opts
         .scroll_selected
         .as_deref()
@@ -496,7 +520,11 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             menu = menu.max_h(mh.as_str());
         }
         if !content_class.is_empty() {
-            menu = with_class_list(menu, &content_class);
+            menu = crate::components::base::SlotChrome {
+                class: content_class.clone(),
+                style: content_style.clone(),
+            }
+            .apply(menu);
         }
         if apply_floating_panel_motion(
             &id_for_effect,
@@ -743,6 +771,118 @@ enum SelectEntry {
     Separator,
 }
 
+impl_simple_slot_builder!(
+    SelectTriggerBuilder,
+    select_trigger,
+    SelectTrigger,
+    SelectTriggerProps
+);
+impl_simple_slot_builder!(
+    SelectValueBuilder,
+    select_value,
+    SelectValue,
+    SelectValueProps
+);
+impl_simple_slot_builder!(
+    SelectGroupBuilder,
+    select_group,
+    SelectGroup,
+    SelectGroupProps
+);
+impl_simple_slot_builder!(
+    SelectSeparatorBuilder,
+    select_separator,
+    SelectSeparator,
+    SelectSeparatorProps
+);
+
+pub struct SelectItemBuilder {
+    value: String,
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: crate::components::base::SlotChrome,
+}
+
+pub fn select_item(value: impl Into<String>) -> SelectItemBuilder {
+    SelectItemBuilder {
+        value: value.into(),
+        disabled: false,
+        children: Vec::new(),
+        chrome: crate::components::base::SlotChrome::default(),
+    }
+}
+
+impl SelectItemBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<SelectItemBuilder> for Element {
+    fn from(builder: SelectItemBuilder) -> Self {
+        let el = SelectItem(SelectItemProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            align: None,
+            class: None,
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for SelectItemBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct SelectContentSlotBuilder {
+    opts: SelectContentOpts,
+}
+
+pub fn select_content_slot() -> SelectContentSlotBuilder {
+    SelectContentSlotBuilder {
+        opts: SelectContentOpts::default(),
+    }
+}
+
+impl SelectContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        select_content(self.opts, body)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Convenience Builder（单组件入口，内建 Trigger+Content）
 // ---------------------------------------------------------------------------
@@ -761,7 +901,9 @@ pub struct SelectBuilder {
     match_trigger: bool,
     placement: PopupPlacement,
     trigger_class: String,
+    trigger_style: Option<SlotStyleFn>,
     content_class: String,
+    content_style: Option<SlotStyleFn>,
     scroll_selected: SelectScrollSelected,
 }
 
@@ -781,7 +923,9 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         match_trigger: true,
         placement: PopupPlacement::BottomStart,
         trigger_class: String::new(),
+        trigger_style: None,
         content_class: String::new(),
+        content_style: None,
         scroll_selected: SelectScrollSelected::None,
     }
 }
@@ -853,9 +997,31 @@ impl SelectBuilder {
         self.trigger_class = c.into();
         self
     }
+    /// Same [`BaseComponentBuilder`] surface as RSX props on the trigger.
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.trigger_style = Some(std::rc::Rc::new(f));
+        self
+    }
     /// Tailwind / utility class（菜单面板）。
     pub fn content_class(mut self, c: impl Into<String>) -> Self {
         self.content_class = c.into();
+        self
+    }
+    /// Layout/paint on the menu panel (same surface as RSX `base` on Content).
+    pub fn content_style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_style = Some(std::rc::Rc::new(f));
         self
     }
     /// 打开时滚动到当前选中项：`none` | `start` | `center`。
@@ -881,7 +1047,9 @@ impl From<SelectBuilder> for Element {
             match_trigger,
             placement,
             trigger_class,
+            trigger_style,
             content_class,
+            content_style,
             scroll_selected,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "select");
@@ -935,7 +1103,7 @@ impl From<SelectBuilder> for Element {
                 },
             );
 
-            let trigger = SelectTrigger(SelectTriggerProps {
+            let mut trigger = SelectTrigger(SelectTriggerProps {
                 class: Some(trigger_class),
                 size: None,
                 children: Some(SelectValue(SelectValueProps {
@@ -945,6 +1113,9 @@ impl From<SelectBuilder> for Element {
                 })),
                 base: None,
             });
+            if let Some(style) = trigger_style {
+                trigger = style(crate::components::base::BaseComponentBuilder::new(trigger)).el;
+            }
             let entries_body = entries;
             let id_for_menu = id.clone();
             let content = select_content(
@@ -957,6 +1128,7 @@ impl From<SelectBuilder> for Element {
                     max_height,
                     placement: Some(placement),
                     scroll_selected: None,
+                    style: content_style,
                 },
                 move || build_entries_element(&id_for_menu, &entries_body, val, open, labels),
             );

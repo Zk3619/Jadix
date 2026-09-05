@@ -33,6 +33,7 @@
 //! - Dynamic `variant={sig.get()}` is reduced from macro to [`apply_bound_badge_variant`] (same origin as Button).
 //! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
+use crate::components::base::SlotChrome;
 use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
@@ -186,6 +187,7 @@ pub struct BadgeBuilder {
     container: BoxBuilder,
     content: Vec<Element>,
     text_style: TextNodeConfig,
+    slot_chrome: SlotChrome,
 }
 
 /// Builder 入口：展示型徽标，默认无用户 id。
@@ -220,6 +222,7 @@ pub fn badge() -> BadgeBuilder {
             leading_scale: None,
             font_family: None,
         },
+        slot_chrome: SlotChrome::default(),
     }
 }
 
@@ -260,6 +263,22 @@ impl BadgeBuilder {
 
     pub fn chrome(mut self, enabled: bool) -> Self {
         self.chrome_enabled = enabled;
+        self
+    }
+
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.slot_chrome.class = classes.into();
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.slot_chrome = self.slot_chrome.style(f);
         self
     }
 
@@ -381,7 +400,7 @@ impl From<BadgeBuilder> for Element {
             }
         }
 
-        el
+        builder.slot_chrome.apply(el)
     }
 }
 
@@ -591,5 +610,19 @@ mod tests {
                 .expect("caption");
             assert_eq!(leaf.text_style.color_resolved(), want_fg);
         }
+    }
+
+    #[test]
+    fn builder_style() {
+        let el: Element = badge().style(|b| b.text_size(20.0)).text("New").into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "badge .style(|b| b.text_size(20)) must land on the badge"
+        );
     }
 }

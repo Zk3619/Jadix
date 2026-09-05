@@ -33,6 +33,7 @@
 //! - Distinct from menu `*Shortcut` slots (those are inline muted captions inside menus).
 //! - `ui!` multi-child packs into `rui_fragment` / anonymous shell; both roots use `take_packed` then lay out in a row.
 
+use crate::components::base::SlotChrome;
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::tokens;
@@ -129,6 +130,7 @@ pub struct KbdBuilder {
     container: BoxBuilder,
     content: Vec<Element>,
     text_style: TextNodeConfig,
+    chrome: SlotChrome,
 }
 
 /// Builder entry: presentational keycap (no required user id).
@@ -150,6 +152,7 @@ pub fn kbd() -> KbdBuilder {
             .flex_shrink(0.0),
         content: Vec::new(),
         text_style: kbd_text_style(),
+        chrome: SlotChrome::default(),
     }
 }
 
@@ -170,6 +173,8 @@ pub fn Kbd(id: String, children: Option<Element>) -> Element {
 }
 
 impl KbdBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -201,13 +206,18 @@ impl crate::core::tree::IntoElementList for KbdBuilder {
 
 impl From<KbdBuilder> for Element {
     fn from(builder: KbdBuilder) -> Self {
+        let chrome = builder.chrome;
         let mut el: Element = builder.container.bg(parse_color("muted")).into();
         el = el.pointer_events_none();
         el.attrs.insert(ATTR_SLOT.to_string(), SLOT_KBD.to_string());
         if !builder.id.trim().is_empty() {
             el.template_id = Some(builder.id.clone());
         }
-        attach_kbd_children(el, builder.content, &builder.text_style)
+        chrome.apply(attach_kbd_children(
+            el,
+            builder.content,
+            &builder.text_style,
+        ))
     }
 }
 
@@ -218,6 +228,7 @@ impl From<KbdBuilder> for Element {
 pub struct KbdGroupBuilder {
     id: String,
     content: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// Builder entry for a horizontal cluster of [`Kbd`] keycaps.
@@ -225,6 +236,7 @@ pub fn kbd_group() -> KbdGroupBuilder {
     KbdGroupBuilder {
         id: String::new(),
         content: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
@@ -245,6 +257,8 @@ pub fn KbdGroup(id: String, children: Option<Element>) -> Element {
 }
 
 impl KbdGroupBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -293,7 +307,7 @@ impl From<KbdGroupBuilder> for Element {
         for child in builder.content {
             el = el.child(child);
         }
-        el
+        builder.chrome.apply(el)
     }
 }
 
@@ -354,5 +368,14 @@ mod tests {
     fn kbd_group_builder_kbd_helper() {
         let el: Element = kbd_group().kbd("Ctrl").kbd("B").into();
         assert_eq!(el.children.len(), 2);
+    }
+
+    #[test]
+    fn kbd_group_builder_style() {
+        let el: Element = kbd_group().style(|b| b.text_size(20.0)).kbd("Ctrl").into();
+        assert!(
+            el.text_style.size.is_some_and(|s| (s - 20.0).abs() < 0.01),
+            "kbd_group .style must land on the cluster root"
+        );
     }
 }

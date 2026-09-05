@@ -37,6 +37,7 @@ use std::rc::Rc;
 use crate::app::pointer_events::EventPhase;
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{bind_style, bind_text, reactive_component_live, StylePatch};
+use crate::components::base::{SlotChrome, SlotMap};
 use crate::components::button::button;
 use crate::components::input::{input, input_value_signal_key};
 use crate::components::select::{select, SelectItemData};
@@ -120,6 +121,8 @@ pub struct ColorPickerBuilder {
     format: ColorFormat,
     show_alpha: bool,
     disabled: bool,
+    chrome: SlotChrome,
+    slots: SlotMap,
 }
 
 pub fn color_picker(id: impl Into<String>) -> ColorPickerBuilder {
@@ -131,10 +134,15 @@ pub fn color_picker(id: impl Into<String>) -> ColorPickerBuilder {
         format: ColorFormat::Hex,
         show_alpha: true,
         disabled: false,
+        chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
     }
 }
 
 impl ColorPickerBuilder {
+    crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -171,6 +179,8 @@ impl From<ColorPickerBuilder> for Element {
             format,
             show_alpha,
             disabled,
+            chrome,
+            slots,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "color_picker");
         let initial = parse_color_str(&default_value).unwrap_or(Rgba::opaque(59, 130, 246));
@@ -198,8 +208,10 @@ impl From<ColorPickerBuilder> for Element {
             show_alpha,
             disabled,
         };
+        let mut slots = slots;
+        slots = slots.slot("color-picker-trigger", |c| chrome.overlay(c));
         reactive_component_live(view_id, props, move |p| {
-            build_color_picker_view(p, open, out, rgba, hue, sat, val, fmt_sig, fmt_str)
+            build_color_picker_view(p, open, out, rgba, hue, sat, val, fmt_sig, fmt_str, &slots)
         })
     }
 }
@@ -209,9 +221,9 @@ mod tests {
     use super::drag::{apply_color_pointer, ColorDrag, ColorDragKind};
     use super::model::SWATCHES_GITHUB;
     use super::view::{
-        format_value_row, place_sv_knob, sv_area, sv_knob_frac, sv_texture_mid_column_luma,
-        swatch_grid, sync_trigger_preview, tex_sv_cpu_count, ATTR_CP_SLOT, SLOT_SV_KNOB,
-        SLOT_SV_TEX, SV_KNOB_HALF_PX,
+        build_color_picker_view, format_value_row, place_sv_knob, sv_area, sv_knob_frac,
+        sv_texture_mid_column_luma, swatch_grid, sync_trigger_preview, tex_sv_cpu_count,
+        ColorPickerRenderProps, ATTR_CP_SLOT, SLOT_SV_KNOB, SLOT_SV_TEX, SV_KNOB_HALF_PX,
     };
     use super::*;
 
@@ -588,5 +600,106 @@ mod tests {
                 val.peek()
             );
         });
+    }
+
+    #[test]
+    fn builder_trigger_style_reaches_trigger_slot() {
+        use crate::core::reactivity::create_root;
+        let (_h, el): (_, Element) = create_root(|| {
+            let id = "cp-trig-chrome";
+            let rgba = use_signal("cp-trig-chrome__cp_rgba", || Rgba::opaque(59, 130, 246));
+            let hue = use_signal("cp-trig-chrome__cp_hue", || 210.0f32);
+            let sat = use_signal("cp-trig-chrome__cp_sat", || 0.76f32);
+            let val = use_signal("cp-trig-chrome__cp_val", || 0.96f32);
+            let fmt_sig = use_signal("cp-trig-chrome__cp_fmt", || ColorFormat::Hex);
+            let fmt_str = use_signal("cp-trig-chrome__cp_fmt_str", || "hex".to_string());
+            let out = use_signal("cp-trig-chrome__value", || "#3b82f6".to_string());
+            let open = use_signal("cp-trig-chrome__open", || false);
+            let slots =
+                SlotMap::default().slot("color-picker-trigger", |c| c.style(|b| b.text_size(20.0)));
+            build_color_picker_view(
+                ColorPickerRenderProps {
+                    id: id.into(),
+                    variant: ColorPickerVariant::Default,
+                    format: ColorFormat::Hex,
+                    show_alpha: true,
+                    disabled: false,
+                },
+                open,
+                out,
+                rgba,
+                hue,
+                sat,
+                val,
+                fmt_sig,
+                fmt_str,
+                &slots,
+            )
+        });
+        fn find_trigger_size(el: &Element, want: f32) -> bool {
+            let is_trig =
+                el.attrs.get(ATTR_CP_SLOT).map(String::as_str) == Some("color-picker-trigger");
+            (is_trig
+                && (el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                    || (el.text_style.size_resolved() - want).abs() < 0.01))
+                || el.children.iter().any(|c| find_trigger_size(c, want))
+        }
+        assert!(
+            find_trigger_size(&el, 20.0),
+            "color_picker .style must land on data-slot=color-picker-trigger"
+        );
+    }
+
+    #[test]
+    fn builder_content_class_reaches_inline_panel() {
+        use crate::core::reactivity::create_root;
+        let (_h, el): (_, Element) = create_root(|| {
+            let id = "cp-content-chrome";
+            let rgba = use_signal("cp-content-chrome__cp_rgba", || Rgba::opaque(59, 130, 246));
+            let hue = use_signal("cp-content-chrome__cp_hue", || 210.0f32);
+            let sat = use_signal("cp-content-chrome__cp_sat", || 0.76f32);
+            let val = use_signal("cp-content-chrome__cp_val", || 0.96f32);
+            let fmt_sig = use_signal("cp-content-chrome__cp_fmt", || ColorFormat::Hex);
+            let fmt_str = use_signal("cp-content-chrome__cp_fmt_str", || "hex".to_string());
+            let out = use_signal("cp-content-chrome__value", || "#3b82f6".to_string());
+            let open = use_signal("cp-content-chrome__open", || true);
+            let slots = SlotMap::default().slot("color-picker-content", |c| c.class("p-4"));
+            build_color_picker_view(
+                ColorPickerRenderProps {
+                    id: id.into(),
+                    variant: ColorPickerVariant::Inline,
+                    format: ColorFormat::Hex,
+                    show_alpha: true,
+                    disabled: false,
+                },
+                open,
+                out,
+                rgba,
+                hue,
+                sat,
+                val,
+                fmt_sig,
+                fmt_str,
+                &slots,
+            )
+        });
+        fn find_content_class(el: &Element, needle: &str) -> bool {
+            let is_content =
+                el.attrs.get(ATTR_CP_SLOT).map(String::as_str) == Some("color-picker-content");
+            (is_content
+                && (el
+                    .class_set
+                    .as_ref()
+                    .is_some_and(|cs| cs.base.iter().any(|t| t.contains(needle)))
+                    || el
+                        .attrs
+                        .get("rui_utility_class")
+                        .is_some_and(|c| c.contains(needle))))
+                || el.children.iter().any(|c| find_content_class(c, needle))
+        }
+        assert!(
+            find_content_class(&el, "p-4"),
+            "color_picker .slot(color-picker-content) class must land on data-slot=color-picker-content"
+        );
     }
 }

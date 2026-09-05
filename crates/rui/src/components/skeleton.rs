@@ -33,6 +33,7 @@
 //!   helpers; the root is a leaf block (no children slot).
 //! - 展示型占位：无受控状态；尺寸与圆角由 `w`/`h`/`rounded`/`class` 或 Builder 链式指定。
 
+use crate::components::base::BaseComponentBuilder;
 use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
 use crate::primitives::r#box::r#box;
 use crate::style::with_class_list;
@@ -97,6 +98,14 @@ impl SkeletonBuilder {
 
     pub fn class(mut self, classes: impl AsRef<str>) -> Self {
         self.el = with_class_list(self.el, classes.as_ref());
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
+    ) -> Self {
+        self.el = f(BaseComponentBuilder::new(self.el)).el;
         self
     }
 
@@ -194,5 +203,19 @@ mod tests {
             ..Default::default()
         });
         let _: Element = el;
+    }
+
+    #[test]
+    fn builder_style() {
+        let el: Element = skeleton().style(|b| b.text_size(20.0)).into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "skeleton .style(|b| b.text_size(20)) must land on the placeholder"
+        );
     }
 }

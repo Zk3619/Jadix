@@ -67,6 +67,7 @@ use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::reactive::reactive_view;
+use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
 use crate::components::dropdown_menu::{
     attach_dropdown_menu_trigger_keys, dropdown_menu_active_is_sub_trigger, dropdown_menu_content,
@@ -82,6 +83,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{Element, Handler};
+use crate::impl_simple_slot_builder;
 use crate::primitives::r#box::hstack;
 use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
@@ -320,11 +322,12 @@ pub fn menubar_menu(
 }
 
 /// `MenubarContent` 选项（`ui!` / [`menubar_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MenubarContentOpts {
     /// `bottom-start` / …（默认 `bottom-start`；ShadCN align=start）。
     pub placement: String,
     pub class: Option<String>,
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for MenubarContentOpts {
@@ -332,8 +335,13 @@ impl Default for MenubarContentOpts {
         Self {
             placement: "bottom-start".into(),
             class: None,
+            style: None,
         }
     }
+}
+
+impl MenubarContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// solid-ui / shadcn `MenubarContent`: reuse DropdownMenuContent (gap≈8); expand animation.
@@ -347,6 +355,7 @@ pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 's
                 opts.placement
             },
             class: opts.class,
+            style: opts.style,
             motion: crate::components::internal::floating_motion::FloatingMotionKind::Expand,
         },
         body,
@@ -707,6 +716,73 @@ pub fn MenubarSubTrigger(
     el
 }
 
+impl_simple_slot_builder!(
+    MenubarTriggerBuilder,
+    menubar_trigger,
+    MenubarTrigger,
+    MenubarTriggerProps
+);
+impl_simple_slot_builder!(
+    MenubarItemBuilder,
+    menubar_item,
+    MenubarItem,
+    MenubarItemProps
+);
+impl_simple_slot_builder!(
+    MenubarLabelBuilder,
+    menubar_label,
+    MenubarLabel,
+    MenubarLabelProps
+);
+impl_simple_slot_builder!(
+    MenubarSeparatorBuilder,
+    menubar_separator,
+    MenubarSeparator,
+    MenubarSeparatorProps
+);
+impl_simple_slot_builder!(
+    MenubarShortcutBuilder,
+    menubar_shortcut,
+    MenubarShortcut,
+    MenubarShortcutProps
+);
+impl_simple_slot_builder!(
+    MenubarGroupBuilder,
+    menubar_group,
+    MenubarGroup,
+    MenubarGroupProps
+);
+
+pub struct MenubarContentSlotBuilder {
+    opts: MenubarContentOpts,
+}
+
+pub fn menubar_content_slot() -> MenubarContentSlotBuilder {
+    MenubarContentSlotBuilder {
+        opts: MenubarContentOpts::default(),
+    }
+}
+
+impl MenubarContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        menubar_content(self.opts, body)
+    }
+}
+
 // ---------------------------------------------------------------------------
 //Builder (double-write convenient entry)
 // ---------------------------------------------------------------------------
@@ -753,6 +829,8 @@ impl MenuSection {
 pub struct MenubarBuilder {
     id: String,
     sections: Vec<MenuSection>,
+    class: Option<String>,
+    style: Option<SlotStyleFn>,
 }
 
 /// Builder 入口：sections → [`menubar_scope`] + [`menubar_menu`]。
@@ -760,6 +838,8 @@ pub fn menubar(id: impl Into<String>) -> MenubarBuilder {
     MenubarBuilder {
         id: id.into(),
         sections: Vec::new(),
+        class: None,
+        style: None,
     }
 }
 
@@ -772,12 +852,42 @@ impl MenubarBuilder {
         self.sections.push(section);
         self
     }
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.class = Some(c.into());
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+    /// Build Menu / Trigger / Content subtrees inside the context.
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        let mut el = menubar_scope(self.id, body);
+        if let Some(c) = self.class.filter(|s| !s.trim().is_empty()) {
+            el = crate::style::with_class_list(el, &c);
+        }
+        if let Some(style) = self.style {
+            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+        }
+        el
+    }
 }
 
 impl From<MenubarBuilder> for Element {
     fn from(builder: MenubarBuilder) -> Self {
-        let MenubarBuilder { id, sections } = builder;
-        menubar_scope(id, move || {
+        let MenubarBuilder {
+            id,
+            sections,
+            class,
+            style,
+        } = builder;
+        let mut el = menubar_scope(id, move || {
             let mut menus = Vec::with_capacity(sections.len());
             for section in sections {
                 let title = section.title.clone();
@@ -815,7 +925,14 @@ impl From<MenubarBuilder> for Element {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag.children(menus)
-        })
+        });
+        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+            el = crate::style::with_class_list(el, &c);
+        }
+        if let Some(style) = style {
+            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 

@@ -37,6 +37,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::r#box;
 use crate::primitives::text::text;
@@ -203,12 +204,14 @@ pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
 }
 
 /// `TooltipContent` 选项（`ui!` / [`tooltip_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TooltipContentOpts {
     /// `top` / `bottom` / `top-start` / …（默认 `bottom`，贴触发器下方）。
     pub side: String,
     /// Extra class (utility).
     pub class: Option<String>,
+    /// Layout/paint on the bubble (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for TooltipContentOpts {
@@ -216,8 +219,13 @@ impl Default for TooltipContentOpts {
         Self {
             side: "bottom".into(),
             class: None,
+            style: None,
         }
     }
+}
+
+impl TooltipContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// solid-ui / shadcn `TooltipContent`：Portal + floating 面板。
@@ -228,7 +236,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
     let id = ctx.id.clone();
     let trigger_fid = ctx.trigger_fid;
     let placement = tooltip_side_to_placement(&opts.side);
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let view_id = format!("{id}__tooltip_view");
     let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
 
@@ -243,9 +251,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
             return Element::new();
         };
         let mut panel = tooltip_bubble(body());
-        if let Some(ref c) = class {
-            panel = crate::style::with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         let anchor = trigger_fid.peek();
         // 默认 Bottom；`compute_anchored_placement` 在下方空间不足时翻到上方。
         // gutter/sideOffset ≈ 4；w-fit（不匹配触发器宽）。
@@ -269,6 +275,47 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+}
+
+impl_simple_slot_builder!(
+    TooltipTriggerBuilder,
+    tooltip_trigger,
+    TooltipTrigger,
+    TooltipTriggerProps
+);
+
+pub struct TooltipContentSlotBuilder {
+    opts: TooltipContentOpts,
+}
+
+pub fn tooltip_content_slot() -> TooltipContentSlotBuilder {
+    TooltipContentSlotBuilder {
+        opts: TooltipContentOpts::default(),
+    }
+}
+
+impl TooltipContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn side(mut self, side: impl Into<String>) -> Self {
+        self.opts.side = side.into();
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        tooltip_content(self.opts, body)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -317,13 +364,19 @@ impl TooltipBuilder {
                 children: Some(trigger),
                 base: None,
             });
-            let tip = tooltip_content(TooltipContentOpts { side, class: None }, move || {
-                Element::from(
-                    text(content.as_str())
-                        .size(12.0)
-                        .color(parse_text_color("popover-foreground")),
-                )
-            });
+            let tip = tooltip_content(
+                TooltipContentOpts {
+                    side,
+                    ..Default::default()
+                },
+                move || {
+                    Element::from(
+                        text(content.as_str())
+                            .size(12.0)
+                            .color(parse_text_color("popover-foreground")),
+                    )
+                },
+            );
             // Fragment：Trigger 可与兄弟并排放在父 HStack。
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");

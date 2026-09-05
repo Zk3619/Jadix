@@ -80,6 +80,7 @@ use crate::core::reactivity::{
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
@@ -546,12 +547,14 @@ pub fn ContextMenuTrigger(id: String, children: Option<Element>) -> Element {
 }
 
 /// `ContextMenuContent` 选项（`ui!` / [`context_menu_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ContextMenuContentOpts {
     /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
     /// Extra class (utility).
     pub class: Option<String>,
+    /// Layout/paint on the panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for ContextMenuContentOpts {
@@ -559,8 +562,13 @@ impl Default for ContextMenuContentOpts {
         Self {
             placement: "bottom-start".into(),
             class: None,
+            style: None,
         }
     }
+}
+
+impl ContextMenuContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// solid-ui / shadcn `ContextMenuContent`：Portal + floating 面板。
@@ -581,7 +589,7 @@ pub fn context_menu_content(
     } else {
         PopupPlacement::from_attr(&opts.placement)
     };
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let view_id = format!("{id}__ctx_view");
     let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
 
@@ -645,9 +653,7 @@ pub fn context_menu_content(
             .border_color(tokens::border())
             .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
             .absolute();
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
         panel = panel.accesskit_role("menu");
         let anchor = trigger_fid.peek();
@@ -1471,6 +1477,73 @@ pub fn ContextMenuGroup(children: Option<Element>) -> Element {
     el
 }
 
+impl_simple_slot_builder!(
+    ContextMenuTriggerBuilder,
+    context_menu_trigger,
+    ContextMenuTrigger,
+    ContextMenuTriggerProps
+);
+impl_simple_slot_builder!(
+    ContextMenuItemBuilder,
+    context_menu_item,
+    ContextMenuItem,
+    ContextMenuItemProps
+);
+impl_simple_slot_builder!(
+    ContextMenuLabelBuilder,
+    context_menu_label,
+    ContextMenuLabel,
+    ContextMenuLabelProps
+);
+impl_simple_slot_builder!(
+    ContextMenuSeparatorBuilder,
+    context_menu_separator,
+    ContextMenuSeparator,
+    ContextMenuSeparatorProps
+);
+impl_simple_slot_builder!(
+    ContextMenuShortcutBuilder,
+    context_menu_shortcut,
+    ContextMenuShortcut,
+    ContextMenuShortcutProps
+);
+impl_simple_slot_builder!(
+    ContextMenuGroupBuilder,
+    context_menu_group,
+    ContextMenuGroup,
+    ContextMenuGroupProps
+);
+
+pub struct ContextMenuContentSlotBuilder {
+    opts: ContextMenuContentOpts,
+}
+
+pub fn context_menu_content_slot() -> ContextMenuContentSlotBuilder {
+    ContextMenuContentSlotBuilder {
+        opts: ContextMenuContentOpts::default(),
+    }
+}
+
+impl ContextMenuContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        context_menu_content(self.opts, body)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Builder (legacy API compatible)
 // ---------------------------------------------------------------------------
@@ -1521,6 +1594,8 @@ pub struct ContextMenuBuilder {
     items: Vec<ContextMenuAction>,
     open: Option<Signal<bool>>,
     placement: PopupPlacement,
+    content_class: Option<String>,
+    content_style: Option<crate::components::base::SlotStyleFn>,
 }
 
 /// Builder 入口：便捷 Trigger + Content + Items（内部接到复合实现）。
@@ -1530,6 +1605,8 @@ pub fn context_menu(id: impl Into<String>) -> ContextMenuBuilder {
         items: Vec::new(),
         open: None,
         placement: PopupPlacement::BottomStart,
+        content_class: None,
+        content_style: None,
     }
 }
 
@@ -1542,6 +1619,27 @@ impl ContextMenuBuilder {
     pub fn placement(mut self, p: PopupPlacement) -> Self {
         self.placement = p;
         self
+    }
+
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.content_class = Some(c.into());
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_style = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// Build Trigger / Content (and related) subtrees inside the context.
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        context_menu_scope(self.id, self.open, body)
     }
 
     pub fn item(mut self, label: impl Into<String>, on_click: impl Fn() + 'static) -> Self {
@@ -1561,6 +1659,8 @@ impl ContextMenuBuilder {
         let placement = self.placement;
         let items = self.items;
         let side = placement.as_attr().to_string();
+        let content_class = self.content_class;
+        let content_style = self.content_style;
         context_menu_scope(id, open, || {
             let trigger = ContextMenuTrigger(ContextMenuTriggerProps {
                 id: String::new(),
@@ -1570,7 +1670,8 @@ impl ContextMenuBuilder {
             let tip = context_menu_content(
                 ContextMenuContentOpts {
                     placement: side,
-                    class: None,
+                    class: content_class,
+                    style: content_style,
                 },
                 move || {
                     let mut col = vstack().w("100%").gap("0");
@@ -1632,6 +1733,28 @@ mod tests {
         let f = fired.clone();
         let _el: Element = context_menu("cm1").item("Copy", move || f.set(true)).into();
         assert!(!fired.get());
+    }
+
+    #[test]
+    fn builder_trigger_style() {
+        use crate::core::reactivity::create_root;
+        let (_o, el): (_, Element) = create_root(|| {
+            context_menu("cm-chrome").child(|| {
+                context_menu_trigger()
+                    .style(|b| b.text_size(20.0))
+                    .text("area")
+                    .into()
+            })
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "context_menu_trigger .style(|b| b.text_size(20)) must land on the trigger tree"
+        );
     }
 
     #[test]

@@ -131,26 +131,35 @@ pub mod virtual_list;
 pub mod virtual_masonry;
 
 pub use accordion::{
-    accordion, accordion_content, accordion_item_scope, accordion_scope, use_accordion,
-    use_accordion_item, Accordion, AccordionBuilder, AccordionContent, AccordionContentProps,
-    AccordionCtx, AccordionItem, AccordionItemCtx, AccordionItemProps, AccordionProps,
-    AccordionTrigger, AccordionTriggerProps,
+    accordion, accordion_content, accordion_item, accordion_item_scope, accordion_scope,
+    accordion_trigger, accordion_use_grid_fr, set_accordion_use_grid_fr, use_accordion,
+    use_accordion_item, Accordion, AccordionBuilder, AccordionContent, AccordionContentBuilder,
+    AccordionContentProps, AccordionCtx, AccordionItem, AccordionItemBuilder, AccordionItemCtx,
+    AccordionItemProps, AccordionProps, AccordionTrigger, AccordionTriggerBuilder,
+    AccordionTriggerProps,
 };
 pub use alert::{
-    alert, apply_alert_variant_paint, apply_bound_alert_chrome, apply_bound_alert_variant, Alert,
-    AlertAction, AlertActionProps, AlertBuilder, AlertDescription, AlertDescriptionProps,
-    AlertProps, AlertTitle, AlertTitleProps, AlertVariant,
+    alert, alert_action, alert_description, alert_title, apply_alert_variant_paint,
+    apply_bound_alert_chrome, apply_bound_alert_variant, Alert, AlertAction, AlertActionBuilder,
+    AlertActionProps, AlertBuilder, AlertDescription, AlertDescriptionBuilder,
+    AlertDescriptionProps, AlertProps, AlertTitle, AlertTitleBuilder, AlertTitleProps,
+    AlertVariant,
 };
 pub use alert_dialog::{
-    alert_dialog, alert_dialog_close, alert_dialog_content, alert_dialog_open, alert_dialog_scope,
-    apply_alert_dialog_variant_paint, apply_bound_alert_dialog_chrome,
-    apply_bound_alert_dialog_variant, use_alert_dialog, AlertDialogAction, AlertDialogActionProps,
-    AlertDialogBody, AlertDialogBodyProps, AlertDialogBuilder, AlertDialogCancel,
-    AlertDialogCancelProps, AlertDialogContentOpts, AlertDialogCtx, AlertDialogDescription,
-    AlertDialogDescriptionProps, AlertDialogFooter, AlertDialogFooterProps, AlertDialogHeader,
-    AlertDialogHeaderProps, AlertDialogMedia, AlertDialogMediaProps, AlertDialogSize,
-    AlertDialogTitle, AlertDialogTitleProps, AlertDialogTrigger, AlertDialogTriggerProps,
-    AlertDialogVariant,
+    alert_dialog, alert_dialog_action, alert_dialog_body, alert_dialog_cancel, alert_dialog_close,
+    alert_dialog_content, alert_dialog_content_slot, alert_dialog_description, alert_dialog_footer,
+    alert_dialog_header, alert_dialog_media, alert_dialog_open, alert_dialog_scope,
+    alert_dialog_title, alert_dialog_trigger, apply_alert_dialog_variant_paint,
+    apply_bound_alert_dialog_chrome, apply_bound_alert_dialog_variant, use_alert_dialog,
+    AlertDialogAction, AlertDialogActionBuilder, AlertDialogActionProps, AlertDialogBody,
+    AlertDialogBodyBuilder, AlertDialogBodyProps, AlertDialogBuilder, AlertDialogCancel,
+    AlertDialogCancelBuilder, AlertDialogCancelProps, AlertDialogContentOpts,
+    AlertDialogContentSlotBuilder, AlertDialogCtx, AlertDialogDescription,
+    AlertDialogDescriptionBuilder, AlertDialogDescriptionProps, AlertDialogFooter,
+    AlertDialogFooterBuilder, AlertDialogFooterProps, AlertDialogHeader, AlertDialogHeaderBuilder,
+    AlertDialogHeaderProps, AlertDialogMedia, AlertDialogMediaBuilder, AlertDialogMediaProps,
+    AlertDialogSize, AlertDialogTitle, AlertDialogTitleBuilder, AlertDialogTitleProps,
+    AlertDialogTrigger, AlertDialogTriggerBuilder, AlertDialogTriggerProps, AlertDialogVariant,
 };
 pub use aspect_ratio::{
     aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
@@ -158,31 +167,37 @@ pub use aspect_ratio::{
 pub use attachment::{
     apply_attachment_paint, apply_bound_attachment_media_variant,
     apply_bound_attachment_orientation, apply_bound_attachment_size, apply_bound_attachment_state,
-    attachment, attachment_group, Attachment, AttachmentAction, AttachmentActionProps,
-    AttachmentActions, AttachmentActionsProps, AttachmentBuilder, AttachmentContent,
-    AttachmentContentProps, AttachmentDescription, AttachmentDescriptionProps, AttachmentGroup,
-    AttachmentGroupBuilder, AttachmentGroupProps, AttachmentMedia, AttachmentMediaProps,
-    AttachmentMediaVariant, AttachmentOrientation, AttachmentProps, AttachmentSize,
-    AttachmentState, AttachmentTitle, AttachmentTitleProps, AttachmentTrigger,
-    AttachmentTriggerProps,
+    attachment, attachment_action, attachment_actions, attachment_content, attachment_description,
+    attachment_group, attachment_media, attachment_title, attachment_trigger, Attachment,
+    AttachmentAction, AttachmentActionBuilder, AttachmentActionProps, AttachmentActions,
+    AttachmentActionsBuilder, AttachmentActionsProps, AttachmentBuilder, AttachmentContent,
+    AttachmentContentBuilder, AttachmentContentProps, AttachmentDescription,
+    AttachmentDescriptionBuilder, AttachmentDescriptionProps, AttachmentGroup,
+    AttachmentGroupBuilder, AttachmentGroupProps, AttachmentMedia, AttachmentMediaBuilder,
+    AttachmentMediaProps, AttachmentMediaVariant, AttachmentOrientation, AttachmentProps,
+    AttachmentSize, AttachmentState, AttachmentTitle, AttachmentTitleBuilder, AttachmentTitleProps,
+    AttachmentTrigger, AttachmentTriggerBuilder, AttachmentTriggerProps,
 };
 pub use avatar::{
     apply_bound_avatar_badge_variant, apply_bound_avatar_shape, apply_bound_avatar_size, avatar,
-    avatar_fallback, avatar_scope, use_avatar, Avatar, AvatarBadge, AvatarBadgeProps,
+    avatar_fallback, avatar_image, avatar_scope, use_avatar, Avatar, AvatarBadge, AvatarBadgeProps,
     AvatarBuilder, AvatarCtx, AvatarFallback, AvatarFallbackBuilder, AvatarFallbackProps,
     AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps, AvatarImage,
-    AvatarImageProps, AvatarProps, AvatarShape, AvatarSize,
+    AvatarImageBuilder, AvatarImageProps, AvatarProps, AvatarShape, AvatarSize,
 };
 pub use badge::{
     apply_bound_badge_chrome, apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps,
     BadgeVariant,
 };
-pub use base::BaseComponentBuilder;
+pub use base::{BaseComponentBuilder, SlotChrome, SlotMap, SlotStyleFn};
 pub use breadcrumb::{
-    breadcrumb, Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis, BreadcrumbEllipsisProps,
-    BreadcrumbItem, BreadcrumbItemProps, BreadcrumbLink, BreadcrumbLinkProps, BreadcrumbList,
-    BreadcrumbListProps, BreadcrumbPage, BreadcrumbPageProps, BreadcrumbProps, BreadcrumbSeparator,
-    BreadcrumbSeparatorProps,
+    breadcrumb, breadcrumb_ellipsis, breadcrumb_item, breadcrumb_link, breadcrumb_list,
+    breadcrumb_page, breadcrumb_separator, Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis,
+    BreadcrumbEllipsisBuilder, BreadcrumbEllipsisProps, BreadcrumbItem, BreadcrumbItemBuilder,
+    BreadcrumbItemProps, BreadcrumbLink, BreadcrumbLinkBuilder, BreadcrumbLinkProps,
+    BreadcrumbList, BreadcrumbListBuilder, BreadcrumbListProps, BreadcrumbPage,
+    BreadcrumbPageBuilder, BreadcrumbPageProps, BreadcrumbProps, BreadcrumbSeparator,
+    BreadcrumbSeparatorBuilder, BreadcrumbSeparatorProps,
 };
 pub use bubble::{
     apply_bound_bubble_align, apply_bound_bubble_variant, apply_bubble_variant_paint, bubble,
@@ -197,20 +212,23 @@ pub use button::{
     ButtonProps,
 };
 pub use button_group::{
-    button_group, ButtonGroup, ButtonGroupBuilder, ButtonGroupOrientation, ButtonGroupProps,
-    ButtonGroupSeparator, ButtonGroupSeparatorProps, ButtonGroupText, ButtonGroupTextProps,
+    button_group, button_group_separator, button_group_text, ButtonGroup, ButtonGroupBuilder,
+    ButtonGroupOrientation, ButtonGroupProps, ButtonGroupSeparator, ButtonGroupSeparatorBuilder,
+    ButtonGroupSeparatorProps, ButtonGroupText, ButtonGroupTextBuilder, ButtonGroupTextProps,
 };
 pub use calendar::{
     calendar, days_in_month, format_long_date, format_month_year, format_ymd, parse_ymd, today_ymd,
     weekday, Calendar, CalendarBuilder, CalendarCaption, CalendarProps,
 };
 pub use card::{
-    Card, CardAction, CardActionProps, CardContent, CardContentProps, CardDescription,
-    CardDescriptionProps, CardFooter, CardFooterProps, CardHeader, CardHeaderProps, CardProps,
-    CardTitle, CardTitleProps,
+    card, card_action, card_content, card_description, card_footer, card_header, card_title, Card,
+    CardAction, CardActionBuilder, CardActionProps, CardBuilder, CardContent, CardContentBuilder,
+    CardContentProps, CardDescription, CardDescriptionBuilder, CardDescriptionProps, CardFooter,
+    CardFooterBuilder, CardFooterProps, CardHeader, CardHeaderBuilder, CardHeaderProps, CardProps,
+    CardTitle, CardTitleBuilder, CardTitleProps,
 };
 pub use carousel::builder::{
-    carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder,
+    carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder, CarouselSlotBuilder,
 };
 pub use carousel::content::{
     CarouselContent, CarouselContentProps, CarouselDots, CarouselDotsProps, CarouselItem,
@@ -235,9 +253,10 @@ pub use chart::{
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use collapsible::{
-    collapsible, collapsible_content, collapsible_scope, use_collapsible, Collapsible,
-    CollapsibleBuilder, CollapsibleContent, CollapsibleContentProps, CollapsibleCtx,
-    CollapsibleProps, CollapsibleTrigger, CollapsibleTriggerProps,
+    collapsible, collapsible_content, collapsible_content_slot, collapsible_scope,
+    collapsible_trigger, use_collapsible, Collapsible, CollapsibleBuilder, CollapsibleContent,
+    CollapsibleContentProps, CollapsibleContentSlotBuilder, CollapsibleCtx, CollapsibleProps,
+    CollapsibleTrigger, CollapsibleTriggerBuilder, CollapsibleTriggerProps,
 };
 pub use color_picker::{
     color_picker, format_color, parse_color_str, ColorFormat, ColorPicker, ColorPickerBuilder,
@@ -252,22 +271,29 @@ pub use combobox::{
     ComboboxVisibleItem,
 };
 pub use command::{
-    command, command_dialog_scope, command_overlay_scope, command_scope, use_command, Command,
-    CommandAction, CommandBuilder, CommandCtx, CommandEmpty, CommandEmptyProps, CommandGroup,
-    CommandGroupData, CommandGroupProps, CommandInput, CommandInputProps, CommandItem,
-    CommandItemProps, CommandList, CommandListProps, CommandProps, CommandSeparator,
-    CommandSeparatorProps, CommandShortcut, CommandShortcutProps, CommandSurface,
+    command, command_dialog_scope, command_empty, command_group, command_input, command_item,
+    command_list, command_overlay_scope, command_scope, command_separator, command_shortcut,
+    use_command, Command, CommandAction, CommandBuilder, CommandCtx, CommandEmpty,
+    CommandEmptyBuilder, CommandEmptyProps, CommandGroup, CommandGroupBuilder, CommandGroupData,
+    CommandGroupProps, CommandInput, CommandInputBuilder, CommandInputProps, CommandItem,
+    CommandItemBuilder, CommandItemProps, CommandList, CommandListBuilder, CommandListProps,
+    CommandProps, CommandSeparator, CommandSeparatorBuilder, CommandSeparatorProps,
+    CommandShortcut, CommandShortcutBuilder, CommandShortcutProps, CommandSurface,
     CommandVisibleItem,
 };
 pub use context_menu::{
-    context_menu, context_menu_content, context_menu_radio_group, context_menu_scope,
-    context_menu_sub, context_menu_sub_content, use_context_menu, ContextMenuAction,
-    ContextMenuBuilder, ContextMenuCheckboxItem, ContextMenuCheckboxItemProps,
-    ContextMenuContentOpts, ContextMenuCtx, ContextMenuGroup, ContextMenuGroupProps,
-    ContextMenuItem, ContextMenuItemProps, ContextMenuLabel, ContextMenuLabelProps,
-    ContextMenuRadioGroupCtx, ContextMenuRadioItem, ContextMenuRadioItemProps,
-    ContextMenuSeparator, ContextMenuSeparatorProps, ContextMenuShortcut, ContextMenuShortcutProps,
-    ContextMenuSubCtx, ContextMenuSubTrigger, ContextMenuSubTriggerProps, ContextMenuTrigger,
+    context_menu, context_menu_content, context_menu_content_slot, context_menu_group,
+    context_menu_item, context_menu_label, context_menu_radio_group, context_menu_scope,
+    context_menu_separator, context_menu_shortcut, context_menu_sub, context_menu_sub_content,
+    context_menu_trigger, use_context_menu, ContextMenuAction, ContextMenuBuilder,
+    ContextMenuCheckboxItem, ContextMenuCheckboxItemProps, ContextMenuContentOpts,
+    ContextMenuContentSlotBuilder, ContextMenuCtx, ContextMenuGroup, ContextMenuGroupBuilder,
+    ContextMenuGroupProps, ContextMenuItem, ContextMenuItemBuilder, ContextMenuItemProps,
+    ContextMenuLabel, ContextMenuLabelBuilder, ContextMenuLabelProps, ContextMenuRadioGroupCtx,
+    ContextMenuRadioItem, ContextMenuRadioItemProps, ContextMenuSeparator,
+    ContextMenuSeparatorBuilder, ContextMenuSeparatorProps, ContextMenuShortcut,
+    ContextMenuShortcutBuilder, ContextMenuShortcutProps, ContextMenuSubCtx, ContextMenuSubTrigger,
+    ContextMenuSubTriggerProps, ContextMenuTrigger, ContextMenuTriggerBuilder,
     ContextMenuTriggerProps,
 };
 pub use date_picker::{
@@ -275,46 +301,60 @@ pub use date_picker::{
     TimePicker, TimePickerBuilder, TimePickerProps,
 };
 pub use dialog::{
-    dialog, dialog_close, dialog_content, dialog_open, dialog_scope, use_dialog, DialogBody,
-    DialogBodyProps, DialogBuilder, DialogContentOpts, DialogCtx, DialogDescription,
-    DialogDescriptionProps, DialogFooter, DialogFooterProps, DialogHeader, DialogHeaderProps,
-    DialogTitle, DialogTitleProps, DialogTrigger, DialogTriggerProps,
+    dialog, dialog_body, dialog_close, dialog_content, dialog_content_slot, dialog_description,
+    dialog_footer, dialog_header, dialog_open, dialog_scope, dialog_title, dialog_trigger,
+    use_dialog, DialogBody, DialogBodyBuilder, DialogBodyProps, DialogBuilder, DialogContentOpts,
+    DialogContentSlotBuilder, DialogCtx, DialogDescription, DialogDescriptionBuilder,
+    DialogDescriptionProps, DialogFooter, DialogFooterBuilder, DialogFooterProps, DialogHeader,
+    DialogHeaderBuilder, DialogHeaderProps, DialogTitle, DialogTitleBuilder, DialogTitleProps,
+    DialogTrigger, DialogTriggerBuilder, DialogTriggerProps,
 };
 pub use drawer::{
-    coerce_snap_point_list, coerce_snap_points, drawer, drawer_active_snap_point, drawer_close,
-    drawer_content, drawer_open, drawer_scope, drawer_set_active_snap_point, drawer_snap_to_next,
-    drawer_snap_to_prev, parse_snap_point_token, parse_snap_points, use_drawer, DrawerBody,
-    DrawerBodyProps, DrawerBuilder, DrawerClose, DrawerCloseProps, DrawerContentOpts, DrawerCtx,
-    DrawerDescription, DrawerDescriptionProps, DrawerDirection, DrawerFooter, DrawerFooterProps,
-    DrawerHeader, DrawerHeaderProps, DrawerSnapPoint, DrawerSwipeHandle, DrawerSwipeHandleProps,
-    DrawerTitle, DrawerTitleProps, DrawerTrigger, DrawerTriggerProps,
+    coerce_snap_point_list, coerce_snap_points, drawer, drawer_active_snap_point, drawer_body,
+    drawer_close, drawer_close_part, drawer_content, drawer_content_slot, drawer_description,
+    drawer_footer, drawer_header, drawer_open, drawer_scope, drawer_set_active_snap_point,
+    drawer_snap_to_next, drawer_snap_to_prev, drawer_title, drawer_trigger, parse_snap_point_token,
+    parse_snap_points, use_drawer, DrawerBody, DrawerBodyBuilder, DrawerBodyProps, DrawerBuilder,
+    DrawerClose, DrawerCloseBuilder, DrawerCloseProps, DrawerContentOpts, DrawerContentSlotBuilder,
+    DrawerCtx, DrawerDescription, DrawerDescriptionBuilder, DrawerDescriptionProps,
+    DrawerDirection, DrawerFooter, DrawerFooterBuilder, DrawerFooterProps, DrawerHeader,
+    DrawerHeaderBuilder, DrawerHeaderProps, DrawerSnapPoint, DrawerSwipeHandle,
+    DrawerSwipeHandleProps, DrawerTitle, DrawerTitleBuilder, DrawerTitleProps, DrawerTrigger,
+    DrawerTriggerBuilder, DrawerTriggerProps,
 };
 pub use dropdown_menu::{
-    dropdown, dropdown_menu, dropdown_menu_content, dropdown_menu_radio_group, dropdown_menu_scope,
-    dropdown_menu_sub, dropdown_menu_sub_content, use_dropdown_menu, DropdownBuilder,
+    dropdown, dropdown_menu, dropdown_menu_content, dropdown_menu_content_slot,
+    dropdown_menu_group, dropdown_menu_item, dropdown_menu_label, dropdown_menu_radio_group,
+    dropdown_menu_scope, dropdown_menu_separator, dropdown_menu_shortcut, dropdown_menu_sub,
+    dropdown_menu_sub_content, dropdown_menu_trigger, use_dropdown_menu, DropdownBuilder,
     DropdownMenuBuilder, DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps,
-    DropdownMenuContentOpts, DropdownMenuCtx, DropdownMenuGroup, DropdownMenuGroupProps,
-    DropdownMenuItem, DropdownMenuItemProps, DropdownMenuLabel, DropdownMenuLabelProps,
+    DropdownMenuContentOpts, DropdownMenuContentSlotBuilder, DropdownMenuCtx, DropdownMenuGroup,
+    DropdownMenuGroupBuilder, DropdownMenuGroupProps, DropdownMenuItem, DropdownMenuItemBuilder,
+    DropdownMenuItemProps, DropdownMenuLabel, DropdownMenuLabelBuilder, DropdownMenuLabelProps,
     DropdownMenuRadioGroupCtx, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
-    DropdownMenuSeparator, DropdownMenuSeparatorProps, DropdownMenuShortcut,
-    DropdownMenuShortcutProps, DropdownMenuSubCtx, DropdownMenuSubTrigger,
-    DropdownMenuSubTriggerProps, DropdownMenuTrigger, DropdownMenuTriggerProps,
+    DropdownMenuSeparator, DropdownMenuSeparatorBuilder, DropdownMenuSeparatorProps,
+    DropdownMenuShortcut, DropdownMenuShortcutBuilder, DropdownMenuShortcutProps,
+    DropdownMenuSubCtx, DropdownMenuSubTrigger, DropdownMenuSubTriggerProps, DropdownMenuTrigger,
+    DropdownMenuTriggerBuilder, DropdownMenuTriggerProps,
 };
 pub use empty::{
-    empty, empty_content, empty_header, empty_media, Empty, EmptyBuilder, EmptyContent,
-    EmptyContentBuilder, EmptyContentProps, EmptyDescription, EmptyDescriptionProps, EmptyHeader,
-    EmptyHeaderBuilder, EmptyHeaderProps, EmptyMedia, EmptyMediaBuilder, EmptyMediaProps,
-    EmptyMediaVariant, EmptyProps, EmptyTitle, EmptyTitleProps,
+    empty, empty_content, empty_description, empty_header, empty_media, empty_title, Empty,
+    EmptyBuilder, EmptyContent, EmptyContentBuilder, EmptyContentProps, EmptyDescription,
+    EmptyDescriptionBuilder, EmptyDescriptionProps, EmptyHeader, EmptyHeaderBuilder,
+    EmptyHeaderProps, EmptyMedia, EmptyMediaBuilder, EmptyMediaProps, EmptyMediaVariant,
+    EmptyProps, EmptyTitle, EmptyTitleBuilder, EmptyTitleProps,
 };
 pub use form::{
     clear_all_errors, clear_field_error, field_error, field_invalid, form_errors_signal,
     form_field, form_provider, form_validate, set_field_error, use_form, FormState,
 };
 pub use hover_card::{
-    hover_card, hover_card_content, hover_card_scope, hover_card_surface, use_hover_card,
-    HoverCardBuilder, HoverCardContentOpts, HoverCardCtx, HoverCardTrigger, HoverCardTriggerProps,
+    hover_card, hover_card_content, hover_card_content_slot, hover_card_scope, hover_card_surface,
+    hover_card_trigger, use_hover_card, HoverCardBuilder, HoverCardContentOpts,
+    HoverCardContentSlotBuilder, HoverCardCtx, HoverCardTrigger, HoverCardTriggerBuilder,
+    HoverCardTriggerProps,
 };
-pub use image::{Image, ImageProps, Img, ImgProps};
+pub use image::{image, ui_image, Image, ImageBuilder, ImageProps, Img, ImgProps};
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,
@@ -324,23 +364,29 @@ pub use input::{
     IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
 };
 pub use input_adornment::{
-    input_adornment, InputAdornment, InputAdornmentAddon, InputAdornmentAddonProps,
-    InputAdornmentAlign, InputAdornmentBuilder, InputAdornmentButton, InputAdornmentButtonProps,
-    InputAdornmentInput, InputAdornmentInputProps, InputAdornmentProps, InputAdornmentText,
+    input_adornment, input_adornment_addon, input_adornment_text, InputAdornment,
+    InputAdornmentAddon, InputAdornmentAddonBuilder, InputAdornmentAddonProps, InputAdornmentAlign,
+    InputAdornmentBuilder, InputAdornmentButton, InputAdornmentButtonProps, InputAdornmentInput,
+    InputAdornmentInputProps, InputAdornmentProps, InputAdornmentText, InputAdornmentTextBuilder,
     InputAdornmentTextProps, InputAdornmentTextarea, InputAdornmentTextareaProps,
 };
 pub use input_otp::{
-    input_otp, input_otp_focus_id, input_otp_scope, use_input_otp, InputOTP, InputOTPGroup,
-    InputOTPGroupProps, InputOTPProps, InputOTPSeparator, InputOTPSeparatorProps, InputOTPSlot,
-    InputOTPSlotProps, InputOtpBuilder, InputOtpCtx, InputOtpPattern, INPUT_OTP_FOCUS_PREFIX,
+    input_otp, input_otp_focus_id, input_otp_group, input_otp_scope, input_otp_separator,
+    input_otp_slot, use_input_otp, InputOTP, InputOTPGroup, InputOTPGroupProps, InputOTPProps,
+    InputOTPSeparator, InputOTPSeparatorProps, InputOTPSlot, InputOTPSlotProps, InputOtpBuilder,
+    InputOtpCtx, InputOtpGroupBuilder, InputOtpPattern, InputOtpSeparatorBuilder,
+    InputOtpSlotBuilder, INPUT_OTP_FOCUS_PREFIX,
 };
 pub use item::{
     apply_bound_item_media_variant, apply_bound_item_size, apply_bound_item_variant,
-    apply_item_paint, item, item_group, Item, ItemActions, ItemActionsProps, ItemBuilder,
-    ItemContent, ItemContentProps, ItemDescription, ItemDescriptionProps, ItemFooter,
-    ItemFooterProps, ItemGroup, ItemGroupBuilder, ItemGroupProps, ItemHeader, ItemHeaderProps,
-    ItemMedia, ItemMediaProps, ItemMediaVariant, ItemProps, ItemSeparator, ItemSeparatorProps,
-    ItemSize, ItemTitle, ItemTitleProps, ItemVariant,
+    apply_item_paint, item, item_actions, item_content, item_description, item_footer, item_group,
+    item_header, item_media, item_separator, item_title, Item, ItemActions, ItemActionsBuilder,
+    ItemActionsProps, ItemBuilder, ItemContent, ItemContentBuilder, ItemContentProps,
+    ItemDescription, ItemDescriptionBuilder, ItemDescriptionProps, ItemFooter, ItemFooterBuilder,
+    ItemFooterProps, ItemGroup, ItemGroupBuilder, ItemGroupProps, ItemHeader, ItemHeaderBuilder,
+    ItemHeaderProps, ItemMedia, ItemMediaBuilder, ItemMediaProps, ItemMediaVariant, ItemProps,
+    ItemSeparator, ItemSeparatorBuilder, ItemSeparatorProps, ItemSize, ItemTitle, ItemTitleBuilder,
+    ItemTitleProps, ItemVariant,
 };
 pub use kbd::{
     kbd, kbd_group, Kbd, KbdBuilder, KbdGroup, KbdGroupBuilder, KbdGroupProps, KbdProps,
@@ -351,8 +397,9 @@ pub use label::{
     LABEL_SELECTION_COPY_SIGNAL,
 };
 pub use list::{
-    list, List, ListBuilder, ListDescription, ListDescriptionProps, ListHeader, ListHeaderProps,
-    ListItem, ListItemProps, ListMarker, ListProps,
+    list, list_description, list_header, list_item, List, ListBuilder, ListDescription,
+    ListDescriptionBuilder, ListDescriptionProps, ListHeader, ListHeaderBuilder, ListHeaderProps,
+    ListItem, ListItemBuilder, ListItemProps, ListMarker, ListProps,
 };
 pub use marker::{
     apply_bound_marker_variant, apply_marker_paint, marker, marker_content, marker_icon, ui_marker,
@@ -360,13 +407,16 @@ pub use marker::{
     MarkerIconBuilder, MarkerIconProps, MarkerProps, MarkerVariant,
 };
 pub use menubar::{
-    menubar, menubar_content, menubar_menu, menubar_radio_group, menubar_scope, menubar_sub,
-    menubar_sub_content, use_menubar, MenuItem, MenuSection, MenubarBuilder, MenubarCheckboxItem,
-    MenubarCheckboxItemProps, MenubarContentOpts, MenubarCtx, MenubarGroup, MenubarGroupProps,
-    MenubarItem, MenubarItemProps, MenubarLabel, MenubarLabelProps, MenubarRadioItem,
-    MenubarRadioItemProps, MenubarSeparator, MenubarSeparatorProps, MenubarShortcut,
+    menubar, menubar_content, menubar_content_slot, menubar_group, menubar_item, menubar_label,
+    menubar_menu, menubar_radio_group, menubar_scope, menubar_separator, menubar_shortcut,
+    menubar_sub, menubar_sub_content, menubar_trigger, use_menubar, MenuItem, MenuSection,
+    MenubarBuilder, MenubarCheckboxItem, MenubarCheckboxItemProps, MenubarContentOpts,
+    MenubarContentSlotBuilder, MenubarCtx, MenubarGroup, MenubarGroupBuilder, MenubarGroupProps,
+    MenubarItem, MenubarItemBuilder, MenubarItemProps, MenubarLabel, MenubarLabelBuilder,
+    MenubarLabelProps, MenubarRadioItem, MenubarRadioItemProps, MenubarSeparator,
+    MenubarSeparatorBuilder, MenubarSeparatorProps, MenubarShortcut, MenubarShortcutBuilder,
     MenubarShortcutProps, MenubarSubTrigger, MenubarSubTriggerProps, MenubarTrigger,
-    MenubarTriggerProps,
+    MenubarTriggerBuilder, MenubarTriggerProps,
 };
 pub use message::{
     apply_bound_message_align, apply_message_paint, message, message_avatar, message_content,
@@ -390,8 +440,9 @@ pub use message_scroller::{
     MessageScrollerViewportBuilder, MessageScrollerViewportProps, MessageScrollerVisibility,
 };
 pub use navbar::{
-    navbar, Navbar, NavbarActions, NavbarActionsProps, NavbarBrand, NavbarBrandProps,
-    NavbarBuilder, NavbarCenter, NavbarCenterProps, NavbarProps,
+    navbar, navbar_actions, navbar_brand, navbar_center, Navbar, NavbarActions,
+    NavbarActionsBuilder, NavbarActionsProps, NavbarBrand, NavbarBrandBuilder, NavbarBrandProps,
+    NavbarBuilder, NavbarCenter, NavbarCenterBuilder, NavbarCenterProps, NavbarProps,
 };
 pub use navigation_menu::{
     navigation_menu, navigation_menu_content, navigation_menu_item, navigation_menu_scope,
@@ -407,47 +458,63 @@ pub use pagination::{
     PaginationContent, PaginationContentProps, PaginationEllipsis, PaginationEllipsisProps,
     PaginationItem, PaginationItemProps, PaginationJumper, PaginationJumperProps, PaginationLink,
     PaginationLinkProps, PaginationNext, PaginationNextProps, PaginationPage, PaginationPrevious,
-    PaginationPreviousProps, PaginationProps, PaginationRangeOpts,
+    PaginationPreviousProps, PaginationProps, PaginationRangeOpts, PaginationSlotBuilder,
 };
 pub use popover::{
-    popover, popover_content, popover_panel, popover_scope, popover_side_align_to_placement,
-    popover_surface, use_popover, PopoverBuilder, PopoverContentOpts, PopoverCtx,
-    PopoverDescription, PopoverDescriptionProps, PopoverHeader, PopoverHeaderProps,
-    PopoverPanelBuilder, PopoverTitle, PopoverTitleProps, PopoverTrigger, PopoverTriggerProps,
+    popover, popover_content, popover_content_slot, popover_description, popover_header,
+    popover_panel, popover_scope, popover_side_align_to_placement, popover_surface, popover_title,
+    popover_trigger, use_popover, PopoverBuilder, PopoverContentOpts, PopoverContentSlotBuilder,
+    PopoverCtx, PopoverDescription, PopoverDescriptionBuilder, PopoverDescriptionProps,
+    PopoverHeader, PopoverHeaderBuilder, PopoverHeaderProps, PopoverPanelBuilder, PopoverTitle,
+    PopoverTitleBuilder, PopoverTitleProps, PopoverTrigger, PopoverTriggerBuilder,
+    PopoverTriggerProps,
 };
 pub use progress::{
-    progress, progress_circle, progress_circle_svg, progress_circle_view, progress_scope,
-    progress_track, use_progress, Progress, ProgressBuilder, ProgressCircle, ProgressCircleBuilder,
-    ProgressCircleOpts, ProgressCircleProps, ProgressCircleSize, ProgressCtx, ProgressIndicator,
-    ProgressIndicatorProps, ProgressLabel, ProgressLabelProps, ProgressOrientation, ProgressProps,
-    ProgressTrack, ProgressTrackOpts, ProgressTrackProps, ProgressValue, ProgressValueProps,
+    progress, progress_circle, progress_circle_svg, progress_circle_view, progress_label,
+    progress_scope, progress_track, progress_track_slot, progress_value, use_progress, Progress,
+    ProgressBuilder, ProgressCircle, ProgressCircleBuilder, ProgressCircleOpts,
+    ProgressCircleProps, ProgressCircleSize, ProgressCtx, ProgressIndicator,
+    ProgressIndicatorProps, ProgressLabel, ProgressLabelBuilder, ProgressLabelProps,
+    ProgressOrientation, ProgressProps, ProgressTrack, ProgressTrackBuilder, ProgressTrackOpts,
+    ProgressTrackProps, ProgressValue, ProgressValueBuilder, ProgressValueProps,
 };
 pub use questionnaire::{
     assign_shortcut, enabled_item_names, item_has_valid_answer, questionnaire,
-    questionnaire_item_change_fn, questionnaire_item_scope, questionnaire_scope,
-    questionnaire_status_change_fn, questionnaire_submit_fn, use_questionnaire,
-    use_questionnaire_item, Questionnaire, QuestionnaireActions, QuestionnaireActionsProps,
-    QuestionnaireAnswers, QuestionnaireBuilder, QuestionnaireChoice, QuestionnaireChoiceDef,
-    QuestionnaireChoiceDescription, QuestionnaireChoiceDescriptionProps, QuestionnaireChoiceProps,
-    QuestionnaireChoices, QuestionnaireChoicesProps, QuestionnaireCtx, QuestionnaireDescription,
-    QuestionnaireDescriptionProps, QuestionnaireError, QuestionnaireErrorProps, QuestionnaireInput,
+    questionnaire_actions, questionnaire_choice, questionnaire_choice_description,
+    questionnaire_choices, questionnaire_description, questionnaire_error,
+    questionnaire_item_change_fn, questionnaire_item_scope, questionnaire_next,
+    questionnaire_previous, questionnaire_progress, questionnaire_scope, questionnaire_skip,
+    questionnaire_status_change_fn, questionnaire_submit, questionnaire_submit_fn,
+    questionnaire_title, use_questionnaire, use_questionnaire_item, Questionnaire,
+    QuestionnaireActions, QuestionnaireActionsBuilder, QuestionnaireActionsProps,
+    QuestionnaireAnswers, QuestionnaireBuilder, QuestionnaireChoice, QuestionnaireChoiceBuilder,
+    QuestionnaireChoiceDef, QuestionnaireChoiceDescription, QuestionnaireChoiceDescriptionBuilder,
+    QuestionnaireChoiceDescriptionProps, QuestionnaireChoiceProps, QuestionnaireChoices,
+    QuestionnaireChoicesBuilder, QuestionnaireChoicesProps, QuestionnaireCtx,
+    QuestionnaireDescription, QuestionnaireDescriptionBuilder, QuestionnaireDescriptionProps,
+    QuestionnaireError, QuestionnaireErrorBuilder, QuestionnaireErrorProps, QuestionnaireInput,
     QuestionnaireInputProps, QuestionnaireItem, QuestionnaireItemAnswer, QuestionnaireItemCtx,
     QuestionnaireItemDef, QuestionnaireItemHandle, QuestionnaireItemMeta, QuestionnaireItemProps,
-    QuestionnaireItemStatus, QuestionnaireNext, QuestionnaireNextProps, QuestionnairePartsClass,
-    QuestionnairePrevious, QuestionnairePreviousProps, QuestionnaireProgress,
+    QuestionnaireItemStatus, QuestionnaireNext, QuestionnaireNextBuilder, QuestionnaireNextProps,
+    QuestionnairePartsClass, QuestionnairePrevious, QuestionnairePreviousBuilder,
+    QuestionnairePreviousProps, QuestionnaireProgress, QuestionnaireProgressBuilder,
     QuestionnaireProgressProps, QuestionnaireProps, QuestionnaireQuestionBuilder,
-    QuestionnaireShortcuts, QuestionnaireSkip, QuestionnaireSkipProps, QuestionnaireSubmit,
-    QuestionnaireSubmitFn, QuestionnaireSubmitProps, QuestionnaireTitle, QuestionnaireTitleProps,
+    QuestionnaireShortcuts, QuestionnaireSkip, QuestionnaireSkipBuilder, QuestionnaireSkipProps,
+    QuestionnaireSubmit, QuestionnaireSubmitBuilder, QuestionnaireSubmitFn,
+    QuestionnaireSubmitProps, QuestionnaireTitle, QuestionnaireTitleBuilder,
+    QuestionnaireTitleProps,
 };
 pub use radio_group::{
-    radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx,
-    RadioGroupItem, RadioGroupItemLabel, RadioGroupItemLabelProps, RadioGroupItemProps,
-    RadioGroupProps,
+    radio_group, radio_group_item, radio_group_item_label, radio_group_scope, radio_option,
+    use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx, RadioGroupItem,
+    RadioGroupItemBuilder, RadioGroupItemLabel, RadioGroupItemLabelBuilder,
+    RadioGroupItemLabelProps, RadioGroupItemProps, RadioGroupProps, RadioOption,
 };
 pub use resizable::{
-    resizable, resizable_panel_group_scope, use_resizable, ResizableBuilder, ResizableCtx,
-    ResizableHandle, ResizableHandleProps, ResizableOrientation, ResizablePanel,
-    ResizablePanelGroup, ResizablePanelGroupProps, ResizablePanelProps,
+    resizable, resizable_handle, resizable_panel, resizable_panel_group_scope, use_resizable,
+    ResizableBuilder, ResizableCtx, ResizableHandle, ResizableHandleBuilder, ResizableHandleProps,
+    ResizableOrientation, ResizablePanel, ResizablePanelBuilder, ResizablePanelGroup,
+    ResizablePanelGroupProps, ResizablePanelProps,
 };
 pub use scroll_area::{scroll_area, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps};
 pub use scroll_viewport::{
@@ -458,62 +525,79 @@ pub use scrollbar::{
     scrollbar, scrollbarbuilder, Scrollbar, ScrollbarBuilder, ScrollbarOrientation, ScrollbarProps,
 };
 pub use select::{
-    select, select_content, select_scope, use_select, Select, SelectBuilder, SelectContentOpts,
-    SelectCtx, SelectGroup, SelectGroupData, SelectGroupProps, SelectItem, SelectItemAlign,
+    select, select_content, select_content_slot, select_group, select_item, select_scope,
+    select_separator, select_trigger, select_value, use_select, Select, SelectBuilder,
+    SelectContentOpts, SelectContentSlotBuilder, SelectCtx, SelectGroup, SelectGroupBuilder,
+    SelectGroupData, SelectGroupProps, SelectItem, SelectItemAlign, SelectItemBuilder,
     SelectItemData, SelectItemProps, SelectLabel, SelectLabelProps, SelectProps,
-    SelectScrollSelected, SelectSeparator, SelectSeparatorProps, SelectTrigger, SelectTriggerProps,
-    SelectValue, SelectValueProps,
+    SelectScrollSelected, SelectSeparator, SelectSeparatorBuilder, SelectSeparatorProps,
+    SelectTrigger, SelectTriggerBuilder, SelectTriggerProps, SelectValue, SelectValueBuilder,
+    SelectValueProps,
 };
 pub use separator::{separator, Separator, SeparatorBuilder, SeparatorProps};
 pub use sheet::{
-    sheet, sheet_close, sheet_content, sheet_open, sheet_scope, use_sheet, SheetBody,
-    SheetBodyProps, SheetBuilder, SheetClose, SheetCloseProps, SheetContentOpts, SheetCtx,
-    SheetDescription, SheetDescriptionProps, SheetFooter, SheetFooterProps, SheetHeader,
-    SheetHeaderProps, SheetSide, SheetTitle, SheetTitleProps, SheetTrigger, SheetTriggerProps,
+    sheet, sheet_body, sheet_close, sheet_close_part, sheet_content, sheet_content_slot,
+    sheet_description, sheet_footer, sheet_header, sheet_open, sheet_scope, sheet_title,
+    sheet_trigger, use_sheet, SheetBody, SheetBodyBuilder, SheetBodyProps, SheetBuilder,
+    SheetClose, SheetCloseBuilder, SheetCloseProps, SheetContentOpts, SheetContentSlotBuilder,
+    SheetCtx, SheetDescription, SheetDescriptionBuilder, SheetDescriptionProps, SheetFooter,
+    SheetFooterBuilder, SheetFooterProps, SheetHeader, SheetHeaderBuilder, SheetHeaderProps,
+    SheetSide, SheetTitle, SheetTitleBuilder, SheetTitleProps, SheetTrigger, SheetTriggerBuilder,
+    SheetTriggerProps,
 };
 pub use sidebar::{
-    apply_bound_sidebar_menu_button_active, sidebar, sidebar_menu_button, sidebar_provider_scope,
-    sidebar_tree, toggle_sidebar, use_sidebar, Sidebar, SidebarBuilder, SidebarCollapsible,
-    SidebarContent, SidebarContentProps, SidebarCtx, SidebarFooter, SidebarFooterProps,
-    SidebarGroup, SidebarGroupContent, SidebarGroupContentProps, SidebarGroupLabel,
-    SidebarGroupLabelProps, SidebarGroupProps, SidebarHeader, SidebarHeaderProps, SidebarInput,
-    SidebarInputProps, SidebarInset, SidebarInsetProps, SidebarMenu, SidebarMenuButton,
+    apply_bound_sidebar_menu_button_active, sidebar, sidebar_content, sidebar_footer,
+    sidebar_group, sidebar_group_content, sidebar_group_label, sidebar_header, sidebar_inset,
+    sidebar_menu, sidebar_menu_button, sidebar_menu_item, sidebar_provider_scope, sidebar_tree,
+    sidebar_trigger, toggle_sidebar, use_sidebar, Sidebar, SidebarBuilder, SidebarCollapsible,
+    SidebarContent, SidebarContentBuilder, SidebarContentProps, SidebarCtx, SidebarFooter,
+    SidebarFooterBuilder, SidebarFooterProps, SidebarGroup, SidebarGroupBuilder,
+    SidebarGroupContent, SidebarGroupContentBuilder, SidebarGroupContentProps, SidebarGroupLabel,
+    SidebarGroupLabelBuilder, SidebarGroupLabelProps, SidebarGroupProps, SidebarHeader,
+    SidebarHeaderBuilder, SidebarHeaderProps, SidebarInput, SidebarInputProps, SidebarInset,
+    SidebarInsetBuilder, SidebarInsetProps, SidebarMenu, SidebarMenuBuilder, SidebarMenuButton,
     SidebarMenuButtonBuilder, SidebarMenuButtonProps, SidebarMenuButtonSize,
-    SidebarMenuButtonVariant, SidebarMenuItem, SidebarMenuItemProps, SidebarMenuProps,
-    SidebarProps, SidebarProvider, SidebarProviderProps, SidebarRail, SidebarRailProps,
-    SidebarSeparator, SidebarSeparatorProps, SidebarSide, SidebarTrigger, SidebarTriggerProps,
-    SidebarVariant,
+    SidebarMenuButtonVariant, SidebarMenuItem, SidebarMenuItemBuilder, SidebarMenuItemProps,
+    SidebarMenuProps, SidebarProps, SidebarProvider, SidebarProviderProps, SidebarRail,
+    SidebarRailProps, SidebarSeparator, SidebarSeparatorProps, SidebarSide, SidebarTrigger,
+    SidebarTriggerBuilder, SidebarTriggerProps, SidebarVariant,
 };
 pub use skeleton::{skeleton, Skeleton, SkeletonBuilder, SkeletonProps};
 pub use slider::{slider, Slider, SliderBuilder, SliderOrientation, SliderProps};
 pub use stepper::{
-    stepper, stepper_scope, use_stepper, Stepper, StepperBuilder, StepperCtx, StepperDescription,
-    StepperDescriptionProps, StepperIndicator, StepperIndicatorProps, StepperItem,
-    StepperItemProps, StepperOrientation, StepperProps, StepperStep, StepperTitle,
-    StepperTitleProps,
+    stepper, stepper_description, stepper_indicator, stepper_item, stepper_scope, stepper_step,
+    stepper_title, use_stepper, Stepper, StepperBuilder, StepperCtx, StepperDescription,
+    StepperDescriptionBuilder, StepperDescriptionProps, StepperIndicator, StepperIndicatorBuilder,
+    StepperIndicatorProps, StepperItem, StepperItemBuilder, StepperItemProps, StepperOrientation,
+    StepperProps, StepperStep, StepperTitle, StepperTitleBuilder, StepperTitleProps,
 };
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
 pub use table::{
-    apply_bound_table_align, apply_bound_table_row_selected, data_table, table, table_comfortable,
-    table_compact, DataTable, DataTableProps, Table, TableAlign, TableBody, TableBodyProps,
-    TableBuilder, TableCaption, TableCaptionProps, TableCell, TableCellProps, TableColumn,
-    TableDensity, TableFooter, TableFooterProps, TableHead, TableHeadProps, TableHeader,
-    TableHeaderProps, TablePaginationState, TableProps, TableRow, TableRowProps, TableSortDir,
-    TableSortState,
+    apply_bound_table_align, apply_bound_table_row_selected, data_table, table, table_body,
+    table_caption, table_cell, table_comfortable, table_compact, table_footer, table_head,
+    table_header, table_row, ui_table, DataTable, DataTableProps, Table, TableAlign, TableBody,
+    TableBodyBuilder, TableBodyProps, TableBuilder, TableCaption, TableCaptionBuilder,
+    TableCaptionProps, TableCell, TableCellBuilder, TableCellProps, TableColumn, TableDensity,
+    TableFooter, TableFooterBuilder, TableFooterProps, TableHead, TableHeadBuilder, TableHeadProps,
+    TableHeader, TableHeaderBuilder, TableHeaderProps, TablePaginationState, TableProps, TableRow,
+    TableRowBuilder, TableRowProps, TableSortDir, TableSortState, TableViewBuilder,
 };
 pub use tabs::{
-    tabs_content, tabs_headless, tabs_headless_root, tabs_list, tabs_scope, use_tabs, Tabs,
-    TabsContent, TabsContentProps, TabsCtx, TabsHeadlessBuilder, TabsList, TabsListBuilder,
-    TabsListProps, TabsOrientation, TabsProps, TabsTrigger, TabsTriggerProps,
+    tabs, tabs_content, tabs_headless, tabs_headless_root, tabs_list, tabs_list_slot, tabs_scope,
+    tabs_trigger, use_tabs, Tabs, TabsBuilder, TabsContent, TabsContentProps, TabsCtx,
+    TabsHeadlessBuilder, TabsList, TabsListBuilder, TabsListProps, TabsListSlotBuilder,
+    TabsOrientation, TabsProps, TabsTrigger, TabsTriggerBuilder, TabsTriggerProps,
     TABSTRIP_FOCUS_PREFIX,
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
 pub use timeline::{
-    bullet_glyph_px, timeline, timeline_bullet_active, timeline_line_active, timeline_scope,
-    use_timeline, Timeline, TimelineBuilder, TimelineCtx, TimelineEntry, TimelineItem,
-    TimelineItemBullet, TimelineItemBulletProps, TimelineItemDescription,
-    TimelineItemDescriptionProps, TimelineItemProps, TimelineItemTitle, TimelineItemTitleProps,
-    TimelineProps,
+    bullet_glyph_px, timeline, timeline_bullet_active, timeline_entry, timeline_item,
+    timeline_item_bullet, timeline_item_description, timeline_item_title, timeline_line_active,
+    timeline_scope, use_timeline, Timeline, TimelineBuilder, TimelineCtx, TimelineEntry,
+    TimelineItem, TimelineItemBuilder, TimelineItemBullet, TimelineItemBulletBuilder,
+    TimelineItemBulletProps, TimelineItemDescription, TimelineItemDescriptionBuilder,
+    TimelineItemDescriptionProps, TimelineItemProps, TimelineItemTitle, TimelineItemTitleBuilder,
+    TimelineItemTitleProps, TimelineProps,
 };
 pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
 pub use toast::view::{
@@ -527,19 +611,21 @@ pub use toast::{
 };
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{
-    parse_toggle_group_spacing, toggle_group, toggle_group_scope, use_toggle_group, ToggleGroup,
-    ToggleGroupBuilder, ToggleGroupCtx, ToggleGroupItem, ToggleGroupItemProps, ToggleGroupLayout,
-    ToggleGroupOrientation, ToggleGroupProps, ToggleGroupSize, ToggleGroupVariant,
+    parse_toggle_group_spacing, toggle_group, toggle_group_item, toggle_group_scope, toggle_option,
+    use_toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupCtx, ToggleGroupItem,
+    ToggleGroupItemBuilder, ToggleGroupItemProps, ToggleGroupLayout, ToggleGroupOrientation,
+    ToggleGroupProps, ToggleGroupSize, ToggleGroupVariant, ToggleOption,
 };
 pub use tooltip::{
-    tooltip, tooltip_bubble, tooltip_content, tooltip_scope, tooltip_side_to_placement,
-    use_tooltip, TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger,
+    tooltip, tooltip_bubble, tooltip_content, tooltip_content_slot, tooltip_scope,
+    tooltip_side_to_placement, tooltip_trigger, use_tooltip, TooltipBuilder, TooltipContentOpts,
+    TooltipContentSlotBuilder, TooltipCtx, TooltipTrigger, TooltipTriggerBuilder,
     TooltipTriggerProps,
 };
 pub use tree_view::{
-    tree_view, tree_view_item_scope, tree_view_scope, use_tree_view, use_tree_view_item, TreeNode,
-    TreeView, TreeViewBuilder, TreeViewChrome, TreeViewCtx, TreeViewItem, TreeViewItemCtx,
-    TreeViewVariant,
+    tree_node, tree_view, tree_view_item_scope, tree_view_scope, use_tree_view, use_tree_view_item,
+    TreeNode, TreeView, TreeViewBuilder, TreeViewChrome, TreeViewCtx, TreeViewItem,
+    TreeViewItemCtx, TreeViewVariant,
 };
 pub use virtual_list::{virtual_list, VirtualListBuilder};
 pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

@@ -291,6 +291,7 @@ pub(super) fn picker_trigger(id: &str, leading: Element, main: Element, disabled
         .focusable(!disabled)
         .into();
     out.template_id = Some(trigger_fid);
+    out.set_attr(ATTR_CP_SLOT, "color-picker-trigger");
     out
 }
 
@@ -1137,6 +1138,7 @@ pub(super) fn panel_shell(width: &str, body: Element) -> Element {
         .border_width(1.0)
         .border_color(tokens::border())
         .shadow([0.0, 0.0, 0.0, 0.12], 8.0);
+    panel.set_attr(ATTR_CP_SLOT, "color-picker-content");
     panel
 }
 
@@ -1153,6 +1155,7 @@ pub(super) fn build_panel(
     disabled: bool,
     out: Signal<String>,
     open: Signal<bool>,
+    slots: &SlotMap,
 ) -> Element {
     let width = variant.panel_width();
     let alpha_on = show_alpha && fmt_sig.peek().supports_alpha();
@@ -1161,9 +1164,14 @@ pub(super) fn build_panel(
             id, variant, rgba, hue, sat, val, fmt_sig, out, alpha_on, disabled,
         )
     };
-    let controls = || format_value_row(id, rgba, hue, sat, val, fmt_sig, fmt_str, out, disabled);
-    let swatches =
-        |round: &str| swatch_grid(id, variant, rgba, hue, sat, val, fmt_sig, out, open, round);
+    let controls = || {
+        let row = format_value_row(id, rgba, hue, sat, val, fmt_sig, fmt_str, out, disabled);
+        slots.paint("color-picker-input", row)
+    };
+    let swatches = |round: &str| {
+        let grid = swatch_grid(id, variant, rgba, hue, sat, val, fmt_sig, out, open, round);
+        slots.paint("color-picker-swatch", grid)
+    };
 
     let body: Element = match variant {
         ColorPickerVariant::Twitter => vstack()
@@ -1240,7 +1248,7 @@ pub(super) fn build_panel(
             .child(swatches("0.25rem"))
             .into(),
     };
-    panel_shell(width, body)
+    slots.paint("color-picker-content", panel_shell(width, body))
 }
 
 pub(super) fn build_color_picker_view(
@@ -1253,6 +1261,7 @@ pub(super) fn build_color_picker_view(
     val: Signal<f32>,
     fmt_sig: Signal<ColorFormat>,
     fmt_str: Signal<String>,
+    slots: &SlotMap,
 ) -> Element {
     let ColorPickerRenderProps {
         id,
@@ -1293,6 +1302,7 @@ pub(super) fn build_color_picker_view(
     if variant == ColorPickerVariant::Inline {
         let panel = build_panel(
             &id, variant, rgba, hue, sat, val, fmt_sig, fmt_str, show_alpha, disabled, out, open,
+            slots,
         );
         let view: Element = vstack()
             .gap("0.5rem")
@@ -1309,7 +1319,10 @@ pub(super) fn build_color_picker_view(
         return with_trigger_preview_sync(view, id, rgba, fmt_sig);
     }
 
-    let mut trigger = picker_trigger(&id, swatch, main, disabled);
+    let mut trigger = slots.paint(
+        "color-picker-trigger",
+        picker_trigger(&id, swatch, main, disabled),
+    );
     if !disabled {
         let open_t = open;
         let trig = trigger_focus_id(&id);
@@ -1355,7 +1368,7 @@ pub(super) fn build_color_picker_view(
         if open.peek() {
             let mut panel = build_panel(
                 &id, variant, rgba, hue, sat, val, fmt_sig, fmt_str, show_alpha, disabled, out,
-                open,
+                open, slots,
             );
             panel = panel.absolute();
             mark_floating(

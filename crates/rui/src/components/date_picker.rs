@@ -23,9 +23,13 @@
 //! }
 //! date_picker("due").kind(DatePickerKind::Date).value_signal(sig)
 //! ```
+//!
+//! Builder `.class()` / `.style()` land on the **trigger**. Panel card: `.content_class()` /
+//! `.content_style()`. Sugar internals (day cells, HMS comboboxes) stay default chrome.
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
+use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::calendar::{
     calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
@@ -447,6 +451,8 @@ pub struct DatePickerBuilder {
     default_value: String,
     caption: CalendarCaption,
     disabled: bool,
+    chrome: SlotChrome,
+    content_chrome: SlotChrome,
 }
 
 pub fn date_picker(id: impl Into<String>) -> DatePickerBuilder {
@@ -457,10 +463,31 @@ pub fn date_picker(id: impl Into<String>) -> DatePickerBuilder {
         default_value: String::new(),
         caption: CalendarCaption::Label,
         disabled: false,
+        chrome: SlotChrome::default(),
+        content_chrome: SlotChrome::default(),
     }
 }
 
 impl DatePickerBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    /// Overlay `class` on the floating panel card (not the trigger).
+    pub fn content_class(mut self, classes: impl Into<String>) -> Self {
+        self.content_chrome.class = classes.into();
+        self
+    }
+
+    /// Overlay style on the floating panel card.
+    pub fn content_style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_chrome.style = Some(std::rc::Rc::new(f));
+        self
+    }
     pub fn kind(mut self, k: DatePickerKind) -> Self {
         self.kind = k;
         self
@@ -500,6 +527,8 @@ fn build_date_picker_view(
     hour: Signal<String>,
     minute: Signal<String>,
     second: Signal<String>,
+    trigger_chrome: SlotChrome,
+    content_chrome: SlotChrome,
 ) -> Element {
     let DatePickerRenderProps {
         id,
@@ -520,6 +549,7 @@ fn build_date_picker_view(
         let val = val;
         let year = year;
         let month = month;
+        let trigger_chrome = trigger_chrome.clone();
         reactive_anchor(trig_anchor.clone(), move || {
             let current = val.get();
             let display = if current.is_empty() {
@@ -528,7 +558,8 @@ fn build_date_picker_view(
                 format_trigger_value(kind, &current)
             };
             let muted = current.is_empty();
-            let trigger = picker_trigger(&id, &display, muted, disabled, "13.25rem");
+            let trigger =
+                trigger_chrome.apply(picker_trigger(&id, &display, muted, disabled, "13.25rem"));
             if disabled {
                 return trigger;
             }
@@ -620,6 +651,7 @@ fn build_date_picker_view(
         let hour = hour;
         let minute = minute;
         let second = second;
+        let content_chrome = content_chrome.clone();
         reactive_anchor(panel_anchor.clone(), move || {
             // 先订 open：关闭时 portal_sync 返回 None 也必须留下订阅。
             let is_open = open.get();
@@ -640,7 +672,18 @@ fn build_date_picker_view(
             // Untrackable (current_effect=None → reactive_anchor returns directly → only the dividing line/colon is left in the floating layer).
             isolate_reads(|| {
                 build_date_picker_floating_panel(
-                    &id, kind, caption, oz.panel, open, val, year, month, hour, minute, second,
+                    &id,
+                    kind,
+                    caption,
+                    oz.panel,
+                    open,
+                    val,
+                    year,
+                    month,
+                    hour,
+                    minute,
+                    second,
+                    content_chrome.clone(),
                 )
             })
         });
@@ -662,6 +705,7 @@ fn build_date_picker_floating_panel(
     hour: Signal<String>,
     minute: Signal<String>,
     second: Signal<String>,
+    content_chrome: SlotChrome,
 ) -> Element {
     // Week 导航要订 year/month；Month/DateTime 只 peek，避免改选项拆掉浮层内 Select。
     let (y, m) = match kind {
@@ -838,7 +882,7 @@ fn build_date_picker_floating_panel(
     }
 
     let trigger_fid = trigger_focus_id(id);
-    let mut floating = panel;
+    let mut floating = content_chrome.apply(panel);
     floating = floating.absolute();
     mark_floating(&mut floating, id, &trigger_fid, PopupPlacement::BottomStart);
     floating.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
@@ -857,6 +901,8 @@ impl From<DatePickerBuilder> for Element {
             default_value,
             caption,
             disabled,
+            chrome,
+            content_chrome,
         } = builder;
         let open = resolve_open_signal(None, &id, false);
         let val = resolve_string_signal(value, &id, "value", default_value.clone());
@@ -875,7 +921,18 @@ impl From<DatePickerBuilder> for Element {
             disabled,
         };
         reactive_component_live(view_id, props, move |p| {
-            build_date_picker_view(p, open, val, year, month, hour, minute, second)
+            build_date_picker_view(
+                p,
+                open,
+                val,
+                year,
+                month,
+                hour,
+                minute,
+                second,
+                chrome.clone(),
+                content_chrome.clone(),
+            )
         })
     }
 }
@@ -885,6 +942,7 @@ pub struct TimePickerBuilder {
     value: Option<Signal<String>>,
     default_value: String,
     disabled: bool,
+    chrome: SlotChrome,
 }
 
 pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
@@ -893,10 +951,13 @@ pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
         value: None,
         default_value: String::new(),
         disabled: false,
+        chrome: SlotChrome::default(),
     }
 }
 
 impl TimePickerBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -923,6 +984,7 @@ fn build_time_picker_view(
     hour: Signal<String>,
     minute: Signal<String>,
     second: Signal<String>,
+    chrome: SlotChrome,
 ) -> Element {
     let TimePickerRenderProps { id, disabled } = props;
     let mut root: Element = vstack().gap("0").into();
@@ -949,7 +1011,7 @@ fn build_time_picker_view(
             .child(reactive_placeholder_sized(to_val, 0.0, 0.0).pointer_events_box_none())
             .child(reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none());
     }
-    root.child(time_hms_row(&id, hour, minute, second, disabled))
+    chrome.apply(root.child(time_hms_row(&id, hour, minute, second, disabled)))
 }
 
 impl From<TimePickerBuilder> for Element {
@@ -959,6 +1021,7 @@ impl From<TimePickerBuilder> for Element {
             value,
             default_value,
             disabled,
+            chrome,
         } = builder;
         let initial = default_value.clone();
         let val = value.unwrap_or_else(|| {
@@ -974,7 +1037,7 @@ impl From<TimePickerBuilder> for Element {
         let view_id = format!("{id}__tp_view");
         let props = TimePickerRenderProps { id, disabled };
         reactive_component_live(view_id, props, move |p| {
-            build_time_picker_view(p, val, hour, minute, second)
+            build_time_picker_view(p, val, hour, minute, second, chrome.clone())
         })
     }
 }
@@ -1046,6 +1109,7 @@ mod tests {
                             hour,
                             minute,
                             second,
+                            SlotChrome::default(),
                         );
                     });
                 }

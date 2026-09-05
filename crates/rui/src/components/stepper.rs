@@ -71,10 +71,12 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
+use crate::components::base::{BaseComponentBuilder, SlotAuthor, SlotChrome, SlotStyleFn};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_color, parse_text_color, Element};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{apply_semantic_border, with_class_list, SemanticBorder};
@@ -181,10 +183,30 @@ impl StepState {
 }
 
 /// One step for Builder `.steps()` sugar (title + optional description).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Default appearance; per-step class/style → [`stepper_step`] / [`StepperStep::class`].
+#[derive(Clone, Debug, Default)]
 pub struct StepperStep {
     pub title: String,
     pub description: String,
+    pub chrome: SlotChrome,
+}
+
+/// Sugar entry: `stepper().steps([stepper_step("A").class("ring-2")])`.
+pub fn stepper_step(title: impl Into<String>) -> StepperStep {
+    StepperStep {
+        title: title.into(),
+        description: String::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl StepperStep {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.description = text.into();
+        self
+    }
 }
 
 impl From<&str> for StepperStep {
@@ -192,6 +214,7 @@ impl From<&str> for StepperStep {
         Self {
             title: s.to_string(),
             description: String::new(),
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -201,6 +224,7 @@ impl From<String> for StepperStep {
         Self {
             title,
             description: String::new(),
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -210,13 +234,18 @@ impl From<(&str, &str)> for StepperStep {
         Self {
             title: title.to_string(),
             description: description.to_string(),
+            chrome: SlotChrome::default(),
         }
     }
 }
 
 impl From<(String, String)> for StepperStep {
     fn from((title, description): (String, String)) -> Self {
-        Self { title, description }
+        Self {
+            title,
+            description,
+            chrome: SlotChrome::default(),
+        }
     }
 }
 
@@ -232,13 +261,17 @@ pub struct StepperCtx {
     pub clickable: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct StepperItemSpec {
     index: usize,
     title: String,
     description: String,
     disabled: bool,
     class: String,
+    style: Option<SlotStyleFn>,
+    indicator: SlotAuthor,
+    title_slot: SlotAuthor,
+    description_slot: SlotAuthor,
 }
 
 struct StepperCollect {
@@ -248,6 +281,7 @@ struct StepperCollect {
 
 thread_local! {
     static STEPPER_STACK: RefCell<Vec<StepperCollect>> = const { RefCell::new(Vec::new()) };
+    static PENDING_ITEM_STYLE: RefCell<Option<SlotStyleFn>> = const { RefCell::new(None) };
 }
 
 fn stepper_context() -> Context<StepperCtx> {
@@ -392,12 +426,22 @@ fn paint_item(
     orientation: StepperOrientation,
     clickable: bool,
 ) -> Element {
-    let indicator = paint_indicator(spec.index, state, clickable && !spec.disabled, current);
-    let title = paint_title(&spec.title, state, orientation);
+    let indicator = spec.indicator.apply(paint_indicator(
+        spec.index,
+        state,
+        clickable && !spec.disabled,
+        current,
+    ));
+    let title = spec
+        .title_slot
+        .apply(paint_title(&spec.title, state, orientation));
     let desc = if spec.description.trim().is_empty() {
         None
     } else {
-        Some(paint_description(&spec.description, orientation))
+        Some(
+            spec.description_slot
+                .apply(paint_description(&spec.description, orientation)),
+        )
     };
 
     let mut copy = if orientation.is_vertical() {
@@ -435,6 +479,9 @@ fn paint_item(
     }
     if !spec.class.trim().is_empty() {
         el = with_class_list(el, &spec.class);
+    }
+    if let Some(ref style) = spec.style {
+        el = style(BaseComponentBuilder::new(el)).el;
     }
     el
 }
@@ -627,6 +674,79 @@ fn slot_of(el: &Element) -> Option<&str> {
 // Builder
 // ---------------------------------------------------------------------------
 
+pub struct StepperItemBuilder {
+    title: String,
+    description: String,
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn stepper_item() -> StepperItemBuilder {
+    StepperItemBuilder {
+        title: String::new(),
+        description: String::new(),
+        disabled: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl StepperItemBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn title(mut self, text: impl Into<String>) -> Self {
+        self.title = text.into();
+        self
+    }
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.description = text.into();
+        self
+    }
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<StepperItemBuilder> for Element {
+    fn from(builder: StepperItemBuilder) -> Self {
+        PENDING_ITEM_STYLE.with(|s| {
+            *s.borrow_mut() = builder.chrome.style.clone();
+        });
+        let class = if builder.chrome.class.trim().is_empty() {
+            None
+        } else {
+            Some(builder.chrome.class.clone())
+        };
+        StepperItem(StepperItemProps {
+            title: Some(builder.title),
+            description: if builder.description.is_empty() {
+                None
+            } else {
+                Some(builder.description)
+            },
+            disabled: Some(builder.disabled),
+            class,
+            children: if builder.children.is_empty() {
+                None
+            } else {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                Some(frag.children(builder.children))
+            },
+            base: None,
+        })
+    }
+}
+
 pub struct StepperBuilder {
     id: String,
     steps: Vec<StepperStep>,
@@ -634,7 +754,9 @@ pub struct StepperBuilder {
     default_step: usize,
     orientation: StepperOrientation,
     clickable: bool,
-    class: String,
+    chrome: SlotChrome,
+    item_chrome: SlotChrome,
+    custom_items: Vec<Box<dyn FnOnce() -> Element>>,
     child: Option<Box<dyn FnOnce() -> Element>>,
 }
 
@@ -647,19 +769,39 @@ pub fn stepper() -> StepperBuilder {
         default_step: 0,
         orientation: StepperOrientation::Horizontal,
         clickable: true,
-        class: String::new(),
+        chrome: SlotChrome::default(),
+        item_chrome: SlotChrome::default(),
+        custom_items: Vec::new(),
         child: None,
     }
 }
 
 impl StepperBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
     }
 
+    /// Data-driven sugar: [`stepper_step`] / `&str` / `(title, description)`.
+    /// Per-step class/style ride on the sugar value; the group default is [`Self::item_chrome`].
     pub fn steps(mut self, steps: impl IntoIterator<Item = impl Into<StepperStep>>) -> Self {
         self.steps = steps.into_iter().map(|s| s.into()).collect();
+        self
+    }
+
+    pub fn item_chrome(mut self, chrome: SlotChrome) -> Self {
+        self.item_chrome = chrome;
+        self
+    }
+
+    pub fn item_with(
+        mut self,
+        f: impl FnOnce(StepperItemBuilder) -> StepperItemBuilder + 'static,
+    ) -> Self {
+        self.custom_items
+            .push(Box::new(move || f(stepper_item()).into()));
         self
     }
 
@@ -680,11 +822,6 @@ impl StepperBuilder {
 
     pub fn clickable(mut self, v: bool) -> Self {
         self.clickable = v;
-        self
-    }
-
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
         self
     }
 
@@ -710,15 +847,18 @@ impl From<StepperBuilder> for Element {
             default_step,
             orientation,
             clickable,
-            class,
+            chrome,
+            item_chrome,
+            custom_items,
             child,
         } = builder;
-        let class = if class.trim().is_empty() {
+        let class = if chrome.class.trim().is_empty() {
             None
         } else {
-            Some(class)
+            Some(chrome.class.clone())
         };
-        stepper_scope(
+        let style = chrome.style.clone();
+        let mut el = stepper_scope(
             id,
             current,
             default_step,
@@ -731,9 +871,18 @@ impl From<StepperBuilder> for Element {
                 } else {
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
-                    let kids: Vec<Element> = steps
+                    let mut kids: Vec<Element> = steps
                         .into_iter()
                         .map(|s| {
+                            let chrome = item_chrome.clone().overlay(s.chrome);
+                            PENDING_ITEM_STYLE.with(|cell| {
+                                *cell.borrow_mut() = chrome.style.clone();
+                            });
+                            let class = if chrome.class.trim().is_empty() {
+                                None
+                            } else {
+                                Some(chrome.class)
+                            };
                             StepperItem(StepperItemProps {
                                 title: Some(s.title),
                                 description: if s.description.is_empty() {
@@ -742,16 +891,23 @@ impl From<StepperBuilder> for Element {
                                     Some(s.description)
                                 },
                                 disabled: None,
-                                class: None,
+                                class,
                                 children: None,
                                 base: None,
                             })
                         })
                         .collect();
+                    for build in custom_items {
+                        kids.push(build());
+                    }
                     frag.children(kids)
                 }
             },
-        )
+        );
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -811,24 +967,28 @@ pub fn StepperItem(
 
     let mut title = title.unwrap_or_default();
     let mut description = description.unwrap_or_default();
+    let mut title_slot = SlotAuthor::default();
+    let mut description_slot = SlotAuthor::default();
+    let mut indicator = SlotAuthor::default();
     if let Some(ch) = children {
         for child in take_packed(ch) {
             match slot_of(&child) {
                 Some(SLOT_TITLE) => {
+                    title_slot = SlotAuthor::from_el(&child);
                     let t = extract_text(&child);
                     if !t.is_empty() {
                         title = t;
                     }
                 }
                 Some(SLOT_DESCRIPTION) => {
+                    description_slot = SlotAuthor::from_el(&child);
                     let t = extract_text(&child);
                     if !t.is_empty() {
                         description = t;
                     }
                 }
                 Some(SLOT_INDICATOR) => {
-                    // Default disc chrome is painted by the root; custom
-                    // indicator children are not a product path yet.
+                    indicator = SlotAuthor::from_el(&child);
                 }
                 _ => {
                     let t = extract_text(&child);
@@ -840,12 +1000,17 @@ pub fn StepperItem(
         }
     }
 
+    let style = PENDING_ITEM_STYLE.with(|s| s.borrow_mut().take());
     register_item(StepperItemSpec {
         index,
         title,
         description,
         disabled: disabled.unwrap_or(false),
         class: class.unwrap_or_default(),
+        style,
+        indicator,
+        title_slot,
+        description_slot,
     });
     Element::new()
 }
@@ -884,6 +1049,45 @@ pub fn StepperDescription(children: Option<Element>) -> Element {
         el = el.children(take_packed(ch));
     }
     el
+}
+
+crate::impl_simple_slot_builder!(
+    StepperIndicatorBuilder,
+    stepper_indicator,
+    StepperIndicator,
+    StepperIndicatorProps
+);
+crate::impl_simple_slot_builder!(
+    StepperTitleBuilder,
+    stepper_title,
+    StepperTitle,
+    StepperTitleProps
+);
+crate::impl_simple_slot_builder!(
+    StepperDescriptionBuilder,
+    stepper_description,
+    StepperDescription,
+    StepperDescriptionProps
+);
+
+impl StepperItemBuilder {
+    pub fn title_with(self, f: impl FnOnce(StepperTitleBuilder) -> StepperTitleBuilder) -> Self {
+        self.child(f(stepper_title()))
+    }
+
+    pub fn description_with(
+        self,
+        f: impl FnOnce(StepperDescriptionBuilder) -> StepperDescriptionBuilder,
+    ) -> Self {
+        self.child(f(stepper_description()))
+    }
+
+    pub fn indicator_with(
+        self,
+        f: impl FnOnce(StepperIndicatorBuilder) -> StepperIndicatorBuilder,
+    ) -> Self {
+        self.child(f(stepper_indicator()))
+    }
 }
 
 #[cfg(test)]
@@ -1081,5 +1285,191 @@ mod tests {
         handle.dispose();
         clear_test_reconcile_root();
         reset_registered_anchors();
+    }
+
+    #[test]
+    fn builder_item_class_reaches_painted_item() {
+        let (_owner, el) = create_root(|| {
+            let class = stepper_item()
+                .title("Profile")
+                .description("Your details")
+                .class("ring-2")
+                .chrome
+                .class;
+            let current = use_signal("st-item-class", || 0usize);
+            let spec = StepperItemSpec {
+                index: 0,
+                title: "Profile".into(),
+                description: "Your details".into(),
+                disabled: false,
+                class,
+                ..Default::default()
+            };
+            paint_item(
+                &spec,
+                current,
+                StepState::Active,
+                StepperOrientation::Horizontal,
+                true,
+            )
+        });
+        assert!(
+            el.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("ring-2")))
+                || el
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("ring-2"))
+        );
+    }
+
+    #[test]
+    fn builder_steps_item_chrome_applies_to_each_item() {
+        let (_owner, ok) = create_root(|| {
+            let class = SlotChrome::default().class("step-highlight").class;
+            let current = use_signal("st-steps-chrome", || 0usize);
+            [0usize, 1usize]
+                .into_iter()
+                .zip(["A", "B"])
+                .all(|(index, title)| {
+                    let spec = StepperItemSpec {
+                        index,
+                        title: title.into(),
+                        description: String::new(),
+                        disabled: false,
+                        class: class.clone(),
+                        ..Default::default()
+                    };
+                    let el = paint_item(
+                        &spec,
+                        current,
+                        StepState::Inactive,
+                        StepperOrientation::Horizontal,
+                        true,
+                    );
+                    el.class_set
+                        .as_ref()
+                        .is_some_and(|cs| cs.base.iter().any(|t| t.contains("step-highlight")))
+                        || el
+                            .attrs
+                            .get("rui_utility_class")
+                            .is_some_and(|c| c.contains("step-highlight"))
+                })
+        });
+        assert!(ok, "each step item should carry item_chrome class");
+    }
+
+    #[test]
+    fn builder_steps_sugar_chrome_reaches_item() {
+        let (_owner, ok) = create_root(|| {
+            let s = stepper_step("A").class("ring-2");
+            let chrome = SlotChrome::default().overlay(s.chrome);
+            let current = use_signal("st-sugar-chrome", || 0usize);
+            let spec = StepperItemSpec {
+                index: 0,
+                title: s.title,
+                description: s.description,
+                disabled: false,
+                class: chrome.class,
+                style: chrome.style,
+                ..Default::default()
+            };
+            let el = paint_item(
+                &spec,
+                current,
+                StepState::Inactive,
+                StepperOrientation::Horizontal,
+                true,
+            );
+            el.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("ring-2")))
+                || el
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("ring-2"))
+        });
+        assert!(
+            ok,
+            "stepper_step(\"A\").class must land on the painted item"
+        );
+    }
+
+    #[test]
+    fn builder_title_style() {
+        let (_owner, el): (_, Element) = create_root(|| {
+            let title: Element = stepper_title()
+                .style(|b| b.text_size(20.0))
+                .text("Account")
+                .into();
+            let title_slot = SlotAuthor::from_el(&title);
+            assert_eq!(title_slot.size, Some(20.0));
+            let current = use_signal("st-title-style", || 0usize);
+            let spec = StepperItemSpec {
+                index: 0,
+                title: "Account".into(),
+                title_slot,
+                ..Default::default()
+            };
+            paint_item(
+                &spec,
+                current,
+                StepState::Active,
+                StepperOrientation::Horizontal,
+                true,
+            )
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "stepper_title .style(|b| b.text_size(20)) must land on the painted title"
+        );
+    }
+
+    #[test]
+    fn builder_title_color_padding_survive_paint() {
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        let (_owner, el): (_, Element) = create_root(|| {
+            let title: Element = stepper_title()
+                .style(|b| b.text_size(20.0).text_color(RED).p(8.0))
+                .text("Account")
+                .into();
+            let title_slot = SlotAuthor::from_el(&title);
+            assert_eq!(title_slot.size, Some(20.0));
+            assert_eq!(title_slot.color, Some(RED));
+            assert!(title_slot.padding.is_some());
+            let current = use_signal("st-title-chrome", || 0usize);
+            let spec = StepperItemSpec {
+                index: 0,
+                title: "Account".into(),
+                title_slot,
+                ..Default::default()
+            };
+            paint_item(
+                &spec,
+                current,
+                StepState::Active,
+                StepperOrientation::Horizontal,
+                true,
+            )
+        });
+        fn find_color(el: &Element, want: [u8; 4]) -> bool {
+            el.text_style.color == Some(want) || el.children.iter().any(|c| find_color(c, want))
+        }
+        fn find_pad(el: &Element, want: f32) -> bool {
+            crate::layout::lp_length_px(el.style.padding.left)
+                .is_some_and(|v| (v - want).abs() < 0.01)
+                || el.children.iter().any(|c| find_pad(c, want))
+        }
+        assert!(
+            find_color(&el, RED),
+            "title text_color must survive paint_*"
+        );
+        assert!(find_pad(&el, 8.0), "title padding must survive paint_*");
     }
 }

@@ -34,8 +34,8 @@
 //!         .value_signal(tier)
 //!         .default_value("free")
 //!         .options(vec![
-//!             ("free".into(), "Free".into()),
-//!             ("pro".into(), "Pro".into()),
+//!             ("free", "Free"),
+//!             ("pro", "Pro"),
 //!         ]),
 //! ) }
 //! ```
@@ -45,6 +45,9 @@
 //! - 项 `focus_id = "{group_id}:{value}"`；选中态 `peek` + 每帧 style sync，不订阅根 effect。
 //! - 兼容旧 prop 名 `selected`（宏映射到 `value`）。
 
+use crate::components::base::{
+    fill_default_text_size, fill_default_text_weight, SlotAuthor, SlotChrome,
+};
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
@@ -53,10 +56,11 @@ use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::LineStyle;
+use crate::style::{is_variant_style_overridden, LineStyle, VariantStyleField};
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_fragment;
+use crate::utils::take_packed;
 use rui_macros::component;
 use std::sync::OnceLock;
 
@@ -128,12 +132,11 @@ fn wire_radio_captions(control_id: &str, children: Vec<Element>) -> (Vec<Element
     for child in children {
         let caption = if is_caption_text_leaf(&child) {
             let text = child.text.clone().unwrap_or_default();
-            label("")
-                .text(text)
-                .r#for(control_id)
-                .text_size(14.0)
-                .font_weight(500.0)
-                .into()
+            let author = SlotAuthor::from_el(&child);
+            let mut lbl: Element = label("").text(text).for_target(control_id).into();
+            fill_default_text_size(&mut lbl, 14.0);
+            fill_default_text_weight(&mut lbl, 500);
+            author.apply(lbl)
         } else if is_label_element(&child) {
             let mut lbl = child;
             let existing_for = lbl
@@ -362,26 +365,32 @@ pub fn RadioGroupItemLabel(children: Option<Element>) -> Element {
     let _ = require_radio_group("RadioGroupItemLabel");
     match children {
         Some(c) if is_caption_text_leaf(&c) || c.text.as_ref().is_some_and(|t| !t.is_empty()) => {
+            let author = SlotAuthor::from_el(&c);
             let text = c.text.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
                 c.children
                     .iter()
                     .find_map(|ch| ch.text.clone().filter(|s| !s.is_empty()))
                     .unwrap_or_default()
             });
-            label("")
-                .text(text)
-                .text_size(14.0)
-                .font_weight(500.0)
-                .into()
+            let mut lbl: Element = label("").text(text).into();
+            fill_default_text_size(&mut lbl, 14.0);
+            fill_default_text_weight(&mut lbl, 500);
+            author.apply(lbl)
         }
         Some(mut c) => {
-            c = c.text_size(14.0).font_weight(500.0);
+            fill_default_text_size(&mut c, 14.0);
+            fill_default_text_weight(&mut c, 500);
             if c.attrs.get("accesskit_role").is_none() {
                 c = c.accesskit_role("label");
             }
             c
         }
-        None => label("").text_size(14.0).font_weight(500.0).into(),
+        None => {
+            let mut lbl: Element = label("").into();
+            fill_default_text_size(&mut lbl, 14.0);
+            fill_default_text_weight(&mut lbl, 500);
+            lbl
+        }
     }
 }
 
@@ -389,13 +398,55 @@ pub fn RadioGroupItemLabel(children: Option<Element>) -> Element {
 // Builder + options 便捷路径
 // ---------------------------------------------------------------------------
 
+/// One radio for Builder `.options()` sugar. Default chrome; per-item class/style → [`radio_option`].
+#[derive(Clone, Debug, Default)]
+pub struct RadioOption {
+    pub value: String,
+    pub label: String,
+    pub chrome: SlotChrome,
+}
+
+/// Sugar entry: `radio_group("tier").options([radio_option("pro", "Pro").class("ring-2")])`.
+pub fn radio_option(value: impl Into<String>, label: impl Into<String>) -> RadioOption {
+    RadioOption {
+        value: value.into(),
+        label: label.into(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl RadioOption {
+    crate::impl_slot_chrome_methods!();
+}
+
+impl From<(String, String)> for RadioOption {
+    fn from((value, label): (String, String)) -> Self {
+        Self {
+            value,
+            label,
+            chrome: SlotChrome::default(),
+        }
+    }
+}
+
+impl From<(&str, &str)> for RadioOption {
+    fn from((value, label): (&str, &str)) -> Self {
+        Self {
+            value: value.to_string(),
+            label: label.to_string(),
+            chrome: SlotChrome::default(),
+        }
+    }
+}
+
 pub struct RadioGroupBuilder {
     group_id: String,
     selected: Option<Signal<String>>,
     default_value: String,
-    options: Vec<(String, String)>,
+    options: Vec<RadioOption>,
     disabled: bool,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// RSX `<RadioGroup options=…>`；无 `options` 时宏走 [`radio_group_scope`]。
@@ -439,10 +490,13 @@ pub fn radio_group(group_id: impl Into<String>) -> RadioGroupBuilder {
         options: Vec::new(),
         disabled: false,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl RadioGroupBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.selected = Some(s);
         self
@@ -458,8 +512,9 @@ impl RadioGroupBuilder {
         self
     }
 
-    pub fn options(mut self, pairs: Vec<(String, String)>) -> Self {
-        self.options = pairs;
+    /// Data-driven sugar: [`radio_option`] or `(value, label)` tuples.
+    pub fn options(mut self, pairs: impl IntoIterator<Item = impl Into<RadioOption>>) -> Self {
+        self.options = pairs.into_iter().map(Into::into).collect();
         self
     }
 
@@ -501,15 +556,10 @@ impl From<RadioGroupBuilder> for Element {
             );
 
             let mut items = Vec::with_capacity(options.len() + extra.len());
-            for (value, label_text) in options {
-                let caption = Element::new().text(label_text);
-                items.push(build_radio_item(
-                    &id,
-                    selected,
-                    &value,
-                    vec![caption],
-                    disabled,
-                ));
+            for opt in options {
+                let caption = Element::new().text(opt.label);
+                let el = build_radio_item(&id, selected, &opt.value, vec![caption], disabled);
+                items.push(opt.chrome.apply(el));
             }
             items.extend(extra);
 
@@ -523,7 +573,7 @@ impl From<RadioGroupBuilder> for Element {
             root.attrs.insert("accesskit_id".to_string(), id.clone());
             root.template_id = Some(id);
             attach_focus_roving(&mut root, FocusRovingAxis::Vertical);
-            root
+            builder.chrome.apply(root)
         })
     }
 }
@@ -533,6 +583,65 @@ impl crate::core::tree::IntoElementList for RadioGroupBuilder {
         vec![self.into()]
     }
 }
+
+pub struct RadioGroupItemBuilder {
+    value: String,
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn radio_group_item(value: impl Into<String>) -> RadioGroupItemBuilder {
+    RadioGroupItemBuilder {
+        value: value.into(),
+        disabled: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl RadioGroupItemBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<RadioGroupItemBuilder> for Element {
+    fn from(builder: RadioGroupItemBuilder) -> Self {
+        let el = RadioGroupItem(RadioGroupItemProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for RadioGroupItemBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+crate::impl_simple_slot_builder!(
+    RadioGroupItemLabelBuilder,
+    radio_group_item_label,
+    RadioGroupItemLabel,
+    RadioGroupItemLabelProps
+);
 
 // ---------------------------------------------------------------------------
 // Per-frame sync
@@ -566,17 +675,22 @@ pub(crate) fn sync_radio_checked_subtree(
                     || el.style.border_width != BORDER_W
                     || el.style.border_style != LineStyle::Solid;
                 if chrome_changed {
-                    el.style.bg_color = want_bg;
-                    el.style.border_color = want_border;
-                    el.style.border_width = BORDER_W;
-                    el.style.border_style = LineStyle::Solid;
+                    if !is_variant_style_overridden(&el.attrs, VariantStyleField::Bg) {
+                        el.style.bg_color = want_bg;
+                    }
+                    if !is_variant_style_overridden(&el.attrs, VariantStyleField::Border) {
+                        el.style.border_color = want_border;
+                        el.style.border_width = BORDER_W;
+                        el.style.border_style = LineStyle::Solid;
+                    }
                 }
 
                 let indicator_changed = if let Some(dot) = find_indicator_mut(el) {
-                    let hit = (dot.style.bg_color[0] - want_dot[0]).abs() > 0.001
-                        || (dot.style.bg_color[1] - want_dot[1]).abs() > 0.001
-                        || (dot.style.bg_color[2] - want_dot[2]).abs() > 0.001
-                        || (dot.style.bg_color[3] - want_dot[3]).abs() > 0.001;
+                    let hit = !is_variant_style_overridden(&dot.attrs, VariantStyleField::Bg)
+                        && ((dot.style.bg_color[0] - want_dot[0]).abs() > 0.001
+                            || (dot.style.bg_color[1] - want_dot[1]).abs() > 0.001
+                            || (dot.style.bg_color[2] - want_dot[2]).abs() > 0.001
+                            || (dot.style.bg_color[3] - want_dot[3]).abs() > 0.001);
                     if hit {
                         dot.style.bg_color = want_dot;
                     }
@@ -613,10 +727,7 @@ mod tests {
     fn options_builder_builds_circular_radios() {
         let el: Element = radio_group("tier")
             .default_value("free")
-            .options(vec![
-                ("free".into(), "Free".into()),
-                ("pro".into(), "Pro".into()),
-            ])
+            .options(vec![("free", "Free"), ("pro", "Pro")])
             .into();
         assert_eq!(
             el.attrs.get("accesskit_role").map(|s| s.as_str()),
@@ -674,7 +785,7 @@ mod tests {
     fn radio_exposes_role_in_accesskit() {
         let el: Element = radio_group("a11y_rg")
             .default_value("x")
-            .options(vec![("x".into(), "X".into())])
+            .options(vec![("x", "X")])
             .into();
         let root = Element::new().child(el);
         let update = tree_update_from_elements(&root, None);
@@ -694,5 +805,46 @@ mod tests {
             .expect("radio");
         assert_eq!(group.role(), Role::RadioGroup);
         assert_eq!(radio.role(), Role::RadioButton);
+    }
+
+    #[test]
+    fn builder_item_style() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            radio_group_scope("rg-chrome", None, "", false, || {
+                radio_group_item("a")
+                    .style(|b| b.text_size(20.0))
+                    .text("A")
+                    .into()
+            })
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "radio_group_item .style(|b| b.text_size(20)) must land on the item"
+        );
+    }
+
+    #[test]
+    fn builder_option_style_reaches_item() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            radio_group("rg-opt-chrome")
+                .options([radio_option("a", "A").style(|b| b.text_size(20.0))])
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "radio_option .style must land on the assembled item"
+        );
     }
 }

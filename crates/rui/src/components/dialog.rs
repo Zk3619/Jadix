@@ -42,6 +42,7 @@
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
+use crate::components::base::{SlotChrome, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
     apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
@@ -56,6 +57,8 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_content_opts_chrome;
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
@@ -261,6 +264,7 @@ pub(crate) fn dialog_shell_frame(
     content_slot: Option<&str>,
     content_size: Option<&str>,
     semantic_shell: Option<&SemanticChrome>,
+    panel_chrome: SlotChrome,
 ) -> Element {
     let panel_w = panel_width.unwrap_or("32rem");
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
@@ -295,6 +299,7 @@ pub(crate) fn dialog_shell_frame(
     } else {
         apply_dialog_shell_surface(card, hug_content)
     };
+    card = panel_chrome.apply(card);
     if let Some(slot) = content_slot {
         card.set_attr("data-slot", slot);
     }
@@ -392,7 +397,7 @@ pub fn DialogTrigger(id: String, children: Option<Element>) -> Element {
 }
 
 /// `DialogContent` 遮罩与 chrome 选项（`ui!` / [`dialog_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DialogContentOpts {
     /// 右上角仅图标 ghost 关闭钮；默认 `true`（对齐 solid-ui / shadcn）。
     pub show_close: bool,
@@ -406,6 +411,10 @@ pub struct DialogContentOpts {
     pub overlay_blur: Option<f32>,
     /// CommandDialog：按内容撑开；顶/左右 `p-0`；列表在 `max_h` 下吃掉 Input 之后的剩余高度。
     pub hug_content: bool,
+    /// Utility class on the panel card (after default surface).
+    pub class: Option<String>,
+    /// Layout/paint on the panel card (same surface as RSX `base`).
+    pub style: Option<SlotStyleFn>,
 }
 
 impl Default for DialogContentOpts {
@@ -417,8 +426,14 @@ impl Default for DialogContentOpts {
             close_on_overlay_click: true,
             overlay_blur: None,
             hug_content: false,
+            class: None,
+            style: None,
         }
     }
+}
+
+impl DialogContentOpts {
+    impl_content_opts_chrome!();
 }
 
 /// 遮罩选项：与 Sheet / Drawer / CommandDialog 共用 [`modal_shell`] 默认（alpha `0.25`、blur `2`）。
@@ -441,6 +456,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
     let overlay = dialog_shell_overlay_opts(&opts);
     let show_close = opts.show_close;
     let hug_content = opts.hug_content;
+    let panel_chrome = SlotChrome::from_opts(opts.class, opts.style);
     let presence = use_modal_presence(&id);
     let mounted = mounted_signal(&presence);
 
@@ -509,6 +525,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
             None,
             None,
             None,
+            panel_chrome.clone(),
         )
     })
 }
@@ -629,6 +646,95 @@ pub fn DialogFooter(children: Option<Element>) -> Element {
     )
 }
 
+impl_simple_slot_builder!(
+    DialogTriggerBuilder,
+    dialog_trigger,
+    DialogTrigger,
+    DialogTriggerProps
+);
+impl_simple_slot_builder!(
+    DialogHeaderBuilder,
+    dialog_header,
+    DialogHeader,
+    DialogHeaderProps
+);
+impl_simple_slot_builder!(
+    DialogTitleBuilder,
+    dialog_title,
+    DialogTitle,
+    DialogTitleProps
+);
+impl_simple_slot_builder!(
+    DialogDescriptionBuilder,
+    dialog_description,
+    DialogDescription,
+    DialogDescriptionProps
+);
+impl_simple_slot_builder!(DialogBodyBuilder, dialog_body, DialogBody, DialogBodyProps);
+impl_simple_slot_builder!(
+    DialogFooterBuilder,
+    dialog_footer,
+    DialogFooter,
+    DialogFooterProps
+);
+
+impl DialogHeaderBuilder {
+    pub fn title(self, text: impl Into<String>) -> Self {
+        self.child(dialog_title().text(text))
+    }
+    pub fn title_with(self, f: impl FnOnce(DialogTitleBuilder) -> DialogTitleBuilder) -> Self {
+        self.child(f(dialog_title()))
+    }
+    pub fn description(self, text: impl Into<String>) -> Self {
+        self.child(dialog_description().text(text))
+    }
+    pub fn description_with(
+        self,
+        f: impl FnOnce(DialogDescriptionBuilder) -> DialogDescriptionBuilder,
+    ) -> Self {
+        self.child(f(dialog_description()))
+    }
+}
+
+/// Builder for [`dialog_content`]: `.class()` / `.style()` land on the panel card.
+pub struct DialogContentSlotBuilder {
+    opts: DialogContentOpts,
+}
+
+pub fn dialog_content_slot() -> DialogContentSlotBuilder {
+    DialogContentSlotBuilder {
+        opts: DialogContentOpts::default(),
+    }
+}
+
+impl DialogContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn show_close(mut self, v: bool) -> Self {
+        self.opts.show_close = v;
+        self
+    }
+    pub fn hug_content(mut self, v: bool) -> Self {
+        self.opts.hug_content = v;
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        dialog_content(self.opts, body)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,6 +799,7 @@ mod tests {
             None,
             None,
             None,
+            SlotChrome::default(),
         );
 
         let mut root = Element::new().w(800.0).h(600.0).child(shell);

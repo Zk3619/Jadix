@@ -64,6 +64,7 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::SlotChrome;
 use crate::components::internal::floating_motion::{
     apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
@@ -741,6 +742,36 @@ struct BubbleReactionsEntry {
 thread_local! {
     static BUBBLE_REACTIONS: RefCell<HashMap<String, BubbleReactionsEntry>> =
         RefCell::new(HashMap::new());
+    static CONTENT_PACK_CHROME: RefCell<HashMap<u64, SlotChrome>> = RefCell::new(HashMap::new());
+    static CONTENT_PACK_CHROME_SEQ: Cell<u64> = const { Cell::new(1) };
+}
+
+const ATTR_PACK_CHROME: &str = "rui_bubble_pack_chrome";
+
+fn stash_content_pack_chrome(chrome: SlotChrome) -> Option<u64> {
+    if chrome.class.trim().is_empty() && chrome.style.is_none() {
+        return None;
+    }
+    let id = CONTENT_PACK_CHROME_SEQ.with(|c| {
+        let n = c.get();
+        c.set(n + 1);
+        n
+    });
+    CONTENT_PACK_CHROME.with(|m| m.borrow_mut().insert(id, chrome));
+    Some(id)
+}
+
+fn take_content_pack_chrome(el: &Element) -> SlotChrome {
+    let Some(id) = el
+        .attrs
+        .get(ATTR_PACK_CHROME)
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        return SlotChrome::default();
+    };
+    CONTENT_PACK_CHROME
+        .with(|m| m.borrow_mut().remove(&id))
+        .unwrap_or_default()
 }
 
 fn register_bubble_reactions_entry(
@@ -1278,7 +1309,8 @@ fn finalize_bubble_children(variant: BubbleVariant, kids: Vec<Element>) -> Vec<E
             if is_bubble_content(&c) || is_bubble_reactions(&c) {
                 c
             } else if c.attrs.get(ATTR_CONTENT_PACK).map(|s| s.as_str()) == Some("1") {
-                build_bubble_content_element(variant, take_packed(c))
+                let chrome = take_content_pack_chrome(&c);
+                chrome.apply(build_bubble_content_element(variant, take_packed(c)))
             } else {
                 build_bubble_content_element(variant, vec![c])
             }
@@ -1475,6 +1507,7 @@ pub fn bubble_scope(
 pub struct BubbleGroupBuilder {
     container: BoxBuilder,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// Builder：`BubbleGroup` 纵向分组。
@@ -1487,10 +1520,13 @@ pub fn bubble_group() -> BubbleGroupBuilder {
             .items("start")
             .gap(tokens::SPACE_2),
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl BubbleGroupBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
@@ -1508,14 +1544,14 @@ impl From<BubbleGroupBuilder> for Element {
     fn from(builder: BubbleGroupBuilder) -> Self {
         let mut el: Element = builder.container.children(builder.children).into();
         el.set_attr(ATTR_SLOT, SLOT_GROUP);
-        el
+        builder.chrome.apply(el)
     }
 }
 
 pub struct BubbleBuilder {
     variant: BubbleVariant,
     align: BubbleAlign,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -1524,12 +1560,14 @@ pub fn bubble() -> BubbleBuilder {
     BubbleBuilder {
         variant: BubbleVariant::Default,
         align: BubbleAlign::Start,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl BubbleBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn variant(mut self, v: impl AsRef<str>) -> Self {
         self.variant = BubbleVariant::from(v.as_ref());
         self
@@ -1540,13 +1578,15 @@ impl BubbleBuilder {
         self
     }
 
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
-        self
-    }
-
     pub fn text(self, content: impl Into<String>) -> Self {
         self.child(bubble_content().text(content))
+    }
+
+    pub fn content_with(
+        self,
+        f: impl FnOnce(BubbleContentBuilder) -> BubbleContentBuilder,
+    ) -> Self {
+        self.child(f(bubble_content()))
     }
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
@@ -1564,32 +1604,41 @@ impl BubbleBuilder {
 
 impl From<BubbleBuilder> for Element {
     fn from(builder: BubbleBuilder) -> Self {
-        let class = if builder.class.trim().is_empty() {
+        let class = if builder.chrome.class.trim().is_empty() {
             None
         } else {
-            Some(builder.class)
+            Some(builder.chrome.class.clone())
         };
-        bubble_scope(builder.variant, builder.align, class, move || {
+        let style = builder.chrome.style.clone();
+        let mut root = bubble_scope(builder.variant, builder.align, class, move || {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag.children = builder.children;
             frag
-        })
+        });
+        if let Some(style) = style {
+            root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
+        }
+        root
     }
 }
 
 pub struct BubbleContentBuilder {
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// Builder：气泡内容面（须在 `<Bubble>` / [`bubble_scope`] 内，或显式 [`BubbleContent`] 标签）。
 pub fn bubble_content() -> BubbleContentBuilder {
     BubbleContentBuilder {
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl BubbleContentBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn text(mut self, content: impl Into<String>) -> Self {
         self.children.push(Element::new().text(content.into()));
         self
@@ -1605,6 +1654,9 @@ impl From<BubbleContentBuilder> for Element {
     fn from(builder: BubbleContentBuilder) -> Element {
         let mut el = Element::new();
         el.set_attr(ATTR_CONTENT_PACK, "1");
+        if let Some(id) = stash_content_pack_chrome(builder.chrome) {
+            el.set_attr(ATTR_PACK_CHROME, id.to_string());
+        }
         el.children = builder.children;
         el
     }
@@ -1617,6 +1669,7 @@ pub struct BubbleReactionsBuilder {
     expand_class: String,
     max_visible: usize,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// Builder：气泡反应条。
@@ -1628,10 +1681,13 @@ pub fn bubble_reactions() -> BubbleReactionsBuilder {
         expand_class: String::new(),
         max_visible: DEFAULT_MAX_VISIBLE_REACTIONS,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl BubbleReactionsBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn side(mut self, s: impl AsRef<str>) -> Self {
         self.side = BubbleReactionsSide::from(s.as_ref());
         self
@@ -1672,7 +1728,7 @@ impl BubbleReactionsBuilder {
 
 impl From<BubbleReactionsBuilder> for Element {
     fn from(builder: BubbleReactionsBuilder) -> Self {
-        BubbleReactions(BubbleReactionsProps {
+        let el = BubbleReactions(BubbleReactionsProps {
             side: Some(builder.side),
             align: builder.align,
             layout: Some(builder.layout),
@@ -1685,7 +1741,8 @@ impl From<BubbleReactionsBuilder> for Element {
                 Some(frag)
             },
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -1819,6 +1876,27 @@ mod tests {
             .child(bubble_content().text("hi"))
             .into();
         assert_eq!(el.attrs.get(ATTR_ALIGN).map(|s| s.as_str()), Some("end"));
+    }
+
+    #[test]
+    fn builder_content_class_and_style() {
+        let el: Element = bubble()
+            .content_with(|c| c.class("px-2").style(|b| b.text_size(20.0)).text("Hi"))
+            .into();
+        let content = el
+            .children
+            .iter()
+            .find(|c| is_bubble_content(c))
+            .expect("bubble-content");
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(content, 20.0),
+            "content .style(|b| b.text_size(20)) must land on the content tree"
+        );
     }
 
     #[test]

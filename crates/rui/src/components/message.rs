@@ -97,10 +97,10 @@
 
 use taffy::style::{AlignSelf, FlexDirection};
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{BaseComponentBuilder, SlotChrome};
 use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -605,13 +605,6 @@ fn packed_children(children: Vec<Element>) -> Option<Element> {
     }
 }
 
-fn apply_optional_class(mut el: Element, class: &str) -> Element {
-    if !class.trim().is_empty() {
-        el = with_class_list(el, class.trim());
-    }
-    el
-}
-
 fn apply_base(
     mut el: Element,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
@@ -725,7 +718,7 @@ pub fn MessageFooter(
 
 pub struct MessageGroupBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -733,19 +726,16 @@ pub struct MessageGroupBuilder {
 pub fn message_group() -> MessageGroupBuilder {
     MessageGroupBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageGroupBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -770,31 +760,28 @@ impl From<MessageGroupBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageAvatarBuilder {
     children: Vec<Element>,
-    class: String,
+    chrome: SlotChrome,
 }
 
 /// Builder entry for [`MessageAvatar`].
 pub fn message_avatar() -> MessageAvatarBuilder {
     MessageAvatarBuilder {
         children: Vec::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl MessageAvatarBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 }
@@ -813,24 +800,26 @@ impl From<MessageAvatarBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageHeaderBuilder {
     children: Vec<Element>,
-    class: String,
+    chrome: SlotChrome,
 }
 
 /// Builder entry for [`MessageHeader`].
 pub fn message_header() -> MessageHeaderBuilder {
     MessageHeaderBuilder {
         children: Vec::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl MessageHeaderBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn text(mut self, content: impl Into<String>) -> Self {
         self.children.push(Element::new().text(content.into()));
         self
@@ -838,11 +827,6 @@ impl MessageHeaderBuilder {
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 }
@@ -861,24 +845,26 @@ impl From<MessageHeaderBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageFooterBuilder {
     children: Vec<Element>,
-    class: String,
+    chrome: SlotChrome,
 }
 
 /// Builder entry for [`MessageFooter`].
 pub fn message_footer() -> MessageFooterBuilder {
     MessageFooterBuilder {
         children: Vec::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl MessageFooterBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn text(mut self, content: impl Into<String>) -> Self {
         self.children.push(Element::new().text(content.into()));
         self
@@ -886,11 +872,6 @@ impl MessageFooterBuilder {
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 }
@@ -909,24 +890,26 @@ impl From<MessageFooterBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageContentBuilder {
     children: Vec<Element>,
-    class: String,
+    chrome: SlotChrome,
 }
 
 /// Builder entry for [`MessageContent`].
 pub fn message_content() -> MessageContentBuilder {
     MessageContentBuilder {
         children: Vec::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl MessageContentBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
@@ -955,11 +938,6 @@ impl MessageContentBuilder {
             .push(message_footer().child(child.into()).into());
         self
     }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
-        self
-    }
 }
 
 impl crate::core::tree::IntoElementList for MessageContentBuilder {
@@ -976,17 +954,18 @@ impl From<MessageContentBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageBuilder {
     id: String,
     align: MessageAlign,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
     avatar: Option<Element>,
     header: Option<Element>,
+    content: Option<Element>,
     body: Vec<Element>,
     footer: Option<Element>,
 }
@@ -996,16 +975,19 @@ pub fn message() -> MessageBuilder {
     MessageBuilder {
         id: String::new(),
         align: MessageAlign::Start,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
         avatar: None,
         header: None,
+        content: None,
         body: Vec::new(),
         footer: None,
     }
 }
 
 impl MessageBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -1013,11 +995,6 @@ impl MessageBuilder {
 
     pub fn align(mut self, align: impl Into<MessageAlign>) -> Self {
         self.align = align.into();
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -1031,6 +1008,14 @@ impl MessageBuilder {
         self
     }
 
+    pub fn avatar_with(
+        mut self,
+        f: impl FnOnce(MessageAvatarBuilder) -> MessageAvatarBuilder,
+    ) -> Self {
+        self.avatar = Some(f(message_avatar()).into());
+        self
+    }
+
     pub fn avatar_slot(mut self, slot: impl Into<Element>) -> Self {
         self.avatar = Some(slot.into());
         self
@@ -1041,8 +1026,24 @@ impl MessageBuilder {
         self
     }
 
+    pub fn header_with(
+        mut self,
+        f: impl FnOnce(MessageHeaderBuilder) -> MessageHeaderBuilder,
+    ) -> Self {
+        self.header = Some(f(message_header()).into());
+        self
+    }
+
     pub fn header_child(mut self, child: impl Into<Element>) -> Self {
         self.header = Some(message_header().child(child.into()).into());
+        self
+    }
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(MessageContentBuilder) -> MessageContentBuilder,
+    ) -> Self {
+        self.content = Some(f(message_content()).into());
         self
     }
 
@@ -1053,6 +1054,14 @@ impl MessageBuilder {
 
     pub fn footer(mut self, text: impl Into<String>) -> Self {
         self.footer = Some(message_footer().text(text.into()).into());
+        self
+    }
+
+    pub fn footer_with(
+        mut self,
+        f: impl FnOnce(MessageFooterBuilder) -> MessageFooterBuilder,
+    ) -> Self {
+        self.footer = Some(f(message_footer()).into());
         self
     }
 
@@ -1075,16 +1084,20 @@ impl From<MessageBuilder> for Element {
             if let Some(avatar) = builder.avatar {
                 kids.push(avatar);
             }
-            let mut content_kids = Vec::new();
-            if let Some(header) = builder.header {
-                content_kids.push(header);
-            }
-            content_kids.extend(builder.body);
-            if let Some(footer) = builder.footer {
-                content_kids.push(footer);
-            }
-            if !content_kids.is_empty() {
-                kids.push(message_content().children_from(content_kids).into());
+            if let Some(content) = builder.content {
+                kids.push(content);
+            } else {
+                let mut content_kids = Vec::new();
+                if let Some(header) = builder.header {
+                    content_kids.push(header);
+                }
+                content_kids.extend(builder.body);
+                if let Some(footer) = builder.footer {
+                    content_kids.push(footer);
+                }
+                if !content_kids.is_empty() {
+                    kids.push(message_content().children_from(content_kids).into());
+                }
             }
         }
         let el = Message(MessageProps {
@@ -1095,7 +1108,7 @@ impl From<MessageBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
@@ -1436,6 +1449,17 @@ mod tests {
         let kept = caption_from_children(vec![btn], &footer_text_config());
         assert_eq!(kept[0].children.len(), 1);
         assert!(kept[0].text.is_none());
+    }
+
+    #[test]
+    fn builder_header_class_and_style() {
+        let el: Element = message_header()
+            .class("x")
+            .style(|b| b.text_size(12.0))
+            .text("Hi")
+            .into();
+        assert_eq!(slot_name(&el), Some(SLOT_HEADER));
+        assert_eq!(el.text_style.size_resolved(), 12.0);
     }
 
     #[test]

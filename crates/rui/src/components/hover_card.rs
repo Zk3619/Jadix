@@ -58,10 +58,11 @@ use crate::core::reactivity::{
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
-use crate::style::{parse_text_color, with_class_list};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::popup::{
     mark_floating_with_gap, mount_anchored_overlay, ATTR_FLOATING_MATCH_TRIGGER,
@@ -430,7 +431,7 @@ pub fn HoverCardTrigger(
 }
 
 /// `HoverCardContent` options (shared by `ui!` / [`hover_card_content`]).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HoverCardContentOpts {
     /// `top` / `bottom` / `left` / `right` (default `bottom`).
     pub side: String,
@@ -442,6 +443,8 @@ pub struct HoverCardContentOpts {
     pub class: Option<String>,
     /// Optional panel width. **Default none** (content width, base parity); pass `16rem` / `w-64` for demo / radix.
     pub width: Option<String>,
+    /// Layout/paint on the panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for HoverCardContentOpts {
@@ -452,8 +455,13 @@ impl Default for HoverCardContentOpts {
             side_offset: 4.0,
             class: None,
             width: None,
+            style: None,
         }
     }
+}
+
+impl HoverCardContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// ShadCN `cn-hover-card-content` panel surface (no Portal / no floating).
@@ -512,7 +520,7 @@ pub fn hover_card_content(
     let trigger_fid = ctx.trigger_fid;
     let placement = popover_side_align_to_placement(&opts.side, &opts.align);
     let side_offset = opts.side_offset;
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let width = opts.width;
     let view_id = format!("{id}__hover_card_view");
     let content_hovered = ctx.content_hovered;
@@ -531,9 +539,7 @@ pub fn hover_card_content(
         };
 
         let mut panel = hover_card_surface(body(), width.as_deref());
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         let ch = content_hovered;
         panel = chain_hover_intent(
             panel,
@@ -566,10 +572,52 @@ pub fn hover_card_content(
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
 
+impl_simple_slot_builder!(
+    HoverCardTriggerBuilder,
+    hover_card_trigger,
+    HoverCardTrigger,
+    HoverCardTriggerProps
+);
+
+pub struct HoverCardContentSlotBuilder {
+    opts: HoverCardContentOpts,
+}
+
+pub fn hover_card_content_slot() -> HoverCardContentSlotBuilder {
+    HoverCardContentSlotBuilder {
+        opts: HoverCardContentOpts::default(),
+    }
+}
+
+impl HoverCardContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn side(mut self, side: impl Into<String>) -> Self {
+        self.opts.side = side.into();
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        hover_card_content(self.opts, body)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+    use crate::style::with_class_list;
     use crate::utils::popup::PopupPlacement;
 
     #[test]

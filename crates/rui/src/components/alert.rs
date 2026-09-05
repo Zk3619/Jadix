@@ -51,14 +51,15 @@
 //! - `.filled(true)` / `filled={true}` enables Badge-style soft tint fill.
 //! - Presentational callout: no controlled open state; `role="alert"` + `accesskit_role="alert"` for screen readers.
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{packed_children, BaseComponentBuilder, SlotChrome};
 use crate::core::tree::{Element, IntoF32, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     apply_semantic_chrome_respecting_overrides, is_variant_style_overridden,
     reapply_class_color_overrides, semantic_chrome, set_variant_chrome_enabled,
-    variant_chrome_enabled, with_class_list, SemanticChrome, SemanticChromeDecor,
-    SemanticChromeOpts, SemanticSurface, SemanticTone, VariantStyleField,
+    variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
+    SemanticSurface, SemanticTone, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::take_packed;
@@ -536,11 +537,138 @@ pub fn AlertAction(
 // Builder (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+pub struct AlertTitleBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn alert_title() -> AlertTitleBuilder {
+    AlertTitleBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AlertTitleBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for AlertTitleBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<AlertTitleBuilder> for Element {
+    fn from(builder: AlertTitleBuilder) -> Self {
+        let el = AlertTitle(AlertTitleProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AlertDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn alert_description() -> AlertDescriptionBuilder {
+    AlertDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AlertDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for AlertDescriptionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<AlertDescriptionBuilder> for Element {
+    fn from(builder: AlertDescriptionBuilder) -> Self {
+        let el = AlertDescription(AlertDescriptionProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AlertActionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn alert_action() -> AlertActionBuilder {
+    AlertActionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AlertActionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for AlertActionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<AlertActionBuilder> for Element {
+    fn from(builder: AlertActionBuilder) -> Self {
+        let el = AlertAction(AlertActionProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct AlertBuilder {
     id: String,
     variant: AlertVariant,
     filled: bool,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -550,12 +678,14 @@ pub fn alert() -> AlertBuilder {
         id: String::new(),
         variant: AlertVariant::Default,
         filled: false,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl AlertBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -572,11 +702,6 @@ impl AlertBuilder {
         self
     }
 
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
-        self
-    }
-
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
         self
@@ -590,32 +715,35 @@ impl AlertBuilder {
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(AlertTitle(AlertTitleProps {
-            children: Some(Element::new().text(text.into())),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(alert_title().text(text).into());
+        self
+    }
+
+    pub fn title_with(mut self, f: impl FnOnce(AlertTitleBuilder) -> AlertTitleBuilder) -> Self {
+        self.children.push(f(alert_title()).into());
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(AlertDescription(AlertDescriptionProps {
-            children: Some(Element::new().text(text.into())),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(alert_description().text(text).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(AlertDescriptionBuilder) -> AlertDescriptionBuilder,
+    ) -> Self {
+        self.children.push(f(alert_description()).into());
         self
     }
 
     pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(AlertAction(AlertActionProps {
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(alert_action().child(child).into());
+        self
+    }
+
+    pub fn action_with(mut self, f: impl FnOnce(AlertActionBuilder) -> AlertActionBuilder) -> Self {
+        self.children.push(f(alert_action()).into());
         self
     }
 }
@@ -628,26 +756,16 @@ impl crate::core::tree::IntoElementList for AlertBuilder {
 
 impl From<AlertBuilder> for Element {
     fn from(builder: AlertBuilder) -> Self {
-        let children = if builder.children.is_empty() {
-            None
-        } else {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            Some(frag.children(builder.children))
-        };
-        let mut el = Alert(AlertProps {
+        let el = Alert(AlertProps {
             id: builder.id,
             variant: Some(builder.variant),
             filled: Some(builder.filled),
-            children,
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
         });
-        if !builder.class.trim().is_empty() {
-            el = with_class_list(el, builder.class.trim());
-        }
-        el
+        builder.chrome.apply(el)
     }
 }
 

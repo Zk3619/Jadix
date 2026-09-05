@@ -28,6 +28,7 @@ use std::rc::Rc;
 use crate::app::reactive::{
     reactive_anchor, reactive_component_live_sized, reactive_placeholder_sized,
 };
+use crate::components::base::{paint_slot, SlotChrome, SlotMap};
 use crate::components::button::button;
 use crate::components::select::{select, SelectItemData};
 use crate::core::reactivity::{use_signal, Signal};
@@ -72,6 +73,14 @@ const MONTH_SHORT: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 const DOW: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+#[cfg(test)]
+const ATTR_SLOT: &str = "data-slot";
+const SLOT_DAY: &str = "calendar-day";
+const SLOT_DAY_TODAY: &str = "calendar-day-today";
+const SLOT_WEEKDAY: &str = "calendar-weekday";
+const SLOT_NAV_PREV: &str = "calendar-nav-prev";
+const SLOT_NAV_NEXT: &str = "calendar-nav-next";
 
 /// Title bar: plain label or month/year dropdown (opposite Aria `captionLayout`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -259,6 +268,8 @@ pub struct CalendarBuilder {
     /// 独立使用时 `rounded-lg border`（对位 examples）；浮层内关闭以免双框。
     bordered: bool,
     on_select: Option<Rc<dyn Fn(String)>>,
+    chrome: SlotChrome,
+    slots: SlotMap,
 }
 
 pub fn calendar(id: impl Into<String>) -> CalendarBuilder {
@@ -270,10 +281,15 @@ pub fn calendar(id: impl Into<String>) -> CalendarBuilder {
         disabled: false,
         bordered: true,
         on_select: None,
+        chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
     }
 }
 
 impl CalendarBuilder {
+    crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -399,6 +415,7 @@ fn build_calendar_view(
     month_sel: Signal<String>,
     year_sel: Signal<String>,
     on_select: Option<Rc<dyn Fn(String)>>,
+    slots: SlotMap,
 ) -> Element {
     let CalendarRenderProps {
         id,
@@ -555,48 +572,54 @@ fn build_calendar_view(
         root = root.cursor_kind(CursorKind::Pointer);
     }
 
-    let prev: Element = button(format!("{id}:prev"))
-        .variant("ghost")
-        .size("icon-sm")
-        .disabled(disabled)
-        .on_click({
-            let y_sig = y_sig;
-            let m_sig = m_sig;
-            let f_sig = f_sig;
-            let msel = month_sel;
-            let ysel = year_sel;
-            move || {
-                let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), -1);
-                y_sig.set(yy);
-                m_sig.set(mm);
-                f_sig.set(clamp_day(yy, mm, f_sig.peek()));
-                msel.set(mm.to_string());
-                ysel.set(yy.to_string());
-            }
-        })
-        .child(lucide_chevron("chevron-left"))
-        .into();
-    let next: Element = button(format!("{id}:next"))
-        .variant("ghost")
-        .size("icon-sm")
-        .disabled(disabled)
-        .on_click({
-            let y_sig = y_sig;
-            let m_sig = m_sig;
-            let f_sig = f_sig;
-            let msel = month_sel;
-            let ysel = year_sel;
-            move || {
-                let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), 1);
-                y_sig.set(yy);
-                m_sig.set(mm);
-                f_sig.set(clamp_day(yy, mm, f_sig.peek()));
-                msel.set(mm.to_string());
-                ysel.set(yy.to_string());
-            }
-        })
-        .child(lucide_chevron("chevron-right"))
-        .into();
+    let prev: Element = slots.paint(
+        SLOT_NAV_PREV,
+        button(format!("{id}:prev"))
+            .variant("ghost")
+            .size("icon-sm")
+            .disabled(disabled)
+            .on_click({
+                let y_sig = y_sig;
+                let m_sig = m_sig;
+                let f_sig = f_sig;
+                let msel = month_sel;
+                let ysel = year_sel;
+                move || {
+                    let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), -1);
+                    y_sig.set(yy);
+                    m_sig.set(mm);
+                    f_sig.set(clamp_day(yy, mm, f_sig.peek()));
+                    msel.set(mm.to_string());
+                    ysel.set(yy.to_string());
+                }
+            })
+            .child(lucide_chevron("chevron-left"))
+            .into(),
+    );
+    let next: Element = slots.paint(
+        SLOT_NAV_NEXT,
+        button(format!("{id}:next"))
+            .variant("ghost")
+            .size("icon-sm")
+            .disabled(disabled)
+            .on_click({
+                let y_sig = y_sig;
+                let m_sig = m_sig;
+                let f_sig = f_sig;
+                let msel = month_sel;
+                let ysel = year_sel;
+                move || {
+                    let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), 1);
+                    y_sig.set(yy);
+                    m_sig.set(mm);
+                    f_sig.set(clamp_day(yy, mm, f_sig.peek()));
+                    msel.set(mm.to_string());
+                    ysel.set(yy.to_string());
+                }
+            })
+            .child(lucide_chevron("chevron-right"))
+            .into(),
+    );
 
     let caption_el: Element = if caption == CalendarCaption::Dropdown && !disabled {
         hstack()
@@ -643,6 +666,7 @@ fn build_calendar_view(
     let grid_id = format!("{id}__days");
     let grid_id_key = id.clone();
     let on_grid = on_select.clone();
+    let grid_slots = slots.clone();
     reactive_anchor(grid_id.clone(), move || {
         build_calendar_day_grid(
             &grid_id_key,
@@ -654,6 +678,7 @@ fn build_calendar_view(
             month_sel,
             year_sel,
             on_grid.clone(),
+            grid_slots.clone(),
         )
     });
     root.child(
@@ -673,6 +698,7 @@ fn build_calendar_day_grid(
     month_sel: Signal<String>,
     year_sel: Signal<String>,
     on_select: Option<Rc<dyn Fn(String)>>,
+    slots: SlotMap,
 ) -> Element {
     let current = val.get();
     let y = year.get();
@@ -693,7 +719,8 @@ fn build_calendar_day_grid(
 
     let mut head: Element = hstack().w("100%").into();
     for name in DOW {
-        head = head.child(calendar_grid_cell(weekday_label(name)));
+        let lab = slots.paint(SLOT_WEEKDAY, weekday_label(name));
+        head = head.child(calendar_grid_cell(lab));
     }
 
     let first = weekday(y, m, 1) as i32;
@@ -751,7 +778,13 @@ fn build_calendar_day_grid(
             if outside {
                 b = b.text_color(parse_text_color("muted-foreground"));
             }
-            row = row.child(calendar_grid_cell(Element::from(b).w("100%").h("100%")));
+            let today = is_today && !outside;
+            let slot = if today { SLOT_DAY_TODAY } else { SLOT_DAY };
+            let mut day: Element = paint_slot(Element::from(b), slot, &slots.get(SLOT_DAY));
+            if today {
+                day = slots.get(SLOT_DAY_TODAY).apply(day);
+            }
+            row = row.child(calendar_grid_cell(day.w("100%").h("100%")));
         }
         grid = grid.child(row);
     }
@@ -768,6 +801,8 @@ impl From<CalendarBuilder> for Element {
             disabled,
             bordered,
             on_select,
+            chrome,
+            slots,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "calendar");
         let initial = default_value.clone();
@@ -790,7 +825,7 @@ impl From<CalendarBuilder> for Element {
             bordered,
         };
         reactive_component_live_sized(view_id, props, CALENDAR_W, "auto", move |p| {
-            build_calendar_view(
+            chrome.apply(build_calendar_view(
                 p,
                 val,
                 year,
@@ -799,7 +834,8 @@ impl From<CalendarBuilder> for Element {
                 month_sel,
                 year_sel,
                 on_select.clone(),
-            )
+                slots.clone(),
+            ))
         })
     }
 }
@@ -866,6 +902,7 @@ mod tests {
             msel,
             ysel,
             None,
+            SlotMap::default(),
         );
         fn find_fid<'a>(el: &'a Element, fid: &str) -> Option<&'a Element> {
             if el.focus_id.as_deref() == Some(fid) {
@@ -920,6 +957,7 @@ mod tests {
             msel,
             ysel,
             None,
+            SlotMap::default(),
         );
         fn has_text(el: &Element, needle: &str) -> bool {
             el.text.as_deref().is_some_and(|t| t.contains(needle))
@@ -953,6 +991,7 @@ mod tests {
             msel,
             ysel,
             None,
+            SlotMap::default(),
         );
         fn has_focus_id(el: &Element, id: &str) -> bool {
             el.focus_id.as_deref() == Some(id) || el.children.iter().any(|c| has_focus_id(c, id))
@@ -964,6 +1003,76 @@ mod tests {
         assert!(
             has_focus_id(&el, "t-cal-dd:cap_y:trigger"),
             "year caption must reuse Select trigger"
+        );
+    }
+
+    #[test]
+    fn builder_style_reaches_calendar_view() {
+        let val = use_signal("t-cal-style-val", || "2026-08-14".to_string());
+        let year = use_signal("t-cal-style-y", || 2026i32);
+        let month = use_signal("t-cal-style-m", || 8u32);
+        let focus = use_signal("t-cal-style-f", || 14u32);
+        let msel = use_signal("t-cal-style-msel", || "8".to_string());
+        let ysel = use_signal("t-cal-style-ysel", || "2026".to_string());
+        let view = build_calendar_view(
+            CalendarRenderProps {
+                id: "t-cal-style".into(),
+                caption: CalendarCaption::Label,
+                disabled: false,
+                bordered: true,
+            },
+            val,
+            year,
+            month,
+            focus,
+            msel,
+            ysel,
+            None,
+            SlotMap::default(),
+        );
+        let view = SlotChrome::default()
+            .style(|b| b.text_size(20.0))
+            .apply(view);
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&view, 20.0),
+            "calendar .style must land on the visible view root, not the placeholder"
+        );
+    }
+
+    #[test]
+    fn builder_day_style_reaches_day_slot() {
+        let val = use_signal("t-cal-day-val", || "2026-08-14".to_string());
+        let year = use_signal("t-cal-day-y", || 2026i32);
+        let month = use_signal("t-cal-day-m", || 8u32);
+        let focus = use_signal("t-cal-day-f", || 14u32);
+        let msel = use_signal("t-cal-day-msel", || "8".to_string());
+        let ysel = use_signal("t-cal-day-ysel", || "2026".to_string());
+        let slots = SlotMap::default().slot(SLOT_DAY, |c| c.style(|b| b.text_size(20.0)));
+        let grid = build_calendar_day_grid(
+            "t-cal-day",
+            false,
+            val,
+            year,
+            month,
+            focus,
+            msel,
+            ysel,
+            None,
+            slots,
+        );
+        fn find_day_size(el: &Element, want: f32) -> bool {
+            let slot = el.attrs.get(ATTR_SLOT).map(String::as_str);
+            let is_day = slot == Some(SLOT_DAY) || slot == Some(SLOT_DAY_TODAY);
+            (is_day && el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01))
+                || el.children.iter().any(|c| find_day_size(c, want))
+        }
+        assert!(
+            find_day_size(&grid, 20.0),
+            "calendar .slot(calendar-day) style must land on data-slot=calendar-day"
         );
     }
 }

@@ -55,10 +55,16 @@
 use std::sync::OnceLock;
 
 use crate::app::reactive::{bind_prop, bind_text, reactive_view};
+use crate::components::base::{
+    fill_default_text_color, fill_default_text_size, fill_default_text_weight, packed_children,
+    BaseComponentBuilder, SlotAuthor, SlotChrome,
+};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{Element, LayoutStatus};
+use crate::impl_simple_slot_builder;
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::svg::{circle, path, svg};
 use crate::primitives::text::text;
@@ -68,6 +74,8 @@ use crate::utils::resolve_instance_id;
 use crate::utils::take_packed;
 use rui_macros::component;
 
+const ATTR_SLOT: &str = "data-slot";
+const SLOT_TRACK: &str = "progress-track";
 const ATTR_ORIENTATION: &str = "data-orientation";
 /// 纵向条默认高度（横向条仍 `w-full` + 固定轨高）。
 const PROGRESS_VERTICAL_DEFAULT_H: &str = "8rem";
@@ -151,31 +159,54 @@ fn is_empty_el(el: &Element) -> bool {
         && el.template_id.is_none()
 }
 
-fn flatten_header(mut header: Element) -> Option<Element> {
-    if is_empty_el(&header) {
+fn is_progress_track(el: &Element) -> bool {
+    el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_TRACK)
+}
+
+fn flatten_kids(mut body: Element) -> Vec<Element> {
+    if is_empty_el(&body) {
+        return Vec::new();
+    }
+    let is_frag = body.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1");
+    if is_frag {
+        std::mem::take(&mut body.children)
+    } else {
+        vec![body]
+    }
+}
+
+fn flatten_header_kids(kids: Vec<Element>) -> Option<Element> {
+    if kids.is_empty() {
         return None;
     }
-    let is_frag = header.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1");
-    if is_frag {
-        let kids = std::mem::take(&mut header.children);
-        if kids.is_empty() {
-            return None;
-        }
-        if kids.len() == 1 {
-            return Some(kids.into_iter().next().unwrap());
-        }
-        // Label + Value 等：一行两端对齐（对位 Root flex-wrap 首行）。
-        return Some(
-            hstack()
-                .w("100%")
-                .items_center()
-                .justify("between")
-                .gap("0.5rem")
-                .children(kids)
-                .into(),
-        );
+    if kids.len() == 1 {
+        return Some(kids.into_iter().next().unwrap());
     }
-    Some(header)
+    // Label + Value 等：一行两端对齐（对位 Root flex-wrap 首行）。
+    Some(
+        hstack()
+            .w("100%")
+            .items_center()
+            .justify("between")
+            .gap("0.5rem")
+            .children(kids)
+            .into(),
+    )
+}
+
+fn split_progress_body(body: Element) -> (Option<Element>, Option<Element>) {
+    let mut header_kids = Vec::new();
+    let mut track = None;
+    for kid in flatten_kids(body) {
+        if is_progress_track(&kid) {
+            if track.is_none() {
+                track = Some(kid);
+            }
+        } else if !is_empty_el(&kid) {
+            header_kids.push(kid);
+        }
+    }
+    (flatten_header_kids(header_kids), track)
 }
 
 /// 提供 Progress 上下文；子树之后自动挂 [`progress_track`]（对位 Root 注入 Track）。
@@ -201,12 +232,14 @@ pub fn progress_scope(
                 orientation,
             },
         );
-        let header = flatten_header(body());
-        let track = progress_track(ProgressTrackOpts {
-            class: None,
-            value: Some(value),
-            id: Some(id.clone()),
-            orientation: Some(orientation),
+        let (header, user_track) = split_progress_body(body());
+        let track = user_track.unwrap_or_else(|| {
+            progress_track(ProgressTrackOpts {
+                class: None,
+                value: Some(value),
+                id: Some(id.clone()),
+                orientation: Some(orientation),
+            })
         });
         let mut col = vstack().gap("0.75rem");
         if orientation.is_vertical() {
@@ -237,12 +270,27 @@ pub fn progress_scope(
 // Builder
 // ---------------------------------------------------------------------------
 
+pub struct ProgressTrackBuilder {
+    chrome: SlotChrome,
+}
+
+pub fn progress_track_slot() -> ProgressTrackBuilder {
+    ProgressTrackBuilder {
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ProgressTrackBuilder {
+    impl_slot_chrome_methods!();
+}
+
 pub struct ProgressBuilder {
     id: String,
     value: Option<Signal<f32>>,
     default_value: f32,
     orientation: ProgressOrientation,
-    class: String,
+    chrome: SlotChrome,
+    track_chrome: SlotChrome,
 }
 
 /// Builder 入口：默认无用户 id（WP-2.8）。
@@ -252,11 +300,64 @@ pub fn progress() -> ProgressBuilder {
         value: None,
         default_value: 0.0,
         orientation: ProgressOrientation::Horizontal,
-        class: String::new(),
+        chrome: SlotChrome::default(),
+        track_chrome: SlotChrome::default(),
     }
 }
 
+fn finish_progress(
+    builder: ProgressBuilder,
+    body: Option<Box<dyn FnOnce() -> Element>>,
+) -> Element {
+    let ProgressBuilder {
+        id,
+        value,
+        default_value,
+        orientation,
+        chrome,
+        track_chrome,
+    } = builder;
+    let class = if chrome.class.trim().is_empty() {
+        None
+    } else {
+        Some(chrome.class.clone())
+    };
+    let mut el = progress_scope(id, value, default_value, orientation, class, move || {
+        let raw = body.map(|b| b()).unwrap_or_else(Element::new);
+        ensure_progress_track(raw, &track_chrome)
+    });
+    if let Some(ref style) = chrome.style {
+        el = style(BaseComponentBuilder::new(el)).el;
+    }
+    el
+}
+
+fn ensure_progress_track(body: Element, chrome: &SlotChrome) -> Element {
+    let mut kids = flatten_kids(body);
+    if kids.iter().any(is_progress_track) {
+        return packed_children(kids).unwrap_or_else(Element::new);
+    }
+    let class = if chrome.class.trim().is_empty() {
+        None
+    } else {
+        Some(chrome.class.clone())
+    };
+    let mut track = progress_track(ProgressTrackOpts {
+        class,
+        value: None,
+        id: None,
+        orientation: None,
+    });
+    if let Some(ref style) = chrome.style {
+        track = style(BaseComponentBuilder::new(track)).el;
+    }
+    kids.push(track);
+    packed_children(kids).unwrap_or_else(Element::new)
+}
+
 impl ProgressBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -277,45 +378,24 @@ impl ProgressBuilder {
         self
     }
 
-    /// Tailwind / utility class（根）。
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
+    /// Style the auto-injected [`ProgressTrack`] (ignored when the body already has a track).
+    pub fn track_with(
+        mut self,
+        f: impl FnOnce(ProgressTrackBuilder) -> ProgressTrackBuilder,
+    ) -> Self {
+        self.track_chrome = f(progress_track_slot()).chrome;
         self
     }
 
     /// 复合面：在 Track 之前渲染 Label / Value 等（内部 → [`progress_scope`]）。
     pub fn child(self, body: impl FnOnce() -> Element + 'static) -> Element {
-        let class = if self.class.trim().is_empty() {
-            None
-        } else {
-            Some(self.class)
-        };
-        progress_scope(
-            self.id,
-            self.value,
-            self.default_value,
-            self.orientation,
-            class,
-            body,
-        )
+        finish_progress(self, Some(Box::new(body)))
     }
 }
 
 impl From<ProgressBuilder> for Element {
     fn from(builder: ProgressBuilder) -> Self {
-        let ProgressBuilder {
-            id,
-            value,
-            default_value,
-            orientation,
-            class,
-        } = builder;
-        let class = if class.trim().is_empty() {
-            None
-        } else {
-            Some(class)
-        };
-        progress_scope(id, value, default_value, orientation, class, Element::new)
+        finish_progress(builder, None)
     }
 }
 
@@ -380,7 +460,7 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
         .unwrap_or_default();
     let view_id = format!("{instance}__progress_track_view");
 
-    reactive_view(view_id, move || {
+    let mut el = reactive_view(view_id, move || {
         let t = val.get().clamp(0.0, 1.0);
         let pct = (t * 100.0).clamp(0.0, 100.0);
         let mut track_bg = tokens::primary();
@@ -430,8 +510,11 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
             track = with_class_list(track, c);
         }
         track.template_id = Some(format!("{instance}__track"));
+        track.set_attr(ATTR_SLOT, SLOT_TRACK);
         track
-    })
+    });
+    el.set_attr(ATTR_SLOT, SLOT_TRACK);
+    el
 }
 
 /// RSX `<ProgressTrack class=… />`（需在 Progress 内；通常由 Root 自动注入）。
@@ -465,13 +548,18 @@ pub fn ProgressLabel(children: Option<Element>) -> Element {
     if kids.len() == 1 {
         let c = kids.into_iter().next().unwrap();
         if c.children.is_empty() && c.text.as_ref().is_some_and(|t| !t.is_empty()) {
-            return text(c.text.clone().unwrap_or_default())
-                .size(14.0)
-                .weight(500.0)
-                .color(fg)
-                .into();
+            let author = SlotAuthor::from_el(&c);
+            let mut el: Element = text(c.text.clone().unwrap_or_default()).into();
+            fill_default_text_size(&mut el, 14.0);
+            fill_default_text_weight(&mut el, 500);
+            fill_default_text_color(&mut el, fg);
+            return author.apply(el);
         }
-        return c.text_size(14.0).font_weight(500.0).text_color(fg);
+        let mut c = c;
+        fill_default_text_size(&mut c, 14.0);
+        fill_default_text_weight(&mut c, 500);
+        fill_default_text_color(&mut c, fg);
+        return c;
     }
     Element::from(
         hstack()
@@ -481,7 +569,12 @@ pub fn ProgressLabel(children: Option<Element>) -> Element {
             .gap("0.5rem")
             .children(
                 kids.into_iter()
-                    .map(|c| c.text_size(14.0).font_weight(500.0).text_color(fg))
+                    .map(|mut c| {
+                        fill_default_text_size(&mut c, 14.0);
+                        fill_default_text_weight(&mut c, 500);
+                        fill_default_text_color(&mut c, fg);
+                        c
+                    })
                     .collect::<Vec<_>>(),
             ),
     )
@@ -504,6 +597,19 @@ pub fn ProgressValue(children: Option<Element>) -> Element {
     .font_weight(400.0)
     .text_color(muted)
 }
+
+impl_simple_slot_builder!(
+    ProgressLabelBuilder,
+    progress_label,
+    ProgressLabel,
+    ProgressLabelProps
+);
+impl_simple_slot_builder!(
+    ProgressValueBuilder,
+    progress_value,
+    ProgressValue,
+    ProgressValueProps
+);
 
 // ---------------------------------------------------------------------------
 // ProgressCircle（Solid UI progress-circle 对位）
@@ -932,6 +1038,49 @@ mod tests {
     fn progress_empty_id_resolves_nonempty_instance_attr() {
         let el: Element = progress().into();
         assert_ne!(el.template_id.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn builder_track_with_marks_slot() {
+        let (_owner, el): (_, Element) = create_root(|| {
+            progress()
+                .id("prog-track-chrome")
+                .default_value(0.4)
+                .track_with(|t| t.class("h-3"))
+                .into()
+        });
+        fn find_track(el: &Element) -> bool {
+            el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_TRACK)
+                || el.children.iter().any(find_track)
+        }
+        assert!(
+            find_track(&el),
+            "injected track must carry data-slot=progress-track"
+        );
+    }
+
+    #[test]
+    fn builder_label_style() {
+        let (_owner, el): (_, Element) = create_root(|| {
+            progress()
+                .id("prog-label-chrome")
+                .child(|| {
+                    progress_label()
+                        .style(|b| b.text_size(20.0))
+                        .text("Uploading")
+                        .into()
+                })
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "progress_label .style(|b| b.text_size(20)) must land on the label tree"
+        );
     }
 
     #[test]

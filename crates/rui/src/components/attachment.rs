@@ -73,10 +73,11 @@
 
 use std::sync::OnceLock;
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{packed_children, BaseComponentBuilder, SlotChrome};
 use crate::components::button::{button, ButtonSize, ButtonVariant};
 use crate::core::reactivity::{create_context, provide_context, use_context, Context};
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     apply_semantic_chrome_respecting_overrides, is_variant_style_overridden, semantic_chrome,
@@ -1147,17 +1148,344 @@ pub fn AttachmentTrigger(
 // Builders (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+pub struct AttachmentMediaBuilder {
+    variant: AttachmentMediaVariant,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_media() -> AttachmentMediaBuilder {
+    AttachmentMediaBuilder {
+        variant: AttachmentMediaVariant::Icon,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentMediaBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn variant(mut self, variant: impl Into<AttachmentMediaVariant>) -> Self {
+        self.variant = variant.into();
+        self
+    }
+
+    pub fn icon(mut self) -> Self {
+        self.variant = AttachmentMediaVariant::Icon;
+        self
+    }
+
+    pub fn image(mut self) -> Self {
+        self.variant = AttachmentMediaVariant::Image;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AttachmentMediaBuilder> for Element {
+    fn from(builder: AttachmentMediaBuilder) -> Self {
+        let el = AttachmentMedia(AttachmentMediaProps {
+            variant: Some(builder.variant),
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentTitleBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_title() -> AttachmentTitleBuilder {
+    AttachmentTitleBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentTitleBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AttachmentTitleBuilder> for Element {
+    fn from(builder: AttachmentTitleBuilder) -> Self {
+        let el = AttachmentTitle(AttachmentTitleProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_description() -> AttachmentDescriptionBuilder {
+    AttachmentDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AttachmentDescriptionBuilder> for Element {
+    fn from(builder: AttachmentDescriptionBuilder) -> Self {
+        let el = AttachmentDescription(AttachmentDescriptionProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentContentBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_content() -> AttachmentContentBuilder {
+    AttachmentContentBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentContentBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+
+    pub fn title(mut self, text: impl Into<String>) -> Self {
+        self.children.push(attachment_title().text(text).into());
+        self
+    }
+
+    pub fn title_with(
+        mut self,
+        f: impl FnOnce(AttachmentTitleBuilder) -> AttachmentTitleBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_title()).into());
+        self
+    }
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.children
+            .push(attachment_description().text(text).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(AttachmentDescriptionBuilder) -> AttachmentDescriptionBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_description()).into());
+        self
+    }
+}
+
+impl From<AttachmentContentBuilder> for Element {
+    fn from(builder: AttachmentContentBuilder) -> Self {
+        let el = AttachmentContent(AttachmentContentProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentActionBuilder {
+    id: String,
+    variant: Option<ButtonVariant>,
+    size: Option<ButtonSize>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_action(id: impl Into<String>) -> AttachmentActionBuilder {
+    AttachmentActionBuilder {
+        id: id.into(),
+        variant: None,
+        size: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentActionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn variant(mut self, variant: impl Into<ButtonVariant>) -> Self {
+        self.variant = Some(variant.into());
+        self
+    }
+
+    pub fn size(mut self, size: impl Into<ButtonSize>) -> Self {
+        self.size = Some(size.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AttachmentActionBuilder> for Element {
+    fn from(builder: AttachmentActionBuilder) -> Self {
+        let el = AttachmentAction(AttachmentActionProps {
+            id: builder.id,
+            variant: builder.variant,
+            size: builder.size,
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentActionsBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_actions() -> AttachmentActionsBuilder {
+    AttachmentActionsBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentActionsBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+
+    pub fn action(mut self, id: impl Into<String>, child: impl Into<Element>) -> Self {
+        self.children
+            .push(attachment_action(id).child(child).into());
+        self
+    }
+
+    pub fn action_with(
+        mut self,
+        id: impl Into<String>,
+        f: impl FnOnce(AttachmentActionBuilder) -> AttachmentActionBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_action(id)).into());
+        self
+    }
+}
+
+impl From<AttachmentActionsBuilder> for Element {
+    fn from(builder: AttachmentActionsBuilder) -> Self {
+        let el = AttachmentActions(AttachmentActionsProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AttachmentTriggerBuilder {
+    id: String,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn attachment_trigger(id: impl Into<String>) -> AttachmentTriggerBuilder {
+    AttachmentTriggerBuilder {
+        id: id.into(),
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AttachmentTriggerBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AttachmentTriggerBuilder> for Element {
+    fn from(builder: AttachmentTriggerBuilder) -> Self {
+        let el = AttachmentTrigger(AttachmentTriggerProps {
+            id: builder.id,
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct AttachmentGroupBuilder {
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn attachment_group() -> AttachmentGroupBuilder {
     AttachmentGroupBuilder {
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl AttachmentGroupBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
@@ -1166,18 +1494,13 @@ impl AttachmentGroupBuilder {
 
 impl From<AttachmentGroupBuilder> for Element {
     fn from(builder: AttachmentGroupBuilder) -> Self {
-        AttachmentGroup(AttachmentGroupProps {
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+        let el = AttachmentGroup(AttachmentGroupProps {
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -1185,6 +1508,7 @@ pub struct AttachmentBuilder {
     state: AttachmentState,
     size: AttachmentSize,
     orientation: AttachmentOrientation,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -1193,11 +1517,14 @@ pub fn attachment() -> AttachmentBuilder {
         state: AttachmentState::Done,
         size: AttachmentSize::Default,
         orientation: AttachmentOrientation::Horizontal,
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl AttachmentBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn state(mut self, s: impl Into<AttachmentState>) -> Self {
         self.state = s.into();
         self
@@ -1218,129 +1545,112 @@ impl AttachmentBuilder {
         self
     }
 
-    pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(AttachmentMedia(AttachmentMediaProps {
-            variant: Some(AttachmentMediaVariant::Icon),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+    pub fn media(self, child: impl Into<Element>) -> Self {
+        self.media_with(|m| m.icon().child(child))
+    }
+
+    pub fn media_with(
+        mut self,
+        f: impl FnOnce(AttachmentMediaBuilder) -> AttachmentMediaBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_media()).into());
         self
     }
 
-    pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(AttachmentMedia(AttachmentMediaProps {
-            variant: Some(AttachmentMediaVariant::Icon),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
-        self
+    pub fn media_icon(self, child: impl Into<Element>) -> Self {
+        self.media_with(|m| m.icon().child(child))
     }
 
-    pub fn media_image(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(AttachmentMedia(AttachmentMediaProps {
-            variant: Some(AttachmentMediaVariant::Image),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
-        self
+    pub fn media_image(self, child: impl Into<Element>) -> Self {
+        self.media_with(|m| m.image().child(child))
     }
 
-    pub fn content(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(child.into());
+    pub fn content(self, child: impl Into<Element>) -> Self {
+        self.content_with(|c| c.child(child))
+    }
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(AttachmentContentBuilder) -> AttachmentContentBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_content()).into());
         self
     }
 
     pub fn title_description(
-        mut self,
+        self,
         title: impl Into<String>,
         description: impl Into<String>,
     ) -> Self {
-        self.children
-            .push(AttachmentContent(AttachmentContentProps {
-                children: {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    Some(frag.children([
-                        AttachmentTitle(AttachmentTitleProps {
-                            children: Some(Element::new().text(title.into())),
-                            base: None,
-                            base_builder: None,
-                            ..Default::default()
-                        }),
-                        AttachmentDescription(AttachmentDescriptionProps {
-                            children: Some(Element::new().text(description.into())),
-                            base: None,
-                            base_builder: None,
-                            ..Default::default()
-                        }),
-                    ]))
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }));
+        let title = title.into();
+        let description = description.into();
+        self.content_with(move |c| c.title(title).description(description))
+    }
+
+    pub fn title(self, text: impl Into<String>) -> Self {
+        self.content_with(|c| c.title(text))
+    }
+
+    pub fn title_with(
+        self,
+        f: impl FnOnce(AttachmentTitleBuilder) -> AttachmentTitleBuilder,
+    ) -> Self {
+        self.content_with(|c| c.title_with(f))
+    }
+
+    pub fn description(self, text: impl Into<String>) -> Self {
+        self.content_with(|c| c.description(text))
+    }
+
+    pub fn description_with(
+        self,
+        f: impl FnOnce(AttachmentDescriptionBuilder) -> AttachmentDescriptionBuilder,
+    ) -> Self {
+        self.content_with(|c| c.description_with(f))
+    }
+
+    pub fn action(self, child: impl Into<Element>) -> Self {
+        self.actions_with(|a| a.child(child))
+    }
+
+    pub fn actions_with(
+        mut self,
+        f: impl FnOnce(AttachmentActionsBuilder) -> AttachmentActionsBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_actions()).into());
         self
     }
 
-    pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children
-            .push(AttachmentContent(AttachmentContentProps {
-                children: {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    Some(frag.children([AttachmentTitle(AttachmentTitleProps {
-                        children: Some(Element::new().text(text.into())),
-                        base: None,
-                        base_builder: None,
-                        ..Default::default()
-                    })]))
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }));
-        self
+    pub fn action_with(
+        self,
+        id: impl Into<String>,
+        f: impl FnOnce(AttachmentActionBuilder) -> AttachmentActionBuilder,
+    ) -> Self {
+        self.actions_with(|a| a.action_with(id, f))
     }
 
-    pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children
-            .push(AttachmentActions(AttachmentActionsProps {
-                children: {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    Some(frag.children([child.into()]))
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            }));
+    pub fn trigger_with(
+        mut self,
+        id: impl Into<String>,
+        f: impl FnOnce(AttachmentTriggerBuilder) -> AttachmentTriggerBuilder,
+    ) -> Self {
+        self.children.push(f(attachment_trigger(id)).into());
         self
     }
 }
 
 impl From<AttachmentBuilder> for Element {
     fn from(builder: AttachmentBuilder) -> Self {
-        Attachment(AttachmentProps {
+        let el = Attachment(AttachmentProps {
             state: Some(builder.state),
             size: Some(builder.size),
             orientation: Some(builder.orientation),
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -1525,6 +1835,35 @@ mod tests {
             ),
             "title must be w-full so a clamped chip can ellipsize"
         );
+    }
+
+    #[test]
+    fn builder_title_with_text_size() {
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            for child in &el.children {
+                if let Some(found) = find_slot(child, slot) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        fn has_text(el: &Element, want: &str) -> bool {
+            if el.text.as_deref() == Some(want) {
+                return true;
+            }
+            el.children.iter().any(|c| has_text(c, want))
+        }
+
+        let el: Element = attachment()
+            .title_with(|t| t.style(|b| b.text_size(18.0)).text("report.pdf"))
+            .into();
+        let title = find_slot(&el, SLOT_TITLE).expect("title slot");
+        assert_eq!(title.text_style.size_resolved(), 18.0);
+        assert!(has_text(title, "report.pdf"));
     }
 
     #[test]

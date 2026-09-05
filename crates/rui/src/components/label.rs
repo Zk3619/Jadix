@@ -14,7 +14,7 @@
 //! <Checkbox id="terms" />
 //! <Label for="terms">"Accept terms"</Label>
 //! // 组合文案请写在 Checkbox 内：`<Checkbox>"Accept"</Checkbox>` 或内嵌 `<Label>`
-//! // Element::from(label("t").text("Hello").size(14.0).r#for("terms"))
+//! // Element::from(label("t").text("Hello").size(14.0).for_target("terms"))
 //! ```
 //!
 //! ## Notes
@@ -23,6 +23,7 @@
 //! `for` 写入 `attrs["for"]`；指针命中时由 hit path 转发到目标 `on_click`。
 //! 关联时写入稳定 `accesskit_id`（`lbl:for:…`），桥侧给目标补 `labelled_by`。
 
+use crate::components::base::SlotChrome;
 use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::text::TextBuilder;
 use crate::style::{parse_color, InputCaretDraw};
@@ -184,6 +185,7 @@ pub struct LabelBuilder {
     pub(crate) id: String,
     pub(crate) for_target: String,
     pub(crate) inner: TextBuilder,
+    chrome: SlotChrome,
 }
 
 /// RSX `<Label>`：见模块文档。
@@ -196,13 +198,13 @@ pub fn Label(
     color: Option<[u8; 4]>,
     weight: Option<f32>,
     center: bool,
-    /// 关联控件的 `focus_id` / Checkbox `id`（Solid `for`）。
-    r#for: String,
+    /// 关联控件的 `focus_id` / Checkbox `id`（RSX `for` / Builder [`LabelBuilder::for_target`]）。
+    for_target: String,
     truncate: bool,
     text_overflow: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    let mut builder = label(&id).text(text).r#for(r#for);
+    let mut builder = label(&id).text(text).for_target(for_target);
     if let Some(s) = size {
         builder = builder.size(s);
     }
@@ -233,6 +235,7 @@ pub fn label(id: impl Into<String>) -> LabelBuilder {
         inner: TextBuilder {
             el: apply_label_defaults(Element::new()),
         },
+        chrome: SlotChrome::default(),
     }
 }
 
@@ -242,6 +245,8 @@ pub fn text_node(id: impl Into<String>) -> LabelBuilder {
 }
 
 impl LabelBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn text(mut self, content: impl crate::core::tree::IntoNodeText) -> Self {
         self.inner = self.inner.text(content);
         self
@@ -259,6 +264,11 @@ impl LabelBuilder {
 
     pub fn font_weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
         self.inner = self.inner.weight(weight);
+        self
+    }
+
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.inner = self.inner.family(family);
         self
     }
 
@@ -483,10 +493,16 @@ impl LabelBuilder {
         self
     }
 
-    /// Solid `for`：关联控件 `focus_id`。
-    pub fn r#for(mut self, target_id: impl Into<String>) -> Self {
+    /// 关联控件 `focus_id`（RSX `<Label for="…">` 映射到此 prop）。
+    pub fn for_target(mut self, target_id: impl Into<String>) -> Self {
         self.for_target = target_id.into();
         self
+    }
+
+    /// [`for_target`] 的别名（保留 `for` 关键字逃逸写法）。
+    #[inline]
+    pub fn r#for(self, target_id: impl Into<String>) -> Self {
+        self.for_target(target_id)
     }
 
     /// 可选 `template_id` 槽；空串 / 省略 → 不写身份（展示型，WP-2.8）。
@@ -510,7 +526,7 @@ impl From<LabelBuilder> for Element {
         }
         let for_id = builder.for_target.trim().to_string();
         apply_label_for(&mut el, &for_id);
-        el
+        builder.chrome.apply(el)
     }
 }
 
@@ -639,8 +655,8 @@ mod tests {
     }
 
     #[test]
-    fn label_for_sets_accesskit_id() {
-        let el: Element = label("").text("Email").r#for("input:email").into();
+    fn label_for_target_sets_accesskit_id() {
+        let el: Element = label("").text("Email").for_target("input:email").into();
         assert_eq!(
             el.attrs.get(ATTR_LABEL_FOR).map(|s| s.as_str()),
             Some("input:email")
@@ -648,6 +664,15 @@ mod tests {
         assert_eq!(
             el.attrs.get("accesskit_id").map(|s| s.as_str()),
             Some("lbl:for:input:email")
+        );
+    }
+
+    #[test]
+    fn label_r_for_alias_sets_accesskit_id() {
+        let el: Element = label("").text("Email").r#for("input:email").into();
+        assert_eq!(
+            el.attrs.get(ATTR_LABEL_FOR).map(|s| s.as_str()),
+            Some("input:email")
         );
     }
 

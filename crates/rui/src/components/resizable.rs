@@ -48,6 +48,7 @@ use std::sync::OnceLock;
 use rui_macros::component;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
+use crate::components::base::{ensure_data_slot, SlotChrome, SlotStyleFn};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
@@ -212,11 +213,15 @@ struct PanelPart {
     max_size: f32,
     content: Element,
     class: Option<String>,
+    text_style: Box<crate::style::TextStyle>,
+    paint: Box<crate::style::Style>,
 }
 
 struct HandlePart {
     with_handle: bool,
     class: Option<String>,
+    text_style: Box<crate::style::TextStyle>,
+    paint: Box<crate::style::Style>,
 }
 
 enum Part {
@@ -233,6 +238,36 @@ fn parse_f32_attr(el: &Element, key: &str, fallback: f32) -> f32 {
 
 fn take_class_attr(el: &mut Element) -> Option<String> {
     el.attrs.remove("class").filter(|c| !c.trim().is_empty())
+}
+
+fn overlay_paint(dst: &mut crate::style::Style, src: &crate::style::Style) {
+    dst.padding = src.padding;
+    dst.gap = src.gap;
+    dst.bg_color = src.bg_color;
+    dst.bg_gradient = src.bg_gradient.clone();
+    dst.border_style = src.border_style;
+    dst.border_color = src.border_color;
+    dst.border_width = src.border_width;
+    dst.border_width_sides = src.border_width_sides;
+    dst.border_color_sides = src.border_color_sides;
+    dst.border_style_sides = src.border_style_sides;
+    dst.radii = src.radii;
+    dst.shadow_color = src.shadow_color;
+    dst.shadow_offset = src.shadow_offset;
+    dst.shadow_blur = src.shadow_blur;
+    dst.shadow_spread = src.shadow_spread;
+    dst.shadow_inset = src.shadow_inset;
+    dst.extra_shadows = src.extra_shadows.clone();
+    dst.opacity = src.opacity;
+}
+
+fn overlay_slot_chrome(
+    dst: &mut Element,
+    text_style: Box<crate::style::TextStyle>,
+    paint: Box<crate::style::Style>,
+) {
+    *dst.text_style = *text_style;
+    overlay_paint(&mut dst.style, &paint);
 }
 
 fn flatten_body_children(mut body: Element) -> Vec<Element> {
@@ -262,6 +297,8 @@ fn parse_parts(body: Element) -> Vec<Part> {
                 let default_size = parse_f32_attr(&el, ATTR_DEFAULT_SIZE, 50.0);
                 let min_size = parse_f32_attr(&el, ATTR_MIN_SIZE, 10.0);
                 let max_size = parse_f32_attr(&el, ATTR_MAX_SIZE, 100.0);
+                let text_style = el.text_style.clone();
+                let paint = el.style.clone();
                 // Prefer inner children as content; otherwise the element itself (text etc.).
                 let content =
                     if el.children.len() == 1 && el.text.as_ref().is_none_or(|t| t.is_empty()) {
@@ -282,6 +319,8 @@ fn parse_parts(body: Element) -> Vec<Part> {
                     max_size: max_size.clamp(0.0, 100.0),
                     content,
                     class,
+                    text_style,
+                    paint,
                 }));
             }
             SLOT_HANDLE => {
@@ -291,7 +330,12 @@ fn parse_parts(body: Element) -> Vec<Part> {
                     .get(ATTR_WITH_HANDLE)
                     .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
-                out.push(Part::Handle(HandlePart { with_handle, class }));
+                out.push(Part::Handle(HandlePart {
+                    with_handle,
+                    class,
+                    text_style: el.text_style.clone(),
+                    paint: el.style.clone(),
+                }));
             }
             _ => {
                 // Unknown node: treat as panel with default 50%.
@@ -301,6 +345,8 @@ fn parse_parts(body: Element) -> Vec<Part> {
                     max_size: 100.0,
                     content: el,
                     class: None,
+                    text_style: Box::new(crate::style::TextStyle::default()),
+                    paint: Box::new(crate::style::Style::default()),
                 }));
             }
         }
@@ -451,6 +497,8 @@ fn build_handle(
     handle_index: usize,
     with_handle: bool,
     class: Option<String>,
+    text_style: Box<crate::style::TextStyle>,
+    paint: Box<crate::style::Style>,
     sizes: Signal<Vec<f32>>,
     limits: Rc<Vec<(f32, f32)>>,
     group_bounds: Rc<Cell<[f32; 4]>>,
@@ -619,6 +667,7 @@ fn build_handle(
         .cursor_kind(cursor)
         .z_index(1)
         .pointer_events_box_none();
+    overlay_slot_chrome(&mut slot, text_style, paint);
 
     slot
 }
@@ -644,6 +693,8 @@ fn build_group_from_parts(
                     handle_meta.push(Some(HandlePart {
                         with_handle: false,
                         class: None,
+                        text_style: Box::new(crate::style::TextStyle::default()),
+                        paint: Box::new(crate::style::Style::default()),
                     }));
                 }
                 panels.push(p);
@@ -667,6 +718,8 @@ fn build_group_from_parts(
         handle_meta.push(Some(HandlePart {
             with_handle: false,
             class: None,
+            text_style: Box::new(crate::style::TextStyle::default()),
+            paint: Box::new(crate::style::Style::default()),
         }));
     }
 
@@ -677,6 +730,8 @@ fn build_group_from_parts(
             max_size: 100.0,
             content: r#box().w("100%").h("100%").bg(tokens::muted()).into(),
             class: None,
+            text_style: Box::new(crate::style::TextStyle::default()),
+            paint: Box::new(crate::style::Style::default()),
         });
     }
 
@@ -739,6 +794,7 @@ fn build_group_from_parts(
         if let Some(ref c) = panel.class {
             pane = with_class_list(pane, c);
         }
+        overlay_slot_chrome(&mut pane, panel.text_style, panel.paint);
         kids.push(pane);
 
         if i < handle_meta.len() {
@@ -749,6 +805,8 @@ fn build_group_from_parts(
                     i,
                     h.with_handle,
                     h.class,
+                    h.text_style,
+                    h.paint,
                     sizes,
                     Rc::clone(&limits),
                     Rc::clone(&group_bounds),
@@ -922,6 +980,107 @@ pub fn ResizableHandle(
     el
 }
 
+pub struct ResizablePanelBuilder {
+    default_size: Option<f32>,
+    min_size: Option<f32>,
+    max_size: Option<f32>,
+    children: Vec<crate::core::tree::Element>,
+    chrome: SlotChrome,
+}
+
+pub fn resizable_panel() -> ResizablePanelBuilder {
+    ResizablePanelBuilder {
+        default_size: None,
+        min_size: None,
+        max_size: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ResizablePanelBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn default_size(mut self, v: f32) -> Self {
+        self.default_size = Some(v);
+        self
+    }
+    pub fn min_size(mut self, v: f32) -> Self {
+        self.min_size = Some(v);
+        self
+    }
+    pub fn max_size(mut self, v: f32) -> Self {
+        self.max_size = Some(v);
+        self
+    }
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+}
+
+impl From<ResizablePanelBuilder> for Element {
+    fn from(builder: ResizablePanelBuilder) -> Self {
+        let el = ResizablePanel(ResizablePanelProps {
+            default_size: builder.default_size,
+            min_size: builder.min_size,
+            max_size: builder.max_size,
+            class: None,
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for ResizablePanelBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct ResizableHandleBuilder {
+    with_handle: bool,
+    chrome: SlotChrome,
+}
+
+pub fn resizable_handle() -> ResizableHandleBuilder {
+    ResizableHandleBuilder {
+        with_handle: false,
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ResizableHandleBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn with_handle(mut self, v: bool) -> Self {
+        self.with_handle = v;
+        self
+    }
+}
+
+impl From<ResizableHandleBuilder> for Element {
+    fn from(builder: ResizableHandleBuilder) -> Self {
+        let el = ResizableHandle(ResizableHandleProps {
+            with_handle: Some(builder.with_handle),
+            class: None,
+            children: None,
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for ResizableHandleBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
 // ── Builder ───────────────────────────────────────────────────────────────────
 
 pub struct ResizableBuilder {
@@ -935,6 +1094,8 @@ pub struct ResizableBuilder {
     height: Option<f32>,
     with_handle: bool,
     class: String,
+    style: Option<SlotStyleFn>,
+    custom_body: Option<Box<dyn FnOnce() -> Element>>,
 }
 
 /// Builder 入口：两栏便捷 / 多栏 `panels`。
@@ -950,6 +1111,8 @@ pub fn resizable(id: impl Into<String>) -> ResizableBuilder {
         height: Some(240.0),
         with_handle: true,
         class: String::new(),
+        style: None,
+        custom_body: None,
     }
 }
 
@@ -1038,6 +1201,23 @@ impl ResizableBuilder {
         self
     }
 
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// Build Panel / Handle subtrees inside the context.
+    pub fn child(mut self, body: impl FnOnce() -> Element + 'static) -> Self {
+        self.custom_body = Some(Box::new(body));
+        self
+    }
+
     pub fn left(mut self, f: impl Fn() -> Element + 'static) -> Self {
         if self.panels.is_empty() {
             self.panels.push(Box::new(f));
@@ -1084,37 +1264,9 @@ impl From<ResizableBuilder> for Element {
             height,
             with_handle,
             class,
+            style,
+            custom_body,
         } = builder;
-
-        let n = panels.len().max(2);
-        let mut defaults = default_sizes;
-        while defaults.len() < n {
-            defaults.push(100.0 / n as f32);
-        }
-        defaults.truncate(n);
-        let mut mins = min_sizes;
-        while mins.len() < n {
-            mins.push(10.0);
-        }
-        mins.truncate(n);
-        let mut maxs = max_sizes;
-        while maxs.len() < n {
-            maxs.push(100.0);
-        }
-        maxs.truncate(n);
-
-        let mut panel_fns = panels;
-        while panel_fns.len() < n {
-            let idx = panel_fns.len();
-            panel_fns.push(Box::new(move || {
-                let bg = if idx % 2 == 0 {
-                    tokens::muted()
-                } else {
-                    tokens::background()
-                };
-                r#box().w("100%").h("100%").bg(bg).into()
-            }));
-        }
 
         let class_opt = if class.trim().is_empty() {
             None
@@ -1122,37 +1274,77 @@ impl From<ResizableBuilder> for Element {
             Some(class)
         };
 
-        resizable_panel_group_scope(
-            id,
-            orientation.as_str(),
-            class_opt,
-            height,
-            sizes,
-            move || {
-                let mut list = Vec::new();
-                for (i, f) in panel_fns.into_iter().enumerate() {
-                    list.push(ResizablePanel(ResizablePanelProps {
-                        default_size: Some(defaults[i]),
-                        min_size: Some(mins[i]),
-                        max_size: Some(maxs[i]),
-                        class: None,
-                        children: Some(f()),
-                        base: None,
-                    }));
-                    if i + 1 < n {
-                        list.push(ResizableHandle(ResizableHandleProps {
-                            with_handle: Some(with_handle),
-                            class: None,
-                            children: None,
-                            base: None,
+        let mut el = if let Some(body) = custom_body {
+            resizable_panel_group_scope(id, orientation.as_str(), class_opt, height, sizes, body)
+        } else {
+            let n = panels.len().max(2);
+            let mut defaults = default_sizes;
+            while defaults.len() < n {
+                defaults.push(100.0 / n as f32);
+            }
+            defaults.truncate(n);
+            let mut mins = min_sizes;
+            while mins.len() < n {
+                mins.push(10.0);
+            }
+            mins.truncate(n);
+            let mut maxs = max_sizes;
+            while maxs.len() < n {
+                maxs.push(100.0);
+            }
+            maxs.truncate(n);
+
+            let mut panel_fns = panels;
+            while panel_fns.len() < n {
+                let idx = panel_fns.len();
+                panel_fns.push(Box::new(move || {
+                    let bg = if idx % 2 == 0 {
+                        tokens::muted()
+                    } else {
+                        tokens::background()
+                    };
+                    r#box().w("100%").h("100%").bg(bg).into()
+                }));
+            }
+
+            resizable_panel_group_scope(
+                id,
+                orientation.as_str(),
+                class_opt,
+                height,
+                sizes,
+                move || {
+                    let mut list = Vec::new();
+                    for (i, f) in panel_fns.into_iter().enumerate() {
+                        list.push(ensure_data_slot(f(), SLOT_PANEL, |el| {
+                            ResizablePanel(ResizablePanelProps {
+                                default_size: Some(defaults[i]),
+                                min_size: Some(mins[i]),
+                                max_size: Some(maxs[i]),
+                                class: None,
+                                children: Some(el),
+                                base: None,
+                            })
                         }));
+                        if i + 1 < n {
+                            list.push(ResizableHandle(ResizableHandleProps {
+                                with_handle: Some(with_handle),
+                                class: None,
+                                children: None,
+                                base: None,
+                            }));
+                        }
                     }
-                }
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(list)
-            },
-        )
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(list)
+                },
+            )
+        };
+        if let Some(style) = style {
+            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -1173,6 +1365,31 @@ mod tests {
                 r#box().child(t).into()
             })
             .into();
+    }
+
+    #[test]
+    fn builder_panel_style() {
+        use crate::core::reactivity::create_root;
+        let (_o, el): (_, Element) = create_root(|| {
+            resizable("rz-chrome")
+                .child(|| {
+                    resizable_panel()
+                        .default_size(40.0)
+                        .style(|b| b.text_size(20.0))
+                        .child(crate::primitives::text::text("L"))
+                        .into()
+                })
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "resizable_panel .style(|b| b.text_size(20)) must land on the panel tree"
+        );
     }
 
     #[test]

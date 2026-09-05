@@ -7,6 +7,7 @@
 //! └── AccordionItem              // value + border-b
 //! ├── AccordionTrigger // Header + chevron (expand rotation)
 //!     └── AccordionContent       // Panel：overflow-hidden + `@keyframes accordion-down/up`
+//!                                //     或 `RUI_ACCORDION_GRID_FR=1` → `grid-template-rows: 0fr→1fr`
 //! ```
 //!
 //! Entry and exit alignment ShadCN `accordion-down` / `accordion-up` (height 0 ↔ content-height, 200ms ease-out):
@@ -53,7 +54,7 @@
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -62,12 +63,17 @@ use rui_macros::component;
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::{
+    overlay_root_author_text, packed_children, BaseComponentBuilder, SlotChrome,
+};
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_scoped_signal, use_signal,
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::layout::layout_tree::LayoutTree;
+use crate::layout::{first_track_fr, set_first_track_fr};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
@@ -75,7 +81,7 @@ use crate::style::{
     AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
-use crate::utils::motion::{clear_motion, ensure_motion_transitions};
+use crate::utils::motion::{clear_motion, ensure_motion_transitions, motion_is_animating};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
@@ -183,6 +189,24 @@ thread_local! {
     static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<AccordionPanelPresenceCell>>>> =
         const { RefCell::new(Vec::new()) };
     static PENDING_ACCORDION_UNMOUNTS: RefCell<Vec<Signal<bool>>> = const { RefCell::new(Vec::new()) };
+    static ACCORDION_USE_GRID_FR: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Override Accordion panel motion to CSS `grid-template-rows: 0fr→1fr` (ANIM A3.6).
+/// `None` restores auto-detect via `RUI_ACCORDION_GRID_FR`.
+pub fn set_accordion_use_grid_fr(on: Option<bool>) {
+    ACCORDION_USE_GRID_FR.set(on);
+}
+
+/// Whether Accordion content uses the `grid-template-rows` transition path.
+pub fn accordion_use_grid_fr() -> bool {
+    if let Some(v) = ACCORDION_USE_GRID_FR.get() {
+        return v;
+    }
+    match std::env::var("RUI_ACCORDION_GRID_FR") {
+        Ok(s) if s == "1" || s.eq_ignore_ascii_case("true") => true,
+        _ => false,
+    }
 }
 
 const PANEL_EXIT: Duration = Duration::from_millis(ACCORDION_MS as u64);
@@ -200,9 +224,6 @@ struct AccordionPanelPresenceCell {
     exit_armed: bool,
     /// 是否已做过至少一次 presence 同步（区分冷启动 defaultOpen 与后续再展开）。
     initialized: bool,
-    /// 上次完全展开时的面板高度（退场 height 动画用）。
-    measured_height: f32,
-    exit_from_height: Option<f32>,
     /// 退场 CSS `accordion-up` 是否仍待 seed（对位 Dialog `needs_exit_anim`）。
     needs_exit_anim: bool,
 }
@@ -219,8 +240,6 @@ fn use_accordion_panel_presence(key: &str) -> AccordionPanelPresenceHandle {
             enter_active: false,
             exit_armed: false,
             initialized: false,
-            measured_height: 0.0,
-            exit_from_height: None,
             needs_exit_anim: false,
         }));
         PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
@@ -258,7 +277,6 @@ fn sync_accordion_panel_presence(
                 c.enter_active = false;
             }
             c.exit_armed = false;
-            c.exit_from_height = None;
             c.needs_exit_anim = false;
         }
         c.initialized = true;
@@ -267,9 +285,6 @@ fn sync_accordion_panel_presence(
             c.needs_enter = false;
             c.enter_active = false;
             c.needs_exit_anim = true;
-            if c.exit_from_height.is_none() {
-                c.exit_from_height = Some(c.measured_height.max(1.0));
-            }
         }
         let set_mounted = c
             .mounted
@@ -303,7 +318,6 @@ pub(crate) fn tick_accordion_panel_presence() -> bool {
                         c.needs_enter = false;
                         c.enter_active = false;
                         c.exit_armed = false;
-                        c.exit_from_height = None;
                         c.needs_exit_anim = false;
                         Some(c.mounted)
                     } else {
@@ -344,12 +358,8 @@ fn chevron_transition_entries() -> [TransitionEntry; 1] {
     }]
 }
 
-fn panel_content_height(presence: &AccordionPanelPresenceHandle, el: &Element) -> f32 {
-    let c = presence.cell.borrow();
-    c.exit_from_height
-        .filter(|h| *h > 1.0)
-        .or_else(|| (c.measured_height > 1.0).then_some(c.measured_height))
-        .unwrap_or_else(|| el.layout_bounds[3].max(0.0))
+fn panel_content_height(el: &Element) -> f32 {
+    el.used_layout.anim_height().max(el.layout_bounds[3])
 }
 
 fn accordion_has_exit_anim(el: &Element) -> bool {
@@ -360,9 +370,9 @@ fn reset_accordion_anim_snapshot(el: &mut Element) {
     el.animation_snapshot = Default::default();
 }
 
-fn seed_accordion_enter_anim(el: &mut Element, content_height: f32) {
+fn seed_accordion_enter_anim(el: &mut Element) {
     clear_motion(el);
-    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.max_size.height = Dimension::auto();
     el.style.animations = vec![keyframes_anim_entry(
         ACCORDION_DOWN,
         ACCORDION_MS,
@@ -372,9 +382,9 @@ fn seed_accordion_enter_anim(el: &mut Element, content_height: f32) {
     reset_accordion_anim_snapshot(el);
 }
 
-fn seed_accordion_exit_anim(el: &mut Element, content_height: f32) {
+fn seed_accordion_exit_anim(el: &mut Element) {
     clear_motion(el);
-    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.max_size.height = Dimension::auto();
     el.style.animations = vec![keyframes_anim_entry(
         ACCORDION_UP,
         ACCORDION_MS,
@@ -392,7 +402,7 @@ fn finish_accordion_panel_exit(presence: &AccordionPanelPresenceHandle) {
         c.exit_armed = false;
         c.needs_exit_anim = false;
         c.enter_active = false;
-        c.exit_from_height = None;
+        c.needs_exit_anim = false;
     }
     PENDING_ACCORDION_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
     crate::app::runtime::request_redraw();
@@ -547,6 +557,8 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
         let mut inner: Element = vstack()
             .w("100%")
             .min_w(0.0)
+            .min_h(0.0)
+            .overflow_y("hidden")
             .pb(tokens::SPACE_4)
             .child(body)
             .into();
@@ -571,6 +583,7 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
         wrap.template_id = Some(format!("{menu_id}:panel:{value_anchor}"));
         let sync_presence = sync_presence.clone();
         wrap = wrap.reactive_sync(move |el, layout_tree| {
+            overlay_root_author_text(el);
             apply_accordion_panel_motion(el, layout_tree, &sync_presence)
         });
         wrap
@@ -585,6 +598,17 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
 }
 
 fn apply_accordion_panel_motion(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    presence: &AccordionPanelPresenceHandle,
+) -> LayoutStatus {
+    if accordion_use_grid_fr() {
+        return apply_accordion_panel_motion_grid(el, layout_tree, presence);
+    }
+    apply_accordion_panel_motion_max_height(el, layout_tree, presence)
+}
+
+fn apply_accordion_panel_motion_max_height(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     presence: &AccordionPanelPresenceHandle,
@@ -651,19 +675,11 @@ fn apply_accordion_panel_motion(
         (needs_enter, needs_exit_anim)
     };
 
-    if exiting {
-        let mut c = presence.cell.borrow_mut();
-        if c.exit_from_height.is_none() {
-            c.exit_from_height = Some(c.measured_height.max(el.layout_bounds[3]).max(1.0));
-        }
-    }
-
     // 只在首次退场或 wrap 被重建（仍 armed 且丢失 accordion-up）时 seed。
     // 动画结束后清 list 不得再 seed，否则会每帧 LayoutChanged。
     let exit_armed = presence.cell.borrow().exit_armed;
     if exiting && (needs_exit_anim || (!accordion_has_exit_anim(el) && exit_armed)) {
-        let h = panel_content_height(presence, el);
-        seed_accordion_exit_anim(el, h);
+        seed_accordion_exit_anim(el);
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
@@ -687,21 +703,11 @@ fn apply_accordion_panel_motion(
     }
 
     if open_visual && needs_enter {
-        let measured = {
-            let mut c = presence.cell.borrow_mut();
-            if c.measured_height < 1.0 {
-                if !max_height_is_auto(el) {
-                    el.style.max_size.height = Dimension::auto();
-                    layout = true;
-                } else {
-                    let h = el.layout_bounds[3];
-                    if h > 1.0 {
-                        c.measured_height = h;
-                    }
-                }
-            }
-            c.measured_height
-        };
+        if !max_height_is_auto(el) {
+            el.style.max_size.height = Dimension::auto();
+            layout = true;
+        }
+        let measured = panel_content_height(el);
         if measured < 1.0 {
             el.style.opacity = 0.0;
             if layout && el.layout_node.is_some() {
@@ -719,7 +725,7 @@ fn apply_accordion_panel_motion(
         if (el.style.opacity - 1.0).abs() > 0.001 {
             el.style.opacity = 1.0;
         }
-        seed_accordion_enter_anim(el, measured);
+        seed_accordion_enter_anim(el);
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
@@ -741,10 +747,182 @@ fn apply_accordion_panel_motion(
             layout = true;
         }
         presence.cell.borrow_mut().enter_active = false;
-        let h = el.layout_bounds[3];
-        if h > 1.0 {
-            presence.cell.borrow_mut().measured_height = h;
+    }
+
+    if layout && el.layout_node.is_some() {
+        layout_tree.update_taffy_node_style(el);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    LayoutStatus::Clean
+}
+
+fn grid_rows_transition_entry(timing: TimingFunction) -> TransitionEntry {
+    TransitionEntry {
+        property: TransitionProperty::GridTemplateRows,
+        duration_ms: ACCORDION_MS,
+        delay_ms: 0.0,
+        timing,
+    }
+}
+
+fn apply_grid_panel_shell(el: &mut Element) -> bool {
+    let mut layout = false;
+    if el.style.display != Display::Grid {
+        el.style.display = Display::Grid;
+        layout = true;
+    }
+    if el.style.overflow.y != Overflow::Hidden {
+        el.style.overflow.y = Overflow::Hidden;
+        layout = true;
+    }
+    let w = crate::layout::dim_kind(el.style.size.width);
+    if !matches!(w, crate::layout::DimKind::Percent(_)) {
+        el.style.size.width = Dimension::percent(1.0);
+        layout = true;
+    }
+    if !matches!(
+        crate::layout::dim_kind(el.style.size.height),
+        crate::layout::DimKind::Auto
+    ) {
+        el.style.size.height = Dimension::auto();
+        layout = true;
+    }
+    if el.style.max_size.height != Dimension::auto() {
+        el.style.max_size.height = Dimension::auto();
+        layout = true;
+    }
+    if (el.style.opacity - 1.0).abs() > 0.001 {
+        el.style.opacity = 1.0;
+    }
+    if el.style.scale != [1.0, 1.0] {
+        el.style.scale = [1.0, 1.0];
+    }
+    for child in &mut el.children {
+        if child.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_CONTENT_INNER) {
+            if child.style.min_size.height != Dimension::length(0.0) {
+                child.style.min_size.height = Dimension::length(0.0);
+                layout = true;
+            }
+            if child.style.overflow.y != Overflow::Hidden {
+                child.style.overflow.y = Overflow::Hidden;
+                layout = true;
+            }
         }
+    }
+    layout
+}
+
+fn accordion_has_grid_exit(el: &Element) -> bool {
+    el.style
+        .transition
+        .iter()
+        .any(|e| e.property == TransitionProperty::GridTemplateRows)
+        && first_track_fr(&el.style.grid_template_rows).is_some_and(|fr| fr < 0.999)
+}
+
+fn seed_accordion_grid_fr(el: &mut Element, from_fr: f32, to_fr: f32, timing: TimingFunction) {
+    el.style.animations.clear();
+    reset_accordion_anim_snapshot(el);
+    let _ = apply_grid_panel_shell(el);
+    el.style.transition = vec![grid_rows_transition_entry(timing)];
+    set_first_track_fr(&mut el.style.grid_template_rows, from_fr);
+    el.snap_css_transition_baseline();
+    set_first_track_fr(&mut el.style.grid_template_rows, to_fr);
+    let _ = el.tick_css_transitions(0.0);
+}
+
+fn apply_accordion_panel_motion_grid(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    presence: &AccordionPanelPresenceHandle,
+) -> LayoutStatus {
+    let phase = accordion_panel_phase(presence);
+    if !phase.is_mounted() {
+        let mut layout = false;
+        if el.style.display != Display::None {
+            el.style.display = Display::None;
+            layout = true;
+        }
+        if layout && el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        return LayoutStatus::Clean;
+    }
+
+    let exiting = phase == PresencePhase::Exiting;
+    let open_visual = phase == PresencePhase::Present && !exiting;
+    let mut layout = apply_grid_panel_shell(el);
+
+    let (needs_enter, needs_exit_anim) = {
+        let mut c = presence.cell.borrow_mut();
+        let needs_enter = c.needs_enter;
+        let needs_exit_anim = c.needs_exit_anim;
+        if needs_enter && open_visual {
+            c.enter_active = true;
+        }
+        if needs_exit_anim && exiting {
+            c.needs_exit_anim = false;
+        }
+        (needs_enter, needs_exit_anim)
+    };
+
+    let exit_armed = presence.cell.borrow().exit_armed;
+    if exiting && (needs_exit_anim || (!accordion_has_grid_exit(el) && exit_armed)) {
+        let from = first_track_fr(&el.style.grid_template_rows)
+            .unwrap_or(1.0)
+            .max(0.0);
+        seed_accordion_grid_fr(el, from, 0.0, TimingFunction::EaseIn);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if exiting {
+        if motion_is_animating(&el.style, &el.transition_snapshot) {
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        set_first_track_fr(&mut el.style.grid_template_rows, 0.0);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        finish_accordion_panel_exit(presence);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if open_visual && needs_enter {
+        presence.cell.borrow_mut().needs_enter = false;
+        seed_accordion_grid_fr(el, 0.0, 1.0, TimingFunction::EaseOut);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if open_visual {
+        if motion_is_animating(&el.style, &el.transition_snapshot) {
+            if el.layout_node.is_some() {
+                layout_tree.update_taffy_node_style(el);
+            }
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        let fr = first_track_fr(&el.style.grid_template_rows).unwrap_or(0.0);
+        if (fr - 1.0).abs() > 1e-3 {
+            set_first_track_fr(&mut el.style.grid_template_rows, 1.0);
+            layout = true;
+        }
+        presence.cell.borrow_mut().enter_active = false;
     }
 
     if layout && el.layout_node.is_some() {
@@ -932,7 +1110,11 @@ pub fn AccordionTrigger(
         trigger = crate::style::with_class_list(trigger, &c);
     }
 
-    hstack().w("100%").min_w(0.0).child(trigger).into()
+    let wrap: Element = hstack().w("100%").min_w(0.0).child(trigger).into();
+    wrap.reactive_sync(move |el, _| {
+        overlay_root_author_text(el);
+        LayoutStatus::Clean
+    })
 }
 
 /// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`accordion_content`]）。
@@ -982,6 +1164,7 @@ pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Ele
 
     let sync_presence = presence.clone();
     panel = panel.reactive_sync(move |el, layout_tree| {
+        overlay_root_author_text(el);
         let want = open_sync
             .try_peek()
             .map(|v| is_item_open(&v, &value_for_presence))
@@ -1025,6 +1208,183 @@ struct AccordionItemSpec {
     disabled: bool,
 }
 
+pub struct AccordionTriggerBuilder {
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn accordion_trigger() -> AccordionTriggerBuilder {
+    AccordionTriggerBuilder {
+        disabled: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AccordionTriggerBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AccordionTriggerBuilder> for Element {
+    fn from(builder: AccordionTriggerBuilder) -> Self {
+        let el = AccordionTrigger(AccordionTriggerProps {
+            disabled: Some(builder.disabled),
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct AccordionContentBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+impl AccordionContentBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+}
+
+impl From<AccordionContentBuilder> for Element {
+    fn from(builder: AccordionContentBuilder) -> Self {
+        let class = {
+            let c = builder.chrome.class.trim();
+            if c.is_empty() {
+                None
+            } else {
+                Some(c.to_string())
+            }
+        };
+        let el = AccordionContent(AccordionContentProps {
+            class,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        if builder.chrome.style.is_some() {
+            builder.chrome.apply(el)
+        } else {
+            el
+        }
+    }
+}
+
+pub struct AccordionItemBuilder {
+    value: String,
+    disabled: bool,
+    chrome: SlotChrome,
+    trigger: Option<AccordionTriggerBuilder>,
+    content: Option<AccordionContentBuilder>,
+}
+
+pub fn accordion_item(value: impl Into<String>) -> AccordionItemBuilder {
+    AccordionItemBuilder {
+        value: value.into(),
+        disabled: false,
+        chrome: SlotChrome::default(),
+        trigger: None,
+        content: None,
+    }
+}
+
+impl AccordionItemBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn trigger(mut self, text: impl Into<String>) -> Self {
+        self.trigger = Some(accordion_trigger().text(text));
+        self
+    }
+
+    pub fn trigger_with(
+        mut self,
+        f: impl FnOnce(AccordionTriggerBuilder) -> AccordionTriggerBuilder,
+    ) -> Self {
+        self.trigger = Some(f(accordion_trigger()));
+        self
+    }
+
+    pub fn content(mut self, child: impl Into<Element>) -> Self {
+        self.content = Some(AccordionContentBuilder {
+            children: crate::utils::take_packed(child.into()),
+            chrome: SlotChrome::default(),
+        });
+        self
+    }
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(AccordionContentBuilder) -> AccordionContentBuilder,
+    ) -> Self {
+        self.content = Some(f(AccordionContentBuilder {
+            children: Vec::new(),
+            chrome: SlotChrome::default(),
+        }));
+        self
+    }
+}
+
+impl From<AccordionItemBuilder> for Element {
+    fn from(builder: AccordionItemBuilder) -> Self {
+        let class = if builder.chrome.class.trim().is_empty() {
+            None
+        } else {
+            Some(builder.chrome.class.clone())
+        };
+        let style = builder.chrome.style.clone();
+        let trigger = builder.trigger;
+        let content = builder.content;
+        let mut el = accordion_item_scope(builder.value, builder.disabled, class, move || {
+            let mut kids = Vec::new();
+            if let Some(t) = trigger {
+                kids.push(t.into());
+            }
+            if let Some(c) = content {
+                kids.push(c.into());
+            }
+            packed_children(kids).unwrap_or_else(Element::new)
+        });
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
+    }
+}
+
 pub struct AccordionBuilder {
     id: String,
     value: Option<Signal<Vec<String>>>,
@@ -1032,7 +1392,10 @@ pub struct AccordionBuilder {
     multiple: bool,
     disabled: bool,
     class: Option<String>,
+    style: Option<crate::components::base::SlotStyleFn>,
     items: Vec<AccordionItemSpec>,
+    custom_items: Vec<Box<dyn FnOnce() -> Element>>,
+    body: Option<Box<dyn FnOnce() -> Element>>,
 }
 
 /// Composite Accordion entry (opposite `<Accordion>`).
@@ -1044,7 +1407,10 @@ pub fn accordion(id: impl Into<String>) -> AccordionBuilder {
         multiple: false,
         disabled: false,
         class: None,
+        style: None,
         items: Vec::new(),
+        custom_items: Vec::new(),
+        body: None,
     }
 }
 
@@ -1071,6 +1437,20 @@ impl AccordionBuilder {
 
     pub fn class(mut self, c: impl Into<String>) -> Self {
         self.class = Some(c.into());
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// Compound surface: assemble [`AccordionItem`] / Trigger / Content inside scope.
+    pub fn child(mut self, body: impl FnOnce() -> Element + 'static) -> Self {
+        self.body = Some(Box::new(body));
         self
     }
 
@@ -1103,6 +1483,23 @@ impl AccordionBuilder {
         });
         self
     }
+
+    pub fn item_with(
+        mut self,
+        value: impl Into<String>,
+        f: impl FnOnce(AccordionItemBuilder) -> AccordionItemBuilder + 'static,
+    ) -> Self {
+        let value = value.into();
+        self.custom_items
+            .push(Box::new(move || f(accordion_item(value)).into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for AccordionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
 }
 
 impl From<AccordionBuilder> for Element {
@@ -1114,9 +1511,12 @@ impl From<AccordionBuilder> for Element {
             multiple,
             disabled,
             class,
+            style,
             items,
+            custom_items,
+            body,
         } = builder;
-        accordion_scope(
+        let mut el = accordion_scope(
             id,
             value,
             default_value,
@@ -1124,7 +1524,10 @@ impl From<AccordionBuilder> for Element {
             disabled,
             class,
             move || {
-                let mut out = Vec::with_capacity(items.len());
+                if let Some(body) = body {
+                    return body();
+                }
+                let mut out = Vec::with_capacity(items.len() + custom_items.len());
                 for spec in items {
                     let value = spec.value.clone();
                     let title = spec.title.clone();
@@ -1149,11 +1552,16 @@ impl From<AccordionBuilder> for Element {
                         },
                     ));
                 }
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(out)
+                for custom in custom_items {
+                    out.push(custom());
+                }
+                packed_children(out).unwrap_or_else(Element::new)
             },
-        )
+        );
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -1186,7 +1594,10 @@ mod tests {
     #[test]
     fn accordion_exit_run_inactive_after_keyframes_finish() {
         let mut el = Element::new();
-        seed_accordion_exit_anim(&mut el, 48.0);
+        el.layout_bounds = [0.0, 0.0, 100.0, 48.0];
+        let bounds = el.layout_bounds;
+        el.used_layout.stamp_border_box(bounds, false);
+        seed_accordion_exit_anim(&mut el);
         assert!(
             animation_run_active(&el.style, &el.animation_snapshot),
             "fresh accordion-up must count as animating"
@@ -1336,6 +1747,51 @@ mod tests {
                 el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
                 "first real expand must run accordion-down"
             );
+        });
+    }
+
+    #[test]
+    fn grid_fr_enter_does_not_wait_for_used_height() {
+        use crate::core::tree::LayoutTree;
+        let (_h, ()) = create_root(|| {
+            set_accordion_use_grid_fr(Some(true));
+            struct Reset;
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    set_accordion_use_grid_fr(None);
+                }
+            }
+            let _reset = Reset;
+            let p = use_accordion_panel_presence("acc_enter_grid_fr");
+            sync_accordion_panel_presence(&p, false);
+            sync_accordion_panel_presence(&p, true);
+            assert!(p.cell.borrow().needs_enter);
+            let mut el = Element::new();
+            el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let mut tree = LayoutTree::new();
+            let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
+            assert!(
+                !p.cell.borrow().needs_enter,
+                "grid-fr must not wait for used height"
+            );
+            assert!(
+                !el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
+                "grid-fr path must not seed accordion-down"
+            );
+            assert_eq!(el.style.display, Display::Grid);
+            assert!(
+                el.style
+                    .transition
+                    .iter()
+                    .any(|e| e.property == TransitionProperty::GridTemplateRows),
+                "must attach grid-template-rows transition"
+            );
+            assert!(
+                el.transition_snapshot.has_active_tweens(),
+                "0fr→1fr tween must start on seed"
+            );
+            let used = first_track_fr(&el.style.grid_template_rows).unwrap_or(-1.0);
+            assert!(used < 0.05, "tick(0) must leave used at 0fr, got {used}");
         });
     }
 }

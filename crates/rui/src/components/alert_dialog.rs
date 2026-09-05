@@ -81,6 +81,7 @@ use crate::core::reactivity::{
     component_root, create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{Element, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{
@@ -585,6 +586,10 @@ pub struct AlertDialogContentOpts {
     pub chrome: bool,
     /// Dynamic chrome toggle (`chrome_signal={sig}`).
     pub chrome_signal: Option<Signal<bool>>,
+    /// Utility class on the panel card (after default surface).
+    pub class: Option<String>,
+    /// Layout/paint on the panel card (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for AlertDialogContentOpts {
@@ -600,8 +605,14 @@ impl Default for AlertDialogContentOpts {
             filled: false,
             chrome: true,
             chrome_signal: None,
+            class: None,
+            style: None,
         }
     }
+}
+
+impl AlertDialogContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 fn alert_shell_overlay_opts(
@@ -657,6 +668,7 @@ pub fn alert_dialog_content(
     let filled = opts.filled;
     let chrome_enabled = opts.chrome;
     let chrome_signal = opts.chrome_signal;
+    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let presence = use_modal_presence(&id);
     let mounted = mounted_signal(&presence);
     let body = std::sync::Arc::new(body);
@@ -727,6 +739,7 @@ pub fn alert_dialog_content(
             Some(SLOT_CONTENT),
             Some(size.as_str()),
             shell_chrome.as_ref(),
+            panel_chrome.clone(),
         );
         if let Some(shell) = find_alert_dialog_content_by_template(&mut root, &id) {
             stamp_alert_dialog_shell_meta(
@@ -920,6 +933,91 @@ pub fn AlertDialogCancel(id: String, children: Option<Element>) -> Element {
     };
     el.set_attr(ATTR_SLOT, SLOT_CANCEL);
     el
+}
+
+impl_simple_slot_builder!(
+    AlertDialogTriggerBuilder,
+    alert_dialog_trigger,
+    AlertDialogTrigger,
+    AlertDialogTriggerProps
+);
+impl_simple_slot_builder!(
+    AlertDialogHeaderBuilder,
+    alert_dialog_header,
+    AlertDialogHeader,
+    AlertDialogHeaderProps
+);
+impl_simple_slot_builder!(
+    AlertDialogMediaBuilder,
+    alert_dialog_media,
+    AlertDialogMedia,
+    AlertDialogMediaProps
+);
+impl_simple_slot_builder!(
+    AlertDialogTitleBuilder,
+    alert_dialog_title,
+    AlertDialogTitle,
+    AlertDialogTitleProps
+);
+impl_simple_slot_builder!(
+    AlertDialogDescriptionBuilder,
+    alert_dialog_description,
+    AlertDialogDescription,
+    AlertDialogDescriptionProps
+);
+impl_simple_slot_builder!(
+    AlertDialogBodyBuilder,
+    alert_dialog_body,
+    AlertDialogBody,
+    AlertDialogBodyProps
+);
+impl_simple_slot_builder!(
+    AlertDialogFooterBuilder,
+    alert_dialog_footer,
+    AlertDialogFooter,
+    AlertDialogFooterProps
+);
+impl_simple_slot_builder!(
+    AlertDialogActionBuilder,
+    alert_dialog_action,
+    AlertDialogAction,
+    AlertDialogActionProps
+);
+impl_simple_slot_builder!(
+    AlertDialogCancelBuilder,
+    alert_dialog_cancel,
+    AlertDialogCancel,
+    AlertDialogCancelProps
+);
+
+pub struct AlertDialogContentSlotBuilder {
+    opts: AlertDialogContentOpts,
+}
+
+pub fn alert_dialog_content_slot() -> AlertDialogContentSlotBuilder {
+    AlertDialogContentSlotBuilder {
+        opts: AlertDialogContentOpts::default(),
+    }
+}
+
+impl AlertDialogContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        alert_dialog_content(self.opts, body)
+    }
 }
 
 #[cfg(test)]

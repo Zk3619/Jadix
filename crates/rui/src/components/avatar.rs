@@ -84,7 +84,7 @@ use crate::app::reactive::apply_bound_size;
 use crate::app::reactive::bind_attr;
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::badge::{apply_badge_variant_paint, BadgeVariant};
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{BaseComponentBuilder, SlotChrome};
 use crate::components::internal::floating_motion::{
     apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
@@ -93,6 +93,7 @@ use crate::core::reactivity::{
     Context, Signal,
 };
 use crate::core::tree::{parse_color, Element, IntoF32, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_text_color, with_class_list};
@@ -1656,6 +1657,7 @@ fn build_avatar_group_count(
 pub struct AvatarFallbackBuilder {
     children: Vec<Element>,
     image_src: Option<String>,
+    class: String,
     base: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
 }
 
@@ -1664,6 +1666,7 @@ pub fn avatar_fallback() -> AvatarFallbackBuilder {
     AvatarFallbackBuilder {
         children: Vec::new(),
         image_src: None,
+        class: String::new(),
         base: None,
     }
 }
@@ -1698,12 +1701,30 @@ impl AvatarFallbackBuilder {
         self
     }
 
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.class = c.into();
+        self
+    }
+
+    /// Same [`BaseComponentBuilder`] surface as RSX props (`w` / `h` / `text_size` / …).
+    pub fn style(
+        mut self,
+        f: impl FnOnce(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
+    ) -> Self {
+        self.base = Some(Box::new(f));
+        self
+    }
+
     pub fn into_element(self) -> Element {
         let mut children = self.children;
         if let Some(src) = self.image_src {
             children.push(build_avatar_texture_layer(&src, None));
         }
-        build_avatar_fallback(children, self.base)
+        let mut el = build_avatar_fallback(children, self.base);
+        if !self.class.trim().is_empty() {
+            el = with_class_list(el, self.class.trim());
+        }
+        el
     }
 }
 
@@ -1717,11 +1738,60 @@ impl From<AvatarFallbackBuilder> for Element {
 // Builder
 // ---------------------------------------------------------------------------
 
+pub struct AvatarImageBuilder {
+    id: String,
+    src: String,
+    alt: String,
+    chrome: SlotChrome,
+}
+
+pub fn avatar_image() -> AvatarImageBuilder {
+    AvatarImageBuilder {
+        id: String::new(),
+        src: String::new(),
+        alt: String::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl AvatarImageBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn src(mut self, src: impl Into<String>) -> Self {
+        self.src = src.into();
+        self
+    }
+
+    pub fn alt(mut self, alt: impl Into<String>) -> Self {
+        self.alt = alt.into();
+        self
+    }
+}
+
+impl From<AvatarImageBuilder> for Element {
+    fn from(builder: AvatarImageBuilder) -> Self {
+        let el = AvatarImage(AvatarImageProps {
+            id: builder.id,
+            src: Some(builder.src),
+            alt: Some(builder.alt),
+            base: None,
+            children: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct AvatarBuilder {
     id: String,
     size: AvatarSize,
     shape: AvatarShape,
-    class: String,
+    chrome: SlotChrome,
     body: Option<Box<dyn FnOnce() -> Element>>,
 }
 
@@ -1731,12 +1801,14 @@ pub fn avatar() -> AvatarBuilder {
         id: String::new(),
         size: AvatarSize::Default,
         shape: AvatarShape::Circle,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         body: None,
     }
 }
 
 impl AvatarBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -1749,11 +1821,6 @@ impl AvatarBuilder {
 
     pub fn shape(mut self, s: impl AsRef<str>) -> Self {
         self.shape = AvatarShape::parse(s.as_ref());
-        self
-    }
-
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
         self
     }
 
@@ -1802,35 +1869,36 @@ impl AvatarBuilder {
     }
 
     /// Convenience: only images (can be linked to `.fallback` / `.fallback_icon`, etc.).
-    pub fn image(mut self, src: impl Into<String>) -> Self {
+    pub fn image(self, src: impl Into<String>) -> Self {
         let src = src.into();
-        self.body = Some(Box::new(move || {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children(vec![AvatarImage(AvatarImageProps {
-                id: String::new(),
-                src: Some(src.clone()),
-                alt: Some(String::new()),
-                base: None,
-                children: None,
-                ..Default::default()
-            })])
-        }));
+        self.image_with(move |img| img.src(src))
+    }
+
+    pub fn image_with(
+        mut self,
+        f: impl FnOnce(AvatarImageBuilder) -> AvatarImageBuilder + 'static,
+    ) -> Self {
+        self.body = Some(Box::new(move || f(avatar_image()).into()));
         self
     }
 }
 
 impl From<AvatarBuilder> for Element {
     fn from(builder: AvatarBuilder) -> Self {
-        let class = if builder.class.trim().is_empty() {
+        let class = if builder.chrome.class.trim().is_empty() {
             None
         } else {
-            Some(builder.class)
+            Some(builder.chrome.class.clone())
         };
+        let style = builder.chrome.style.clone();
         let body = builder.body;
-        avatar_scope(builder.id, builder.size, builder.shape, class, move || {
+        let mut el = avatar_scope(builder.id, builder.size, builder.shape, class, move || {
             body.map(|b| b()).unwrap_or_else(Element::new)
-        })
+        });
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -2770,6 +2838,61 @@ mod tests {
             el.children.iter().any(find_load_layer)
         }
         assert!(find_load_layer(fb), "fallback image layer must exist");
+    }
+
+    #[test]
+    fn avatar_fallback_builder_class_and_style() {
+        fn has_text(el: &Element, want: &str) -> bool {
+            if el.text.as_deref() == Some(want) {
+                return true;
+            }
+            el.children.iter().any(|c| has_text(c, want))
+        }
+
+        let el: Element = avatar()
+            .fallback_with(|fb| {
+                fb.class("bg-accent")
+                    .style(|b| b.text_size(20.0))
+                    .text("AB")
+            })
+            .into();
+        let fb = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_FALLBACK))
+            .expect("fallback slot");
+        assert!(
+            fb.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("bg-accent")))
+                || fb
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("bg-accent"))
+        );
+        assert_eq!(fb.text_style.size_resolved(), 20.0);
+        assert!(has_text(fb, "AB"), "fallback caption must render");
+    }
+
+    #[test]
+    fn avatar_image_with_applies_chrome() {
+        let el: Element = avatar()
+            .image_with(|img| img.src("assets/user.png").class("opacity-80"))
+            .into();
+        let img = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_IMAGE))
+            .expect("avatar-image");
+        assert!(
+            img.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("opacity-80")))
+                || img
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("opacity-80"))
+        );
     }
 
     #[test]

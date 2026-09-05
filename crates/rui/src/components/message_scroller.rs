@@ -79,7 +79,7 @@ use std::sync::OnceLock;
 
 use rui_macros::component;
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{BaseComponentBuilder, SlotChrome};
 use crate::components::button::button;
 use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
 use crate::core::reactivity::{
@@ -90,6 +90,7 @@ use crate::core::scroll_viewport::{
     scroll_target_y_signal_key, scroll_viewport_h_signal_key, SCROLL_BEHAVIOR_JUMP,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus, ATTR_POINTER_EVENTS};
+use crate::impl_slot_chrome_methods;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
@@ -708,13 +709,6 @@ fn apply_button_active(
 // Paint helpers
 // ---------------------------------------------------------------------------
 
-fn apply_optional_class(mut el: Element, class: &str) -> Element {
-    if !class.trim().is_empty() {
-        el = with_class_list(el, class.trim());
-    }
-    el
-}
-
 fn apply_base(
     mut el: Element,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
@@ -1100,7 +1094,7 @@ pub struct MessageScrollerProviderBuilder {
     default_scroll_position: MessageScrollerDefaultPosition,
     scroll_edge_threshold: f32,
     scroll_previous_item_peek: f32,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<DelayedEl>,
 }
 
@@ -1112,12 +1106,14 @@ pub fn message_scroller_provider() -> MessageScrollerProviderBuilder {
         default_scroll_position: MessageScrollerDefaultPosition::End,
         scroll_edge_threshold: DEFAULT_EDGE_THRESHOLD,
         scroll_previous_item_peek: DEFAULT_PREVIOUS_PEEK,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageScrollerProviderBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -1146,11 +1142,6 @@ impl MessageScrollerProviderBuilder {
         self
     }
 
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
-        self
-    }
-
     pub fn child(mut self, child: impl Into<Element> + 'static) -> Self {
         self.children.push(delay_el(child));
         self
@@ -1165,26 +1156,23 @@ impl crate::core::tree::IntoElementList for MessageScrollerProviderBuilder {
 
 impl From<MessageScrollerProviderBuilder> for Element {
     fn from(builder: MessageScrollerProviderBuilder) -> Self {
-        let class = if builder.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.class)
-        };
-        message_scroller_scope(
+        let chrome = builder.chrome;
+        let el = message_scroller_scope(
             builder.id,
             builder.auto_scroll,
             builder.default_scroll_position,
             builder.scroll_edge_threshold,
             builder.scroll_previous_item_peek,
-            class,
+            None,
             move || packed_children(collect_delayed(builder.children)).unwrap_or_else(Element::new),
-        )
+        );
+        chrome.apply(el)
     }
 }
 
 pub struct MessageScrollerBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
     w: Option<String>,
     h: Option<String>,
     children: Vec<DelayedEl>,
@@ -1194,7 +1182,7 @@ pub struct MessageScrollerBuilder {
 pub fn message_scroller() -> MessageScrollerBuilder {
     MessageScrollerBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         w: None,
         h: None,
         children: Vec::new(),
@@ -1202,13 +1190,10 @@ pub fn message_scroller() -> MessageScrollerBuilder {
 }
 
 impl MessageScrollerBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -1249,27 +1234,24 @@ impl From<MessageScrollerBuilder> for Element {
         if let Some(h) = builder.h {
             el = el.h(h);
         }
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageScrollerViewportBuilder {
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
 pub fn message_scroller_viewport() -> MessageScrollerViewportBuilder {
     MessageScrollerViewportBuilder {
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageScrollerViewportBuilder {
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
-        self
-    }
+    impl_slot_chrome_methods!();
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
@@ -1291,27 +1273,24 @@ impl From<MessageScrollerViewportBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageScrollerContentBuilder {
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
 pub fn message_scroller_content() -> MessageScrollerContentBuilder {
     MessageScrollerContentBuilder {
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageScrollerContentBuilder {
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
-        self
-    }
+    impl_slot_chrome_methods!();
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
@@ -1333,14 +1312,14 @@ impl From<MessageScrollerContentBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
 pub struct MessageScrollerItemBuilder {
     message_id: String,
     scroll_anchor: bool,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -1348,12 +1327,14 @@ pub fn message_scroller_item() -> MessageScrollerItemBuilder {
     MessageScrollerItemBuilder {
         message_id: String::new(),
         scroll_anchor: false,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageScrollerItemBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn message_id(mut self, id: impl Into<String>) -> Self {
         self.message_id = id.into();
         self
@@ -1361,11 +1342,6 @@ impl MessageScrollerItemBuilder {
 
     pub fn scroll_anchor(mut self, on: bool) -> Self {
         self.scroll_anchor = on;
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -1391,7 +1367,7 @@ impl From<MessageScrollerItemBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
     }
 }
 
@@ -1399,7 +1375,7 @@ pub struct MessageScrollerButtonBuilder {
     direction: MessageScrollerDirection,
     variant: String,
     size: String,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -1408,12 +1384,14 @@ pub fn message_scroller_button() -> MessageScrollerButtonBuilder {
         direction: MessageScrollerDirection::End,
         variant: String::new(),
         size: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl MessageScrollerButtonBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn direction(mut self, direction: impl Into<MessageScrollerDirection>) -> Self {
         self.direction = direction.into();
         self
@@ -1426,11 +1404,6 @@ impl MessageScrollerButtonBuilder {
 
     pub fn size(mut self, size: impl Into<String>) -> Self {
         self.size = size.into();
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -1457,6 +1430,29 @@ impl From<MessageScrollerButtonBuilder> for Element {
             base_builder: None,
             ..Default::default()
         });
-        apply_optional_class(el, &builder.class)
+        builder.chrome.apply(el)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewport_builder_style_sticks() {
+        let el = message_scroller_scope(
+            "test-ms",
+            true,
+            MessageScrollerDefaultPosition::End,
+            DEFAULT_EDGE_THRESHOLD,
+            DEFAULT_PREVIOUS_PEEK,
+            None,
+            || {
+                message_scroller_viewport()
+                    .style(|b| b.text_size(11.0))
+                    .into()
+            },
+        );
+        assert_eq!(el.text_style.size_resolved(), 11.0);
     }
 }

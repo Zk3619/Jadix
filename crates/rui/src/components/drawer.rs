@@ -73,6 +73,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::text::text;
@@ -400,6 +401,8 @@ impl From<DrawerBuilder> for Element {
             overlay_blur: None,
             width,
             height,
+            class: None,
+            style: None,
         };
         drawer_scope(id, open, move || {
             drawer_content(opts, move || {
@@ -644,6 +647,7 @@ fn drawer_shell_frame(
     chrome_close: Option<Element>,
     presence: &ModalPresenceHandle,
     phase: PresencePhase,
+    panel_chrome: crate::components::base::SlotChrome,
 ) -> Element {
     let (vw, vh) = drawer_viewport_size();
     let axis = if direction.is_vertical() {
@@ -727,6 +731,7 @@ fn drawer_shell_frame(
     };
 
     panel = apply_drawer_shell_surface(panel, direction, width, height, visible_px);
+    panel = panel_chrome.apply(panel);
     // Keep `position: absolute` from the shell surface — `relative()` would put the
     // panel in stage flow (flex-start / opposite edge) so enter looked like it
     // crossed the viewport to the dock. Absolute is already a containing block
@@ -884,7 +889,7 @@ pub fn DrawerSwipeHandle(_children: Option<Element>) -> Element {
 }
 
 /// `DrawerContent` 遮罩 / 方向 / chrome 选项（`ui!` / [`drawer_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DrawerContentOpts {
     /// 滑入方向；默认 [`DrawerDirection::Down`]（自底向上）。
     pub direction: DrawerDirection,
@@ -912,6 +917,10 @@ pub struct DrawerContentOpts {
     pub snap_to_sequential_point: bool,
     /// Aligns with Vaul `shouldScaleBackground` / shadcn `scaleBackground`.
     pub scale_background: bool,
+    /// Utility class on the drawer panel (after default surface).
+    pub class: Option<String>,
+    /// Layout/paint on the drawer panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for DrawerContentOpts {
@@ -930,8 +939,14 @@ impl Default for DrawerContentOpts {
             snap_points: vec![DrawerSnapPoint::Fraction(1.0)],
             snap_to_sequential_point: false,
             scale_background: false,
+            class: None,
+            style: None,
         }
     }
+}
+
+impl DrawerContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// shadcn `DrawerContent`：Portal + Overlay + 贴边/底滑面板壳。
@@ -955,6 +970,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     let snap_points = normalize_snap_points(&opts.snap_points);
     let snap_to_sequential = opts.snap_to_sequential_point;
     let scale_background = opts.scale_background;
+    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let presence = use_modal_presence(&id);
     let mounted = mounted_signal(&presence);
     let had_mounted_key = format!("{id}__drawer_had_mounted");
@@ -1036,6 +1052,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
             chrome_close,
             &presence,
             phase,
+            panel_chrome.clone(),
         )
     })
 }
@@ -1123,6 +1140,82 @@ pub fn DrawerFooter(children: Option<Element>) -> Element {
             .flex_shrink(0.0)
             .children(kids),
     )
+}
+
+impl_simple_slot_builder!(
+    DrawerTriggerBuilder,
+    drawer_trigger,
+    DrawerTrigger,
+    DrawerTriggerProps
+);
+impl_simple_slot_builder!(
+    DrawerCloseBuilder,
+    drawer_close_part,
+    DrawerClose,
+    DrawerCloseProps
+);
+impl_simple_slot_builder!(
+    DrawerHeaderBuilder,
+    drawer_header,
+    DrawerHeader,
+    DrawerHeaderProps
+);
+impl_simple_slot_builder!(
+    DrawerTitleBuilder,
+    drawer_title,
+    DrawerTitle,
+    DrawerTitleProps
+);
+impl_simple_slot_builder!(
+    DrawerDescriptionBuilder,
+    drawer_description,
+    DrawerDescription,
+    DrawerDescriptionProps
+);
+impl_simple_slot_builder!(DrawerBodyBuilder, drawer_body, DrawerBody, DrawerBodyProps);
+impl_simple_slot_builder!(
+    DrawerFooterBuilder,
+    drawer_footer,
+    DrawerFooter,
+    DrawerFooterProps
+);
+
+pub struct DrawerContentSlotBuilder {
+    opts: DrawerContentOpts,
+}
+
+pub fn drawer_content_slot() -> DrawerContentSlotBuilder {
+    DrawerContentSlotBuilder {
+        opts: DrawerContentOpts::default(),
+    }
+}
+
+impl DrawerContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn direction(mut self, direction: impl Into<DrawerDirection>) -> Self {
+        self.opts.direction = direction.into();
+        self
+    }
+    pub fn show_close(mut self, v: bool) -> Self {
+        self.opts.show_close = v;
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        drawer_content(self.opts, body)
+    }
 }
 
 // ---------------------------------------------------------------------------

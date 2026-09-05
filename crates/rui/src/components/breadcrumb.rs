@@ -50,9 +50,12 @@
 //!   underline-offset paints below the box and relies on decoration clip expansion.
 //! - [`BreadcrumbSeparator`] / [`BreadcrumbEllipsis`] 默认 Lucide chevron / more-horizontal。
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{
+    ensure_data_slot, packed_children, BaseComponentBuilder, SlotChrome,
+};
 use crate::components::button::button;
 use crate::core::tree::{parse_text_color, Element, Handler};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
 use crate::style::{parse_text_color as theme_fg, with_class_list};
 use crate::utils::lucide::lucide_glyph;
@@ -346,18 +349,233 @@ pub fn BreadcrumbEllipsis(class: Option<String>, children: Option<Element>) -> E
 // ---------------------------------------------------------------------------
 
 enum BreadcrumbBuilderPart {
+    Child(Element),
     Link {
         label: String,
         on_click: Handler<()>,
+        chrome: SlotChrome,
     },
-    Page(String),
-    Ellipsis,
+    Page {
+        label: String,
+        chrome: SlotChrome,
+    },
+    Ellipsis {
+        chrome: SlotChrome,
+    },
+}
+
+pub struct BreadcrumbItemBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_item() -> BreadcrumbItemBuilder {
+    BreadcrumbItemBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbItemBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+}
+
+impl From<BreadcrumbItemBuilder> for Element {
+    fn from(builder: BreadcrumbItemBuilder) -> Self {
+        let el = BreadcrumbItem(BreadcrumbItemProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct BreadcrumbLinkBuilder {
+    id: String,
+    label: String,
+    on_click: Handler<()>,
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_link() -> BreadcrumbLinkBuilder {
+    BreadcrumbLinkBuilder {
+        id: String::new(),
+        label: String::new(),
+        on_click: Handler::default(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbLinkBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn text(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+
+    pub fn on_click(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_click = Handler::new(move |_| f());
+        self
+    }
+}
+
+impl From<BreadcrumbLinkBuilder> for Element {
+    fn from(builder: BreadcrumbLinkBuilder) -> Self {
+        let el = build_breadcrumb_link(&builder.id, &builder.label, None, builder.on_click, None);
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct BreadcrumbPageBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_page() -> BreadcrumbPageBuilder {
+    BreadcrumbPageBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbPageBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, label: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(label.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<BreadcrumbPageBuilder> for Element {
+    fn from(builder: BreadcrumbPageBuilder) -> Self {
+        let el = BreadcrumbPage(BreadcrumbPageProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct BreadcrumbSeparatorBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_separator() -> BreadcrumbSeparatorBuilder {
+    BreadcrumbSeparatorBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbSeparatorBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+}
+
+impl From<BreadcrumbSeparatorBuilder> for Element {
+    fn from(builder: BreadcrumbSeparatorBuilder) -> Self {
+        let el = BreadcrumbSeparator(BreadcrumbSeparatorProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct BreadcrumbEllipsisBuilder {
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_ellipsis() -> BreadcrumbEllipsisBuilder {
+    BreadcrumbEllipsisBuilder {
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbEllipsisBuilder {
+    impl_slot_chrome_methods!();
+}
+
+impl From<BreadcrumbEllipsisBuilder> for Element {
+    fn from(builder: BreadcrumbEllipsisBuilder) -> Self {
+        let el = BreadcrumbEllipsis(BreadcrumbEllipsisProps {
+            class: None,
+            children: None,
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct BreadcrumbListBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn breadcrumb_list() -> BreadcrumbListBuilder {
+    BreadcrumbListBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl BreadcrumbListBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+}
+
+impl From<BreadcrumbListBuilder> for Element {
+    fn from(builder: BreadcrumbListBuilder) -> Self {
+        let el = BreadcrumbList(BreadcrumbListProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
 }
 
 /// Builder status (ADR-9 Side B).
 pub struct BreadcrumbBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
+    list_chrome: SlotChrome,
+    item_chrome: SlotChrome,
+    separator_chrome: SlotChrome,
     label: String,
     parts: Vec<BreadcrumbBuilderPart>,
 }
@@ -366,20 +584,20 @@ pub struct BreadcrumbBuilder {
 pub fn breadcrumb() -> BreadcrumbBuilder {
     BreadcrumbBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
+        list_chrome: SlotChrome::default(),
+        item_chrome: SlotChrome::default(),
+        separator_chrome: SlotChrome::default(),
         label: String::new(),
         parts: Vec::new(),
     }
 }
 
 impl BreadcrumbBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, class: impl Into<String>) -> Self {
-        self.class = class.into();
         self
     }
 
@@ -388,21 +606,74 @@ impl BreadcrumbBuilder {
         self
     }
 
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.parts.push(BreadcrumbBuilderPart::Child(child.into()));
+        self
+    }
+
     pub fn link(mut self, label: impl Into<String>, on_click: impl Fn() + 'static) -> Self {
         self.parts.push(BreadcrumbBuilderPart::Link {
             label: label.into(),
             on_click: Handler::new(move |_| on_click()),
+            chrome: SlotChrome::default(),
+        });
+        self
+    }
+
+    pub fn link_with(
+        mut self,
+        label: impl Into<String>,
+        on_click: impl Fn() + 'static,
+        f: impl FnOnce(BreadcrumbLinkBuilder) -> BreadcrumbLinkBuilder,
+    ) -> Self {
+        let b = f(breadcrumb_link().text(label).on_click(on_click));
+        self.parts.push(BreadcrumbBuilderPart::Link {
+            label: b.label,
+            on_click: b.on_click,
+            chrome: b.chrome,
         });
         self
     }
 
     pub fn page(mut self, label: impl Into<String>) -> Self {
-        self.parts.push(BreadcrumbBuilderPart::Page(label.into()));
+        self.parts.push(BreadcrumbBuilderPart::Page {
+            label: label.into(),
+            chrome: SlotChrome::default(),
+        });
+        self
+    }
+
+    pub fn page_with(
+        mut self,
+        f: impl FnOnce(BreadcrumbPageBuilder) -> BreadcrumbPageBuilder,
+    ) -> Self {
+        self.parts
+            .push(BreadcrumbBuilderPart::Child(f(breadcrumb_page()).into()));
         self
     }
 
     pub fn ellipsis(mut self) -> Self {
-        self.parts.push(BreadcrumbBuilderPart::Ellipsis);
+        self.parts.push(BreadcrumbBuilderPart::Ellipsis {
+            chrome: SlotChrome::default(),
+        });
+        self
+    }
+
+    pub fn ellipsis_with(
+        mut self,
+        f: impl FnOnce(BreadcrumbEllipsisBuilder) -> BreadcrumbEllipsisBuilder,
+    ) -> Self {
+        self.parts.push(BreadcrumbBuilderPart::Ellipsis {
+            chrome: f(breadcrumb_ellipsis()).chrome,
+        });
+        self
+    }
+
+    pub fn list_with(
+        mut self,
+        f: impl FnOnce(BreadcrumbListBuilder) -> BreadcrumbListBuilder,
+    ) -> Self {
+        self.list_chrome = f(breadcrumb_list()).chrome;
         self
     }
 }
@@ -412,69 +683,84 @@ impl From<BreadcrumbBuilder> for Element {
         let mut list_kids = Vec::new();
         for (part_idx, part) in builder.parts.into_iter().enumerate() {
             if part_idx > 0 {
-                list_kids.push(BreadcrumbSeparator(BreadcrumbSeparatorProps {
-                    class: None,
-                    children: None,
-                    base: None,
-                    ..Default::default()
-                }));
+                list_kids.push(builder.separator_chrome.apply(BreadcrumbSeparator(
+                    BreadcrumbSeparatorProps {
+                        class: None,
+                        children: None,
+                        base: None,
+                        ..Default::default()
+                    },
+                )));
             }
             match part {
-                BreadcrumbBuilderPart::Link { label, on_click } => {
-                    list_kids.push(BreadcrumbItem(BreadcrumbItemProps {
-                        class: None,
-                        children: Some(build_breadcrumb_link(
-                            "",
-                            &label,
-                            Some(part_idx),
-                            on_click,
-                            None,
-                        )),
-                        base: None,
-                        ..Default::default()
+                BreadcrumbBuilderPart::Child(el) => {
+                    list_kids.push(ensure_data_slot(el, SLOT_ITEM, |inner| {
+                        breadcrumb_item().child(inner).into()
                     }));
                 }
-                BreadcrumbBuilderPart::Page(label) => {
-                    list_kids.push(BreadcrumbItem(BreadcrumbItemProps {
-                        class: None,
-                        children: Some(BreadcrumbPage(BreadcrumbPageProps {
+                BreadcrumbBuilderPart::Link {
+                    label,
+                    on_click,
+                    chrome,
+                } => {
+                    let link = chrome.apply(build_breadcrumb_link(
+                        "",
+                        &label,
+                        Some(part_idx),
+                        on_click,
+                        None,
+                    ));
+                    list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
+                        BreadcrumbItemProps {
                             class: None,
-                            children: Some(Element::new().text(label)),
+                            children: Some(link),
                             base: None,
                             ..Default::default()
-                        })),
-                        base: None,
-                        ..Default::default()
-                    }));
+                        },
+                    )));
                 }
-                BreadcrumbBuilderPart::Ellipsis => {
-                    list_kids.push(BreadcrumbItem(BreadcrumbItemProps {
+                BreadcrumbBuilderPart::Page { label, chrome } => {
+                    let page = chrome.apply(BreadcrumbPage(BreadcrumbPageProps {
                         class: None,
-                        children: Some(BreadcrumbEllipsis(BreadcrumbEllipsisProps {
-                            class: None,
-                            children: None,
-                            base: None,
-                            ..Default::default()
-                        })),
+                        children: Some(Element::new().text(label)),
                         base: None,
                         ..Default::default()
                     }));
+                    list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
+                        BreadcrumbItemProps {
+                            class: None,
+                            children: Some(page),
+                            base: None,
+                            ..Default::default()
+                        },
+                    )));
+                }
+                BreadcrumbBuilderPart::Ellipsis { chrome } => {
+                    let ellipsis = chrome.apply(BreadcrumbEllipsis(BreadcrumbEllipsisProps {
+                        class: None,
+                        children: None,
+                        base: None,
+                        ..Default::default()
+                    }));
+                    list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
+                        BreadcrumbItemProps {
+                            class: None,
+                            children: Some(ellipsis),
+                            base: None,
+                            ..Default::default()
+                        },
+                    )));
                 }
             }
         }
-        let list_children = if list_kids.is_empty() {
-            None
-        } else {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            Some(frag.children(list_kids))
-        };
-        let list = BreadcrumbList(BreadcrumbListProps {
-            class: None,
-            children: list_children,
-            base: None,
-            ..Default::default()
-        });
+        let list = builder
+            .list_chrome
+            .apply(BreadcrumbList(BreadcrumbListProps {
+                class: None,
+                children: packed_children(list_kids),
+                base: None,
+                ..Default::default()
+            }));
         let mut el = Breadcrumb(BreadcrumbProps {
             id: builder.id,
             children: Some(list),
@@ -485,16 +771,26 @@ impl From<BreadcrumbBuilder> for Element {
         if !builder.label.trim().is_empty() {
             el = el.aria_label(builder.label.trim());
         }
-        if !builder.class.trim().is_empty() {
-            el = with_class_list(el, builder.class.trim());
-        }
-        el
+        builder.chrome.apply(el)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builder_page_with_style() {
+        let el: Element = breadcrumb()
+            .link("Home", || ())
+            .page_with(|p| p.style(|b| b.text_size(18.0)).text("Here"))
+            .into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(find_size(&el, 18.0));
+    }
 
     #[test]
     fn breadcrumb_root_slot_and_aria() {

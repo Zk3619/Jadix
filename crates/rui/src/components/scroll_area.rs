@@ -420,6 +420,10 @@ impl From<ScrollAreaBuilder> for Element {
             .eq_ignore_ascii_case("outside");
         let v_right = !builder.scrollbar_y_side.trim().eq_ignore_ascii_case("left");
         let h_top = builder.scrollbar_x_side.trim().eq_ignore_ascii_case("top");
+        let cross_px = builder
+            .scrollbar_thickness
+            .unwrap_or(crate::components::scrollbar::SCROLLBAR_DEFAULT_CROSS_PX)
+            .max(2.0);
         let vis_x = if vis == "auto" && inset_outside_x {
             "always"
         } else {
@@ -452,10 +456,16 @@ impl From<ScrollAreaBuilder> for Element {
         if inset_outside_y {
             v_scroll = v_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
-            v_scroll = v_scroll
-                .absolute()
-                .top(SCROLLBAR_EDGE_PAD)
-                .bottom(SCROLLBAR_EDGE_PAD);
+            // Overlay L-join: vertical owns the corner; horizontal yields lane width.
+            let (top, bottom) = crate::components::scrollbar::scrollbar_overlay_main_insets(
+                "y",
+                false,
+                show_h,
+                !v_right,
+                SCROLLBAR_EDGE_PAD,
+                cross_px,
+            );
+            v_scroll = v_scroll.absolute().top(top).bottom(bottom);
             if v_right {
                 v_scroll = v_scroll.right(SCROLLBAR_EDGE_PAD);
             } else {
@@ -465,10 +475,15 @@ impl From<ScrollAreaBuilder> for Element {
         if inset_outside_x {
             h_scroll = h_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
-            h_scroll = h_scroll
-                .absolute()
-                .left(SCROLLBAR_EDGE_PAD)
-                .right(SCROLLBAR_EDGE_PAD);
+            let (left, right) = crate::components::scrollbar::scrollbar_overlay_main_insets(
+                "x",
+                false,
+                show_v,
+                !v_right,
+                SCROLLBAR_EDGE_PAD,
+                cross_px,
+            );
+            h_scroll = h_scroll.absolute().left(left).right(right);
             if h_top {
                 h_scroll = h_scroll.top(SCROLLBAR_EDGE_PAD);
             } else {
@@ -517,6 +532,18 @@ impl From<ScrollAreaBuilder> for Element {
 
         let mut v_opt: Option<Element> = if show_v { Some(v_scroll.into()) } else { None };
         let mut h_opt: Option<Element> = if show_h { Some(h_scroll.into()) } else { None };
+        if let Some(v) = v_opt.as_mut() {
+            if !inset_outside_y {
+                v.style.size.height = taffy::style::Dimension::auto();
+                v.style.min_size.height = taffy::style::Dimension::auto();
+            }
+        }
+        if let Some(h) = h_opt.as_mut() {
+            if !inset_outside_x {
+                h.style.size.width = taffy::style::Dimension::auto();
+                h.style.min_size.width = taffy::style::Dimension::auto();
+            }
+        }
 
         if inset_outside_x || inset_outside_y {
             outer.style.flex_direction = taffy::style::FlexDirection::Column;
@@ -535,13 +562,17 @@ impl From<ScrollAreaBuilder> for Element {
                 .min_w(0.0);
             let mut h_left = if inset_outside_x { h_opt.take() } else { None };
             if show_h && inset_outside_x && h_top {
-                if let Some(h) = h_left.take() {
+                if let Some(mut h) = h_left.take() {
+                    h.style.size.width = taffy::style::Dimension::percent(1.0);
+                    h.style.min_size.width = taffy::style::Dimension::auto();
                     inner_col = inner_col.child(h);
                 }
             }
             inner_col = inner_col.child(vp);
             if show_h && inset_outside_x && !h_top {
-                if let Some(h) = h_left.take() {
+                if let Some(mut h) = h_left.take() {
+                    h.style.size.width = taffy::style::Dimension::percent(1.0);
+                    h.style.min_size.width = taffy::style::Dimension::auto();
                     inner_col = inner_col.child(h);
                 }
             }
@@ -555,13 +586,17 @@ impl From<ScrollAreaBuilder> for Element {
                 .h("100%");
             let mut v_left = if inset_outside_y { v_opt.take() } else { None };
             if show_v && inset_outside_y && !v_right {
-                if let Some(v) = v_left.take() {
+                if let Some(mut v) = v_left.take() {
+                    v.style.size.height = taffy::style::Dimension::percent(1.0);
+                    v.style.min_size.height = taffy::style::Dimension::auto();
                     row = row.child(v);
                 }
             }
             row = row.child(inner_col);
             if show_v && inset_outside_y && v_right {
-                if let Some(v) = v_left.take() {
+                if let Some(mut v) = v_left.take() {
+                    v.style.size.height = taffy::style::Dimension::percent(1.0);
+                    v.style.min_size.height = taffy::style::Dimension::auto();
                     row = row.child(v);
                 }
             }

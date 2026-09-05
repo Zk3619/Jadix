@@ -78,6 +78,7 @@ use crate::core::reactivity::{
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
@@ -561,12 +562,14 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
 }
 
 /// `DropdownMenuContent` 选项（`ui!` / [`dropdown_menu_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DropdownMenuContentOpts {
     /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
     /// Extra class (utility).
     pub class: Option<String>,
+    /// Layout/paint on the panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
     /// 面板动效；默认 Expand（从上到下展开）。Fade 可显式传入。
     pub(crate) motion: FloatingMotionKind,
 }
@@ -576,17 +579,21 @@ impl Default for DropdownMenuContentOpts {
         Self {
             placement: "bottom-start".into(),
             class: None,
+            style: None,
             motion: FloatingMotionKind::Expand,
         }
     }
 }
 
 impl DropdownMenuContentOpts {
+    crate::impl_content_opts_chrome!();
+
     /// `ui!` / 宏入口：只暴露 placement / class；`motion` 保持 crate 内默认 Expand。
     pub fn new(placement: impl Into<String>, class: Option<String>) -> Self {
         Self {
             placement: placement.into(),
             class,
+            style: None,
             motion: FloatingMotionKind::Expand,
         }
     }
@@ -609,7 +616,7 @@ pub fn dropdown_menu_content(
     } else {
         PopupPlacement::from_attr(&opts.placement)
     };
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let motion = opts.motion;
     let view_id = format!("{id}__dd_view");
     let presence = use_floating_presence(&id, motion);
@@ -669,9 +676,7 @@ pub fn dropdown_menu_content(
             .border_color(tokens::border())
             .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
             .absolute();
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
         panel = panel.accesskit_role("menu");
         let anchor = trigger_fid.peek();
@@ -1501,6 +1506,73 @@ pub fn DropdownMenuGroup(children: Option<Element>) -> Element {
     el
 }
 
+impl_simple_slot_builder!(
+    DropdownMenuTriggerBuilder,
+    dropdown_menu_trigger,
+    DropdownMenuTrigger,
+    DropdownMenuTriggerProps
+);
+impl_simple_slot_builder!(
+    DropdownMenuItemBuilder,
+    dropdown_menu_item,
+    DropdownMenuItem,
+    DropdownMenuItemProps
+);
+impl_simple_slot_builder!(
+    DropdownMenuLabelBuilder,
+    dropdown_menu_label,
+    DropdownMenuLabel,
+    DropdownMenuLabelProps
+);
+impl_simple_slot_builder!(
+    DropdownMenuSeparatorBuilder,
+    dropdown_menu_separator,
+    DropdownMenuSeparator,
+    DropdownMenuSeparatorProps
+);
+impl_simple_slot_builder!(
+    DropdownMenuGroupBuilder,
+    dropdown_menu_group,
+    DropdownMenuGroup,
+    DropdownMenuGroupProps
+);
+impl_simple_slot_builder!(
+    DropdownMenuShortcutBuilder,
+    dropdown_menu_shortcut,
+    DropdownMenuShortcut,
+    DropdownMenuShortcutProps
+);
+
+pub struct DropdownMenuContentSlotBuilder {
+    opts: DropdownMenuContentOpts,
+}
+
+pub fn dropdown_menu_content_slot() -> DropdownMenuContentSlotBuilder {
+    DropdownMenuContentSlotBuilder {
+        opts: DropdownMenuContentOpts::default(),
+    }
+}
+
+impl DropdownMenuContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        dropdown_menu_content(self.opts, body)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
@@ -1515,6 +1587,8 @@ pub struct DropdownMenuBuilder {
     menu: Box<dyn Fn() -> Element>,
     anchor_focus_id: Option<String>,
     placement: PopupPlacement,
+    content_class: Option<String>,
+    content_style: Option<crate::components::base::SlotStyleFn>,
 }
 
 /// 触发器 + 菜单壳。Esc 经 overlay 栈关闭。见模块文档。
@@ -1530,6 +1604,8 @@ pub fn dropdown_menu(
         menu: Box::new(menu),
         anchor_focus_id: None,
         placement: PopupPlacement::BottomStart,
+        content_class: None,
+        content_style: None,
     }
 }
 
@@ -1557,6 +1633,27 @@ impl DropdownMenuBuilder {
         self.placement = p;
         self
     }
+
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.content_class = Some(c.into());
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_style = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// Build Trigger / Content (and related) subtrees inside the context.
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        dropdown_menu_scope(self.id, self.open, body)
+    }
 }
 
 impl From<DropdownMenuBuilder> for Element {
@@ -1568,6 +1665,8 @@ impl From<DropdownMenuBuilder> for Element {
             menu,
             anchor_focus_id,
             placement,
+            content_class,
+            content_style,
         } = builder;
         let side = placement.as_attr().to_string();
         let trigger_fid = anchor_focus_id.unwrap_or_else(|| format!("{id}__dd_trigger"));
@@ -1584,7 +1683,8 @@ impl From<DropdownMenuBuilder> for Element {
             let content = dropdown_menu_content(
                 DropdownMenuContentOpts {
                     placement: side,
-                    class: None,
+                    class: content_class,
+                    style: content_style,
                     motion: FloatingMotionKind::Expand,
                 },
                 move || menu(),

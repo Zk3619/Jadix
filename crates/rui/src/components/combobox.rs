@@ -55,6 +55,7 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
 use crate::components::input::{
     input, input_adornment_button, input_value_signal_key, lucide_named,
@@ -480,7 +481,7 @@ pub fn ComboboxInput(
 // ---------------------------------------------------------------------------
 
 /// `<ComboboxContent>` / [`combobox_content`] 选项。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct ComboboxContentOpts {
     pub class: Option<String>,
     pub match_trigger: Option<bool>,
@@ -489,6 +490,26 @@ pub struct ComboboxContentOpts {
     pub min_height: Option<String>,
     pub max_height: Option<String>,
     pub placement: Option<PopupPlacement>,
+    pub style: Option<crate::components::base::SlotStyleFn>,
+}
+
+impl Default for ComboboxContentOpts {
+    fn default() -> Self {
+        Self {
+            class: None,
+            match_trigger: None,
+            menu_width: None,
+            menu_height: None,
+            min_height: None,
+            max_height: None,
+            placement: None,
+            style: None,
+        }
+    }
+}
+
+impl ComboboxContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// ShadCN `ComboboxContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
@@ -518,6 +539,7 @@ pub fn combobox_content(
         .class
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.content_class.clone());
+    let content_style = opts.style.clone();
 
     // 预扫注册 labels，避免首屏输入框闪 value id。
     if labels.peek().is_empty() {
@@ -635,7 +657,11 @@ pub fn combobox_content(
             menu = menu.max_h(mh.as_str());
         }
         if !content_class.is_empty() {
-            menu = with_class_list(menu, &content_class);
+            menu = crate::components::base::SlotChrome {
+                class: content_class.clone(),
+                style: content_style.clone(),
+            }
+            .apply(menu);
         }
         if apply_floating_panel_motion(
             &id_for_effect,
@@ -994,6 +1020,9 @@ pub struct ComboboxBuilder {
     placement: PopupPlacement,
     clearable: bool,
     class: String,
+    style: Option<SlotStyleFn>,
+    content_class: String,
+    content_style: Option<SlotStyleFn>,
 }
 
 pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
@@ -1006,6 +1035,9 @@ pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
         placement: PopupPlacement::BottomStart,
         clearable: false,
         class: String::new(),
+        style: None,
+        content_class: String::new(),
+        content_style: None,
     }
 }
 
@@ -1066,6 +1098,30 @@ impl ComboboxBuilder {
         self.class = c.into();
         self
     }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+    pub fn content_class(mut self, c: impl Into<String>) -> Self {
+        self.content_class = c.into();
+        self
+    }
+    pub fn content_style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_style = Some(std::rc::Rc::new(f));
+        self
+    }
 }
 
 fn collect_labels(entries: &[ComboboxEntry]) -> HashMap<String, String> {
@@ -1097,6 +1153,9 @@ impl From<ComboboxBuilder> for Element {
             placement,
             clearable,
             class,
+            style,
+            content_class,
+            content_style,
         } = builder;
         let labels_map = collect_labels(&entries);
         let default_initial = default_value;
@@ -1108,14 +1167,14 @@ impl From<ComboboxBuilder> for Element {
         // Pre-seed labels signal via scope path.
         let id_owned = id.clone();
         let ph = placeholder.clone();
-        combobox_scope(
+        let mut root = combobox_scope(
             id,
             None,
             Some(value),
             ph,
             clearable,
             class,
-            String::new(),
+            content_class,
             move || {
                 // Seed labels before Input sync.
                 let ctx = require_combobox("ComboboxBuilder");
@@ -1139,15 +1198,21 @@ impl From<ComboboxBuilder> for Element {
                 let placement = placement;
                 let content = combobox_content(
                     ComboboxContentOpts {
+                        class: None,
                         placement: Some(placement),
                         max_height: Some("24rem".into()),
+                        style: content_style,
                         ..Default::default()
                     },
                     move || build_builder_entries(&entries_body),
                 );
                 Element::from(vstack().gap("0").w("100%").child(input_el).child(content))
             },
-        )
+        );
+        if let Some(style) = style {
+            root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
+        }
+        root
     }
 }
 

@@ -18,6 +18,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::components::base::SlotChrome;
 use crate::components::input::InputType;
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::Signal;
@@ -44,6 +45,7 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         resize_max_h: None,
         wrap_mode: TextareaWrapMode::Word,
         plain_chrome: false,
+        chrome: SlotChrome::default(),
     }
 }
 
@@ -58,9 +60,12 @@ pub struct TextareaBuilder {
     resize_max_h: Option<f32>,
     wrap_mode: TextareaWrapMode,
     plain_chrome: bool,
+    chrome: SlotChrome,
 }
 
 impl TextareaBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn placeholder(mut self, s: impl Into<String>) -> Self {
         self.placeholder = s.into();
         self
@@ -124,6 +129,7 @@ impl From<TextareaBuilder> for Element {
             resize_max_h,
             wrap_mode,
             plain_chrome,
+            chrome,
         } = b;
 
         let field_id = if id.is_empty() {
@@ -138,7 +144,7 @@ impl From<TextareaBuilder> for Element {
 
         let resize_max_h = resize_max_h.unwrap_or(DEFAULT_RESIZE_MAX_H);
 
-        build_text_edit_element(TextEditBuildParams {
+        chrome.apply(build_text_edit_element(TextEditBuildParams {
             field_id,
             placeholder,
             disabled,
@@ -161,7 +167,7 @@ impl From<TextareaBuilder> for Element {
             resize_max_h,
             wrap_mode,
             plain_chrome,
-        })
+        }))
     }
 }
 
@@ -282,5 +288,18 @@ mod tests {
         let _ = use_signal(&input_caret_signal_key("t1"), || None::<usize>);
         let el: Element = textarea("t1").into();
         assert_eq!(el.focus_id.as_deref(), Some("textarea:t1"));
+    }
+
+    #[test]
+    fn builder_style_reaches_textarea() {
+        let el: Element = textarea("ta-style").style(|b| b.text_size(20.0)).into();
+        assert!(
+            el.text_style.size.is_some_and(|s| (s - 20.0).abs() < 0.01)
+                || el
+                    .children
+                    .iter()
+                    .any(|c| c.text_style.size.is_some_and(|s| (s - 20.0).abs() < 0.01)),
+            "textarea .style(|b| b.text_size(20)) must land on the field"
+        );
     }
 }

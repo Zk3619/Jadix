@@ -65,10 +65,12 @@ use winit::keyboard::{Key, NamedKey};
 use rui_macros::component;
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, Handler, LayoutStatus, LayoutTree};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
 use crate::style::with_class_list;
 use crate::utils::lucide::lucide_glyph;
@@ -953,6 +955,7 @@ fn paint_jumper(
 pub struct PaginationBuilder {
     id: String,
     class: Option<String>,
+    root_style: Option<crate::components::base::SlotStyleFn>,
     page_count: usize,
     page: Option<Signal<usize>>,
     default_page: usize,
@@ -968,6 +971,32 @@ pub struct PaginationBuilder {
     previous_text: String,
     next_text: String,
     on_page_change: Option<Rc<dyn Fn(usize)>>,
+    parts: PaginationPartChrome,
+    custom_body: Option<Box<dyn FnOnce() -> Element>>,
+}
+
+#[derive(Clone, Default)]
+struct PaginationPartChrome {
+    content: SlotChrome,
+    item: SlotChrome,
+    previous: SlotChrome,
+    next: SlotChrome,
+    ellipsis: SlotChrome,
+    link: SlotChrome,
+}
+
+pub struct PaginationSlotBuilder {
+    chrome: SlotChrome,
+}
+
+fn pagination_slot() -> PaginationSlotBuilder {
+    PaginationSlotBuilder {
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl PaginationSlotBuilder {
+    impl_slot_chrome_methods!();
 }
 
 /// 便捷入口：按 `page_count` 生成 Prev / 页码窗 / Next（复合零件组装）。
@@ -979,6 +1008,7 @@ pub fn pagination(id: impl Into<String>) -> PaginationBuilder {
     PaginationBuilder {
         id: id.into(),
         class: None,
+        root_style: None,
         page_count: 1,
         page: None,
         default_page: 1,
@@ -992,6 +1022,8 @@ pub fn pagination(id: impl Into<String>) -> PaginationBuilder {
         previous_text: "Previous".into(),
         next_text: "Next".into(),
         on_page_change: None,
+        parts: PaginationPartChrome::default(),
+        custom_body: None,
     }
 }
 
@@ -1002,6 +1034,62 @@ impl PaginationBuilder {
     }
     pub fn class(mut self, class: impl Into<String>) -> Self {
         self.class = Some(class.into());
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.root_style = Some(std::rc::Rc::new(f));
+        self
+    }
+    pub fn child(mut self, body: impl FnOnce() -> Element + 'static) -> Self {
+        self.custom_body = Some(Box::new(body));
+        self
+    }
+    pub fn previous_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.previous = f(pagination_slot()).chrome;
+        self
+    }
+    pub fn next_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.next = f(pagination_slot()).chrome;
+        self
+    }
+    pub fn ellipsis_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.ellipsis = f(pagination_slot()).chrome;
+        self
+    }
+    pub fn link_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.link = f(pagination_slot()).chrome;
+        self
+    }
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.content = f(pagination_slot()).chrome;
+        self
+    }
+    pub fn item_with(
+        mut self,
+        f: impl FnOnce(PaginationSlotBuilder) -> PaginationSlotBuilder,
+    ) -> Self {
+        self.parts.item = f(pagination_slot()).chrome;
         self
     }
     pub fn page_count(mut self, n: usize) -> Self {
@@ -1089,6 +1177,7 @@ fn paint_builder_content(
     jumper: Option<&JumperPaint>,
     page_sig: Signal<usize>,
     on_page_change: Option<Rc<dyn Fn(usize)>>,
+    parts: &PaginationPartChrome,
 ) -> Element {
     let page = page.clamp(1, page_count.max(1));
     let notify: Rc<dyn Fn(usize)> = Rc::new(move |n: usize| {
@@ -1103,9 +1192,9 @@ fn paint_builder_content(
     let prev_disabled = page <= 1;
     let prev_notify = Rc::clone(&notify);
     let prev_sig = page_sig;
-    items.push(PaginationItem(PaginationItemProps {
-        class: None,
-        children: Some(PaginationPrevious(PaginationPreviousProps {
+    let prev_el = parts
+        .previous
+        .apply(PaginationPrevious(PaginationPreviousProps {
             id: format!("{id_prefix}__prev"),
             class: None,
             text: Some(previous_text.to_string()),
@@ -1119,28 +1208,33 @@ fn paint_builder_content(
             })),
             children: None,
             base: None,
-        })),
+        }));
+    items.push(parts.item.apply(PaginationItem(PaginationItemProps {
+        class: None,
+        children: Some(prev_el),
         base: None,
-    }));
+    })));
 
     for entry in pagination_range(page, page_count, range) {
         match entry {
             PaginationPage::Ellipsis => {
-                items.push(PaginationItem(PaginationItemProps {
+                items.push(parts.item.apply(PaginationItem(PaginationItemProps {
                     class: None,
-                    children: Some(PaginationEllipsis(PaginationEllipsisProps {
-                        class: None,
-                        children: None,
-                        base: None,
-                    })),
+                    children: Some(parts.ellipsis.apply(PaginationEllipsis(
+                        PaginationEllipsisProps {
+                            class: None,
+                            children: None,
+                            base: None,
+                        },
+                    ))),
                     base: None,
-                }));
+                })));
             }
             PaginationPage::Number(n) => {
                 let go = Rc::clone(&notify);
-                items.push(PaginationItem(PaginationItemProps {
+                items.push(parts.item.apply(PaginationItem(PaginationItemProps {
                     class: None,
-                    children: Some(PaginationLink(PaginationLinkProps {
+                    children: Some(parts.link.apply(PaginationLink(PaginationLinkProps {
                         id: format!("{id_prefix}__p{n}"),
                         class: None,
                         is_active: Some(n == page),
@@ -1149,9 +1243,9 @@ fn paint_builder_content(
                         on_click: Some(Handler::new(move |_| go(n))),
                         children: Some(Element::new().text(n.to_string())),
                         base: None,
-                    })),
+                    }))),
                     base: None,
-                }));
+                })));
             }
         }
     }
@@ -1160,25 +1254,26 @@ fn paint_builder_content(
     let next_notify = Rc::clone(&notify);
     let next_sig = page_sig;
     let next_count = page_count;
-    items.push(PaginationItem(PaginationItemProps {
+    let next_el = parts.next.apply(PaginationNext(PaginationNextProps {
+        id: format!("{id_prefix}__next"),
         class: None,
-        children: Some(PaginationNext(PaginationNextProps {
-            id: format!("{id_prefix}__next"),
-            class: None,
-            text: Some(next_text.to_string()),
-            hide_text: Some(hide_nav_text),
-            disabled: Some(next_disabled),
-            on_click: Some(Handler::new(move |_| {
-                let cur = next_sig.peek();
-                if cur < next_count {
-                    next_notify(cur + 1);
-                }
-            })),
-            children: None,
-            base: None,
+        text: Some(next_text.to_string()),
+        hide_text: Some(hide_nav_text),
+        disabled: Some(next_disabled),
+        on_click: Some(Handler::new(move |_| {
+            let cur = next_sig.peek();
+            if cur < next_count {
+                next_notify(cur + 1);
+            }
         })),
+        children: None,
         base: None,
     }));
+    items.push(parts.item.apply(PaginationItem(PaginationItemProps {
+        class: None,
+        children: Some(next_el),
+        base: None,
+    })));
 
     if let Some(j) = jumper {
         items.push(paint_jumper(
@@ -1193,11 +1288,13 @@ fn paint_builder_content(
 
     let mut frag = Element::new();
     frag.set_attr("rui_fragment", "1");
-    PaginationContent(PaginationContentProps {
-        class: None,
-        children: Some(frag.children(items)),
-        base: None,
-    })
+    parts
+        .content
+        .apply(PaginationContent(PaginationContentProps {
+            class: None,
+            children: Some(frag.children(items)),
+            base: None,
+        }))
 }
 
 impl From<PaginationBuilder> for Element {
@@ -1205,6 +1302,7 @@ impl From<PaginationBuilder> for Element {
         let PaginationBuilder {
             id,
             class,
+            root_style,
             page_count,
             page,
             default_page,
@@ -1218,7 +1316,21 @@ impl From<PaginationBuilder> for Element {
             previous_text,
             next_text,
             on_page_change,
+            parts,
+            custom_body,
         } = builder;
+        if let Some(body) = custom_body {
+            let mut el = Pagination(PaginationProps {
+                id,
+                class,
+                children: Some(body()),
+                base: None,
+            });
+            if let Some(style) = root_style {
+                el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+            }
+            return el;
+        }
         let instance = if id.trim().is_empty() {
             format!(
                 "pagination-{}",
@@ -1256,6 +1368,9 @@ impl From<PaginationBuilder> for Element {
         } else {
             0.0
         };
+        let parts_k = parts.clone();
+        let parts_sync = parts.clone();
+        let root_style_k = root_style.clone();
 
         reactive_anchor(view_id.clone(), move || {
             let page = page_sig.get();
@@ -1285,6 +1400,7 @@ impl From<PaginationBuilder> for Element {
                 jumper_paint.as_ref(),
                 page_sig,
                 on_page_change.clone(),
+                &parts_k,
             );
             let mut root = Pagination(PaginationProps {
                 id: id_k.clone(),
@@ -1292,6 +1408,9 @@ impl From<PaginationBuilder> for Element {
                 children: Some(content),
                 base: None,
             });
+            if let Some(ref style) = root_style_k {
+                root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
+            }
             if auto_fit {
                 let fit_max_s = fit_max;
                 let fit_compact_s = fit_compact;
@@ -1302,6 +1421,7 @@ impl From<PaginationBuilder> for Element {
                 let id_prefix = instance_sync.clone();
                 let jumper_p = jumper_paint.clone();
                 let jumper_c = jumper_chrome;
+                let parts_fit = parts_sync.clone();
                 root = root.reactive_sync(move |el, _lt: &mut LayoutTree| {
                     let width = el.layout_bounds[2];
                     if width <= 1.0 {
@@ -1344,6 +1464,7 @@ impl From<PaginationBuilder> for Element {
                         jumper_p.as_ref(),
                         page_s,
                         on_chg.clone(),
+                        &parts_fit,
                     );
                     el.children = vec![content];
                     LayoutStatus::StructureChanged
@@ -1549,6 +1670,7 @@ mod tests {
             Some(&jumper),
             page,
             None,
+            &PaginationPartChrome::default(),
         );
         fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
             if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
@@ -1736,6 +1858,7 @@ mod tests {
             None,
             page,
             None,
+            &PaginationPartChrome::default(),
         );
         assert_eq!(
             el.attrs.get(ATTR_SLOT).map(String::as_str),
@@ -1772,6 +1895,7 @@ mod tests {
             None,
             page,
             None,
+            &PaginationPartChrome::default(),
         );
         assert_eq!(
             el.attrs.get(ATTR_SLOT).map(String::as_str),

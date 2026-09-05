@@ -1267,4 +1267,47 @@ mod tests {
             "last category must pin with `right`, not `left`"
         );
     }
+
+    #[test]
+    fn builder_axis_style_reaches_axis_slot() {
+        let el: Element = define_chart()
+            .mark(bar_y([
+                ChartDatum::new("Mon", 1.0),
+                ChartDatum::new("Tue", 2.0),
+            ]))
+            .axis_labels(true)
+            .slot("chart-axis", |c| c.style(|b| b.text_size(20.0)))
+            .into();
+        fn find_axis_size(el: &Element, want: f32) -> bool {
+            let is_axis = el.attrs.get("data-slot").map(String::as_str) == Some("chart-axis");
+            (is_axis
+                && (el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                    || (el.text_style.size_resolved() - want).abs() < 0.01))
+                || el.children.iter().any(|c| find_axis_size(c, want))
+        }
+        assert!(
+            find_axis_size(&el, 20.0),
+            "chart .slot(chart-axis) style must land on data-slot=chart-axis"
+        );
+    }
+
+    #[test]
+    fn builder_legend_style_reaches_legend_slot() {
+        let el: Element = define_chart()
+            .mark(pie([ChartDatum::new("A", 1.0), ChartDatum::new("B", 2.0)]))
+            .legend(true)
+            .slot("chart-legend", |c| c.style(|b| b.text_size(20.0)))
+            .into();
+        fn find_legend_size(el: &Element, want: f32) -> bool {
+            let is_legend = el.attrs.get("data-slot").map(String::as_str) == Some("chart-legend");
+            (is_legend
+                && (el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                    || (el.text_style.size_resolved() - want).abs() < 0.01))
+                || el.children.iter().any(|c| find_legend_size(c, want))
+        }
+        assert!(
+            find_legend_size(&el, 20.0),
+            "chart .slot(chart-legend) style must land on data-slot=chart-legend"
+        );
+    }
 }

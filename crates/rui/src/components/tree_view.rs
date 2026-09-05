@@ -37,7 +37,10 @@
 //! tree_view("files")
 //!     .variant("collapsible")
 //!     .expanded_signal(expanded)
-//!     .roots([TreeNode { id: "src".into(), label: "src".into(), children: vec![…] }])
+//!     .roots([tree_node("src", "src").children([
+//!         tree_node("main", "main.rs"),
+//!         tree_node("lib", "lib.rs"),
+//!     ])])
 //! ```
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
@@ -47,6 +50,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::OnceLock;
 
+use crate::components::base::{BaseComponentBuilder, SlotChrome, SlotStyleFn};
 use crate::components::collapsible::{
     collapsible_content, collapsible_scope, CollapsibleTrigger, CollapsibleTriggerProps,
 };
@@ -60,7 +64,8 @@ use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, parse_color, with_class_list, TransitionEntry, TransitionProperty,
+    css_transition_needs_frame, is_variant_style_overridden, parse_color, with_class_list,
+    TransitionEntry, TransitionProperty, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::motion::ensure_motion_transitions;
@@ -89,11 +94,31 @@ const ROW_PX: &str = tokens::SPACE_2;
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TreeNode {
     pub id: String,
     pub label: String,
     pub children: Vec<TreeNode>,
+    pub chrome: SlotChrome,
+}
+
+/// Sugar entry: `tree_view("files").roots([tree_node("src", "src").class("ring-2")])`.
+pub fn tree_node(id: impl Into<String>, label: impl Into<String>) -> TreeNode {
+    TreeNode {
+        id: id.into(),
+        label: label.into(),
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TreeNode {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn children(mut self, children: impl IntoIterator<Item = TreeNode>) -> Self {
+        self.children = children.into_iter().collect();
+        self
+    }
 }
 
 impl TreeNodeLike for TreeNode {
@@ -232,6 +257,7 @@ struct FlatRow {
     label: String,
     depth: usize,
     has_children: bool,
+    chrome: SlotChrome,
 }
 
 fn flatten(nodes: &[TreeNode], expanded: &HashSet<String>, depth: usize, out: &mut Vec<FlatRow>) {
@@ -240,6 +266,7 @@ fn flatten(nodes: &[TreeNode], expanded: &HashSet<String>, depth: usize, out: &m
         label: n.label.clone(),
         depth: d,
         has_children: has,
+        chrome: n.chrome.clone(),
     });
 }
 
@@ -311,12 +338,18 @@ fn rest_label_weight(chrome: TreeViewChrome) -> u16 {
 }
 
 fn paint_tree_row_fg(el: &mut Element, color: [u8; 4], weight: u16) {
+    let lock_fg = is_variant_style_overridden(&el.attrs, VariantStyleField::Fg);
+    let lock_weight = is_variant_style_overridden(&el.attrs, VariantStyleField::Weight);
     crate::core::tree::walk_elements_mut_pruned(el, |el| {
         if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CHEVRON) {
             return false;
         }
-        el.text_style.color = Some(color);
-        el.text_style.weight = Some(weight);
+        if !lock_fg {
+            el.text_style.color = Some(color);
+        }
+        if !lock_weight {
+            el.text_style.weight = Some(weight);
+        }
         true
     });
 }
@@ -356,7 +389,8 @@ fn sync_tree_row_chrome(
             rest_label_weight(chrome),
         )
     };
-    let changed = el.style.bg_color != want_bg;
+    let lock_bg = is_variant_style_overridden(&el.attrs, VariantStyleField::Bg);
+    let changed = !lock_bg && el.style.bg_color != want_bg;
     if changed {
         el.style.bg_color = want_bg;
     }
@@ -659,14 +693,16 @@ fn build_flat_tree(ctx: &TreeViewCtx, roots: &[TreeNode], row_height: f32, heigh
                 label: String::new(),
                 depth: 0,
                 has_children: false,
+                chrome: SlotChrome::default(),
             });
             let nid = row.id.clone();
             let has = row.has_children;
-            if has {
+            let el = if has {
                 branch_row(&ctx_render, &row.label, row.depth, &nid)
             } else {
                 leaf_row(&ctx_render, &row.label, row.depth, &nid)
-            }
+            };
+            row.chrome.apply(el)
         })
         .into()
 }
@@ -678,11 +714,14 @@ fn build_collapsible_node(
     parent_path: &str,
 ) -> Element {
     if node.children.is_empty() {
-        return leaf_row(ctx, &node.label, depth, &node.id);
+        return node
+            .chrome
+            .apply(leaf_row(ctx, &node.label, depth, &node.id));
     }
     let node_id = node.id.clone();
     let label = node.label.clone();
     let children = node.children.clone();
+    let row_chrome = node.chrome.clone();
     let open_sig = node_open_signal(&ctx.id, &node_id, &ctx.expanded_storage_key);
     let ctx_clone = ctx.clone();
     let ctx_trigger = ctx.clone();
@@ -704,11 +743,11 @@ fn build_collapsible_node(
                 disabled: Some(false),
                 class: None,
                 base: None,
-                children: Some(with_row_hover_chrome(
+                children: Some(row_chrome.apply(with_row_hover_chrome(
                     &ctx_trigger,
                     &row_nid,
                     branch_row_visual(&ctx_trigger, &label, depth, &row_nid),
-                )),
+                ))),
             });
             let content = collapsible_content(move || {
                 let kids: Vec<Element> = children
@@ -856,6 +895,7 @@ pub fn tree_view_scope(
     chrome: TreeViewChrome,
     selected: Option<Signal<String>>,
     on_select: Option<Rc<dyn Fn(String)>>,
+    prefab_roots: Vec<TreeNode>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "tree-view");
@@ -884,7 +924,11 @@ pub fn tree_view_scope(
         provide_context(tree_view_context(), ctx.clone());
         take_fragment(body())
     });
-    let nodes = extract_item_nodes(&kids);
+    let nodes = if prefab_roots.is_empty() {
+        extract_item_nodes(&kids)
+    } else {
+        prefab_roots
+    };
     let tree_body = if nodes.is_empty() {
         Element::new()
     } else {
@@ -907,6 +951,13 @@ pub fn tree_view_scope(
         .insert(ATTR_CHROME.to_string(), chrome.as_str().to_string());
     shell.template_id = Some(id.clone());
     shell
+}
+
+fn apply_tree_view_style(el: Element, style: Option<SlotStyleFn>) -> Element {
+    match style {
+        Some(f) => f(BaseComponentBuilder::new(el)).el,
+        None => el,
+    }
 }
 
 /// 宏 `<TreeViewItem>`：标记节点元数据；由 [`tree_view_scope`] 统一建树。
@@ -947,17 +998,6 @@ pub fn tree_view_item_scope(
     })
 }
 
-fn tree_node_marker(node: TreeNode) -> Element {
-    let kids: Vec<Element> = node.children.into_iter().map(tree_node_marker).collect();
-    let mut el: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
-    el.attrs
-        .insert(ATTR_SLOT.to_string(), SLOT_ITEM.to_string());
-    el.attrs.insert("rui_tree_item_id".to_string(), node.id);
-    el.attrs
-        .insert("rui_tree_item_label".to_string(), node.label);
-    el
-}
-
 fn extract_item_nodes(kids: &[Element]) -> Vec<TreeNode> {
     kids.iter()
         .filter_map(|el| {
@@ -979,6 +1019,7 @@ fn extract_item_nodes(kids: &[Element]) -> Vec<TreeNode> {
                 id,
                 label,
                 children,
+                chrome: SlotChrome::default(),
             })
         })
         .collect()
@@ -1021,6 +1062,7 @@ pub fn TreeView(
         chrome,
         selected,
         None,
+        Vec::new(),
         move || children.unwrap_or_else(Element::new),
     )
 }
@@ -1054,6 +1096,7 @@ pub struct TreeViewBuilder {
     expanded: Option<Signal<HashSet<String>>>,
     expanded_storage_key: Option<String>,
     class: Option<String>,
+    style: Option<SlotStyleFn>,
     exclusive: Option<bool>,
     chrome: TreeViewChrome,
     selected: Option<Signal<String>>,
@@ -1070,6 +1113,7 @@ pub fn tree_view(id: impl Into<String>) -> TreeViewBuilder {
         expanded: None,
         expanded_storage_key: None,
         class: None,
+        style: None,
         exclusive: None,
         chrome: TreeViewChrome::Default,
         selected: None,
@@ -1114,6 +1158,15 @@ impl TreeViewBuilder {
         self
     }
 
+    /// Same [`BaseComponentBuilder`] surface as RSX layout attrs.
+    pub fn style(
+        mut self,
+        f: impl Fn(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+
     /// Collapsible 同层兄弟是否互斥。默认 `false`（与独立 Collapsible 一致）；flat 忽略。
     pub fn exclusive(mut self, v: bool) -> Self {
         self.exclusive = Some(v);
@@ -1137,7 +1190,8 @@ impl TreeViewBuilder {
 
     /// 在上下文内构建任意子树（`TreeViewItem` 等）。
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        tree_view_scope(
+        let style = self.style.clone();
+        let el = tree_view_scope(
             self.id,
             self.variant,
             self.expanded,
@@ -1149,8 +1203,10 @@ impl TreeViewBuilder {
             self.chrome,
             self.selected,
             self.on_select,
+            Vec::new(),
             body,
-        )
+        );
+        apply_tree_view_style(el, style)
     }
 }
 
@@ -1165,32 +1221,29 @@ impl From<TreeViewBuilder> for Element {
             expanded,
             expanded_storage_key,
             class,
+            style,
             exclusive,
             chrome,
             selected,
             on_select,
         } = builder;
-        tree_view_scope(
-            id,
-            variant,
-            expanded,
-            expanded_storage_key,
-            class,
-            row_height,
-            height,
-            exclusive,
-            chrome,
-            selected,
-            on_select,
-            move || {
-                if roots.is_empty() {
-                    Element::new()
-                } else {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(roots.into_iter().map(tree_node_marker))
-                }
-            },
+        apply_tree_view_style(
+            tree_view_scope(
+                id,
+                variant,
+                expanded,
+                expanded_storage_key,
+                class,
+                row_height,
+                height,
+                exclusive,
+                chrome,
+                selected,
+                on_select,
+                roots,
+                Element::new,
+            ),
+            style,
         )
     }
 }
@@ -1215,7 +1268,9 @@ mod tests {
                 id: "b".into(),
                 label: "B".into(),
                 children: vec![],
+                chrome: Default::default(),
             }],
+            chrome: Default::default(),
         }];
         let mut out = Vec::new();
         flatten(&roots, &HashSet::new(), 0, &mut out);
@@ -1249,13 +1304,16 @@ mod tests {
                             id: "main".into(),
                             label: "main.rs".into(),
                             children: vec![],
+                            chrome: Default::default(),
                         },
                         TreeNode {
                             id: "lib".into(),
                             label: "lib.rs".into(),
                             children: vec![],
+                            chrome: Default::default(),
                         },
                     ],
+                    chrome: Default::default(),
                 },
                 TreeNode {
                     id: "docs".into(),
@@ -1264,9 +1322,12 @@ mod tests {
                         id: "readme".into(),
                         label: "README.md".into(),
                         children: vec![],
+                        chrome: Default::default(),
                     }],
+                    chrome: Default::default(),
                 },
             ],
+            chrome: Default::default(),
         }]
     }
 
@@ -1299,6 +1360,7 @@ mod tests {
                         id: "readme".into(),
                         label: "README.md".into(),
                         children: vec![],
+                        chrome: Default::default(),
                     },
                     TreeNode {
                         id: "src".into(),
@@ -1307,7 +1369,9 @@ mod tests {
                             id: "main".into(),
                             label: "main.rs".into(),
                             children: vec![],
+                            chrome: Default::default(),
                         }],
+                        chrome: Default::default(),
                     },
                 ])
                 .into()
@@ -1407,7 +1471,9 @@ mod tests {
                 id: "src".into(),
                 label: "src".into(),
                 children: vec![],
+                chrome: Default::default(),
             }],
+            chrome: Default::default(),
         }];
         let (_o, ()) = create_root(|| {
             let a_key = "tv-isol-a__tree_exp";
@@ -1454,8 +1520,11 @@ mod tests {
                     id: "main".into(),
                     label: "main.rs".into(),
                     children: vec![],
+                    chrome: Default::default(),
                 }],
+                chrome: Default::default(),
             }],
+            chrome: Default::default(),
         }];
         let (_o, ()) = create_root(|| {
             let expanded_key = "tv_shared_collapse::expanded";
@@ -1508,7 +1577,9 @@ mod tests {
                 id: "a".into(),
                 label: "A".into(),
                 children: vec![],
+                chrome: Default::default(),
             }],
+            chrome: Default::default(),
         }];
         let (_o, ()) = create_root(|| {
             let expanded_key = "tv_flat_collapse::expanded";
@@ -1561,6 +1632,7 @@ mod tests {
                     id: "a".into(),
                     label: "A".into(),
                     children: vec![],
+                    chrome: Default::default(),
                 }])
                 .into()
         });
@@ -1607,6 +1679,7 @@ mod tests {
                     id: "a".into(),
                     label: "A".into(),
                     children: vec![],
+                    chrome: Default::default(),
                 }])
                 .into()
         });
@@ -1619,6 +1692,25 @@ mod tests {
         assert_eq!(
             first_text_color(row),
             Some(parse_text_color("sidebar-foreground"))
+        );
+    }
+
+    #[test]
+    fn builder_node_style_reaches_row() {
+        let (_o, el): (_, Element) = create_root(|| {
+            tree_view("tv-node-chrome")
+                .variant("collapsible")
+                .roots(vec![tree_node("a", "A").style(|b| b.text_size(20.0))])
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "tree_node .style must land on the painted row"
         );
     }
 
@@ -1647,12 +1739,15 @@ mod tests {
             id: "y".into(),
             variant: Some("collapsible".into()),
             expanded: None,
+            expanded_storage_key: None,
             class: None,
             row_height: None,
             height: None,
+            exclusive: None,
+            chrome: None,
+            selected: None,
             children: None,
             base: None,
-            ..Default::default()
         });
         let _: Element = el;
     }

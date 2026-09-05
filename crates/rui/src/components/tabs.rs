@@ -56,15 +56,17 @@
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
+use crate::components::base::SlotChrome;
 use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::{LineStyle, WhiteSpace};
+use crate::style::{is_variant_style_overridden, LineStyle, VariantStyleField, WhiteSpace};
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
 use crate::utils::take_packed;
@@ -220,14 +222,21 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     };
     let mut paint = false;
     let mut layout = false;
+    let lock_bg = is_variant_style_overridden(&el.attrs, VariantStyleField::Bg);
+    let lock_shadow = is_variant_style_overridden(&el.attrs, VariantStyleField::Shadow);
+    let lock_pad = is_variant_style_overridden(&el.attrs, VariantStyleField::Pad);
+    let lock_fg = is_variant_style_overridden(&el.attrs, VariantStyleField::Fg);
+    let lock_weight = is_variant_style_overridden(&el.attrs, VariantStyleField::Weight);
+    let lock_leading = is_variant_style_overridden(&el.attrs, VariantStyleField::Leading);
+    let lock_border = is_variant_style_overridden(&el.attrs, VariantStyleField::Border);
 
-    if el.style.bg_color != want_bg {
+    if !lock_bg && el.style.bg_color != want_bg {
         el.style.bg_color = want_bg;
         paint = true;
     }
     let shadow_hit = (el.style.shadow_blur - want_blur).abs() > 0.01
         || (el.style.shadow_color[3] - want_shadow[3]).abs() > 0.001;
-    if shadow_hit {
+    if !lock_shadow && shadow_hit {
         el.style.shadow_color = want_shadow;
         el.style.shadow_blur = want_blur;
         el.style.shadow_offset = [0.0, 0.0];
@@ -235,7 +244,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         paint = true;
     }
     // line 用绘制属性，不用 border（四边均匀）。
-    if el.style.border_width != 0.0 || !el.style.border_style.is_invisible() {
+    if !lock_border && (el.style.border_width != 0.0 || !el.style.border_style.is_invisible()) {
         el.style.border_width = 0.0;
         el.style.border_color = parse_color("transparent");
         el.style.border_style = LineStyle::None;
@@ -277,10 +286,11 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         el.style.align_items = Some(AlignItems::CENTER);
         layout = true;
     }
-    if length_px(el.style.padding.left) != PAD_X
-        || length_px(el.style.padding.right) != PAD_X
-        || length_px(el.style.padding.top) != PAD_Y
-        || length_px(el.style.padding.bottom) != PAD_Y
+    if !lock_pad
+        && (length_px(el.style.padding.left) != PAD_X
+            || length_px(el.style.padding.right) != PAD_X
+            || length_px(el.style.padding.top) != PAD_Y
+            || length_px(el.style.padding.bottom) != PAD_Y)
     {
         set_padding_x(el, PAD_X);
         set_padding_y(el, PAD_Y);
@@ -318,11 +328,11 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     }
 
     if el.text.is_some() {
-        if el.text_style.color_resolved() != want_fg {
+        if !lock_fg && el.text_style.color_resolved() != want_fg {
             el.text_style.color = Some(want_fg);
             paint = true;
         }
-        if el.text_style.weight_resolved() != 500 {
+        if !lock_weight && el.text_style.weight_resolved() != 500 {
             el.text_style.weight = Some(500);
             layout = true;
         }
@@ -332,7 +342,10 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
                 .insert("text_align".to_string(), "center".to_string());
             paint = true;
         }
-        if el.text_style.line_height_scale != Some(1.0) || el.text_style.line_height_px.is_some() {
+        if !lock_leading
+            && (el.text_style.line_height_scale != Some(1.0)
+                || el.text_style.line_height_px.is_some())
+        {
             el.text_style.line_height_px = None;
             el.text_style.line_height_scale = Some(1.0);
             el.attrs.insert("leading".to_string(), "1".to_string());
@@ -344,7 +357,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
                 .insert("white_space".to_string(), "nowrap".to_string());
             layout = true;
         }
-        if (el.text_style.size_resolved() - 14.0).abs() > f32::EPSILON {
+        if el.text_style.size.is_none() {
             el.text_style.size = Some(14.0);
             layout = true;
         }
@@ -464,6 +477,63 @@ pub fn tabs_scope(
     );
     root.template_id = Some(id);
     root
+}
+
+pub struct TabsBuilder {
+    id: String,
+    value: Option<Signal<String>>,
+    default_value: String,
+    orientation: String,
+    disabled: bool,
+    chrome: SlotChrome,
+}
+
+/// Composite Tabs entry (parity with `<Tabs>` / [`tabs_scope`]).
+pub fn tabs(id: impl Into<String>) -> TabsBuilder {
+    TabsBuilder {
+        id: id.into(),
+        value: None,
+        default_value: String::new(),
+        orientation: "horizontal".into(),
+        disabled: false,
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TabsBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn value_signal(mut self, s: Signal<String>) -> Self {
+        self.value = Some(s);
+        self
+    }
+
+    pub fn default_value(mut self, v: impl Into<String>) -> Self {
+        self.default_value = v.into();
+        self
+    }
+
+    pub fn orientation(mut self, o: impl Into<String>) -> Self {
+        self.orientation = o.into();
+        self
+    }
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    /// Build List / Trigger / Content subtrees inside the context.
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        self.chrome.apply(tabs_scope(
+            self.id,
+            self.value,
+            self.default_value,
+            self.orientation,
+            self.disabled,
+            body,
+        ))
+    }
 }
 
 /// 宏 `<TabsContent>`：仅在选中时挂载子树。
@@ -636,6 +706,61 @@ pub fn TabsTrigger(value: String, disabled: bool, children: Option<Element>) -> 
         .find_map(caption_text)
         .unwrap_or_else(|| value.clone());
     build_trigger(&ctx, &value, label, disabled)
+}
+
+pub struct TabsTriggerBuilder {
+    value: String,
+    disabled: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn tabs_trigger(value: impl Into<String>) -> TabsTriggerBuilder {
+    TabsTriggerBuilder {
+        value: value.into(),
+        disabled: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TabsTriggerBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<TabsTriggerBuilder> for Element {
+    fn from(builder: TabsTriggerBuilder) -> Self {
+        let el = TabsTrigger(TabsTriggerProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for TabsTriggerBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
 }
 
 /// 非宏路径：子节点已构建时用 display 显隐（RSX 走 [`tabs_content`]）。
@@ -814,6 +939,7 @@ pub struct TabsListBuilder {
     options: Vec<(String, String)>,
     value: Option<Signal<String>>,
     default_value: String,
+    chrome: SlotChrome,
 }
 
 pub fn tabs_list(id: impl Into<String>) -> TabsListBuilder {
@@ -822,10 +948,13 @@ pub fn tabs_list(id: impl Into<String>) -> TabsListBuilder {
         options: Vec::new(),
         value: None,
         default_value: String::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl TabsListBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn options(mut self, opts: Vec<(String, String)>) -> Self {
         self.options = opts;
         self
@@ -847,6 +976,7 @@ impl From<TabsListBuilder> for Element {
             options,
             value,
             default_value,
+            chrome,
         } = builder;
         let default_value = if default_value.is_empty() {
             options.first().map(|(v, _)| v.clone()).unwrap_or_default()
@@ -865,9 +995,11 @@ impl From<TabsListBuilder> for Element {
         }
         let mut el: Element = b.into();
         el.set_attr("rui_tabs_list", "1");
-        el
+        chrome.apply(el)
     }
 }
+
+impl_simple_slot_builder!(TabsListSlotBuilder, tabs_list_slot, TabsList, TabsListProps);
 
 // ── Per-frame trigger sync ───────────────────────────────────────────────────
 
@@ -1095,6 +1227,31 @@ mod tests {
             .into();
         assert_eq!(el.attrs.get("rui_tabs_list").map(|s| s.as_str()), Some("1"));
         assert!(el.children.len() >= 2);
+    }
+
+    #[test]
+    fn builder_trigger_style() {
+        use crate::core::reactivity::create_root;
+        let (_o, el): (_, Element) = create_root(|| {
+            tabs("tab-chrome").default_value("a").child(|| {
+                tabs_list_slot()
+                    .child(
+                        tabs_trigger("a")
+                            .style(|b| b.text_size(20.0))
+                            .text("Account"),
+                    )
+                    .into()
+            })
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "tabs_trigger .style(|b| b.text_size(20)) must land on the trigger tree"
+        );
     }
 
     #[test]
@@ -1525,5 +1682,24 @@ mod tests {
             trigger.children.is_empty(),
             "tabs sync must remove stray radio Indicator so text leaf measure returns"
         );
+    }
+
+    #[test]
+    fn trigger_chrome_respects_author_padding_bg_and_size() {
+        use crate::style::{mark_variant_style_override, VariantStyleField};
+        let mut el = Element::new();
+        el.text = Some("Account".into());
+        el.text_style.size = Some(18.0);
+        el.style.bg_color = [1.0, 0.0, 0.0, 1.0];
+        mark_variant_style_override(&mut el, VariantStyleField::Bg);
+        el.style.padding.left = taffy::style::LengthPercentage::length(20.0);
+        el.style.padding.right = taffy::style::LengthPercentage::length(20.0);
+        el.style.padding.top = taffy::style::LengthPercentage::length(20.0);
+        el.style.padding.bottom = taffy::style::LengthPercentage::length(20.0);
+        mark_variant_style_override(&mut el, VariantStyleField::Pad);
+        apply_trigger_chrome(&mut el, true, false);
+        assert_eq!(el.style.bg_color, [1.0, 0.0, 0.0, 1.0]);
+        assert!((length_px(el.style.padding.left) - 20.0).abs() < 0.01);
+        assert_eq!(el.text_style.size, Some(18.0));
     }
 }

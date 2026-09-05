@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
+use crate::components::base::SlotChrome;
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
@@ -533,6 +534,7 @@ pub struct InputBuilder {
     text_align: crate::style::TextAlign,
     /// 内嵌于 InputAdornment / Command：无自身边框与焦点环。
     plain_chrome: bool,
+    chrome: SlotChrome,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -637,10 +639,13 @@ pub fn input(id: &str) -> InputBuilder {
         value: None,
         text_align: crate::style::TextAlign::Start,
         plain_chrome: false,
+        chrome: SlotChrome::default(),
     }
 }
 
 impl InputBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn placeholder(mut self, s: impl Into<String>) -> Self {
         self.placeholder = s.into();
         self
@@ -936,7 +941,8 @@ impl From<InputBuilder> for Element {
             builder.id
         };
 
-        build_text_edit_element(TextEditBuildParams {
+        let chrome = builder.chrome;
+        chrome.apply(build_text_edit_element(TextEditBuildParams {
             field_id,
             placeholder: builder.placeholder,
             disabled: builder.disabled,
@@ -959,7 +965,7 @@ impl From<InputBuilder> for Element {
             resize_max_h: 0.0,
             wrap_mode: crate::utils::text_field::TextareaWrapMode::Word,
             plain_chrome: builder.plain_chrome,
-        })
+        }))
     }
 }
 

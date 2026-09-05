@@ -40,11 +40,13 @@
 use std::cell::Cell;
 use std::sync::OnceLock;
 
+use crate::components::base::SlotStyleFn;
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
 };
 use crate::core::tree::{Element, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
 use crate::renderer::caret_blink_visible;
@@ -821,6 +823,59 @@ pub fn InputOTPSeparator(class: Option<String>, children: Option<Element>) -> El
     el
 }
 
+impl_simple_slot_builder!(
+    InputOtpGroupBuilder,
+    input_otp_group,
+    InputOTPGroup,
+    InputOTPGroupProps
+);
+impl_simple_slot_builder!(
+    InputOtpSeparatorBuilder,
+    input_otp_separator,
+    InputOTPSeparator,
+    InputOTPSeparatorProps
+);
+
+pub struct InputOtpSlotBuilder {
+    index: i32,
+    chrome: crate::components::base::SlotChrome,
+}
+
+pub fn input_otp_slot() -> InputOtpSlotBuilder {
+    InputOtpSlotBuilder {
+        index: 0,
+        chrome: crate::components::base::SlotChrome::default(),
+    }
+}
+
+impl InputOtpSlotBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn index(mut self, index: i32) -> Self {
+        self.index = index.max(0);
+        self
+    }
+}
+
+impl From<InputOtpSlotBuilder> for Element {
+    fn from(builder: InputOtpSlotBuilder) -> Self {
+        let el = InputOTPSlot(InputOTPSlotProps {
+            index: Some(builder.index),
+            class: None,
+            children: None,
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for InputOtpSlotBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
 // ── Builder ──────────────────────────────────────────────────────────────────
 
 pub struct InputOtpBuilder {
@@ -831,6 +886,7 @@ pub struct InputOtpBuilder {
     invalid: bool,
     pattern: InputOtpPattern,
     class: String,
+    style: Option<SlotStyleFn>,
     /// 在该索引前插入 Separator（如 `3` → `[0,1,2] | [3,4,5]`）。
     separator_at: Option<usize>,
     custom_body: Option<Box<dyn FnOnce() -> Element>>,
@@ -846,6 +902,7 @@ pub fn input_otp(id: impl Into<String>) -> InputOtpBuilder {
         invalid: false,
         pattern: InputOtpPattern::Digits,
         class: String::new(),
+        style: None,
         separator_at: None,
         custom_body: None,
     }
@@ -876,6 +933,16 @@ impl InputOtpBuilder {
         self.class = c.into();
         self
     }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
     pub fn separator_at(mut self, index: usize) -> Self {
         self.separator_at = Some(index);
         self
@@ -897,6 +964,7 @@ impl From<InputOtpBuilder> for Element {
             invalid,
             pattern,
             class,
+            style,
             separator_at,
             custom_body,
         } = b;
@@ -905,7 +973,7 @@ impl From<InputOtpBuilder> for Element {
         } else {
             Some(class)
         };
-        input_otp_scope(
+        let mut el = input_otp_scope(
             id,
             max_length,
             value,
@@ -920,7 +988,11 @@ impl From<InputOtpBuilder> for Element {
                     build_default_slots(max_length, separator_at)
                 }
             },
-        )
+        );
+        if let Some(style) = style {
+            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -967,6 +1039,29 @@ mod tests {
             assert_eq!(
                 rsx.attrs.get(ATTR_SLOT).map(String::as_str),
                 Some(SLOT_ROOT)
+            );
+        });
+    }
+
+    #[test]
+    fn builder_slot_style() {
+        create_root(|| {
+            let el: Element = input_otp("t-otp-chrome")
+                .max_length(1)
+                .child(|| {
+                    input_otp_group()
+                        .child(input_otp_slot().index(0).style(|b| b.text_size(20.0)))
+                        .into()
+                })
+                .into();
+            fn find_size(el: &Element, want: f32) -> bool {
+                el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                    || (el.text_style.size_resolved() - want).abs() < 0.01
+                    || el.children.iter().any(|c| find_size(c, want))
+            }
+            assert!(
+                find_size(&el, 20.0),
+                "otp slot .style(|b| b.text_size(20)) must land on the slot tree"
             );
         });
     }

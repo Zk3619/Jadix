@@ -61,10 +61,13 @@
 
 use std::sync::OnceLock;
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{
+    ensure_data_slot, packed_children, BaseComponentBuilder, SlotChrome,
+};
 use crate::components::separator::separator;
 use crate::core::reactivity::{create_context, provide_context, use_context, Context};
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::take_packed;
@@ -702,46 +705,379 @@ pub fn ItemFooter(
 // Builders (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+pub struct ItemSeparatorBuilder {
+    chrome: SlotChrome,
+}
+
+pub fn item_separator() -> ItemSeparatorBuilder {
+    ItemSeparatorBuilder {
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemSeparatorBuilder {
+    impl_slot_chrome_methods!();
+}
+
+impl crate::core::tree::IntoElementList for ItemSeparatorBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemSeparatorBuilder> for Element {
+    fn from(builder: ItemSeparatorBuilder) -> Self {
+        let el = ItemSeparator(ItemSeparatorProps {
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemMediaBuilder {
+    variant: ItemMediaVariant,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_media() -> ItemMediaBuilder {
+    ItemMediaBuilder {
+        variant: ItemMediaVariant::Default,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemMediaBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn variant(mut self, variant: impl Into<ItemMediaVariant>) -> Self {
+        self.variant = variant.into();
+        self
+    }
+
+    pub fn icon(mut self) -> Self {
+        self.variant = ItemMediaVariant::Icon;
+        self
+    }
+
+    pub fn image(mut self) -> Self {
+        self.variant = ItemMediaVariant::Image;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemMediaBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemMediaBuilder> for Element {
+    fn from(builder: ItemMediaBuilder) -> Self {
+        let el = ItemMedia(ItemMediaProps {
+            variant: Some(builder.variant),
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemContentBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_content() -> ItemContentBuilder {
+    ItemContentBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemContentBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemContentBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemContentBuilder> for Element {
+    fn from(builder: ItemContentBuilder) -> Self {
+        let el = ItemContent(ItemContentProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemTitleBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_title() -> ItemTitleBuilder {
+    ItemTitleBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemTitleBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemTitleBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemTitleBuilder> for Element {
+    fn from(builder: ItemTitleBuilder) -> Self {
+        let el = ItemTitle(ItemTitleProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_description() -> ItemDescriptionBuilder {
+    ItemDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemDescriptionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemDescriptionBuilder> for Element {
+    fn from(builder: ItemDescriptionBuilder) -> Self {
+        let el = ItemDescription(ItemDescriptionProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemActionsBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_actions() -> ItemActionsBuilder {
+    ItemActionsBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemActionsBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemActionsBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemActionsBuilder> for Element {
+    fn from(builder: ItemActionsBuilder) -> Self {
+        let el = ItemActions(ItemActionsProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemHeaderBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_header() -> ItemHeaderBuilder {
+    ItemHeaderBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemHeaderBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemHeaderBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemHeaderBuilder> for Element {
+    fn from(builder: ItemHeaderBuilder) -> Self {
+        let el = ItemHeader(ItemHeaderProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ItemFooterBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn item_footer() -> ItemFooterBuilder {
+    ItemFooterBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ItemFooterBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemFooterBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ItemFooterBuilder> for Element {
+    fn from(builder: ItemFooterBuilder) -> Self {
+        let el = ItemFooter(ItemFooterProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct ItemGroupBuilder {
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn item_group() -> ItemGroupBuilder {
     ItemGroupBuilder {
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl ItemGroupBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
     pub fn separator(mut self) -> Self {
-        self.children.push(ItemSeparator(ItemSeparatorProps {
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(item_separator().into());
         self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemGroupBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
     }
 }
 
 impl From<ItemGroupBuilder> for Element {
     fn from(builder: ItemGroupBuilder) -> Self {
-        ItemGroup(ItemGroupProps {
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+        let el = ItemGroup(ItemGroupProps {
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -749,6 +1085,7 @@ pub struct ItemBuilder {
     variant: ItemVariant,
     size: ItemSize,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn item() -> ItemBuilder {
@@ -756,10 +1093,13 @@ pub fn item() -> ItemBuilder {
         variant: ItemVariant::Default,
         size: ItemSize::Default,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl ItemBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn variant(mut self, v: impl Into<ItemVariant>) -> Self {
         self.variant = v.into();
         self
@@ -775,41 +1115,54 @@ impl ItemBuilder {
         self
     }
 
+    pub fn header(mut self, child: impl Into<Element>) -> Self {
+        let el = child.into();
+        let el = ensure_data_slot(el, SLOT_HEADER, |c| item_header().child(c).into());
+        self.children.push(el);
+        self
+    }
+
+    pub fn header_with(mut self, f: impl FnOnce(ItemHeaderBuilder) -> ItemHeaderBuilder) -> Self {
+        self.children.push(f(item_header()).into());
+        self
+    }
+
+    pub fn footer(mut self, child: impl Into<Element>) -> Self {
+        let el = child.into();
+        let el = ensure_data_slot(el, SLOT_FOOTER, |c| item_footer().child(c).into());
+        self.children.push(el);
+        self
+    }
+
+    pub fn footer_with(mut self, f: impl FnOnce(ItemFooterBuilder) -> ItemFooterBuilder) -> Self {
+        self.children.push(f(item_footer()).into());
+        self
+    }
+
     pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(ItemMedia(ItemMediaProps {
-            variant: Some(ItemMediaVariant::Default),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(item_media().child(child).into());
         self
     }
 
     pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(ItemMedia(ItemMediaProps {
-            variant: Some(ItemMediaVariant::Icon),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(item_media().icon().child(child).into());
         self
     }
 
     pub fn media_image(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(ItemMedia(ItemMediaProps {
-            variant: Some(ItemMediaVariant::Image),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(item_media().image().child(child).into());
+        self
+    }
+
+    pub fn media_with(mut self, f: impl FnOnce(ItemMediaBuilder) -> ItemMediaBuilder) -> Self {
+        self.children.push(f(item_media()).into());
         self
     }
 
     pub fn content(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(child.into());
+        let el = child.into();
+        let el = ensure_data_slot(el, SLOT_CONTENT, |c| item_content().child(c).into());
+        self.children.push(el);
         self
     }
 
@@ -818,78 +1171,70 @@ impl ItemBuilder {
         title: impl Into<String>,
         description: impl Into<String>,
     ) -> Self {
-        self.children.push(ItemContent(ItemContentProps {
-            children: {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(vec![
-                    ItemTitle(ItemTitleProps {
-                        children: Some(Element::new().text(title.into())),
-                        base: None,
-                        base_builder: None,
-                        ..Default::default()
-                    }),
-                    ItemDescription(ItemDescriptionProps {
-                        children: Some(Element::new().text(description.into())),
-                        base: None,
-                        base_builder: None,
-                        ..Default::default()
-                    }),
-                ]))
-            },
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(
+            item_content()
+                .child(item_title().text(title))
+                .child(item_description().text(description))
+                .into(),
+        );
         self
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(ItemContent(ItemContentProps {
-            children: {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(vec![ItemTitle(ItemTitleProps {
-                    children: Some(Element::new().text(text.into())),
-                    base: None,
-                    base_builder: None,
-                    ..Default::default()
-                })]))
-            },
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children
+            .push(item_content().child(item_title().text(text)).into());
+        self
+    }
+
+    pub fn title_with(mut self, f: impl FnOnce(ItemTitleBuilder) -> ItemTitleBuilder) -> Self {
+        self.children
+            .push(item_content().child(f(item_title())).into());
+        self
+    }
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.children
+            .push(item_content().child(item_description().text(text)).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(ItemDescriptionBuilder) -> ItemDescriptionBuilder,
+    ) -> Self {
+        self.children
+            .push(item_content().child(f(item_description())).into());
         self
     }
 
     pub fn action(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(ItemActions(ItemActionsProps {
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(item_actions().child(child).into());
         self
+    }
+
+    pub fn action_with(mut self, f: impl FnOnce(ItemActionsBuilder) -> ItemActionsBuilder) -> Self {
+        self.children.push(f(item_actions()).into());
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ItemBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
     }
 }
 
 impl From<ItemBuilder> for Element {
     fn from(builder: ItemBuilder) -> Self {
-        Item(ItemProps {
+        let el = Item(ItemProps {
             variant: Some(builder.variant),
             size: Some(builder.size),
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -998,5 +1343,25 @@ mod tests {
                     .title_description("T", "D"),
             )
             .into();
+    }
+
+    #[test]
+    fn item_title_with_chrome_applies_text_size() {
+        let el: Element = item()
+            .class("w-full")
+            .title_with(|t| t.style(|b| b.text_size(18.0)).text("Hi"))
+            .into();
+        let title = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CONTENT))
+            .and_then(|content| {
+                content
+                    .children
+                    .iter()
+                    .find(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_TITLE))
+            })
+            .expect("item title slot");
+        assert_eq!(title.text_style.size, Some(18.0));
     }
 }

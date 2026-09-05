@@ -74,6 +74,7 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::SlotChrome;
 use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
@@ -93,6 +94,7 @@ use crate::core::reactivity::{
     Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
@@ -674,6 +676,17 @@ impl CommandBuilder {
     pub fn dialog(mut self) -> Self {
         self.surface = CommandSurface::Dialog;
         self
+    }
+
+    /// Embed in existing layout (no portal).
+    pub fn inline(mut self) -> Self {
+        self.surface = CommandSurface::Inline;
+        self
+    }
+
+    /// Build Input / List / Item subtrees inside the context.
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        command_scope(self.id, self.open, self.placeholder, self.surface, body)
     }
 }
 
@@ -1353,6 +1366,145 @@ pub fn CommandShortcut(children: Option<Element>) -> Element {
     el
 }
 
+impl_simple_slot_builder!(
+    CommandInputBuilder,
+    command_input,
+    CommandInput,
+    CommandInputProps
+);
+impl_simple_slot_builder!(
+    CommandListBuilder,
+    command_list,
+    CommandList,
+    CommandListProps
+);
+impl_simple_slot_builder!(
+    CommandEmptyBuilder,
+    command_empty,
+    CommandEmpty,
+    CommandEmptyProps
+);
+impl_simple_slot_builder!(
+    CommandSeparatorBuilder,
+    command_separator,
+    CommandSeparator,
+    CommandSeparatorProps
+);
+impl_simple_slot_builder!(
+    CommandShortcutBuilder,
+    command_shortcut,
+    CommandShortcut,
+    CommandShortcutProps
+);
+
+pub struct CommandGroupBuilder {
+    heading: Option<String>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn command_group() -> CommandGroupBuilder {
+    CommandGroupBuilder {
+        heading: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CommandGroupBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn heading(mut self, h: impl Into<String>) -> Self {
+        self.heading = Some(h.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+}
+
+impl From<CommandGroupBuilder> for Element {
+    fn from(builder: CommandGroupBuilder) -> Self {
+        let el = CommandGroup(CommandGroupProps {
+            heading: builder.heading,
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for CommandGroupBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct CommandItemBuilder {
+    value: String,
+    disabled: bool,
+    checked: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn command_item(value: impl Into<String>) -> CommandItemBuilder {
+    CommandItemBuilder {
+        value: value.into(),
+        disabled: false,
+        checked: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CommandItemBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+    pub fn checked(mut self, v: bool) -> Self {
+        self.checked = v;
+        self
+    }
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<CommandItemBuilder> for Element {
+    fn from(builder: CommandItemBuilder) -> Self {
+        let el = CommandItem(CommandItemProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            checked: Some(builder.checked),
+            on_click: Default::default(),
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for CommandItemBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1368,6 +1520,36 @@ mod tests {
         assert_eq!(a.id, "ping");
         assert_eq!(a.label, "Ping host");
         assert_eq!(a.shortcut.as_deref(), Some("⌘P"));
+    }
+
+    #[test]
+    fn builder_item_style() {
+        let (_o, el): (_, Element) = create_root(|| {
+            command_paint(
+                "cmd-chrome".into(),
+                Signal::new(true),
+                "search".into(),
+                CommandSurface::Inline,
+                Rc::new(|| {
+                    command_list()
+                        .child(
+                            command_item("cal")
+                                .style(|b| b.text_size(20.0))
+                                .text("Calendar"),
+                        )
+                        .into()
+                }),
+            )
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "command_item .style(|b| b.text_size(20)) must land on the item tree"
+        );
     }
 
     fn find_portal_layer(root: &Element) -> &Element {
@@ -2088,6 +2270,7 @@ mod tests {
 
     #[test]
     fn command_dialog_list_max_scroll_reveals_last_item() {
+        use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
         use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
         use crate::components::internal::modal_shell::{
@@ -2128,6 +2311,7 @@ mod tests {
                 None,
                 None,
                 None,
+                SlotChrome::default(),
             );
             Element::new().w("100%").h("100%").child(shell)
         });

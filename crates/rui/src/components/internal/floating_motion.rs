@@ -107,7 +107,12 @@ fn apply_expand_width_clip(panel: &mut Element, presence: &FloatingPresenceHandl
     }
     panel.style.min_size.width = Dimension::length(0.0);
     panel.style.flex_wrap = FlexWrap::NoWrap;
-    let to_w = presence.cell.borrow().measured_width.max(from_w).max(1.0);
+    let to_w = panel
+        .used_layout
+        .anim_width()
+        .max(panel.layout_bounds[2])
+        .max(from_w)
+        .max(1.0);
     let t = expand_anim_progress(panel);
     let e = if exiting {
         TimingFunction::EaseIn.eval(t)
@@ -158,8 +163,12 @@ fn ensure_expand_up_to_keyframe(to_h: f32) -> String {
 }
 
 /// Floating panel motion kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FloatingMotionKind {
+///
+/// Re-exported by [`crate::utils::anchored_overlay`] (headless shell). Keep this `pub`
+/// so the utils shell can name it without duplicating the enum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FloatingMotionKind {
+    #[default]
     Fade,
     Expand,
 }
@@ -189,9 +198,6 @@ struct FloatingPresenceCell {
     exit_armed: bool,
     needs_exit_anim: bool,
     shell: Option<FloatingShellState>,
-    measured_height: f32,
-    measured_width: f32,
-    exit_from_height: Option<f32>,
     /// Last accordion clip height (interpolated max-height). Rebuild/placement must not
     /// flash the viewport cap before flush re-seeds.
     clip_height: Option<f32>,
@@ -241,9 +247,6 @@ pub(crate) fn use_floating_presence(
             exit_armed: false,
             needs_exit_anim: false,
             shell: None,
-            measured_height: 0.0,
-            measured_width: 0.0,
-            exit_from_height: None,
             clip_height: None,
             clip_width: None,
             measuring: false,
@@ -281,7 +284,6 @@ pub(crate) fn sync_floating_presence(
             c.enter_active = false;
             c.needs_enter = false;
             c.shell = None;
-            c.exit_from_height = None;
             c.clip_height = None;
             c.clip_width = None;
             c.measuring = false;
@@ -299,21 +301,15 @@ pub(crate) fn sync_floating_presence(
             c.enter_active = false;
             c.exit_armed = false;
             c.needs_exit_anim = false;
-            c.exit_from_height = None;
             c.clip_height = None;
             c.clip_width = None;
             c.measuring = false;
-            c.measured_height = 0.0;
-            c.measured_width = 0.0;
         }
         if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
             c.exit_armed = true;
             c.needs_enter = false;
             c.enter_active = false;
             c.needs_exit_anim = true;
-            if c.exit_from_height.is_none() {
-                c.exit_from_height = Some(c.measured_height.max(1.0));
-            }
         }
         let set_mounted = c.mounted.peek() != mounted;
         (phase, mounted, set_mounted)
@@ -344,7 +340,6 @@ pub(crate) fn tick_floating_presence() -> bool {
                         c.enter_active = false;
                         c.needs_exit_anim = false;
                         c.shell = None;
-                        c.exit_from_height = None;
                         Some(c.mounted)
                     } else {
                         needs_frame = true;
@@ -417,8 +412,8 @@ fn seed_fade_exit(el: &mut Element) {
 fn seed_expand_enter(el: &mut Element, content_height: f32) {
     clear_motion(el);
     el.style.opacity = 1.0;
-    // Baseline = content height; keyframes `from { max-height: 0 }` → interpolate to baseline.
-    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    // Specified stays `auto`; used_layout supplies the implicit 100% end.
+    el.style.max_size.height = Dimension::auto();
     let anim_name = if let Some(from_h) = floating_expand_from_h(el) {
         ensure_expand_down_from_keyframe(from_h.min(content_height))
     } else {
@@ -519,29 +514,15 @@ fn max_height_is_auto(el: &Element) -> bool {
     )
 }
 
-fn take_measured_height(
-    presence: &FloatingPresenceHandle,
-    panel: &Element,
-    max_height_cap: Option<f32>,
-) -> f32 {
-    let mut c = presence.cell.borrow_mut();
-    let w = panel.layout_bounds[2];
-    if w > 1.0 && w > c.measured_width {
-        c.measured_width = w;
+fn take_measured_height(panel: &Element, max_height_cap: Option<f32>) -> f32 {
+    let h = panel.used_layout.anim_height().max(panel.layout_bounds[3]);
+    if h <= 1.0 {
+        return 0.0;
     }
-    if c.measured_height >= 1.0 {
-        return c.measured_height;
+    match max_height_cap {
+        Some(max) if max > 0.0 => h.min(max),
+        _ => h,
     }
-    // Prefer this frame's layout. User max_h is already in bounds — do not clear to auto and lose height forever.
-    let h = panel.layout_bounds[3];
-    if h > 1.0 {
-        c.measured_height = match max_height_cap {
-            Some(max) if max > 0.0 => h.min(max),
-            _ => h,
-        };
-        return c.measured_height;
-    }
-    0.0
 }
 
 fn prepare_expand_measure(panel: &mut Element, max_height_cap: Option<f32>) {
@@ -591,17 +572,8 @@ fn apply_idle_expand_max_h(panel: &mut Element, presence: &FloatingPresenceHandl
     }
 }
 
-fn panel_content_height(presence: &FloatingPresenceHandle, el: &Element, cap: Option<f32>) -> f32 {
-    let c = presence.cell.borrow();
-    let h = c
-        .exit_from_height
-        .filter(|h| *h > 1.0)
-        .or_else(|| (c.measured_height > 1.0).then_some(c.measured_height))
-        .unwrap_or_else(|| el.layout_bounds[3].max(0.0));
-    match cap {
-        Some(max) if max > 0.0 => h.min(max),
-        _ => h,
-    }
+fn panel_content_height(el: &Element, cap: Option<f32>) -> f32 {
+    take_measured_height(el, cap).max(el.layout_bounds[3].max(0.0))
 }
 
 fn finish_floating_exit(presence: &FloatingPresenceHandle) {
@@ -623,7 +595,6 @@ fn finish_floating_exit(presence: &FloatingPresenceHandle) {
             .as_ref()
             .map(|s| (s.overlay_id.clone(), s.open, s.overlay_kind, s.overlay_mode));
         c.shell = None;
-        c.exit_from_height = None;
         c.clip_height = None;
         c.clip_width = None;
         c.measuring = false;
@@ -744,16 +715,13 @@ fn apply_expand_motion(
         if needs_exit_anim && exiting {
             c.needs_exit_anim = false;
         }
-        if exiting && c.exit_from_height.is_none() {
-            c.exit_from_height = Some(c.measured_height.max(panel.layout_bounds[3]).max(1.0));
-        }
         (needs_enter, needs_exit_anim, enter_active)
     };
 
     let exit_armed = presence.cell.borrow().exit_armed;
     // Seed only on first exit or when accordion-up was dropped; resume from current max-height (see seed_expand_exit).
     if exiting && (needs_exit_anim || (!expand_has_exit_anim(panel) && exit_armed)) {
-        let h = panel_content_height(presence, panel, max_height_cap);
+        let h = panel_content_height(panel, max_height_cap);
         seed_expand_exit(panel, h);
         remember_clip_height(presence, panel);
         apply_expand_width_clip(panel, presence, true);
@@ -804,8 +772,6 @@ fn apply_expand_motion(
                 let mut c = presence.cell.borrow_mut();
                 c.measuring = true;
                 c.enter_active = true;
-                c.measured_height = 0.0;
-                c.measured_width = 0.0;
                 c.clip_width = None;
             }
             panel.layout_bounds[2] = 0.0;
@@ -815,7 +781,7 @@ fn apply_expand_motion(
             return true;
         }
 
-        let measured = take_measured_height(presence, panel, max_height_cap);
+        let measured = take_measured_height(panel, max_height_cap);
         if measured < 1.0 {
             prepare_expand_measure(panel, max_height_cap);
             apply_expand_width_clip(panel, presence, false);
@@ -837,25 +803,22 @@ fn apply_expand_motion(
     }
 
     if open_visual {
-        // Grow stored content height; never shrink to the current viewport clip.
+        // Grow used-layout intrinsic; never shrink to the current viewport clip.
         let h = panel.layout_bounds[3];
         if h > 1.0 {
             let capped = match max_height_cap {
                 Some(max) if max > 0.0 => h.min(max),
                 _ => h,
             };
-            let mut c = presence.cell.borrow_mut();
-            if capped > c.measured_height + 0.5 {
-                c.measured_height = capped;
-                panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{capped}"));
-            }
+            panel.used_layout.absorb_child_height(capped);
+            panel.set_attr(
+                ATTR_FLOATING_CONTENT_H,
+                format!("{}", panel.used_layout.anim_height()),
+            );
         }
         let w = panel.layout_bounds[2];
         if w > 1.0 {
-            let mut c = presence.cell.borrow_mut();
-            if w > c.measured_width + 0.5 {
-                c.measured_width = w;
-            }
+            panel.used_layout.absorb_child_width(w);
         }
     }
     false
@@ -907,8 +870,14 @@ pub(crate) fn apply_floating_panel_motion(
             panel.style.opacity = 0.0;
         }
         let measuring = c.measuring;
-        if kind == FloatingMotionKind::Expand && !measuring && c.measured_height >= 1.0 {
-            panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{}", c.measured_height));
+        if kind == FloatingMotionKind::Expand
+            && !measuring
+            && panel.used_layout.anim_height() >= 1.0
+        {
+            panel.set_attr(
+                ATTR_FLOATING_CONTENT_H,
+                format!("{}", panel.used_layout.anim_height()),
+            );
         }
         if kind == FloatingMotionKind::Expand
             && matches!(phase, PresencePhase::Present)
@@ -1513,7 +1482,10 @@ mod tests {
                 panel.layout_bounds[3] = 80.0;
             }
             let _ = flush_floating_motion_subtree(&mut root);
-            let stored = handle.cell.borrow().measured_height;
+            let stored = find_template_id_mut(&mut root, "exp-idle__floating_panel")
+                .unwrap()
+                .used_layout
+                .anim_height();
             assert!(
                 (stored - 200.0).abs() < 0.5,
                 "idle clip 80 must not overwrite content measure 200, got {stored}"
@@ -1548,8 +1520,9 @@ mod tests {
             panel.style.animations.clear();
             panel.animation_snapshot = Default::default();
             panel.style.max_size.height = Dimension::length(48.0);
-            handle.cell.borrow_mut().measured_height = 120.0;
-            handle.cell.borrow_mut().exit_from_height = Some(120.0);
+            panel
+                .used_layout
+                .stamp_border_box([0.0, 0.0, 100.0, 120.0], false);
 
             open.set(false);
             sync_floating_presence(&handle, false);
@@ -1603,7 +1576,8 @@ mod tests {
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "exp-exit-hide__floating_panel").unwrap();
             panel.layout_bounds[3] = 120.0;
-            handle.cell.borrow_mut().measured_height = 120.0;
+            let bounds = panel.layout_bounds;
+            panel.used_layout.stamp_border_box(bounds, false);
             assert!(flush_floating_motion_subtree(&mut root));
             {
                 let panel =

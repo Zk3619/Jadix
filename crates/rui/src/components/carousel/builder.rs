@@ -2,8 +2,24 @@
 
 use super::content::*;
 use super::*;
+use crate::components::base::SlotChrome;
+use crate::impl_slot_chrome_methods;
 
 // ── Builder ──────────────────────────────────────────────────────────────────
+
+pub struct CarouselSlotBuilder {
+    chrome: SlotChrome,
+}
+
+fn carousel_slot() -> CarouselSlotBuilder {
+    CarouselSlotBuilder {
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl CarouselSlotBuilder {
+    impl_slot_chrome_methods!();
+}
 
 pub struct CarouselBuilder {
     id: String,
@@ -24,6 +40,12 @@ pub struct CarouselBuilder {
     item_width: String,
     dots: Option<bool>,
     stack_sides: u32,
+    chrome: SlotChrome,
+    content_chrome: SlotChrome,
+    item_chrome: SlotChrome,
+    previous_chrome: SlotChrome,
+    next_chrome: SlotChrome,
+    dots_chrome: SlotChrome,
 }
 
 /// Builder 入口：默认单页 `Carousel`。
@@ -47,6 +69,12 @@ pub fn carousel(id: impl Into<String>) -> CarouselBuilder {
         item_width: "12rem".into(),
         dots: None,
         stack_sides: 1,
+        chrome: SlotChrome::default(),
+        content_chrome: SlotChrome::default(),
+        item_chrome: SlotChrome::default(),
+        previous_chrome: SlotChrome::default(),
+        next_chrome: SlotChrome::default(),
+        dots_chrome: SlotChrome::default(),
     }
 }
 
@@ -160,8 +188,42 @@ impl CarouselBuilder {
         self
     }
 
+    impl_slot_chrome_methods!();
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(CarouselSlotBuilder) -> CarouselSlotBuilder,
+    ) -> Self {
+        self.content_chrome = f(carousel_slot()).chrome;
+        self
+    }
+
+    pub fn item_with(mut self, f: impl FnOnce(CarouselSlotBuilder) -> CarouselSlotBuilder) -> Self {
+        self.item_chrome = f(carousel_slot()).chrome;
+        self
+    }
+
+    pub fn previous_with(
+        mut self,
+        f: impl FnOnce(CarouselSlotBuilder) -> CarouselSlotBuilder,
+    ) -> Self {
+        self.previous_chrome = f(carousel_slot()).chrome;
+        self
+    }
+
+    pub fn next_with(mut self, f: impl FnOnce(CarouselSlotBuilder) -> CarouselSlotBuilder) -> Self {
+        self.next_chrome = f(carousel_slot()).chrome;
+        self
+    }
+
+    pub fn dots_with(mut self, f: impl FnOnce(CarouselSlotBuilder) -> CarouselSlotBuilder) -> Self {
+        self.dots_chrome = f(carousel_slot()).chrome;
+        self
+    }
+
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        carousel_scope(
+        let chrome = self.chrome.clone();
+        let el = carousel_scope(
             self.id,
             self.index,
             self.orientation.as_str(),
@@ -180,7 +242,8 @@ impl CarouselBuilder {
             self.dots,
             self.stack_sides,
             body,
-        )
+        );
+        chrome.apply(el)
     }
 }
 
@@ -205,10 +268,16 @@ impl From<CarouselBuilder> for Element {
             item_width,
             dots,
             stack_sides,
+            chrome,
+            content_chrome,
+            item_chrome,
+            previous_chrome,
+            next_chrome,
+            dots_chrome,
         } = builder;
         let slides_for_content = slides.clone();
         let inject_dots = dots.unwrap_or_else(|| variant.default_dots());
-        carousel_scope(
+        let el = carousel_scope(
             id,
             index,
             orientation.as_str(),
@@ -243,25 +312,27 @@ impl From<CarouselBuilder> for Element {
                         .insert(ATTR_SLOT.to_string(), SLOT_ITEM.to_string());
                     item = item.accesskit_role("group");
                     item.set_attr("aria-roledescription", "slide");
-                    items.push(item);
+                    items.push(item_chrome.apply(item));
                 }
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
                 frag = frag.children(items);
-                let content = CarouselContent(CarouselContentProps {
+                let content = content_chrome.apply(CarouselContent(CarouselContentProps {
                     children: Some(frag),
                     ..Default::default()
-                });
-                let prev = CarouselPrevious(CarouselPreviousProps::default());
-                let next = CarouselNext(CarouselNextProps::default());
+                }));
+                let prev =
+                    previous_chrome.apply(CarouselPrevious(CarouselPreviousProps::default()));
+                let next = next_chrome.apply(CarouselNext(CarouselNextProps::default()));
                 let mut kids = vec![content, prev, next];
                 if inject_dots {
-                    kids.push(CarouselDots(CarouselDotsProps::default()));
+                    kids.push(dots_chrome.apply(CarouselDots(CarouselDotsProps::default())));
                 }
                 let mut root = Element::new();
                 root.set_attr("rui_fragment", "1");
                 root.children(kids)
             },
-        )
+        );
+        chrome.apply(el)
     }
 }

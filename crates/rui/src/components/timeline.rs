@@ -69,10 +69,12 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
+use crate::components::base::{BaseComponentBuilder, SlotAuthor, SlotChrome, SlotStyleFn};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32Raw};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{apply_semantic_border, with_class_list, SemanticBorder};
 use crate::utils::icon_provider::{build_icon_named, with_icon_size};
@@ -114,15 +116,34 @@ const DESC_SIZE_PX: f32 = 14.0;
 // ---------------------------------------------------------------------------
 
 /// One timeline row for Builder `.item()` / `.items()` sugar.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Default appearance; per-row class/style → [`timeline_entry`].
+#[derive(Clone, Debug, Default)]
 pub struct TimelineEntry {
     pub title: String,
     pub description: String,
     /// Optional Lucide icon name inside the disc.
     pub bullet: Option<String>,
+    pub chrome: SlotChrome,
+}
+
+/// Sugar entry: `timeline().items([timeline_entry("Shipped").class("ring-2")])`.
+pub fn timeline_entry(title: impl Into<String>) -> TimelineEntry {
+    TimelineEntry {
+        title: title.into(),
+        description: String::new(),
+        bullet: None,
+        chrome: SlotChrome::default(),
+    }
 }
 
 impl TimelineEntry {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.description = text.into();
+        self
+    }
+
     pub fn bullet(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         self.bullet = if name.trim().is_empty() {
@@ -140,6 +161,7 @@ impl From<&str> for TimelineEntry {
             title: s.to_string(),
             description: String::new(),
             bullet: None,
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -150,6 +172,7 @@ impl From<String> for TimelineEntry {
             title,
             description: String::new(),
             bullet: None,
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -160,6 +183,7 @@ impl From<(&str, &str)> for TimelineEntry {
             title: title.to_string(),
             description: description.to_string(),
             bullet: None,
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -170,6 +194,7 @@ impl From<(String, String)> for TimelineEntry {
             title,
             description,
             bullet: None,
+            chrome: SlotChrome::default(),
         }
     }
 }
@@ -182,13 +207,17 @@ pub struct TimelineCtx {
     pub line_size: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct TimelineItemSpec {
     index: usize,
     title: String,
     description: String,
     bullet: Option<String>,
     class: String,
+    style: Option<SlotStyleFn>,
+    bullet_slot: SlotAuthor,
+    title_slot: SlotAuthor,
+    description_slot: SlotAuthor,
 }
 
 struct TimelineCollect {
@@ -198,6 +227,7 @@ struct TimelineCollect {
 
 thread_local! {
     static TIMELINE_STACK: RefCell<Vec<TimelineCollect>> = const { RefCell::new(Vec::new()) };
+    static PENDING_ITEM_STYLE: RefCell<Option<SlotStyleFn>> = const { RefCell::new(None) };
 }
 
 fn timeline_context() -> Context<TimelineCtx> {
@@ -342,7 +372,12 @@ fn paint_item(
 ) -> Element {
     let bullet_on = timeline_bullet_active(active, spec.index);
     let line_on = timeline_line_active(active, spec.index, is_last);
-    let disc = paint_bullet(spec.bullet.as_deref(), bullet_on, bullet_size, line_size);
+    let disc = spec.bullet_slot.apply(paint_bullet(
+        spec.bullet.as_deref(),
+        bullet_on,
+        bullet_size,
+        line_size,
+    ));
 
     let mut rail = vstack().w(bullet_size).items_center().flex_shrink(0.0);
     rail = rail.child(disc);
@@ -368,9 +403,12 @@ fn paint_item(
         .min_w(0.0)
         .flex_grow(1.0)
         .pb(if is_last { "0" } else { ITEM_PB });
-    body = body.child(paint_title(&spec.title));
+    body = body.child(spec.title_slot.apply(paint_title(&spec.title)));
     if !spec.description.trim().is_empty() {
-        body = body.child(paint_description(&spec.description));
+        body = body.child(
+            spec.description_slot
+                .apply(paint_description(&spec.description)),
+        );
     }
 
     let cell = hstack()
@@ -386,6 +424,9 @@ fn paint_item(
     el = el.accesskit_role("listitem");
     if !spec.class.trim().is_empty() {
         el = with_class_list(el, &spec.class);
+    }
+    if let Some(ref style) = spec.style {
+        el = style(BaseComponentBuilder::new(el)).el;
     }
     el
 }
@@ -499,6 +540,79 @@ fn find_icon_name(el: &Element) -> Option<String> {
 // Builder
 // ---------------------------------------------------------------------------
 
+pub struct TimelineItemBuilder {
+    title: String,
+    description: String,
+    bullet: Option<String>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn timeline_item() -> TimelineItemBuilder {
+    TimelineItemBuilder {
+        title: String::new(),
+        description: String::new(),
+        bullet: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TimelineItemBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn title(mut self, text: impl Into<String>) -> Self {
+        self.title = text.into();
+        self
+    }
+
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.description = text.into();
+        self
+    }
+
+    pub fn bullet(mut self, name: impl Into<String>) -> Self {
+        self.bullet = Some(name.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<TimelineItemBuilder> for Element {
+    fn from(builder: TimelineItemBuilder) -> Self {
+        PENDING_ITEM_STYLE.with(|s| {
+            *s.borrow_mut() = builder.chrome.style.clone();
+        });
+        let class = if builder.chrome.class.trim().is_empty() {
+            None
+        } else {
+            Some(builder.chrome.class.clone())
+        };
+        TimelineItem(TimelineItemProps {
+            title: Some(builder.title),
+            description: if builder.description.is_empty() {
+                None
+            } else {
+                Some(builder.description)
+            },
+            bullet: builder.bullet,
+            class,
+            children: if builder.children.is_empty() {
+                None
+            } else {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                Some(frag.children(builder.children))
+            },
+            base: None,
+        })
+    }
+}
+
 pub struct TimelineBuilder {
     id: String,
     items: Vec<TimelineEntry>,
@@ -506,7 +620,9 @@ pub struct TimelineBuilder {
     default_active: i32,
     bullet_size: f32,
     line_size: f32,
-    class: String,
+    chrome: SlotChrome,
+    item_chrome: SlotChrome,
+    custom_items: Vec<Box<dyn FnOnce() -> Element>>,
     child: Option<Box<dyn FnOnce() -> Element>>,
 }
 
@@ -519,17 +635,23 @@ pub fn timeline() -> TimelineBuilder {
         default_active: -1,
         bullet_size: DEFAULT_BULLET_PX,
         line_size: DEFAULT_LINE_PX,
-        class: String::new(),
+        chrome: SlotChrome::default(),
+        item_chrome: SlotChrome::default(),
+        custom_items: Vec::new(),
         child: None,
     }
 }
 
 impl TimelineBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
     }
 
+    /// Data-driven sugar: [`timeline_entry`] / `&str` / `(title, description)`.
+    /// Per-item class/style ride on the sugar value; the group default is [`Self::item_chrome`].
     pub fn items(mut self, items: impl IntoIterator<Item = impl Into<TimelineEntry>>) -> Self {
         self.items = items.into_iter().map(|s| s.into()).collect();
         self
@@ -537,6 +659,20 @@ impl TimelineBuilder {
 
     pub fn item(mut self, item: impl Into<TimelineEntry>) -> Self {
         self.items.push(item.into());
+        self
+    }
+
+    pub fn item_chrome(mut self, chrome: SlotChrome) -> Self {
+        self.item_chrome = chrome;
+        self
+    }
+
+    pub fn item_with(
+        mut self,
+        f: impl FnOnce(TimelineItemBuilder) -> TimelineItemBuilder + 'static,
+    ) -> Self {
+        self.custom_items
+            .push(Box::new(move || f(timeline_item()).into()));
         self
     }
 
@@ -558,11 +694,6 @@ impl TimelineBuilder {
 
     pub fn line_size(mut self, v: impl IntoF32Raw) -> Self {
         self.line_size = v.into_f32_raw().max(1.0);
-        self
-    }
-
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
         self
     }
 
@@ -588,15 +719,18 @@ impl From<TimelineBuilder> for Element {
             default_active,
             bullet_size,
             line_size,
-            class,
+            chrome,
+            item_chrome,
+            custom_items,
             child,
         } = builder;
-        let class = if class.trim().is_empty() {
+        let class = if chrome.class.trim().is_empty() {
             None
         } else {
-            Some(class)
+            Some(chrome.class.clone())
         };
-        timeline_scope(
+        let style = chrome.style.clone();
+        let mut el = timeline_scope(
             id,
             active,
             default_active,
@@ -609,9 +743,18 @@ impl From<TimelineBuilder> for Element {
                 } else {
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
-                    let kids: Vec<Element> = items
+                    let mut kids: Vec<Element> = items
                         .into_iter()
                         .map(|s| {
+                            let chrome = item_chrome.clone().overlay(s.chrome);
+                            PENDING_ITEM_STYLE.with(|cell| {
+                                *cell.borrow_mut() = chrome.style.clone();
+                            });
+                            let class = if chrome.class.trim().is_empty() {
+                                None
+                            } else {
+                                Some(chrome.class)
+                            };
                             TimelineItem(TimelineItemProps {
                                 title: Some(s.title),
                                 description: if s.description.is_empty() {
@@ -620,16 +763,23 @@ impl From<TimelineBuilder> for Element {
                                     Some(s.description)
                                 },
                                 bullet: s.bullet,
-                                class: None,
+                                class,
                                 children: None,
                                 base: None,
                             })
                         })
                         .collect();
+                    for build in custom_items {
+                        kids.push(build());
+                    }
                     frag.children(kids)
                 }
             },
-        )
+        );
+        if let Some(style) = style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
     }
 }
 
@@ -689,22 +839,28 @@ pub fn TimelineItem(
     let mut title = title.unwrap_or_default();
     let mut description = description.unwrap_or_default();
     let mut bullet = bullet.filter(|s| !s.trim().is_empty());
+    let mut title_slot = SlotAuthor::default();
+    let mut description_slot = SlotAuthor::default();
+    let mut bullet_slot = SlotAuthor::default();
     if let Some(ch) = children {
         for child in take_packed(ch) {
             match slot_of(&child) {
                 Some(SLOT_TITLE) => {
+                    title_slot = SlotAuthor::from_el(&child);
                     let t = extract_text(&child);
                     if !t.is_empty() {
                         title = t;
                     }
                 }
                 Some(SLOT_DESCRIPTION) => {
+                    description_slot = SlotAuthor::from_el(&child);
                     let t = extract_text(&child);
                     if !t.is_empty() {
                         description = t;
                     }
                 }
                 Some(SLOT_BULLET) => {
+                    bullet_slot = SlotAuthor::from_el(&child);
                     if bullet.is_none() {
                         bullet = find_icon_name(&child);
                     }
@@ -722,12 +878,17 @@ pub fn TimelineItem(
         }
     }
 
+    let style = PENDING_ITEM_STYLE.with(|s| s.borrow_mut().take());
     register_item(TimelineItemSpec {
         index,
         title,
         description,
         bullet,
         class: class.unwrap_or_default(),
+        style,
+        bullet_slot,
+        title_slot,
+        description_slot,
     });
     Element::new()
 }
@@ -766,6 +927,48 @@ pub fn TimelineItemDescription(children: Option<Element>) -> Element {
         el = el.children(take_packed(ch));
     }
     el
+}
+
+crate::impl_simple_slot_builder!(
+    TimelineItemBulletBuilder,
+    timeline_item_bullet,
+    TimelineItemBullet,
+    TimelineItemBulletProps
+);
+crate::impl_simple_slot_builder!(
+    TimelineItemTitleBuilder,
+    timeline_item_title,
+    TimelineItemTitle,
+    TimelineItemTitleProps
+);
+crate::impl_simple_slot_builder!(
+    TimelineItemDescriptionBuilder,
+    timeline_item_description,
+    TimelineItemDescription,
+    TimelineItemDescriptionProps
+);
+
+impl TimelineItemBuilder {
+    pub fn title_with(
+        self,
+        f: impl FnOnce(TimelineItemTitleBuilder) -> TimelineItemTitleBuilder,
+    ) -> Self {
+        self.child(f(timeline_item_title()))
+    }
+
+    pub fn description_with(
+        self,
+        f: impl FnOnce(TimelineItemDescriptionBuilder) -> TimelineItemDescriptionBuilder,
+    ) -> Self {
+        self.child(f(timeline_item_description()))
+    }
+
+    pub fn bullet_with(
+        self,
+        f: impl FnOnce(TimelineItemBulletBuilder) -> TimelineItemBulletBuilder,
+    ) -> Self {
+        self.child(f(timeline_item_bullet()))
+    }
 }
 
 #[cfg(test)]
@@ -859,5 +1062,85 @@ mod tests {
                 base: None,
             })
         });
+    }
+
+    #[test]
+    fn builder_item_class_reaches_painted_item() {
+        let class = timeline_item()
+            .title("Packed")
+            .description("Warehouse")
+            .class("border-primary")
+            .chrome
+            .class;
+        let spec = TimelineItemSpec {
+            index: 0,
+            title: "Packed".into(),
+            description: "Warehouse".into(),
+            bullet: None,
+            class,
+            ..Default::default()
+        };
+        let el = paint_item(&spec, 0, false, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);
+        assert!(
+            el.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("border-primary")))
+                || el
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("border-primary"))
+        );
+    }
+
+    #[test]
+    fn builder_items_sugar_chrome_reaches_item() {
+        let s = timeline_entry("Packed").class("border-primary");
+        let chrome = SlotChrome::default().overlay(s.chrome);
+        let spec = TimelineItemSpec {
+            index: 0,
+            title: s.title,
+            description: s.description,
+            bullet: s.bullet,
+            class: chrome.class,
+            style: chrome.style,
+            ..Default::default()
+        };
+        let el = paint_item(&spec, 0, false, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);
+        assert!(
+            el.class_set
+                .as_ref()
+                .is_some_and(|cs| cs.base.iter().any(|t| t.contains("border-primary")))
+                || el
+                    .attrs
+                    .get("rui_utility_class")
+                    .is_some_and(|c| c.contains("border-primary")),
+            "timeline_entry(\"Packed\").class must land on the painted item"
+        );
+    }
+
+    #[test]
+    fn builder_title_style() {
+        let title: Element = timeline_item_title()
+            .style(|b| b.text_size(20.0))
+            .text("Packed")
+            .into();
+        let title_slot = SlotAuthor::from_el(&title);
+        assert_eq!(title_slot.size, Some(20.0));
+        let spec = TimelineItemSpec {
+            index: 0,
+            title: "Packed".into(),
+            title_slot,
+            ..Default::default()
+        };
+        let el = paint_item(&spec, 0, false, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "timeline_item_title .style(|b| b.text_size(20)) must land on the painted title"
+        );
     }
 }

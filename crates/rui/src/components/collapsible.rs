@@ -50,11 +50,13 @@ use rui_macros::component;
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::base::{ensure_data_slot, overlay_root_author_text, SlotStyleFn};
 use crate::core::reactivity::{
     create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
@@ -132,8 +134,6 @@ struct CollapsePanelPresenceCell {
     enter_active: bool,
     exit_armed: bool,
     initialized: bool,
-    measured_height: f32,
-    exit_from_height: Option<f32>,
     needs_exit_anim: bool,
 }
 
@@ -149,8 +149,6 @@ fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresenceHandle {
             enter_active: false,
             exit_armed: false,
             initialized: false,
-            measured_height: 0.0,
-            exit_from_height: None,
             needs_exit_anim: false,
         }));
         PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
@@ -191,7 +189,6 @@ fn sync_collapse_panel_presence(handle: &CollapsePanelPresenceHandle, want: bool
                 c.enter_active = false;
             }
             c.exit_armed = false;
-            c.exit_from_height = None;
             c.needs_exit_anim = false;
         }
         c.initialized = true;
@@ -200,9 +197,6 @@ fn sync_collapse_panel_presence(handle: &CollapsePanelPresenceHandle, want: bool
             c.needs_enter = false;
             c.enter_active = false;
             c.needs_exit_anim = true;
-            if c.exit_from_height.is_none() {
-                c.exit_from_height = Some(c.measured_height.max(1.0));
-            }
         }
         let set_mounted = if c.mounted.is_alive() {
             c.mounted
@@ -238,7 +232,6 @@ pub(crate) fn tick_collapsible_panel_presence() -> bool {
                         c.needs_enter = false;
                         c.enter_active = false;
                         c.exit_armed = false;
-                        c.exit_from_height = None;
                         c.needs_exit_anim = false;
                         Some(c.mounted)
                     } else {
@@ -283,12 +276,8 @@ fn chevron_transition_entries() -> [TransitionEntry; 1] {
     }]
 }
 
-fn panel_content_height(presence: &CollapsePanelPresenceHandle, el: &Element) -> f32 {
-    let c = presence.cell.borrow();
-    c.exit_from_height
-        .filter(|h| *h > 1.0)
-        .or_else(|| (c.measured_height > 1.0).then_some(c.measured_height))
-        .unwrap_or_else(|| el.layout_bounds[3].max(0.0))
+fn panel_content_height(el: &Element) -> f32 {
+    el.used_layout.anim_height().max(el.layout_bounds[3])
 }
 
 fn collapse_has_exit_anim(el: &Element) -> bool {
@@ -299,9 +288,9 @@ fn reset_collapse_anim_snapshot(el: &mut Element) {
     el.animation_snapshot = Default::default();
 }
 
-fn seed_collapse_enter_anim(el: &mut Element, content_height: f32) {
+fn seed_collapse_enter_anim(el: &mut Element) {
     clear_motion(el);
-    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.max_size.height = Dimension::auto();
     el.style.animations = vec![keyframes_anim_entry(
         COLLAPSIBLE_DOWN,
         COLLAPSE_MS,
@@ -311,9 +300,9 @@ fn seed_collapse_enter_anim(el: &mut Element, content_height: f32) {
     reset_collapse_anim_snapshot(el);
 }
 
-fn seed_collapse_exit_anim(el: &mut Element, content_height: f32) {
+fn seed_collapse_exit_anim(el: &mut Element) {
     clear_motion(el);
-    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.max_size.height = Dimension::auto();
     el.style.animations = vec![keyframes_anim_entry(
         COLLAPSIBLE_UP,
         COLLAPSE_MS,
@@ -331,7 +320,6 @@ fn finish_collapse_panel_exit(presence: &CollapsePanelPresenceHandle) {
         c.exit_armed = false;
         c.needs_exit_anim = false;
         c.enter_active = false;
-        c.exit_from_height = None;
     }
     PENDING_COLLAPSE_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
     crate::app::runtime::request_redraw();
@@ -546,17 +534,9 @@ fn apply_collapse_panel_motion(
         (needs_enter, needs_exit_anim)
     };
 
-    if exiting {
-        let mut c = presence.cell.borrow_mut();
-        if c.exit_from_height.is_none() {
-            c.exit_from_height = Some(c.measured_height.max(el.layout_bounds[3]).max(1.0));
-        }
-    }
-
     let exit_armed = presence.cell.borrow().exit_armed;
     if exiting && (needs_exit_anim || (!collapse_has_exit_anim(el) && exit_armed)) {
-        let h = panel_content_height(presence, el);
-        seed_collapse_exit_anim(el, h);
+        seed_collapse_exit_anim(el);
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
@@ -580,21 +560,11 @@ fn apply_collapse_panel_motion(
     }
 
     if open_visual && needs_enter {
-        let measured = {
-            let mut c = presence.cell.borrow_mut();
-            if c.measured_height < 1.0 {
-                if !max_height_is_auto(el) {
-                    el.style.max_size.height = Dimension::auto();
-                    layout = true;
-                } else {
-                    let h = el.layout_bounds[3];
-                    if h > 1.0 {
-                        c.measured_height = h;
-                    }
-                }
-            }
-            c.measured_height
-        };
+        if !max_height_is_auto(el) {
+            el.style.max_size.height = Dimension::auto();
+            layout = true;
+        }
+        let measured = panel_content_height(el);
         if measured < 1.0 {
             el.style.opacity = 0.0;
             if layout && el.layout_node.is_some() {
@@ -612,7 +582,7 @@ fn apply_collapse_panel_motion(
         if (el.style.opacity - 1.0).abs() > 0.001 {
             el.style.opacity = 1.0;
         }
-        seed_collapse_enter_anim(el, measured);
+        seed_collapse_enter_anim(el);
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
@@ -634,10 +604,6 @@ fn apply_collapse_panel_motion(
             layout = true;
         }
         presence.cell.borrow_mut().enter_active = false;
-        let h = el.layout_bounds[3];
-        if h > 1.0 {
-            presence.cell.borrow_mut().measured_height = h;
-        }
     }
 
     if layout && el.layout_node.is_some() {
@@ -750,6 +716,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
         wrap.template_id = Some(format!("{menu_id}:panel"));
         let sync_presence = sync_presence.clone();
         wrap = wrap.reactive_sync(move |el, layout_tree| {
+            overlay_root_author_text(el);
             apply_collapse_panel_motion(el, layout_tree, &sync_presence)
         });
         wrap
@@ -787,6 +754,14 @@ pub fn CollapsibleTrigger(
     };
 
     // 自定义子节点（如 Button）：只挂点击，不改外观。
+    // Slot Builder `packed_children` 把单个文案叶包进 `rui_fragment`，须拆开才走 chevron 路径。
+    let children = children.map(|mut c| {
+        if c.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") && c.children.len() == 1 {
+            c.children.pop().unwrap()
+        } else {
+            c
+        }
+    });
     let label_text = match children {
         Some(c) if !is_text_leaf(&c) => {
             let mut trigger = c;
@@ -871,7 +846,10 @@ pub fn CollapsibleTrigger(
         trigger = with_class_list(trigger, &c);
     }
 
-    hstack().w("100%").min_w(0.0).child(trigger).into()
+    let mut host: Element = hstack().w("100%").min_w(0.0).child(trigger).into();
+    host.attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER.to_string());
+    host
 }
 
 /// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`collapsible_content`]）。
@@ -914,6 +892,7 @@ pub fn CollapsibleContent(class: Option<String>, children: Option<Element>) -> E
 
     let sync_presence = presence.clone();
     panel = panel.reactive_sync(move |el, layout_tree| {
+        overlay_root_author_text(el);
         let want = open_sig.try_peek().unwrap_or(false);
         sync_collapse_panel_presence(&sync_presence, want);
         apply_collapse_panel_motion(el, layout_tree, &sync_presence)
@@ -955,10 +934,12 @@ pub struct CollapsibleBuilder {
     default_open: bool,
     disabled: bool,
     class: Option<String>,
+    style: Option<SlotStyleFn>,
     exclusive: bool,
     group: Option<String>,
     trigger: Option<Box<dyn FnOnce() -> Element>>,
     content: Option<Box<dyn Fn() -> Element>>,
+    content_slot: Option<Box<dyn FnOnce() -> Element>>,
 }
 
 /// Composite Collapsible entry (opposite `<Collapsible>`).
@@ -969,10 +950,12 @@ pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
         default_open: false,
         disabled: false,
         class: None,
+        style: None,
         exclusive: false,
         group: None,
         trigger: None,
         content: None,
+        content_slot: None,
     }
 }
 
@@ -1002,6 +985,17 @@ impl CollapsibleBuilder {
         self
     }
 
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
+
     /// 与同 [`Self::group`] 的其它 Collapsible 互斥（组键为空时无效）。
     pub fn exclusive(mut self, v: bool) -> Self {
         self.exclusive = v;
@@ -1019,25 +1013,63 @@ impl CollapsibleBuilder {
         self
     }
 
+    pub fn trigger_with(
+        self,
+        f: impl FnOnce(CollapsibleTriggerBuilder) -> CollapsibleTriggerBuilder + 'static,
+    ) -> Self {
+        self.trigger(move || f(collapsible_trigger()).into())
+    }
+
     pub fn content(mut self, build: impl Fn() -> Element + 'static) -> Self {
         self.content = Some(Box::new(build));
         self
     }
 
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(CollapsibleContentSlotBuilder) -> CollapsibleContentSlotBuilder + 'static,
+    ) -> Self {
+        self.content_slot = Some(Box::new(move || f(collapsible_content_slot()).into()));
+        self
+    }
+
     /// 在上下文内构建任意子树（Trigger / Content 等）。
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        collapsible_scope(
-            self.id,
-            self.open,
-            self.default_open,
-            self.disabled,
-            self.class,
-            self.exclusive,
-            self.group,
-            body,
+        apply_collapsible_style(
+            collapsible_scope(
+                self.id,
+                self.open,
+                self.default_open,
+                self.disabled,
+                self.class,
+                self.exclusive,
+                self.group,
+                body,
+            ),
+            self.style,
         )
     }
 }
+
+fn apply_collapsible_style(mut el: Element, style: Option<SlotStyleFn>) -> Element {
+    if let Some(style) = style {
+        el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
+    }
+    el
+}
+
+impl_simple_slot_builder!(
+    CollapsibleTriggerBuilder,
+    collapsible_trigger,
+    CollapsibleTrigger,
+    CollapsibleTriggerProps
+);
+impl_simple_slot_builder!(
+    CollapsibleContentSlotBuilder,
+    collapsible_content_slot,
+    CollapsibleContent,
+    CollapsibleContentProps
+);
 
 impl From<CollapsibleBuilder> for Element {
     fn from(builder: CollapsibleBuilder) -> Self {
@@ -1047,36 +1079,40 @@ impl From<CollapsibleBuilder> for Element {
             default_open,
             disabled,
             class,
+            style,
             exclusive,
             group,
             trigger,
             content,
+            content_slot,
         } = builder;
-        collapsible_scope(
-            id,
-            open,
-            default_open,
-            disabled,
-            class,
-            exclusive,
-            group,
-            move || {
-                let mut kids = Vec::new();
-                if let Some(t) = trigger {
-                    kids.push(CollapsibleTrigger(CollapsibleTriggerProps {
-                        disabled: Some(false),
-                        class: None,
-                        children: Some(t()),
-                        base: None,
-                    }));
-                }
-                if let Some(c) = content {
-                    kids.push(collapsible_content(c));
-                }
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(kids)
-            },
+        apply_collapsible_style(
+            collapsible_scope(
+                id,
+                open,
+                default_open,
+                disabled,
+                class,
+                exclusive,
+                group,
+                move || {
+                    let mut kids = Vec::new();
+                    if let Some(t) = trigger {
+                        kids.push(ensure_data_slot(t(), SLOT_TRIGGER, |el| {
+                            collapsible_trigger().child(el).into()
+                        }));
+                    }
+                    if let Some(c) = content_slot {
+                        kids.push(c());
+                    } else if let Some(c) = content {
+                        kids.push(collapsible_content(c));
+                    }
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(kids)
+                },
+            ),
+            style,
         )
     }
 }
@@ -1105,11 +1141,42 @@ mod tests {
         assert_eq!(el.template_id.as_deref(), Some("col-test"));
     }
 
+    #[test]
+    fn builder_trigger_class_and_style() {
+        let (_o, el): (_, Element) = create_root(|| {
+            collapsible("col-chrome")
+                .trigger_with(|t| t.class("px-2").style(|b| b.text_size(20.0)).text("Toggle"))
+                .content(|| Element::new().text("Body"))
+                .into()
+        });
+        let trigger = find_slot(&el, SLOT_TRIGGER).expect("trigger");
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(trigger, 20.0),
+            "trigger .style(|b| b.text_size(20)) must land on the trigger tree"
+        );
+    }
+
     fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
         if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
             return Some(el);
         }
         el.children.iter().find_map(|c| find_slot(c, slot))
+    }
+
+    fn find_icon_name<'a>(el: &'a Element, name: &str) -> Option<&'a Element> {
+        if el
+            .get_attr(crate::utils::ATTR_ICON_NAME)
+            .map(|s| s.as_str())
+            == Some(name)
+        {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_icon_name(c, name))
     }
 
     #[test]
@@ -1120,7 +1187,7 @@ mod tests {
                 .content(|| Element::new().text("Body"))
                 .into()
         });
-        let icon = find_slot(&el, SLOT_TRIGGER_ICON).expect("collapsible chevron");
+        let icon = find_icon_name(&el, "chevron-down").expect("collapsible chevron");
         assert_eq!(
             icon.get_attr(crate::utils::ATTR_ICON_NAME)
                 .map(String::as_str),

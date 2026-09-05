@@ -25,6 +25,7 @@
 //!   (outline → `foreground`). Slotted shells such as
 //!   [`crate::components::Kbd`] / `KbdGroup` keep their own chrome.
 
+use crate::components::base::SlotChrome;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
     parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus,
@@ -492,6 +493,7 @@ pub struct ButtonBuilder {
     explicit_text_color: Option<[u8; 4]>,
     truncate: bool,
     text_overflow: Option<crate::style::TextOverflow>,
+    chrome: SlotChrome,
 }
 
 static NEXT_BUTTON_ID: AtomicUsize = AtomicUsize::new(1);
@@ -623,10 +625,13 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
         explicit_text_color: None,
         truncate: false,
         text_overflow: None,
+        chrome: SlotChrome::default(),
     }
 }
 
 impl ButtonBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn hover_easing(mut self, e: &str) -> Self {
         self.hover_easing = e.to_string();
         self
@@ -692,11 +697,17 @@ impl ButtonBuilder {
     pub fn text_leading_tight(self) -> Self {
         self.leading_tight()
     }
+    pub fn text_leading_snug(self) -> Self {
+        self.leading_snug()
+    }
     pub fn text_leading_normal(self) -> Self {
         self.leading_normal()
     }
     pub fn text_leading_relaxed(self) -> Self {
         self.leading_relaxed()
+    }
+    pub fn text_leading_loose(self) -> Self {
+        self.leading_loose()
     }
     pub fn text_line_height(self, px: impl IntoF32) -> Self {
         self.line_height(px)
@@ -808,6 +819,12 @@ impl ButtonBuilder {
         self
     }
 
+    pub fn leading_snug(mut self) -> Self {
+        self.text_style.line_height_px = None;
+        self.text_style.leading_scale = Some(1.375);
+        self
+    }
+
     pub fn leading_normal(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.leading_scale = Some(1.5);
@@ -819,10 +836,17 @@ impl ButtonBuilder {
         self.text_style.leading_scale = Some(1.625);
         self
     }
+
+    pub fn leading_loose(mut self) -> Self {
+        self.text_style.line_height_px = None;
+        self.text_style.leading_scale = Some(2.0);
+        self
+    }
 }
 
 impl From<ButtonBuilder> for Element {
     fn from(builder: ButtonBuilder) -> Element {
+        let chrome = builder.chrome.clone();
         let caption_underline_offset = if builder.variant == ButtonVariant::Link {
             Some(link_underline_offset_px(&builder))
         } else {
@@ -1036,7 +1060,7 @@ impl From<ButtonBuilder> for Element {
                 crate::core::tree::CursorKind::Pointer
             });
         }
-        el
+        chrome.apply(el)
     }
 }
 
@@ -1653,6 +1677,26 @@ mod chrome_tests {
         assert_eq!(
             el.children[0].attrs.get("data-slot").map(|s| s.as_str()),
             Some("kbd-group")
+        );
+    }
+
+    #[test]
+    fn builder_style() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            button("btn-chrome")
+                .style(|b| b.text_size(20.0))
+                .child(Element::new().text("OK"))
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "button .style(|b| b.text_size(20)) must land on the button"
         );
     }
 }

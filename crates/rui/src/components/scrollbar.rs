@@ -197,6 +197,39 @@ pub struct ScrollbarBuilder {
     overlay: bool,
 }
 
+/// Along-track minimum thumb size (see [`scrollbar_min_thumb_along_track`]).
+pub const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
+
+/// L-join corner policy (Cursor / modern VS Code): the **vertical** bar owns the
+/// corner square; the **horizontal** overlay always stops before the vertical lane.
+///
+/// Returns main-axis padding for an **inside** (absolute) track:
+/// - vertical → `(top, bottom)` — full height, only container edge pad
+/// - horizontal → `(left, right)` — edge pad plus `v_cross` on the side the vertical bar occupies
+pub(crate) fn scrollbar_overlay_main_insets(
+    axis: &str,
+    this_outside: bool,
+    vertical_shown: bool,
+    vertical_on_left: bool,
+    edge_pad: f32,
+    vertical_cross: f32,
+) -> (f32, f32) {
+    if this_outside {
+        return (0.0, 0.0);
+    }
+    match axis {
+        "y" => (edge_pad, edge_pad),
+        "x" if vertical_shown => {
+            if vertical_on_left {
+                (edge_pad + vertical_cross, edge_pad)
+            } else {
+                (edge_pad, edge_pad + vertical_cross)
+            }
+        }
+        _ => (edge_pad, edge_pad),
+    }
+}
+
 pub fn scrollbar(id: &str) -> ScrollbarBuilder {
     ScrollbarBuilder {
         _id: id.to_string(),
@@ -675,5 +708,34 @@ mod content_inset_tests {
         assert!((scrollbar_track_content_inset_px(1.0, 1.0, true) - 2.0).abs() < f32::EPSILON);
         assert!((scrollbar_track_content_inset_px(1.0, 1.0, false) - 1.0).abs() < f32::EPSILON);
         assert!((scrollbar_track_content_inset_px(0.0, 0.0, true) - 0.0).abs() < f32::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod overlay_main_inset_tests {
+    use super::scrollbar_overlay_main_insets;
+
+    #[test]
+    fn vertical_overlay_spans_full_height() {
+        let (top, bottom) = scrollbar_overlay_main_insets("y", false, true, false, 2.0, 10.0);
+        assert_eq!((top, bottom), (2.0, 2.0));
+    }
+
+    #[test]
+    fn horizontal_yields_to_vertical_on_right() {
+        let (left, right) = scrollbar_overlay_main_insets("x", false, true, false, 2.0, 10.0);
+        assert_eq!((left, right), (2.0, 12.0));
+    }
+
+    #[test]
+    fn horizontal_yields_to_vertical_on_left() {
+        let (left, right) = scrollbar_overlay_main_insets("x", false, true, true, 2.0, 10.0);
+        assert_eq!((left, right), (12.0, 2.0));
+    }
+
+    #[test]
+    fn outside_track_does_not_self_inset() {
+        let (a, b) = scrollbar_overlay_main_insets("x", true, true, false, 2.0, 10.0);
+        assert_eq!((a, b), (0.0, 0.0));
     }
 }

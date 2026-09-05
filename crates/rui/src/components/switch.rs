@@ -39,6 +39,7 @@
 //!   `transition-transform` / `transition-colors`（~150ms）。
 //! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
+use crate::components::base::SlotChrome;
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, Element, IntoCssDim, LayoutStatus};
@@ -153,7 +154,7 @@ fn wire_switch_captions(
             let text = child.text.clone().unwrap_or_default();
             label("")
                 .text(text)
-                .r#for(control_id)
+                .for_target(control_id)
                 .text_size(14.0)
                 .font_weight(500.0)
                 .into()
@@ -252,6 +253,7 @@ pub struct SwitchBuilder {
     default_checked: bool,
     disabled: bool,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// RSX `<Switch>`。
@@ -315,10 +317,13 @@ pub fn switch(id: impl Into<String>) -> SwitchBuilder {
         default_checked: false,
         disabled: false,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl SwitchBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn checked_signal(mut self, s: Signal<bool>) -> Self {
         self.checked = Some(s);
         self
@@ -355,6 +360,7 @@ impl SwitchBuilder {
 
 impl From<SwitchBuilder> for Element {
     fn from(builder: SwitchBuilder) -> Self {
+        let chrome = builder.chrome;
         let id = resolve_instance_id(builder.id, "switch");
         let sig = resolve_bool_signal(builder.checked, &id, SLOT_SWITCH, builder.default_checked);
         let disabled = builder.disabled;
@@ -400,7 +406,7 @@ impl From<SwitchBuilder> for Element {
         track.template_id = Some(id.clone());
 
         if !has_caption {
-            return track;
+            return chrome.apply(track);
         }
 
         let (captions, labelled_by) = wire_switch_captions(&id, captions_raw);
@@ -423,7 +429,7 @@ impl From<SwitchBuilder> for Element {
         if disabled {
             root = root.opacity(0.5).cursor_not_allowed();
         }
-        root
+        chrome.apply(root)
     }
 }
 

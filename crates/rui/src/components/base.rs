@@ -18,8 +18,493 @@
 //! ## Notes
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
-use crate::style::{mark_variant_style_override, VariantStyleField};
+use crate::style::{
+    is_variant_style_overridden, mark_variant_style_override, with_class_list, VariantStyleField,
+};
+
+/// Same layout/paint surface as RSX `base` props (`w` / `h` / `text_size` / …).
+/// `Rc` so data-driven chrome (Pagination links, Carousel slides) can clone it.
+pub type SlotStyleFn = Rc<dyn Fn(BaseComponentBuilder) -> BaseComponentBuilder>;
+
+/// Utility `class` + [`BaseComponentBuilder`] style, matching RSX `class` + layout attrs.
+#[derive(Clone, Default)]
+pub struct SlotChrome {
+    pub class: String,
+    pub style: Option<SlotStyleFn>,
+}
+
+impl SlotChrome {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.class = classes.into();
+        self
+    }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
+    ) -> Self {
+        self.style = Some(Rc::new(f));
+        self
+    }
+
+    /// Overlay `*ContentOpts` / RSX `class` + Builder `.style()`.
+    pub fn from_opts(class: Option<String>, style: Option<SlotStyleFn>) -> Self {
+        Self {
+            class: class.unwrap_or_default(),
+            style,
+        }
+    }
+
+    /// Apply after the slot component builds (same order as RSX `class` chrome_binds + `base`).
+    pub fn apply(&self, mut el: Element) -> Element {
+        if !self.class.trim().is_empty() {
+            el = with_class_list(el, self.class.trim());
+        }
+        if let Some(ref style) = self.style {
+            el = style(BaseComponentBuilder::new(el)).el;
+        }
+        el
+    }
+
+    /// Layer `over` on top of `self`: classes concatenate, styles run `self` then `over`.
+    pub fn overlay(self, over: Self) -> Self {
+        let class = [self.class.trim(), over.class.trim()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let style = match (self.style, over.style) {
+            (Some(a), Some(b)) => Some(Rc::new(move |x| b(a(x))) as SlotStyleFn),
+            (a, b) => b.or(a),
+        };
+        Self { class, style }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.class.trim().is_empty() && self.style.is_none()
+    }
+}
+
+/// Stamp `data-slot` then apply chrome. Closed builders call this (or [`SlotMap::paint`])
+/// instead of growing per-slot `*_with` methods.
+pub fn paint_slot(mut el: Element, slot: &str, chrome: &SlotChrome) -> Element {
+    el.set_attr("data-slot", slot);
+    chrome.apply(el)
+}
+
+/// User chrome keyed by `data-slot`. One map per closed Builder; components only stamp names.
+#[derive(Clone, Default)]
+pub struct SlotMap {
+    entries: HashMap<String, SlotChrome>,
+}
+
+impl SlotMap {
+    pub fn slot(
+        mut self,
+        name: impl Into<String>,
+        f: impl FnOnce(SlotChrome) -> SlotChrome,
+    ) -> Self {
+        let name = name.into();
+        let next = f(self.entries.remove(&name).unwrap_or_default());
+        if !next.is_empty() {
+            self.entries.insert(name, next);
+        }
+        self
+    }
+
+    pub fn get(&self, slot: &str) -> SlotChrome {
+        self.entries.get(slot).cloned().unwrap_or_default()
+    }
+
+    /// Stamp `data-slot` and apply the matching chrome (no-op when unset).
+    pub fn paint(&self, slot: &str, el: Element) -> Element {
+        paint_slot(el, slot, &self.get(slot))
+    }
+}
+
+/// Author `text-size` on a slot marker (root or any descendant).
+pub fn author_text_size(el: &Element) -> Option<f32> {
+    el.text_style
+        .size
+        .or_else(|| el.children.iter().find_map(author_text_size))
+}
+
+pub fn author_text_color(el: &Element) -> Option<[u8; 4]> {
+    el.text_style
+        .color
+        .or_else(|| el.children.iter().find_map(author_text_color))
+}
+
+pub fn author_text_weight(el: &Element) -> Option<u16> {
+    el.text_style
+        .weight
+        .or_else(|| el.children.iter().find_map(author_text_weight))
+}
+
+/// Write `size` onto `el` and every descendant (painted title/description trees).
+pub fn overlay_author_text_size(el: &mut Element, size: f32) {
+    el.text_style.size = Some(size);
+    for child in &mut el.children {
+        overlay_author_text_size(child, size);
+    }
+}
+
+pub fn overlay_author_text_color(el: &mut Element, color: [u8; 4]) {
+    el.text_style.color = Some(color);
+    for child in &mut el.children {
+        overlay_author_text_color(child, color);
+    }
+}
+
+pub fn overlay_author_text_weight(el: &mut Element, weight: u16) {
+    el.text_style.weight = Some(weight);
+    for child in &mut el.children {
+        overlay_author_text_weight(child, weight);
+    }
+}
+
+/// If the root carries author marks (`text_size` / `text_color` / `font_weight`),
+/// copy those values onto descendants so extract-and-rebuild leaves pick them up.
+pub fn overlay_root_author_text(el: &mut Element) {
+    if is_variant_style_overridden(&el.attrs, VariantStyleField::Size) {
+        if let Some(sz) = el.text_style.size {
+            overlay_author_text_size(el, sz);
+        }
+    }
+    if is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
+        if let Some(c) = el.text_style.color {
+            overlay_author_text_color(el, c);
+        }
+    }
+    if is_variant_style_overridden(&el.attrs, VariantStyleField::Weight) {
+        if let Some(w) = el.text_style.weight {
+            overlay_author_text_weight(el, w);
+        }
+    }
+}
+
+/// Fill component-default type only when the author left the field unset.
+pub fn fill_default_text_size(el: &mut Element, px: f32) {
+    if el.text_style.size.is_none() {
+        el.text_style.size = Some(px);
+    }
+}
+
+pub fn fill_default_text_weight(el: &mut Element, weight: u16) {
+    if el.text_style.weight.is_none() {
+        el.text_style.weight = Some(weight);
+    }
+}
+
+pub fn fill_default_text_color(el: &mut Element, color: [u8; 4]) {
+    if is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
+        return;
+    }
+    if el.text_style.color.is_none() {
+        el.text_style.color = Some(color);
+    }
+}
+
+/// Utility class captured from a slot marker (`class` attr or `rui_utility_class`).
+pub fn author_class(el: &Element) -> String {
+    el.attrs
+        .get("class")
+        .cloned()
+        .or_else(|| el.attrs.get("rui_utility_class").cloned())
+        .unwrap_or_default()
+}
+
+fn author_padding_px(el: &Element) -> Option<[f32; 4]> {
+    let l = crate::layout::lp_length_px(el.style.padding.left).unwrap_or(0.0);
+    let r = crate::layout::lp_length_px(el.style.padding.right).unwrap_or(0.0);
+    let t = crate::layout::lp_length_px(el.style.padding.top).unwrap_or(0.0);
+    let b = crate::layout::lp_length_px(el.style.padding.bottom).unwrap_or(0.0);
+    if l != 0.0
+        || r != 0.0
+        || t != 0.0
+        || b != 0.0
+        || is_variant_style_overridden(&el.attrs, VariantStyleField::Pad)
+    {
+        Some([l, t, r, b])
+    } else {
+        None
+    }
+}
+
+/// Class + text + box chrome captured from a slot marker that will be discarded
+/// (Stepper / Timeline extract-and-repaint).
+#[derive(Clone, Default)]
+pub struct SlotAuthor {
+    pub class: String,
+    pub size: Option<f32>,
+    pub color: Option<[u8; 4]>,
+    pub weight: Option<u16>,
+    pub bg: Option<[f32; 4]>,
+    pub padding: Option<[f32; 4]>,
+    pub radii: Option<[f32; 4]>,
+    pub border_width: Option<f32>,
+    pub border_color: Option<[f32; 4]>,
+}
+
+impl SlotAuthor {
+    pub fn from_el(el: &Element) -> Self {
+        let bg = if is_variant_style_overridden(&el.attrs, VariantStyleField::Bg)
+            || el.style.bg_color[3] > 0.0
+        {
+            Some(el.style.bg_color)
+        } else {
+            None
+        };
+        let radii = if el.style.radii.iter().any(|r| *r > 0.0)
+            || is_variant_style_overridden(&el.attrs, VariantStyleField::Radius)
+        {
+            Some(el.style.radii)
+        } else {
+            None
+        };
+        let border_width = if el.style.border_width > 0.0
+            || is_variant_style_overridden(&el.attrs, VariantStyleField::Border)
+        {
+            Some(el.style.border_width)
+        } else {
+            None
+        };
+        let border_color = if el.style.border_color[3] > 0.0
+            || is_variant_style_overridden(&el.attrs, VariantStyleField::Border)
+        {
+            Some(el.style.border_color)
+        } else {
+            None
+        };
+        Self {
+            class: author_class(el),
+            size: author_text_size(el),
+            color: author_text_color(el),
+            weight: author_text_weight(el),
+            bg,
+            padding: author_padding_px(el),
+            radii,
+            border_width,
+            border_color,
+        }
+    }
+
+    pub fn apply(&self, mut el: Element) -> Element {
+        if !self.class.trim().is_empty() {
+            el = with_class_list(el, self.class.trim());
+        }
+        if let Some(sz) = self.size {
+            overlay_author_text_size(&mut el, sz);
+            mark_variant_style_override(&mut el, VariantStyleField::Size);
+        }
+        if let Some(c) = self.color {
+            overlay_author_text_color(&mut el, c);
+            mark_variant_style_override(&mut el, VariantStyleField::Fg);
+        }
+        if let Some(w) = self.weight {
+            overlay_author_text_weight(&mut el, w);
+            mark_variant_style_override(&mut el, VariantStyleField::Weight);
+        }
+        if let Some(bg) = self.bg {
+            el.style.bg_color = bg;
+            mark_variant_style_override(&mut el, VariantStyleField::Bg);
+        }
+        if let Some([l, t, r, b]) = self.padding {
+            el.style.padding.left = taffy::style::LengthPercentage::length(l);
+            el.style.padding.top = taffy::style::LengthPercentage::length(t);
+            el.style.padding.right = taffy::style::LengthPercentage::length(r);
+            el.style.padding.bottom = taffy::style::LengthPercentage::length(b);
+            mark_variant_style_override(&mut el, VariantStyleField::Pad);
+        }
+        if let Some(radii) = self.radii {
+            el.style.radii = radii;
+            mark_variant_style_override(&mut el, VariantStyleField::Radius);
+        }
+        if let Some(w) = self.border_width {
+            el.style.border_width = w;
+            mark_variant_style_override(&mut el, VariantStyleField::Border);
+        }
+        if let Some(c) = self.border_color {
+            el.style.border_color = c;
+            mark_variant_style_override(&mut el, VariantStyleField::Border);
+        }
+        el
+    }
+}
+
+impl std::fmt::Debug for SlotChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlotChrome")
+            .field("class", &self.class)
+            .field("has_style", &self.style.is_some())
+            .finish()
+    }
+}
+
+pub fn packed_children(children: Vec<Element>) -> Option<Element> {
+    if children.is_empty() {
+        None
+    } else {
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        Some(frag.children(children))
+    }
+}
+
+pub fn data_slot(el: &Element) -> Option<&str> {
+    el.attrs.get("data-slot").map(String::as_str)
+}
+
+/// If `el` already carries `data-slot=expected`, keep it; otherwise wrap.
+pub fn ensure_data_slot(
+    el: Element,
+    expected: &str,
+    wrap: impl FnOnce(Element) -> Element,
+) -> Element {
+    if data_slot(&el) == Some(expected) {
+        el
+    } else {
+        wrap(el)
+    }
+}
+
+/// `.slot("data-slot-name", |c| c.class(..).style(..))` for closed Builders that store `slots: SlotMap`.
+#[macro_export]
+macro_rules! impl_slot_map_methods {
+    () => {
+        /// Style an internal node by its `data-slot` (framework slot chrome).
+        pub fn slot(
+            mut self,
+            name: impl Into<String>,
+            f: impl FnOnce($crate::components::base::SlotChrome) -> $crate::components::base::SlotChrome,
+        ) -> Self {
+            self.slots = self.slots.slot(name, f);
+            self
+        }
+    };
+}
+
+/// Chrome-only named-slot Builder (`*_with(|p| p.class(..).style(..))`).
+/// Prefer [`SlotMap`] / `.slot()` on closed roots; keep this for real Tier 1 part builders.
+#[macro_export]
+macro_rules! impl_chrome_part_builder {
+    ($builder:ident, $entry:ident) => {
+        pub struct $builder {
+            chrome: $crate::components::base::SlotChrome,
+        }
+
+        pub fn $entry() -> $builder {
+            $builder {
+                chrome: $crate::components::base::SlotChrome::default(),
+            }
+        }
+
+        impl $builder {
+            $crate::impl_slot_chrome_methods!();
+        }
+    };
+}
+
+/// `.class()` / `.style()` for builders that store chrome as `chrome: SlotChrome`.
+#[macro_export]
+macro_rules! impl_slot_chrome_methods {
+    () => {
+        pub fn class(mut self, classes: impl Into<String>) -> Self {
+            self.chrome.class = classes.into();
+            self
+        }
+
+        /// Same [`BaseComponentBuilder`] surface as RSX props (`w` / `h` / `text_size` / …).
+        pub fn style(
+            mut self,
+            f: impl Fn(
+                    $crate::components::base::BaseComponentBuilder,
+                ) -> $crate::components::base::BaseComponentBuilder
+                + 'static,
+        ) -> Self {
+            self.chrome.style = Some(::std::rc::Rc::new(f));
+            self
+        }
+    };
+}
+
+/// `.class()` / `.style()` for overlay `*ContentOpts` that store `class: Option<String>` + `style: Option<SlotStyleFn>`.
+#[macro_export]
+macro_rules! impl_content_opts_chrome {
+    () => {
+        pub fn class(mut self, classes: impl Into<String>) -> Self {
+            self.class = Some(classes.into());
+            self
+        }
+
+        /// Same [`BaseComponentBuilder`] surface as RSX layout attrs (`w` / `p` / `text_size` / …).
+        pub fn style(
+            mut self,
+            f: impl Fn(
+                    $crate::components::base::BaseComponentBuilder,
+                ) -> $crate::components::base::BaseComponentBuilder
+                + 'static,
+        ) -> Self {
+            self.style = Some(::std::rc::Rc::new(f));
+            self
+        }
+    };
+}
+
+/// Presentational slot Builder: children + [`SlotChrome`], `From` via `$comp($props { ..Default })`.
+#[macro_export]
+macro_rules! impl_simple_slot_builder {
+    ($builder:ident, $entry:ident, $comp:ident, $props:ident) => {
+        pub struct $builder {
+            children: Vec<$crate::core::tree::Element>,
+            chrome: $crate::components::base::SlotChrome,
+        }
+
+        pub fn $entry() -> $builder {
+            $builder {
+                children: Vec::new(),
+                chrome: $crate::components::base::SlotChrome::default(),
+            }
+        }
+
+        impl $builder {
+            $crate::impl_slot_chrome_methods!();
+
+            pub fn child(mut self, child: impl Into<$crate::core::tree::Element>) -> Self {
+                self.children
+                    .extend($crate::utils::take_packed(child.into()));
+                self
+            }
+
+            pub fn text(mut self, content: impl Into<String>) -> Self {
+                self.children
+                    .push($crate::core::tree::Element::new().text(content.into()));
+                self
+            }
+        }
+
+        impl From<$builder> for $crate::core::tree::Element {
+            fn from(builder: $builder) -> Self {
+                let el = $comp($props {
+                    children: $crate::components::base::packed_children(builder.children),
+                    base: None,
+                    ..Default::default()
+                });
+                builder.chrome.apply(el)
+            }
+        }
+
+        impl $crate::core::tree::IntoElementList for $builder {
+            fn into_element_list(self) -> Vec<$crate::core::tree::Element> {
+                vec![self.into()]
+            }
+        }
+    };
+}
 
 pub struct BaseComponentBuilder {
     pub el: Element,
@@ -167,12 +652,14 @@ impl BaseComponentBuilder {
 
     pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.p(p);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
 
     pub fn rounded(mut self, radius: impl IntoF32) -> Self {
         self.has_custom_rounded = true;
         self.el = self.el.rounded(radius);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Radius);
         self
     }
 
@@ -330,6 +817,7 @@ impl BaseComponentBuilder {
         self.explicit_text_size_px = Some(px);
         // Same as `font_weight`: RSX `text_size` must be written back to the root node when taking `base`, otherwise only `explicit_*` has no consumers.
         self.el = self.el.text_size(px);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Size);
         self
     }
 
@@ -339,6 +827,12 @@ impl BaseComponentBuilder {
         // RSX 将 `font_weight` 作用在 `base` 回调上；必须写回根节点的 `text_style`，否则
         // `resolved_text_weight` will lose the font weight when it is never consumed (e.g. `<Label font_weight=600>`).
         self.el = self.el.font_weight(w as f32);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Weight);
+        self
+    }
+
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.el = self.el.font_family(family);
         self
     }
 
@@ -416,26 +910,32 @@ impl BaseComponentBuilder {
     }
     pub fn px(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.px(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn py(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.py(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn pt(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pt(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn pr(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pr(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn pb(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pb(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn pl(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pl(val);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Pad);
         self
     }
     pub fn mt(mut self, val: impl IntoCssDim) -> Self {
@@ -458,22 +958,37 @@ impl BaseComponentBuilder {
     // Text enhancements
     pub fn leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.text_leading(scale);
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
         self
     }
     pub fn leading_none(mut self) -> Self {
         self.el = self.el.text_leading_none();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
         self
     }
     pub fn leading_tight(mut self) -> Self {
         self.el = self.el.text_leading_tight();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
+        self
+    }
+    pub fn leading_snug(mut self) -> Self {
+        self.el = self.el.text_leading_snug();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
         self
     }
     pub fn leading_normal(mut self) -> Self {
         self.el = self.el.text_leading_normal();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
         self
     }
     pub fn leading_relaxed(mut self) -> Self {
         self.el = self.el.text_leading_relaxed();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
+        self
+    }
+    pub fn leading_loose(mut self) -> Self {
+        self.el = self.el.text_leading_loose();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Leading);
         self
     }
     pub fn line_height(mut self, px: impl IntoF32) -> Self {

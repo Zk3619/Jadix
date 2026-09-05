@@ -313,11 +313,11 @@ impl Parse for RsxNode {
                 })?;
                 syn::Ident::new("loop", proc_macro2::Span::call_site())
             } else if input.peek(Token![for]) {
-                // Solid `for={id}` → Label prop `r#for`。
+                // Solid `for={id}` → Label prop `for_target`（`r#for` 仍可作为 Builder 别名）。
                 input.parse::<Token![for]>().map_err(|e| {
                     syn::Error::new(e.span(), format!("Failed at keyword attr for: {}", e))
                 })?;
-                proc_macro2::Ident::new_raw("for", proc_macro2::Span::call_site())
+                syn::Ident::new("for", proc_macro2::Span::call_site())
             } else {
                 let first: Ident = input
                     .parse()
@@ -914,6 +914,10 @@ fn expand_node(
                 || name_str == "Show"
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
+                || name_str == "AnchoredOverlay"
+                || name_str == "AnchoredOverlayContent"
+                || name_str == "ViewportModal"
+                || name_str == "ViewportModalContent"
                 || name_str == "HoverCard"
                 || name_str == "HoverCardContent"
                 || name_str == "Progress"
@@ -1624,6 +1628,7 @@ fn expand_node(
                             #chrome_ts,
                             #selected_ts,
                             None,
+                            ::std::vec::Vec::new(),
                             || #child_el,
                         )
                     };
@@ -2009,6 +2014,122 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::popover_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "AnchoredOverlay" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:AnchoredOverlay#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::utils::anchored_overlay::anchored_overlay_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "ViewportModal" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let overlay_color = get_attr("overlay_color")
+                        .or_else(|| get_attr("overlayColor"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_opacity = get_attr("overlay_opacity")
+                        .or_else(|| get_attr("overlayOpacity"))
+                        .map(|e| {
+                            let v = quote_unitless_f32(e);
+                            quote! { Some(#v) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_blur = get_attr("overlay_blur")
+                        .or_else(|| get_attr("overlayBlur"))
+                        .or_else(|| get_attr("backdrop_blur"))
+                        .or_else(|| get_attr("backdropBlur"))
+                        .map(|e| {
+                            let v = quote_length_f32(e);
+                            quote! { Some(#v) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_click = get_attr("close_on_click")
+                        .or_else(|| get_attr("closeOnClick"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:ViewportModal#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::utils::viewport_modal::viewport_modal_scope(
+                            #id_ts,
+                            #open_ts,
+                            rui::utils::viewport_modal::ShellOverlayOpts {
+                                color: #overlay_color,
+                                opacity: #overlay_opacity,
+                                backdrop_blur: #overlay_blur,
+                                close_on_click: #close_on_click,
+                            },
+                            || #child_el,
+                        )
                     };
                 }
 
@@ -3652,6 +3773,10 @@ fn expand_node(
                             quote! { Some(#v) }
                         })
                         .unwrap_or_else(|| quote! { None });
+                    let class = get_attr("class")
+                        .or_else(|| get_attr("className"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3686,6 +3811,8 @@ fn expand_node(
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
                                 hug_content: false,
+                                class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -3744,6 +3871,10 @@ fn expand_node(
                         .or_else(|| get_attr("chromeSignal"))
                         .map(|e| quote! { Some(#e) })
                         .unwrap_or_else(|| quote! { None });
+                    let class = get_attr("class")
+                        .or_else(|| get_attr("className"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3782,6 +3913,8 @@ fn expand_node(
                                 filled: #filled_static,
                                 chrome: #chrome_static,
                                 chrome_signal: #chrome_signal,
+                                class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -3831,6 +3964,10 @@ fn expand_node(
                         .or_else(|| get_attr("height"))
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });
+                    let class = get_attr("class")
+                        .or_else(|| get_attr("className"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3867,6 +4004,8 @@ fn expand_node(
                                 overlay_blur: #overlay_blur,
                                 width: #width,
                                 height: #height,
+                                class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -3892,6 +4031,10 @@ fn expand_node(
                         .or_else(|| get_attr("shouldScaleBackground"))
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
+                    let class = get_attr("class")
+                        .or_else(|| get_attr("className"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let modal = get_attr("modal")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
@@ -3984,6 +4127,8 @@ fn expand_node(
                                 snap_points: #snap_points,
                                 snap_to_sequential_point: #snap_to_sequential_point,
                                 scale_background: #scale_background,
+                                class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4025,6 +4170,7 @@ fn expand_node(
                             rui::components::TooltipContentOpts {
                                 side: #side,
                                 class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4084,6 +4230,163 @@ fn expand_node(
                                 class: #class,
                                 strategy: #strategy,
                                 width: #width,
+                                style: None,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "AnchoredOverlayContent" {
+                    let placement_mode = get_attr("placement")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "trigger".to_string() });
+                    let side = get_attr("side")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom".to_string() });
+                    let align = get_attr("align")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "start".to_string() });
+                    let side_offset = get_attr("side_offset")
+                        .or_else(|| get_attr("sideOffset"))
+                        .map(|e| quote_length_f32(e))
+                        .unwrap_or_else(|| quote! { 4.0f32 });
+                    let focus_id = get_attr("focus_id")
+                        .or_else(|| get_attr("focusId"))
+                        .or_else(|| get_attr("triggerId"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let strategy = get_attr("strategy")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let pos = get_attr("pos")
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let x = get_attr("x")
+                        .map(|e| quote_length_f32(e))
+                        .unwrap_or_else(|| quote! { 0.0f32 });
+                    let y = get_attr("y")
+                        .map(|e| quote_length_f32(e))
+                        .unwrap_or_else(|| quote! { 0.0f32 });
+                    let gap = get_attr("gap")
+                        .map(|e| quote_length_f32(e))
+                        .unwrap_or_else(|| quote! { 0.0f32 });
+                    let kind = get_attr("kind")
+                        .map(|e| {
+                            quote! {
+                                rui::utils::anchored_overlay::parse_overlay_kind(&(#e).to_string())
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            quote! { rui::app::portal_overlay::OverlayKind::Popover }
+                        });
+                    let motion = get_attr("motion")
+                        .map(|e| {
+                            quote! {
+                                rui::utils::anchored_overlay::parse_floating_motion(&(#e).to_string())
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            quote! { rui::utils::anchored_overlay::FloatingMotionKind::Fade }
+                        });
+                    let match_trigger = get_attr("match_trigger_width")
+                        .or_else(|| get_attr("matchTriggerWidth"))
+                        .map(|e| quote! { (#e) })
+                        .unwrap_or_else(|| quote! { false });
+                    let max_h = get_attr("max_h")
+                        .or_else(|| get_attr("maxH"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let width = get_attr("width")
+                        .or_else(|| get_attr("w"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::utils::anchored_overlay::anchored_overlay_content_from_rsx(
+                            rui::utils::anchored_overlay::AnchoredOverlayContentOpts {
+                                placement: None,
+                                placement_mode: #placement_mode,
+                                side: #side,
+                                align: #align,
+                                side_offset: #side_offset,
+                                focus_id: #focus_id,
+                                strategy: #strategy,
+                                pos: #pos,
+                                x: #x,
+                                y: #y,
+                                gap: #gap,
+                                kind: #kind,
+                                motion: #motion,
+                                match_trigger_width: #match_trigger,
+                                max_h: #max_h,
+                                width: #width,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "ViewportModalContent" {
+                    let motion = get_attr("motion")
+                        .map(|e| {
+                            quote! {
+                                rui::utils::viewport_modal::parse_modal_motion(&(#e).to_string())
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            quote! { rui::utils::viewport_modal::ModalSurfaceMotion::DialogFade }
+                        });
+                    let raw_stage = get_attr("raw_stage")
+                        .or_else(|| get_attr("rawStage"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::utils::viewport_modal::viewport_modal_content_from_rsx(
+                            rui::utils::viewport_modal::ViewportModalContentOpts {
+                                motion: #motion,
+                                raw_stage: #raw_stage,
                             },
                             move || #child_el,
                         )
@@ -4139,6 +4442,7 @@ fn expand_node(
                                 side_offset: #side_offset,
                                 class: #class,
                                 width: #width,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4457,6 +4761,7 @@ fn expand_node(
                             rui::components::ContextMenuContentOpts {
                                 placement: #placement,
                                 class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4534,6 +4839,7 @@ fn expand_node(
                             rui::components::MenubarContentOpts {
                                 placement: #placement,
                                 class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4569,6 +4875,7 @@ fn expand_node(
                         rui::components::navigation_menu_content(
                             rui::components::NavigationMenuContentOpts {
                                 class: #class,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4740,6 +5047,7 @@ fn expand_node(
                                 max_height: #max_height,
                                 placement: #placement,
                                 scroll_selected: #scroll_selected,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -4889,6 +5197,7 @@ fn expand_node(
                                 min_height: #min_height,
                                 max_height: #max_height,
                                 placement: #placement,
+                                style: None,
                             },
                             move || #child_el,
                         )
@@ -5907,6 +6216,8 @@ fn expand_node(
                                 | "text_color"
                                 | "font_weight"
                                 | "text_weight"
+                                | "font_family"
+                                | "text_font"
                                 | "flex_grow"
                                 | "flex_shrink"
                                 | "grow"
@@ -6043,6 +6354,16 @@ fn expand_node(
                                 | "animationRangeStart"
                                 | "animation_range_end"
                                 | "animationRangeEnd"
+                                | "clip_path"
+                                | "clipPath"
+                                | "clip_path_name"
+                                | "clipPathName"
+                                | "offset_path"
+                                | "offsetPath"
+                                | "offset_distance"
+                                | "offsetDistance"
+                                | "offset_rotate"
+                                | "offsetRotate"
                                 | "shadow"
                                 | "box_shadow"
                                 | "boxShadow"
@@ -6269,11 +6590,7 @@ fn expand_node(
                             for warn in parse_utility_unknown_warnings(value) {
                                 base_calls.push(warn);
                             }
-                            if let Some(lit) = class_lit_str(value) {
-                                chrome_binds.push(quote! {
-                                    __rui_el = rui::style::with_class_list(__rui_el, #lit);
-                                });
-                            }
+                            chrome_binds.push(quote_apply_class_list(value));
                         } else if matches!(attr_name, "leading" | "text_leading") {
                             // 与原生节点分支一致：`leading="normal"` 等不能走 `IntoF32 for &str`（会按 CSS 长度解析失败 → 0 → 行高≈0，文本被裁掉）。
                             let s = if let syn::Expr::Lit(expr_lit) = value {
@@ -6288,8 +6605,10 @@ fn expand_node(
                             let call = match s.as_deref() {
                                 Some("none") => quote! { b = b.leading_none(); },
                                 Some("tight") => quote! { b = b.leading_tight(); },
+                                Some("snug") => quote! { b = b.leading_snug(); },
                                 Some("normal") => quote! { b = b.leading_normal(); },
                                 Some("relaxed") => quote! { b = b.leading_relaxed(); },
+                                Some("loose") => quote! { b = b.leading_loose(); },
                                 _ => {
                                     quote! { b = b.leading(rui::core::tree::IntoF32Raw::into_f32_raw(#value)); }
                                 }
@@ -6326,6 +6645,7 @@ fn expand_node(
                                 "padding" => "p",
                                 "color" | "text_color" => "text_color",
                                 "text_weight" => "font_weight",
+                                "text_font" => "font_family",
                                 "textDecoration" => "text_decoration",
                                 "textDecorationLine" => "text_decoration_line",
                                 "textDecorationStyle" => "text_decoration_style",
@@ -6449,6 +6769,9 @@ fn expand_node(
                         let final_attr = if name_str == "Input" && attr_str == "type" {
                             // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
                             syn::Ident::new("input_type", attr.span())
+                        } else if name_str == "Label" && attr_str == "for" {
+                            // Solid `for` → `for_target`（原生 GUI 命名；`r#for` 仍可作为 Builder 别名）。
+                            syn::Ident::new("for_target", attr.span())
                         } else if name_str == "ToggleGroup" && attr_str == "type" {
                             // ShadCN `type="single|multiple"` → prop `selection`（避免 Rust 关键字）。
                             syn::Ident::new("selection", attr.span())
@@ -6523,7 +6846,7 @@ fn expand_node(
                                 }
                                 "messageId" => syn::Ident::new("message_id", attr.span()),
                                 "scrollAnchor" => syn::Ident::new("scroll_anchor", attr.span()),
-                                // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
+                                // Solid `for`（非 Label 组件仍走 raw ident；Label 已在上方映射为 `for_target`）
                                 "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),
                             }
@@ -7214,7 +7537,7 @@ fn expand_node(
                     continue;
                 }
                 match attr_str.as_str() {
-                    "w" | "width" | "inline_size" | "inlineSize" => {
+                    "w" | "width" => {
                         if expr_reads_get(value) && parse_min_max_call(value).is_none() {
                             let idx = *node_counter;
                             *node_counter += 1;
@@ -7231,6 +7554,25 @@ fn expand_node(
                             });
                         } else {
                             element = apply_min_max_size_expr(element, value, "w");
+                        }
+                    }
+                    "inline_size" | "inlineSize" => {
+                        if expr_reads_get(value) && parse_min_max_call(value).is_none() {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "inline_size";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_inline#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.inline_size(#value) };
                         }
                     }
                     "max_w" | "maxWidth" | "max_width" => {
@@ -7271,7 +7613,7 @@ fn expand_node(
                             element = quote! { #element.min_w(#value) };
                         }
                     }
-                    "h" | "height" | "block_size" | "blockSize" => {
+                    "h" | "height" => {
                         if expr_reads_get(value) && parse_min_max_call(value).is_none() {
                             let idx = *node_counter;
                             *node_counter += 1;
@@ -7288,6 +7630,25 @@ fn expand_node(
                             });
                         } else {
                             element = apply_min_max_size_expr(element, value, "h");
+                        }
+                    }
+                    "block_size" | "blockSize" => {
+                        if expr_reads_get(value) && parse_min_max_call(value).is_none() {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "block_size";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_block#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.block_size(#value) };
                         }
                     }
                     "max_h" | "maxHeight" | "max_height" => {
@@ -7530,6 +7891,9 @@ fn expand_node(
                             #element.font_weight(rui::core::tree::IntoF32Raw::into_f32_raw(#value))
                         }
                     }
+                    "font_family" | "text_font" => {
+                        element = quote! { #element.font_family(#value) }
+                    }
                     "underline" => element = quote! { #element.underline(#value) },
                     "text_decoration" | "textDecoration" | "decoration" => {
                         element = quote! { #element.text_decoration(#value) }
@@ -7592,6 +7956,12 @@ fn expand_node(
                             } else {
                                 element = quote! { #element.text_leading_tight() }
                             }
+                        } else if s == "snug" {
+                            if is_custom {
+                                element = quote! { #element.leading_snug() }
+                            } else {
+                                element = quote! { #element.text_leading_snug() }
+                            }
                         } else if s == "normal" {
                             if is_custom {
                                 element = quote! { #element.leading_normal() }
@@ -7603,6 +7973,12 @@ fn expand_node(
                                 element = quote! { #element.leading_relaxed() }
                             } else {
                                 element = quote! { #element.text_leading_relaxed() }
+                            }
+                        } else if s == "loose" {
+                            if is_custom {
+                                element = quote! { #element.leading_loose() }
+                            } else {
+                                element = quote! { #element.text_leading_loose() }
                             }
                         } else if is_custom {
                             let v = quote_unitless_f32(value);
@@ -7667,6 +8043,9 @@ fn expand_node(
                     }
                     "m" | "margin" => element = quote! { #element.m(#value) },
                     "overflow" => element = quote! { #element.overflow(#value) },
+                    "writing_mode" | "writingMode" => {
+                        element = quote! { #element.writing_mode(#value) }
+                    }
                     "overflow_x" | "overflowX" => element = quote! { #element.overflow_x(#value) },
                     "overflow_y" | "overflowY" => element = quote! { #element.overflow_y(#value) },
                     "aspect_ratio" | "aspect-ratio" | "aspectRatio" => {
@@ -7950,6 +8329,21 @@ fn expand_node(
                     "css_transform" | "cssTransform" => {
                         element = quote! { #element.css_transform(#value) }
                     }
+                    "clip_path" | "clipPath" | "clip-path" => {
+                        element = quote! { #element.clip_path(#value) }
+                    }
+                    "clip_path_name" | "clipPathName" => {
+                        element = quote! { #element.clip_path_name(#value) }
+                    }
+                    "offset_path" | "offsetPath" | "offset-path" => {
+                        element = quote! { #element.offset_path(#value) }
+                    }
+                    "offset_distance" | "offsetDistance" | "offset-distance" => {
+                        element = quote! { #element.offset_distance(#value) }
+                    }
+                    "offset_rotate" | "offsetRotate" | "offset-rotate" => {
+                        element = quote! { #element.offset_rotate(#value) }
+                    }
                     "transform_origin" | "transformOrigin" | "transform-origin" => {
                         element = quote! { #element.transform_origin(#value) }
                     }
@@ -8091,6 +8485,26 @@ fn class_lit_str(value: &Expr) -> Option<syn::LitStr> {
     Some(lit_str.clone())
 }
 
+/// `class="lit"` → `with_class_list`; `class={expr}` → same, via `AsRef<str>` (build-time snapshot).
+/// Reactive `class={sig.get()}` is handled by `bind_class` before this runs.
+fn quote_apply_class_list(value: &Expr) -> proc_macro2::TokenStream {
+    if let Some(lit) = class_lit_str(value) {
+        quote! {
+            __rui_el = rui::style::with_class_list(__rui_el, #lit);
+        }
+    } else {
+        quote! {
+            {
+                let __rui_class = #value;
+                __rui_el = rui::style::with_class_list(
+                    __rui_el,
+                    ::std::convert::AsRef::<str>::as_ref(&__rui_class),
+                );
+            }
+        }
+    }
+}
+
 fn parse_utility_unknown_warnings(value: &Expr) -> Vec<proc_macro2::TokenStream> {
     let Some(lit_str) = class_lit_str(value) else {
         return Vec::new();
@@ -8117,11 +8531,7 @@ fn parse_utility_unknown_warnings(value: &Expr) -> Vec<proc_macro2::TokenStream>
 
 fn parse_utility_calls(value: &Expr) -> Vec<proc_macro2::TokenStream> {
     let mut out = parse_utility_unknown_warnings(value);
-    if let Some(lit) = class_lit_str(value) {
-        out.push(quote! {
-            __rui_el = rui::style::with_class_list(__rui_el, #lit);
-        });
-    }
+    out.push(quote_apply_class_list(value));
     out
 }
 

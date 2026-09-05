@@ -87,6 +87,7 @@ use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::reactive::bind_prop;
+use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::components::kbd::kbd;
@@ -1008,13 +1009,11 @@ fn apply_class(el: Element, class: Option<String>) -> Element {
 
 /// `parts` first, then the local slot class (later utilities win on conflict).
 fn merge_slot_class(part: Option<&str>, local: Option<&str>) -> Option<String> {
-    let part = part.map(str::trim).filter(|s| !s.is_empty());
-    let local = local.map(str::trim).filter(|s| !s.is_empty());
-    match (part, local) {
-        (None, None) => None,
-        (Some(a), None) => Some(a.to_string()),
-        (None, Some(b)) => Some(b.to_string()),
-        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+    let merged = crate::style::classes([part, local]);
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
     }
 }
 
@@ -1975,6 +1974,133 @@ pub fn QuestionnaireSubmit(class: Option<String>, children: Option<Element>) -> 
     )
 }
 
+crate::impl_simple_slot_builder!(
+    QuestionnaireTitleBuilder,
+    questionnaire_title,
+    QuestionnaireTitle,
+    QuestionnaireTitleProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireDescriptionBuilder,
+    questionnaire_description,
+    QuestionnaireDescription,
+    QuestionnaireDescriptionProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireChoicesBuilder,
+    questionnaire_choices,
+    QuestionnaireChoices,
+    QuestionnaireChoicesProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireChoiceDescriptionBuilder,
+    questionnaire_choice_description,
+    QuestionnaireChoiceDescription,
+    QuestionnaireChoiceDescriptionProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireProgressBuilder,
+    questionnaire_progress,
+    QuestionnaireProgress,
+    QuestionnaireProgressProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireErrorBuilder,
+    questionnaire_error,
+    QuestionnaireError,
+    QuestionnaireErrorProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireActionsBuilder,
+    questionnaire_actions,
+    QuestionnaireActions,
+    QuestionnaireActionsProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnairePreviousBuilder,
+    questionnaire_previous,
+    QuestionnairePrevious,
+    QuestionnairePreviousProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireSkipBuilder,
+    questionnaire_skip,
+    QuestionnaireSkip,
+    QuestionnaireSkipProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireNextBuilder,
+    questionnaire_next,
+    QuestionnaireNext,
+    QuestionnaireNextProps
+);
+crate::impl_simple_slot_builder!(
+    QuestionnaireSubmitBuilder,
+    questionnaire_submit,
+    QuestionnaireSubmit,
+    QuestionnaireSubmitProps
+);
+
+pub struct QuestionnaireChoiceBuilder {
+    value: String,
+    disabled: bool,
+    default_checked: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn questionnaire_choice(value: impl Into<String>) -> QuestionnaireChoiceBuilder {
+    QuestionnaireChoiceBuilder {
+        value: value.into(),
+        disabled: false,
+        default_checked: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl QuestionnaireChoiceBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+    pub fn default_checked(mut self, v: bool) -> Self {
+        self.default_checked = v;
+        self
+    }
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<QuestionnaireChoiceBuilder> for Element {
+    fn from(builder: QuestionnaireChoiceBuilder) -> Self {
+        let el = QuestionnaireChoice(QuestionnaireChoiceProps {
+            value: Some(builder.value),
+            disabled: Some(builder.disabled),
+            default_checked: Some(builder.default_checked),
+            class: None,
+            children: crate::components::base::packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for QuestionnaireChoiceBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
 // ── Builder ───────────────────────────────────────────────────────────────────
 
 pub struct QuestionnaireQuestionBuilder {
@@ -2094,6 +2220,8 @@ impl QuestionnaireBuilder {
         self
     }
     /// Default `class` tokens for auto-assembled slots (Progress, Title, Choices, …).
+    /// Sugar = default appearance; per-slot class/style uses the composition builders
+    /// (`questionnaire_title`, `questionnaire_choice`, …), not extra `*PartsClass` maps.
     pub fn parts(
         mut self,
         build: impl FnOnce(QuestionnairePartsClass) -> QuestionnairePartsClass,
@@ -2436,5 +2564,29 @@ mod tests {
             Some("gap-8 p-2")
         );
         assert_eq!(merge_slot_class(Some("  "), Some("")), None);
+    }
+
+    #[test]
+    fn builder_title_style() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            questionnaire("q-chrome").child(|| {
+                questionnaire_item_scope("q1", false, false, false, false, None, None, || {
+                    questionnaire_title()
+                        .style(|b| b.text_size(20.0))
+                        .text("Hello")
+                        .into()
+                })
+            })
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "questionnaire_title .style(|b| b.text_size(20)) must land on the title"
+        );
     }
 }

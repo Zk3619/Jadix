@@ -67,10 +67,11 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
-use crate::style::{parse_text_color, with_class_list};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::popup::{
     disarm_underlay_close, mark_floating_with_gap, mount_anchored_overlay, panel_block_clicks,
@@ -270,7 +271,7 @@ pub fn PopoverTrigger(id: String, children: Option<Element>) -> Element {
 }
 
 /// `PopoverContent` 选项（`ui!` / [`popover_content`] 共用）。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PopoverContentOpts {
     /// `top` / `bottom` / `left` / `right`（默认 `bottom`）。
     pub side: String,
@@ -284,6 +285,8 @@ pub struct PopoverContentOpts {
     pub strategy: Option<String>,
     /// 面板宽；默认 `18rem`（`w-72`）。空 / `auto` → 内容宽。
     pub width: Option<String>,
+    /// Layout/paint on the panel (same surface as RSX `base`).
+    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for PopoverContentOpts {
@@ -295,8 +298,13 @@ impl Default for PopoverContentOpts {
             class: None,
             strategy: None,
             width: None,
+            style: None,
         }
     }
+}
+
+impl PopoverContentOpts {
+    crate::impl_content_opts_chrome!();
 }
 
 /// ShadCN `cn-popover-content` 面板表面（无 Portal / 无 floating）。
@@ -337,7 +345,7 @@ pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 's
     let trigger_fid = ctx.trigger_fid;
     let placement = popover_side_align_to_placement(&opts.side, &opts.align);
     let side_offset = opts.side_offset;
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let strategy = opts.strategy.filter(|s| !s.trim().is_empty());
     let width = opts.width;
     let view_id = format!("{id}__popover_view");
@@ -355,9 +363,7 @@ pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 's
         };
 
         let mut panel = popover_surface(body(), width.as_deref());
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         let anchor = trigger_fid.peek();
         mark_floating_with_gap(&mut panel, &id, &anchor, placement, side_offset);
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
@@ -428,6 +434,65 @@ pub fn PopoverDescription(children: Option<Element>) -> Element {
     match children {
         Some(c) => c.text_size(14.0).font_weight(400.0).text_color(muted),
         None => Element::from(text("").size(14.0).weight(400.0).color(muted)),
+    }
+}
+
+impl_simple_slot_builder!(
+    PopoverTriggerBuilder,
+    popover_trigger,
+    PopoverTrigger,
+    PopoverTriggerProps
+);
+impl_simple_slot_builder!(
+    PopoverHeaderBuilder,
+    popover_header,
+    PopoverHeader,
+    PopoverHeaderProps
+);
+impl_simple_slot_builder!(
+    PopoverTitleBuilder,
+    popover_title,
+    PopoverTitle,
+    PopoverTitleProps
+);
+impl_simple_slot_builder!(
+    PopoverDescriptionBuilder,
+    popover_description,
+    PopoverDescription,
+    PopoverDescriptionProps
+);
+
+pub struct PopoverContentSlotBuilder {
+    opts: PopoverContentOpts,
+}
+
+pub fn popover_content_slot() -> PopoverContentSlotBuilder {
+    PopoverContentSlotBuilder {
+        opts: PopoverContentOpts::default(),
+    }
+}
+
+impl PopoverContentSlotBuilder {
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.opts = self.opts.class(classes);
+        self
+    }
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.opts = self.opts.style(f);
+        self
+    }
+    pub fn side(mut self, side: impl Into<String>) -> Self {
+        self.opts.side = side.into();
+        self
+    }
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        popover_content(self.opts, body)
     }
 }
 

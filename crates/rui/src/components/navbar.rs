@@ -45,7 +45,9 @@
 
 use rui_macros::component;
 
+use crate::components::base::{data_slot, ensure_data_slot, packed_children, SlotChrome};
 use crate::core::tree::Element;
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
 use crate::style::with_class_list;
 use crate::tokens;
@@ -179,54 +181,266 @@ pub fn NavbarActions(class: Option<String>, children: Option<Element>) -> Elemen
 // Builder
 // ---------------------------------------------------------------------------
 
+pub struct NavbarBrandBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn navbar_brand() -> NavbarBrandBuilder {
+    NavbarBrandBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl NavbarBrandBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for NavbarBrandBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<NavbarBrandBuilder> for Element {
+    fn from(builder: NavbarBrandBuilder) -> Self {
+        let el = NavbarBrand(NavbarBrandProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct NavbarCenterBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+    justify: Option<String>,
+}
+
+pub fn navbar_center() -> NavbarCenterBuilder {
+    NavbarCenterBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+        justify: None,
+    }
+}
+
+impl NavbarCenterBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn justify(mut self, kw: impl Into<String>) -> Self {
+        self.justify = Some(kw.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for NavbarCenterBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<NavbarCenterBuilder> for Element {
+    fn from(builder: NavbarCenterBuilder) -> Self {
+        let el = NavbarCenter(NavbarCenterProps {
+            class: None,
+            justify: builder.justify,
+            children: packed_children(builder.children),
+            base: None,
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct NavbarActionsBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn navbar_actions() -> NavbarActionsBuilder {
+    NavbarActionsBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl NavbarActionsBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for NavbarActionsBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<NavbarActionsBuilder> for Element {
+    fn from(builder: NavbarActionsBuilder) -> Self {
+        let el = NavbarActions(NavbarActionsProps {
+            class: None,
+            children: packed_children(builder.children),
+            base: None,
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct NavbarBuilder {
     id: String,
-    class: Option<String>,
+    chrome: SlotChrome,
     brand: Option<Element>,
     center: Vec<Element>,
     /// 中栏主轴对齐；默认与 RSX 相同（`start`），由调用方覆盖。
     center_justify: Option<String>,
     actions: Vec<Element>,
+    children: Vec<Element>,
 }
 
 /// 展示型入口：默认无用户 id（WP-2.8）。需要热重载槽时再 `.id(...)`。
 pub fn navbar() -> NavbarBuilder {
     NavbarBuilder {
         id: String::new(),
-        class: None,
+        chrome: SlotChrome::default(),
         brand: None,
         center: Vec::new(),
         center_justify: None,
         actions: Vec::new(),
+        children: Vec::new(),
     }
 }
 
 impl NavbarBuilder {
+    impl_slot_chrome_methods!();
+
     /// 可选槽位 / 测试选择器；空串等同未设置。
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
     }
-    pub fn class(mut self, class: impl Into<String>) -> Self {
-        self.class = Some(class.into());
-        self
-    }
+
     pub fn brand(mut self, el: impl Into<Element>) -> Self {
-        self.brand = Some(el.into());
+        let el = el.into();
+        self.brand = Some(ensure_data_slot(el, SLOT_BRAND, |c| {
+            navbar_brand().child(c).into()
+        }));
         self
     }
+
+    pub fn brand_with(mut self, f: impl FnOnce(NavbarBrandBuilder) -> NavbarBrandBuilder) -> Self {
+        self.brand = Some(f(navbar_brand()).into());
+        self
+    }
+
     pub fn center_child(mut self, el: impl Into<Element>) -> Self {
         self.center.push(el.into());
         self
     }
+
+    pub fn center_with(
+        mut self,
+        f: impl FnOnce(NavbarCenterBuilder) -> NavbarCenterBuilder,
+    ) -> Self {
+        self.center.push(f(navbar_center()).into());
+        self
+    }
+
     /// 覆盖中栏主轴对齐（默认 `start`，与 RSX `<NavbarCenter>` 一致）。
     pub fn center_justify(mut self, kw: impl Into<String>) -> Self {
         self.center_justify = Some(kw.into());
         self
     }
+
     pub fn action(mut self, el: impl Into<Element>) -> Self {
         self.actions.push(el.into());
         self
+    }
+
+    pub fn actions_with(
+        mut self,
+        f: impl FnOnce(NavbarActionsBuilder) -> NavbarActionsBuilder,
+    ) -> Self {
+        self.actions.push(f(navbar_actions()).into());
+        self
+    }
+
+    pub fn child(mut self, el: impl Into<Element>) -> Self {
+        self.children.push(el.into());
+        self
+    }
+}
+
+fn push_center_slots(
+    kids: &mut Vec<Element>,
+    center: Vec<Element>,
+    center_justify: Option<String>,
+) {
+    if center.is_empty() {
+        return;
+    }
+    if center.len() == 1 && data_slot(&center[0]) == Some(SLOT_CENTER) {
+        kids.push(center.into_iter().next().expect("center slot"));
+        return;
+    }
+    let mut unslotted = Vec::new();
+    for c in center {
+        if data_slot(&c) == Some(SLOT_CENTER) {
+            kids.push(c);
+        } else {
+            unslotted.push(c);
+        }
+    }
+    if !unslotted.is_empty() {
+        let mut b = navbar_center();
+        if let Some(j) = center_justify {
+            b = b.justify(j);
+        }
+        for c in unslotted {
+            b = b.child(c);
+        }
+        kids.push(b.into());
+    }
+}
+
+fn push_action_slots(kids: &mut Vec<Element>, actions: Vec<Element>) {
+    if actions.is_empty() {
+        return;
+    }
+    if actions.len() == 1 && data_slot(&actions[0]) == Some(SLOT_ACTIONS) {
+        kids.push(actions.into_iter().next().expect("actions slot"));
+        return;
+    }
+    let mut unslotted = Vec::new();
+    for a in actions {
+        if data_slot(&a) == Some(SLOT_ACTIONS) {
+            kids.push(a);
+        } else {
+            unslotted.push(a);
+        }
+    }
+    if !unslotted.is_empty() {
+        let mut b = navbar_actions();
+        for a in unslotted {
+            b = b.child(a);
+        }
+        kids.push(b.into());
     }
 }
 
@@ -234,47 +448,27 @@ impl From<NavbarBuilder> for Element {
     fn from(builder: NavbarBuilder) -> Self {
         let NavbarBuilder {
             id,
-            class,
+            chrome,
             brand,
             center,
             center_justify,
             actions,
+            children,
         } = builder;
         let mut kids = Vec::new();
         if let Some(b) = brand {
-            kids.push(NavbarBrand(NavbarBrandProps {
-                class: None,
-                children: Some(b),
-                base: None,
-            }));
+            kids.push(b);
         }
-        if !center.is_empty() {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            kids.push(NavbarCenter(NavbarCenterProps {
-                class: None,
-                justify: center_justify,
-                children: Some(frag.children(center)),
-                base: None,
-            }));
-        }
-        if !actions.is_empty() {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            kids.push(NavbarActions(NavbarActionsProps {
-                class: None,
-                children: Some(frag.children(actions)),
-                base: None,
-            }));
-        }
-        let mut frag = Element::new();
-        frag.set_attr("rui_fragment", "1");
-        Navbar(NavbarProps {
+        push_center_slots(&mut kids, center, center_justify);
+        push_action_slots(&mut kids, actions);
+        kids.extend(children);
+        let el = Navbar(NavbarProps {
             id,
-            class,
-            children: Some(frag.children(kids)),
+            class: None,
+            children: packed_children(kids),
             base: None,
-        })
+        });
+        chrome.apply(el)
     }
 }
 
@@ -401,6 +595,39 @@ mod tests {
         assert_eq!(
             el.style.justify_content,
             Some(taffy::style::JustifyContent::FLEX_START)
+        );
+    }
+
+    #[test]
+    fn navbar_brand_with_class_and_style_text_size() {
+        let el: Element = navbar()
+            .brand_with(|b| {
+                b.class("custom-brand")
+                    .style(|s| s.text_size(18.0))
+                    .child(Element::new().text("RUI"))
+            })
+            .into();
+        let brand = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_BRAND))
+            .expect("brand slot");
+        assert!(brand
+            .attrs
+            .get("rui_utility_class")
+            .map(String::as_str)
+            .is_some_and(|c| c.contains("custom-brand")));
+        assert_eq!(brand.text_style.size_resolved(), 18.0);
+    }
+
+    #[test]
+    fn navbar_brand_preserves_existing_slot() {
+        let existing: Element = navbar_brand().child(Element::new().text("Logo")).into();
+        let el: Element = navbar().brand(existing).into();
+        assert_eq!(el.children.len(), 1);
+        assert_eq!(
+            el.children[0].attrs.get(ATTR_SLOT).map(String::as_str),
+            Some(SLOT_BRAND)
         );
     }
 }

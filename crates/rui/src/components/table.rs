@@ -75,10 +75,12 @@
 use std::rc::Rc;
 
 use crate::app::reactive::reactive_view;
+use crate::components::base::{packed_children, SlotChrome, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::virtual_list::virtual_list;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
+use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
 use crate::primitives::text::text;
@@ -651,6 +653,218 @@ pub fn TableCaption(children: Option<Element>) -> Element {
     mark_slot(cap, SLOT_CAPTION)
 }
 
+impl_simple_slot_builder!(
+    TableHeaderBuilder,
+    table_header,
+    TableHeader,
+    TableHeaderProps
+);
+impl_simple_slot_builder!(TableBodyBuilder, table_body, TableBody, TableBodyProps);
+impl_simple_slot_builder!(
+    TableFooterBuilder,
+    table_footer,
+    TableFooter,
+    TableFooterProps
+);
+impl_simple_slot_builder!(
+    TableCaptionBuilder,
+    table_caption,
+    TableCaption,
+    TableCaptionProps
+);
+impl_simple_slot_builder!(TableViewBuilder, ui_table, Table, TableProps);
+
+pub struct TableRowBuilder {
+    id: String,
+    selected: bool,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn table_row() -> TableRowBuilder {
+    TableRowBuilder {
+        id: String::new(),
+        selected: false,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TableRowBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn selected(mut self, v: bool) -> Self {
+        self.selected = v;
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+}
+
+impl From<TableRowBuilder> for Element {
+    fn from(builder: TableRowBuilder) -> Self {
+        let el = TableRow(TableRowProps {
+            id: builder.id,
+            selected: Some(builder.selected),
+            on_click: Default::default(),
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for TableRowBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct TableHeadBuilder {
+    w: Option<String>,
+    align: Option<String>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn table_head() -> TableHeadBuilder {
+    TableHeadBuilder {
+        w: None,
+        align: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TableHeadBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn w(mut self, w: impl Into<String>) -> Self {
+        self.w = Some(w.into());
+        self
+    }
+
+    pub fn align(mut self, a: impl Into<String>) -> Self {
+        self.align = Some(a.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<TableHeadBuilder> for Element {
+    fn from(builder: TableHeadBuilder) -> Self {
+        let el = TableHead(TableHeadProps {
+            w: builder.w,
+            align: builder.align,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for TableHeadBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+pub struct TableCellBuilder {
+    w: Option<String>,
+    align: Option<String>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn table_cell() -> TableCellBuilder {
+    TableCellBuilder {
+        w: None,
+        align: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl TableCellBuilder {
+    crate::impl_slot_chrome_methods!();
+
+    pub fn w(mut self, w: impl Into<String>) -> Self {
+        self.w = Some(w.into());
+        self
+    }
+
+    pub fn align(mut self, a: impl Into<String>) -> Self {
+        self.align = Some(a.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+}
+
+impl From<TableCellBuilder> for Element {
+    fn from(builder: TableCellBuilder) -> Self {
+        let el = TableCell(TableCellProps {
+            w: builder.w,
+            align: builder.align,
+            children: packed_children(builder.children),
+            base: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+impl crate::core::tree::IntoElementList for TableCellBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl TableViewBuilder {
+    pub fn header_with(self, f: impl FnOnce(TableHeaderBuilder) -> TableHeaderBuilder) -> Self {
+        self.child(f(table_header()))
+    }
+    pub fn body_with(self, f: impl FnOnce(TableBodyBuilder) -> TableBodyBuilder) -> Self {
+        self.child(f(table_body()))
+    }
+    pub fn footer_with(self, f: impl FnOnce(TableFooterBuilder) -> TableFooterBuilder) -> Self {
+        self.child(f(table_footer()))
+    }
+    pub fn caption(self, text: impl Into<String>) -> Self {
+        self.child(table_caption().text(text))
+    }
+}
+
 // ── Column / state（TanStack 对齐）───────────────────────────────────────────
 
 #[derive(Clone)]
@@ -739,6 +953,7 @@ pub struct TableBuilder {
     pagination: Option<Signal<TablePaginationState>>,
     caption: Option<String>,
     cell: Rc<dyn Fn(usize, usize) -> String>,
+    style: Option<SlotStyleFn>,
 }
 
 /// 默认密度数据表预设（ShadCN 外观 + TanStack columns/data）。
@@ -757,6 +972,7 @@ pub fn table(id: impl Into<String>) -> TableBuilder {
         pagination: None,
         caption: None,
         cell: Rc::new(|r, c| format!("{r}:{c}")),
+        style: None,
     }
 }
 
@@ -851,6 +1067,17 @@ impl TableBuilder {
         self.cell = Rc::new(f);
         self
     }
+
+    pub fn style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.style = Some(std::rc::Rc::new(f));
+        self
+    }
 }
 
 impl From<&str> for TableDensity {
@@ -928,6 +1155,7 @@ impl From<TableBuilder> for Element {
             pagination,
             caption,
             cell,
+            style,
         } = builder;
 
         let header_h = density.header_h();
@@ -1172,6 +1400,9 @@ impl From<TableBuilder> for Element {
             root.set_attr("rui_table", "1");
             root.set_attr("data-slot", "table-container");
             root.template_id = Some(id.clone());
+            if let Some(ref style) = style {
+                root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
+            }
             root
         })
     }
@@ -1264,6 +1495,26 @@ mod tests {
         assert_eq!(s1.dir, TableSortDir::Asc);
         let s2 = cycle_sort(&s1, "a");
         assert_eq!(s2.dir, TableSortDir::Desc);
+    }
+
+    #[test]
+    fn builder_ui_table_header_cell_style() {
+        let el: Element = ui_table()
+            .header_with(|h| {
+                h.child(
+                    table_row().child(table_head().style(|b| b.text_size(20.0)).text("Invoice")),
+                )
+            })
+            .into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "table_head .style(|b| b.text_size(20)) must land on the header tree"
+        );
     }
 
     #[test]

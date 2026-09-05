@@ -48,10 +48,10 @@
 //! - `EmptyMedia variant="icon"` applies muted rounded icon chrome; `default` is transparent.
 //! - 展示型空状态：无受控状态；标题/说明为子节点或 Builder 文案 helper。
 
-use crate::components::base::BaseComponentBuilder;
+use crate::components::base::{packed_children, BaseComponentBuilder, SlotChrome};
 use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -346,91 +346,166 @@ pub fn EmptyContent(
 
 pub struct EmptyHeaderBuilder {
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn empty_header() -> EmptyHeaderBuilder {
     EmptyHeaderBuilder {
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl EmptyHeaderBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
     }
 
     pub fn media(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(EmptyMedia(EmptyMediaProps {
-            variant: Some(EmptyMediaVariant::Default),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(empty_media().child(child).into());
         self
     }
 
     pub fn media_icon(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(EmptyMedia(EmptyMediaProps {
-            variant: Some(EmptyMediaVariant::Icon),
-            children: Some(child.into()),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(empty_media().icon().child(child).into());
+        self
+    }
+
+    pub fn media_with(mut self, f: impl FnOnce(EmptyMediaBuilder) -> EmptyMediaBuilder) -> Self {
+        self.children.push(f(empty_media()).into());
         self
     }
 
     pub fn title(mut self, text: impl Into<String>) -> Self {
-        self.children.push(EmptyTitle(EmptyTitleProps {
-            children: Some(Element::new().text(text.into())),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(empty_title().text(text).into());
+        self
+    }
+
+    pub fn title_with(mut self, f: impl FnOnce(EmptyTitleBuilder) -> EmptyTitleBuilder) -> Self {
+        self.children.push(f(empty_title()).into());
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(EmptyDescription(EmptyDescriptionProps {
-            children: Some(Element::new().text(text.into())),
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(empty_description().text(text).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(EmptyDescriptionBuilder) -> EmptyDescriptionBuilder,
+    ) -> Self {
+        self.children.push(f(empty_description()).into());
         self
     }
 }
 
 impl From<EmptyHeaderBuilder> for Element {
     fn from(builder: EmptyHeaderBuilder) -> Self {
-        EmptyHeader(EmptyHeaderProps {
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+        let el = EmptyHeader(EmptyHeaderProps {
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct EmptyTitleBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn empty_title() -> EmptyTitleBuilder {
+    EmptyTitleBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl EmptyTitleBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<EmptyTitleBuilder> for Element {
+    fn from(builder: EmptyTitleBuilder) -> Self {
+        let el = EmptyTitle(EmptyTitleProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct EmptyDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn empty_description() -> EmptyDescriptionBuilder {
+    EmptyDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl EmptyDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl From<EmptyDescriptionBuilder> for Element {
+    fn from(builder: EmptyDescriptionBuilder) -> Self {
+        let el = EmptyDescription(EmptyDescriptionProps {
+            children: packed_children(builder.children),
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
     }
 }
 
 pub struct EmptyContentBuilder {
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn empty_content() -> EmptyContentBuilder {
     EmptyContentBuilder {
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl EmptyContentBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
         self
@@ -439,24 +514,19 @@ impl EmptyContentBuilder {
 
 impl From<EmptyContentBuilder> for Element {
     fn from(builder: EmptyContentBuilder) -> Self {
-        EmptyContent(EmptyContentProps {
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+        let el = EmptyContent(EmptyContentProps {
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
 pub struct EmptyBuilder {
     id: String,
-    class: String,
+    chrome: SlotChrome,
     children: Vec<Element>,
 }
 
@@ -464,19 +534,16 @@ pub struct EmptyBuilder {
 pub fn empty() -> EmptyBuilder {
     EmptyBuilder {
         id: String::new(),
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: Vec::new(),
     }
 }
 
 impl EmptyBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
-        self
-    }
-
-    pub fn class(mut self, classes: impl Into<String>) -> Self {
-        self.class = classes.into();
         self
     }
 
@@ -490,8 +557,21 @@ impl EmptyBuilder {
         self
     }
 
+    pub fn header_with(mut self, f: impl FnOnce(EmptyHeaderBuilder) -> EmptyHeaderBuilder) -> Self {
+        self.children.push(f(empty_header()).into());
+        self
+    }
+
     pub fn content(mut self, content: impl Into<Element>) -> Self {
         self.children.push(content.into());
+        self
+    }
+
+    pub fn content_with(
+        mut self,
+        f: impl FnOnce(EmptyContentBuilder) -> EmptyContentBuilder,
+    ) -> Self {
+        self.children.push(f(empty_content()).into());
         self
     }
 
@@ -509,40 +589,34 @@ impl crate::core::tree::IntoElementList for EmptyBuilder {
 
 impl From<EmptyBuilder> for Element {
     fn from(builder: EmptyBuilder) -> Self {
-        let children = if builder.children.is_empty() {
-            None
-        } else {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            Some(frag.children(builder.children))
-        };
-        let mut el = Empty(EmptyProps {
+        let el = Empty(EmptyProps {
             id: builder.id,
-            children,
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
         });
-        if !builder.class.trim().is_empty() {
-            el = with_class_list(el, builder.class.trim());
-        }
-        el
+        builder.chrome.apply(el)
     }
 }
 
 pub struct EmptyMediaBuilder {
     variant: EmptyMediaVariant,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn empty_media() -> EmptyMediaBuilder {
     EmptyMediaBuilder {
         variant: EmptyMediaVariant::Default,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl EmptyMediaBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn variant(mut self, variant: impl Into<EmptyMediaVariant>) -> Self {
         self.variant = variant.into();
         self
@@ -561,20 +635,14 @@ impl EmptyMediaBuilder {
 
 impl From<EmptyMediaBuilder> for Element {
     fn from(builder: EmptyMediaBuilder) -> Self {
-        let children = if builder.children.is_empty() {
-            None
-        } else {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            Some(frag.children(builder.children))
-        };
-        EmptyMedia(EmptyMediaProps {
+        let el = EmptyMedia(EmptyMediaProps {
             variant: Some(builder.variant),
-            children,
+            children: packed_children(builder.children),
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 

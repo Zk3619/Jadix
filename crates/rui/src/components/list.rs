@@ -58,13 +58,13 @@
 
 use std::sync::OnceLock;
 
-use crate::components::base::BaseComponentBuilder;
-use crate::components::item::{
-    ItemBuilder, ItemContent, ItemContentProps, ItemDescription, ItemDescriptionProps, ItemTitle,
-    ItemTitleProps,
+use crate::components::base::{
+    ensure_data_slot, packed_children, BaseComponentBuilder, SlotChrome,
 };
+use crate::components::item::{item_content, item_description, item_title, ItemBuilder};
 use crate::core::reactivity::{create_context, provide_context, use_context, Context};
 use crate::core::tree::{parse_text_color, Element};
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::utils::take_packed;
@@ -423,43 +423,191 @@ pub fn ListItem(
 // Builders (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
+pub struct ListHeaderBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn list_header() -> ListHeaderBuilder {
+    ListHeaderBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ListHeaderBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ListHeaderBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ListHeaderBuilder> for Element {
+    fn from(builder: ListHeaderBuilder) -> Self {
+        let el = ListHeader(ListHeaderProps {
+            children: packed_children(builder.children),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ListDescriptionBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn list_description() -> ListDescriptionBuilder {
+    ListDescriptionBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ListDescriptionBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ListDescriptionBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ListDescriptionBuilder> for Element {
+    fn from(builder: ListDescriptionBuilder) -> Self {
+        let el = ListDescription(ListDescriptionProps {
+            children: packed_children(builder.children),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
+pub struct ListItemBuilder {
+    marker: Option<ListMarker>,
+    children: Vec<Element>,
+    chrome: SlotChrome,
+}
+
+pub fn list_item() -> ListItemBuilder {
+    ListItemBuilder {
+        marker: None,
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+    }
+}
+
+impl ListItemBuilder {
+    impl_slot_chrome_methods!();
+
+    pub fn marker(mut self, m: impl Into<ListMarker>) -> Self {
+        self.marker = Some(m.into());
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(content.into()));
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.extend(take_packed(child.into()));
+        self
+    }
+}
+
+impl crate::core::tree::IntoElementList for ListItemBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl From<ListItemBuilder> for Element {
+    fn from(builder: ListItemBuilder) -> Self {
+        let el = ListItem(ListItemProps {
+            marker: builder.marker,
+            children: packed_children(builder.children),
+            class: None,
+            base: None,
+            base_builder: None,
+            ..Default::default()
+        });
+        builder.chrome.apply(el)
+    }
+}
+
 pub struct ListBuilder {
     marker: ListMarker,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn list() -> ListBuilder {
     ListBuilder {
         marker: ListMarker::None,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl ListBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn marker(mut self, m: impl Into<ListMarker>) -> Self {
         self.marker = m.into();
         self
     }
 
     pub fn header(mut self, text: impl Into<String>) -> Self {
-        self.children.push(ListHeader(ListHeaderProps {
-            children: Some(Element::new().text(text.into())),
-            class: None,
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(list_header().text(text).into());
+        self
+    }
+
+    pub fn header_with(mut self, f: impl FnOnce(ListHeaderBuilder) -> ListHeaderBuilder) -> Self {
+        self.children.push(f(list_header()).into());
         self
     }
 
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.children.push(ListDescription(ListDescriptionProps {
-            children: Some(Element::new().text(text.into())),
-            class: None,
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children.push(list_description().text(text).into());
+        self
+    }
+
+    pub fn description_with(
+        mut self,
+        f: impl FnOnce(ListDescriptionBuilder) -> ListDescriptionBuilder,
+    ) -> Self {
+        self.children.push(f(list_description()).into());
         self
     }
 
@@ -469,64 +617,31 @@ impl ListBuilder {
     }
 
     pub fn item(mut self, child: impl Into<Element>) -> Self {
-        self.children.push(ListItem(ListItemProps {
-            marker: None,
-            children: Some(child.into()),
-            class: None,
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        let el = child.into();
+        let el = ensure_data_slot(el, SLOT_ITEM, |c| list_item().child(c).into());
+        self.children.push(el);
+        self
+    }
+
+    pub fn item_with(mut self, f: impl FnOnce(ListItemBuilder) -> ListItemBuilder) -> Self {
+        self.children.push(f(list_item()).into());
         self
     }
 
     /// Plain text row (inherits list `marker` when inside [`List`]).
     pub fn text(mut self, label: impl Into<String>) -> Self {
-        self.children.push(ListItem(ListItemProps {
-            marker: None,
-            children: Some(Element::new().text(label.into())),
-            class: None,
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }));
+        self.children
+            .push(list_item().child(Element::new().text(label.into())).into());
         self
     }
 
     /// Title + description row (lightweight; no Item chrome).
     pub fn text_row(self, title: impl Into<String>, description: impl Into<String>) -> Self {
-        let mut frag = Element::new();
-        frag.set_attr("rui_fragment", "1");
-        self.item(ListItem(ListItemProps {
-            marker: None,
-            children: Some(frag.children(vec![ItemContent(ItemContentProps {
-                children: {
-                    let mut inner = Element::new();
-                    inner.set_attr("rui_fragment", "1");
-                    Some(inner.children(vec![
-                        ItemTitle(ItemTitleProps {
-                            children: Some(Element::new().text(title.into())),
-                            base: None,
-                            base_builder: None,
-                            ..Default::default()
-                        }),
-                        ItemDescription(ItemDescriptionProps {
-                            children: Some(Element::new().text(description.into())),
-                            base: None,
-                            base_builder: None,
-                            ..Default::default()
-                        }),
-                    ]))
-                },
-                base: None,
-                base_builder: None,
-                ..Default::default()
-            })])),
-            class: None,
-            base: None,
-            base_builder: None,
-            ..Default::default()
-        }))
+        self.item(
+            item_content()
+                .child(item_title().text(title))
+                .child(item_description().text(description)),
+        )
     }
 
     /// Rich row — wraps an [`Item`] builder inside [`ListItem`].
@@ -535,22 +650,23 @@ impl ListBuilder {
     }
 }
 
+impl crate::core::tree::IntoElementList for ListBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
 impl From<ListBuilder> for Element {
     fn from(builder: ListBuilder) -> Self {
-        List(ListProps {
+        let el = List(ListProps {
             marker: Some(builder.marker),
-            children: if builder.children.is_empty() {
-                None
-            } else {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                Some(frag.children(builder.children))
-            },
+            children: packed_children(builder.children),
             class: None,
             base: None,
             base_builder: None,
             ..Default::default()
-        })
+        });
+        builder.chrome.apply(el)
     }
 }
 
@@ -653,5 +769,19 @@ mod tests {
             .text("One")
             .text_row("Two", "Second line")
             .into();
+    }
+
+    #[test]
+    fn list_header_with_chrome_applies_text_size() {
+        let el: Element = list()
+            .class("w-full")
+            .header_with(|h| h.class("font-bold").style(|b| b.text_size(18.0)).text("Hi"))
+            .into();
+        let header = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_HEADER))
+            .expect("list header slot");
+        assert_eq!(header.text_style.size, Some(18.0));
     }
 }

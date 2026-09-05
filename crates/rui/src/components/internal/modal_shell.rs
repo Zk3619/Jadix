@@ -2,7 +2,9 @@
 //!
 //! 面板表面与布局仍留在各组件（居中 Dialog vs 贴边 Sheet）。
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode, OverlayZ};
+use crate::app::portal_overlay::{
+    portal_sync, portal_sync_presence, OverlayKind, OverlayMode, OverlayZ,
+};
 use crate::core::reactivity::Signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::overlay::overlay;
@@ -10,9 +12,9 @@ use crate::style::{parse_color, semantic_modal_overlay_scrim, SemanticTone};
 use crate::tokens;
 
 /// 模态遮罩默认不透明度（alpha）。
-pub(crate) const DEFAULT_MODAL_OVERLAY_OPACITY: f32 = 0.25;
+pub const DEFAULT_MODAL_OVERLAY_OPACITY: f32 = 0.25;
 /// 模态遮罩默认 backdrop 模糊（逻辑 px；相对文档示例 `8` 减半，对齐 `backdrop-blur-sm`）。
-pub(crate) const DEFAULT_MODAL_OVERLAY_BLUR: f32 = 2.0;
+pub const DEFAULT_MODAL_OVERLAY_BLUR: f32 = 2.0;
 
 /// Portal underlay / panel z-index（[`modal_sync`]）。
 pub(crate) struct ModalShellZs {
@@ -87,6 +89,20 @@ pub(crate) fn default_modal_overlay_color(color: Option<&str>, opacity: Option<f
 
 pub(crate) fn modal_sync(id: &str, open: Signal<bool>) -> Option<ModalShellZs> {
     let oz: OverlayZ = portal_sync(id, open, OverlayKind::Modal, OverlayMode::Stacked)?;
+    Some(ModalShellZs {
+        underlay: oz.underlay,
+        panel: oz.panel,
+    })
+}
+
+/// Esc / overlay click 关逻辑 `open`；`mounted` 为 true 时仍占栈以便播退场。
+pub(crate) fn modal_sync_presence(
+    id: &str,
+    open: Signal<bool>,
+    mounted: Signal<bool>,
+) -> Option<ModalShellZs> {
+    let oz: OverlayZ =
+        portal_sync_presence(id, open, mounted, OverlayKind::Modal, OverlayMode::Stacked)?;
     Some(ModalShellZs {
         underlay: oz.underlay,
         panel: oz.panel,

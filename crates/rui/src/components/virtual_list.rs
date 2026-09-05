@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::components::base::SlotChrome;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
@@ -51,6 +52,7 @@ pub struct VirtualListBuilder {
     height: f32,
     scrollbar_visibility: String,
     render_item: Rc<dyn Fn(usize) -> Element>,
+    chrome: SlotChrome,
 }
 
 pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
@@ -64,10 +66,12 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
         height: 240.0,
         scrollbar_visibility: "auto".to_string(),
         render_item: Rc::new(|i| Element::new().text(format!("item {i}"))),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl VirtualListBuilder {
+    crate::impl_slot_chrome_methods!();
     pub fn item_count(mut self, n: usize) -> Self {
         self.item_count = n;
         self
@@ -307,6 +311,7 @@ impl From<VirtualListBuilder> for Element {
             height,
             scrollbar_visibility,
             render_item,
+            chrome,
         } = builder;
         let scroll_id = id.clone();
         let scroll_id_sync = scroll_id.clone();
@@ -357,15 +362,17 @@ impl From<VirtualListBuilder> for Element {
             )
         });
 
-        scroll_area(&scroll_id)
-            .overflow_y("auto")
-            .overflow_x("hidden")
-            .scroll_behavior("jump")
-            .scrollbar_visibility(scrollbar_visibility)
-            .w("100%")
-            .h(height)
-            .child(body)
-            .into()
+        chrome.apply(
+            scroll_area(&scroll_id)
+                .overflow_y("auto")
+                .overflow_x("hidden")
+                .scroll_behavior("jump")
+                .scrollbar_visibility(scrollbar_visibility)
+                .w("100%")
+                .h(height)
+                .child(body)
+                .into(),
+        )
     }
 }
 
@@ -391,6 +398,25 @@ mod tests {
             .item_height(24.0)
             .render_item(|i| Element::new().text(format!("#{i}")))
             .into();
+    }
+
+    #[test]
+    fn builder_style_reaches_list_root() {
+        let el: Element = virtual_list("vl-chrome")
+            .item_count(3)
+            .item_height(24.0)
+            .style(|b| b.text_size(20.0))
+            .render_item(|i| Element::new().text(format!("#{i}")))
+            .into();
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "virtual_list .style must land on the scroll root"
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! **身份（WP-2.8 / 3.7）**：`id` 可空 → [`resolve_instance_id`]；布尔状态走
 //! [`crate::utils::toggle_state::resolve_bool_signal`]（受控 XOR Owner 作用域非受控）。
 
+use crate::components::base::SlotChrome;
 use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
@@ -32,6 +33,7 @@ pub struct ToggleBuilder {
     size: String,
     label: String,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 /// RSX `<Toggle>` — `id` 可省略。
@@ -71,10 +73,13 @@ pub fn toggle(id: impl Into<String>) -> ToggleBuilder {
         size: "default".into(),
         label: String::new(),
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
 impl ToggleBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn pressed_signal(mut self, s: Signal<bool>) -> Self {
         self.pressed = Some(s);
         self
@@ -186,7 +191,7 @@ impl From<ToggleBuilder> for Element {
             out = out.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
         out.template_id = Some(instance);
-        out
+        builder.chrome.apply(out)
     }
 }
 
@@ -235,5 +240,24 @@ mod tests {
         assert_eq!(el.template_id.as_deref(), Some("t-ctrl"));
         assert_eq!(el.focus_id.as_deref(), Some("t-ctrl"));
         assert!(pressed.peek());
+    }
+
+    #[test]
+    fn builder_style() {
+        let (_owner, el): (_, Element) = create_root(|| {
+            toggle("t-chrome")
+                .style(|b| b.text_size(20.0))
+                .text("B")
+                .into()
+        });
+        fn find_size(el: &Element, want: f32) -> bool {
+            el.text_style.size.is_some_and(|s| (s - want).abs() < 0.01)
+                || (el.text_style.size_resolved() - want).abs() < 0.01
+                || el.children.iter().any(|c| find_size(c, want))
+        }
+        assert!(
+            find_size(&el, 20.0),
+            "toggle .style(|b| b.text_size(20)) must land on the toggle"
+        );
     }
 }

@@ -22,6 +22,7 @@
 //! ## Notes
 //! 垂直分割线时，父级宜 `items="stretch"` 且有明确高度，否则可能看不见。
 
+use crate::components::base::SlotChrome;
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::tokens;
@@ -30,12 +31,14 @@ use rui_macros::component;
 pub struct SeparatorBuilder {
     vertical: bool,
     children: Vec<Element>,
+    chrome: SlotChrome,
 }
 
 pub fn separator() -> SeparatorBuilder {
     SeparatorBuilder {
         vertical: false,
         children: Vec::new(),
+        chrome: SlotChrome::default(),
     }
 }
 
@@ -51,6 +54,8 @@ pub fn Separator(vertical: bool, children: Option<Element>) -> Element {
 }
 
 impl SeparatorBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn vertical(mut self, v: bool) -> Self {
         self.vertical = v;
         self
@@ -88,6 +93,21 @@ impl From<SeparatorBuilder> for Element {
         };
         el = el.bg(tokens::border()).flex_shrink(0.0);
         let _ = builder.children;
-        el
+        builder.chrome.apply(el)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_style_reaches_separator() {
+        let el: Element = separator().style(|b| b.p(8.0)).into();
+        let pad = crate::layout::lp_length_px(el.style.padding.left).unwrap_or(0.0);
+        assert!(
+            (pad - 8.0).abs() < 0.01,
+            "separator .style(|b| b.p(8)) must land on the line"
+        );
     }
 }
