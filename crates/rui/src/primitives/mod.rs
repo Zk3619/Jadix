@@ -1,6 +1,6 @@
 //! 原子原语层：声明式 UI 的底座。
 //!
-//! - **[`r#box`] / [`hstack`] / [`vstack`] / [`gstack`]**：布局与视觉容器。
+//! - **[`r#box`] / [`boxed`] / [`hstack`] / [`vstack`] / [`gstack`]**：布局与视觉容器。
 //! - **[`interactive`]**：点击、悬停、键盘与焦点挂载。
 //! - **[`overlay`]**：全屏模态遮罩（色 / 透明度 / backdrop 模糊 / 点击关闭）。
 //! - **[`text`] / [`icon`]**：纯文本与图标叶子。
@@ -41,7 +41,7 @@ pub use path::{
     ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
 pub use portal::{Portal, PortalProps};
-pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
+pub use r#box::{boxed, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };

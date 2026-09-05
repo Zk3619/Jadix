@@ -3,24 +3,22 @@
 //! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::time::Instant;
 
 use taffy::prelude::*;
 
 use crate::components::scrollbar::{
-    scrollbar_min_thumb_along_track, scrollbar_track_content_inset,
-    scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX, scrollbar_min_thumb_along_track,
+    scrollbar_track_content_inset, scrollbar_visibility_signal_key,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
-    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-    scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-    scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-    scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
-    scroll_viewport_axis_offset, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
-    SCROLL_VIEWPORT_FOCUS_PREFIX,
+    SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
+    scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
+    scroll_overflow_y_signal_key, scroll_viewport_axis_offset, scroll_viewport_h_signal_key,
+    scroll_viewport_w_signal_key,
 };
 use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
@@ -125,10 +123,34 @@ pub const ATTR_PORTAL_KEY: &str = "rui_portal_key";
 pub const ATTR_PORTAL_SLOT: &str = "rui_portal_slot";
 
 /// Remembers `rui_portal_mount` on a hoisted node so remount can target the same host.
-const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
+pub(crate) const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
 
 /// Opt out of ancestor overflow clip (Command / Dialog stages that must paint over the sidebar).
 pub const ATTR_ESCAPE_OVERFLOW_CLIP: &str = "rui_escape_overflow_clip";
+
+/// Body-layer / `position:fixed` / explicit escape skip ancestor overflow + scroll.
+/// Local `mount=` hoisted nodes stay in the host: clipped and scrolled with it.
+pub(crate) fn escapes_ancestor_overflow(el: &Element) -> bool {
+    if el.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return true;
+    }
+    // Host-mounted portals must follow the host even if a prior body-mount frame
+    // left `position_fixed` set (keyed overlay adopt copies style flags).
+    let local_mount = el
+        .attrs
+        .get(ATTR_HOISTED_MOUNT)
+        .is_some_and(|s| !s.trim().is_empty());
+    if local_mount {
+        return false;
+    }
+    if el.style.position_fixed {
+        return true;
+    }
+    if el.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(|s| s.as_str()) == Some("1") {
+        return true;
+    }
+    el.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
+}
 
 /// Portal stacking shells that intentionally pass hits to content underneath.
 ///
@@ -253,6 +275,11 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
 
         for (path, mut kids) in host_buckets {
             let host = element_mut_by_path(root, &path);
+            // Local mount + in-page siblings share a parent paint band unless this host
+            // is a stacking context. Nested gallery cards already open `page_stack_depth`,
+            // so z-index on a child is not enough — glyphs of earlier siblings paint
+            // *after* every rect in that band (scrim under, sharp text on top).
+            host.set_attr("data-stacking-context", "1");
             host.children.append(&mut kids);
         }
 
@@ -391,19 +418,14 @@ fn prepare_hoisted_node(node: &mut Element, key: &str) {
     node.set_attr(ATTR_PORTAL_KEY, key);
     if !mount.trim().is_empty() {
         node.set_attr(ATTR_HOISTED_MOUNT, mount.trim());
-    }
-    // Popovers / menus / dialogs / color panels must claim their silhouette by
-    // default (`pointer-events: auto`). Never coerce Auto → box-none here: gaps
-    // between children would click through to page content under the portal layer.
-    // Opt *out* explicitly with `.pointer_events_box_none()` / `.pointer_events_none()`
-    // (viewport centering stage, empty 0×0 anchors, Toast host, Portal wrapper).
-    if node.style.position != taffy::style::Position::Absolute {
-        node.style.position = taffy::style::Position::Absolute;
-    }
-    // Default body mount (Solid → document.body): viewport-fixed so scrolled
-    // ancestors cannot shift or crop the overlay. Local `mount=` hosts keep
-    // absolute positioning inside that host's containing block.
-    if mount.trim().is_empty() {
+        node.style.position_fixed = false;
+        if node.style.position != taffy::style::Position::Absolute {
+            node.style.position = taffy::style::Position::Absolute;
+        }
+    } else {
+        if node.style.position != taffy::style::Position::Absolute {
+            node.style.position = taffy::style::Position::Absolute;
+        }
         node.style.position_fixed = true;
     }
 }
@@ -485,6 +507,7 @@ fn hoist_nested_portals_from_hoisted(
     }
     for (path, mut kids) in host_buckets {
         let host = element_mut_by_path(root, &path);
+        host.set_attr("data-stacking-context", "1");
         host.children.append(&mut kids);
     }
     n
@@ -704,6 +727,52 @@ fn hoist_portal_rec_with_slots(node: &mut Element, lifted: &mut Vec<Element>) {
     }
 }
 
+/// CSS 3D border: mix toward black so a dark `primary` still has a visible bevel.
+fn css_bevel_dark(c: [f32; 4]) -> [f32; 4] {
+    [c[0] * 0.32, c[1] * 0.32, c[2] * 0.32, c[3]]
+}
+
+/// Mix toward white (not `rgb * 1.4`, which clips and stays dark on near-black).
+fn css_bevel_light(c: [f32; 4]) -> [f32; 4] {
+    [
+        c[0] + (1.0 - c[0]) * 0.58,
+        c[1] + (1.0 - c[1]) * 0.58,
+        c[2] + (1.0 - c[2]) * 0.58,
+        c[3],
+    ]
+}
+
+/// CSS inset lighting. `side`: 0=top 1=right 2=bottom 3=left.
+fn css_inset_tone(c: [f32; 4], side: usize) -> [f32; 4] {
+    if side == 0 || side == 3 {
+        css_bevel_dark(c)
+    } else {
+        css_bevel_light(c)
+    }
+}
+
+fn css_outset_tone(c: [f32; 4], side: usize) -> [f32; 4] {
+    if side == 0 || side == 3 {
+        css_bevel_light(c)
+    } else {
+        css_bevel_dark(c)
+    }
+}
+
+/// Uniform `border_color` is often left at transparent when only per-side colors
+/// were set. SDF stroke is single-colored, so pick the first opaque side.
+fn representative_border_color(style: &crate::style::Style) -> [f32; 4] {
+    if style.border_color[3] > 0.001 {
+        return style.border_color;
+    }
+    for c in style.resolved_border_colors() {
+        if c[3] > 0.001 {
+            return c;
+        }
+    }
+    style.border_color
+}
+
 fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
     let cap = (w.min(h) * 0.5).max(0.0);
     let mut out = radii;
@@ -733,20 +802,9 @@ fn push_per_side_border_strips(
     let [x, y, w, h] = render_rect;
     let [bt, br, bb, bl] = widths;
 
-    fn darken(c: [f32; 4]) -> [f32; 4] {
-        [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, c[3]]
-    }
-    fn lighten(c: [f32; 4]) -> [f32; 4] {
-        [
-            (c[0] * 1.4).min(1.0),
-            (c[1] * 1.4).min(1.0),
-            (c[2] * 1.4).min(1.0),
-            c[3],
-        ]
-    }
-
     /// Push a single side strip with style-aware rendering.
     /// `horizontal`: true for top/bottom edges (span full width), false for left/right.
+    /// `side`: 0=top 1=right 2=bottom 3=left (CSS 3D lighting).
     fn push_styled_side(
         instances: &mut Vec<InstanceInput>,
         pos: [f32; 2],
@@ -754,6 +812,7 @@ fn push_per_side_border_strips(
         color: [f32; 4],
         style: LineStyle,
         horizontal: bool,
+        side: usize,
         opacity: f32,
         transform: [f32; 6],
         parent_clip: Option<[f32; 4]>,
@@ -785,7 +844,7 @@ fn push_per_side_border_strips(
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
+                        border_extra: 0.0, backdrop_blur: 0.0,
                     }
                     .with_clip(parent_clip),
                 );
@@ -796,17 +855,35 @@ fn push_per_side_border_strips(
                 push_one(instances, pos, size, color);
             }
             LineStyle::Dotted => {
-                let dot_size = bw;
-                let step = dot_size * 2.0;
+                let d = bw.max(2.0);
+                let step = d * 2.0;
                 let mut t = 0.0;
-                while t < span {
-                    let seg = dot_size.min(span - t);
+                while t + d <= span + 0.05 {
                     let (p, s) = if horizontal {
-                        ([pos[0] + t, pos[1]], [seg, size[1]])
+                        ([pos[0] + t, pos[1]], [d, d])
                     } else {
-                        ([pos[0], pos[1] + t], [size[0], seg])
+                        ([pos[0], pos[1] + t], [d, d])
                     };
-                    push_one(instances, p, s, color);
+                    instances.push(
+                        InstanceInput {
+                            rect_pos: p,
+                            rect_size: s,
+                            color: mul_color_alpha(color, opacity),
+                            border_color: [0.0; 4],
+                            radii: [d * 0.5; 4],
+                            border_width: 0.0,
+                            shadow_color: [0.0; 4],
+                            shadow_offset: [0.0; 2],
+                            shadow_blur: 0.0,
+                            shadow_spread: 0.0,
+                            shadow_inset: 0.0,
+                            transform,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            border_extra: 0.0, backdrop_blur: 0.0,
+                        }
+                        .with_clip(parent_clip),
+                    );
                     t += step;
                 }
             }
@@ -815,12 +892,11 @@ fn push_per_side_border_strips(
                 let gap = bw * 1.5;
                 let step = dash + gap;
                 let mut t = 0.0;
-                while t < span {
-                    let seg = dash.min(span - t);
+                while t + dash <= span + 0.05 {
                     let (p, s) = if horizontal {
-                        ([pos[0] + t, pos[1]], [seg, size[1]])
+                        ([pos[0] + t, pos[1]], [dash, size[1]])
                     } else {
-                        ([pos[0], pos[1] + t], [size[0], seg])
+                        ([pos[0], pos[1] + t], [size[0], dash])
                     };
                     push_one(instances, p, s, color);
                     t += step;
@@ -847,50 +923,57 @@ fn push_per_side_border_strips(
                 }
             }
             LineStyle::Groove => {
+                // Outer band = inset lighting, inner band = outset (carved).
                 let half = bw / 2.0;
-                if horizontal {
-                    push_one(instances, pos, [size[0], half], darken(color));
-                    push_one(
-                        instances,
-                        [pos[0], pos[1] + half],
-                        [size[0], half],
-                        lighten(color),
-                    );
-                } else {
-                    push_one(instances, pos, [half, size[1]], darken(color));
-                    push_one(
-                        instances,
-                        [pos[0] + half, pos[1]],
-                        [half, size[1]],
-                        lighten(color),
-                    );
+                let outer_c = css_inset_tone(color, side);
+                let inner_c = css_outset_tone(color, side);
+                match side {
+                    0 => {
+                        push_one(instances, pos, [size[0], half], outer_c);
+                        push_one(instances, [pos[0], pos[1] + half], [size[0], half], inner_c);
+                    }
+                    2 => {
+                        push_one(instances, pos, [size[0], half], inner_c);
+                        push_one(instances, [pos[0], pos[1] + half], [size[0], half], outer_c);
+                    }
+                    3 => {
+                        push_one(instances, pos, [half, size[1]], outer_c);
+                        push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], inner_c);
+                    }
+                    _ => {
+                        push_one(instances, pos, [half, size[1]], inner_c);
+                        push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], outer_c);
+                    }
                 }
             }
             LineStyle::Ridge => {
                 let half = bw / 2.0;
-                if horizontal {
-                    push_one(instances, pos, [size[0], half], lighten(color));
-                    push_one(
-                        instances,
-                        [pos[0], pos[1] + half],
-                        [size[0], half],
-                        darken(color),
-                    );
-                } else {
-                    push_one(instances, pos, [half, size[1]], lighten(color));
-                    push_one(
-                        instances,
-                        [pos[0] + half, pos[1]],
-                        [half, size[1]],
-                        darken(color),
-                    );
+                let outer_c = css_outset_tone(color, side);
+                let inner_c = css_inset_tone(color, side);
+                match side {
+                    0 => {
+                        push_one(instances, pos, [size[0], half], outer_c);
+                        push_one(instances, [pos[0], pos[1] + half], [size[0], half], inner_c);
+                    }
+                    2 => {
+                        push_one(instances, pos, [size[0], half], inner_c);
+                        push_one(instances, [pos[0], pos[1] + half], [size[0], half], outer_c);
+                    }
+                    3 => {
+                        push_one(instances, pos, [half, size[1]], outer_c);
+                        push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], inner_c);
+                    }
+                    _ => {
+                        push_one(instances, pos, [half, size[1]], inner_c);
+                        push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], outer_c);
+                    }
                 }
             }
             LineStyle::Inset => {
-                push_one(instances, pos, size, darken(color));
+                push_one(instances, pos, size, css_inset_tone(color, side));
             }
             LineStyle::Outset => {
-                push_one(instances, pos, size, lighten(color));
+                push_one(instances, pos, size, css_outset_tone(color, side));
             }
             LineStyle::None | LineStyle::Hidden => {}
         }
@@ -904,6 +987,7 @@ fn push_per_side_border_strips(
         colors[0],
         styles[0],
         true,
+        0,
         opacity,
         transform,
         parent_clip,
@@ -916,6 +1000,7 @@ fn push_per_side_border_strips(
         colors[2],
         styles[2],
         true,
+        2,
         opacity,
         transform,
         parent_clip,
@@ -929,6 +1014,7 @@ fn push_per_side_border_strips(
         colors[3],
         styles[3],
         false,
+        3,
         opacity,
         transform,
         parent_clip,
@@ -941,6 +1027,7 @@ fn push_per_side_border_strips(
         colors[1],
         styles[1],
         false,
+        1,
         opacity,
         transform,
         parent_clip,
@@ -1022,6 +1109,8 @@ fn push_border_image_draws(
             opacity,
             tint_rgb: [1.0, 1.0, 1.0],
             transform: crate::style::transform::MAT2D_IDENTITY,
+            clip_pos: [0.0, 0.0],
+            clip_size: TexturedDraw::NO_CLIP_SIZE,
         });
     };
 
@@ -1071,8 +1160,27 @@ const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 /// `parent.color` into `Some(...)`). Snapshotting would pin underlines to the parent's
 /// RGB when a child overrides `color` (e.g. Button `link` / `text-primary` under a
 /// white-default root), which is the desync authors hit in practice.
-fn apply_inheritable_text_fields(node: &mut Element, parent: &TextStyle) {
+fn apply_inheritable_text_fields(
+    node: &mut Element,
+    parent: &TextStyle,
+    parent_wm: crate::style::WritingMode,
+    parent_dir: crate::style::TextDirection,
+) {
+    if !node.style.writing_mode_specified {
+        node.style.writing_mode = parent_wm;
+    }
+    if !node.style.direction_specified {
+        node.style.direction = parent_dir;
+    }
+    let inherited_dir = node.style.direction;
     let ts = &mut node.text_style;
+    // Keep Auto when the ancestor did not specify a paragraph direction so
+    // `prepare_text` does not inject bidi marks on ordinary LTR copy.
+    if ts.direction == crate::style::TextDirection::Auto
+        && inherited_dir != crate::style::TextDirection::Auto
+    {
+        ts.direction = inherited_dir;
+    }
     if ts.color.is_none() {
         ts.color = parent.color;
     }
@@ -1127,12 +1235,24 @@ fn cascade_inheritable_text_style(root: &mut Element, parent_style: Option<TextS
     stack_probe::mark_cascade();
     let parent = parent_style.unwrap_or_else(crate::style::TextStyle::cascade_root);
     // Heap worklist: style inherit must not map tree depth onto the OS call stack.
-    let mut stack: Vec<(*mut Element, TextStyle)> = Vec::new();
-    stack.push((root as *mut Element, parent));
-    while let Some((ptr, parent)) = stack.pop() {
+    let mut stack: Vec<(
+        *mut Element,
+        TextStyle,
+        crate::style::WritingMode,
+        crate::style::TextDirection,
+    )> = Vec::new();
+    stack.push((
+        root as *mut Element,
+        parent,
+        crate::style::WritingMode::HorizontalTb,
+        // Auto, not Ltr: CSS initial `ltr` is physical LTR, but feeding Ltr into
+        // `text_style.direction` used to prepend U+200E on every run (visible junk).
+        crate::style::TextDirection::Auto,
+    ));
+    while let Some((ptr, parent, parent_wm, parent_dir)) = stack.pop() {
         // SAFETY: pointers are into `root`'s exclusive subtree for this pass.
         let node = unsafe { &mut *ptr };
-        apply_inheritable_text_fields(node, &parent);
+        apply_inheritable_text_fields(node, &parent, parent_wm, parent_dir);
         let inherit_attrs: Vec<(String, String)> = crate::renderer::SHIMMER_INHERIT_ATTRS
             .iter()
             .filter_map(|key| {
@@ -1142,6 +1262,8 @@ fn cascade_inheritable_text_style(root: &mut Element, parent_style: Option<TextS
             })
             .collect();
         let child_parent = node.text_style.effective_ancestry(&parent);
+        let child_wm = node.style.writing_mode;
+        let child_dir = node.style.direction;
         for child in node.children.iter_mut().rev() {
             for (key, value) in &inherit_attrs {
                 child
@@ -1149,7 +1271,12 @@ fn cascade_inheritable_text_style(root: &mut Element, parent_style: Option<TextS
                     .entry(key.clone())
                     .or_insert_with(|| value.clone());
             }
-            stack.push((child as *mut Element, child_parent.clone()));
+            stack.push((
+                child as *mut Element,
+                child_parent.clone(),
+                child_wm,
+                child_dir,
+            ));
         }
     }
 }
@@ -1172,10 +1299,6 @@ struct ScrollAreaSignalsCached {
     overflow_y: String,
     scrollbar_vis_x: String,
     scrollbar_vis_y: String,
-    inset_x: String,
-    inset_y: String,
-    y_side: String,
-    x_side: String,
 }
 
 fn scroll_area_signals_cached<'a>(
@@ -1206,22 +1329,6 @@ fn scroll_area_signals_cached<'a>(
                 "auto".to_string()
             })
             .peek();
-            let inset_x = use_signal(&scroll_scrollbar_inset_x_signal_key(rest), || {
-                "inside".to_string()
-            })
-            .peek();
-            let inset_y = use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
-                "inside".to_string()
-            })
-            .peek();
-            let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(rest), || {
-                "right".to_string()
-            })
-            .peek();
-            let x_side = use_signal(&scroll_scrollbar_x_side_signal_key(rest), || {
-                "bottom".to_string()
-            })
-            .peek();
             v.insert(ScrollAreaSignalsCached {
                 vw,
                 vh,
@@ -1233,10 +1340,6 @@ fn scroll_area_signals_cached<'a>(
                 overflow_y,
                 scrollbar_vis_x,
                 scrollbar_vis_y,
-                inset_x,
-                inset_y,
-                y_side,
-                x_side,
             })
         }
     }
@@ -1250,6 +1353,7 @@ struct CollectScratch {
     input_chrome_instances: Vec<InstanceInput>,
     scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
     tex_keys: Vec<String>,
+    clip_polys: Vec<crate::style::GpuClipPoly>,
 }
 
 impl Default for CollectScratch {
@@ -1261,6 +1365,7 @@ impl Default for CollectScratch {
             input_chrome_instances: Vec::new(),
             scroll_metrics: Vec::new(),
             tex_keys: Vec::new(),
+            clip_polys: Vec::new(),
         }
     }
 }
@@ -1272,6 +1377,7 @@ impl CollectScratch {
         self.text_nodes.clear();
         self.input_chrome_instances.clear();
         self.scroll_metrics.clear();
+        self.clip_polys.clear();
     }
 }
 
@@ -1660,6 +1766,13 @@ pub struct OverlayPaintBand {
     pub underlay_opacity: f32,
 }
 
+fn subtree_has_backdrop_blur(el: &Element) -> bool {
+    if el.style.backdrop_blur > 0.5 {
+        return true;
+    }
+    el.children.iter().any(subtree_has_backdrop_blur)
+}
+
 /// Resolved `[start, end)` ranges for drawing one overlay band.
 #[derive(Clone, Copy, Debug)]
 pub struct OverlayBandRange {
@@ -1668,6 +1781,8 @@ pub struct OverlayBandRange {
     pub text: (usize, usize),
     pub chrome: (usize, usize),
     pub paint_ops: (usize, usize),
+    pub backdrop_blur: f32,
+    pub underlay_opacity: f32,
 }
 
 impl OverlayPaintSplit {
@@ -1730,6 +1845,8 @@ impl OverlayPaintSplit {
                     next.map(|n| n.paint_op_start.min(paint_op_len))
                         .unwrap_or(paint_op_len),
                 ),
+                backdrop_blur: b.backdrop_blur,
+                underlay_opacity: b.underlay_opacity,
             });
         }
         out
@@ -1771,6 +1888,8 @@ impl OverlayPaintSplit {
                 text: (b.text_start, next.text_start),
                 chrome: (b.chrome_start, next.chrome_start),
                 paint_ops: (b.paint_op_start, next.paint_op_start),
+                backdrop_blur: b.backdrop_blur,
+                underlay_opacity: b.underlay_opacity,
             });
         }
         out
@@ -1883,6 +2002,8 @@ pub struct RenderResult {
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
     pub hover_cursor: Option<crate::core::tree::CursorValue>,
     pub prof: LayoutProfileMs,
+    /// Per-SDF-instance polygon clip (even-odd). Length matches [`Self::instances`].
+    pub clip_polys: Vec<crate::style::GpuClipPoly>,
 }
 
 /// Post-layout geometry/style snapshot for one text run (consumed by glyphon).
@@ -1978,6 +2099,7 @@ struct TextMeasureMeta {
     /// `text-overflow: clip|hidden|ellipsis`: honor definite/avail width instead of
     /// growing the leaf to the full line (buttons still use `nowrap` without this).
     clip_to_box: bool,
+    writing_mode: crate::style::WritingMode,
 }
 
 fn element_text_clips_to_box(element: &Element) -> bool {
@@ -2037,6 +2159,7 @@ fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeas
         spans: element.text_spans.clone(),
         nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
         clip_to_box: element_text_clips_to_box(element),
+        writing_mode: element.style.writing_mode,
     }
 }
 
@@ -2120,6 +2243,31 @@ fn measure_leaf_cached(
 }
 
 fn measured_text_leaf_size(
+    m: &TextMeasureMeta,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+) -> taffy::geometry::Size<f32> {
+    if m.writing_mode.is_vertical() {
+        let inner = measured_text_leaf_size_horizontal(
+            m,
+            taffy::geometry::Size {
+                width: known_dimensions.height,
+                height: known_dimensions.width,
+            },
+            taffy::geometry::Size {
+                width: available_space.height,
+                height: available_space.width,
+            },
+        );
+        return taffy::geometry::Size {
+            width: inner.height,
+            height: inner.width,
+        };
+    }
+    measured_text_leaf_size_horizontal(m, known_dimensions, available_space)
+}
+
+fn measured_text_leaf_size_horizontal(
     m: &TextMeasureMeta,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
     available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
@@ -2258,6 +2406,7 @@ struct CollectPainted {
     opacity: f32,
     clip: Option<[f32; 4]>,
     parent_clip: Option<[f32; 4]>,
+    clip_poly: crate::style::GpuClipPoly,
     render_rect: [f32; 4],
     visible_rect: [f32; 4],
     paint_sx: f32,
@@ -2306,6 +2455,9 @@ struct CollectWalk {
     any_stacking: bool,
     opacity: f32,
     clip: Option<[f32; 4]>,
+    /// Clip passed to children. CSS `filter` SourceGraphic must not inherit ancestor
+    /// overflow — only this node's own overflow (if any).
+    child_clip_poly: crate::style::GpuClipPoly,
     stopped: bool,
 }
 
@@ -2327,6 +2479,7 @@ struct CollectFrame {
     abs_offset: [f32; 2],
     scroll_acc: [f32; 2],
     parent_clip: Option<[f32; 4]>,
+    parent_clip_poly: crate::style::GpuClipPoly,
     ancestor_scroll_viewport_rest: Option<String>,
     ancestor_opacity: f32,
     ancestor_scale: [f32; 2],
@@ -2910,7 +3063,11 @@ impl LayoutTree {
             scroll_cache_slot,
             &mut overlay_split,
             &mut paint_rec,
+            &mut scratch.clip_polys,
         );
+        while scratch.clip_polys.len() < scratch.instances.len() {
+            scratch.clip_polys.push(crate::style::GpuClipPoly::NONE);
+        }
         #[cfg(feature = "devtools")]
         {
             crate::app::devtools::finalize_highlight_after_collect(root);
@@ -2942,6 +3099,7 @@ impl LayoutTree {
             overlay_split,
             scroll_metrics: std::mem::take(&mut scratch.scroll_metrics),
             hover_cursor,
+            clip_polys: std::mem::take(&mut scratch.clip_polys),
             prof: LayoutProfileMs {
                 rebuild_ms,
                 setup_ms,
@@ -3072,7 +3230,10 @@ impl LayoutTree {
                     let ctx = self.unit_ctx_with_cb(element, frame.cb_w, frame.cb_h);
                     let (child_cb_w, child_cb_h) = element.style.estimate_content_box(&ctx);
                     let child_parent_dir = matches!(element.style.display, Display::Flex)
-                        .then_some(element.style.flex_direction);
+                        .then_some(element.style.writing_mode.map_flex_direction(
+                            element.style.direction,
+                            element.style.flex_direction,
+                        ));
                     frame.phase = Phase::Leave;
                     stack.push(frame);
                     for child in element.children.iter_mut().rev() {
@@ -3256,6 +3417,7 @@ impl LayoutTree {
                 let child_size = [cl.size.width, cl.size.height];
                 element.children[i].layout_bounds =
                     [child_abs[0], child_abs[1], child_size[0], child_size[1]];
+                crate::style::stamp_element_used_layout(&mut element.children[i]);
                 stack.push((
                     &mut element.children[i] as *mut Element,
                     child_nodes[i],
@@ -3309,13 +3471,16 @@ impl LayoutTree {
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
+        clip_polys: &mut Vec<crate::style::GpuClipPoly>,
     ) -> [f32; 2] {
+        crate::style::begin_named_clip_pass();
         let mut stack = vec![CollectFrame {
             element: element as *mut Element,
             node,
             abs_offset,
             scroll_acc,
             parent_clip,
+            parent_clip_poly: crate::style::GpuClipPoly::NONE,
             ancestor_scroll_viewport_rest: ancestor_scroll_viewport_rest.map(str::to_string),
             ancestor_opacity,
             ancestor_scale,
@@ -3339,6 +3504,7 @@ impl LayoutTree {
                     frame.abs_offset,
                     frame.scroll_acc,
                     frame.parent_clip,
+                    frame.parent_clip_poly,
                     frame.ancestor_scroll_viewport_rest.as_deref(),
                     mouse_pos,
                     frame.ancestor_opacity,
@@ -3357,6 +3523,7 @@ impl LayoutTree {
                     scroll_signals_cache,
                     overlay_split,
                     paint_rec,
+                    clip_polys,
                 ) {
                     CollectPaintOutcome::Done(extent) => {
                         collect_commit_extent(&mut stack, extent, &mut root_extent);
@@ -3408,6 +3575,7 @@ impl LayoutTree {
                     abs_offset: job.abs_offset,
                     scroll_acc: walk.next_scroll_acc,
                     parent_clip: walk.clip,
+                    parent_clip_poly: walk.child_clip_poly,
                     ancestor_scroll_viewport_rest: walk.pass_to_children.clone(),
                     ancestor_opacity: walk.opacity,
                     ancestor_scale: walk.child_ancestor_scale,
@@ -3431,6 +3599,7 @@ impl LayoutTree {
                     scroll_metrics,
                     overlay_split,
                     paint_rec,
+                    clip_polys,
                     walk,
                 );
                 collect_commit_extent(&mut stack, extent, &mut root_extent);
@@ -3449,6 +3618,7 @@ impl LayoutTree {
         abs_offset: [f32; 2],
         scroll_acc: [f32; 2],
         parent_clip: Option<[f32; 4]>,
+        parent_clip_poly: crate::style::GpuClipPoly,
         _ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
         ancestor_opacity: f32,
@@ -3471,6 +3641,7 @@ impl LayoutTree {
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
+        clip_polys: &mut Vec<crate::style::GpuClipPoly>,
     ) -> CollectPaintOutcome {
         // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
         // Reset clip + scroll accumulation when entering the root portal layer so hoisted
@@ -3478,15 +3649,8 @@ impl LayoutTree {
         // `position: fixed` / `rui_escape_overflow_clip` / already-hoisted portals: same
         // (Command overlay left edge was flush-cut by the gallery sidebar ScrollArea).
         let is_body_portal_layer = element.template_id.as_deref() == Some(PORTAL_LAYER_ID);
-        let escape_overflow_clip = is_body_portal_layer
-            || element.style.position_fixed
-            || element.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
-            || element
-                .attrs
-                .get(ATTR_ESCAPE_OVERFLOW_CLIP)
-                .map(|s| s.as_str())
-                == Some("1");
-        let (parent_clip, scroll_acc) = if escape_overflow_clip {
+        let escape_overflow_clip = escapes_ancestor_overflow(element);
+        let (mut parent_clip, scroll_acc) = if escape_overflow_clip {
             (None, [0.0_f32, 0.0_f32])
         } else {
             (parent_clip, scroll_acc)
@@ -3506,6 +3670,7 @@ impl LayoutTree {
             Ok(l) => *l,
             Err(err) => {
                 log::error!("taffy.layout({node:?}) failed: {err:?}");
+                stamp_clip_polys(clip_polys, instances.len(), parent_clip_poly);
                 return CollectPaintOutcome::Done([abs_offset[0], abs_offset[1]]);
             }
         };
@@ -3590,13 +3755,16 @@ impl LayoutTree {
             scroll_acc
         };
         let paint_nudge = crate::components::button_group::button_group_paint_nudge(element);
+        let offset_motion = crate::style::offset_path::sample(&element.style, [lay_w, lay_h]);
         // 布局原点（文字 / 子节点 / overflow clip）。连体叠边只扩 chrome，不平移整框。
         let mut render_x = abs_x - scroll_for_render[0]
             + element.style.translate[0]
-            + lay_w * element.style.translate_pct[0];
+            + lay_w * element.style.translate_pct[0]
+            + offset_motion.translate[0];
         let mut render_y = abs_y - scroll_for_render[1]
             + element.style.translate[1]
-            + lay_h * element.style.translate_pct[1];
+            + lay_h * element.style.translate_pct[1]
+            + offset_motion.translate[1];
 
         // CSS `position: sticky` — clamp render position within the nearest scroll ancestor clip.
         if element.style.position_sticky {
@@ -3676,7 +3844,7 @@ impl LayoutTree {
         // （scale 已 bake 进 rect，传 [1,1]）。
         let local_full = crate::style::compute_combined_transform(
             &[0.0, 0.0],
-            element.style.rotate_deg,
+            element.style.rotate_deg + offset_motion.rotate_deg,
             &[1.0, 1.0],
             element.style.transform.as_ref(),
             &element.style.transform_origin,
@@ -3700,11 +3868,43 @@ impl LayoutTree {
         // jittered hit-test and flashed sidebar hover while those tiles were on screen.
         let layout_border = [render_x, render_y, lay_w, lay_h];
         let mut clip = parent_clip;
-        if element.style.overflow.x != taffy::style::Overflow::Visible
-            || element.style.overflow.y != taffy::style::Overflow::Visible
-        {
+        let overflow_clips = element.style.overflow.x != taffy::style::Overflow::Visible
+            || element.style.overflow.y != taffy::style::Overflow::Visible;
+        if overflow_clips {
             clip = Some(intersect_rect(clip, layout_border));
         }
+        if !element.style.clip_path.is_none() {
+            if let Some(aabb) = element.style.clip_path.aabb(layout_border) {
+                parent_clip = Some(intersect_rect(parent_clip, aabb));
+                clip = Some(intersect_rect(clip, aabb));
+            }
+        }
+        if let Some(name) = element.style.clip_path_name.as_deref() {
+            crate::style::register_clip_path(name, element.style.clip_path.clone());
+        }
+        let gpu_poly = {
+            let inherited = if escape_overflow_clip {
+                crate::style::GpuClipPoly::NONE
+            } else {
+                parent_clip_poly
+            };
+            let clip_path_poly = if element.style.clip_path.is_none() {
+                crate::style::GpuClipPoly::NONE
+            } else {
+                element.style.clip_path.to_gpu(layout_border)
+            };
+            let local = if clip_path_poly.is_active() {
+                clip_path_poly
+            } else if overflow_clips
+                && !escape_overflow_clip
+                && crate::style::radii_affect_clip(element.style.radii)
+            {
+                crate::style::GpuClipPoly::from_rounded_rect(layout_border, element.style.radii)
+            } else {
+                crate::style::GpuClipPoly::NONE
+            };
+            crate::style::GpuClipPoly::and_layers(inherited, local)
+        };
         let visible_rect = intersect_rect(clip, render_rect);
 
         // Clip-cull: skip paint + descendants when this box (plus shadow/transform outset)
@@ -3786,6 +3986,7 @@ impl LayoutTree {
                     [lay_w, lay_h],
                     scroll_for_render,
                 );
+                stamp_clip_polys(clip_polys, instances.len(), gpu_poly);
                 return CollectPaintOutcome::Done(extent);
             }
         }
@@ -3810,6 +4011,10 @@ impl LayoutTree {
         } else {
             0
         };
+        // Filter SourceGraphic is the unclipped subtree (plus this node's own overflow).
+        // Ancestor overflow clips the *output* after the filter runs.
+        let paint_parent_clip = if filter_capture { None } else { parent_clip };
+        let paint_clip = if filter_capture { None } else { clip };
 
         // Collect main instance (solid / gradient strips + shadows).
         // Geometry stays full `render_rect`. CSS overflow clips *descendants* only — the
@@ -3827,7 +4032,7 @@ impl LayoutTree {
         let sdf_border_color = if use_border_strips {
             [0.0, 0.0, 0.0, 0.0]
         } else {
-            mul_color_alpha(element.style.border_color, opacity)
+            mul_color_alpha(representative_border_color(&element.style), opacity)
         };
         let sdf_border_extra = {
             let bs = if use_border_strips {
@@ -3844,12 +4049,23 @@ impl LayoutTree {
         let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
+        // Page-stack `backdrop-filter` is sampled on this element's SDF instance
+        // (modal underlays keep the fullscreen blit and must not double-sample).
+        let instance_backdrop_blur = if overlay_split.page_stack_depth > 0 {
+            element.style.backdrop_blur.max(0.0)
+        } else {
+            0.0
+        };
+        let has_backdrop = instance_backdrop_blur > 0.5;
         let paint_visible = intersect_rect(parent_clip, render_rect);
-        if (has_bg || has_border || has_shadow) && paint_visible[2] > 0.0 && paint_visible[3] > 0.0
+        if (has_bg || has_border || has_shadow || has_backdrop)
+            && paint_visible[2] > 0.0
+            && paint_visible[3] > 0.0
         {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
-            let need_fill_instance = has_bg || has_shadow || (has_border && !use_border_strips);
+            let need_fill_instance =
+                has_bg || has_shadow || (has_border && !use_border_strips) || has_backdrop;
             if let Some(ref grad) = element.style.bg_gradient {
                 use crate::style::{
                     ensure_gradient_texture, gradient_texture_radii, gradient_texture_size,
@@ -3861,10 +4077,17 @@ impl LayoutTree {
                 let (tw, th) = gradient_texture_size(render_rect[2], render_rect[3]);
                 let tex_radii = gradient_texture_radii(resolved_radii);
                 let key = ensure_gradient_texture(grad, tw, th, tex_radii);
-                if let Some(draw) = TexturedDraw::clipped(render_rect, parent_clip, key, opacity) {
+                if let Some(mut draw) =
+                    TexturedDraw::clipped(render_rect, paint_parent_clip, key, opacity)
+                {
+                    let [px, py] = element.style.bg_position;
+                    if px.abs() > 1e-6 || py.abs() > 1e-6 {
+                        draw.uv_offset[0] = (draw.uv_offset[0] + px).rem_euclid(1.0);
+                        draw.uv_offset[1] = (draw.uv_offset[1] + py).rem_euclid(1.0);
+                    }
                     textured_draws.push(draw);
                 }
-                if has_shadow || (has_border && !use_border_strips) {
+                if has_shadow || (has_border && !use_border_strips) || has_backdrop {
                     instances.push(
                         InstanceInput {
                             rect_pos: [render_rect[0], render_rect[1]],
@@ -3882,8 +4105,9 @@ impl LayoutTree {
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: sdf_border_extra,
+                            backdrop_blur: instance_backdrop_blur,
                         }
-                        .with_clip(parent_clip),
+                        .with_clip(paint_parent_clip),
                     );
                 }
             } else if need_fill_instance {
@@ -3902,10 +4126,11 @@ impl LayoutTree {
                         shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
                         transform,
                         clip_pos: [0.0, 0.0],
-                        clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: sdf_border_extra,
-                    }
-                    .with_clip(parent_clip),
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            border_extra: sdf_border_extra,
+                            backdrop_blur: instance_backdrop_blur,
+                        }
+                    .with_clip(paint_parent_clip),
                 );
             }
             if use_border_strips {
@@ -3917,7 +4142,7 @@ impl LayoutTree {
                     element.style.resolved_border_styles(),
                     opacity,
                     transform,
-                    parent_clip,
+                    paint_parent_clip,
                 );
             }
             // border-image overrides normal border rendering when present
@@ -3928,7 +4153,7 @@ impl LayoutTree {
                     border_widths,
                     &element.style,
                     opacity,
-                    parent_clip,
+                    paint_parent_clip,
                 );
             }
             for sh in &element.style.extra_shadows {
@@ -3951,9 +4176,9 @@ impl LayoutTree {
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
+                        border_extra: 0.0, backdrop_blur: 0.0,
                     }
-                    .with_clip(parent_clip),
+                    .with_clip(paint_parent_clip),
                 );
             }
         }
@@ -3971,7 +4196,7 @@ impl LayoutTree {
                 )
             {
                 if let Some(draw) =
-                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
                     textured_draws
                         .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -3985,7 +4210,7 @@ impl LayoutTree {
                 )
             {
                 if let Some(draw) =
-                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
                     textured_draws
                         .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -4028,7 +4253,7 @@ impl LayoutTree {
                                 },
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                border_extra: 0.0,
+                                border_extra: 0.0, backdrop_blur: 0.0,
                             }
                             .with_clip(clip),
                         );
@@ -4042,7 +4267,7 @@ impl LayoutTree {
                     )
                 {
                     if let Some(draw) =
-                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                     {
                         textured_draws
                             .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -4056,7 +4281,7 @@ impl LayoutTree {
                     )
                 {
                     if let Some(draw) =
-                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                     {
                         textured_draws
                             .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -4067,7 +4292,7 @@ impl LayoutTree {
                 crate::primitives::svg::svg_raster_from_element_attrs(&element.attrs, vis_w, vis_h)
             {
                 if let Some(draw) =
-                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
                     textured_draws
                         .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -4081,7 +4306,7 @@ impl LayoutTree {
                 )
             {
                 if let Some(draw) =
-                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
                     textured_draws
                         .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
@@ -4120,9 +4345,9 @@ impl LayoutTree {
                             transform: q_xf,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: 0.0,
+                            border_extra: 0.0, backdrop_blur: 0.0,
                         }
-                        .with_clip(parent_clip),
+                        .with_clip(paint_parent_clip),
                     );
                 }
             }
@@ -4178,9 +4403,9 @@ impl LayoutTree {
                             transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: 0.0,
+                            border_extra: 0.0, backdrop_blur: 0.0,
                         }
-                        .with_clip(parent_clip),
+                        .with_clip(paint_parent_clip),
                     );
                 }
             }
@@ -4232,9 +4457,9 @@ impl LayoutTree {
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: outline_extra,
+                        border_extra: outline_extra, backdrop_blur: 0.0,
                     }
-                    .with_clip(parent_clip),
+                    .with_clip(paint_parent_clip),
                 );
             }
         }
@@ -4244,7 +4469,7 @@ impl LayoutTree {
                 if !tex_key.is_empty() {
                     if let Some(mut draw) = TexturedDraw::clipped(
                         [vis_x, vis_y, vis_w, vis_h],
-                        parent_clip,
+                        paint_parent_clip,
                         tex_key.clone(),
                         opacity,
                     ) {
@@ -4276,11 +4501,37 @@ impl LayoutTree {
                     1.0
                 };
             let scaled_paint = (text_scale - 1.0).abs() > f32::EPSILON;
-            let (text_x0, text_y0, text_w, text_h) = if scaled_paint {
-                // vis_* = layout box scaled about center; width/height stay layout for shaping.
-                (vis_x, vis_y, lay_w, lay_h)
+            let is_icon = text_style.font_family.as_deref() == Some("lucide");
+            let wm = element.style.writing_mode;
+            let wm_rot = if wm.is_vertical() && !is_icon {
+                wm.glyph_rotation_rad()
             } else {
-                (render_x, render_y, lay_w, lay_h)
+                0.0
+            };
+            let (text_x0, text_y0, text_w, text_h) = {
+                let (x, y, w, h) = if scaled_paint {
+                    // vis_* = layout box scaled about center; width/height stay layout for shaping.
+                    (vis_x, vis_y, lay_w, lay_h)
+                } else {
+                    (render_x, render_y, lay_w, lay_h)
+                };
+                if wm_rot.abs() > 1e-6 {
+                    let cx = x + w * 0.5;
+                    let cy = y + h * 0.5;
+                    let sw = h;
+                    let sh = w;
+                    (cx - sw * 0.5, cy - sh * 0.5, sw, sh)
+                } else {
+                    (x, y, w, h)
+                }
+            };
+            let text_paint_linear = if wm_rot.abs() > 1e-6 {
+                crate::style::mat2d_multiply(
+                    &text_world_linear,
+                    &crate::style::mat2d_rotate(wm_rot),
+                )
+            } else {
+                text_world_linear
             };
             // wrap=off textarea pans via viewport `scroll_acc` (signal sx). Do not also
             // subtract `text_style.scroll_x` (single-line Hidden input only).
@@ -4291,7 +4542,6 @@ impl LayoutTree {
             } else {
                 text_x0 - text_style.scroll_x.max(0.0) * text_scale
             };
-            let is_icon = text_style.font_family.as_deref() == Some("lucide");
             let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
             // Glyphon cannot rotate. Lucide + spin/rotate/transform-transition → cached
             // square texture + element transform (same path at 0° and 180°, so accordion
@@ -4343,15 +4593,20 @@ impl LayoutTree {
                             2.0,
                         )
                     {
-                        textured_draws.push(crate::renderer::TexturedDraw {
-                            rect: full,
-                            uv_offset: [0.0, 0.0],
-                            uv_scale: [1.0, 1.0],
-                            texture_key: tex_key,
-                            opacity,
-                            tint_rgb: [1.0, 1.0, 1.0],
-                            transform: icon_xf,
-                        });
+                        textured_draws.push(
+                            crate::renderer::TexturedDraw {
+                                rect: full,
+                                uv_offset: [0.0, 0.0],
+                                uv_scale: [1.0, 1.0],
+                                texture_key: tex_key,
+                                opacity,
+                                tint_rgb: [1.0, 1.0, 1.0],
+                                transform: icon_xf,
+                                clip_pos: [0.0, 0.0],
+                                clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                            }
+                            .with_overflow_clip(clip),
+                        );
                     }
                 } else if let Some(glyph) = element.text.as_deref() {
                     let icon_name = element
@@ -4368,15 +4623,20 @@ impl LayoutTree {
                             2.0,
                         )
                     {
-                        textured_draws.push(crate::renderer::TexturedDraw {
-                            rect: full,
-                            uv_offset: [0.0, 0.0],
-                            uv_scale: [1.0, 1.0],
-                            texture_key: tex_key,
-                            opacity,
-                            tint_rgb: [1.0, 1.0, 1.0],
-                            transform: icon_xf,
-                        });
+                        textured_draws.push(
+                            crate::renderer::TexturedDraw {
+                                rect: full,
+                                uv_offset: [0.0, 0.0],
+                                uv_scale: [1.0, 1.0],
+                                texture_key: tex_key,
+                                opacity,
+                                tint_rgb: [1.0, 1.0, 1.0],
+                                transform: icon_xf,
+                                clip_pos: [0.0, 0.0],
+                                clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                            }
+                            .with_overflow_clip(clip),
+                        );
                     }
                 }
             } else {
@@ -4404,15 +4664,20 @@ impl LayoutTree {
                             {
                                 let cx = vis_x + vis_w * 0.5;
                                 let cy = vis_y + vis_h * 0.5;
-                                textured_draws.push(crate::renderer::TexturedDraw {
-                                    rect: [cx - side * 0.5, cy - side * 0.5, side, side],
-                                    uv_offset: [0.0, 0.0],
-                                    uv_scale: [1.0, 1.0],
-                                    texture_key: tex_key,
-                                    opacity,
-                                    tint_rgb: [1.0, 1.0, 1.0],
-                                    transform: text_world_linear,
-                                });
+                                textured_draws.push(
+                                    crate::renderer::TexturedDraw {
+                                        rect: [cx - side * 0.5, cy - side * 0.5, side, side],
+                                        uv_offset: [0.0, 0.0],
+                                        uv_scale: [1.0, 1.0],
+                                        texture_key: tex_key,
+                                        opacity,
+                                        tint_rgb: [1.0, 1.0, 1.0],
+                                        transform: text_world_linear,
+                                        clip_pos: [0.0, 0.0],
+                                        clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                                    }
+                                    .with_overflow_clip(clip),
+                                );
                                 lucide_static_textured = true;
                             }
                         }
@@ -4422,10 +4687,11 @@ impl LayoutTree {
                     // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
                     // Coverage (glyphon) for idle axis-aligned UI text only.
                     let sticky_xform = ancestor_sticky_xform
-                        || crate::renderer::element_wants_sticky_xform(element);
+                        || crate::renderer::element_wants_sticky_xform(element)
+                        || wm_rot.abs() > 1e-6;
                     let glyph_raster = crate::renderer::resolve_glyph_raster(
                         sticky_xform,
-                        &text_world_linear,
+                        &text_paint_linear,
                         text_scale,
                     );
                     let shimmer_active = element
@@ -4577,25 +4843,44 @@ impl LayoutTree {
                             let full = crate::utils::text_texture::bake_draw_rect_for_layout(
                                 text_x, text_y0, draw_w, draw_h, bake_w, bake_h,
                             );
-                            if let Some(draw) =
-                                TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
-                            {
-                                let mut draw = draw
-                                    .with_transform(crate::style::mat2d_linear(&text_world_linear));
-                                if as_sdf {
-                                    let c = text_style.color_resolved();
-                                    draw = draw.with_tint_rgb([
-                                        c[0] as f32 / 255.0,
-                                        c[1] as f32 / 255.0,
-                                        c[2] as f32 / 255.0,
-                                    ]);
+                            let xform = crate::style::mat2d_linear(&text_paint_linear);
+                            let rotated =
+                                !crate::style::transform::mat2d_is_axis_aligned(&text_paint_linear);
+                            // Rotated Bake (writing-mode / CSS rotate): the quad is the
+                            // pre-rotation box. AABB-intersecting it with overflow squeezes
+                            // vertical text into the clip edge. Keep the full quad and GPU-clip
+                            // after the vertex transform.
+                            let cpu_clip = if rotated { None } else { parent_clip };
+                            let skip = rotated
+                                && parent_clip.is_some_and(|c| {
+                                    crate::renderer::aabbs_disjoint(
+                                        crate::renderer::aabb_of_centered_transform(full, &xform),
+                                        c,
+                                    )
+                                });
+                            if !skip {
+                                if let Some(mut draw) =
+                                    TexturedDraw::clipped(full, cpu_clip, tex_key, opacity)
+                                {
+                                    draw = draw.with_transform(xform);
+                                    if rotated {
+                                        draw = draw.with_overflow_clip(parent_clip);
+                                    }
+                                    if as_sdf {
+                                        let c = text_style.color_resolved();
+                                        draw = draw.with_tint_rgb([
+                                            c[0] as f32 / 255.0,
+                                            c[1] as f32 / 255.0,
+                                            c[2] as f32 / 255.0,
+                                        ]);
+                                    }
+                                    // Emoji Bake is RGBA Twemoji — never apply text-color tint.
+                                    textured_draws.push(draw);
                                 }
-                                // Emoji Bake is RGBA Twemoji — never apply text-color tint.
-                                textured_draws.push(draw);
                             }
                             text_baked = true;
                         } else if sticky_xform
-                            || !crate::style::transform::mat2d_is_axis_aligned(&text_world_linear)
+                            || !crate::style::transform::mat2d_is_axis_aligned(&text_paint_linear)
                         {
                             log::warn!(
                                 target: "rui::text_xform",
@@ -4673,7 +4958,7 @@ impl LayoutTree {
                             glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
                             shimmer: crate::renderer::ShimmerParams::from_attrs(&element.attrs),
                             paint_scale: text_scale,
-                            paint_transform: text_world_linear,
+                            paint_transform: text_paint_linear,
                             paint_origin: [
                                 text_x + text_w * text_scale * 0.5,
                                 text_y0 + text_h * text_scale * 0.5,
@@ -4707,6 +4992,8 @@ impl LayoutTree {
             } // else !icon_spin_paint
         }
 
+        stamp_clip_polys(clip_polys, instances.len(), gpu_poly);
+
         paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
 
         CollectPaintOutcome::Ready(CollectPainted {
@@ -4717,6 +5004,7 @@ impl LayoutTree {
             opacity,
             clip,
             parent_clip,
+            clip_poly: gpu_poly,
             render_rect,
             visible_rect,
             paint_sx,
@@ -4790,9 +5078,18 @@ impl LayoutTree {
             .map(|s| s.as_str())
             == Some("1");
         let any_stacking = stacking_attr || any_z;
+        // `backdrop-filter` must split even inside an already-open page_stack
+        // (gallery sidebar / ScrollArea). Nested z-index alone must not
+        // (MessageScroller). Only walk the subtree when this node already
+        // z-orders children — O(children of stacking parents), not O(n²).
+        let nested_backdrop_split = overlay_split.page_stack_depth > 0
+            && !stacking_attr
+            && any_z
+            && subtree_has_backdrop_blur(element);
         let record_page_stack_bands = !overlay_split.marked
             && ((overlay_split.page_stack_depth == 0 && any_stacking)
-                || (overlay_split.page_stack_depth > 0 && stacking_attr));
+                || (overlay_split.page_stack_depth > 0 && stacking_attr)
+                || nested_backdrop_split);
         if record_page_stack_bands {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_add(1);
         }
@@ -4818,6 +5115,12 @@ impl LayoutTree {
             (fx_cap_inst0, fx_cap_tex0, true)
         } else {
             (0, 0, false)
+        };
+
+        let (child_clip, child_clip_poly) = if painted.filter_capture {
+            filter_source_overflow_clip(&element.style, abs_x, abs_y, lay_w, lay_h)
+        } else {
+            (painted.clip, painted.clip_poly)
         };
 
         let parent_tl = [
@@ -4854,7 +5157,8 @@ impl LayoutTree {
             child_sticky_xform: ancestor_sticky_xform
                 || crate::renderer::element_wants_sticky_xform(element),
             opacity: painted.opacity,
-            clip: painted.clip,
+            clip: child_clip,
+            child_clip_poly,
             parent_tl,
             parent_scales,
             parent_rotates,
@@ -5138,6 +5442,7 @@ impl LayoutTree {
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
+        clip_polys: &mut Vec<crate::style::GpuClipPoly>,
         walk: CollectWalk,
     ) -> [f32; 2] {
         let CollectWalk {
@@ -5169,53 +5474,80 @@ impl LayoutTree {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_sub(1);
         }
 
-        if cap_children
-            && visible_rect[2] > 0.0
-            && visible_rect[3] > 0.0
-            && (instances.len() > cap_inst0 || textured_draws.len() > cap_tex0)
-        {
-            let child_insts = instances[cap_inst0..].to_vec();
-            let child_tex = textured_draws[cap_tex0..].to_vec();
-            instances.truncate(cap_inst0);
-            textured_draws.truncate(cap_tex0);
-            paint_rec.truncate_from(cap_inst0, cap_tex0);
-            let filter_bounds = if filter_capture {
-                [
-                    render_rect[0],
-                    render_rect[1],
-                    render_rect[2].max(1.0),
-                    render_rect[3].max(1.0),
-                ]
+        if cap_children && (instances.len() > cap_inst0 || textured_draws.len() > cap_tex0) {
+            let filter_outset = if filter_capture {
+                element
+                    .style
+                    .filter
+                    .as_ref()
+                    .map(|list| {
+                        crate::style::filter_list_paint_outset(list, render_rect[2], render_rect[3])
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let output_vis = if filter_capture {
+                intersect_rect(
+                    parent_clip,
+                    inflate_rect(render_rect, filter_outset, filter_outset),
+                )
             } else {
                 visible_rect
             };
-            let out_key = if filter_capture {
-                element.style.filter.as_ref().and_then(|list| {
-                    crate::renderer::queue_css_filter_wrap(
-                        list,
-                        filter_bounds,
-                        child_insts,
-                        child_tex,
-                    )
-                })
+            if output_vis[2] <= 0.0 || output_vis[3] <= 0.0 {
+                // Fully outside ancestor clip (including filter halo) — drop captured draws.
+                instances.truncate(cap_inst0);
+                textured_draws.truncate(cap_tex0);
+                clip_polys.truncate(cap_inst0);
+                paint_rec.truncate_from(cap_inst0, cap_tex0);
             } else {
-                crate::renderer::queue_subtree_wrap(
-                    &element.attrs,
-                    visible_rect,
-                    child_insts,
-                    child_tex,
-                )
-            };
-            if let Some(out_key) = out_key {
-                let draw_rect = if filter_capture {
-                    filter_bounds
+                let child_insts = instances[cap_inst0..].to_vec();
+                let child_tex = textured_draws[cap_tex0..].to_vec();
+                instances.truncate(cap_inst0);
+                textured_draws.truncate(cap_tex0);
+                clip_polys.truncate(cap_inst0);
+                paint_rec.truncate_from(cap_inst0, cap_tex0);
+                let filter_bounds = if filter_capture {
+                    let inflated = inflate_rect(render_rect, filter_outset, filter_outset);
+                    [
+                        inflated[0],
+                        inflated[1],
+                        inflated[2].max(1.0),
+                        inflated[3].max(1.0),
+                    ]
                 } else {
                     visible_rect
                 };
-                if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity) {
-                    let tex_i = textured_draws.len();
-                    textured_draws.push(draw);
-                    paint_rec.push_textured(tex_i, 1);
+                let out_key = if filter_capture {
+                    element.style.filter.as_ref().and_then(|list| {
+                        crate::renderer::queue_css_filter_wrap(
+                            list,
+                            filter_bounds,
+                            child_insts,
+                            child_tex,
+                        )
+                    })
+                } else {
+                    crate::renderer::queue_subtree_wrap(
+                        &element.attrs,
+                        visible_rect,
+                        child_insts,
+                        child_tex,
+                    )
+                };
+                if let Some(out_key) = out_key {
+                    let draw_rect = if filter_capture {
+                        filter_bounds
+                    } else {
+                        visible_rect
+                    };
+                    if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity)
+                    {
+                        let tex_i = textured_draws.len();
+                        textured_draws.push(draw);
+                        paint_rec.push_textured(tex_i, 1);
+                    }
                 }
             }
         }
@@ -5279,6 +5611,7 @@ impl LayoutTree {
 
         element.collect_extent = [extent_r, extent_b];
         element.collect_extent_valid = true;
+        crate::style::stamp_element_used_layout(element);
         [extent_r, extent_b]
     }
 }
@@ -5291,17 +5624,11 @@ fn scrollbar_track_overlay_abs(
     track_el: &Element,
     base_abs_x: f32,
     base_abs_y: f32,
-    _layout_w: f32,
-    _layout_h: f32,
+    layout_w: f32,
+    layout_h: f32,
     axis: &str,
     sig: &ScrollAreaSignalsCached,
 ) -> ([f32; 4], [f32; 4]) {
-    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| {
-        crate::layout::lpa_length_px(*v)
-            .filter(|px| px.is_finite())
-            .unwrap_or(0.0)
-            .max(0.0)
-    };
     let vw = sig.vw;
     let vh = sig.vh;
     let cw = sig.cw;
@@ -5315,24 +5642,8 @@ fn scrollbar_track_overlay_abs(
     let allow_y = !sig.overflow_y.eq_ignore_ascii_case("hidden")
         && !sig.overflow_y.eq_ignore_ascii_case("clip")
         && !sig.overflow_y.eq_ignore_ascii_case("visible");
-    let vis_x_trim = sig.scrollbar_vis_x.trim().to_ascii_lowercase();
-    let vis_y_trim = sig.scrollbar_vis_y.trim().to_ascii_lowercase();
-    let show_track_x = allow_x && vis_x_trim != "never";
-    let show_track_y = allow_y && vis_y_trim != "never";
     let can_scroll_x = allow_x && cw > vw + 0.5;
     let can_scroll_y = allow_y && ch > vh + 0.5;
-    let reserve_for_x = show_track_x
-        && match vis_x_trim.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => can_scroll_x,
-        };
-    let reserve_for_y = show_track_y
-        && match vis_y_trim.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => can_scroll_y,
-        };
     let allow_axis = if axis == "x" { allow_x } else { allow_y };
     let scrollable = if axis == "x" {
         can_scroll_x
@@ -5363,76 +5674,26 @@ fn scrollbar_track_overlay_abs(
             .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
     };
 
-    let both_outside =
-        sig.inset_x.eq_ignore_ascii_case("outside") && sig.inset_y.eq_ignore_ascii_case("outside");
-    let y_is_left = sig.y_side.eq_ignore_ascii_case("left");
-    let x_is_top = sig.x_side.eq_ignore_ascii_case("top");
-    // Keep identical with `app::state`: reserve only opposite lane thickness when both outside.
-    let corner_reserve = base_thickness;
-
-    let mut reserve_left = 0.0_f32;
-    let mut reserve_right = 0.0_f32;
-    let mut reserve_top = 0.0_f32;
-    let mut reserve_bottom = 0.0_f32;
-    if both_outside {
-        if axis == "x" && reserve_for_y {
-            if y_is_left {
-                reserve_left = corner_reserve;
-            } else {
-                reserve_right = corner_reserve;
-            }
-        }
-        if axis == "y" && reserve_for_x {
-            if x_is_top {
-                reserve_top = corner_reserve;
-            } else {
-                reserve_bottom = corner_reserve;
-            }
-        }
-    }
-
-    // Keep same track-length semantics as `app::state`: only corner reserve affects main-axis length.
-    // Do not additionally subtract edge pads, otherwise inside tracks become 4px shorter.
-    let edge_pad_main = 0.0_f32;
-
     let inset = 1.0_f32;
     let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);
 
-    let main_available = match axis {
-        "x" => {
-            let inset_l = inset_len_px(&track_el.style.inset.left);
-            let inset_r = inset_len_px(&track_el.style.inset.right);
-            (vw - inset_l - inset_r).max(1.0)
-        }
-        _ => {
-            let inset_t = inset_len_px(&track_el.style.inset.top);
-            let inset_b = inset_len_px(&track_el.style.inset.bottom);
-            (vh - inset_t - inset_b).max(1.0)
+    // Prefer Taffy's placed box: overlay insets (or 100% flex lanes) already encode
+    // the VS Code overlap / outside L-join. Fall back to viewport metrics on first frame.
+    let (track_w, track_h) = if layout_w > 1.0 && layout_h > 1.0 {
+        (layout_w, layout_h)
+    } else {
+        match axis {
+            "x" => (vw.max(1.0), cross),
+            _ => (cross, vh.max(1.0)),
         }
     };
-
-    let (track_w, track_h) = match axis {
-        "x" => (
-            (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0),
-            cross,
-        ),
-        _ => (
-            cross,
-            (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
-        ),
-    };
-
     let track_rect = [base_abs_x, base_abs_y, track_w, track_h];
 
-    // Overlay path bypasses Taffy for the thumb and must match the track **content** box
-    // (border-box origin + layout border; track has no padding so the 1px border is the
-    // only inset — padding+border double-counted and sat the thumb 1px down-right).
     let content_inset = scrollbar_track_content_inset(track_el);
     let thumb_rect = match axis {
         "x" => {
-            let track = (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
-            let track_inner = (track - inset * 2.0).max(1.0);
+            let track_inner = (track_w - inset * 2.0).max(1.0);
             let (tw, ml) = if scrollable {
                 let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
                 let min_thumb = scrollbar_min_thumb_along_track(track_inner);
@@ -5456,8 +5717,7 @@ fn scrollbar_track_overlay_abs(
             ]
         }
         _ => {
-            let track = (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
-            let track_inner = (track - inset * 2.0).max(1.0);
+            let track_inner = (track_h - inset * 2.0).max(1.0);
             let (th, mt) = if scrollable {
                 let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
                 let min_thumb = scrollbar_min_thumb_along_track(track_inner);
@@ -5541,7 +5801,33 @@ fn paint_outset_pad(style: &crate::style::Style, lay_w: f32, lay_h: f32) -> f32 
         pad += 0.5 * (lay_w * sx.max(1.0)).hypot(lay_h * sy.max(1.0));
     }
     pad += style.translate[0].abs().max(style.translate[1].abs());
+    if let Some(list) = style.filter.as_ref() {
+        pad = pad.max(crate::style::filter_list_paint_outset(list, lay_w, lay_h));
+    }
     pad
+}
+
+/// Clip applied to descendants while capturing a CSS `filter` SourceGraphic.
+/// Ancestor overflow is *not* inherited — it clips the filter output after the effect.
+fn filter_source_overflow_clip(
+    style: &crate::style::Style,
+    abs_x: f32,
+    abs_y: f32,
+    lay_w: f32,
+    lay_h: f32,
+) -> (Option<[f32; 4]>, crate::style::GpuClipPoly) {
+    let overflow_clips = style.overflow.x != taffy::style::Overflow::Visible
+        || style.overflow.y != taffy::style::Overflow::Visible;
+    if !overflow_clips {
+        return (None, crate::style::GpuClipPoly::NONE);
+    }
+    let box_r = [abs_x, abs_y, lay_w, lay_h];
+    let poly = if crate::style::radii_affect_clip(style.radii) {
+        crate::style::GpuClipPoly::from_rounded_rect(box_r, style.radii)
+    } else {
+        crate::style::GpuClipPoly::NONE
+    };
+    (Some(box_r), poly)
 }
 
 /// Native `<input>`: clip at the padding box. The text leaf is the content box —
@@ -5555,7 +5841,7 @@ fn hidden_input_text_clip(parent_clip: Option<[f32; 4]>, leaf: [f32; 4]) -> Opti
 /// Extract a definite px value from `LengthPercentageAuto`, returning `None` for `Auto`.
 #[inline]
 fn lpa_to_px(v: taffy::style::LengthPercentageAuto) -> Option<f32> {
-    use crate::layout::dimension::{lpa_kind, DimKind};
+    use crate::layout::dimension::{DimKind, lpa_kind};
     match lpa_kind(v) {
         DimKind::Length(px) => Some(px),
         DimKind::Percent(_) | DimKind::Auto => None,
@@ -5618,7 +5904,7 @@ fn push_shimmer_box_overlay(
                 transform,
                 clip_pos: [0.0, 0.0],
                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                border_extra: 0.0,
+                border_extra: 0.0, backdrop_blur: 0.0,
             }
             .with_clip(Some(box_clip)),
         );
@@ -5634,6 +5920,16 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
         [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
     } else {
         rect
+    }
+}
+
+fn stamp_clip_polys(
+    clip_polys: &mut Vec<crate::style::GpuClipPoly>,
+    instance_count: usize,
+    poly: crate::style::GpuClipPoly,
+) {
+    while clip_polys.len() < instance_count {
+        clip_polys.push(poly);
     }
 }
 
@@ -5704,7 +6000,7 @@ fn push_chrome_rect(
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: InstanceInput::NO_CLIP_SIZE,
-            border_extra: 0.0,
+            border_extra: 0.0, backdrop_blur: 0.0,
         }
         .with_clip(clip),
     );
@@ -5803,11 +6099,7 @@ fn push_input_chrome_instances(
         let mut e = sa.max(sb).min(text.len());
         s = text.floor_char_boundary(s);
         e = text.floor_char_boundary(e);
-        if s < e {
-            Some((s, e))
-        } else {
-            None
-        }
+        if s < e { Some((s, e)) } else { None }
     } else if let Some((a, b)) = caret.overwrite_highlight {
         if !crate::renderer::caret_blink_visible() {
             None
@@ -5816,11 +6108,7 @@ fn push_input_chrome_instances(
             let mut e = a.max(b).min(text.len());
             s = text.floor_char_boundary(s);
             e = text.floor_char_boundary(e);
-            if s < e {
-                Some((s, e))
-            } else {
-                None
-            }
+            if s < e { Some((s, e)) } else { None }
         }
     } else {
         None
@@ -6501,6 +6789,7 @@ mod prepared_text_attach_tests {
             spans: None,
             nowrap: true,
             clip_to_box: true,
+            writing_mode: crate::style::WritingMode::HorizontalTb,
         };
         let known = taffy::geometry::Size {
             width: Some(64.0),
@@ -6542,6 +6831,7 @@ mod prepared_text_attach_tests {
             spans: None,
             nowrap: true,
             clip_to_box: false,
+            writing_mode: crate::style::WritingMode::HorizontalTb,
         };
         let known = taffy::geometry::Size {
             width: Some(64.0),
@@ -6829,12 +7119,16 @@ mod portal_hoist_tests {
             "overlay must contribute text nodes after the split"
         );
         // Page glyphs are collected before the portal suffix.
-        assert!(result.text_nodes[..result.overlay_split.text_start]
-            .iter()
-            .any(|t| t.text == "page"));
-        assert!(result.text_nodes[result.overlay_split.text_start..]
-            .iter()
-            .any(|t| t.text == "overlay"));
+        assert!(
+            result.text_nodes[..result.overlay_split.text_start]
+                .iter()
+                .any(|t| t.text == "page")
+        );
+        assert!(
+            result.text_nodes[result.overlay_split.text_start..]
+                .iter()
+                .any(|t| t.text == "overlay")
+        );
         assert!(
             !result.overlay_split.bands.is_empty(),
             "each portal child should open a paint band"
@@ -6914,12 +7208,16 @@ mod portal_hoist_tests {
             b.text.0 >= a.text.1,
             "upper band text follows lower band text"
         );
-        assert!(result.text_nodes[a.text.0..a.text.1]
-            .iter()
-            .any(|t| t.text == "lower-glyph"));
-        assert!(result.text_nodes[b.text.0..b.text.1]
-            .iter()
-            .any(|t| t.text == "upper-glyph"));
+        assert!(
+            result.text_nodes[a.text.0..a.text.1]
+                .iter()
+                .any(|t| t.text == "lower-glyph")
+        );
+        assert!(
+            result.text_nodes[b.text.0..b.text.1]
+                .iter()
+                .any(|t| t.text == "upper-glyph")
+        );
     }
 
     #[test]
@@ -7611,6 +7909,140 @@ mod portal_hoist_tests {
             "overflow must still clip descendants to the panel box"
         );
     }
+
+    #[test]
+    fn local_backdrop_blur_stamps_on_mask_instance() {
+        // Gallery LocalOverlayShowcase: host stacking + 75% rounded scrim with blur.
+        // Blur binds to that SDF instance (radii + overflow clip), not a parallel AABB.
+        let host = Element::new()
+            .relative()
+            .w(220.0)
+            .h(140.0)
+            .template_id("card-host");
+        let scrim = Element::new()
+            .w(165.0)
+            .h(105.0)
+            .rounded(10.0)
+            .bg([15.0, 23.0, 42.0, 140.0])
+            .backdrop_blur(12.0)
+            .template_id("local-scrim");
+        let mut wrapper = Element::new()
+            .w("100%")
+            .h("100%")
+            .absolute()
+            .inset(0.0)
+            .z_index(2)
+            .child(scrim);
+        wrapper.set_attr(ATTR_HOISTED_MOUNT, "card-host");
+        let mut root = Element::new().children([host, wrapper]);
+        assert_eq!(hoist_portal_subtrees(&mut root), 1);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 300.0, [-1.0, -1.0]);
+        let blur_insts: Vec<_> = result
+            .instances
+            .iter()
+            .filter(|i| i.backdrop_blur > 0.5)
+            .collect();
+        assert_eq!(
+            blur_insts.len(),
+            1,
+            "only the 75% mask instance samples backdrop; got {:?}",
+            blur_insts
+                .iter()
+                .map(|i| (i.backdrop_blur, i.rect_size, i.radii))
+                .collect::<Vec<_>>()
+        );
+        let inst = blur_insts[0];
+        assert!(
+            (inst.backdrop_blur - 12.0).abs() < 0.01,
+            "backdrop_blur={}",
+            inst.backdrop_blur
+        );
+        assert!(
+            (inst.rect_size[0] - 165.0).abs() < 2.0 && (inst.rect_size[1] - 105.0).abs() < 2.0,
+            "mask size {:?}",
+            inst.rect_size
+        );
+        assert!(inst.radii[0] > 5.0, "mask radii={:?}", inst.radii);
+    }
+
+    #[test]
+    fn local_backdrop_blur_splits_from_host_text_inside_nested_stack() {
+        // Gallery「浮层 / 反馈」sits under a page stacking context (sidebar / ScrollArea).
+        // Nested z-index must still split so the scrim band is *after* host glyphs —
+        // otherwise capture prefix is empty and the SDF sample covers the labels.
+        let mut page = Element::new().w(400.0).h(300.0);
+        page.set_attr("data-stacking-context", "1");
+        page.style.z_index = 0;
+
+        let labels = Element::new()
+            .absolute()
+            .inset(0.0)
+            .z_index(0)
+            .text("YELLOW 高对比 BLUR");
+        let scrim = Element::new()
+            .w(165.0)
+            .h(105.0)
+            .rounded(10.0)
+            .bg([1.0, 1.0, 1.0, 0.55])
+            .backdrop_blur(12.0)
+            .template_id("local-scrim");
+        let mut overlay = Element::new()
+            .w("100%")
+            .h("100%")
+            .absolute()
+            .inset(0.0)
+            .z_index(2)
+            .child(scrim);
+        overlay.set_attr("rui_portal", "1");
+        overlay.set_attr(ATTR_PORTAL_MOUNT, "card-host");
+        overlay.set_attr(ATTR_PORTAL_KEY, "local-scrim");
+        let host = Element::new()
+            .relative()
+            .w(220.0)
+            .h(140.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden")
+            .template_id("card-host")
+            .children([labels, overlay]);
+        let mut root = Element::new().child(page.child(host));
+        assert!(
+            hoist_portal_subtrees(&mut root) >= 1,
+            "local mount portal must lift onto the host"
+        );
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 300.0, [-1.0, -1.0]);
+        assert!(
+            result.text_nodes.iter().any(|t| t.text.contains("YELLOW")),
+            "host contrast labels must still be collected"
+        );
+        let bands = result.overlay_split.page_stack_band_ranges();
+        let blur_at = result
+            .instances
+            .iter()
+            .position(|i| i.backdrop_blur > 0.5)
+            .expect("scrim instance must stamp backdrop_blur");
+        let text_at = result
+            .text_nodes
+            .iter()
+            .position(|t| t.text.contains("YELLOW"))
+            .unwrap();
+        let blur_band = bands
+            .iter()
+            .position(|b| b.instance.0 <= blur_at && blur_at < b.instance.1)
+            .expect("blur instance in a page_stack band");
+        let text_band = bands
+            .iter()
+            .position(|b| b.text.0 <= text_at && text_at < b.text.1)
+            .expect("label in a page_stack band");
+        assert!(
+            text_band < blur_band,
+            "labels must paint in an earlier band than the scrim so capture includes them; text_band={text_band} blur_band={blur_band} bands={}",
+            bands.len()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -7652,5 +8084,53 @@ mod text_cascade_tests {
             root.children[0].text_style.decoration_color,
             Some([239, 68, 68, 255])
         );
+    }
+}
+
+#[cfg(test)]
+mod border_paint_tests {
+    use super::representative_border_color;
+    use crate::style::{LineStyle, Style};
+
+    #[test]
+    fn representative_color_uses_first_opaque_side_when_uniform_is_clear() {
+        let mut style = Style::default();
+        style.border_style = LineStyle::Solid;
+        style.set_border_side_color(0, [1.0, 0.0, 0.0, 1.0]);
+        style.set_border_side_color(1, [0.0, 1.0, 0.0, 1.0]);
+        let c = representative_border_color(&style);
+        assert!(
+            (c[0] - 1.0).abs() < 1e-5 && c[3] > 0.5,
+            "expected first opaque side, got {c:?}"
+        );
+    }
+
+    #[test]
+    fn representative_color_prefers_uniform_when_set() {
+        let mut style = Style::default();
+        style.border_style = LineStyle::Solid;
+        style.border_color = [0.0, 0.0, 1.0, 1.0];
+        let c = representative_border_color(&style);
+        assert!((c[2] - 1.0).abs() < 1e-5);
+    }
+
+    fn lum(c: [f32; 4]) -> f32 {
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    }
+
+    #[test]
+    fn css_bevel_tones_stay_apart_on_dark_primary() {
+        let dark_teal = [0.05, 0.18, 0.16, 1.0];
+        let d = super::css_bevel_dark(dark_teal);
+        let l = super::css_bevel_light(dark_teal);
+        assert!(
+            lum(l) - lum(d) > 0.35,
+            "3D bevel must stay readable on near-black primary, dark={d:?} light={l:?}"
+        );
+        let top = super::css_inset_tone(dark_teal, 0);
+        let bottom = super::css_inset_tone(dark_teal, 2);
+        assert!(lum(bottom) > lum(top) + 0.35);
+        let top_out = super::css_outset_tone(dark_teal, 0);
+        assert!(lum(top_out) > lum(top) + 0.35);
     }
 }

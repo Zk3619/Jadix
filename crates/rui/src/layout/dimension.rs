@@ -256,6 +256,8 @@ pub struct UnitCtx {
     pub cb_w: Option<f32>,
     /// Containing-block **content** height.
     pub cb_h: Option<f32>,
+    /// CSS `calc-size()` `size` keyword — used px of the basis after layout.
+    pub size_px: Option<f32>,
 }
 
 impl UnitCtx {
@@ -271,6 +273,7 @@ impl UnitCtx {
             root_font_size: CSS_ROOT_FONT_SIZE_PX,
             cb_w: None,
             cb_h: None,
+            size_px: None,
         }
     }
 
@@ -300,8 +303,19 @@ pub enum CssDim {
     MinContent,
     /// CSS `max-content` / Tailwind `w-max`.
     MaxContent,
+    /// Unitless number inside `calc()` / `calc-size()` (multipliers).
+    Number(f32),
     CalcAdd(Box<CssDim>, Box<CssDim>),
     CalcSub(Box<CssDim>, Box<CssDim>),
+    CalcMul(Box<CssDim>, Box<CssDim>),
+    CalcDiv(Box<CssDim>, Box<CssDim>),
+    /// CSS `calc-size()` `size` keyword (only valid inside a calc-size calculation).
+    Size,
+    /// CSS `calc-size(basis, calc)` — `size` in `calc` is the used px of `basis`.
+    CalcSize {
+        basis: Box<CssDim>,
+        calc: Box<CssDim>,
+    },
 }
 
 impl CssDim {
@@ -311,8 +325,11 @@ impl CssDim {
 
     pub fn needs_layout_context(&self) -> bool {
         match self {
-            Self::Em(_) | Self::Vw(_) | Self::Vh(_) => true,
-            Self::CalcAdd(a, b) | Self::CalcSub(a, b) => {
+            Self::Em(_) | Self::Vw(_) | Self::Vh(_) | Self::Size | Self::CalcSize { .. } => true,
+            Self::CalcAdd(a, b)
+            | Self::CalcSub(a, b)
+            | Self::CalcMul(a, b)
+            | Self::CalcDiv(a, b) => {
                 a.needs_layout_context() || b.needs_layout_context() || self.has_percent()
             }
             _ => false,
@@ -322,7 +339,27 @@ impl CssDim {
     pub fn has_percent(&self) -> bool {
         match self {
             Self::Percent(_) => true,
-            Self::CalcAdd(a, b) | Self::CalcSub(a, b) => a.has_percent() || b.has_percent(),
+            Self::CalcAdd(a, b)
+            | Self::CalcSub(a, b)
+            | Self::CalcMul(a, b)
+            | Self::CalcDiv(a, b) => a.has_percent() || b.has_percent(),
+            Self::CalcSize { basis, calc } => basis.has_percent() || calc.has_percent(),
+            _ => false,
+        }
+    }
+
+    pub fn is_calc_size(&self) -> bool {
+        matches!(self, Self::CalcSize { .. })
+    }
+
+    pub fn contains_size_keyword(&self) -> bool {
+        match self {
+            Self::Size => true,
+            Self::CalcAdd(a, b)
+            | Self::CalcSub(a, b)
+            | Self::CalcMul(a, b)
+            | Self::CalcDiv(a, b) => a.contains_size_keyword() || b.contains_size_keyword(),
+            Self::CalcSize { calc, .. } => calc.contains_size_keyword(),
             _ => false,
         }
     }
@@ -353,6 +390,7 @@ impl CssDim {
         match self {
             Self::Em(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
             Self::Vw(p) | Self::Vh(p) => Some(Dimension::percent(*p)),
+            Self::CalcSize { .. } | Self::Size => Some(Dimension::auto()),
             _ => None,
         }
     }
@@ -372,8 +410,39 @@ impl CssDim {
             Self::Em(v) => Some(*v * ctx.font_size),
             Self::Vw(p) => Some(*p * ctx.viewport_w),
             Self::Vh(p) => Some(*p * ctx.viewport_h),
+            Self::Number(v) => Some(*v),
             Self::CalcAdd(a, b) => Some(a.resolve_px(ctx, axis)? + b.resolve_px(ctx, axis)?),
             Self::CalcSub(a, b) => Some(a.resolve_px(ctx, axis)? - b.resolve_px(ctx, axis)?),
+            Self::CalcMul(a, b) => Some(a.resolve_px(ctx, axis)? * b.resolve_px(ctx, axis)?),
+            Self::CalcDiv(a, b) => {
+                let d = b.resolve_px(ctx, axis)?;
+                if d.abs() < 1e-12 {
+                    return None;
+                }
+                Some(a.resolve_px(ctx, axis)? / d)
+            }
+            Self::Size => ctx.size_px,
+            Self::CalcSize { basis, calc } => {
+                let basis_px = match basis.as_ref() {
+                    Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent => {
+                        ctx.size_px
+                    }
+                    _ => basis.resolve_px(ctx, axis),
+                }?;
+                let mut inner = *ctx;
+                inner.size_px = Some(basis_px);
+                calc.resolve_px(&inner, axis)
+            }
+        }
+    }
+
+    /// Evaluate `calc-size(basis, calc)` with `size` bound to `size_px`.
+    pub fn eval_calc_size(&self, size_px: f32, ctx: &UnitCtx, axis: PercentAxis) -> Option<f32> {
+        let mut inner = *ctx;
+        inner.size_px = Some(size_px.max(0.0));
+        match self {
+            Self::CalcSize { .. } | Self::Size => self.resolve_px(&inner, axis),
+            _ => self.resolve_px(&inner, axis),
         }
     }
 
@@ -387,9 +456,18 @@ impl CssDim {
         }
         if matches!(
             self,
-            Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent
+            Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent | Self::Size
         ) {
             return Dimension::auto();
+        }
+        if let Self::CalcSize { basis, .. } = self {
+            if matches!(
+                basis.as_ref(),
+                Self::Auto | Self::FitContent | Self::MinContent | Self::MaxContent
+            ) && ctx.size_px.is_none()
+            {
+                return Dimension::auto();
+            }
         }
         if let Some(px) = self.resolve_px(ctx, axis) {
             return Dimension::length(px);
@@ -409,6 +487,29 @@ impl CssDim {
         dimension_to_lpa(self.to_dimension_axis(ctx, axis))
     }
 
+    /// CSS Box Model: percentage **padding** (all sides) resolves against the
+    /// containing block's **width**. Unknown CB → `0` (cyclic `%`).
+    pub fn to_box_edge_length_percentage(&self, ctx: &UnitCtx) -> LengthPercentage {
+        match self {
+            Self::Percent(p) => match ctx.cb_w {
+                Some(w) => LengthPercentage::length(*p * w),
+                None => LengthPercentage::length(0.0),
+            },
+            _ => self.to_length_percentage(ctx, PercentAxis::Inline),
+        }
+    }
+
+    /// Same containing-block rule as [`Self::to_box_edge_length_percentage`] for margin.
+    pub fn to_box_edge_length_percentage_auto(&self, ctx: &UnitCtx) -> LengthPercentageAuto {
+        match self {
+            Self::Percent(p) => match ctx.cb_w {
+                Some(w) => LengthPercentageAuto::length(*p * w),
+                None => LengthPercentageAuto::length(0.0),
+            },
+            _ => self.to_length_percentage_auto(ctx, PercentAxis::Inline),
+        }
+    }
+
     /// Unary minus for length-like dims (used by [`crate::core::tree::Element::bleed_x`]).
     pub fn negated(self) -> Self {
         match self {
@@ -419,15 +520,26 @@ impl CssDim {
             Self::Rem(v) => Self::Rem(-v),
             Self::Vw(p) => Self::Vw(-p),
             Self::Vh(p) => Self::Vh(-p),
+            Self::Number(v) => Self::Number(-v),
             // -(a + b) = (-a) + (-b); -(a - b) = (-a) + b
             Self::CalcAdd(a, b) => Self::CalcAdd(Box::new(a.negated()), Box::new(b.negated())),
             Self::CalcSub(a, b) => Self::CalcAdd(Box::new(a.negated()), b),
-            Self::FitContent | Self::MinContent | Self::MaxContent => self,
+            Self::CalcMul(a, b) => Self::CalcMul(Box::new(a.negated()), b),
+            Self::CalcDiv(a, b) => Self::CalcDiv(Box::new(a.negated()), b),
+            Self::FitContent | Self::MinContent | Self::MaxContent | Self::Size => self,
+            Self::CalcSize { basis, calc } => Self::CalcSize {
+                basis,
+                calc: Box::new(calc.negated()),
+            },
         }
     }
 }
 
 pub fn parse_css_dim(s: &str) -> Option<CssDim> {
+    parse_css_dim_ex(s, false)
+}
+
+fn parse_css_dim_ex(s: &str, allow_size: bool) -> Option<CssDim> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -438,10 +550,19 @@ pub fn parse_css_dim(s: &str) -> Option<CssDim> {
         "fit" | "fit-content" => return Some(CssDim::FitContent),
         "min-content" | "min_content" | "min" => return Some(CssDim::MinContent),
         "max-content" | "max_content" | "max" => return Some(CssDim::MaxContent),
+        "size" if allow_size => return Some(CssDim::Size),
         _ => {}
     }
+    if let Some(inner) = strip_fn_call(s, "calc-size") {
+        return parse_calc_size(inner);
+    }
     if let Some(inner) = s.strip_prefix("calc(").and_then(|t| t.strip_suffix(')')) {
-        return parse_calc(inner.trim());
+        return parse_calc_expr(inner.trim(), allow_size);
+    }
+    if allow_size {
+        if let Some(d) = parse_calc_expr(s, true) {
+            return Some(d);
+        }
     }
     if let Some(rest) = s.strip_suffix('%') {
         let val: f32 = rest.trim().parse().ok()?;
@@ -464,12 +585,55 @@ pub fn parse_css_dim(s: &str) -> Option<CssDim> {
     if let Some(raw) = s.strip_suffix("px") {
         return parse_css_number(raw).map(CssDim::Px);
     }
+    if allow_size {
+        if let Some(n) = parse_css_number(s) {
+            return Some(CssDim::Number(n));
+        }
+    }
     // Tailwind-style `a/b` → parent containing-block fraction (`1/2` ≡ 50%).
     if let Some(dim) = parse_css_fraction_percent(s) {
         return Some(dim);
     }
     // Unsuffixed number = rem (root 16px). `"100"` is 100rem, not 100% of the parent.
     parse_css_number(s).map(CssDim::Rem)
+}
+
+fn strip_fn_call<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let t = s.trim();
+    let rest = t.strip_prefix(name)?;
+    let rest = rest.trim_start();
+    rest.strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .map(str::trim)
+}
+
+fn parse_calc_size(inner: &str) -> Option<CssDim> {
+    let (basis_s, calc_s) = split_top_comma(inner)?;
+    let basis = parse_css_dim_ex(basis_s, false)?;
+    let calc = parse_css_dim_ex(calc_s, true)?;
+    Some(CssDim::CalcSize {
+        basis: Box::new(basis),
+        calc: Box::new(calc),
+    })
+}
+
+fn split_top_comma(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                let left = s[..i].trim();
+                let right = s[i + 1..].trim();
+                if !left.is_empty() && !right.is_empty() {
+                    return Some((left, right));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `"1/2"` / `"3/4"` → [`CssDim::Percent`] of the **parent** content box (not inner content).
@@ -486,30 +650,44 @@ fn parse_css_fraction_percent(s: &str) -> Option<CssDim> {
     Some(CssDim::Percent(num / den))
 }
 
-fn parse_calc(inner: &str) -> Option<CssDim> {
+fn parse_calc_expr(inner: &str, allow_size: bool) -> Option<CssDim> {
     let (left, op, right) = split_calc_binop(inner)?;
-    let a = parse_css_dim(left)?;
-    let b = parse_css_dim(right)?;
+    let a = parse_css_dim_ex(left, allow_size)?;
+    let b = parse_css_dim_ex(right, allow_size)?;
     Some(match op {
         '+' => CssDim::CalcAdd(Box::new(a), Box::new(b)),
         '-' => CssDim::CalcSub(Box::new(a), Box::new(b)),
+        '*' => CssDim::CalcMul(Box::new(a), Box::new(b)),
+        '/' => CssDim::CalcDiv(Box::new(a), Box::new(b)),
         _ => return None,
     })
 }
 
 fn split_calc_binop(s: &str) -> Option<(&str, char, &str)> {
     let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        if c == '+' || (c == '-' && i > 0) {
-            let left = s[..i].trim();
-            let right = s[i + 1..].trim();
-            if !left.is_empty() && !right.is_empty() {
-                return Some((left, c, right));
+    let mut depth = 0i32;
+    // Lowest precedence first so `size + 20px` splits on `+`.
+    for &(ops, skip_leading_minus) in &[("+-", true), ("*/", false)] {
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+            } else if depth == 0 && ops.contains(c) {
+                if skip_leading_minus && c == '-' && i == 0 {
+                    i += 1;
+                    continue;
+                }
+                let left = s[..i].trim();
+                let right = s[i + 1..].trim();
+                if !left.is_empty() && !right.is_empty() {
+                    return Some((left, c, right));
+                }
             }
+            i += 1;
         }
-        i += 1;
     }
     None
 }
@@ -915,6 +1093,57 @@ mod tests {
             other => panic!("fit-content maps to Auto for Taffy, got {other:?}"),
         }
         assert!(matches!("fit".into_css_dim(), CssDim::FitContent));
+    }
+
+    #[test]
+    fn padding_margin_percent_bakes_against_containing_block_width() {
+        let ctx = UnitCtx::new(800.0, 100.0, 16.0).with_containing_block(Some(400.0), Some(80.0));
+        let pad = CssDim::Percent(0.10).to_box_edge_length_percentage(&ctx);
+        assert!(
+            (lp_length_px(pad).unwrap() - 40.0).abs() < 0.01,
+            "10% of cb width 400 → 40, not 10% of height 80"
+        );
+        let mar = CssDim::Percent(0.25).to_box_edge_length_percentage_auto(&ctx);
+        match lpa_kind(mar) {
+            DimKind::Length(px) => assert!((px - 100.0).abs() < 0.01, "25% of 400 → {px}"),
+            other => panic!("{other:?}"),
+        }
+        let unk = UnitCtx::new(800.0, 100.0, 16.0);
+        let zero = CssDim::Percent(0.10).to_box_edge_length_percentage(&unk);
+        assert!(
+            (lp_length_px(zero).unwrap()).abs() < 0.01,
+            "cyclic / unknown CB → 0"
+        );
+    }
+
+    #[test]
+    fn calc_size_parses_and_evals_size_plus_px() {
+        let dim = parse_css_dim("calc-size(auto, size + 20px)").expect("parse");
+        match &dim {
+            CssDim::CalcSize { basis, calc } => {
+                assert!(matches!(**basis, CssDim::Auto));
+                assert!(calc.contains_size_keyword());
+            }
+            other => panic!("{other:?}"),
+        }
+        let ctx = UnitCtx::new(800.0, 600.0, 16.0);
+        let px = dim
+            .eval_calc_size(100.0, &ctx, PercentAxis::Block)
+            .expect("eval");
+        assert!(
+            (px - 120.0).abs() < 1e-3,
+            "calc-size(auto, size + 20px) of 100 → {px}"
+        );
+    }
+
+    #[test]
+    fn calc_size_half_max_content() {
+        let dim = parse_css_dim("calc-size(max-content, size * 0.5)").expect("parse");
+        let ctx = UnitCtx::new(800.0, 600.0, 16.0);
+        let px = dim
+            .eval_calc_size(80.0, &ctx, PercentAxis::Inline)
+            .expect("eval");
+        assert!((px - 40.0).abs() < 1e-3, "got {px}");
     }
 }
 

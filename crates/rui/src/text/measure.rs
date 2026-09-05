@@ -307,7 +307,10 @@ fn measure_run_width(
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
-        buffer.set_size(Some(16_384.0), Some(line_height + 2.0));
+        buffer.set_size(
+            Some(16_384.0),
+            Some(line_height + crate::utils::text_field::text_edit_ink_pad_px(size)),
+        );
         let attrs = Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight));
@@ -1545,5 +1548,55 @@ mod tests {
         assert_eq!(snap_content_text_width(16.621), 17.0);
         assert_eq!(snap_content_text_width(33.0), 33.0);
         assert_eq!(snap_content_text_width(0.2), 1.0);
+    }
+
+    #[test]
+    fn leading_none_cjk_stays_one_line_at_measured_width() {
+        // Gallery sidebar Labels: `text-sm font-medium leading-none` ("布局").
+        let size = 14.0;
+        let lh = size;
+        let text = "布局";
+        let p = prepare(text, size, 500, lh);
+        let mw = snap_content_text_width(intrinsic_width(&p));
+        assert_eq!(
+            glyphon_soft_wrap_line_count(text, size, 500, lh, mw),
+            1,
+            "CJK caption must not wrap at measured width {mw}"
+        );
+    }
+
+    #[test]
+    fn gallery_sidebar_cjk_labels_stay_one_line_under_fast_wrap() {
+        // Scroll chase force_fast snap-to-8px must not wrap a 2-glyph caption
+        // (user report: only 「数据」 strobes on downward chase).
+        let size = 14.0;
+        let lh = size;
+        let labels = [
+            "基础",
+            "指针事件",
+            "表单",
+            "浮层 / 反馈",
+            "数据",
+            "绘制",
+            "导航",
+            "布局",
+            "文本",
+            "关于",
+        ];
+        for text in labels {
+            let p = prepare(text, size, 500, lh);
+            let mw = snap_content_text_width(intrinsic_width(&p));
+            let fast = layout_wrap_target(mw, true);
+            let settle_lines = glyphon_soft_wrap_line_count(text, size, 500, lh, mw);
+            let fast_lines = glyphon_soft_wrap_line_count(text, size, 500, lh, fast);
+            assert_eq!(
+                settle_lines, 1,
+                "{text:?} must stay one line at measured width {mw}"
+            );
+            assert_eq!(
+                fast_lines, settle_lines,
+                "{text:?} fast wrap {fast} must not add lines vs settle {mw}"
+            );
+        }
     }
 }

@@ -367,12 +367,13 @@ fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize
 /// Parse one or more CSS `animation` shorthand declarations (comma-separated).
 pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntry> {
     use crate::style::{
-        AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
-        AnimationIterationCount, AnimationPlayState, AnimationTimeline, TimingFunction,
+        split_comma_list, split_ws_tokens, AnimationComposition, AnimationDirection,
+        AnimationEntry, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
+        AnimationTimeline, TimingFunction,
     };
     let mut out = Vec::new();
-    for segment in value.split(',') {
-        let parts: Vec<&str> = segment.split_whitespace().collect();
+    for segment in split_comma_list(value) {
+        let parts = split_ws_tokens(segment);
         if parts.is_empty() {
             continue;
         }
@@ -392,9 +393,19 @@ pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntr
                 continue;
             }
             if pl.starts_with("cubic-bezier(")
+                || pl.starts_with("steps(")
+                || pl.starts_with("linear(")
+                || pl.starts_with("spring(")
+                || pl == "spring"
                 || matches!(
                     pl.as_str(),
-                    "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out"
+                    "linear"
+                        | "ease"
+                        | "ease-in"
+                        | "ease-out"
+                        | "ease-in-out"
+                        | "step-start"
+                        | "step-end"
                 )
             {
                 entry.timing = TimingFunction::from_css(p);
@@ -897,6 +908,10 @@ pub struct ElementInner {
     pub transition_snapshot: crate::style::TransitionSnapshot,
     /// Per-element CSS `@keyframes` animation runtime.
     pub animation_snapshot: crate::style::AnimationSnapshot,
+    /// Author-specified animatable values (not polluted by tick present writes).
+    pub specified_present: crate::style::SpecifiedPresent,
+    /// Layout-pass used sizes for `max-height: auto` → content px keyframes.
+    pub used_layout: crate::style::UsedLayout,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
@@ -998,6 +1013,8 @@ fn blank_inner() -> ElementInner {
         paint_visual_gen: 0,
         transition_snapshot: Default::default(),
         animation_snapshot: Default::default(),
+        specified_present: Default::default(),
+        used_layout: Default::default(),
         on_click: None,
         on_hover: None,
         on_mousedown: None,
@@ -1090,20 +1107,27 @@ impl Element {
     /// Split-borrow style + animation snapshot (Deref cannot).
     #[inline]
     pub(crate) fn tick_css_animations(&mut self, dt: f32) -> bool {
-        crate::style::tick_element_animations(
+        crate::style::ensure_used_layout_from_bounds(self);
+        let active = crate::style::tick_element_animations_ex(
             &mut self.inner.style,
+            &mut self.inner.text_style,
+            &self.inner.used_layout,
             &mut self.inner.animation_snapshot,
             dt,
-        )
+        );
+        self.inner.specified_present = self.inner.animation_snapshot.specified.clone();
+        active
     }
 
     /// Split-borrow style + transition snapshot (Deref cannot).
     #[inline]
-    #[allow(dead_code)] // used by crate tests (motion / keyed_overlay)
     pub(crate) fn tick_css_transitions(&mut self, dt: f32) -> bool {
-        crate::style::tick_element_transitions(
+        let lock = crate::style::AnimationLock::default();
+        crate::style::tick_element_transitions_with_text(
             &mut self.inner.style,
+            &mut self.inner.text_style,
             &mut self.inner.transition_snapshot,
+            lock,
             dt,
         )
     }
@@ -1112,8 +1136,9 @@ impl Element {
     #[inline]
     pub(crate) fn tick_css_transitions_locked(&mut self, dt: f32) -> bool {
         let lock = self.inner.animation_snapshot.lock();
-        crate::style::tick_element_transitions_locked(
+        crate::style::tick_element_transitions_with_text(
             &mut self.inner.style,
+            &mut self.inner.text_style,
             &mut self.inner.transition_snapshot,
             lock,
             dt,
@@ -1872,6 +1897,12 @@ impl Element {
         self.text_style.line_height_specified = true;
         self
     }
+    pub fn text_leading_snug(mut self) -> Self {
+        self.text_style.line_height_px = None;
+        self.text_style.line_height_scale = Some(1.375);
+        self.text_style.line_height_specified = true;
+        self
+    }
     pub fn text_leading_normal(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.5);
@@ -1881,6 +1912,12 @@ impl Element {
     pub fn text_leading_relaxed(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.625);
+        self.text_style.line_height_specified = true;
+        self
+    }
+    pub fn text_leading_loose(mut self) -> Self {
+        self.text_style.line_height_px = None;
+        self.text_style.line_height_scale = Some(2.0);
         self.text_style.line_height_specified = true;
         self
     }
@@ -2358,10 +2395,12 @@ impl Element {
     /// Parse CSS `transition` shorthand, e.g. `"opacity 300ms ease-in-out 100ms"`.
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
-        use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
+        use crate::style::{
+            split_comma_list, split_ws_tokens, TimingFunction, TransitionEntry, TransitionProperty,
+        };
         self.style.transition.clear();
-        for segment in value.as_ref().split(',') {
-            let parts: Vec<&str> = segment.split_whitespace().collect();
+        for segment in split_comma_list(value.as_ref()) {
+            let parts = split_ws_tokens(segment);
             if parts.is_empty() {
                 continue;
             }
@@ -2378,7 +2417,15 @@ impl Element {
                     } else {
                         delay_ms = ms;
                     }
-                } else if p.starts_with("cubic-bezier(") || p.contains("cubic-bezier") {
+                } else if p.starts_with("cubic-bezier(")
+                    || p.starts_with("steps(")
+                    || p.starts_with("linear(")
+                    || p.starts_with("spring(")
+                    || *p == "step-start"
+                    || *p == "step-end"
+                    || *p == "spring"
+                    || p.contains("cubic-bezier")
+                {
                     timing = TimingFunction::from_css(p);
                 } else {
                     match *p {
@@ -2471,6 +2518,32 @@ impl Element {
     pub fn animation(mut self, value: impl AsRef<str>) -> Self {
         self.style.animations = parse_animation_shorthand(value.as_ref());
         self
+    }
+
+    /// Attach a programmatic [`crate::style::Animation`] handle (play / pause / seek).
+    /// Same `playback_id` replaces the existing list item (rebuild-safe).
+    pub fn animate(mut self, anim: crate::style::Animation) -> Self {
+        let entry = anim.to_entry();
+        if let Some(slot) = self
+            .style
+            .animations
+            .iter_mut()
+            .find(|e| e.playback_id == entry.playback_id)
+        {
+            *slot = entry;
+        } else {
+            self.style.animations.push(entry);
+        }
+        self
+    }
+
+    /// Live handles attached to this node (registry dump, not a DOM API).
+    pub fn get_animations(&self) -> Vec<crate::style::Animation> {
+        self.style
+            .animations
+            .iter()
+            .filter_map(|e| e.playback_id.and_then(crate::style::Animation::from_id))
+            .collect()
     }
 
     pub fn animation_name(mut self, value: impl AsRef<str>) -> Self {
@@ -2673,6 +2746,118 @@ impl Element {
         self
     }
 
+    /// CSS `interpolate-size: numeric-only | allow-keywords`.
+    pub fn interpolate_size(mut self, value: impl AsRef<str>) -> Self {
+        self.style.interpolate_size = crate::style::InterpolateSize::from_css(value.as_ref());
+        self
+    }
+
+    /// CSS `clip-path` (`none` / `inset()` / `polygon()` / `circle()` / `ellipse()` / `path()` / `url(#id)`).
+    pub fn clip_path(mut self, value: impl AsRef<str>) -> Self {
+        if let Some(parsed) = crate::style::parse_clip_path(value.as_ref()) {
+            self.style.clip_path = parsed;
+        }
+        self
+    }
+
+    /// Publish this node's `clip-path` as `url(#id)` (see [`crate::style::register_clip_path`]).
+    pub fn clip_path_name(mut self, value: impl AsRef<str>) -> Self {
+        let s = value.as_ref().trim();
+        self.style.clip_path_name = if s.is_empty() {
+            None
+        } else {
+            Some(s.trim_start_matches('#').to_string())
+        };
+        self
+    }
+
+    /// CSS `offset-path` (`none` / `path()` / `url(#id)`).
+    pub fn offset_path(mut self, value: impl AsRef<str>) -> Self {
+        if let Some(parsed) = crate::style::parse_offset_path(value.as_ref()) {
+            self.style.offset_path = parsed;
+        }
+        self
+    }
+
+    /// CSS `offset-distance` (`50%` or 0–1 fraction).
+    pub fn offset_distance(mut self, value: impl AsRef<str>) -> Self {
+        let s = value.as_ref().trim();
+        if let Some(n) = s.strip_suffix('%') {
+            if let Ok(v) = n.trim().parse::<f32>() {
+                self.style.offset_distance = (v / 100.0).clamp(0.0, 1.0);
+            }
+        } else if let Ok(v) = s.parse::<f32>() {
+            self.style.offset_distance = v.clamp(0.0, 1.0);
+        }
+        self
+    }
+
+    /// CSS `offset-rotate` (`auto` or angle).
+    pub fn offset_rotate(mut self, value: impl AsRef<str>) -> Self {
+        let s = value.as_ref().trim();
+        if s.is_empty() || s.eq_ignore_ascii_case("auto") {
+            self.style.offset_rotate_deg = None;
+            return self;
+        }
+        let deg = s
+            .strip_suffix("deg")
+            .unwrap_or(s)
+            .trim()
+            .parse::<f32>()
+            .ok();
+        self.style.offset_rotate_deg = deg;
+        self
+    }
+
+    /// CSS `scroll-timeline-name`.
+    pub fn scroll_timeline_name(mut self, value: impl AsRef<str>) -> Self {
+        let s = value.as_ref().trim();
+        self.style.scroll_timeline_name = if s.is_empty() || s.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(s.to_string())
+        };
+        self
+    }
+
+    /// CSS `scroll-timeline-axis`: `block` | `inline` | `x` | `y`.
+    pub fn scroll_timeline_axis(mut self, value: impl AsRef<str>) -> Self {
+        self.style.scroll_timeline_axis =
+            crate::style::ScrollTimelineAxis::from_css(value.as_ref());
+        self
+    }
+
+    /// CSS `view-timeline-name`.
+    pub fn view_timeline_name(mut self, value: impl AsRef<str>) -> Self {
+        let s = value.as_ref().trim();
+        self.style.view_timeline_name = if s.is_empty() || s.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(s.to_string())
+        };
+        self
+    }
+
+    /// CSS `scroll-timeline: <name> <axis>?`.
+    pub fn scroll_timeline(mut self, value: impl AsRef<str>) -> Self {
+        let mut it = value.as_ref().split_whitespace();
+        if let Some(name) = it.next() {
+            self = self.scroll_timeline_name(name);
+        }
+        if let Some(axis) = it.next() {
+            self = self.scroll_timeline_axis(axis);
+        }
+        self
+    }
+
+    /// CSS `background-position` (keywords / percentages → 0–1).
+    pub fn background_position(mut self, value: impl AsRef<str>) -> Self {
+        if let Some(xy) = crate::style::parse_background_position(value.as_ref()) {
+            self.style.bg_position = xy;
+        }
+        self
+    }
+
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
         self.style.shadow_offset[0] = dx;
         self
@@ -2707,13 +2892,13 @@ impl Element {
         self.set_css(UnitSlot::Width, width)
     }
     pub fn inline_size(self, size: impl IntoCssDim) -> Self {
-        self.w(size)
+        self.set_css(UnitSlot::InlineSize, size)
     }
     pub fn h(self, height: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::Height, height)
     }
     pub fn block_size(self, size: impl IntoCssDim) -> Self {
-        self.h(size)
+        self.set_css(UnitSlot::BlockSize, size)
     }
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.push(child.into());
@@ -2815,22 +3000,22 @@ impl Element {
         self.set_css(UnitSlot::PadL, padding)
     }
     pub fn padding_inline(self, padding: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::PadL, UnitSlot::PadR, padding)
+        self.apply_rect_pair(UnitSlot::PadInlineStart, UnitSlot::PadInlineEnd, padding)
     }
     pub fn padding_block(self, padding: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::PadT, UnitSlot::PadB, padding)
+        self.apply_rect_pair(UnitSlot::PadBlockStart, UnitSlot::PadBlockEnd, padding)
     }
     pub fn padding_inline_start(self, padding: impl IntoCssDim) -> Self {
-        self.pl(padding)
+        self.set_css(UnitSlot::PadInlineStart, padding)
     }
     pub fn padding_inline_end(self, padding: impl IntoCssDim) -> Self {
-        self.pr(padding)
+        self.set_css(UnitSlot::PadInlineEnd, padding)
     }
     pub fn padding_block_start(self, padding: impl IntoCssDim) -> Self {
-        self.pt(padding)
+        self.set_css(UnitSlot::PadBlockStart, padding)
     }
     pub fn padding_block_end(self, padding: impl IntoCssDim) -> Self {
-        self.pb(padding)
+        self.set_css(UnitSlot::PadBlockEnd, padding)
     }
     pub fn padding_h(self, val: impl IntoCssDim) -> Self {
         self.px(val)
@@ -2895,22 +3080,26 @@ impl Element {
         self.set_css(UnitSlot::MarginL, margin)
     }
     pub fn margin_inline(self, margin: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::MarginL, UnitSlot::MarginR, margin)
+        self.apply_rect_pair(
+            UnitSlot::MarginInlineStart,
+            UnitSlot::MarginInlineEnd,
+            margin,
+        )
     }
     pub fn margin_block(self, margin: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::MarginT, UnitSlot::MarginB, margin)
+        self.apply_rect_pair(UnitSlot::MarginBlockStart, UnitSlot::MarginBlockEnd, margin)
     }
     pub fn margin_inline_start(self, margin: impl IntoCssDim) -> Self {
-        self.ml(margin)
+        self.set_css(UnitSlot::MarginInlineStart, margin)
     }
     pub fn margin_inline_end(self, margin: impl IntoCssDim) -> Self {
-        self.mr(margin)
+        self.set_css(UnitSlot::MarginInlineEnd, margin)
     }
     pub fn margin_block_start(self, margin: impl IntoCssDim) -> Self {
-        self.mt(margin)
+        self.set_css(UnitSlot::MarginBlockStart, margin)
     }
     pub fn margin_block_end(self, margin: impl IntoCssDim) -> Self {
-        self.mb(margin)
+        self.set_css(UnitSlot::MarginBlockEnd, margin)
     }
     pub fn flex_grow(mut self, grow: impl IntoF32Raw) -> Self {
         self.style.flex_grow = grow.into_f32_raw();
@@ -3282,6 +3471,17 @@ impl Element {
     }
     pub fn text_direction(mut self, dir: crate::style::TextDirection) -> Self {
         self.text_style.direction = dir;
+        self.style.direction = dir;
+        self.style.direction_specified = !matches!(dir, crate::style::TextDirection::Auto);
+        self
+    }
+
+    /// CSS [`writing-mode`](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/writing-mode).
+    pub fn writing_mode(mut self, mode: impl AsRef<str>) -> Self {
+        if let Some(wm) = crate::style::WritingMode::parse(mode.as_ref()) {
+            self.style.writing_mode = wm;
+            self.style.writing_mode_specified = true;
+        }
         self
     }
     pub fn letter_spacing(mut self, spacing: f32) -> Self {
@@ -3308,10 +3508,10 @@ impl Element {
             .set_css(UnitSlot::InsetB, d)
     }
     pub fn inset_inline(self, val: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::InsetL, UnitSlot::InsetR, val)
+        self.apply_rect_pair(UnitSlot::InsetInlineStart, UnitSlot::InsetInlineEnd, val)
     }
     pub fn inset_block(self, val: impl IntoCssRectPair) -> Self {
-        self.apply_rect_pair(UnitSlot::InsetT, UnitSlot::InsetB, val)
+        self.apply_rect_pair(UnitSlot::InsetBlockStart, UnitSlot::InsetBlockEnd, val)
     }
     pub fn z_index(mut self, z: i32) -> Self {
         self.style.z_index = z;
@@ -3394,6 +3594,16 @@ pub(crate) fn element_clips_overflow(el: &Element) -> bool {
         || el.focus_id.as_deref().is_some_and(|f| {
             f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
         })
+}
+
+/// Overflow clip hit: border-box AABB, then `border-radius` if any corner is rounded.
+#[inline]
+pub(crate) fn overflow_clip_contains_point(
+    el: &Element,
+    box_xywh: [f32; 4],
+    world: [f32; 2],
+) -> bool {
+    crate::style::rounded_rect_contains(box_xywh, el.style.radii, world)
 }
 
 #[inline]

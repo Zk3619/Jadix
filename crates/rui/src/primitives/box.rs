@@ -2,7 +2,7 @@
 //!
 //! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` 由宏映射到
 //! 本 Builder；SVG 形状用小写/Pascal `<rect>` / `<Rect>`（见 `primitives::svg`）。
-//! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]。
+//! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]（[`boxed`] 别名；`box` 为 Rust 关键字）。
 
 use crate::layout::GridTrack;
 
@@ -580,8 +580,52 @@ impl BoxBuilder {
         self
     }
 
+    pub fn transition(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.transition(value);
+        self
+    }
+    pub fn transition_property(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.transition_property(value);
+        self
+    }
+    pub fn transition_duration(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.transition_duration(value);
+        self
+    }
+    pub fn transition_delay(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.transition_delay(value);
+        self
+    }
+    pub fn transition_timing_function(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.transition_timing_function(value);
+        self
+    }
     pub fn animation(mut self, value: impl AsRef<str>) -> Self {
         self.el = self.el.animation(value);
+        self
+    }
+    pub fn clip_path(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.clip_path(value);
+        self
+    }
+    pub fn clip_path_name(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.clip_path_name(value);
+        self
+    }
+    pub fn offset_path(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.offset_path(value);
+        self
+    }
+    pub fn offset_distance(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.offset_distance(value);
+        self
+    }
+    pub fn offset_rotate(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.offset_rotate(value);
+        self
+    }
+    pub fn animate(mut self, anim: crate::style::Animation) -> Self {
+        self.el = self.el.animate(anim);
         self
     }
     pub fn animation_name(mut self, value: impl AsRef<str>) -> Self {
@@ -759,6 +803,11 @@ impl BoxBuilder {
         self
     }
 
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.el = self.el.font_family(family);
+        self
+    }
+
     pub fn underline(mut self, underline: bool) -> Self {
         self.el = self.el.underline(underline);
         self
@@ -865,6 +914,12 @@ impl BoxBuilder {
         self.el = self.el.overflow_y(mode.into());
         self
     }
+
+    /// CSS [`writing-mode`](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/writing-mode).
+    pub fn writing_mode(mut self, mode: impl AsRef<str>) -> Self {
+        self.el = self.el.writing_mode(mode);
+        self
+    }
 }
 
 impl From<BoxBuilder> for Element {
@@ -886,6 +941,12 @@ impl crate::core::tree::IntoElementList for BoxBuilder {
 
 pub fn r#box() -> BoxBuilder {
     BoxBuilder::new()
+}
+
+/// Callable alias of [`r#box`] (Rust reserves `box`; RSX still uses `<Box>`).
+#[inline]
+pub fn boxed() -> BoxBuilder {
+    r#box()
 }
 
 pub fn hstack() -> BoxBuilder {
