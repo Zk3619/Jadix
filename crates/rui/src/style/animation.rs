@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 
 thread_local! {
     static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = const { RefCell::new(Vec::new()) };
@@ -181,11 +181,13 @@ pub fn any_ui_animation_active() -> bool {
 // `SystemTime` / wall clock (NTP jumps must not seek animations).
 // Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
 
+use super::clip_path::ClipPath;
 use super::element_style::{
-    AnimationDirection, AnimationEntry, AnimationFillMode, AnimationIterationCount,
-    AnimationPlayState, TimingFunction, TransitionEntry, TransitionProperty,
+    AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
+    AnimationIterationCount, AnimationPlayState, AnimationTimeline, BoxShadow, TimingFunction,
+    TransitionEntry, TransitionProperty, UnitSlot,
 };
-use super::filter::{interpolate_filter_lists, FilterList};
+use super::filter::{FilterList, interpolate_filter_lists};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -240,6 +242,79 @@ pub fn set_css_transition_synthetic_clock(on: bool) {
     }
 }
 
+thread_local! {
+    static PREFERS_REDUCED_MOTION: Cell<Option<bool>> = const { Cell::new(None) };
+    static TRANSITION_TEXT: RefCell<Option<*mut super::text_style::TextStyle>> =
+        const { RefCell::new(None) };
+    static TRANSITION_USED: Cell<Option<*const super::used_layout::UsedLayout>> =
+        const { Cell::new(None) };
+}
+
+/// Bind `TextStyle` for color / font-size transition ticks (Element path).
+pub fn tick_element_transitions_with_text(
+    style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
+    snapshot: &mut TransitionSnapshot,
+    lock: AnimationLock,
+    dt_secs: f32,
+) -> bool {
+    tick_element_transitions_with_text_used(style, text, None, snapshot, lock, dt_secs)
+}
+
+/// Same as [`tick_element_transitions_with_text`], with `used_layout` for `interpolate-size`.
+pub fn tick_element_transitions_with_text_used(
+    style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
+    used: Option<&super::used_layout::UsedLayout>,
+    snapshot: &mut TransitionSnapshot,
+    lock: AnimationLock,
+    dt_secs: f32,
+) -> bool {
+    TRANSITION_TEXT.with(|c| *c.borrow_mut() = Some(text as *mut _));
+    TRANSITION_USED.set(used.map(|u| u as *const _));
+    let r = tick_element_transitions_locked(style, snapshot, lock, dt_secs);
+    TRANSITION_TEXT.with(|c| *c.borrow_mut() = None);
+    TRANSITION_USED.set(None);
+    r
+}
+
+fn transition_tick_used() -> Option<&'static super::used_layout::UsedLayout> {
+    TRANSITION_USED.get().map(|ptr| {
+        // SAFETY: pointer is set only for the duration of `tick_element_transitions_with_text_used`
+        // on the same thread; no re-entrant tick.
+        unsafe { &*ptr }
+    })
+}
+
+fn transition_tick_text() -> Option<&'static mut super::text_style::TextStyle> {
+    TRANSITION_TEXT.with(|c| {
+        let p = *c.borrow();
+        p.map(|ptr| {
+            // SAFETY: pointer is set only for the duration of `tick_element_transitions_with_text`
+            // on the same thread; no re-entrant tick.
+            unsafe { &mut *ptr }
+        })
+    })
+}
+
+/// Override `prefers-reduced-motion` (tests / settings). `None` restores auto-detect.
+pub fn set_prefers_reduced_motion(on: Option<bool>) {
+    PREFERS_REDUCED_MOTION.set(on);
+}
+
+/// CSS `prefers-reduced-motion: reduce` — durations snap to the end of the interval.
+pub fn prefers_reduced_motion() -> bool {
+    if let Some(v) = PREFERS_REDUCED_MOTION.get() {
+        return v;
+    }
+    match std::env::var("RUI_REDUCED_MOTION") {
+        Ok(s) if s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("reduce") => {
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Per-property in-flight tween state (CSS transition segment).
 #[derive(Clone, Debug)]
 struct PropertyTween {
@@ -260,11 +335,13 @@ struct PropertyTween {
     /// separate places. Here there is a single `Style`, so without this receipt the next
     /// frame would read back our own mid-tween value, mistake it for a new target, and
     /// retarget the tween onto itself — every transition would die after one frame
-    /// unless its owner rewrote the target on every single frame.
+    ///     unless its owner rewrote the target on every single frame.
     written: Option<[f32; 8]>,
+    vel: [f32; 8],
+    last_ms: f64,
 }
 
-/// Filter list tween (cannot fit in `[f32; 4]`).
+/// Filter list tween (cannot fit in `[f32; 8]`).
 #[derive(Clone, Debug)]
 struct FilterTween {
     from: Option<FilterList>,
@@ -278,11 +355,39 @@ struct FilterTween {
     written: Option<Option<FilterList>>,
 }
 
+/// `clip-path` tween — same interpolator as keyframes (`ClipPath::interpolate`).
+#[derive(Clone, Debug)]
+struct ClipPathTween {
+    from: ClipPath,
+    to: ClipPath,
+    start_ms: f64,
+    duration_ms: f32,
+    delay_ms: f32,
+    timing: TimingFunction,
+    active: bool,
+    written: Option<ClipPath>,
+}
+
+/// `box-shadow` list tween (primary `shadow_*` + `extra_shadows`).
+#[derive(Clone, Debug)]
+struct ShadowListTween {
+    from: Vec<BoxShadow>,
+    to: Vec<BoxShadow>,
+    start_ms: f64,
+    duration_ms: f32,
+    delay_ms: f32,
+    timing: TimingFunction,
+    active: bool,
+    written: Option<Vec<BoxShadow>>,
+}
+
 /// Per-element transition snapshot stored alongside the element.
 #[derive(Clone, Debug, Default)]
 pub struct TransitionSnapshot {
     tweens: HashMap<TransitionProperty, PropertyTween>,
     filter_tween: Option<FilterTween>,
+    clip_tween: Option<ClipPathTween>,
+    shadow_tween: Option<ShadowListTween>,
 }
 
 impl TransitionSnapshot {
@@ -290,6 +395,46 @@ impl TransitionSnapshot {
     pub(crate) fn has_active_tweens(&self) -> bool {
         self.tweens.values().any(|t| t.active)
             || self.filter_tween.as_ref().is_some_and(|t| t.active)
+            || self.clip_tween.as_ref().is_some_and(|t| t.active)
+            || self.shadow_tween.as_ref().is_some_and(|t| t.active)
+    }
+
+    /// True if this node has ever seeded a transition snapshot (active or settled).
+    pub(crate) fn has_any_tweens(&self) -> bool {
+        !self.tweens.is_empty()
+            || self.filter_tween.is_some()
+            || self.clip_tween.is_some()
+            || self.shadow_tween.is_some()
+    }
+
+    pub(crate) fn prop_tween_active(&self, prop: TransitionProperty) -> bool {
+        self.tweens.get(&prop).is_some_and(|t| t.active)
+    }
+
+    /// Write last-used (computed) values from this snapshot into `style`.
+    fn write_used_values_into(&self, style: &mut super::Style) {
+        for (prop, tween) in &self.tweens {
+            if let Some(written) = tween.written {
+                write_prop(style, *prop, &written, tween.components);
+            } else if tween.active {
+                write_prop(style, *prop, &tween.from, tween.components);
+            }
+        }
+        if let Some(ft) = &self.filter_tween {
+            if let Some(written) = &ft.written {
+                style.filter = written.clone();
+            }
+        }
+        if let Some(ct) = &self.clip_tween {
+            if let Some(written) = &ct.written {
+                style.clip_path = written.clone();
+            }
+        }
+        if let Some(st) = &self.shadow_tween {
+            if let Some(written) = &st.written {
+                write_shadow_layers(style, written);
+            }
+        }
     }
 }
 
@@ -304,18 +449,27 @@ pub struct AnimationLock {
     /// Covers `translate` / `scale` / `rotate` (this engine's transform bundle).
     pub transform: bool,
     pub max_height: bool,
+    pub ids: super::animatable::PropertySet,
 }
 
 impl AnimationLock {
     pub fn any(self) -> bool {
-        self.opacity || self.transform || self.max_height
+        self.opacity || self.transform || self.max_height || !self.ids.is_empty()
     }
 }
 
 fn animation_owns_prop(prop: TransitionProperty, lock: AnimationLock) -> bool {
+    if let Some(id) = super::animatable::PropertyId::from_transition(prop) {
+        if lock.ids.contains(id) {
+            return true;
+        }
+    }
     match prop {
         TransitionProperty::Opacity => lock.opacity,
-        TransitionProperty::Transform | TransitionProperty::Translate => lock.transform,
+        TransitionProperty::Transform
+        | TransitionProperty::Translate
+        | TransitionProperty::Scale
+        | TransitionProperty::Rotate => lock.transform,
         TransitionProperty::MaxHeight => lock.max_height,
         _ => false,
     }
@@ -367,6 +521,9 @@ pub struct AnimationSnapshot {
     /// fresh assignment by the component (same trick as [`PropertyTween::written`]).
     written: Option<AnimationBaseline>,
     lock: AnimationLock,
+    /// Specified slot for style-only ticks (Element also has `specified_present`).
+    pub specified: super::specified::SpecifiedPresent,
+    written_props: HashMap<super::animatable::PropertyId, super::animatable::AnimatableValue>,
 }
 
 impl AnimationSnapshot {
@@ -417,6 +574,12 @@ pub fn keyframes_anim_entry(
     }
 }
 
+fn observe_playback(id: Option<u64>, run: &AnimationRunState) {
+    if let Some(id) = id {
+        super::waapi::observe_time(id, run.elapsed_ms, run.finished);
+    }
+}
+
 fn animation_entry_fp(entry: &AnimationEntry) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -428,7 +591,24 @@ fn animation_entry_fp(entry: &AnimationEntry) -> u64 {
     format!("{:?}", entry.iteration_count).hash(&mut h);
     entry.direction.as_str().hash(&mut h);
     entry.fill_mode.as_str().hash(&mut h);
+    entry.end_delay_ms.to_bits().hash(&mut h);
     h.finish()
+}
+
+/// Progress for CSS scroll/view `animation-timeline` (0–1). Document time uses [`Self::ZERO`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TimelineProgress {
+    /// Nearest scroller (`scroll()`): `scroll_offset / max_scroll`.
+    pub scroll: f32,
+    /// Element in the viewport (`view()`): 0 just entering, 1 just leaving.
+    pub view: f32,
+}
+
+impl TimelineProgress {
+    pub const ZERO: Self = Self {
+        scroll: 0.0,
+        view: 0.0,
+    };
 }
 
 /// Write a sample back, but only for the properties the rule actually declares.
@@ -439,38 +619,22 @@ fn animation_entry_fp(entry: &AnimationEntry) -> u64 {
 /// because `zoom-in-95` reported the *base* opacity and ran last.
 fn apply_keyframe_sample(
     style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
     stops: &[super::keyframes::KeyframeStop],
     sample: &super::keyframes::KeyframeSample,
+    composition: AnimationComposition,
 ) {
-    if let Some(o) = sample
-        .opacity
-        .filter(|_| stops.iter().any(|s| s.opacity.is_some()))
-    {
-        style.opacity = o;
-    }
-    if let Some(r) = sample
-        .rotate_deg
-        .filter(|_| stops.iter().any(|s| s.rotate_deg.is_some()))
-    {
-        style.rotate_deg = r;
-    }
-    if let Some(s) = sample
-        .scale
-        .filter(|_| stops.iter().any(|s| s.scale.is_some()))
-    {
-        style.scale = s;
-    }
-    if let Some(t) = sample
-        .translate
-        .filter(|_| stops.iter().any(|s| s.translate.is_some()))
-    {
-        style.translate = t;
-    }
-    if let Some(h) = sample
-        .max_height
-        .filter(|_| stops.iter().any(|s| s.max_height.is_some()))
-    {
-        style.max_size.height = taffy::style::Dimension::length(h.max(0.0));
+    let cov = super::keyframes::keyframe_coverage(stops);
+    for id in cov.ids.iter() {
+        if let Some(effect) = sample.props.get(&id) {
+            let written = if matches!(composition, AnimationComposition::Replace) {
+                effect.clone()
+            } else {
+                let underlying = super::animatable::read_value(style, text, id);
+                super::animatable::compose(composition, &underlying, effect)
+            };
+            super::animatable::write_value(style, text, id, &written);
+        }
     }
 }
 
@@ -502,7 +666,7 @@ fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
 }
 
 fn max_height_dim_matches(style: taffy::style::Dimension, base: taffy::style::Dimension) -> bool {
-    use crate::layout::{dim_kind, DimKind};
+    use crate::layout::{DimKind, dim_kind};
     match (dim_kind(style), dim_kind(base)) {
         (DimKind::Auto, DimKind::Auto) => true,
         (DimKind::Length(a), DimKind::Length(b)) => (a - b).abs() <= 1e-3,
@@ -514,18 +678,21 @@ fn max_height_dim_matches(style: taffy::style::Dimension, base: taffy::style::Di
 /// Paint one keyframe sample and record which properties it claimed.
 fn apply_animation_sample(
     style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
     stops: &[super::keyframes::KeyframeStop],
     local_t: f32,
     timing: TimingFunction,
     base: &super::keyframes::KeyframeBase,
     lock: &mut AnimationLock,
+    composition: AnimationComposition,
 ) {
     let sample = super::keyframes::sample_keyframes_eased(stops, local_t, timing, Some(base));
-    apply_keyframe_sample(style, stops, &sample);
+    apply_keyframe_sample(style, text, stops, &sample, composition);
     let cov = super::keyframes::keyframe_coverage(stops);
     lock.opacity |= cov.opacity;
     lock.transform |= cov.transform;
     lock.max_height |= cov.max_height;
+    lock.ids.union_with(cov.ids);
 }
 
 #[cfg(debug_assertions)]
@@ -549,22 +716,23 @@ fn warn_unknown_keyframes(name: &str) {
 fn warn_unknown_keyframes(_name: &str) {}
 
 /// Map local cycle progress through `animation-direction`.
-fn direction_local_t(
+pub(crate) fn direction_local_t(
     direction: super::element_style::AnimationDirection,
     iteration_index: u32,
     cycle_t: f32,
 ) -> f32 {
-    use super::element_style::AnimationDirection;
-    let reverse = match direction {
-        AnimationDirection::Normal => false,
-        AnimationDirection::Reverse => true,
-        AnimationDirection::Alternate => iteration_index % 2 == 1,
-        AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
-    };
-    if reverse {
-        1.0 - cycle_t
-    } else {
-        cycle_t
+    super::timing::direction_local_t(direction, iteration_index, cycle_t)
+}
+
+fn entry_timing_model(entry: &super::element_style::AnimationEntry) -> super::timing::Timing {
+    super::timing::Timing {
+        duration_ms: entry.duration_ms,
+        delay_ms: entry.delay_ms,
+        end_delay_ms: entry.end_delay_ms,
+        easing: entry.timing,
+        iterations: entry.iteration_count,
+        direction: entry.direction,
+        fill: entry.fill_mode,
     }
 }
 
@@ -574,12 +742,56 @@ pub fn tick_element_animations(
     snap: &mut AnimationSnapshot,
     dt_secs: f32,
 ) -> bool {
-    use super::element_style::{AnimationIterationCount, AnimationPlayState};
-    use super::keyframes::{lookup_keyframes, KeyframeBase};
+    let mut text = super::text_style::TextStyle::default();
+    let used = super::used_layout::UsedLayout::default();
+    tick_element_animations_ex(style, &mut text, &used, snap, dt_secs)
+}
+
+/// Full tick: specified slot on `snap.specified`, used layout for `auto` sizes, text props.
+pub fn tick_element_animations_ex(
+    style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
+    used: &super::used_layout::UsedLayout,
+    snap: &mut AnimationSnapshot,
+    dt_secs: f32,
+) -> bool {
+    tick_element_animations_ex_named(
+        style,
+        text,
+        used,
+        snap,
+        dt_secs,
+        TimelineProgress::ZERO,
+        &[],
+    )
+}
+
+/// Full tick with scroll/view timeline progress (ANIM A6.1).
+pub fn tick_element_animations_ex_progress(
+    style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
+    used: &super::used_layout::UsedLayout,
+    snap: &mut AnimationSnapshot,
+    dt_secs: f32,
+    progress: TimelineProgress,
+) -> bool {
+    tick_element_animations_ex_named(style, text, used, snap, dt_secs, progress, &[])
+}
+
+/// Full tick with named `scroll-timeline` / `view-timeline` progress (later = nearer).
+pub fn tick_element_animations_ex_named(
+    style: &mut super::Style,
+    text: &mut super::text_style::TextStyle,
+    used: &super::used_layout::UsedLayout,
+    snap: &mut AnimationSnapshot,
+    dt_secs: f32,
+    progress: TimelineProgress,
+    named: &[(String, f32)],
+) -> bool {
+    use super::element_style::AnimationPlayState;
+    use super::keyframes::{KeyframeBase, keyframe_coverage, lookup_keyframes};
 
     if style.animations.is_empty() {
-        // Animation removed: hand the cascaded value back, unless the component has
-        // meanwhile specified something of its own (CSS drops to the base style here).
         if let (Some(base), Some(written)) = (snap.base, snap.written) {
             if baseline_matches(style, &written) {
                 restore_baseline(style, &base);
@@ -589,9 +801,15 @@ pub fn tick_element_animations(
         return false;
     }
 
-    // Resolve the base value the animation is layered over. Keyframes are *not*
-    // cumulative: every frame must sample from the cascaded style, otherwise our own
-    // output from last frame becomes the new base and the animation drifts/freezes.
+    let mut cov_ids = super::animatable::PropertySet::default();
+    for entry in &style.animations {
+        if let Some(stops) = lookup_keyframes(&entry.name) {
+            cov_ids.union_with(keyframe_coverage(&stops).ids);
+        }
+    }
+    snap.specified
+        .capture_author(style, text, &snap.written_props, cov_ids.iter());
+
     let base = match (snap.base, snap.written) {
         (Some(b), Some(w)) if baseline_matches(style, &w) => b,
         _ => AnimationBaseline::from_style(style),
@@ -599,16 +817,16 @@ pub fn tick_element_animations(
     snap.base = Some(base);
     restore_baseline(style, &base);
 
-    let kf_base = KeyframeBase {
-        opacity: base.opacity,
-        rotate_deg: base.rotate_deg,
-        scale: base.scale,
-        translate: base.translate,
-        // Accordion interpolates toward the cascaded px; `auto` has no length → 0.
-        max_height: crate::layout::dim_length_px(base.max_height).unwrap_or(0.0),
-    };
+    let kf_base = KeyframeBase::from_specified(&snap.specified, style, text, used, || {
+        KeyframeBase::layered(
+            base.opacity,
+            base.rotate_deg,
+            base.scale,
+            base.translate,
+            crate::layout::dim_length_px(base.max_height).unwrap_or(used.anim_height()),
+        )
+    });
 
-    // Sync run slots with style list length / fingerprints.
     while snap.runs.len() < style.animations.len() {
         let i = snap.runs.len();
         snap.runs.push(AnimationRunState {
@@ -620,13 +838,20 @@ pub fn tick_element_animations(
     }
     snap.runs.truncate(style.animations.len());
 
-    let dt_ms = (dt_secs.max(0.0) * 1000.0).min(80.0);
+    let reduced = prefers_reduced_motion();
+    let dt_ms = if reduced {
+        1.0e9
+    } else {
+        (dt_secs.max(0.0) * 1000.0).min(80.0)
+    };
     let mut any_active = false;
     let mut lock = AnimationLock::default();
-    let animations = style.animations.clone();
+    let mut animations = style.animations.clone();
+    let skip_max_h =
+        cov_ids.contains(super::animatable::PropertyId::MaxHeight) && kf_base.max_height < 1.0;
 
-    for (i, entry) in animations.iter().enumerate() {
-        if !entry.is_named() || !entry.timeline.is_auto() {
+    for (i, entry) in animations.iter_mut().enumerate() {
+        if !entry.is_named() {
             continue;
         }
         let fp = animation_entry_fp(entry);
@@ -642,9 +867,16 @@ pub fn tick_element_animations(
                 };
             }
         }
+        super::waapi::prepare_entry(entry, &mut snap.runs[i]);
+        let playback_id = entry.playback_id;
+        if playback_id.is_some_and(super::waapi::is_cancelled) {
+            observe_playback(playback_id, &snap.runs[i]);
+            continue;
+        }
 
         let Some(stops) = lookup_keyframes(&entry.name) else {
             warn_unknown_keyframes(&entry.name);
+            observe_playback(playback_id, &snap.runs[i]);
             continue;
         };
 
@@ -653,77 +885,196 @@ pub fn tick_element_animations(
             (
                 run.elapsed_ms,
                 run.finished,
-                entry.play_state == AnimationPlayState::Paused,
+                entry.play_state == AnimationPlayState::Paused && !reduced,
             )
         };
 
+        if skip_max_h && keyframe_coverage(&stops).max_height {
+            any_active = true;
+            observe_playback(playback_id, &snap.runs[i]);
+            continue;
+        }
+
+        if entry.timeline.is_progress_driven() {
+            let raw = match &entry.timeline {
+                AnimationTimeline::Scroll => Some(progress.scroll),
+                AnimationTimeline::View => Some(progress.view),
+                AnimationTimeline::Named(name) => super::scroll_timeline::lookup_named(named, name),
+                AnimationTimeline::Auto => None,
+            };
+            let Some(raw) = raw else {
+                observe_playback(playback_id, &snap.runs[i]);
+                continue;
+            };
+            let raw = super::scroll_timeline::map_animation_range(
+                raw,
+                entry.range_start.as_deref(),
+                entry.range_end.as_deref(),
+            );
+            let t = if paused {
+                (elapsed_ms / 1000.0).clamp(0.0, 1.0)
+            } else {
+                let t = raw.clamp(0.0, 1.0);
+                snap.runs[i].elapsed_ms = t * 1000.0;
+                t
+            };
+            let local = direction_local_t(entry.direction, 0, t);
+            apply_animation_sample(
+                style,
+                text,
+                &stops,
+                local,
+                entry.timing,
+                &kf_base,
+                &mut lock,
+                entry.composition,
+            );
+            observe_playback(playback_id, &snap.runs[i]);
+            continue;
+        }
+
         if paused {
-            // Still paint the current fill/frame without advancing.
             if let Some(local) = animation_sample_t(entry, elapsed_ms) {
-                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
+                apply_animation_sample(
+                    style,
+                    text,
+                    &stops,
+                    local,
+                    entry.timing,
+                    &kf_base,
+                    &mut lock,
+                    entry.composition,
+                );
             } else if entry.fill_mode.apply_backwards() && elapsed_ms < entry.delay_ms {
                 let local = direction_local_t(entry.direction, 0, 0.0);
-                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
+                apply_animation_sample(
+                    style,
+                    text,
+                    &stops,
+                    local,
+                    entry.timing,
+                    &kf_base,
+                    &mut lock,
+                    entry.composition,
+                );
             }
             if entry.needs_frame() || !finished_before {
                 any_active = true;
             }
+            if entry_timing_model(entry).resolve(elapsed_ms).finished {
+                snap.runs[i].finished = true;
+            }
+            observe_playback(playback_id, &snap.runs[i]);
             continue;
         }
 
         let elapsed_ms = if finished_before {
             elapsed_ms
         } else {
-            let next = elapsed_ms + dt_ms;
+            let rate = playback_id.map(super::waapi::playback_rate).unwrap_or(1.0);
+            let next = elapsed_ms + dt_ms * rate;
+            if next < 0.0 {
+                snap.runs[i].elapsed_ms = 0.0;
+                snap.runs[i].finished = true;
+                if entry.fill_mode.apply_backwards() {
+                    let local = direction_local_t(entry.direction, 0, 0.0);
+                    apply_animation_sample(
+                        style,
+                        text,
+                        &stops,
+                        local,
+                        entry.timing,
+                        &kf_base,
+                        &mut lock,
+                        entry.composition,
+                    );
+                }
+                observe_playback(playback_id, &snap.runs[i]);
+                continue;
+            }
             snap.runs[i].elapsed_ms = next;
             next
         };
 
-        let after_delay = elapsed_ms - entry.delay_ms;
-        if after_delay < 0.0 {
-            if entry.fill_mode.apply_backwards() {
-                let local = direction_local_t(entry.direction, 0, 0.0);
-                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
+        let progress = entry_timing_model(entry).resolve(elapsed_ms);
+        match progress.phase {
+            super::timing::TimingPhase::Delay => {
+                if entry.fill_mode.apply_backwards() {
+                    apply_animation_sample(
+                        style,
+                        text,
+                        &stops,
+                        progress.local_t,
+                        entry.timing,
+                        &kf_base,
+                        &mut lock,
+                        entry.composition,
+                    );
+                }
+                any_active = true;
+                observe_playback(playback_id, &snap.runs[i]);
+                continue;
             }
-            any_active = true;
-            continue;
-        }
-
-        let dur = entry.duration_ms.max(1e-3);
-        let total_iters = match entry.iteration_count {
-            AnimationIterationCount::Infinite => None,
-            AnimationIterationCount::Finite(n) => Some(n.max(0.0)),
-        };
-
-        let finished = matches!(total_iters, Some(n) if after_delay >= dur * n);
-
-        if finished {
-            snap.runs[i].finished = true;
-            if entry.fill_mode.apply_forwards() {
-                let last_iter = match total_iters {
-                    Some(n) if n > 0.0 => (n.ceil() as u32).saturating_sub(1),
-                    _ => 0,
-                };
-                // End of last iteration: local t = 1.0 before direction.
-                let local = direction_local_t(entry.direction, last_iter, 1.0);
-                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
+            super::timing::TimingPhase::EndDelay => {
+                if entry.fill_mode.apply_forwards() {
+                    apply_animation_sample(
+                        style,
+                        text,
+                        &stops,
+                        progress.local_t,
+                        entry.timing,
+                        &kf_base,
+                        &mut lock,
+                        entry.composition,
+                    );
+                }
+                any_active = true;
+                observe_playback(playback_id, &snap.runs[i]);
+                continue;
             }
-            // `fill-mode: none` needs no work: the base was already restored above.
-            continue;
+            super::timing::TimingPhase::Finished => {
+                snap.runs[i].finished = true;
+                if entry.fill_mode.apply_forwards() {
+                    apply_animation_sample(
+                        style,
+                        text,
+                        &stops,
+                        progress.local_t,
+                        entry.timing,
+                        &kf_base,
+                        &mut lock,
+                        entry.composition,
+                    );
+                }
+                observe_playback(playback_id, &snap.runs[i]);
+                continue;
+            }
+            super::timing::TimingPhase::Active => {
+                snap.runs[i].finished = false;
+                any_active = true;
+                apply_animation_sample(
+                    style,
+                    text,
+                    &stops,
+                    progress.local_t,
+                    entry.timing,
+                    &kf_base,
+                    &mut lock,
+                    entry.composition,
+                );
+                observe_playback(playback_id, &snap.runs[i]);
+            }
         }
-
-        snap.runs[i].finished = false;
-        any_active = true;
-
-        let cycle_index = (after_delay / dur).floor() as u32;
-        let cycle_t = (after_delay % dur) / dur;
-        let local = direction_local_t(entry.direction, cycle_index, cycle_t);
-        apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
     }
 
     snap.lock = lock;
     pin_min_height_for_max_height_keyframes(style, lock);
     snap.written = Some(AnimationBaseline::from_style(style));
+    snap.written_props.clear();
+    for id in lock.ids.iter() {
+        snap.written_props
+            .insert(id, super::animatable::read_value(style, text, id));
+    }
     any_active
 }
 
@@ -742,24 +1093,11 @@ fn animation_sample_t(
     entry: &super::element_style::AnimationEntry,
     elapsed_ms: f32,
 ) -> Option<f32> {
-    use super::element_style::AnimationIterationCount;
-    let after_delay = elapsed_ms - entry.delay_ms;
-    if after_delay < 0.0 {
-        return None;
+    let p = entry_timing_model(entry).resolve(elapsed_ms);
+    match p.phase {
+        super::timing::TimingPhase::Delay => None,
+        _ => Some(p.local_t),
     }
-    let dur = entry.duration_ms.max(1e-3);
-    let total_iters = match entry.iteration_count {
-        AnimationIterationCount::Infinite => None,
-        AnimationIterationCount::Finite(n) => Some(n.max(0.0)),
-    };
-    if let Some(n) = total_iters {
-        if after_delay >= dur * n {
-            return Some(1.0);
-        }
-    }
-    let cycle_index = (after_delay / dur).floor() as u32;
-    let cycle_t = (after_delay % dur) / dur;
-    Some(direction_local_t(entry.direction, cycle_index, cycle_t))
 }
 
 /// True when this element should keep the animation frame pump alive.
@@ -786,51 +1124,354 @@ fn specified_filter_value(tween: &FilterTween, current: &Option<FilterList>) -> 
     }
 }
 
+fn specified_clip_value(tween: &ClipPathTween, current: &ClipPath) -> ClipPath {
+    match tween.written.as_ref() {
+        Some(w) if w == current => tween.to.clone(),
+        _ => current.clone(),
+    }
+}
+
 /// CSS keywords like `auto` have no numeric value to interpolate.
 ///
 /// Web needs `interpolate-size: allow-keywords` / `calc-size()` to animate to `auto`;
 /// without this guard `max-height: auto` reads back as `0`, and the tween then pins the
 /// box to zero height — turning a decorative `transition: all` into an invisible element.
 fn prop_is_interpolable(style: &super::Style, prop: TransitionProperty) -> bool {
+    use crate::layout::{DimKind, dim_kind, lp_kind, lpa_kind};
+    let keywords = style.interpolate_size.allows_keywords();
+    let calc = |slot: UnitSlot| {
+        style
+            .unit_specs
+            .iter()
+            .any(|(s, d)| *s == slot && (d.is_calc_size() || d.contains_size_keyword()))
+    };
+    let dim_len = |d, slot| matches!(dim_kind(d), DimKind::Length(_)) || keywords || calc(slot);
+    let lp_len = |d| matches!(lp_kind(d), DimKind::Length(_));
+    let lpa_len = |d| matches!(lpa_kind(d), DimKind::Length(_));
     match prop {
-        TransitionProperty::MaxHeight => matches!(
-            crate::layout::dim_kind(style.max_size.height),
-            crate::layout::DimKind::Length(_)
-        ),
+        TransitionProperty::Width => dim_len(style.size.width, UnitSlot::Width),
+        TransitionProperty::Height => dim_len(style.size.height, UnitSlot::Height),
+        TransitionProperty::MinWidth => dim_len(style.min_size.width, UnitSlot::MinWidth),
+        TransitionProperty::MinHeight => dim_len(style.min_size.height, UnitSlot::MinHeight),
+        TransitionProperty::MaxWidth => dim_len(style.max_size.width, UnitSlot::MaxWidth),
+        TransitionProperty::MaxHeight => dim_len(style.max_size.height, UnitSlot::MaxHeight),
+        TransitionProperty::FlexBasis => dim_len(style.flex_basis, UnitSlot::FlexBasis),
+        TransitionProperty::Padding => {
+            lp_len(style.padding.top)
+                && lp_len(style.padding.right)
+                && lp_len(style.padding.bottom)
+                && lp_len(style.padding.left)
+        }
+        TransitionProperty::PaddingTop => lp_len(style.padding.top),
+        TransitionProperty::PaddingRight => lp_len(style.padding.right),
+        TransitionProperty::PaddingBottom => lp_len(style.padding.bottom),
+        TransitionProperty::PaddingLeft => lp_len(style.padding.left),
+        TransitionProperty::Margin => {
+            lpa_len(style.margin.top)
+                && lpa_len(style.margin.right)
+                && lpa_len(style.margin.bottom)
+                && lpa_len(style.margin.left)
+        }
+        TransitionProperty::MarginTop => lpa_len(style.margin.top),
+        TransitionProperty::MarginRight => lpa_len(style.margin.right),
+        TransitionProperty::MarginBottom => lpa_len(style.margin.bottom),
+        TransitionProperty::MarginLeft => lpa_len(style.margin.left),
+        TransitionProperty::Inset => {
+            lpa_len(style.inset.top)
+                && lpa_len(style.inset.right)
+                && lpa_len(style.inset.bottom)
+                && lpa_len(style.inset.left)
+        }
+        TransitionProperty::Top => lpa_len(style.inset.top),
+        TransitionProperty::Right => lpa_len(style.inset.right),
+        TransitionProperty::Bottom => lpa_len(style.inset.bottom),
+        TransitionProperty::Left => lpa_len(style.inset.left),
+        TransitionProperty::Gap => lp_len(style.gap.width) && lp_len(style.gap.height),
+        TransitionProperty::ColumnGap => lp_len(style.gap.width),
+        TransitionProperty::RowGap => lp_len(style.gap.height),
+        TransitionProperty::GridTemplateRows => {
+            crate::layout::tracks_fr_list(&style.grid_template_rows).is_some()
+                || crate::layout::first_track_fr(&style.grid_template_rows).is_some()
+        }
+        TransitionProperty::GridTemplateColumns => {
+            crate::layout::tracks_fr_list(&style.grid_template_columns).is_some()
+                || crate::layout::first_track_fr(&style.grid_template_columns).is_some()
+        }
         _ => true,
+    }
+}
+
+fn pack1(v: f32) -> ([f32; 8], u8) {
+    ([v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+}
+
+fn pack2(a: f32, b: f32) -> ([f32; 8], u8) {
+    ([a, b, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 2)
+}
+
+fn pack4(a: f32, b: f32, c: f32, d: f32) -> ([f32; 8], u8) {
+    ([a, b, c, d, 0.0, 0.0, 0.0, 0.0], 4)
+}
+
+fn dim_px_transition(style: &super::Style, d: taffy::style::Dimension, slot: UnitSlot) -> f32 {
+    use crate::layout::dimension::{PercentAxis, UnitCtx};
+    use crate::layout::{DimKind, dim_kind};
+    let height = matches!(
+        slot,
+        UnitSlot::Height | UnitSlot::MinHeight | UnitSlot::MaxHeight
+    );
+    if let Some((_, dim)) = style.unit_specs.iter().find(|(s, _)| *s == slot) {
+        if dim.is_calc_size() || dim.contains_size_keyword() {
+            let used_px = transition_tick_used()
+                .map(|u| {
+                    if height {
+                        u.anim_height()
+                    } else {
+                        u.anim_width()
+                    }
+                })
+                .unwrap_or(0.0);
+            let ctx = UnitCtx::new(0.0, 0.0, 16.0);
+            let axis = if height {
+                PercentAxis::Block
+            } else {
+                PercentAxis::Inline
+            };
+            if let Some(px) = dim.eval_calc_size(used_px, &ctx, axis) {
+                return px;
+            }
+        }
+    }
+    match dim_kind(d) {
+        DimKind::Length(px) => px,
+        _ if style.interpolate_size.allows_keywords() => transition_tick_used()
+            .map(|u| {
+                if height {
+                    u.anim_height()
+                } else {
+                    u.anim_width()
+                }
+            })
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn lp_px(lp: taffy::style::LengthPercentage) -> f32 {
+    crate::layout::lp_length_px(lp).unwrap_or(0.0)
+}
+
+fn lpa_px(lpa: taffy::style::LengthPercentageAuto) -> f32 {
+    crate::layout::lpa_length_px(lpa).unwrap_or(0.0)
+}
+
+fn write_dim_slot(style: &mut super::Style, slot: UnitSlot, px: f32, nonneg: bool) {
+    let v = if nonneg { px.max(0.0) } else { px };
+    let slot = super::element_style::physical_unit_slot(slot, style.writing_mode, style.direction);
+    style.unit_specs.retain(|(s, _)| *s != slot);
+    match slot {
+        UnitSlot::Width => style.size.width = taffy::style::Dimension::length(v),
+        UnitSlot::Height => style.size.height = taffy::style::Dimension::length(v),
+        UnitSlot::MinWidth => style.min_size.width = taffy::style::Dimension::length(v),
+        UnitSlot::MinHeight => style.min_size.height = taffy::style::Dimension::length(v),
+        UnitSlot::MaxWidth => style.max_size.width = taffy::style::Dimension::length(v),
+        UnitSlot::MaxHeight => style.max_size.height = taffy::style::Dimension::length(v),
+        UnitSlot::FlexBasis => style.flex_basis = taffy::style::Dimension::length(v),
+        UnitSlot::PadT => style.padding.top = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::PadR => style.padding.right = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::PadB => style.padding.bottom = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::PadL => style.padding.left = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::MarginT => style.margin.top = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::MarginR => style.margin.right = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::MarginB => style.margin.bottom = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::MarginL => style.margin.left = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::GapX => style.gap.width = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::GapY => style.gap.height = taffy::style::LengthPercentage::length(v.max(0.0)),
+        UnitSlot::InsetT => style.inset.top = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::InsetR => style.inset.right = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::InsetB => style.inset.bottom = taffy::style::LengthPercentageAuto::length(v),
+        UnitSlot::InsetL => style.inset.left = taffy::style::LengthPercentageAuto::length(v),
+        _ => {}
     }
 }
 
 fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8) {
     match prop {
-        TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::Opacity => pack1(style.opacity),
         TransitionProperty::BackgroundColor => {
             let c = style.bg_color;
-            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+            pack4(c[0], c[1], c[2], c[3])
         }
         TransitionProperty::BorderColor => {
             let c = style.border_color;
-            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+            pack4(c[0], c[1], c[2], c[3])
         }
         TransitionProperty::OutlineColor => {
             let c = style.outline_color;
-            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+            pack4(c[0], c[1], c[2], c[3])
         }
-        TransitionProperty::Color => ([0.0; 8], 0), // text color is on TextStyle, not Style
-        TransitionProperty::OutlineWidth => {
-            ([style.outline_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        TransitionProperty::Color => match transition_tick_text().and_then(|t| t.color) {
+            Some(c) => pack4(
+                c[0] as f32 / 255.0,
+                c[1] as f32 / 255.0,
+                c[2] as f32 / 255.0,
+                c[3] as f32 / 255.0,
+            ),
+            None => ([0.0; 8], 0),
+        },
+        TransitionProperty::FontSize => match transition_tick_text().and_then(|t| t.size) {
+            Some(s) => pack1(s),
+            None => ([0.0; 8], 0),
+        },
+        TransitionProperty::LineHeight => {
+            match transition_tick_text().and_then(|t| t.line_height_px) {
+                Some(h) => pack1(h),
+                None => ([0.0; 8], 0),
+            }
         }
-        TransitionProperty::OutlineOffset => {
-            ([style.outline_offset, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        TransitionProperty::LetterSpacing => match transition_tick_text() {
+            Some(t) => pack1(t.letter_spacing),
+            None => ([0.0; 8], 0),
+        },
+        TransitionProperty::TextDecorationColor => {
+            match transition_tick_text().and_then(|t| t.decoration_color) {
+                Some(c) => pack4(
+                    c[0] as f32 / 255.0,
+                    c[1] as f32 / 255.0,
+                    c[2] as f32 / 255.0,
+                    c[3] as f32 / 255.0,
+                ),
+                None => ([0.0; 8], 0),
+            }
         }
-        TransitionProperty::BoxShadow => {
-            let c = style.shadow_color;
-            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+        TransitionProperty::OutlineWidth => pack1(style.outline_width),
+        TransitionProperty::OutlineOffset => pack1(style.outline_offset),
+        TransitionProperty::BoxShadow => (
+            [
+                style.shadow_color[0],
+                style.shadow_color[1],
+                style.shadow_color[2],
+                style.shadow_color[3],
+                style.shadow_offset[0],
+                style.shadow_offset[1],
+                style.shadow_blur,
+                style.shadow_spread,
+            ],
+            8,
+        ),
+        TransitionProperty::Width => {
+            pack1(dim_px_transition(style, style.size.width, UnitSlot::Width))
         }
-        TransitionProperty::MaxHeight => {
-            let h = crate::layout::dim_length_px(style.max_size.height).unwrap_or(0.0);
-            ([h, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        TransitionProperty::Height => pack1(dim_px_transition(
+            style,
+            style.size.height,
+            UnitSlot::Height,
+        )),
+        TransitionProperty::MinWidth => pack1(dim_px_transition(
+            style,
+            style.min_size.width,
+            UnitSlot::MinWidth,
+        )),
+        TransitionProperty::MinHeight => pack1(dim_px_transition(
+            style,
+            style.min_size.height,
+            UnitSlot::MinHeight,
+        )),
+        TransitionProperty::MaxWidth => pack1(dim_px_transition(
+            style,
+            style.max_size.width,
+            UnitSlot::MaxWidth,
+        )),
+        TransitionProperty::MaxHeight => pack1(dim_px_transition(
+            style,
+            style.max_size.height,
+            UnitSlot::MaxHeight,
+        )),
+        TransitionProperty::Padding => pack4(
+            lp_px(style.padding.top),
+            lp_px(style.padding.right),
+            lp_px(style.padding.bottom),
+            lp_px(style.padding.left),
+        ),
+        TransitionProperty::PaddingTop => pack1(lp_px(style.padding.top)),
+        TransitionProperty::PaddingRight => pack1(lp_px(style.padding.right)),
+        TransitionProperty::PaddingBottom => pack1(lp_px(style.padding.bottom)),
+        TransitionProperty::PaddingLeft => pack1(lp_px(style.padding.left)),
+        TransitionProperty::Margin => pack4(
+            lpa_px(style.margin.top),
+            lpa_px(style.margin.right),
+            lpa_px(style.margin.bottom),
+            lpa_px(style.margin.left),
+        ),
+        TransitionProperty::MarginTop => pack1(lpa_px(style.margin.top)),
+        TransitionProperty::MarginRight => pack1(lpa_px(style.margin.right)),
+        TransitionProperty::MarginBottom => pack1(lpa_px(style.margin.bottom)),
+        TransitionProperty::MarginLeft => pack1(lpa_px(style.margin.left)),
+        TransitionProperty::Inset => pack4(
+            lpa_px(style.inset.top),
+            lpa_px(style.inset.right),
+            lpa_px(style.inset.bottom),
+            lpa_px(style.inset.left),
+        ),
+        TransitionProperty::Top => pack1(lpa_px(style.inset.top)),
+        TransitionProperty::Right => pack1(lpa_px(style.inset.right)),
+        TransitionProperty::Bottom => pack1(lpa_px(style.inset.bottom)),
+        TransitionProperty::Left => pack1(lpa_px(style.inset.left)),
+        TransitionProperty::Gap => pack2(lp_px(style.gap.width), lp_px(style.gap.height)),
+        TransitionProperty::ColumnGap => pack1(lp_px(style.gap.width)),
+        TransitionProperty::RowGap => pack1(lp_px(style.gap.height)),
+        TransitionProperty::BorderWidth => {
+            let w = style.border_width_sides.unwrap_or([style.border_width; 4]);
+            pack4(w[0], w[1], w[2], w[3])
         }
+        TransitionProperty::BorderTopWidth => {
+            pack1(style.border_width_sides.unwrap_or([style.border_width; 4])[0])
+        }
+        TransitionProperty::BorderRightWidth => {
+            pack1(style.border_width_sides.unwrap_or([style.border_width; 4])[1])
+        }
+        TransitionProperty::BorderBottomWidth => {
+            pack1(style.border_width_sides.unwrap_or([style.border_width; 4])[2])
+        }
+        TransitionProperty::BorderLeftWidth => {
+            pack1(style.border_width_sides.unwrap_or([style.border_width; 4])[3])
+        }
+        TransitionProperty::BorderRadius => pack4(
+            style.radii[0],
+            style.radii[1],
+            style.radii[2],
+            style.radii[3],
+        ),
+        TransitionProperty::BorderTopLeftRadius => pack1(style.radii[0]),
+        TransitionProperty::BorderTopRightRadius => pack1(style.radii[1]),
+        TransitionProperty::BorderBottomRightRadius => pack1(style.radii[2]),
+        TransitionProperty::BorderBottomLeftRadius => pack1(style.radii[3]),
+        TransitionProperty::FlexGrow => pack1(style.flex_grow),
+        TransitionProperty::FlexShrink => pack1(style.flex_shrink),
+        TransitionProperty::FlexBasis => pack1(dim_px_transition(
+            style,
+            style.flex_basis,
+            UnitSlot::FlexBasis,
+        )),
+        TransitionProperty::GridTemplateRows => {
+            crate::layout::pack_tracks_fr(&style.grid_template_rows)
+        }
+        TransitionProperty::GridTemplateColumns => {
+            crate::layout::pack_tracks_fr(&style.grid_template_columns)
+        }
+        TransitionProperty::BackgroundPosition => pack2(style.bg_position[0], style.bg_position[1]),
+        // Handled via [`ClipPathTween`] + [`ClipPath::interpolate`].
+        TransitionProperty::ClipPath => ([0.0; 8], 0),
+        TransitionProperty::Zoom => pack1(style.zoom),
+        TransitionProperty::BackdropFilter => pack1(style.backdrop_blur),
+        TransitionProperty::Scale => pack2(style.scale[0], style.scale[1]),
+        TransitionProperty::Rotate => pack1(style.rotate_deg),
+        TransitionProperty::TransformOrigin => {
+            let f = super::transform::origin_frac(&style.transform_origin);
+            pack2(f[0], f[1])
+        }
+        TransitionProperty::OffsetDistance => pack1(style.offset_distance),
+        TransitionProperty::OffsetRotate => pack1(style.offset_rotate_deg.unwrap_or(0.0)),
         // Independent transform props: translate → rotate → scale (matches resolve order).
         TransitionProperty::Transform | TransitionProperty::Translate => (
             [
@@ -855,19 +1496,138 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8
     }
 }
 
-fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]) {
+fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8], comps: u8) {
     match prop {
         TransitionProperty::Opacity => style.opacity = val[0],
         TransitionProperty::BackgroundColor => style.bg_color = [val[0], val[1], val[2], val[3]],
         TransitionProperty::BorderColor => style.border_color = [val[0], val[1], val[2], val[3]],
         TransitionProperty::OutlineColor => style.outline_color = [val[0], val[1], val[2], val[3]],
-        TransitionProperty::Color => {} // text color is on TextStyle
+        TransitionProperty::Color => {
+            if let Some(t) = transition_tick_text() {
+                t.color = Some([
+                    (val[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+                ]);
+            }
+        }
+        TransitionProperty::FontSize => {
+            if let Some(t) = transition_tick_text() {
+                t.size = Some(val[0].max(0.0));
+            }
+        }
+        TransitionProperty::LineHeight => {
+            if let Some(t) = transition_tick_text() {
+                t.line_height_px = Some(val[0].max(0.0));
+            }
+        }
+        TransitionProperty::LetterSpacing => {
+            if let Some(t) = transition_tick_text() {
+                t.letter_spacing = val[0];
+            }
+        }
+        TransitionProperty::TextDecorationColor => {
+            if let Some(t) = transition_tick_text() {
+                t.decoration_color = Some([
+                    (val[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (val[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+                ]);
+                t.decoration_color_specified = true;
+            }
+        }
         TransitionProperty::OutlineWidth => style.outline_width = val[0],
         TransitionProperty::OutlineOffset => style.outline_offset = val[0],
-        TransitionProperty::BoxShadow => style.shadow_color = [val[0], val[1], val[2], val[3]],
-        TransitionProperty::MaxHeight => {
-            style.max_size.height = taffy::style::Dimension::length(val[0].max(0.0));
+        TransitionProperty::BoxShadow => {
+            style.shadow_color = [val[0], val[1], val[2], val[3]];
+            style.shadow_offset = [val[4], val[5]];
+            style.shadow_blur = val[6].max(0.0);
+            style.shadow_spread = val[7];
         }
+        TransitionProperty::Width => write_dim_slot(style, UnitSlot::Width, val[0], true),
+        TransitionProperty::Height => write_dim_slot(style, UnitSlot::Height, val[0], true),
+        TransitionProperty::MinWidth => write_dim_slot(style, UnitSlot::MinWidth, val[0], true),
+        TransitionProperty::MinHeight => write_dim_slot(style, UnitSlot::MinHeight, val[0], true),
+        TransitionProperty::MaxWidth => write_dim_slot(style, UnitSlot::MaxWidth, val[0], true),
+        TransitionProperty::MaxHeight => write_dim_slot(style, UnitSlot::MaxHeight, val[0], true),
+        TransitionProperty::Padding => {
+            write_dim_slot(style, UnitSlot::PadT, val[0], true);
+            write_dim_slot(style, UnitSlot::PadR, val[1], true);
+            write_dim_slot(style, UnitSlot::PadB, val[2], true);
+            write_dim_slot(style, UnitSlot::PadL, val[3], true);
+        }
+        TransitionProperty::PaddingTop => write_dim_slot(style, UnitSlot::PadT, val[0], true),
+        TransitionProperty::PaddingRight => write_dim_slot(style, UnitSlot::PadR, val[0], true),
+        TransitionProperty::PaddingBottom => write_dim_slot(style, UnitSlot::PadB, val[0], true),
+        TransitionProperty::PaddingLeft => write_dim_slot(style, UnitSlot::PadL, val[0], true),
+        TransitionProperty::Margin => {
+            write_dim_slot(style, UnitSlot::MarginT, val[0], false);
+            write_dim_slot(style, UnitSlot::MarginR, val[1], false);
+            write_dim_slot(style, UnitSlot::MarginB, val[2], false);
+            write_dim_slot(style, UnitSlot::MarginL, val[3], false);
+        }
+        TransitionProperty::MarginTop => write_dim_slot(style, UnitSlot::MarginT, val[0], false),
+        TransitionProperty::MarginRight => write_dim_slot(style, UnitSlot::MarginR, val[0], false),
+        TransitionProperty::MarginBottom => write_dim_slot(style, UnitSlot::MarginB, val[0], false),
+        TransitionProperty::MarginLeft => write_dim_slot(style, UnitSlot::MarginL, val[0], false),
+        TransitionProperty::Inset => {
+            write_dim_slot(style, UnitSlot::InsetT, val[0], false);
+            write_dim_slot(style, UnitSlot::InsetR, val[1], false);
+            write_dim_slot(style, UnitSlot::InsetB, val[2], false);
+            write_dim_slot(style, UnitSlot::InsetL, val[3], false);
+        }
+        TransitionProperty::Top => write_dim_slot(style, UnitSlot::InsetT, val[0], false),
+        TransitionProperty::Right => write_dim_slot(style, UnitSlot::InsetR, val[0], false),
+        TransitionProperty::Bottom => write_dim_slot(style, UnitSlot::InsetB, val[0], false),
+        TransitionProperty::Left => write_dim_slot(style, UnitSlot::InsetL, val[0], false),
+        TransitionProperty::Gap => {
+            write_dim_slot(style, UnitSlot::GapX, val[0], true);
+            write_dim_slot(style, UnitSlot::GapY, val[1], true);
+        }
+        TransitionProperty::ColumnGap => write_dim_slot(style, UnitSlot::GapX, val[0], true),
+        TransitionProperty::RowGap => write_dim_slot(style, UnitSlot::GapY, val[0], true),
+        TransitionProperty::BorderWidth => {
+            style.set_border_widths_trbl([val[0], val[1], val[2], val[3]])
+        }
+        TransitionProperty::BorderTopWidth => style.set_border_side_width(0, val[0]),
+        TransitionProperty::BorderRightWidth => style.set_border_side_width(1, val[0]),
+        TransitionProperty::BorderBottomWidth => style.set_border_side_width(2, val[0]),
+        TransitionProperty::BorderLeftWidth => style.set_border_side_width(3, val[0]),
+        TransitionProperty::BorderRadius => {
+            style.radii = [
+                val[0].max(0.0),
+                val[1].max(0.0),
+                val[2].max(0.0),
+                val[3].max(0.0),
+            ];
+        }
+        TransitionProperty::BorderTopLeftRadius => style.radii[0] = val[0].max(0.0),
+        TransitionProperty::BorderTopRightRadius => style.radii[1] = val[0].max(0.0),
+        TransitionProperty::BorderBottomRightRadius => style.radii[2] = val[0].max(0.0),
+        TransitionProperty::BorderBottomLeftRadius => style.radii[3] = val[0].max(0.0),
+        TransitionProperty::FlexGrow => style.flex_grow = val[0].max(0.0),
+        TransitionProperty::FlexShrink => style.flex_shrink = val[0].max(0.0),
+        TransitionProperty::FlexBasis => write_dim_slot(style, UnitSlot::FlexBasis, val[0], true),
+        TransitionProperty::GridTemplateRows => {
+            write_grid_tracks_packed(&mut style.grid_template_rows, val, comps)
+        }
+        TransitionProperty::GridTemplateColumns => {
+            write_grid_tracks_packed(&mut style.grid_template_columns, val, comps)
+        }
+        TransitionProperty::BackgroundPosition => {
+            style.bg_position = [val[0], val[1]];
+        }
+        TransitionProperty::ClipPath => {}
+        TransitionProperty::Zoom => {
+            style.zoom = if val[0].is_finite() && val[0] > 0.0 {
+                val[0]
+            } else {
+                1.0
+            };
+        }
+        TransitionProperty::BackdropFilter => style.backdrop_blur = val[0].max(0.0),
         TransitionProperty::Transform => {
             style.translate = [val[0], val[1]];
             style.scale = [val[2], val[3]];
@@ -876,8 +1636,116 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]
         TransitionProperty::Translate => {
             style.translate = [val[0], val[1]];
         }
+        TransitionProperty::Scale => {
+            style.scale = [val[0], val[1]];
+        }
+        TransitionProperty::Rotate => {
+            style.rotate_deg = val[0];
+        }
+        TransitionProperty::TransformOrigin => {
+            super::transform::set_origin_frac(&mut style.transform_origin, [val[0], val[1]]);
+        }
+        TransitionProperty::OffsetDistance => {
+            style.offset_distance = val[0].clamp(0.0, 1.0);
+        }
+        TransitionProperty::OffsetRotate => {
+            style.offset_rotate_deg = Some(val[0]);
+        }
         TransitionProperty::Filter => {}
         TransitionProperty::All | TransitionProperty::Unsupported => {}
+    }
+}
+
+fn write_grid_tracks_packed(tracks: &mut Vec<crate::layout::GridTrack>, val: &[f32; 8], comps: u8) {
+    let n = (comps as usize).min(8);
+    if n <= 1 {
+        crate::layout::set_first_track_fr(tracks, val[0].max(0.0));
+    } else {
+        crate::layout::set_tracks_fr_list(tracks, &val[..n]);
+    }
+}
+
+/// Write a specified (cascade) value without clobbering an in-flight used value.
+///
+/// When `style` still holds exactly what the engine last wrote and `specified`
+/// equals the standing tween target, this is a no-op so every-frame owners
+/// (sidebar rail sync) do not wipe the mid-tween width before tick.
+pub fn assign_transition_specified(
+    style: &mut super::Style,
+    snapshot: &TransitionSnapshot,
+    prop: TransitionProperty,
+    specified: [f32; 8],
+) {
+    let (current, comps) = extract_prop(style, prop);
+    if comps == 0 {
+        write_prop(style, prop, &specified, comps.max(1));
+        return;
+    }
+    if let Some(tween) = snapshot.tweens.get(&prop) {
+        if let Some(w) = tween.written {
+            let holding_used = (0..comps as usize).all(|i| (w[i] - current[i]).abs() <= 1e-5);
+            let same_target =
+                (0..comps as usize).all(|i| (tween.to[i] - specified[i]).abs() <= 1e-5);
+            if holding_used && same_target {
+                return;
+            }
+        }
+    }
+    write_prop(style, prop, &specified, comps);
+}
+
+fn for_each_declared_prop(entries: &[TransitionEntry], mut f: impl FnMut(TransitionProperty)) {
+    for entry in entries {
+        match entry.property {
+            TransitionProperty::All => {
+                for &p in ALL_PROPS {
+                    f(p);
+                }
+            }
+            TransitionProperty::Unsupported => {}
+            p => f(p),
+        }
+    }
+}
+
+/// Copy computed values of every transitioned property from `src` onto `dst`.
+///
+/// Snapshot **used** values (mid-tween) win over `src`'s current fields so a
+/// rebuild fragment cannot clobber an in-flight width with paint's end state.
+/// Non-interpolable keywords (`auto`, `%`) are left on `dst` (the rebuild paint).
+pub fn copy_transition_used_values(
+    dst: &mut super::Style,
+    src: &super::Style,
+    snapshot: &TransitionSnapshot,
+) {
+    let mut props = Vec::new();
+    for_each_declared_prop(&src.transition, |prop| props.push(prop));
+    for_each_declared_prop(&dst.transition, |prop| props.push(prop));
+    for prop in props {
+        copy_declared_prop(dst, src, prop);
+    }
+    snapshot.write_used_values_into(dst);
+}
+
+fn copy_declared_prop(dst: &mut super::Style, src: &super::Style, prop: TransitionProperty) {
+    if prop == TransitionProperty::Filter {
+        dst.filter = src.filter.clone();
+        return;
+    }
+    if prop == TransitionProperty::ClipPath {
+        dst.clip_path = src.clip_path.clone();
+        return;
+    }
+    if prop == TransitionProperty::BoxShadow {
+        write_shadow_layers(dst, &shadow_layers(src));
+        return;
+    }
+    if !prop_is_interpolable(src, prop) {
+        return;
+    }
+    let (val, comps) = extract_prop(src, prop);
+    if comps > 0 {
+        write_prop(dst, prop, &val, comps);
     }
 }
 
@@ -893,7 +1761,32 @@ fn lerp_arr(a: &[f32; 8], b: &[f32; 8], t: f32, n: u8) -> [f32; 8] {
     out
 }
 
+fn is_color_transition_prop(prop: TransitionProperty) -> bool {
+    matches!(
+        prop,
+        TransitionProperty::BackgroundColor
+            | TransitionProperty::BorderColor
+            | TransitionProperty::OutlineColor
+            | TransitionProperty::Color
+            | TransitionProperty::TextDecorationColor
+    )
+}
+
+/// Same interpolator as keyframes (`AnimatableValue::Color` → `lerp_text_rgba`).
+fn lerp_packed_color(from: &[f32; 8], to: &[f32; 8], t: f32) -> [f32; 8] {
+    use super::animatable::{AnimatableValue, interpolate};
+    let a = AnimatableValue::Color([from[0], from[1], from[2], from[3]]);
+    let b = AnimatableValue::Color([to[0], to[1], to[2], to[3]]);
+    match interpolate(&a, &b, t) {
+        Some(AnimatableValue::Color(c)) => [c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0],
+        _ => lerp_arr(from, to, t, 4),
+    }
+}
+
 /// All concrete properties that `All` expands into.
+///
+/// Shorthands only (not longhands) so `transition: all` does not double-write
+/// `padding` and `padding-left` in an undefined HashMap order.
 const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::Opacity,
     TransitionProperty::BackgroundColor,
@@ -903,9 +1796,35 @@ const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::OutlineOffset,
     TransitionProperty::BoxShadow,
     TransitionProperty::Color,
+    TransitionProperty::FontSize,
+    TransitionProperty::LineHeight,
+    TransitionProperty::LetterSpacing,
+    TransitionProperty::TextDecorationColor,
     // Transform 已含 translate；勿再单独扩 Translate，避免同帧双写。
     TransitionProperty::Transform,
+    TransitionProperty::Width,
+    TransitionProperty::Height,
+    TransitionProperty::MinWidth,
+    TransitionProperty::MinHeight,
+    TransitionProperty::MaxWidth,
     TransitionProperty::MaxHeight,
+    TransitionProperty::Padding,
+    TransitionProperty::Margin,
+    TransitionProperty::Inset,
+    TransitionProperty::Gap,
+    TransitionProperty::BorderWidth,
+    TransitionProperty::BorderRadius,
+    TransitionProperty::FlexGrow,
+    TransitionProperty::FlexShrink,
+    TransitionProperty::FlexBasis,
+    TransitionProperty::GridTemplateRows,
+    TransitionProperty::GridTemplateColumns,
+    TransitionProperty::BackgroundPosition,
+    TransitionProperty::ClipPath,
+    TransitionProperty::TransformOrigin,
+    TransitionProperty::OffsetDistance,
+    TransitionProperty::Zoom,
+    TransitionProperty::BackdropFilter,
     TransitionProperty::Filter,
 ];
 
@@ -941,6 +1860,30 @@ pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSna
             }
             continue;
         }
+        if prop == TransitionProperty::ClipPath {
+            let current = style.clip_path.clone();
+            match &snapshot.clip_tween {
+                Some(t) => {
+                    if t.to != specified_clip_value(t, &current) {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+            continue;
+        }
+        if prop == TransitionProperty::BoxShadow {
+            let current = shadow_layers(style);
+            match &snapshot.shadow_tween {
+                Some(t) => {
+                    if t.to != specified_shadow_value(t, &current) {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+            continue;
+        }
         let (current, comps) = extract_prop(style, prop);
         if comps == 0 || !prop_is_interpolable(style, prop) {
             continue;
@@ -962,7 +1905,18 @@ fn tween_elapsed_ms(tween: &PropertyTween, now_ms: f64) -> f32 {
     (now_ms - tween.start_ms).max(0.0) as f32
 }
 
-fn tween_sample(tween: &PropertyTween, now_ms: f64) -> ([f32; 8], f32) {
+fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 8], f32) {
+    if prefers_reduced_motion() {
+        return (tween.to, 1.0);
+    }
+    if let TimingFunction::Spring {
+        stiffness,
+        damping,
+        mass,
+    } = tween.timing
+    {
+        return tween_sample_spring(tween, now_ms, dt_secs, stiffness, damping, mass);
+    }
     let elapsed_ms = tween_elapsed_ms(tween, now_ms);
     let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
     let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
@@ -971,6 +1925,51 @@ fn tween_sample(tween: &PropertyTween, now_ms: f64) -> ([f32; 8], f32) {
         lerp_arr(&tween.from, &tween.to, eased, tween.components),
         linear_t,
     )
+}
+
+fn tween_sample_spring(
+    tween: &mut PropertyTween,
+    now_ms: f64,
+    dt_secs: f32,
+    stiffness: f32,
+    damping: f32,
+    mass: f32,
+) -> ([f32; 8], f32) {
+    let elapsed_ms = tween_elapsed_ms(tween, now_ms);
+    if elapsed_ms < tween.delay_ms {
+        return (tween.from, 0.0);
+    }
+    let clock_dt = ((now_ms - tween.last_ms) as f32 / 1000.0).max(0.0);
+    let dt = if tween.last_ms <= tween.start_ms + 1e-6 {
+        dt_secs.clamp(1.0 / 240.0, 0.08).max(1.0 / 60.0)
+    } else if clock_dt < 1e-6 {
+        // Monotonic clock did not move (virtual timeline not seeked, or coalesced
+        // scroll frames). Duration tweens can wait; spring integrates velocity and
+        // would freeze until the clock jumps.
+        dt_secs.clamp(1.0 / 240.0, 0.08)
+    } else {
+        clock_dt.clamp(1.0 / 240.0, 0.08)
+    };
+    tween.last_ms = now_ms;
+    let mut out = tween.from;
+    let mut all_settled = true;
+    let n = tween.components as usize;
+    for i in 0..n {
+        let (p, v, ok) = super::timing::spring_step(
+            out[i],
+            tween.vel[i],
+            tween.to[i],
+            dt,
+            stiffness,
+            damping,
+            mass,
+        );
+        out[i] = p;
+        tween.vel[i] = v;
+        all_settled &= ok;
+    }
+    tween.from = out;
+    (out, if all_settled { 1.0 } else { 0.0 })
 }
 
 fn filter_tween_sample(tween: &FilterTween, now_ms: f64) -> (Option<FilterList>, f32) {
@@ -998,6 +1997,119 @@ fn filter_tween_sample(tween: &FilterTween, now_ms: f64) -> (Option<FilterList>,
     (list, linear_t)
 }
 
+fn clip_tween_sample(tween: &ClipPathTween, now_ms: f64) -> (ClipPath, f32) {
+    let elapsed_ms = (now_ms - tween.start_ms).max(0.0) as f32;
+    let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
+    let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
+    let eased = tween.timing.eval(linear_t);
+    (tween.from.interpolate(&tween.to, eased), linear_t)
+}
+
+fn shadow_layers(style: &super::Style) -> Vec<BoxShadow> {
+    let mut layers = vec![BoxShadow {
+        color: style.shadow_color,
+        offset: style.shadow_offset,
+        blur: style.shadow_blur,
+        spread: style.shadow_spread,
+        inset: style.shadow_inset,
+    }];
+    layers.extend(style.extra_shadows.iter().cloned());
+    layers
+}
+
+fn write_shadow_layers(style: &mut super::Style, layers: &[BoxShadow]) {
+    if let Some(first) = layers.first() {
+        style.shadow_color = first.color;
+        style.shadow_offset = first.offset;
+        style.shadow_blur = first.blur.max(0.0);
+        style.shadow_spread = first.spread;
+        style.shadow_inset = first.inset;
+        style.extra_shadows = layers.iter().skip(1).cloned().collect();
+    } else {
+        style.shadow_color = [0.0; 4];
+        style.shadow_offset = [0.0; 2];
+        style.shadow_blur = 0.0;
+        style.shadow_spread = 0.0;
+        style.shadow_inset = false;
+        style.extra_shadows.clear();
+    }
+}
+
+fn interpolate_shadow_layers(
+    from: &[BoxShadow],
+    to: &[BoxShadow],
+    t: f32,
+) -> Option<Vec<BoxShadow>> {
+    if from.len() != to.len() {
+        return None;
+    }
+    let t = t.clamp(0.0, 1.0);
+    let mut out = Vec::with_capacity(from.len());
+    for (a, b) in from.iter().zip(to.iter()) {
+        if a.inset != b.inset {
+            return None;
+        }
+        out.push(BoxShadow {
+            color: [
+                a.color[0] + (b.color[0] - a.color[0]) * t,
+                a.color[1] + (b.color[1] - a.color[1]) * t,
+                a.color[2] + (b.color[2] - a.color[2]) * t,
+                a.color[3] + (b.color[3] - a.color[3]) * t,
+            ],
+            offset: [
+                a.offset[0] + (b.offset[0] - a.offset[0]) * t,
+                a.offset[1] + (b.offset[1] - a.offset[1]) * t,
+            ],
+            blur: a.blur + (b.blur - a.blur) * t,
+            spread: a.spread + (b.spread - a.spread) * t,
+            inset: a.inset,
+        });
+    }
+    Some(out)
+}
+
+fn shadow_tween_sample(tween: &ShadowListTween, now_ms: f64) -> (Vec<BoxShadow>, f32) {
+    let elapsed_ms = (now_ms - tween.start_ms).max(0.0) as f32;
+    let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
+    let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
+    let eased = tween.timing.eval(linear_t);
+    let list = match interpolate_shadow_layers(&tween.from, &tween.to, eased) {
+        Some(list) => list,
+        None => {
+            if linear_t >= 1.0 - 1e-6 {
+                tween.to.clone()
+            } else {
+                tween.from.clone()
+            }
+        }
+    };
+    (list, linear_t)
+}
+
+fn specified_shadow_value(tween: &ShadowListTween, current: &[BoxShadow]) -> Vec<BoxShadow> {
+    if tween
+        .written
+        .as_ref()
+        .is_some_and(|w| shadow_layers_close(w, current))
+    {
+        tween.to.clone()
+    } else {
+        current.to_vec()
+    }
+}
+
+fn shadow_layers_close(a: &[BoxShadow], b: &[BoxShadow]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(x, y)| {
+            x.inset == y.inset
+                && (0..4).all(|i| (x.color[i] - y.color[i]).abs() < 1e-4)
+                && (x.offset[0] - y.offset[0]).abs() < 1e-4
+                && (x.offset[1] - y.offset[1]).abs() < 1e-4
+                && (x.blur - y.blur).abs() < 1e-4
+                && (x.spread - y.spread).abs() < 1e-4
+        })
+}
+
 /// 把当前 style 值记为已 settle 的 transition 基线（`from=to=current`，inactive）。
 /// 用于 Carousel 无缝瞬移等：清 snapshot 后若直接写入新目标，首帧 seed 会 `from=to=新目标` 而跳过动画。
 pub fn snap_element_transitions_to_current(
@@ -1007,6 +2119,8 @@ pub fn snap_element_transitions_to_current(
     if style.transition.is_empty() {
         snapshot.tweens.clear();
         snapshot.filter_tween = None;
+        snapshot.clip_tween = None;
+        snapshot.shadow_tween = None;
         return;
     }
     let now_ms = css_timeline_now_ms();
@@ -1036,6 +2150,34 @@ pub fn snap_element_transitions_to_current(
             });
             continue;
         }
+        if prop == TransitionProperty::ClipPath {
+            let cur = style.clip_path.clone();
+            snapshot.clip_tween = Some(ClipPathTween {
+                from: cur.clone(),
+                to: cur.clone(),
+                start_ms: now_ms,
+                duration_ms: style.transition[cfg_idx].duration_ms,
+                delay_ms: style.transition[cfg_idx].delay_ms,
+                timing: style.transition[cfg_idx].timing,
+                active: false,
+                written: Some(cur),
+            });
+            continue;
+        }
+        if prop == TransitionProperty::BoxShadow {
+            let cur = shadow_layers(style);
+            snapshot.shadow_tween = Some(ShadowListTween {
+                from: cur.clone(),
+                to: cur.clone(),
+                start_ms: now_ms,
+                duration_ms: style.transition[cfg_idx].duration_ms,
+                delay_ms: style.transition[cfg_idx].delay_ms,
+                timing: style.transition[cfg_idx].timing,
+                active: false,
+                written: Some(cur),
+            });
+            continue;
+        }
         let (val, comps) = extract_prop(style, prop);
         if comps == 0 || !prop_is_interpolable(style, prop) {
             snapshot.tweens.remove(&prop);
@@ -1054,6 +2196,8 @@ pub fn snap_element_transitions_to_current(
                 timing: cfg.timing,
                 active: false,
                 written: Some(val),
+                vel: [0.0; 8],
+                last_ms: now_ms,
             },
         );
     }
@@ -1065,8 +2209,8 @@ pub fn snap_element_transitions_to_current(
 /// `snapshot` is mutable storage that persists across frames on the element.
 ///
 /// Progress is sampled from the **monotonic CSS timeline** (`Instant`, or a virtual
-/// clock in tests). `dt_secs` is ignored for progress (kept for call-site compatibility);
-/// dense CursorMoved redraws therefore cannot accelerate `transition-*`.
+/// clock in tests). Duration tweens ignore `dt_secs` so CursorMoved storms cannot
+/// accelerate `transition-*`. Spring uses `dt_secs` only when the clock did not move.
 pub fn tick_element_transitions(
     style: &mut super::Style,
     snapshot: &mut TransitionSnapshot,
@@ -1085,13 +2229,15 @@ pub fn tick_element_transitions_locked(
     style: &mut super::Style,
     snapshot: &mut TransitionSnapshot,
     lock: AnimationLock,
-    _dt_secs: f32,
+    dt_secs: f32,
 ) -> bool {
     if style.transition.is_empty() {
         if !snapshot.tweens.is_empty() {
             snapshot.tweens.clear();
         }
         snapshot.filter_tween = None;
+        snapshot.clip_tween = None;
+        snapshot.shadow_tween = None;
         return false;
     }
 
@@ -1117,54 +2263,193 @@ pub fn tick_element_transitions_locked(
     // Filter uses list interpolation (or discrete when kinds don't align).
     if let Some(&cfg_idx) = config_map.get(&TransitionProperty::Filter) {
         let cfg = &transition_entries[cfg_idx];
+        let duration_ms = if prefers_reduced_motion() {
+            0.0
+        } else {
+            cfg.duration_ms
+        };
         let current = style.filter.clone();
         let tween = snapshot.filter_tween.get_or_insert_with(|| FilterTween {
             from: current.clone(),
             to: current.clone(),
             start_ms: now_ms,
-            duration_ms: cfg.duration_ms,
+            duration_ms,
             delay_ms: cfg.delay_ms,
             timing: cfg.timing,
             active: false,
             written: None,
         });
 
-        let target = specified_filter_value(tween, &current);
-        let target_changed = tween.to != target;
-        if target_changed {
-            if tween.active {
-                let (mid, _) = filter_tween_sample(tween, now_ms);
-                tween.from = mid;
+        if animation_owns_prop(TransitionProperty::Filter, lock) {
+            tween.from = current.clone();
+            tween.to = current.clone();
+            tween.active = false;
+            tween.written = Some(current);
+        } else {
+            let target = specified_filter_value(tween, &current);
+            let target_changed = tween.to != target;
+            if target_changed {
+                if tween.active {
+                    let (mid, _) = filter_tween_sample(tween, now_ms);
+                    tween.from = mid;
+                }
+                tween.to = target;
+                tween.duration_ms = duration_ms;
+                tween.delay_ms = cfg.delay_ms;
+                tween.timing = cfg.timing;
+                tween.active = true;
+                tween.start_ms = now_ms;
             }
-            tween.to = target;
-            tween.duration_ms = cfg.duration_ms;
-            tween.delay_ms = cfg.delay_ms;
-            tween.timing = cfg.timing;
-            tween.active = true;
-            tween.start_ms = now_ms;
-        }
 
-        if tween.active {
-            let (interpolated, linear_t) = filter_tween_sample(tween, now_ms);
-            if linear_t >= 1.0 - 1e-6 {
-                tween.active = false;
-                tween.from = tween.to.clone();
-                style.filter = tween.to.clone();
-            } else {
-                style.filter = interpolated;
-                any_active = true;
+            if tween.active {
+                let (interpolated, linear_t) = filter_tween_sample(tween, now_ms);
+                if linear_t >= 1.0 - 1e-6 {
+                    tween.active = false;
+                    tween.from = tween.to.clone();
+                    style.filter = tween.to.clone();
+                } else {
+                    style.filter = interpolated;
+                    any_active = true;
+                }
+                tween.written = Some(style.filter.clone());
             }
-            tween.written = Some(style.filter.clone());
         }
     } else {
         snapshot.filter_tween = None;
     }
 
+    // clip-path uses the same interpolator as keyframes (`ClipPath::interpolate`).
+    if let Some(&cfg_idx) = config_map.get(&TransitionProperty::ClipPath) {
+        let cfg = &transition_entries[cfg_idx];
+        let duration_ms = if prefers_reduced_motion() {
+            0.0
+        } else {
+            cfg.duration_ms
+        };
+        let current = style.clip_path.clone();
+        let tween = snapshot.clip_tween.get_or_insert_with(|| ClipPathTween {
+            from: current.clone(),
+            to: current.clone(),
+            start_ms: now_ms,
+            duration_ms,
+            delay_ms: cfg.delay_ms,
+            timing: cfg.timing,
+            active: false,
+            written: None,
+        });
+
+        if animation_owns_prop(TransitionProperty::ClipPath, lock) {
+            tween.from = current.clone();
+            tween.to = current.clone();
+            tween.active = false;
+            tween.written = Some(current);
+        } else {
+            let target = specified_clip_value(tween, &current);
+            let target_changed = tween.to != target;
+            if target_changed {
+                if tween.active {
+                    let (mid, _) = clip_tween_sample(tween, now_ms);
+                    tween.from = mid;
+                }
+                tween.to = target;
+                tween.duration_ms = duration_ms;
+                tween.delay_ms = cfg.delay_ms;
+                tween.timing = cfg.timing;
+                tween.active = true;
+                tween.start_ms = now_ms;
+            }
+
+            if tween.active {
+                let (interpolated, linear_t) = clip_tween_sample(tween, now_ms);
+                if linear_t >= 1.0 - 1e-6 {
+                    tween.active = false;
+                    tween.from = tween.to.clone();
+                    style.clip_path = tween.to.clone();
+                } else {
+                    style.clip_path = interpolated;
+                    any_active = true;
+                }
+                tween.written = Some(style.clip_path.clone());
+            }
+        }
+    } else {
+        snapshot.clip_tween = None;
+    }
+
+    if let Some(&cfg_idx) = config_map.get(&TransitionProperty::BoxShadow) {
+        let cfg = &transition_entries[cfg_idx];
+        let duration_ms = if prefers_reduced_motion() {
+            0.0
+        } else {
+            cfg.duration_ms
+        };
+        let current = shadow_layers(style);
+        let tween = snapshot
+            .shadow_tween
+            .get_or_insert_with(|| ShadowListTween {
+                from: current.clone(),
+                to: current.clone(),
+                start_ms: now_ms,
+                duration_ms,
+                delay_ms: cfg.delay_ms,
+                timing: cfg.timing,
+                active: false,
+                written: None,
+            });
+
+        if animation_owns_prop(TransitionProperty::BoxShadow, lock) {
+            tween.from = current.clone();
+            tween.to = current.clone();
+            tween.active = false;
+            tween.written = Some(current);
+        } else {
+            let target = specified_shadow_value(tween, &current);
+            let target_changed = tween.to != target;
+            if target_changed {
+                if tween.active {
+                    let (mid, _) = shadow_tween_sample(tween, now_ms);
+                    tween.from = mid;
+                }
+                tween.to = target;
+                tween.duration_ms = duration_ms;
+                tween.delay_ms = cfg.delay_ms;
+                tween.timing = cfg.timing;
+                tween.active = true;
+                tween.start_ms = now_ms;
+            }
+
+            if tween.active {
+                let (interpolated, linear_t) = shadow_tween_sample(tween, now_ms);
+                if linear_t >= 1.0 - 1e-6 {
+                    tween.active = false;
+                    tween.from = tween.to.clone();
+                    write_shadow_layers(style, &tween.to);
+                } else {
+                    write_shadow_layers(style, &interpolated);
+                    any_active = true;
+                }
+                tween.written = Some(shadow_layers(style));
+            }
+        }
+    } else {
+        snapshot.shadow_tween = None;
+    }
+
     for (&prop, &cfg_idx) in &config_map {
-        if prop == TransitionProperty::Filter {
+        if matches!(
+            prop,
+            TransitionProperty::Filter
+                | TransitionProperty::ClipPath
+                | TransitionProperty::BoxShadow
+        ) {
             continue;
         }
         let cfg = &transition_entries[cfg_idx];
+        let duration_ms = if prefers_reduced_motion() {
+            0.0
+        } else {
+            cfg.duration_ms
+        };
         let (current, comps) = extract_prop(style, prop);
         if comps == 0 {
             continue;
@@ -1180,11 +2465,13 @@ pub fn tick_element_transitions_locked(
                     to: current,
                     components: comps,
                     start_ms: now_ms,
-                    duration_ms: cfg.duration_ms,
+                    duration_ms,
                     delay_ms: cfg.delay_ms,
                     timing: cfg.timing,
                     active: false,
                     written: Some(current),
+                    vel: [0.0; 8],
+                    last_ms: now_ms,
                 },
             );
             continue;
@@ -1204,11 +2491,13 @@ pub fn tick_element_transitions_locked(
                 to: current,
                 components: comps,
                 start_ms: now_ms,
-                duration_ms: cfg.duration_ms,
+                duration_ms,
                 delay_ms: cfg.delay_ms,
                 timing: cfg.timing,
                 active: false,
                 written: None,
+                vel: [0.0; 8],
+                last_ms: now_ms,
             });
 
         let target = specified_prop_value(tween, current, comps);
@@ -1217,32 +2506,39 @@ pub fn tick_element_transitions_locked(
         if target_changed {
             tween.components = comps;
             if tween.active {
-                let (mid, _) = tween_sample(tween, now_ms);
+                let (mid, _) = tween_sample(tween, now_ms, dt_secs);
                 tween.from = mid;
             }
             // Inactive: `from` already equals last settled `to`.
             tween.to = target;
-            tween.duration_ms = cfg.duration_ms;
+            tween.duration_ms = duration_ms;
             tween.delay_ms = cfg.delay_ms;
             tween.timing = cfg.timing;
             tween.active = true;
             tween.start_ms = now_ms;
+            tween.last_ms = now_ms;
+            // Keep `vel` so a mid-flight retarget carries speed into the new rest pose.
         }
 
         if !tween.active {
             continue;
         }
 
-        let (interpolated, linear_t) = tween_sample(tween, now_ms);
+        let (interpolated, linear_t) = tween_sample(tween, now_ms, dt_secs);
         let written = if linear_t >= 1.0 - 1e-6 {
             tween.active = false;
             tween.from = tween.to;
             tween.to
         } else {
             any_active = true;
-            interpolated
+            if is_color_transition_prop(prop) && !tween.timing.is_spring() {
+                let eased = tween.timing.eval(linear_t);
+                lerp_packed_color(&tween.from, &tween.to, eased)
+            } else {
+                interpolated
+            }
         };
-        write_prop(style, prop, &written);
+        write_prop(style, prop, &written, tween.components);
         tween.written = Some(written);
     }
 
@@ -1254,13 +2550,44 @@ pub fn tick_element_transitions_locked(
 #[cfg(test)]
 mod css_transition_dt_tests {
     use super::*;
-    use crate::style::element_style::{Style, TransitionEntry, TransitionProperty};
     use crate::style::TimingFunction;
+    use crate::style::element_style::{TransitionEntry, TransitionProperty};
+
+    #[test]
+    fn spring_transition_retargets_from_current_value() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.opacity = 0.0;
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: 0.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::default_spring(),
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.opacity = 1.0;
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(50.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = style.opacity;
+        assert!(mid > 0.05 && mid < 0.95, "spring mid {mid}");
+        style.opacity = 0.0;
+        set_css_transition_timeline_ms(50.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.opacity - mid).abs() < 0.2,
+            "retarget must start near mid {mid}, got {}",
+            style.opacity
+        );
+        set_css_transition_virtual_timeline(false);
+    }
 
     #[test]
     fn monotonic_timeline_ignores_dt_storm() {
         set_css_transition_virtual_timeline(false);
-        let mut style = Style::default();
+        let mut style = crate::style::Style::default();
         style.scale = [1.0, 1.0];
         style.transition.push(TransitionEntry {
             property: TransitionProperty::Transform,
@@ -1296,7 +2623,7 @@ mod css_transition_dt_tests {
     fn virtual_timeline_advances_only_when_seeked() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
-        let mut style = Style::default();
+        let mut style = crate::style::Style::default();
         style.scale = [1.0, 1.0];
         style.transition.push(TransitionEntry {
             property: TransitionProperty::Transform,
@@ -1335,7 +2662,7 @@ mod css_transition_dt_tests {
     fn retarget_continues_from_current_computed_value() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
-        let mut style = Style::default();
+        let mut style = crate::style::Style::default();
         style.opacity = 0.5;
         style.transition.push(TransitionEntry {
             property: TransitionProperty::Opacity,
@@ -1374,7 +2701,7 @@ mod css_transition_dt_tests {
     fn transform_transition_includes_translate() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
-        let mut style = Style::default();
+        let mut style = crate::style::Style::default();
         style.translate = [0.0, 0.0];
         style.scale = [1.0, 1.0];
         style.transition.push(TransitionEntry {
@@ -1411,7 +2738,7 @@ mod css_transition_dt_tests {
     fn snap_baseline_then_new_target_still_animates() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
-        let mut style = Style::default();
+        let mut style = crate::style::Style::default();
         style.translate = [-100.0, 0.0];
         // Simulate Carousel seamless jump: pin at -100 and seed, then write new target -300.
         style.transition.push(TransitionEntry {
@@ -1687,6 +3014,144 @@ mod tests {
         set_css_transition_virtual_timeline(false);
     }
 
+    #[test]
+    fn from_css_recognizes_layout_properties() {
+        use crate::style::TransitionProperty as P;
+        assert_eq!(P::from_css("width"), P::Width);
+        assert_eq!(P::from_css("min-width"), P::MinWidth);
+        assert_eq!(P::from_css("min_width"), P::MinWidth);
+        assert_eq!(P::from_css("height"), P::Height);
+        assert_eq!(P::from_css("padding"), P::Padding);
+        assert_eq!(P::from_css("padding-left"), P::PaddingLeft);
+        assert_eq!(P::from_css("margin-top"), P::MarginTop);
+        assert_eq!(P::from_css("gap"), P::Gap);
+        assert_eq!(P::from_css("flex-grow"), P::FlexGrow);
+        assert_eq!(P::from_css("border-radius"), P::BorderRadius);
+        assert_eq!(P::from_css("zoom"), P::Zoom);
+        assert_eq!(P::from_css("backdrop-filter"), P::BackdropFilter);
+        assert_eq!(P::from_css("grid-template-rows"), P::GridTemplateRows);
+        assert_eq!(P::from_css("grid-template-columns"), P::GridTemplateColumns);
+        assert_eq!(P::from_css("background-position"), P::BackgroundPosition);
+        assert_eq!(P::from_css("clip-path"), P::ClipPath);
+        assert_eq!(P::from_css("scale"), P::Scale);
+        assert_eq!(P::from_css("rotate"), P::Rotate);
+        assert_eq!(P::from_css("display"), P::Unsupported);
+    }
+
+    #[test]
+    fn width_length_tweens_auto_stays_discrete() {
+        use taffy::style::Dimension;
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.size.width = Dimension::length(48.0);
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Width,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        style.size.width = Dimension::length(256.0);
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(100.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = crate::layout::dim_length_px(style.size.width).unwrap_or(-1.0);
+        assert!(
+            mid > 100.0 && mid < 220.0,
+            "width must interpolate, got {mid}"
+        );
+
+        let mut auto_style = crate::style::Style::default();
+        auto_style.transition.push(TransitionEntry {
+            property: TransitionProperty::All,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut auto_snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut auto_style, &mut auto_snap, 0.0);
+        assert!(
+            matches!(
+                crate::layout::dim_kind(auto_style.size.width),
+                crate::layout::DimKind::Auto
+            ),
+            "auto width must survive `transition: all`"
+        );
+        assert!(!auto_snap.tweens.contains_key(&TransitionProperty::Width));
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn copied_used_width_keeps_standing_target_across_paint() {
+        use taffy::style::Dimension;
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.size.width = Dimension::length(48.0);
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Width,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(!snap.has_active_tweens());
+
+        let mut painted = crate::style::Style::default();
+        painted.size.width = Dimension::length(256.0);
+        painted.transition = style.transition.clone();
+        copy_transition_used_values(&mut painted, &style, &snap);
+        assert_eq!(
+            crate::layout::dim_length_px(painted.size.width),
+            Some(48.0),
+            "rebuild paint 16rem must not replace the used collapsed width"
+        );
+        let _ = tick_element_transitions(&mut painted, &mut snap, 0.0);
+        assert!(
+            !snap.has_active_tweens(),
+            "matching used value must keep the standing rest target, not expand"
+        );
+        assert_eq!(crate::layout::dim_length_px(painted.size.width), Some(48.0));
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn assign_specified_does_not_clobber_mid_when_target_unchanged() {
+        use taffy::style::Dimension;
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.size.width = Dimension::length(256.0);
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Width,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        style.size.width = Dimension::length(48.0);
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(100.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = crate::layout::dim_length_px(style.size.width).unwrap_or(-1.0);
+        assign_transition_specified(
+            &mut style,
+            &snap,
+            TransitionProperty::Width,
+            [48.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        let after = crate::layout::dim_length_px(style.size.width).unwrap_or(-1.0);
+        assert!(
+            (after - mid).abs() < 0.5,
+            "same-target assign must keep mid {mid}, got {after}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
     /// An animation owns the properties its keyframes touch; the transition on the same
     /// property must not chase the animation's output (CSS: animation wins, and an
     /// animation-driven change never starts a transition).
@@ -1810,8 +3275,8 @@ mod tests {
 
     #[test]
     fn max_height_keyframes_pin_min_height_zero_and_restore_on_clear() {
-        use crate::layout::dim_kind;
         use crate::layout::DimKind;
+        use crate::layout::dim_kind;
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.max_size.height = taffy::style::Dimension::length(48.0);
@@ -1870,7 +3335,7 @@ mod tests {
 
     #[test]
     fn opacity_animation_preserves_auto_max_height() {
-        use crate::layout::{dim_kind, DimKind};
+        use crate::layout::{DimKind, dim_kind};
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.size.height = taffy::style::Dimension::length(32.0);
@@ -1907,5 +3372,507 @@ mod tests {
         assert_eq!(e.direction, crate::style::AnimationDirection::Reverse);
         assert_eq!(e.fill_mode, crate::style::AnimationFillMode::Both);
         assert_eq!(e.play_state, crate::style::AnimationPlayState::Running);
+    }
+
+    #[test]
+    fn parse_animation_shorthand_keeps_linear_stops_token() {
+        let list = crate::core::tree::parse_animation_shorthand(
+            "2s linear(0, 0.05 50%, 1) infinite gal-linear-slide",
+        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "gal-linear-slide");
+        assert!(
+            matches!(list[0].timing, crate::style::TimingFunction::LinearStops(_)),
+            "linear() must parse as piecewise easing, not the spin keyframe, got {:?}",
+            list[0].timing
+        );
+    }
+
+    #[test]
+    fn parse_animation_shorthand_keeps_steps_token() {
+        let list =
+            crate::core::tree::parse_animation_shorthand("200ms steps(4, jump-end) both fade-in-0");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "fade-in-0");
+        assert!(matches!(
+            list[0].timing,
+            crate::style::TimingFunction::Steps {
+                n: 4,
+                jump: crate::style::StepJumpTerm::JumpEnd
+            }
+        ));
+    }
+
+    #[test]
+    fn reduced_motion_snaps_keyframes_to_end() {
+        set_prefers_reduced_motion(Some(true));
+        let mut style = crate::style::Style::default();
+        style.opacity = 1.0;
+        style.animations.push(keyframes_anim_entry(
+            "fade-out-0",
+            400.0,
+            TimingFunction::Linear,
+            crate::style::AnimationFillMode::Forwards,
+        ));
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+        assert!(
+            style.opacity < 0.05,
+            "reduced motion must jump to the end sample, got {}",
+            style.opacity
+        );
+        set_prefers_reduced_motion(None);
+    }
+
+    #[test]
+    fn accordion_down_uses_used_layout_not_written_px() {
+        use crate::style::UsedLayout;
+        let mut style = crate::style::Style::default();
+        style.max_size.height = taffy::style::Dimension::auto();
+        style.animations.push(keyframes_anim_entry(
+            "accordion-down",
+            200.0,
+            TimingFunction::Linear,
+            crate::style::AnimationFillMode::Both,
+        ));
+        let mut text = crate::style::TextStyle::default();
+        let mut used = UsedLayout::default();
+        used.stamp_border_box([0.0, 0.0, 100.0, 80.0], false);
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.0);
+        let h = crate::layout::dim_length_px(style.max_size.height).unwrap_or(999.0);
+        assert!(h < 2.0, "fill-mode both at t=0 must start at 0, got {h}");
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.1);
+        let mid = crate::layout::dim_length_px(style.max_size.height).unwrap_or(0.0);
+        assert!(
+            mid > 1.0 && mid < 80.0,
+            "mid accordion-down must interpolate toward used height, got {mid}"
+        );
+        match snap.specified.get(crate::style::PropertyId::MaxHeight) {
+            Some(crate::style::AnimatableValue::Auto) | None => {}
+            other => panic!("specified max-height must stay auto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_transition_writes_text_style() {
+        let mut style = crate::style::Style::default();
+        style.transition.push(crate::style::TransitionEntry {
+            property: crate::style::TransitionProperty::Color,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut text = crate::style::TextStyle::default();
+        text.color = Some([0, 0, 0, 255]);
+        let mut snap = TransitionSnapshot::default();
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let _ = tick_element_transitions_with_text(
+            &mut style,
+            &mut text,
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        text.color = Some([255, 255, 255, 255]);
+        let _ = tick_element_transitions_with_text(
+            &mut style,
+            &mut text,
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        advance_css_transition_timeline_ms(50.0);
+        let _ = tick_element_transitions_with_text(
+            &mut style,
+            &mut text,
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        let c = text.color.expect("color");
+        assert!(
+            c[0] > 10 && c[0] < 245,
+            "color transition must be mid-gray, got {c:?}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn grid_template_rows_transition_lerps_fr() {
+        use crate::layout::{first_track_fr, track_fr};
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.grid_template_rows = vec![track_fr(0.0)];
+        style.transition.push(crate::style::TransitionEntry {
+            property: crate::style::TransitionProperty::GridTemplateRows,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.grid_template_rows = vec![track_fr(1.0)];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(50.0);
+        style.grid_template_rows = vec![track_fr(1.0)];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = first_track_fr(&style.grid_template_rows).unwrap();
+        assert!(
+            (mid - 0.5).abs() < 0.05,
+            "expected ~0.5fr at 50ms linear, got {mid}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn grid_template_rows_transition_lerps_equal_length_list() {
+        use crate::layout::{track_fr, tracks_fr_list};
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.grid_template_rows = vec![track_fr(0.0), track_fr(0.0)];
+        style.transition.push(crate::style::TransitionEntry {
+            property: crate::style::TransitionProperty::GridTemplateRows,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        style.grid_template_rows = vec![track_fr(1.0), track_fr(1.0)];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        set_css_transition_timeline_ms(50.0);
+        style.grid_template_rows = vec![track_fr(1.0), track_fr(1.0)];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = tracks_fr_list(&style.grid_template_rows).expect("fr list");
+        assert_eq!(mid.len(), 2);
+        assert!(
+            (mid[0] - 0.5).abs() < 0.05 && (mid[1] - 0.5).abs() < 0.05,
+            "expected ~0.5 0.5, got {mid:?}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn animation_composition_add_stacks_opacity() {
+        use crate::style::{
+            AnimationComposition, AnimationFillMode, KeyframeStop, TimingFunction,
+            register_keyframes,
+        };
+        register_keyframes(
+            "anim6-hold-03",
+            vec![
+                KeyframeStop::at(0.0).opacity(0.3),
+                KeyframeStop::at(1.0).opacity(0.3),
+            ],
+        );
+        register_keyframes(
+            "anim6-hold-02",
+            vec![
+                KeyframeStop::at(0.0).opacity(0.2),
+                KeyframeStop::at(1.0).opacity(0.2),
+            ],
+        );
+        let mut style = crate::style::Style::default();
+        style.opacity = 0.0;
+        let mut a = keyframes_anim_entry(
+            "anim6-hold-03",
+            1000.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        );
+        a.composition = AnimationComposition::Replace;
+        let mut b = keyframes_anim_entry(
+            "anim6-hold-02",
+            1000.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        );
+        b.composition = AnimationComposition::Add;
+        style.animations.push(a);
+        style.animations.push(b);
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.opacity - 0.5).abs() < 0.02,
+            "replace 0.3 + add 0.2, got {}",
+            style.opacity
+        );
+    }
+
+    #[test]
+    fn interpolate_size_allow_keywords_tweens_auto_height() {
+        use crate::style::{InterpolateSize, TransitionEntry, TransitionProperty, UsedLayout};
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.size.height = taffy::style::Dimension::length(0.0);
+        style.interpolate_size = InterpolateSize::AllowKeywords;
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Height,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut used = UsedLayout::default();
+        used.content_height = 100.0;
+        used.intrinsic_height = 100.0;
+        used.border_box = [0.0, 0.0, 40.0, 100.0];
+        let mut text = crate::style::TextStyle::default();
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions_with_text_used(
+            &mut style,
+            &mut text,
+            Some(&used),
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        style.size.height = taffy::style::Dimension::auto();
+        let _ = tick_element_transitions_with_text_used(
+            &mut style,
+            &mut text,
+            Some(&used),
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        set_css_transition_timeline_ms(50.0);
+        style.size.height = taffy::style::Dimension::auto();
+        let _ = tick_element_transitions_with_text_used(
+            &mut style,
+            &mut text,
+            Some(&used),
+            &mut snap,
+            AnimationLock::default(),
+            0.0,
+        );
+        let h = crate::layout::dim_length_px(style.size.height).unwrap_or(0.0);
+        assert!(
+            (h - 50.0).abs() < 5.0,
+            "interpolate-size should tween auto via used 100px, got {h}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn scroll_timeline_samples_progress_not_elapsed() {
+        use crate::style::{AnimationFillMode, AnimationTimeline, TimingFunction};
+        let mut style = crate::style::Style::default();
+        style.opacity = 1.0;
+        let mut entry = keyframes_anim_entry(
+            "fade-in",
+            10_000.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        );
+        entry.timeline = AnimationTimeline::Scroll;
+        style.animations.push(entry);
+        let mut snap = AnimationSnapshot::default();
+        let mut text = crate::style::TextStyle::default();
+        let used = crate::style::UsedLayout::default();
+        let _ = tick_element_animations_ex_progress(
+            &mut style,
+            &mut text,
+            &used,
+            &mut snap,
+            1.0,
+            TimelineProgress {
+                scroll: 0.5,
+                view: 0.0,
+            },
+        );
+        assert!(
+            (style.opacity - 0.5).abs() < 0.05,
+            "scroll() progress 0.5 must sample fade-in mid, got {}",
+            style.opacity
+        );
+    }
+
+    #[test]
+    fn background_position_and_clip_path_lerp() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.bg_position = [0.0, 0.0];
+        style.clip_path = crate::style::ClipPath::Inset {
+            trbl: [crate::style::ClipCoord::Px(0.0); 4],
+        };
+        style.transition.push(crate::style::TransitionEntry {
+            property: crate::style::TransitionProperty::BackgroundPosition,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        style.transition.push(crate::style::TransitionEntry {
+            property: crate::style::TransitionProperty::ClipPath,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        style.bg_position = [1.0, 1.0];
+        style.clip_path = crate::style::ClipPath::Inset {
+            trbl: [crate::style::ClipCoord::Px(20.0); 4],
+        };
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        set_css_transition_timeline_ms(50.0);
+        style.bg_position = [1.0, 1.0];
+        style.clip_path = crate::style::ClipPath::Inset {
+            trbl: [crate::style::ClipCoord::Px(20.0); 4],
+        };
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.bg_position[0] - 0.5).abs() < 0.05,
+            "bg-position mid, got {:?}",
+            style.bg_position
+        );
+        let inset = style.clip_path.inset_trbl_px([100.0, 100.0]).expect("clip");
+        assert!(
+            (inset[0] - 10.0).abs() < 1.0,
+            "clip-path inset mid, got {inset:?}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn named_scroll_timeline_drives_descendant_animation() {
+        use crate::core::tree::Element;
+        use crate::style::{AnimationFillMode, AnimationTimeline, push_named_timelines};
+        use taffy::style::Overflow;
+
+        let mut scroller = Element::new();
+        scroller.style.overflow.y = Overflow::Scroll;
+        scroller.style.scroll_timeline_name = Some("--page".into());
+        scroller.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        scroller.used_layout.content_height = 200.0;
+        scroller.used_layout.intrinsic_height = 200.0;
+        scroller.used_layout.border_box = [0.0, 0.0, 100.0, 200.0];
+        scroller.scroll_offset = [0.0, 50.0];
+        let mut named = Vec::new();
+        push_named_timelines(&scroller, &mut named, [0.0, 0.0], 100.0);
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].0, "page");
+        assert!(
+            (named[0].1 - 0.5).abs() < 0.05,
+            "scroller 50/100 → 0.5, got {}",
+            named[0].1
+        );
+
+        let mut style = crate::style::Style::default();
+        style.opacity = 1.0;
+        let mut entry = keyframes_anim_entry(
+            "fade-in",
+            10_000.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        );
+        entry.timeline = AnimationTimeline::Named("page".into());
+        entry.range_start = Some("0%".into());
+        entry.range_end = Some("100%".into());
+        style.animations.push(entry);
+        let mut snap = AnimationSnapshot::default();
+        let mut text = crate::style::TextStyle::default();
+        let used = crate::style::UsedLayout::default();
+        let _ = tick_element_animations_ex_named(
+            &mut style,
+            &mut text,
+            &used,
+            &mut snap,
+            1.0,
+            TimelineProgress::ZERO,
+            &named,
+        );
+        assert!(
+            (style.opacity - 0.5).abs() < 0.05,
+            "named --page at 0.5 must sample fade-in mid, got {}",
+            style.opacity
+        );
+    }
+
+    #[test]
+    fn calc_size_keyframes_animate_to_used_plus_n() {
+        use crate::layout::dimension::parse_css_dim;
+        use crate::style::{
+            AnimatableValue, AnimationFillMode, KeyframeStop, PropertyId, UsedLayout,
+            register_keyframes,
+        };
+        register_keyframes(
+            "calc-size-grow",
+            vec![
+                KeyframeStop::at(0.0).set(PropertyId::Height, AnimatableValue::Scalar(0.0)),
+                KeyframeStop::at(1.0).set(
+                    PropertyId::Height,
+                    AnimatableValue::Dim(
+                        parse_css_dim("calc-size(auto, size + 20px)").expect("parse"),
+                    ),
+                ),
+            ],
+        );
+        let mut style = crate::style::Style::default();
+        style.size.height = taffy::style::Dimension::length(0.0);
+        style.animations.push(keyframes_anim_entry(
+            "calc-size-grow",
+            1.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        ));
+        let mut used = UsedLayout::default();
+        used.content_height = 100.0;
+        used.intrinsic_height = 100.0;
+        used.border_box = [0.0, 0.0, 40.0, 100.0];
+        let mut text = crate::style::TextStyle::default();
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.0);
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 1.0);
+        let h = crate::layout::dim_length_px(style.size.height).unwrap_or(-1.0);
+        assert!(
+            (h - 120.0).abs() < 1.0,
+            "calc-size(auto, size+20px) of used 100 → 120, got {h}"
+        );
+    }
+
+    #[test]
+    fn clip_path_polygon_keyframes_lerp_vertices() {
+        use crate::style::{
+            AnimatableValue, AnimationFillMode, ClipCoord, ClipPath, KeyframeStop, PropertyId,
+            register_keyframes,
+        };
+        let from =
+            crate::style::parse_clip_path("polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)").unwrap();
+        let to =
+            crate::style::parse_clip_path("polygon(25% 25%, 75% 25%, 75% 75%, 25% 75%)").unwrap();
+        register_keyframes(
+            "clip-poly-lerp",
+            vec![
+                KeyframeStop::at(0.0).set(PropertyId::ClipPath, AnimatableValue::Clip(from)),
+                KeyframeStop::at(1.0).set(PropertyId::ClipPath, AnimatableValue::Clip(to)),
+            ],
+        );
+        let mut style = crate::style::Style::default();
+        style.animations.push(keyframes_anim_entry(
+            "clip-poly-lerp",
+            100.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        ));
+        let mut snap = AnimationSnapshot::default();
+        let mut text = crate::style::TextStyle::default();
+        let used = crate::style::UsedLayout::default();
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.0);
+        let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.05);
+        match &style.clip_path {
+            ClipPath::Polygon { points, .. } => match points[0][0] {
+                ClipCoord::Percent(p) => {
+                    assert!((p - 0.125).abs() < 0.02, "polygon mid vertex, got {p}")
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
     }
 }

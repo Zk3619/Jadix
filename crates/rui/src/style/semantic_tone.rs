@@ -8,7 +8,7 @@
 //! 别名：`error`≡`destructive` · `warn`≡`warning` · 未知→[`SemanticTone::Default`].
 
 use crate::core::tree::Element;
-use crate::style::{is_dark_theme, parse_color, parse_text_color, LineStyle};
+use crate::style::{LineStyle, is_dark_theme, parse_color, parse_text_color};
 
 /// 语义语气（非 Button `outline`/`ghost` 等产品 variant）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -283,7 +283,7 @@ pub fn button_soft_semantic_chrome(
     tone: SemanticTone,
     hover_t: f32,
 ) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
-    use crate::style::{lerp_paint_chrome, PaintChrome};
+    use crate::style::{PaintChrome, lerp_paint_chrome};
     let palette = semantic_palette(tone);
     let mix = soft_semantic_mix_alphas();
     let rest = PaintChrome {

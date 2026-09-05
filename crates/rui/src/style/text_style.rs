@@ -89,7 +89,8 @@ pub enum WhiteSpace {
     Nowrap,
 }
 
-/// Paragraph direction MVP: Unicode marks + align; bidi still handled by cosmic-text.
+/// Paragraph direction MVP: Unicode RLM for explicit RTL + align; bidi still handled by cosmic-text.
+/// `Ltr` / `Auto` do **not** inject U+200E (some fonts render LRM as a visible glyph).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextDirection {
     #[default]
@@ -454,10 +455,12 @@ impl Default for TextStyle {
 impl TextStyle {
     /// Root ancestor defaults when no parent supplies inheritable values.
     pub fn cascade_root() -> Self {
+        let defaults = crate::utils::font::text_defaults();
         Self {
             color: Some(super::parse_text_color("foreground")),
-            size: Some(16.0),
-            weight: Some(400),
+            size: Some(defaults.size_px),
+            weight: Some(defaults.weight),
+            font_family: Some(crate::utils::font::default_ui_sans_family_list().to_string()),
             align: Some(TextAlign::Start),
             underline: Some(false),
             overline: Some(false),
@@ -478,12 +481,14 @@ impl TextStyle {
 
     #[inline]
     pub fn size_resolved(&self) -> f32 {
-        self.size.unwrap_or(16.0)
+        self.size
+            .unwrap_or_else(|| crate::utils::font::text_defaults().size_px)
     }
 
     #[inline]
     pub fn weight_resolved(&self) -> u16 {
-        self.weight.unwrap_or(400)
+        self.weight
+            .unwrap_or_else(|| crate::utils::font::text_defaults().weight)
     }
 
     #[inline]
@@ -669,8 +674,8 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_text_shadow, TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan,
-        TextSpanKind, TextStyle, WhiteSpace,
+        TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan, TextSpanKind,
+        TextStyle, WhiteSpace, parse_text_shadow,
     };
 
     #[test]

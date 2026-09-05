@@ -17,15 +17,15 @@ pub enum FontWeightToken {
 impl FontWeightToken {
     pub fn from_rest(rest: &str) -> Option<Self> {
         Some(match rest {
-            "thin" => Self::Thin,
-            "extralight" => Self::ExtraLight,
-            "light" => Self::Light,
-            "normal" => Self::Normal,
-            "medium" => Self::Medium,
-            "semibold" => Self::SemiBold,
-            "bold" => Self::Bold,
-            "extrabold" => Self::ExtraBold,
-            "black" => Self::Black,
+            "100" | "thin" => Self::Thin,
+            "200" | "extralight" => Self::ExtraLight,
+            "300" | "light" => Self::Light,
+            "400" | "normal" => Self::Normal,
+            "500" | "medium" => Self::Medium,
+            "600" | "semibold" => Self::SemiBold,
+            "700" | "bold" => Self::Bold,
+            "800" | "extrabold" => Self::ExtraBold,
+            "900" | "black" => Self::Black,
             _ => return None,
         })
     }
@@ -91,6 +91,14 @@ pub enum KnownUtility<'a> {
     TextColor(&'a str),
     TextSize(f32),
     FontWeight(FontWeightToken),
+    /// Tailwind `font-sans` — UI sans stack.
+    FontFamilySans,
+    /// Tailwind `font-serif`.
+    FontFamilySerif,
+    /// Tailwind `font-mono` / `font-monospace`.
+    FontFamilyMono,
+    /// Tailwind `leading-*` unitless scale (`none` / `tight` / …).
+    Leading(f32),
     AlignSelf(&'a str),
     Opacity(f32),
     /// Visual translate X in logical px (`translate-x-*`).
@@ -153,6 +161,8 @@ pub enum KnownUtility<'a> {
     LetterSpacing(f32),
     TextDirectionLtr,
     TextDirectionRtl,
+    /// Tailwind `writing-*` → CSS `writing-mode`.
+    WritingMode(&'a str),
     /// `transition-opacity` — marks element for opacity transitions.
     TransitionOpacity,
     /// `transition-transform` — marks element for transform transitions.
@@ -161,6 +171,8 @@ pub enum KnownUtility<'a> {
     TransitionAll,
     /// `transition-colors` — transition color-related properties.
     TransitionColors,
+    /// `transition-padding` — layout padding only (avoid `transition-all` seeding width/height).
+    TransitionPadding,
     /// `transition-none` — disable transitions.
     TransitionNone,
     /// `duration-N` — transition duration in ms (e.g. `duration-300`).
@@ -169,6 +181,8 @@ pub enum KnownUtility<'a> {
     TransitionDelay(u32),
     /// `ease-*` — transition timing function.
     TransitionEase(&'static str),
+    /// Tailwind `will-change-*`.
+    WillChange(&'static str),
     /// `animate-spin` — continuous rotate (`animation: spin 1s linear infinite`).
     AnimateSpin,
     /// `animate-ping` — scale+fade pulse.
@@ -443,7 +457,13 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "transition-transform" => return Some(KnownUtility::TransitionTransform),
         "transition-all" => return Some(KnownUtility::TransitionAll),
         "transition-colors" => return Some(KnownUtility::TransitionColors),
+        "transition-padding" => return Some(KnownUtility::TransitionPadding),
         "transition-none" => return Some(KnownUtility::TransitionNone),
+        "will-change-auto" => return Some(KnownUtility::WillChange("auto")),
+        "will-change-transform" => return Some(KnownUtility::WillChange("transform")),
+        "will-change-opacity" => return Some(KnownUtility::WillChange("opacity")),
+        "will-change-scroll" => return Some(KnownUtility::WillChange("scroll-position")),
+        "will-change-contents" => return Some(KnownUtility::WillChange("contents")),
         "ease-linear" => return Some(KnownUtility::TransitionEase("linear")),
         "ease-in" => return Some(KnownUtility::TransitionEase("ease-in")),
         "ease-out" => return Some(KnownUtility::TransitionEase("ease-out")),
@@ -637,7 +657,15 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::BgColor(rest));
     }
     if let Some(rest) = token.strip_prefix("font-") {
-        return Some(KnownUtility::FontWeight(FontWeightToken::from_rest(rest)?));
+        return match rest {
+            "sans" => Some(KnownUtility::FontFamilySans),
+            "serif" => Some(KnownUtility::FontFamilySerif),
+            "mono" | "monospace" => Some(KnownUtility::FontFamilyMono),
+            _ => Some(KnownUtility::FontWeight(FontWeightToken::from_rest(rest)?)),
+        };
+    }
+    if let Some(rest) = token.strip_prefix("leading-") {
+        return leading_scale_token(rest).map(KnownUtility::Leading);
     }
     if let Some(rest) = token.strip_prefix("overflow-x-") {
         return Some(KnownUtility::OverflowX(rest));
@@ -672,6 +700,11 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "aspect-video" => return Some(KnownUtility::AspectRatio(16.0 / 9.0)),
         "rtl" => return Some(KnownUtility::TextDirectionRtl),
         "ltr" => return Some(KnownUtility::TextDirectionLtr),
+        "writing-horizontal-tb" => return Some(KnownUtility::WritingMode("horizontal-tb")),
+        "writing-vertical-rl" => return Some(KnownUtility::WritingMode("vertical-rl")),
+        "writing-vertical-lr" => return Some(KnownUtility::WritingMode("vertical-lr")),
+        "writing-sideways-rl" => return Some(KnownUtility::WritingMode("sideways-rl")),
+        "writing-sideways-lr" => return Some(KnownUtility::WritingMode("sideways-lr")),
         _ => {}
     }
 
@@ -1184,6 +1217,22 @@ fn parse_shimmer_angle_deg(rest: &str) -> Option<f32> {
     rest.parse().ok()
 }
 
+fn leading_scale_token(rest: &str) -> Option<f32> {
+    match rest {
+        "none" => Some(1.0),
+        "tight" => Some(1.25),
+        "snug" => Some(1.375),
+        "normal" => Some(1.5),
+        "relaxed" => Some(1.625),
+        "loose" => Some(2.0),
+        _ => {
+            let inner = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']'))?;
+            let v = inner.trim().trim_end_matches("em");
+            v.parse().ok().filter(|n: &f32| n.is_finite() && *n > 0.0)
+        }
+    }
+}
+
 #[inline]
 pub fn is_known_utility(token: &str) -> bool {
     classify_utility(token).is_some()
@@ -1243,7 +1292,39 @@ mod tests {
             classify_utility("text-justify"),
             Some(KnownUtility::TextAlign("justify"))
         ));
-        assert!(is_known_utility("whitespace-nowrap"));
+        assert!(is_known_utility("font-medium"));
+        assert!(matches!(
+            classify_utility("font-medium"),
+            Some(KnownUtility::FontWeight(FontWeightToken::Medium))
+        ));
+        assert!(matches!(
+            classify_utility("font-500"),
+            Some(KnownUtility::FontWeight(FontWeightToken::Medium))
+        ));
+        assert!(matches!(
+            classify_utility("font-sans"),
+            Some(KnownUtility::FontFamilySans)
+        ));
+        assert!(matches!(
+            classify_utility("font-serif"),
+            Some(KnownUtility::FontFamilySerif)
+        ));
+        assert!(matches!(
+            classify_utility("font-mono"),
+            Some(KnownUtility::FontFamilyMono)
+        ));
+        assert!(matches!(
+            classify_utility("leading-none"),
+            Some(KnownUtility::Leading(s)) if (s - 1.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("leading-tight"),
+            Some(KnownUtility::Leading(s)) if (s - 1.25).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("leading-[1.15]"),
+            Some(KnownUtility::Leading(s)) if (s - 1.15).abs() < f32::EPSILON
+        ));
         assert!(matches!(
             classify_utility("whitespace-nowrap"),
             Some(KnownUtility::WhitespaceNowrap)
@@ -1420,6 +1501,10 @@ mod tests {
             Some(KnownUtility::TextDirectionRtl)
         ));
         assert!(matches!(
+            classify_utility("writing-vertical-rl"),
+            Some(KnownUtility::WritingMode("vertical-rl"))
+        ));
+        assert!(matches!(
             classify_utility("fixed"),
             Some(KnownUtility::PositionFixed)
         ));
@@ -1518,6 +1603,14 @@ mod tests {
         assert!(matches!(
             classify_utility("transition-opacity"),
             Some(KnownUtility::TransitionOpacity)
+        ));
+        assert!(matches!(
+            classify_utility("transition-colors"),
+            Some(KnownUtility::TransitionColors)
+        ));
+        assert!(matches!(
+            classify_utility("transition-padding"),
+            Some(KnownUtility::TransitionPadding)
         ));
         assert!(matches!(
             classify_utility("transition-transform"),

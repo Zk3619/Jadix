@@ -4,7 +4,7 @@
 //! and 2D affine matrix resolution. 3D functions are stored but projected
 //! to 2D at resolve time (true `preserve-3d` requires a 3D pipeline).
 
-use crate::layout::dimension::{parse_css_angle, parse_css_dim, CssAngle, CssDim};
+use crate::layout::dimension::{CssAngle, CssDim, parse_css_angle, parse_css_dim};
 
 // ---------------------------------------------------------------------------
 // Value types
@@ -286,6 +286,37 @@ fn origin_y_px(oy: &TransformOriginY, h: f32) -> f32 {
     }
 }
 
+/// `transform-origin` as fractions of the border box (0–1), independent of used size.
+pub fn origin_frac(origin: &TransformOrigin) -> [f32; 2] {
+    [origin_axis_frac_x(&origin.x), origin_axis_frac_y(&origin.y)]
+}
+
+fn origin_axis_frac_x(ox: &TransformOriginX) -> f32 {
+    match ox {
+        TransformOriginX::Left => 0.0,
+        TransformOriginX::Center => 0.5,
+        TransformOriginX::Right => 1.0,
+        TransformOriginX::Length(CssDim::Percent(p)) => *p,
+        TransformOriginX::Length(_) => 0.5,
+    }
+}
+
+fn origin_axis_frac_y(oy: &TransformOriginY) -> f32 {
+    match oy {
+        TransformOriginY::Top => 0.0,
+        TransformOriginY::Center => 0.5,
+        TransformOriginY::Bottom => 1.0,
+        TransformOriginY::Length(CssDim::Percent(p)) => *p,
+        TransformOriginY::Length(_) => 0.5,
+    }
+}
+
+/// Write animated `transform-origin` fractions back onto the specified origin.
+pub fn set_origin_frac(origin: &mut TransformOrigin, frac: [f32; 2]) {
+    origin.x = TransformOriginX::Length(CssDim::Percent(frac[0].clamp(0.0, 1.0)));
+    origin.y = TransformOriginY::Length(CssDim::Percent(frac[1].clamp(0.0, 1.0)));
+}
+
 // ---------------------------------------------------------------------------
 // Public resolve API
 // ---------------------------------------------------------------------------
@@ -407,11 +438,7 @@ pub fn parse_transform(s: &str) -> Option<TransformList> {
         list.push(func);
     }
 
-    if list.is_empty() {
-        None
-    } else {
-        Some(list)
-    }
+    if list.is_empty() { None } else { Some(list) }
 }
 
 fn find_matching_paren(s: &str) -> Option<usize> {

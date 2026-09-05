@@ -5,16 +5,17 @@
 //! classes against the same catalog.
 
 use rui_style_tokens::{
-    classify_utility, parse_class_list, KnownUtility, ParsedClassList, VariantSelector,
+    KnownUtility, ParsedClassList, VariantSelector, classify_utility, parse_class_list,
 };
 
+use std::borrow::Cow;
 use std::cell::Cell;
 
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::style::{
-    mark_variant_style_override, parse_color, parse_text_color, Style, TextStyle, VariantStyleField,
+    Style, TextStyle, VariantStyleField, mark_variant_style_override, parse_color, parse_text_color,
 };
 
 thread_local! {
@@ -54,6 +55,11 @@ fn style_needs_taffy_sync(before: &Style, after: &Style) -> bool {
         s.shadow_inset = false;
         s.extra_shadows.clear();
         s.bg_gradient = None;
+        s.bg_position = [0.0; 2];
+        s.clip_path = crate::style::ClipPath::None;
+        s.scroll_timeline_name = None;
+        s.view_timeline_name = None;
+        s.interpolate_size = crate::style::InterpolateSize::NumericOnly;
         s.opacity = 1.0;
         s.translate = [0.0; 2];
         s.translate_pct = [0.0; 2];
@@ -64,6 +70,13 @@ fn style_needs_taffy_sync(before: &Style, after: &Style) -> bool {
         s.transform_origin = Default::default();
         s.filter = None;
         s.transition.clear();
+        // offset-path motion is compositor/paint (same as translate). Leaving these in the
+        // comparison made `gal-offset-run` dirty Taffy every frame on the gallery layout page.
+        s.offset_distance = 0.0;
+        s.offset_rotate_deg = None;
+        s.offset_path = crate::style::OffsetPath::None;
+        s.will_change = crate::style::WillChangeHint::Auto;
+        s.backdrop_blur = 0.0;
     }
     a != b
 }
@@ -80,7 +93,7 @@ pub struct ClassSet {
     last_ctx_fp: Option<u64>,
     /// Last `:hover` geometry sample from [`sync_class_variants_subtree`].
     /// CursorMoved uses this via [`class_variant_hover_needs_frame`].
-    last_pointer_hover: Option<bool>,
+    pub(crate) last_pointer_hover: Option<bool>,
 }
 
 impl ClassSet {
@@ -204,6 +217,85 @@ pub fn apply_utility_classes(el: &mut Element, classes: &str) -> LayoutStatus {
 pub fn with_class_list(mut el: Element, classes: &str) -> Element {
     let _ = apply_class_list(&mut el, classes);
     el
+}
+
+/// One fragment for [`classes`] / [`classes!`](crate::classes): a class string, optional, or `(token, on)`.
+///
+/// Join only — does not resolve utility conflicts. Pass the result to a single
+/// [`apply_class_list`] / RSX `class={…}` so later tokens win at apply time.
+pub trait ClassPart {
+    fn push_to(self, out: &mut String);
+}
+
+fn append_class_token(out: &mut String, raw: &str) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !out.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(trimmed);
+}
+
+impl ClassPart for &str {
+    fn push_to(self, out: &mut String) {
+        append_class_token(out, self);
+    }
+}
+
+impl ClassPart for String {
+    fn push_to(self, out: &mut String) {
+        append_class_token(out, &self);
+    }
+}
+
+impl ClassPart for &String {
+    fn push_to(self, out: &mut String) {
+        append_class_token(out, self);
+    }
+}
+
+impl ClassPart for Cow<'_, str> {
+    fn push_to(self, out: &mut String) {
+        append_class_token(out, self.as_ref());
+    }
+}
+
+impl<T: ClassPart> ClassPart for Option<T> {
+    fn push_to(self, out: &mut String) {
+        if let Some(part) = self {
+            part.push_to(out);
+        }
+    }
+}
+
+impl<T: ClassPart> ClassPart for (T, bool) {
+    fn push_to(self, out: &mut String) {
+        if self.1 {
+            self.0.push_to(out);
+        }
+    }
+}
+
+/// Append one [`ClassPart`] onto `out`. Building block for [`classes!`](crate::classes).
+#[inline]
+pub fn push_class_part(out: &mut String, part: impl ClassPart) {
+    part.push_to(out);
+}
+
+/// Join class fragments into one whitespace-separated list.
+///
+/// Skips empty strings and `None`. Tuple `("hidden", on)` is the classList form:
+/// the token is included only when `on` is true.
+///
+/// Mixed types (`&str` + `Option<String>` + `(&str, bool)`) need [`classes!`](crate::classes).
+pub fn classes(parts: impl IntoIterator<Item = impl ClassPart>) -> String {
+    let mut out = String::new();
+    for part in parts {
+        part.push_to(&mut out);
+    }
+    out
 }
 
 fn apply_parsed_class_list(
@@ -341,11 +433,7 @@ fn variant_ctx_fingerprint(
         }
     }
     mix_fp(&mut h, attrs_h);
-    if h == 0 {
-        1
-    } else {
-        h
-    }
+    if h == 0 { 1 } else { h }
 }
 
 /// Walk the tree and resolve class variants (chrome sync).
@@ -375,13 +463,28 @@ pub fn sync_class_variants_subtree(
     );
 }
 
-/// During smooth-scroll / scrollbar-fade frames: advance already-running CSS tweens only.
+fn scroller_timeline_progress(el: &Element) -> Option<f32> {
+    super::scroll_timeline::scroller_progress_axis(
+        el,
+        super::scroll_timeline::ScrollTimelineAxis::Block,
+    )
+}
+
+fn view_timeline_progress(el: &Element, scroll_acc: [f32; 2], viewport_h: f32) -> f32 {
+    super::scroll_timeline::view_timeline_progress(el, scroll_acc, viewport_h)
+}
+
+/// During smooth-scroll / scrollbar-fade frames: advance already-running CSS tweens,
+/// and **leave** stale `:hover` (content slid out from under a still cursor).
 ///
-/// Do **not** re-sample pointer `:hover`. Content sliding under a still cursor would otherwise
-/// enter/leave every `transition-transform` tile on the gallery layout page, spawning a tween
+/// Do **not** enter new `:hover`. Content sliding *onto* a still cursor would otherwise
+/// light up every `transition-transform` tile on the gallery layout page, spawning a tween
 /// storm (`mark_hover_paint_dirty` + full redraw pump) that janks hard and flickers sidebar hover.
 pub fn tick_active_css_transitions_subtree(
     el: &mut Element,
+    mouse_pos: [f32; 2],
+    focused_id: &str,
+    dark: bool,
     viewport_w: f32,
     viewport_h: f32,
     scroll_acc: [f32; 2],
@@ -391,10 +494,14 @@ pub fn tick_active_css_transitions_subtree(
     struct Frame {
         ptr: *mut Element,
         scroll_acc: [f32; 2],
+        scroll_progress: f32,
+        named: Vec<(String, f32)>,
     }
     let mut stack = vec![Frame {
         ptr: el as *mut Element,
         scroll_acc,
+        scroll_progress: 0.0,
+        named: Vec::new(),
     }];
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive subtree walk of the `el` passed to this function.
@@ -407,9 +514,8 @@ pub fn tick_active_css_transitions_subtree(
             frame.scroll_acc
         };
 
-        if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
-            continue;
-        }
+        let offscreen =
+            crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h);
 
         let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
         let has_css_anim = !el.style.animations.is_empty()
@@ -417,6 +523,14 @@ pub fn tick_active_css_transitions_subtree(
         let has_active_css = el.transition_snapshot.has_active_tweens();
         let css_needs =
             super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+        let force_leave = class_hover_should_leave(el, mouse_pos, scroll_acc);
+        // Culled nodes still advance in-flight tweens. Spring has duration_ms=0 so the
+        // duration clock cannot "catch up" after a skip — it looks like a forced pause.
+        // Settled `:hover` (no active tween) must still leave when the pointer is gone.
+        // Do not walk children (keep the gallery offscreen cull); do not seed via css_needs.
+        if offscreen && !(has_spin || has_css_anim || has_active_css || force_leave) {
+            continue;
+        }
         let defer_shell_css = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
             el.template_id.as_deref(),
         )
@@ -424,24 +538,45 @@ pub fn tick_active_css_transitions_subtree(
                 el.template_id.as_deref(),
             );
 
-        if has_spin || has_css_anim || has_active_css || css_needs {
+        let mut named = frame.named.clone();
+        super::scroll_timeline::push_named_timelines(el, &mut named, scroll_acc, viewport_h);
+
+        let mut local = LayoutStatus::Clean;
+        if force_leave {
+            local = resolve_stale_class_hover_leave(el, focused_id, dark, viewport_w);
+        }
+
+        if has_spin || has_css_anim || has_active_css || css_needs || force_leave {
             let before = el.style.clone();
             let spun = tick_animate_spin(el);
             let css_anim = if !defer_shell_css && (has_css_anim || !el.style.animations.is_empty())
             {
-                super::animation::tick_element_animations(
+                crate::style::ensure_used_layout_from_bounds(el);
+                let progress = super::animation::TimelineProgress {
+                    scroll: scroller_timeline_progress(el).unwrap_or(frame.scroll_progress),
+                    view: view_timeline_progress(el, scroll_acc, viewport_h),
+                };
+                let active = super::animation::tick_element_animations_ex_named(
                     &mut el.inner.style,
+                    &mut el.inner.text_style,
+                    &el.inner.used_layout,
                     &mut el.inner.animation_snapshot,
                     frame_dt(),
-                )
+                    progress,
+                    &named,
+                );
+                el.inner.specified_present = el.inner.animation_snapshot.specified.clone();
+                active
             } else {
                 false
             };
             let css_trans = if !defer_shell_css
                 && (has_active_css || css_needs || !el.style.transition.is_empty())
             {
-                super::animation::tick_element_transitions_locked(
+                super::animation::tick_element_transitions_with_text_used(
                     &mut el.inner.style,
+                    &mut el.inner.text_style,
+                    Some(&el.inner.used_layout),
                     &mut el.inner.transition_snapshot,
                     el.inner.animation_snapshot.lock(),
                     frame_dt(),
@@ -449,16 +584,29 @@ pub fn tick_active_css_transitions_subtree(
             } else {
                 false
             };
-            if spun || css_anim || css_trans || el.style != before {
-                *impact = impact.merge(LayoutStatus::StyleChanged);
+            if spun || css_anim || css_trans || el.style != before || local != LayoutStatus::Clean {
+                *impact = impact.merge(local.merge(LayoutStatus::StyleChanged));
                 mark_hover_paint_dirty();
-                let need_taffy = style_needs_taffy_sync(&before, &el.style);
-                if need_taffy && el.layout_node.is_some() {
-                    layout_tree.update_taffy_node_style(el);
+                // Padding/margin/size tweens must request flex recompute. StyleChanged alone
+                // is treated as scroll-only paint and leaves geometry stuck at the hover size.
+                let need_taffy = matches!(
+                    local,
+                    LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+                ) || style_needs_taffy_sync(&before, &el.style);
+                if need_taffy {
+                    *impact = impact.merge(LayoutStatus::LayoutChanged);
+                    if el.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(el);
+                    }
                 }
             }
         }
 
+        if offscreen {
+            continue;
+        }
+
+        let child_progress = scroller_timeline_progress(el).unwrap_or(frame.scroll_progress);
         let child_acc = if is_portal {
             scroll_acc
         } else {
@@ -469,6 +617,8 @@ pub fn tick_active_css_transitions_subtree(
             stack.push(Frame {
                 ptr: std::ptr::addr_of_mut!(el.children[i]),
                 scroll_acc: child_acc,
+                scroll_progress: child_progress,
+                named: named.clone(),
             });
         }
     }
@@ -493,20 +643,22 @@ fn class_variant_hover_needs_frame_inner(
         el: &'a Element,
         scroll_acc: [f32; 2],
         clip: Option<[f32; 4]>,
+        clip_round: OverflowRoundClip,
     }
     let mut stack = vec![Frame {
         el,
         scroll_acc,
         clip,
+        clip_round: None,
     }];
     while let Some(frame) = stack.pop() {
         let el = frame.el;
         let is_portal =
             el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-        let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
-            ([0.0_f32, 0.0], None)
+        let (scroll_acc, clip, clip_round) = if el.style.position_fixed || is_portal {
+            ([0.0_f32, 0.0], None, None)
         } else {
-            (frame.scroll_acc, frame.clip)
+            (frame.scroll_acc, frame.clip, frame.clip_round)
         };
 
         let b = el.layout_bounds;
@@ -514,7 +666,7 @@ fn class_variant_hover_needs_frame_inner(
         let ly = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
         let layout_box = [lx, ly, b[2], b[3]];
         let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-        let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
+        let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip, clip_round);
 
         if let Some(cs) = el.class_set.as_ref() {
             if !cs.variants.is_empty() {
@@ -534,6 +686,7 @@ fn class_variant_hover_needs_frame_inner(
         } else {
             clip
         };
+        let child_clip_round = next_overflow_round_clip(el, is_portal, layout_box, clip_round);
         let child_scroll_acc = if is_portal {
             scroll_acc
         } else {
@@ -544,6 +697,7 @@ fn class_variant_hover_needs_frame_inner(
                 el: child,
                 scroll_acc: child_scroll_acc,
                 clip: child_clip,
+                clip_round: child_clip_round,
             });
         }
     }
@@ -555,12 +709,26 @@ fn pointer_inside_for_class_hover(
     mouse_pos: [f32; 2],
     vis_box: [f32; 4],
     clip: Option<[f32; 4]>,
+    clip_round: OverflowRoundClip,
 ) -> bool {
     let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
     let in_clip = clip.map_or(true, |c| {
         c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
     });
     if !(in_box && in_clip) {
+        return false;
+    }
+    if let Some((rect, radii)) = clip_round {
+        if !crate::style::rounded_rect_contains(rect, radii, mouse_pos) {
+            return false;
+        }
+    }
+    if crate::core::tree::element_clips_overflow(el)
+        && !crate::core::tree::overflow_clip_contains_point(el, vis_box, mouse_pos)
+    {
+        return false;
+    }
+    if !el.style.clip_path.is_none() && !el.style.clip_path.contains_point(vis_box, mouse_pos) {
         return false;
     }
     if crate::primitives::path::element_has_path_geometry(&el.attrs) {
@@ -575,6 +743,51 @@ fn pointer_inside_for_class_hover(
     true
 }
 
+/// Already-hovered class variants whose paint AABB no longer contains the pointer.
+/// Used on the scroll-freeze path so springs / padding can leave without entering new hovers.
+fn class_hover_should_leave(el: &Element, mouse_pos: [f32; 2], scroll_acc: [f32; 2]) -> bool {
+    let Some(cs) = el.class_set.as_ref() else {
+        return false;
+    };
+    if cs.last_pointer_hover != Some(true) || cs.variants.is_empty() {
+        return false;
+    }
+    let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+    !pointer_inside_for_class_hover(el, mouse_pos, vis_box, None, None)
+}
+
+fn resolve_stale_class_hover_leave(
+    el: &mut Element,
+    focused_id: &str,
+    dark: bool,
+    viewport_w: f32,
+) -> LayoutStatus {
+    let focused = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty() && id == focused_id);
+    let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
+        || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
+    let attrs_snapshot = el.attrs.clone();
+    let ctx = VariantContext {
+        hovered: false,
+        focused,
+        disabled,
+        active: false,
+        dark,
+        viewport_w,
+        group_hovered: &[],
+        peer_hovered: &[],
+        attrs: Some(&attrs_snapshot),
+    };
+    let local = resolve_class_variants(el, &ctx);
+    if let Some(cs) = el.class_set.as_mut() {
+        cs.last_pointer_hover = Some(false);
+        cs.last_ctx_fp = None;
+    }
+    local
+}
+
 fn intersect_clip(clip: Option<[f32; 4]>, rect: [f32; 4]) -> Option<[f32; 4]> {
     let c = match clip {
         Some(c) => c,
@@ -587,8 +800,31 @@ fn intersect_clip(clip: Option<[f32; 4]>, rect: [f32; 4]) -> Option<[f32; 4]> {
     Some([x1, y1, (x2 - x1).max(0.0), (y2 - y1).max(0.0)])
 }
 
+/// Overflow `border-radius` clip inherited by descendants (nested ≈ inner radii only).
+type OverflowRoundClip = Option<([f32; 4], [f32; 4])>;
+
+fn next_overflow_round_clip(
+    el: &Element,
+    is_portal: bool,
+    layout_box: [f32; 4],
+    inherited: OverflowRoundClip,
+) -> OverflowRoundClip {
+    if is_portal {
+        return None;
+    }
+    if crate::core::tree::element_clips_overflow(el) {
+        if crate::style::radii_affect_clip(el.style.radii) {
+            Some((layout_box, el.style.radii))
+        } else {
+            None
+        }
+    } else {
+        inherited
+    }
+}
+
 fn node_clips_pointer(el: &Element) -> bool {
-    crate::core::tree::element_clips_overflow(el)
+    crate::core::tree::element_clips_overflow(el) || !el.style.clip_path.is_none()
 }
 
 fn record_peer_hover(
@@ -597,12 +833,16 @@ fn record_peer_hover(
     mouse_pos: [f32; 2],
     child_scroll_acc: [f32; 2],
     child_clip: Option<[f32; 4]>,
+    child_clip_round: OverflowRoundClip,
 ) {
     prev_peer_owned.clear();
     let child_paint = crate::core::tree::visual_paint_aabb(child, child_scroll_acc);
     let child_hovered = crate::core::tree::point_in_aabb(mouse_pos, child_paint)
         && child_clip.map_or(true, |c| {
             c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
+        })
+        && child_clip_round.map_or(true, |(rect, radii)| {
+            crate::style::rounded_rect_contains(rect, radii, mouse_pos)
         });
     if !child_hovered {
         return;
@@ -634,19 +874,26 @@ fn sync_class_variants_subtree_inner(
         ptr: *mut Element,
         scroll_acc: [f32; 2],
         clip: Option<[f32; 4]>,
+        clip_round: OverflowRoundClip,
         ancestor_groups: Vec<Option<String>>,
         peer: Vec<Option<String>>,
         next_child: usize,
         started: bool,
         child_scroll_acc: [f32; 2],
         child_clip: Option<[f32; 4]>,
+        child_clip_round: OverflowRoundClip,
         group_for_children: Vec<Option<String>>,
         prev_peer_owned: Vec<Option<String>>,
+        named: Vec<(String, f32)>,
+        scroll_progress: f32,
+        child_named: Vec<(String, f32)>,
+        child_scroll_progress: f32,
     }
     let mut stack = vec![Frame {
         ptr: el as *mut Element,
         scroll_acc,
         clip,
+        clip_round: None,
         ancestor_groups: ancestor_group_hovered
             .iter()
             .map(|n| n.map(str::to_string))
@@ -656,8 +903,13 @@ fn sync_class_variants_subtree_inner(
         started: false,
         child_scroll_acc: [0.0, 0.0],
         child_clip: None,
+        child_clip_round: None,
         group_for_children: Vec::new(),
         prev_peer_owned: Vec::new(),
+        named: Vec::new(),
+        scroll_progress: 0.0,
+        child_named: Vec::new(),
+        child_scroll_progress: 0.0,
     }];
     while let Some(mut frame) = stack.pop() {
         let ptr = frame.ptr;
@@ -674,10 +926,10 @@ fn sync_class_variants_subtree_inner(
             // mirroring the behaviour in pick_hover_target / hit_path.
             let is_portal =
                 el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-            let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
-                ([0.0_f32, 0.0], None)
+            let (scroll_acc, clip, clip_round) = if el.style.position_fixed || is_portal {
+                ([0.0_f32, 0.0], None, None)
             } else {
-                (frame.scroll_acc, frame.clip)
+                (frame.scroll_acc, frame.clip, frame.clip_round)
             };
 
             if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
@@ -693,7 +945,7 @@ fn sync_class_variants_subtree_inner(
             // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
             // while the pointer is on the scaled ink (not the unscaled Taffy box).
             // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
-            let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
+            let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip, clip_round);
 
             let child_clip = if is_portal {
                 None
@@ -702,6 +954,7 @@ fn sync_class_variants_subtree_inner(
             } else {
                 clip
             };
+            let child_clip_round = next_overflow_round_clip(el, is_portal, layout_box, clip_round);
 
             let has_variants = el
                 .class_set
@@ -770,17 +1023,33 @@ fn sync_class_variants_subtree_inner(
                     el.template_id.as_deref(),
                 );
                     let css_anim = if !defer_shell_css {
-                        super::animation::tick_element_animations(
+                        crate::style::ensure_used_layout_from_bounds(el);
+                        let mut named = frame.named.clone();
+                        super::scroll_timeline::push_named_timelines(
+                            el, &mut named, scroll_acc, viewport_h,
+                        );
+                        let progress = super::animation::TimelineProgress {
+                            scroll: scroller_timeline_progress(el).unwrap_or(frame.scroll_progress),
+                            view: view_timeline_progress(el, scroll_acc, viewport_h),
+                        };
+                        let active = super::animation::tick_element_animations_ex_named(
                             &mut el.inner.style,
+                            &mut el.inner.text_style,
+                            &el.inner.used_layout,
                             &mut el.inner.animation_snapshot,
                             frame_dt(),
-                        )
+                            progress,
+                            &named,
+                        );
+                        el.inner.specified_present = el.inner.animation_snapshot.specified.clone();
+                        active
                     } else {
                         false
                     };
                     let css_trans = if !defer_shell_css {
-                        super::animation::tick_element_transitions_locked(
+                        super::animation::tick_element_transitions_with_text(
                             &mut el.inner.style,
+                            &mut el.inner.text_style,
                             &mut el.inner.transition_snapshot,
                             el.inner.animation_snapshot.lock(),
                             frame_dt(),
@@ -810,8 +1079,13 @@ fn sync_class_variants_subtree_inner(
                             local,
                             LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
                         ) || style_needs_taffy_sync(&before, &el.style);
-                        if need_taffy && el.layout_node.is_some() {
-                            layout_tree.update_taffy_node_style(el);
+                        if need_taffy {
+                            // Leave `hover:p-*` with local=Clean (restore base) still changes
+                            // padding every tween frame. StyleChanged skips `compute_layout`.
+                            *impact = impact.merge(LayoutStatus::LayoutChanged);
+                            if el.layout_node.is_some() {
+                                layout_tree.update_taffy_node_style(el);
+                            }
                         }
                     }
                 }
@@ -844,6 +1118,17 @@ fn sync_class_variants_subtree_inner(
             }
             frame.child_scroll_acc = child_scroll_acc;
             frame.child_clip = child_clip;
+            frame.child_clip_round = child_clip_round;
+            let mut child_named = frame.named.clone();
+            super::scroll_timeline::push_named_timelines(
+                el,
+                &mut child_named,
+                scroll_acc,
+                viewport_h,
+            );
+            frame.child_named = child_named;
+            frame.child_scroll_progress =
+                scroller_timeline_progress(el).unwrap_or(frame.scroll_progress);
             frame.prev_peer_owned.clear();
             frame.next_child = 0;
             frame.started = true;
@@ -863,6 +1148,7 @@ fn sync_class_variants_subtree_inner(
                 mouse_pos,
                 frame.child_scroll_acc,
                 frame.child_clip,
+                frame.child_clip_round,
             );
         }
         let i = frame.next_child;
@@ -875,20 +1161,29 @@ fn sync_class_variants_subtree_inner(
         let peer = frame.prev_peer_owned.clone();
         let child_scroll_acc = frame.child_scroll_acc;
         let child_clip = frame.child_clip;
+        let child_clip_round = frame.child_clip_round;
+        let child_named = frame.child_named.clone();
+        let child_scroll_progress = frame.child_scroll_progress;
         let child_ptr = std::ptr::addr_of_mut!(el.inner.children[i]);
         stack.push(frame);
         stack.push(Frame {
             ptr: child_ptr,
             scroll_acc: child_scroll_acc,
             clip: child_clip,
+            clip_round: child_clip_round,
             ancestor_groups,
             peer,
             next_child: 0,
             started: false,
             child_scroll_acc: [0.0, 0.0],
             child_clip: None,
+            child_clip_round: None,
             group_for_children: Vec::new(),
             prev_peer_owned: Vec::new(),
+            named: child_named,
+            scroll_progress: child_scroll_progress,
+            child_named: Vec::new(),
+            child_scroll_progress: 0.0,
         });
     }
 }
@@ -1283,6 +1578,50 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
+        KnownUtility::FontFamilySans => {
+            let stack = crate::utils::font::default_ui_sans_family_list().to_string();
+            if el.text_style.font_family.as_deref() != Some(stack.as_str()) {
+                el.text_style.font_family = Some(stack);
+                el.attrs.insert("font_family".to_string(), "1".to_string());
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::FontFamilySerif => {
+            let stack = crate::utils::font::default_ui_serif_family_list().to_string();
+            if el.text_style.font_family.as_deref() != Some(stack.as_str()) {
+                el.text_style.font_family = Some(stack);
+                el.attrs.insert("font_family".to_string(), "1".to_string());
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::FontFamilyMono => {
+            let stack = crate::utils::font::default_ui_mono_family_list().to_string();
+            if el.text_style.font_family.as_deref() != Some(stack.as_str()) {
+                el.text_style.font_family = Some(stack);
+                el.attrs.insert("font_family".to_string(), "1".to_string());
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::Leading(scale) => {
+            mark_variant_style_override(el, VariantStyleField::Leading);
+            let next = scale.max(0.01);
+            if el.text_style.line_height_scale == Some(next)
+                && el.text_style.line_height_px.is_none()
+            {
+                LayoutStatus::Clean
+            } else {
+                el.text_style.line_height_px = None;
+                el.text_style.line_height_scale = Some(next);
+                el.text_style.line_height_specified = true;
+                LayoutStatus::LayoutChanged
+            }
+        }
         KnownUtility::AlignSelf(kw) => {
             *el = std::mem::take(el).align_self_kw(kw);
             LayoutStatus::LayoutChanged
@@ -1527,21 +1866,17 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::TextDirectionLtr => {
             use crate::style::TextDirection;
-            if el.text_style.direction != TextDirection::Ltr {
-                el.text_style.direction = TextDirection::Ltr;
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::Clean
-            }
+            *el = std::mem::take(el).text_direction(TextDirection::Ltr);
+            LayoutStatus::LayoutChanged
         }
         KnownUtility::TextDirectionRtl => {
             use crate::style::TextDirection;
-            if el.text_style.direction != TextDirection::Rtl {
-                el.text_style.direction = TextDirection::Rtl;
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::Clean
-            }
+            *el = std::mem::take(el).text_direction(TextDirection::Rtl);
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::WritingMode(kw) => {
+            *el = std::mem::take(el).writing_mode(kw);
+            LayoutStatus::LayoutChanged
         }
         KnownUtility::TransitionOpacity => {
             ensure_transition_entry(el, crate::style::TransitionProperty::Opacity);
@@ -1559,6 +1894,11 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             ensure_transition_entry(el, crate::style::TransitionProperty::BackgroundColor);
             ensure_transition_entry(el, crate::style::TransitionProperty::BorderColor);
             ensure_transition_entry(el, crate::style::TransitionProperty::OutlineColor);
+            ensure_transition_entry(el, crate::style::TransitionProperty::Color);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionPadding => {
+            ensure_transition_entry(el, crate::style::TransitionProperty::Padding);
             LayoutStatus::StyleChanged
         }
         KnownUtility::TransitionNone => {
@@ -1584,6 +1924,16 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             for entry in &mut el.style.transition {
                 entry.timing = tf;
             }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::WillChange(hint) => {
+            el.style.will_change = match hint {
+                "transform" => crate::style::WillChangeHint::Transform,
+                "opacity" => crate::style::WillChangeHint::Opacity,
+                "scroll-position" => crate::style::WillChangeHint::ScrollPosition,
+                "contents" => crate::style::WillChangeHint::Contents,
+                _ => crate::style::WillChangeHint::Auto,
+            };
             LayoutStatus::StyleChanged
         }
         KnownUtility::AnimateSpin => {
@@ -1877,6 +2227,19 @@ fn drop_shadow_utility_css(spec: &str) -> String {
 mod tests {
     use super::*;
     use rui_style_tokens::parse_class_token;
+
+    #[test]
+    fn classes_joins_skips_empty_and_class_list_tuples() {
+        assert_eq!(classes(["flex", "gap-2"]), "flex gap-2");
+        assert_eq!(classes(["flex", "", "p-4"]), "flex p-4");
+        assert_eq!(classes([Some("flex"), None, Some("p-4")]), "flex p-4");
+        assert_eq!(
+            crate::classes!("flex", ("hidden", false), ("p-4", true)),
+            "flex p-4"
+        );
+        assert_eq!(crate::classes!(), "");
+        assert_eq!(crate::classes!("  "), "");
+    }
 
     #[test]
     fn apply_base_and_store_variants() {
@@ -2228,10 +2591,11 @@ mod p1_utility_tests {
         crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
         let leaf = &root.children[0];
         assert!(leaf.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
-        assert!(leaf
-            .attrs
-            .get(crate::renderer::ATTR_GLYPH_FX)
-            .is_none_or(|s| s.is_empty()));
+        assert!(
+            leaf.attrs
+                .get(crate::renderer::ATTR_GLYPH_FX)
+                .is_none_or(|s| s.is_empty())
+        );
         assert_eq!(
             leaf.attrs
                 .get(crate::renderer::ATTR_SHIMMER_COUNT)
@@ -2385,8 +2749,9 @@ mod p1_utility_tests {
 
     #[test]
     fn scroll_paint_freeze_does_not_start_hover_tween_from_pointer() {
-        // scroll_paint_only path must not re-sample :hover — a tile under the pointer
-        // should stay idle if it was never hovered via a full sync.
+        // scroll_paint_only path must not *enter* :hover — a tile under the pointer
+        // should stay idle if it was never hovered via a full sync. Leave of an
+        // already-hovered tile is allowed (see scroll_paint_freeze_leaves_stale_hover_spring).
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut tile = Element::new();
@@ -2399,6 +2764,9 @@ mod p1_utility_tests {
         let mut impact = LayoutStatus::Clean;
         tick_active_css_transitions_subtree(
             &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
             1024.0,
             800.0,
             [0.0, 0.0],
@@ -2462,6 +2830,9 @@ mod p1_utility_tests {
         impact = LayoutStatus::Clean;
         tick_active_css_transitions_subtree(
             &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
             1024.0,
             800.0,
             [0.0, 0.0],
@@ -2471,6 +2842,267 @@ mod p1_utility_tests {
         assert!(
             tile.style.scale[0] > scale_after_enter + 0.01,
             "active tween must keep advancing during scroll freeze, before={scale_after_enter} after={}",
+            tile.style.scale[0]
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn offset_distance_is_paint_only_for_taffy() {
+        let before = Style::default();
+        let mut after = before.clone();
+        after.offset_distance = 0.42;
+        after.offset_rotate_deg = Some(15.0);
+        assert!(
+            !style_needs_taffy_sync(&before, &after),
+            "offset-path motion must not dirty Taffy"
+        );
+        after.padding.top = taffy::style::LengthPercentage::length(8.0);
+        assert!(
+            style_needs_taffy_sync(&before, &after),
+            "padding still requires a Taffy sync"
+        );
+    }
+
+    #[test]
+    fn hover_text_color_transitions_away_from_foreground() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let fg = parse_text_color("foreground");
+        let dest = parse_text_color("destructive");
+        assert_ne!(fg, dest, "demo color must differ from Label default");
+        let mut el = Element::new().text("悬停变色");
+        el.text_style.color = Some(fg);
+        apply_class_list(
+            &mut el,
+            "transition-colors duration-300 hover:text-destructive",
+        );
+        el.layout_bounds = [10.0, 10.0, 120.0, 24.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        for _ in 0..12 {
+            crate::style::advance_css_transition_timeline_ms(30.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [40.0, 20.0],
+                "",
+                false,
+                400.0,
+                200.0,
+                &mut tree,
+                &mut impact,
+            );
+        }
+        let got = el.text_style.color.expect("color");
+        assert_ne!(
+            got, fg,
+            "hover:text-destructive must leave foreground, got {got:?}"
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn hover_padding_leave_restores_authored_padding() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut el = Element::new().p("0.25rem").w(128.0).h(56.0);
+        apply_class_list(&mut el, "transition-padding duration-300 hover:p-4");
+        el.layout_bounds = [0.0, 0.0, 128.0, 56.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let pad_px = |el: &Element| match crate::layout::lp_kind(el.style.padding.top) {
+            crate::layout::DimKind::Length(px) => px,
+            other => panic!("expected length padding, got {other:?}"),
+        };
+        let base_px = pad_px(&el);
+        assert!((base_px - 4.0).abs() < 0.2, "0.25rem base, got {base_px}");
+        for _ in 0..12 {
+            crate::style::advance_css_transition_timeline_ms(30.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [20.0, 20.0],
+                "",
+                false,
+                400.0,
+                200.0,
+                &mut tree,
+                &mut impact,
+            );
+        }
+        let hovered = pad_px(&el);
+        assert!(
+            hovered > 10.0,
+            "hover:p-4 should grow padding, got {hovered}"
+        );
+        let mut leave_requested_layout = false;
+        for _ in 0..16 {
+            crate::style::advance_css_transition_timeline_ms(30.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [300.0, 20.0],
+                "",
+                false,
+                400.0,
+                200.0,
+                &mut tree,
+                &mut impact,
+            );
+            if matches!(
+                impact,
+                LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+            ) {
+                leave_requested_layout = true;
+            }
+        }
+        assert!(
+            leave_requested_layout,
+            "padding leave tween must request compute_layout, not paint-only StyleChanged"
+        );
+        let left = pad_px(&el);
+        assert!(
+            (left - base_px).abs() < 1.0,
+            "leave must restore authored 0.25rem, base={base_px} left={left}"
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn scroll_paint_freeze_still_advances_spring() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut tile = Element::new().transition("transform spring()");
+        apply_class_list(&mut tile, "hover:scale-125");
+        tile.layout_bounds = [400.0, 200.0, 64.0, 64.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut tile,
+            [10.0, 10.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert!(
+            tile.transition_snapshot.has_active_tweens(),
+            "spring hover enter must start an active tween"
+        );
+        let scale_after_enter = tile.style.scale[0];
+        crate::style::advance_css_transition_timeline_ms(80.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert!(
+            tile.style.scale[0] > scale_after_enter + 0.005,
+            "spring must keep integrating during scroll freeze, before={scale_after_enter} after={}",
+            tile.style.scale[0]
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn scroll_paint_freeze_leaves_stale_hover_spring() {
+        // Wheel can slide a hovered tile out from under a still cursor. Freeze must not
+        // enter new hovers, but it must retarget the already-hovered spring back to rest.
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut tile = Element::new().transition("transform spring()");
+        apply_class_list(&mut tile, "hover:scale-125");
+        tile.layout_bounds = [400.0, 200.0, 64.0, 64.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut tile,
+            [10.0, 10.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        for _ in 0..12 {
+            crate::style::advance_css_transition_timeline_ms(16.0);
+            impact = LayoutStatus::Clean;
+            tick_active_css_transitions_subtree(
+                &mut tile,
+                [432.0, 232.0],
+                "",
+                false,
+                1024.0,
+                800.0,
+                [0.0, 0.0],
+                &mut tree,
+                &mut impact,
+            );
+        }
+        let hovered = tile.style.scale[0];
+        assert!(
+            hovered > 1.05,
+            "spring should have grown under hover, got {hovered}"
+        );
+        assert_eq!(
+            tile.class_set.as_ref().and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "hover enter must record last_pointer_hover"
+        );
+        for _ in 0..16 {
+            crate::style::advance_css_transition_timeline_ms(16.0);
+            impact = LayoutStatus::Clean;
+            tick_active_css_transitions_subtree(
+                &mut tile,
+                [10.0, 10.0],
+                "",
+                false,
+                1024.0,
+                800.0,
+                [0.0, 0.0],
+                &mut tree,
+                &mut impact,
+            );
+        }
+        assert_eq!(
+            tile.class_set.as_ref().and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "freeze leave must clear last_pointer_hover"
+        );
+        assert!(
+            tile.style.scale[0] < hovered - 0.02,
+            "stale hover must leave during scroll freeze, before={hovered} after={}",
             tile.style.scale[0]
         );
         crate::style::set_css_transition_virtual_timeline(false);

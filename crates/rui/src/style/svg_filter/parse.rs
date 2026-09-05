@@ -1,6 +1,6 @@
 //! Minimal SVG `<filter>` / `fe*` markup parser (enough for Filter Effects L1 primitives).
 
-use crate::layout::dimension::{parse_css_dim, CssDim};
+use crate::layout::dimension::{CssDim, parse_css_dim};
 use crate::style::color::try_parse_color;
 
 use super::graph::{

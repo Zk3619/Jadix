@@ -6,8 +6,8 @@ mod parse;
 mod registry;
 
 pub use graph::*;
-pub use lower_css::{lower_css_filters, LowerSegment, LoweredFilter};
-pub use parse::{parse_svg_filters_document, FilterParseError};
+pub use lower_css::{LowerSegment, LoweredFilter, lower_css_filters};
+pub use parse::{FilterParseError, parse_svg_filters_document};
 pub use registry::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph, resolve_svg_filter_url,
 };

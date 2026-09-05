@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
-use super::animation::{cubic_bezier_y_at_x, CubicTween};
+use super::animation::{CubicTween, cubic_bezier_y_at_x};
 
 thread_local! {
     static CLOCK: RefCell<Option<Instant>> = const { RefCell::new(None) };

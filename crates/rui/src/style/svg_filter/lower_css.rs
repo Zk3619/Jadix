@@ -1,6 +1,6 @@
 //! Lower CSS `filter` function lists into SVG [`FilterGraph`]s (Filter Effects L1).
 
-use crate::layout::dimension::{CssDim, CSS_ROOT_FONT_SIZE_PX};
+use crate::layout::dimension::{CSS_ROOT_FONT_SIZE_PX, CssDim};
 use crate::style::filter::{FilterFunction, FilterList};
 
 use super::graph::{

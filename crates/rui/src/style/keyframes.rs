@@ -13,36 +13,49 @@
 //!   `from { opacity: 0 }` alone animates 0 → the cascaded opacity, not a constant 0.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
+use super::animatable::{AnimatableValue, PropertyId, PropertySet, interpolate};
 use super::element_style::TimingFunction;
 
 /// One stop in a `@keyframes` rule (`offset` ∈ [0, 1]).
+///
+/// Properties live in [`Self::props`] (ANIM table). Builder methods remain the
+/// authoring API — do not add more struct fields for new CSS properties.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyframeStop {
     pub offset: f32,
-    pub opacity: Option<f32>,
-    pub rotate_deg: Option<f32>,
-    pub scale: Option<[f32; 2]>,
-    pub translate: Option<[f32; 2]>,
-    /// Layout clip height (maps to `Style::max_size.height` length px).
-    pub max_height: Option<f32>,
     /// CSS `animation-timing-function` declared *inside* a keyframe: eases the segment
     /// that starts at this stop. `None` → inherit the animation's timing function.
     pub timing: Option<TimingFunction>,
+    props: BTreeMap<PropertyId, AnimatableValue>,
 }
 
 impl KeyframeStop {
     pub fn at(offset: f32) -> Self {
         Self {
             offset: offset.clamp(0.0, 1.0),
-            opacity: None,
-            rotate_deg: None,
-            scale: None,
-            translate: None,
-            max_height: None,
             timing: None,
+            props: BTreeMap::new(),
         }
+    }
+
+    pub fn with_props(mut self, props: BTreeMap<PropertyId, AnimatableValue>) -> Self {
+        self.props = props;
+        self
+    }
+
+    pub fn set(mut self, id: PropertyId, v: AnimatableValue) -> Self {
+        self.props.insert(id, v);
+        self
+    }
+
+    pub fn get(&self, id: PropertyId) -> Option<&AnimatableValue> {
+        self.props.get(&id)
+    }
+
+    pub fn props(&self) -> &BTreeMap<PropertyId, AnimatableValue> {
+        &self.props
     }
 
     /// Per-keyframe `animation-timing-function` (applies to the outgoing segment).
@@ -51,34 +64,44 @@ impl KeyframeStop {
         self
     }
 
-    pub fn opacity(mut self, v: f32) -> Self {
-        self.opacity = Some(v);
-        self
+    pub fn opacity(self, v: f32) -> Self {
+        self.set(PropertyId::Opacity, AnimatableValue::Scalar(v))
     }
 
-    pub fn rotate_deg(mut self, v: f32) -> Self {
-        self.rotate_deg = Some(v);
-        self
+    pub fn rotate_deg(self, v: f32) -> Self {
+        self.set(PropertyId::Rotate, AnimatableValue::Scalar(v))
     }
 
-    pub fn scale(mut self, xy: [f32; 2]) -> Self {
-        self.scale = Some(xy);
-        self
+    pub fn scale(self, xy: [f32; 2]) -> Self {
+        self.set(PropertyId::Scale, AnimatableValue::Vec2(xy))
     }
 
-    pub fn scale_uniform(mut self, s: f32) -> Self {
-        self.scale = Some([s, s]);
-        self
+    pub fn scale_uniform(self, s: f32) -> Self {
+        self.scale([s, s])
     }
 
-    pub fn translate(mut self, xy: [f32; 2]) -> Self {
-        self.translate = Some(xy);
-        self
+    pub fn translate(self, xy: [f32; 2]) -> Self {
+        self.set(PropertyId::Translate, AnimatableValue::Vec2(xy))
     }
 
-    pub fn max_height(mut self, px: f32) -> Self {
-        self.max_height = Some(px.max(0.0));
-        self
+    pub fn translate_pct(self, xy: [f32; 2]) -> Self {
+        self.set(PropertyId::TranslatePct, AnimatableValue::Vec2(xy))
+    }
+
+    pub fn max_height(self, px: f32) -> Self {
+        self.set(PropertyId::MaxHeight, AnimatableValue::Scalar(px.max(0.0)))
+    }
+
+    pub fn background_color(self, c: [f32; 4]) -> Self {
+        self.set(PropertyId::BackgroundColor, AnimatableValue::Color(c))
+    }
+
+    pub fn color(self, c: [f32; 4]) -> Self {
+        self.set(PropertyId::Color, AnimatableValue::Color(c))
+    }
+
+    pub fn filter(self, f: Option<super::filter::FilterList>) -> Self {
+        self.set(PropertyId::Filter, AnimatableValue::Filter(f))
     }
 }
 
@@ -90,19 +113,140 @@ pub struct KeyframeSample {
     pub scale: Option<[f32; 2]>,
     pub translate: Option<[f32; 2]>,
     pub max_height: Option<f32>,
+    pub props: BTreeMap<PropertyId, AnimatableValue>,
+}
+
+impl KeyframeSample {
+    fn from_props(props: BTreeMap<PropertyId, AnimatableValue>) -> Self {
+        fn scalar(props: &BTreeMap<PropertyId, AnimatableValue>, id: PropertyId) -> Option<f32> {
+            match props.get(&id) {
+                Some(AnimatableValue::Scalar(x)) => Some(*x),
+                _ => None,
+            }
+        }
+        fn vec2(props: &BTreeMap<PropertyId, AnimatableValue>, id: PropertyId) -> Option<[f32; 2]> {
+            match props.get(&id) {
+                Some(AnimatableValue::Vec2(x)) => Some(*x),
+                _ => None,
+            }
+        }
+        Self {
+            opacity: scalar(&props, PropertyId::Opacity),
+            rotate_deg: scalar(&props, PropertyId::Rotate),
+            scale: vec2(&props, PropertyId::Scale),
+            translate: vec2(&props, PropertyId::Translate),
+            max_height: scalar(&props, PropertyId::MaxHeight),
+            props,
+        }
+    }
 }
 
 /// Element values the animation is layered on top of (CSS base value).
 ///
 /// Supplies the implicit `0%` / `100%` keyframes for properties a rule only declares
 /// at one end.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct KeyframeBase {
     pub opacity: f32,
     pub rotate_deg: f32,
     pub scale: [f32; 2],
     pub translate: [f32; 2],
     pub max_height: f32,
+    extra: HashMap<PropertyId, AnimatableValue>,
+}
+
+impl KeyframeBase {
+    pub fn layered(
+        opacity: f32,
+        rotate_deg: f32,
+        scale: [f32; 2],
+        translate: [f32; 2],
+        max_height: f32,
+    ) -> Self {
+        Self {
+            opacity,
+            rotate_deg,
+            scale,
+            translate,
+            max_height,
+            extra: HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, id: PropertyId) -> Option<AnimatableValue> {
+        if let Some(v) = self.extra.get(&id) {
+            return Some(v.clone());
+        }
+        Some(match id {
+            PropertyId::Opacity => AnimatableValue::Scalar(self.opacity),
+            PropertyId::Rotate => AnimatableValue::Scalar(self.rotate_deg),
+            PropertyId::Scale => AnimatableValue::Vec2(self.scale),
+            PropertyId::Translate => AnimatableValue::Vec2(self.translate),
+            PropertyId::MaxHeight => AnimatableValue::Scalar(self.max_height),
+            PropertyId::Transform => AnimatableValue::Transform([
+                self.translate[0],
+                self.translate[1],
+                self.scale[0],
+                self.scale[1],
+                self.rotate_deg,
+            ]),
+            _ => return None,
+        })
+    }
+
+    pub fn set_extra(&mut self, id: PropertyId, v: AnimatableValue) {
+        self.extra.insert(id, v);
+    }
+
+    /// Specified + used-layout base for implicit 0%/100% endpoints.
+    pub fn from_specified(
+        spec: &super::specified::SpecifiedPresent,
+        style: &super::Style,
+        text: &super::text_style::TextStyle,
+        used: &super::used_layout::UsedLayout,
+        fallback: impl FnOnce() -> Self,
+    ) -> Self {
+        let mut kf = fallback();
+        for id in PropertyId::ALL {
+            kf.set_extra(*id, spec.resolved_for_base(*id, style, text, used));
+        }
+        if let Some(AnimatableValue::Scalar(x)) = kf.get(PropertyId::Opacity) {
+            kf.opacity = x;
+        }
+        if let Some(AnimatableValue::Scalar(x)) = kf.get(PropertyId::Rotate) {
+            kf.rotate_deg = x;
+        }
+        if let Some(AnimatableValue::Vec2(x)) = kf.get(PropertyId::Scale) {
+            kf.scale = x;
+        }
+        if let Some(AnimatableValue::Vec2(x)) = kf.get(PropertyId::Translate) {
+            kf.translate = x;
+        }
+        match kf.get(PropertyId::MaxHeight) {
+            Some(AnimatableValue::Scalar(x)) if x > 0.5 => kf.max_height = x,
+            _ => {
+                let u = used.anim_height();
+                if u > 0.5 {
+                    kf.max_height = u;
+                    kf.set_extra(PropertyId::MaxHeight, AnimatableValue::Scalar(u));
+                }
+            }
+        }
+        kf
+    }
+}
+
+impl Default for KeyframeBase {
+    fn default() -> Self {
+        Self {
+            opacity: 1.0,
+            rotate_deg: 0.0,
+            scale: [1.0, 1.0],
+            translate: [0.0, 0.0],
+            max_height: 0.0,
+            extra: HashMap::new(),
+        }
+    }
 }
 
 /// Which properties a rule touches anywhere in its stops.
@@ -114,16 +258,26 @@ pub struct KeyframeCoverage {
     pub opacity: bool,
     pub transform: bool,
     pub max_height: bool,
+    pub ids: PropertySet,
 }
 
 /// Properties declared anywhere in `stops`.
 pub fn keyframe_coverage(stops: &[KeyframeStop]) -> KeyframeCoverage {
+    let mut ids = PropertySet::default();
+    for s in stops {
+        for id in s.props().keys() {
+            ids.insert(*id);
+        }
+    }
     KeyframeCoverage {
-        opacity: stops.iter().any(|s| s.opacity.is_some()),
-        transform: stops
-            .iter()
-            .any(|s| s.rotate_deg.is_some() || s.scale.is_some() || s.translate.is_some()),
-        max_height: stops.iter().any(|s| s.max_height.is_some()),
+        opacity: ids.contains(PropertyId::Opacity),
+        transform: ids.contains(PropertyId::Rotate)
+            || ids.contains(PropertyId::Scale)
+            || ids.contains(PropertyId::Translate)
+            || ids.contains(PropertyId::TranslatePct)
+            || ids.contains(PropertyId::Transform),
+        max_height: ids.contains(PropertyId::MaxHeight),
+        ids,
     }
 }
 
@@ -246,6 +400,17 @@ fn ensure_builtins() {
             "collapsible-up",
             vec![KeyframeStop::at(1.0).max_height(0.0)],
         );
+        register_keyframes(
+            "fade-in-blur",
+            vec![
+                KeyframeStop::at(0.0)
+                    .opacity(0.0)
+                    .filter(super::parse_filter("blur(8px)")),
+                KeyframeStop::at(1.0)
+                    .opacity(1.0)
+                    .filter(super::parse_filter("blur(0px)")),
+            ],
+        );
         // shadcn `shimmer` utility (`animation: tw-shimmer`). Visual sweep is painted
         // in prepare_text; this rule keeps the CSS animation pump alive.
         register_keyframes(
@@ -277,6 +442,29 @@ fn ensure_builtins() {
                 ],
             );
         }
+        // Sheet / Drawer exit: CSS `translate: 100%` of the panel box, not viewport px.
+        // Pixel distances registered at seed time jumped the first frame off-screen.
+        for (name, pct) in [
+            ("top", [0.0, -1.0]),
+            ("bottom", [0.0, 1.0]),
+            ("left", [-1.0, 0.0]),
+            ("right", [1.0, 0.0]),
+        ] {
+            register_keyframes(
+                format!("rui-modal-slide-in-{name}"),
+                vec![
+                    KeyframeStop::at(0.0).translate_pct(pct),
+                    KeyframeStop::at(1.0).translate_pct([0.0, 0.0]),
+                ],
+            );
+            register_keyframes(
+                format!("rui-modal-slide-out-{name}"),
+                vec![
+                    KeyframeStop::at(0.0).translate_pct([0.0, 0.0]),
+                    KeyframeStop::at(1.0).translate_pct(pct),
+                ],
+            );
+        }
     });
 }
 
@@ -304,59 +492,6 @@ pub fn lookup_keyframes(name: &str) -> Option<Vec<KeyframeStop>> {
     REGISTRY.with(|reg| reg.borrow().get(name).cloned())
 }
 
-fn lerp_f(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
-fn lerp_opt_f(a: Option<f32>, b: Option<f32>, t: f32) -> Option<f32> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(lerp_f(x, y, t)),
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (None, None) => None,
-    }
-}
-
-fn lerp_opt_xy(a: Option<[f32; 2]>, b: Option<[f32; 2]>, t: f32) -> Option<[f32; 2]> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some([lerp_f(x[0], y[0], t), lerp_f(x[1], y[1], t)]),
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (None, None) => None,
-    }
-}
-
-/// One endpoint of a segment; an undeclared property falls back to the base value.
-#[derive(Clone, Copy, Default)]
-struct Endpoint {
-    opacity: Option<f32>,
-    rotate_deg: Option<f32>,
-    scale: Option<[f32; 2]>,
-    translate: Option<[f32; 2]>,
-    max_height: Option<f32>,
-}
-
-impl Endpoint {
-    fn from_stop(stop: &KeyframeStop, base: Option<&KeyframeBase>) -> Self {
-        Self {
-            opacity: stop.opacity.or(base.map(|b| b.opacity)),
-            rotate_deg: stop.rotate_deg.or(base.map(|b| b.rotate_deg)),
-            scale: stop.scale.or(base.map(|b| b.scale)),
-            translate: stop.translate.or(base.map(|b| b.translate)),
-            max_height: stop.max_height.or(base.map(|b| b.max_height)),
-        }
-    }
-
-    /// CSS implicit `0%` / `100%` keyframe: every property comes from the base value.
-    fn implicit(base: Option<&KeyframeBase>) -> Self {
-        Self {
-            opacity: base.map(|b| b.opacity),
-            rotate_deg: base.map(|b| b.rotate_deg),
-            scale: base.map(|b| b.scale),
-            translate: base.map(|b| b.translate),
-            max_height: base.map(|b| b.max_height),
-        }
-    }
-}
-
 /// Sample keyframes at local progress `t` ∈ [0, 1] (after `animation-direction`).
 ///
 /// Legacy entry point: linear segments, and a property declared at only one end holds
@@ -364,6 +499,62 @@ impl Endpoint {
 /// segment and honours implicit keyframes.
 pub fn sample_keyframes(stops: &[KeyframeStop], t: f32) -> KeyframeSample {
     sample_keyframes_eased(stops, t, TimingFunction::Linear, None)
+}
+
+fn resolve_sample_value(
+    id: PropertyId,
+    v: AnimatableValue,
+    base: Option<&KeyframeBase>,
+) -> AnimatableValue {
+    let AnimatableValue::Dim(_) = &v else {
+        return v;
+    };
+    let Some(base) = base else {
+        return v;
+    };
+    let mut used = super::used_layout::UsedLayout::default();
+    let pick = |id: PropertyId, floor: f32| match base.get(id) {
+        Some(AnimatableValue::Scalar(x)) if x > 0.5 => x,
+        _ => floor,
+    };
+    let h = pick(PropertyId::Height, 0.0)
+        .max(pick(PropertyId::MaxHeight, 0.0))
+        .max(base.max_height);
+    let w = pick(PropertyId::Width, 0.0).max(pick(PropertyId::MaxWidth, 0.0));
+    used.content_height = h;
+    used.intrinsic_height = h;
+    used.border_box[3] = h;
+    used.content_width = w;
+    used.intrinsic_width = w;
+    used.border_box[2] = w;
+    super::animatable::resolve_used(id, v, &used)
+}
+
+fn stop_value(
+    stop: Option<&KeyframeStop>,
+    id: PropertyId,
+    base: Option<&KeyframeBase>,
+) -> Option<AnimatableValue> {
+    if let Some(s) = stop {
+        if let Some(v) = s.get(id) {
+            return Some(v.clone());
+        }
+    }
+    base.and_then(|b| b.get(id))
+}
+
+fn implicit_ids(
+    stops: &[KeyframeStop],
+    a: Option<&KeyframeStop>,
+    b: Option<&KeyframeStop>,
+) -> PropertySet {
+    let mut ids = keyframe_coverage(stops).ids;
+    for stop in [a, b].into_iter().flatten() {
+        for id in stop.props().keys() {
+            ids.insert(*id);
+        }
+    }
+    ids
 }
 
 /// Sample keyframes the way CSS does.
@@ -382,30 +573,22 @@ pub fn sample_keyframes_eased(
     }
     let t = linear_t.clamp(0.0, 1.0);
 
-    let (a, b, a_off, b_off, seg_timing) = if t <= stops[0].offset {
-        // Implicit 0% keyframe → first authored stop.
-        (
-            Endpoint::implicit(base),
-            Endpoint::from_stop(&stops[0], base),
-            0.0,
-            stops[0].offset,
-            timing,
-        )
+    let (a_stop, b_stop, a_off, b_off, seg_timing) = if t <= stops[0].offset {
+        (None, Some(&stops[0]), 0.0, stops[0].offset, timing)
     } else {
         match stops.iter().position(|s| t <= s.offset).filter(|&i| i > 0) {
             Some(i) => (
-                Endpoint::from_stop(&stops[i - 1], base),
-                Endpoint::from_stop(&stops[i], base),
+                Some(&stops[i - 1]),
+                Some(&stops[i]),
                 stops[i - 1].offset,
                 stops[i].offset,
                 stops[i - 1].timing.unwrap_or(timing),
             ),
-            // Past the last authored stop → implicit 100% keyframe.
             None => {
                 let last = stops.last().unwrap();
                 (
-                    Endpoint::from_stop(last, base),
-                    Endpoint::implicit(base),
+                    Some(last),
+                    None,
                     last.offset,
                     1.0,
                     last.timing.unwrap_or(timing),
@@ -421,13 +604,25 @@ pub fn sample_keyframes_eased(
         seg_timing.eval((t - a_off) / span)
     };
 
-    KeyframeSample {
-        opacity: lerp_opt_f(a.opacity, b.opacity, u),
-        rotate_deg: lerp_opt_f(a.rotate_deg, b.rotate_deg, u),
-        scale: lerp_opt_xy(a.scale, b.scale, u),
-        translate: lerp_opt_xy(a.translate, b.translate, u),
-        max_height: lerp_opt_f(a.max_height, b.max_height, u),
+    let mut props = BTreeMap::new();
+    for id in implicit_ids(stops, a_stop, b_stop).iter() {
+        let av = stop_value(a_stop, id, base);
+        let bv = stop_value(b_stop, id, base);
+        match (av, bv) {
+            (Some(x), Some(y)) => {
+                let x = resolve_sample_value(id, x, base);
+                let y = resolve_sample_value(id, y, base);
+                if let Some(m) = interpolate(&x, &y, u) {
+                    props.insert(id, m);
+                }
+            }
+            (Some(x), None) | (None, Some(x)) => {
+                props.insert(id, resolve_sample_value(id, x, base));
+            }
+            (None, None) => {}
+        }
     }
+    KeyframeSample::from_props(props)
 }
 
 #[cfg(test)]
@@ -450,11 +645,8 @@ mod tests {
 
     fn base() -> KeyframeBase {
         KeyframeBase {
-            opacity: 1.0,
-            rotate_deg: 0.0,
-            scale: [1.0, 1.0],
-            translate: [0.0, 0.0],
             max_height: 48.0,
+            ..Default::default()
         }
     }
 
@@ -574,7 +766,13 @@ mod tests {
             assert!(keyframes_exist(name), "{name} should be a builtin");
         }
         let slide = lookup_keyframes("slide-in-from-bottom-2").expect("slide");
-        assert_eq!(slide[0].translate, Some([0.0, SLIDE_2_PX]));
-        assert_eq!(slide[1].translate, Some([0.0, 0.0]));
+        assert_eq!(
+            slide[0].get(PropertyId::Translate),
+            Some(&AnimatableValue::Vec2([0.0, SLIDE_2_PX]))
+        );
+        assert_eq!(
+            slide[1].get(PropertyId::Translate),
+            Some(&AnimatableValue::Vec2([0.0, 0.0]))
+        );
     }
 }

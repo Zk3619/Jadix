@@ -4,7 +4,7 @@
 //! SVG [`FilterGraph`](super::svg_filter::FilterGraph) (see `svg_filter::lower_css`).
 
 use crate::layout::dimension::{
-    parse_css_angle, parse_css_dim, CssAngle, CssDim, CSS_ROOT_FONT_SIZE_PX,
+    CSS_ROOT_FONT_SIZE_PX, CssAngle, CssDim, parse_css_angle, parse_css_dim,
 };
 
 use super::color::try_parse_color;
@@ -44,6 +44,46 @@ pub enum FilterFunction {
 /// Ordered CSS `filter` value list. `None` on [`Style`](super::Style) means `none`.
 pub type FilterList = Vec<FilterFunction>;
 
+/// Extra pixels the filter result can paint past the border box (Gaussian kernel /
+/// drop-shadow offset). Used for clip-cull and the capture region.
+pub fn filter_list_paint_outset(list: &FilterList, lay_w: f32, lay_h: f32) -> f32 {
+    // feGaussianBlur practical support is ~3σ; CSS `blur()` length is stdDeviation.
+    const KERNEL: f32 = 3.0;
+    fn len_px(d: &CssDim) -> f32 {
+        match d {
+            CssDim::Px(v) => v.abs(),
+            CssDim::Rem(v) | CssDim::Em(v) => (*v * CSS_ROOT_FONT_SIZE_PX).abs(),
+            _ => 0.0,
+        }
+    }
+    let mut pad = 0.0_f32;
+    let mut has_url = false;
+    for f in list {
+        match f {
+            FilterFunction::Blur(d) => {
+                let s = d.as_ref().map(len_px).unwrap_or(0.0);
+                pad = pad.max(s * KERNEL);
+            }
+            FilterFunction::DropShadow {
+                offset_x,
+                offset_y,
+                blur,
+                ..
+            } => {
+                let b = blur.as_ref().map(len_px).unwrap_or(0.0) * KERNEL;
+                pad = pad.max(len_px(offset_x).max(len_px(offset_y)) + b);
+            }
+            FilterFunction::Url(_) => has_url = true,
+            _ => {}
+        }
+    }
+    if has_url {
+        // SVG default filter region is x/y = -10%, width/height = 120%.
+        pad = pad.max(0.1 * lay_w.max(lay_h).max(0.0));
+    }
+    pad
+}
+
 /// Parse a CSS `filter` property value.
 ///
 /// Returns `None` for `"none"` / empty, or when any function argument is invalid
@@ -79,11 +119,7 @@ pub fn parse_filter(s: &str) -> Option<FilterList> {
         list.push(func);
     }
 
-    if list.is_empty() {
-        None
-    } else {
-        Some(list)
-    }
+    if list.is_empty() { None } else { Some(list) }
 }
 
 fn find_matching_paren(s: &str) -> Option<usize> {
@@ -532,6 +568,7 @@ mod tests {
         assert!(
             matches!(&list[0], FilterFunction::Blur(Some(CssDim::Px(v))) if (*v - 5.0).abs() < 1e-6)
         );
+        assert!((filter_list_paint_outset(&list, 80.0, 80.0) - 15.0).abs() < 1e-6);
     }
 
     #[test]

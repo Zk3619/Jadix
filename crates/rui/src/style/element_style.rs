@@ -10,9 +10,11 @@
 
 use taffy::prelude::*;
 
+use super::clip_path::ClipPath;
+use super::scroll_timeline::ScrollTimelineAxis;
 use crate::layout::dimension::{
-    dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind, lpa_kind, CssDim, DimKind, PercentAxis,
-    UnitCtx,
+    CssDim, DimKind, PercentAxis, UnitCtx, dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind,
+    lpa_kind,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -186,6 +188,37 @@ mod tests {
         approx_eq(list[0].blur, 2.0);
         approx_eq(list[1].blur, 8.0);
     }
+
+    #[test]
+    fn line_style_shader_codes_match_wgsl_branches() {
+        use super::LineStyle;
+        assert_eq!(LineStyle::None.to_shader_f32(), 0.0);
+        assert_eq!(LineStyle::Hidden.to_shader_f32(), 0.0);
+        assert_eq!(LineStyle::Solid.to_shader_f32(), 1.0);
+        assert_eq!(LineStyle::Dotted.to_shader_f32(), 2.0);
+        assert_eq!(LineStyle::Dashed.to_shader_f32(), 3.0);
+        assert_eq!(LineStyle::Double.to_shader_f32(), 4.0);
+        assert_eq!(LineStyle::Groove.to_shader_f32(), 5.0);
+        assert_eq!(LineStyle::Ridge.to_shader_f32(), 6.0);
+        assert_eq!(LineStyle::Inset.to_shader_f32(), 7.0);
+        assert_eq!(LineStyle::Outset.to_shader_f32(), 8.0);
+    }
+
+    #[test]
+    fn corner_shape_shader_param_is_zero_except_superellipse() {
+        use super::CornerShape;
+        assert_eq!(CornerShape::Round.shader_param(), 0.0);
+        assert_eq!(CornerShape::Angle.shader_param(), 0.0);
+        assert_eq!(CornerShape::Notch.shader_param(), 0.0);
+        assert_eq!(CornerShape::Scoop.shader_param(), 0.0);
+        assert_eq!(CornerShape::Round.to_shader_f32(), 0.0);
+        assert_eq!(CornerShape::Angle.to_shader_f32(), 1.0);
+        assert_eq!(CornerShape::Superellipse(4.0).to_shader_f32(), 2.0);
+        assert_eq!(CornerShape::Notch.to_shader_f32(), 3.0);
+        assert_eq!(CornerShape::Scoop.to_shader_f32(), 4.0);
+        approx_eq(CornerShape::Superellipse(4.0).shader_param(), 4.0);
+        approx_eq(CornerShape::Superellipse(8.0).shader_param(), 8.0);
+    }
 }
 
 /// CSS `border-image-repeat` value.
@@ -251,10 +284,11 @@ impl CornerShape {
     }
 
     /// Superellipse exponent (only meaningful when `Superellipse`).
+    /// Other shapes encode `0` so `border_extra` stays small and unpack-stable.
     pub fn shader_param(self) -> f32 {
         match self {
-            Self::Superellipse(n) => n,
-            _ => 2.0,
+            Self::Superellipse(n) => n.max(0.0),
+            _ => 0.0,
         }
     }
 }
@@ -336,6 +370,170 @@ pub enum UnitSlot {
     InsetR,
     InsetT,
     InsetB,
+    InlineSize,
+    BlockSize,
+    MinInlineSize,
+    MinBlockSize,
+    MaxInlineSize,
+    MaxBlockSize,
+    PadInlineStart,
+    PadInlineEnd,
+    PadBlockStart,
+    PadBlockEnd,
+    MarginInlineStart,
+    MarginInlineEnd,
+    MarginBlockStart,
+    MarginBlockEnd,
+    InsetInlineStart,
+    InsetInlineEnd,
+    InsetBlockStart,
+    InsetBlockEnd,
+}
+
+impl UnitSlot {
+    /// CSS Box Model: `%` on padding/margin (all sides) resolves against the
+    /// containing block's **width**, not the axis of that side.
+    pub(crate) fn percent_against_containing_block_width(self) -> bool {
+        matches!(
+            self,
+            Self::PadL
+                | Self::PadR
+                | Self::PadT
+                | Self::PadB
+                | Self::MarginL
+                | Self::MarginR
+                | Self::MarginT
+                | Self::MarginB
+                | Self::PadInlineStart
+                | Self::PadInlineEnd
+                | Self::PadBlockStart
+                | Self::PadBlockEnd
+                | Self::MarginInlineStart
+                | Self::MarginInlineEnd
+                | Self::MarginBlockStart
+                | Self::MarginBlockEnd
+        )
+    }
+
+    pub(crate) fn is_logical(self) -> bool {
+        matches!(
+            self,
+            Self::InlineSize
+                | Self::BlockSize
+                | Self::MinInlineSize
+                | Self::MinBlockSize
+                | Self::MaxInlineSize
+                | Self::MaxBlockSize
+                | Self::PadInlineStart
+                | Self::PadInlineEnd
+                | Self::PadBlockStart
+                | Self::PadBlockEnd
+                | Self::MarginInlineStart
+                | Self::MarginInlineEnd
+                | Self::MarginBlockStart
+                | Self::MarginBlockEnd
+                | Self::InsetInlineStart
+                | Self::InsetInlineEnd
+                | Self::InsetBlockStart
+                | Self::InsetBlockEnd
+        )
+    }
+}
+
+/// Map logical `*-inline` / `*-block` slots to Taffy physical edges for the used writing mode.
+pub(crate) fn physical_unit_slot(
+    slot: UnitSlot,
+    wm: super::writing_mode::WritingMode,
+    dir: super::text_style::TextDirection,
+) -> UnitSlot {
+    use super::writing_mode::PhysicalSide;
+    let horiz = wm.is_horizontal();
+    let pad = |side: PhysicalSide| match side {
+        PhysicalSide::Top => UnitSlot::PadT,
+        PhysicalSide::Right => UnitSlot::PadR,
+        PhysicalSide::Bottom => UnitSlot::PadB,
+        PhysicalSide::Left => UnitSlot::PadL,
+    };
+    let margin = |side: PhysicalSide| match side {
+        PhysicalSide::Top => UnitSlot::MarginT,
+        PhysicalSide::Right => UnitSlot::MarginR,
+        PhysicalSide::Bottom => UnitSlot::MarginB,
+        PhysicalSide::Left => UnitSlot::MarginL,
+    };
+    let inset = |side: PhysicalSide| match side {
+        PhysicalSide::Top => UnitSlot::InsetT,
+        PhysicalSide::Right => UnitSlot::InsetR,
+        PhysicalSide::Bottom => UnitSlot::InsetB,
+        PhysicalSide::Left => UnitSlot::InsetL,
+    };
+    match slot {
+        UnitSlot::InlineSize => {
+            if horiz {
+                UnitSlot::Width
+            } else {
+                UnitSlot::Height
+            }
+        }
+        UnitSlot::BlockSize => {
+            if horiz {
+                UnitSlot::Height
+            } else {
+                UnitSlot::Width
+            }
+        }
+        UnitSlot::MinInlineSize => {
+            if horiz {
+                UnitSlot::MinWidth
+            } else {
+                UnitSlot::MinHeight
+            }
+        }
+        UnitSlot::MinBlockSize => {
+            if horiz {
+                UnitSlot::MinHeight
+            } else {
+                UnitSlot::MinWidth
+            }
+        }
+        UnitSlot::MaxInlineSize => {
+            if horiz {
+                UnitSlot::MaxWidth
+            } else {
+                UnitSlot::MaxHeight
+            }
+        }
+        UnitSlot::MaxBlockSize => {
+            if horiz {
+                UnitSlot::MaxHeight
+            } else {
+                UnitSlot::MaxWidth
+            }
+        }
+        UnitSlot::PadInlineStart => pad(wm.inline_start(dir)),
+        UnitSlot::PadInlineEnd => pad(wm.inline_end(dir)),
+        UnitSlot::PadBlockStart => pad(wm.block_start()),
+        UnitSlot::PadBlockEnd => pad(wm.block_end()),
+        UnitSlot::MarginInlineStart => margin(wm.inline_start(dir)),
+        UnitSlot::MarginInlineEnd => margin(wm.inline_end(dir)),
+        UnitSlot::MarginBlockStart => margin(wm.block_start()),
+        UnitSlot::MarginBlockEnd => margin(wm.block_end()),
+        UnitSlot::InsetInlineStart => inset(wm.inline_start(dir)),
+        UnitSlot::InsetInlineEnd => inset(wm.inline_end(dir)),
+        UnitSlot::InsetBlockStart => inset(wm.block_start()),
+        UnitSlot::InsetBlockEnd => inset(wm.block_end()),
+        other => other,
+    }
+}
+
+/// CSS `will-change` hint (ANIM-3.4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WillChangeHint {
+    #[default]
+    Auto,
+    Transform,
+    Opacity,
+    ScrollPosition,
+    Contents,
 }
 
 /// 元素布局与部分视觉属性（背景/边框/阴影等由渲染路径消费，不进入 Taffy）。
@@ -363,6 +561,12 @@ pub struct Style {
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
+    /// CSS `writing-mode` (inherited when [`Self::writing_mode_specified`] is false).
+    pub writing_mode: super::writing_mode::WritingMode,
+    pub writing_mode_specified: bool,
+    /// CSS `direction` for logical mapping + Taffy RTL (text also uses [`crate::style::TextStyle::direction`]).
+    pub direction: super::text_style::TextDirection,
+    pub direction_specified: bool,
     pub padding: Rect<LengthPercentage>,
     pub margin: Rect<LengthPercentageAuto>,
     pub gap: taffy::geometry::Size<taffy::style::LengthPercentage>,
@@ -438,6 +642,25 @@ pub struct Style {
     pub extra_shadows: Vec<BoxShadow>,
     /// Optional CSS gradient fill (linear / radial / conic; painted as strips or texture).
     pub bg_gradient: Option<super::gradient::Gradient>,
+    /// CSS `background-position` as fractions of the padding box `[x, y]` (0 = start, 1 = end).
+    pub bg_position: [f32; 2],
+    /// CSS `clip-path` (none / inset / polygon / circle / ellipse / path / url).
+    pub clip_path: ClipPath,
+    /// Publish this node's `clip_path` under `url(#id)` lookup (nearest last).
+    pub clip_path_name: Option<String>,
+    /// CSS `offset-path` (`none` / `path()` / `url(#id)`).
+    pub offset_path: super::offset_path::OffsetPath,
+    /// 0–1 along the offset path (CSS `%` of path length).
+    pub offset_distance: f32,
+    /// Extra degrees added to path tangent (`None` = auto tangent only).
+    pub offset_rotate_deg: Option<f32>,
+    /// CSS `scroll-timeline-name` (without requiring the `--` prefix at lookup).
+    pub scroll_timeline_name: Option<String>,
+    pub scroll_timeline_axis: ScrollTimelineAxis,
+    /// CSS `view-timeline-name`.
+    pub view_timeline_name: Option<String>,
+    /// CSS `interpolate-size` (ANIM A6.3): allow keyword size endpoints via `used_layout`.
+    pub interpolate_size: InterpolateSize,
     /// Element opacity multiplier for drawn colors (layout unchanged).
     pub opacity: f32,
     /// Visual translate offset in logical px (MVP transform; does not affect layout).
@@ -480,9 +703,16 @@ pub struct Style {
     /// CSS `animation` entries (MDN shorthand / longhands). Driven by
     /// [`crate::style::tick_element_animations`].
     pub animations: Vec<AnimationEntry>,
+    /// CSS `will-change` hint. Compositor properties already skip Taffy; this is
+    /// stored for layer promotion (ANIM-3.4).
+    pub will_change: WillChangeHint,
 }
 
 /// Which CSS property a transition applies to.
+///
+/// Variants cover every numeric field this engine can interpolate. Keywords such as
+/// `auto` / `%` stay discrete via [`crate::style::animation`]’s interpolable guard —
+/// the same rule that keeps `transition: all` from pinning `max-height: auto` to 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionProperty {
     All,
@@ -490,6 +720,16 @@ pub enum TransitionProperty {
     Transform,
     /// CSS 独立 `translate` 属性（也包含在 `transform` 过渡中）。
     Translate,
+    /// CSS 独立 `scale`（**不**进 `transition: all`，避免与 `transform` 双写）。
+    Scale,
+    /// CSS 独立 `rotate`（**不**进 `transition: all`，避免与 `transform` 双写）。
+    Rotate,
+    /// CSS `transform-origin` (fractions of the border box).
+    TransformOrigin,
+    /// CSS `offset-distance` (0–1 along the offset path).
+    OffsetDistance,
+    /// CSS `offset-rotate` in degrees (`None` on style = auto tangent).
+    OffsetRotate,
     Filter,
     BackgroundColor,
     BorderColor,
@@ -498,8 +738,59 @@ pub enum TransitionProperty {
     OutlineOffset,
     BoxShadow,
     Color,
+    FontSize,
+    LineHeight,
+    LetterSpacing,
+    TextDecorationColor,
+    Width,
+    Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
     MaxHeight,
-    /// A property this engine cannot interpolate (`height`, `padding`, …).
+    Padding,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    Margin,
+    MarginTop,
+    MarginRight,
+    MarginBottom,
+    MarginLeft,
+    /// CSS `inset` shorthand (top/right/bottom/left).
+    Inset,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    Gap,
+    RowGap,
+    ColumnGap,
+    BorderWidth,
+    BorderTopWidth,
+    BorderRightWidth,
+    BorderBottomWidth,
+    BorderLeftWidth,
+    BorderRadius,
+    BorderTopLeftRadius,
+    BorderTopRightRadius,
+    BorderBottomRightRadius,
+    BorderBottomLeftRadius,
+    FlexGrow,
+    FlexShrink,
+    FlexBasis,
+    /// First `grid-template-rows` track as `fr` (ANIM A3.6 `0fr` ↔ `1fr`).
+    GridTemplateRows,
+    /// `grid-template-columns` `fr` list (same interpolator as rows).
+    GridTemplateColumns,
+    /// CSS `background-position` (`[x, y]` 0–1).
+    BackgroundPosition,
+    /// CSS `clip-path`（`none` / `inset()` / `polygon()` / `circle()` / `ellipse()`）。
+    ClipPath,
+    Zoom,
+    BackdropFilter,
+    /// A property this engine cannot interpolate (unknown name, `none`, …).
     ///
     /// CSS treats an unknown / non-animatable `transition-property` as "no transition"
     /// for that entry. Folding it into [`Self::All`] instead would silently attach
@@ -515,6 +806,11 @@ impl TransitionProperty {
             "opacity" => Self::Opacity,
             "transform" => Self::Transform,
             "translate" => Self::Translate,
+            "scale" => Self::Scale,
+            "rotate" => Self::Rotate,
+            "transform-origin" | "transform_origin" => Self::TransformOrigin,
+            "offset-distance" | "offset_distance" => Self::OffsetDistance,
+            "offset-rotate" | "offset_rotate" => Self::OffsetRotate,
             "filter" => Self::Filter,
             "background-color" | "background" | "bg" => Self::BackgroundColor,
             "border-color" => Self::BorderColor,
@@ -523,7 +819,57 @@ impl TransitionProperty {
             "outline-offset" => Self::OutlineOffset,
             "box-shadow" | "shadow" => Self::BoxShadow,
             "color" => Self::Color,
+            "font-size" | "font_size" => Self::FontSize,
+            "line-height" | "line_height" => Self::LineHeight,
+            "letter-spacing" | "letter_spacing" => Self::LetterSpacing,
+            "text-decoration-color" => Self::TextDecorationColor,
+            "width" => Self::Width,
+            "height" => Self::Height,
+            "min-width" | "min_width" => Self::MinWidth,
+            "min-height" | "min_height" => Self::MinHeight,
+            "max-width" | "max_width" => Self::MaxWidth,
             "max-height" | "max_height" => Self::MaxHeight,
+            "padding" => Self::Padding,
+            "padding-top" | "padding_top" => Self::PaddingTop,
+            "padding-right" | "padding_right" => Self::PaddingRight,
+            "padding-bottom" | "padding_bottom" => Self::PaddingBottom,
+            "padding-left" | "padding_left" => Self::PaddingLeft,
+            "margin" => Self::Margin,
+            "margin-top" | "margin_top" => Self::MarginTop,
+            "margin-right" | "margin_right" => Self::MarginRight,
+            "margin-bottom" | "margin_bottom" => Self::MarginBottom,
+            "margin-left" | "margin_left" => Self::MarginLeft,
+            "inset" => Self::Inset,
+            "top" => Self::Top,
+            "right" => Self::Right,
+            "bottom" => Self::Bottom,
+            "left" => Self::Left,
+            "gap" => Self::Gap,
+            "row-gap" | "row_gap" => Self::RowGap,
+            "column-gap" | "column_gap" => Self::ColumnGap,
+            "border-width" | "border_width" => Self::BorderWidth,
+            "border-top-width" | "border_top_width" => Self::BorderTopWidth,
+            "border-right-width" | "border_right_width" => Self::BorderRightWidth,
+            "border-bottom-width" | "border_bottom_width" => Self::BorderBottomWidth,
+            "border-left-width" | "border_left_width" => Self::BorderLeftWidth,
+            "border-radius" | "border_radius" => Self::BorderRadius,
+            "border-top-left-radius" | "border_top_left_radius" => Self::BorderTopLeftRadius,
+            "border-top-right-radius" | "border_top_right_radius" => Self::BorderTopRightRadius,
+            "border-bottom-right-radius" | "border_bottom_right_radius" => {
+                Self::BorderBottomRightRadius
+            }
+            "border-bottom-left-radius" | "border_bottom_left_radius" => {
+                Self::BorderBottomLeftRadius
+            }
+            "flex-grow" | "flex_grow" => Self::FlexGrow,
+            "flex-shrink" | "flex_shrink" => Self::FlexShrink,
+            "flex-basis" | "flex_basis" => Self::FlexBasis,
+            "grid-template-rows" | "grid_template_rows" => Self::GridTemplateRows,
+            "grid-template-columns" | "grid_template_columns" => Self::GridTemplateColumns,
+            "background-position" | "background_position" => Self::BackgroundPosition,
+            "clip-path" | "clip_path" => Self::ClipPath,
+            "zoom" => Self::Zoom,
+            "backdrop-filter" | "backdrop_filter" => Self::BackdropFilter,
             "none" => Self::Unsupported,
             other => {
                 #[cfg(debug_assertions)]
@@ -540,7 +886,16 @@ impl TransitionProperty {
     }
 }
 
-/// CSS `transition-timing-function`.
+/// CSS `steps()` jump term (`jump-start` / `jump-end` / `jump-none` / `jump-both`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepJumpTerm {
+    JumpStart,
+    JumpEnd,
+    JumpNone,
+    JumpBoth,
+}
+
+/// CSS `transition-timing-function` / `animation-timing-function`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TimingFunction {
     Linear,
@@ -549,6 +904,18 @@ pub enum TimingFunction {
     EaseOut,
     EaseInOut,
     CubicBezier(f32, f32, f32, f32),
+    Steps {
+        n: u32,
+        jump: StepJumpTerm,
+    },
+    /// CSS `linear()` piecewise stops (intern id; table in [`super::easing`]).
+    LinearStops(u16),
+    /// Native spring driver (`spring()` / `spring(stiffness, damping)`). Not CSS.
+    Spring {
+        stiffness: f32,
+        damping: f32,
+        mass: f32,
+    },
 }
 
 impl Default for TimingFunction {
@@ -568,6 +935,22 @@ impl TimingFunction {
             Self::EaseOut => cubic_bezier_y_at_x(t, 0.0, 0.0, 0.58, 1.0),
             Self::EaseInOut => cubic_bezier_y_at_x(t, 0.42, 0.0, 0.58, 1.0),
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_y_at_x(t, *x1, *y1, *x2, *y2),
+            Self::Steps { n, jump } => super::easing::eval_steps(t, *n, *jump),
+            Self::LinearStops(id) => super::easing::eval_linear_stops(*id, t),
+            Self::Spring { .. } => t,
+        }
+    }
+
+    pub fn is_spring(self) -> bool {
+        matches!(self, Self::Spring { .. })
+    }
+
+    /// react-spring / Framer-ish defaults (stiffness 170, damping 26, mass 1).
+    pub fn default_spring() -> Self {
+        Self::Spring {
+            stiffness: 170.0,
+            damping: 26.0,
+            mass: 1.0,
         }
     }
 
@@ -580,6 +963,15 @@ impl TimingFunction {
             "ease-out" => Self::EaseOut,
             "ease-in-out" => Self::EaseInOut,
             _ => {
+                if let Some(spring) = super::timing::parse_spring_timing(&s) {
+                    return spring;
+                }
+                if let Some(steps) = super::easing::parse_steps_timing(&s) {
+                    return steps;
+                }
+                if let Some(linear) = super::easing::parse_linear_timing(&s) {
+                    return linear;
+                }
                 if let Some(inner) = s
                     .strip_prefix("cubic-bezier(")
                     .and_then(|r| r.strip_suffix(')'))
@@ -725,7 +1117,28 @@ impl AnimationIterationCount {
     }
 }
 
-/// CSS `animation-composition` (MVP: stored; runtime always **replace**).
+/// CSS `interpolate-size`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InterpolateSize {
+    #[default]
+    NumericOnly,
+    AllowKeywords,
+}
+
+impl InterpolateSize {
+    pub fn from_css(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "allow-keywords" => Self::AllowKeywords,
+            _ => Self::NumericOnly,
+        }
+    }
+
+    pub fn allows_keywords(self) -> bool {
+        matches!(self, Self::AllowKeywords)
+    }
+}
+
+/// CSS `animation-composition`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AnimationComposition {
     #[default]
@@ -753,12 +1166,17 @@ impl AnimationComposition {
     }
 }
 
-/// CSS `animation-timeline` (MVP: only [`Self::Auto`] drives time).
+/// CSS `animation-timeline`.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum AnimationTimeline {
     #[default]
     Auto,
-    Other(String),
+    /// `scroll()` — nearest scroller progress in 0–1.
+    Scroll,
+    /// `view()` — element position in the viewport, 0–1.
+    View,
+    /// `animation-timeline: --name` (CSS `scroll-timeline-name` / `view-timeline-name`).
+    Named(String),
 }
 
 impl AnimationTimeline {
@@ -766,13 +1184,22 @@ impl AnimationTimeline {
         let s = s.trim();
         if s.is_empty() || s.eq_ignore_ascii_case("auto") {
             Self::Auto
+        } else if s.eq_ignore_ascii_case("scroll") || s.to_ascii_lowercase().starts_with("scroll(")
+        {
+            Self::Scroll
+        } else if s.eq_ignore_ascii_case("view") || s.to_ascii_lowercase().starts_with("view(") {
+            Self::View
         } else {
-            Self::Other(s.to_string())
+            Self::Named(super::scroll_timeline::normalize_timeline_name(s))
         }
     }
 
     pub fn is_auto(&self) -> bool {
         matches!(self, Self::Auto)
+    }
+
+    pub fn is_progress_driven(&self) -> bool {
+        matches!(self, Self::Scroll | Self::View | Self::Named(_))
     }
 }
 
@@ -789,10 +1216,14 @@ pub struct AnimationEntry {
     pub play_state: AnimationPlayState,
     pub composition: AnimationComposition,
     pub timeline: AnimationTimeline,
-    /// Raw CSS `animation-range-start` (stored; not driven in MVP).
+    /// Raw CSS `animation-range-start`.
     pub range_start: Option<String>,
-    /// Raw CSS `animation-range-end` (stored; not driven in MVP).
+    /// Raw CSS `animation-range-end`.
     pub range_end: Option<String>,
+    /// Native player id ([`crate::style::waapi::Animation`] handle). `None` = CSS-only entry.
+    pub playback_id: Option<u64>,
+    /// After the last iteration, hold the end pose this many ms before `finished`.
+    pub end_delay_ms: f32,
 }
 
 impl Default for AnimationEntry {
@@ -810,6 +1241,8 @@ impl Default for AnimationEntry {
             timeline: AnimationTimeline::Auto,
             range_start: None,
             range_end: None,
+            playback_id: None,
+            end_delay_ms: 0.0,
         }
     }
 }
@@ -854,6 +1287,10 @@ impl Default for Style {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: Dimension::auto(),
+            writing_mode: super::writing_mode::WritingMode::HorizontalTb,
+            writing_mode_specified: false,
+            direction: super::text_style::TextDirection::Auto,
+            direction_specified: false,
             padding: Rect::zero(),
             margin: Rect::zero(),
             gap: taffy::geometry::Size {
@@ -910,6 +1347,16 @@ impl Default for Style {
             shadow_inset: false,
             extra_shadows: Vec::new(),
             bg_gradient: None,
+            bg_position: [0.0, 0.0],
+            clip_path: ClipPath::None,
+            clip_path_name: None,
+            offset_path: super::offset_path::OffsetPath::None,
+            offset_distance: 0.0,
+            offset_rotate_deg: None,
+            scroll_timeline_name: None,
+            scroll_timeline_axis: ScrollTimelineAxis::Block,
+            view_timeline_name: None,
+            interpolate_size: InterpolateSize::NumericOnly,
             opacity: 1.0,
             translate: [0.0, 0.0],
             translate_pct: [0.0, 0.0],
@@ -928,6 +1375,7 @@ impl Default for Style {
             filter: None,
             transition: Vec::new(),
             animations: Vec::new(),
+            will_change: WillChangeHint::Auto,
         }
     }
 }
@@ -991,7 +1439,10 @@ impl Style {
         let mut margin = self.margin;
         let mut gap = self.gap;
         let mut inset = self.inset;
+        let wm = self.writing_mode;
+        let dir = self.direction;
         for (slot, dim) in &self.unit_specs {
+            let slot = physical_unit_slot(*slot, wm, dir);
             match slot {
                 UnitSlot::Width => size.width = dim.to_dimension_axis(ctx, PercentAxis::Inline),
                 UnitSlot::Height => size.height = dim.to_dimension_axis(ctx, PercentAxis::Block),
@@ -1009,26 +1460,14 @@ impl Style {
                 }
                 UnitSlot::FlexBasis => flex_basis = dim.to_dimension_axis(ctx, PercentAxis::Inline),
                 // CSS: padding/margin % is always relative to containing-block **width**.
-                UnitSlot::PadL => padding.left = dim.to_length_percentage(ctx, PercentAxis::Inline),
-                UnitSlot::PadR => {
-                    padding.right = dim.to_length_percentage(ctx, PercentAxis::Inline)
-                }
-                UnitSlot::PadT => padding.top = dim.to_length_percentage(ctx, PercentAxis::Inline),
-                UnitSlot::PadB => {
-                    padding.bottom = dim.to_length_percentage(ctx, PercentAxis::Inline)
-                }
-                UnitSlot::MarginL => {
-                    margin.left = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
-                }
-                UnitSlot::MarginR => {
-                    margin.right = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
-                }
-                UnitSlot::MarginT => {
-                    margin.top = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
-                }
-                UnitSlot::MarginB => {
-                    margin.bottom = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
-                }
+                UnitSlot::PadL => padding.left = dim.to_box_edge_length_percentage(ctx),
+                UnitSlot::PadR => padding.right = dim.to_box_edge_length_percentage(ctx),
+                UnitSlot::PadT => padding.top = dim.to_box_edge_length_percentage(ctx),
+                UnitSlot::PadB => padding.bottom = dim.to_box_edge_length_percentage(ctx),
+                UnitSlot::MarginL => margin.left = dim.to_box_edge_length_percentage_auto(ctx),
+                UnitSlot::MarginR => margin.right = dim.to_box_edge_length_percentage_auto(ctx),
+                UnitSlot::MarginT => margin.top = dim.to_box_edge_length_percentage_auto(ctx),
+                UnitSlot::MarginB => margin.bottom = dim.to_box_edge_length_percentage_auto(ctx),
                 UnitSlot::GapX => gap.width = dim.to_length_percentage(ctx, PercentAxis::Inline),
                 UnitSlot::GapY => gap.height = dim.to_length_percentage(ctx, PercentAxis::Block),
                 UnitSlot::InsetL => {
@@ -1043,6 +1482,7 @@ impl Style {
                 UnitSlot::InsetB => {
                     inset.bottom = dim.to_length_percentage_auto(ctx, PercentAxis::Block)
                 }
+                _ => {}
             }
         }
         // CSS `zoom`: scale layout dimensions by the zoom factor.
@@ -1071,17 +1511,57 @@ impl Style {
             border
         };
 
+        let flex_direction = wm.map_flex_direction(dir, self.flex_direction);
+        let mut align_items = self.align_items;
+        let mut align_self = self.align_self;
+        let mut align_content = self.align_content;
+        let mut justify_items = self.justify_items;
+        if wm.flip_flex_cross_start(self.flex_direction) {
+            align_items = align_items.map(super::writing_mode::flip_align_items);
+            align_self = align_self.map(super::writing_mode::flip_align_items);
+            align_content = align_content.map(super::writing_mode::flip_align_content);
+            justify_items = justify_items.map(super::writing_mode::flip_align_items);
+        }
+        let (
+            grid_template_columns,
+            grid_template_rows,
+            grid_auto_flow,
+            grid_auto_rows,
+            grid_auto_columns,
+        ) = if wm.is_horizontal() {
+            (
+                self.grid_template_columns.clone(),
+                self.grid_template_rows.clone(),
+                self.grid_auto_flow,
+                self.grid_auto_rows.clone(),
+                self.grid_auto_columns.clone(),
+            )
+        } else {
+            (
+                self.grid_template_rows.clone(),
+                self.grid_template_columns.clone(),
+                match self.grid_auto_flow {
+                    GridAutoFlow::Row => GridAutoFlow::Column,
+                    GridAutoFlow::Column => GridAutoFlow::Row,
+                    GridAutoFlow::RowDense => GridAutoFlow::ColumnDense,
+                    GridAutoFlow::ColumnDense => GridAutoFlow::RowDense,
+                },
+                self.grid_auto_columns.clone(),
+                self.grid_auto_rows.clone(),
+            )
+        };
+
         let mut taffy = taffy::style::Style {
             box_sizing: self.box_sizing,
             display: self.display,
-            flex_direction: self.flex_direction,
+            flex_direction,
             flex_wrap: self.flex_wrap,
             justify_content: self.justify_content,
-            align_items: self.align_items,
-            align_self: self.align_self,
+            align_items,
+            align_self,
             justify_self: self.justify_self,
-            align_content: self.align_content,
-            justify_items: self.justify_items,
+            align_content,
+            justify_items,
             size,
             min_size,
             max_size,
@@ -1096,15 +1576,16 @@ impl Style {
             position: self.position,
             inset,
             aspect_ratio: self.aspect_ratio,
-            grid_template_columns: self.grid_template_columns.clone(),
-            grid_template_rows: self.grid_template_rows.clone(),
-            grid_auto_rows: self.grid_auto_rows.clone(),
-            grid_auto_columns: self.grid_auto_columns.clone(),
-            grid_auto_flow: self.grid_auto_flow,
+            grid_template_columns,
+            grid_template_rows,
+            grid_auto_rows,
+            grid_auto_columns,
+            grid_auto_flow,
             grid_row: self.grid_row.clone(),
             grid_column: self.grid_column.clone(),
             ..Default::default()
         };
+        taffy.direction = super::writing_mode::taffy_direction(wm, dir);
         apply_content_keyword_cross_axis_hug(self, parent_flex_direction, &mut taffy);
         taffy
     }
@@ -1113,11 +1594,12 @@ impl Style {
         self.unit_specs.iter().any(|(_, d)| d.has_percent())
     }
 
-    /// `vw`/`vh`/`em`/`calc`（含 `%` in calc）须在布局期按视口 / 字号 / 包含块重烘焙。
+    /// `vw`/`vh`/`em`/`calc`，以及 padding/margin 的裸 `%`，须在布局期按视口 / 字号 / 包含块重烘焙。
     pub fn has_deferred_units(&self) -> bool {
-        self.unit_specs
-            .iter()
-            .any(|(_, d)| d.needs_layout_context())
+        self.unit_specs.iter().any(|(slot, d)| {
+            d.needs_layout_context()
+                || (d.has_percent() && slot.percent_against_containing_block_width())
+        })
     }
 
     /// Border widths **T R B L** that participate in layout (0 if `border_style` is invisible).
@@ -1252,7 +1734,13 @@ impl Style {
 
     pub fn set_css_dim(&mut self, slot: UnitSlot, dim: CssDim) {
         self.unit_specs.retain(|(s, _)| *s != slot);
-        if dim.needs_layout_context() {
+        if slot.is_logical() {
+            self.unit_specs.push((slot, dim));
+            return;
+        }
+        let defer_box_edge_percent =
+            dim.has_percent() && slot.percent_against_containing_block_width();
+        if dim.needs_layout_context() || defer_box_edge_percent {
             if let Some(preview) = dim.preview_dimension() {
                 self.apply_taffy_slot(slot, preview);
             }
@@ -1292,6 +1780,24 @@ impl Style {
             UnitSlot::InsetR => self.inset.right = lpa,
             UnitSlot::InsetT => self.inset.top = lpa,
             UnitSlot::InsetB => self.inset.bottom = lpa,
+            UnitSlot::InlineSize
+            | UnitSlot::BlockSize
+            | UnitSlot::MinInlineSize
+            | UnitSlot::MinBlockSize
+            | UnitSlot::MaxInlineSize
+            | UnitSlot::MaxBlockSize
+            | UnitSlot::PadInlineStart
+            | UnitSlot::PadInlineEnd
+            | UnitSlot::PadBlockStart
+            | UnitSlot::PadBlockEnd
+            | UnitSlot::MarginInlineStart
+            | UnitSlot::MarginInlineEnd
+            | UnitSlot::MarginBlockStart
+            | UnitSlot::MarginBlockEnd
+            | UnitSlot::InsetInlineStart
+            | UnitSlot::InsetInlineEnd
+            | UnitSlot::InsetBlockStart
+            | UnitSlot::InsetBlockEnd => {}
         }
     }
 }

@@ -1,24 +1,34 @@
-//! 变体 chroming 与用户样式覆盖：动态 `variant={sig}` 重绘时保留显式 `bg` / `border` / `shadow`。
+//! 变体 chroming 与用户样式覆盖：动态 `variant={sig}` / 每帧 sync 时保留作者已写字段。
 //!
 //! - `chrome={false}` → 跳过容器与子树语义色重绘（仍更新 `data-variant` 等元数据）。
-//! - 用户经 RSX `bg` / `border_color` / `shadow`（或 [`BaseComponentBuilder`]）写入时打标，重绘跳过对应字段。
+//! - 用户经 RSX `bg` / `border_color` / `shadow` / `p` / `text_size`（或 [`BaseComponentBuilder`]）写入时打标，重绘跳过对应字段。
 
 use crate::core::tree::{Element, LayoutStatus};
-use crate::style::{apply_semantic_border, apply_semantic_shadow, SemanticChrome};
+use crate::style::{SemanticChrome, apply_semantic_border, apply_semantic_shadow};
 
 pub const ATTR_VARIANT_CHROME: &str = "rui_variant_chrome";
 pub const ATTR_OVERRIDE_BG: &str = "rui_override_bg";
 pub const ATTR_OVERRIDE_BORDER: &str = "rui_override_border";
 pub const ATTR_OVERRIDE_SHADOW: &str = "rui_override_shadow";
 pub const ATTR_OVERRIDE_FG: &str = "rui_override_fg";
+pub const ATTR_OVERRIDE_PAD: &str = "rui_override_pad";
+pub const ATTR_OVERRIDE_SIZE: &str = "rui_override_size";
+pub const ATTR_OVERRIDE_WEIGHT: &str = "rui_override_weight";
+pub const ATTR_OVERRIDE_LEADING: &str = "rui_override_leading";
+pub const ATTR_OVERRIDE_RADIUS: &str = "rui_override_radius";
 
-/// 用户可覆盖的变体容器/字色字段。
+/// 用户可覆盖的变体容器/字色/盒模型字段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VariantStyleField {
     Bg,
     Border,
     Shadow,
     Fg,
+    Pad,
+    Size,
+    Weight,
+    Leading,
+    Radius,
 }
 
 impl VariantStyleField {
@@ -28,6 +38,11 @@ impl VariantStyleField {
             Self::Border => ATTR_OVERRIDE_BORDER,
             Self::Shadow => ATTR_OVERRIDE_SHADOW,
             Self::Fg => ATTR_OVERRIDE_FG,
+            Self::Pad => ATTR_OVERRIDE_PAD,
+            Self::Size => ATTR_OVERRIDE_SIZE,
+            Self::Weight => ATTR_OVERRIDE_WEIGHT,
+            Self::Leading => ATTR_OVERRIDE_LEADING,
+            Self::Radius => ATTR_OVERRIDE_RADIUS,
         }
     }
 }
@@ -113,8 +128,8 @@ pub fn apply_user_fg(el: &mut Element, color: [u8; 4]) -> LayoutStatus {
 mod tests {
     use super::*;
     use crate::style::{
-        parse_color, semantic_chrome, SemanticChromeDecor, SemanticChromeOpts, SemanticSurface,
-        SemanticTone,
+        SemanticChromeDecor, SemanticChromeOpts, SemanticSurface, SemanticTone, parse_color,
+        semantic_chrome,
     };
 
     #[test]
