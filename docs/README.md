@@ -38,16 +38,16 @@
 
 ### 引擎
 
-- [box_model.md](engine/box_model.md)（WP-2.9 ☑）· [layout_subtree.md](engine/layout_subtree.md) · [stack_and_element_model.md](engine/stack_and_element_model.md)（ADR-10 ☑ 冻结）
+- [box_model.md](engine/box_model.md)（WP-2.9 ☑ **已冻结**）· [layout_subtree.md](engine/layout_subtree.md) · [stack_and_element_model.md](engine/stack_and_element_model.md)（ADR-10 ☑ 冻结）· [platform.md](engine/platform.md)
 - [color.md](engine/color.md) · [font.md](engine/font.md) · [font_strategy.md](engine/font_strategy.md) · [text_align.md](engine/text_align.md)
-- [animation_and_motion.md](engine/animation_and_motion.md) · [css_animation_max_alignment.md](engine/css_animation_max_alignment.md)
+- [animation_and_motion.md](engine/animation_and_motion.md) · [css_animation_max_alignment.md](engine/css_animation_max_alignment.md)（**已冻结**）
 - [damage.md](engine/damage.md) · [glyphon_audit.md](engine/glyphon_audit.md) · [assets_and_icons_architecture.md](engine/assets_and_icons_architecture.md)
 
 ### 运维 / 验收
 
 - [desktop_smoke.md](ops/desktop_smoke.md) · [a11y_smoke.md](ops/a11y_smoke.md) · [ime.md](ops/ime.md) · [keyboard_nav.md](ops/keyboard_nav.md)
 - [PUBLISH.md](ops/PUBLISH.md) · [W4_PRELAUNCH_CHECKLIST.md](ops/W4_PRELAUNCH_CHECKLIST.md)
-- [multi_window.md](ops/multi_window.md) · [tray.md](ops/tray.md) · [devtools.md](ops/devtools.md)
+- [multi_window.md](ops/multi_window.md) · [tray.md](ops/tray.md) · [remote_asset.md](ops/remote_asset.md) · [devtools.md](ops/devtools.md)
 - [reactivity_and_hot_reload.md](ops/reactivity_and_hot_reload.md) · [size_and_memory.md](ops/size_and_memory.md) · [crate_deps.md](ops/crate_deps.md)
 
 ### 非执行源

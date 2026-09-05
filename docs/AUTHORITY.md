@@ -51,8 +51,8 @@ docs/                                ★ 根目录 = 权威 + changelog
 │   component_variants.md            variant/size/受控命名（WP-3.8）
 │   custom_components · headless · overlay_shells · COMPONENT_LAYERING
 │
-├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算
-│   box_model · layout_subtree · stack_and_element_model · color · font* · text_align
+├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算 / 平台层
+│   box_model · layout_subtree · stack_and_element_model · platform · color · font* · text_align
 │   animation_and_motion · css_animation_max_alignment · damage · glyphon_audit
 │
 ├─ ops/                              验收手册（不是第二套 WP）
@@ -82,7 +82,8 @@ docs/                                ★ 根目录 = 权威 + changelog
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](components/custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
 | `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) | 在组件里重复实现 tick；把 presence 塞进 `keyframes` |
-| CSS 动画最大对齐范围、ANIM 波次、Specified/Used 模型 | [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) | 创作时按组件补丁 `KeyframeStop`；跳过 ANIM DoD |
+| CSS 动画 / transition / `@keyframes` 冻结子集、Specified/Used 模型 | [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) | 静默扩面不改该手册 §1.2 / §3；`KeyframeStop` 手工字段；冒充 DOM `animation*` 事件 |
+| `platform` OS 层该放哪、cfg 边界、mobile/embedded | [`platform.md`](engine/platform.md) | 在 `app/` 或 `renderer/` 静默新增 Win32 块而不更新该手册 |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
@@ -369,19 +370,21 @@ WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_c
 | **2.9.7** | （P2）视口单位：文档诚实写清「布局根 Percent」；真 `vw`/`vh` 另议 | BM5 | ☑ 真视口（`LayoutTree.viewport` + `to_taffy_style_with`） |
 
 **退出**：2.9.1–2.9.7 ☑（含分边 border）。  
-**禁区**：换 Taffy；outline/shadow 进布局；块级 margin collapse。
+**禁区**：换 Taffy；outline/shadow 进布局；块级 margin collapse；静默改默认 BorderBox；把 overflow clip 改成 padding-box 而不改 [`box_model.md`](engine/box_model.md)。
 
 WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`；测宽叶审计表（Tabs=ContentBox，Button/Input 等拆叶）；命中/裁剪库测；局部 `em` + 真视口 `vw`/`vh`/`dvh` + `calc`；分边 `border-left` 等（B15）。Gallery「布局 → WP-2.9 / B15」。细则 [`box_model.md`](engine/box_model.md)。
+
+**2026-09-05 已冻结**（不重开 WP）：手册追上实现；padding/margin `%` 对齐 CSS；Gallery 洋葱图不用 zinc `secondary`/`accent` 当相邻层；`box_model_gallery_colors` + CI step「Box model contract (freeze)」。同日加深：overflow **圆角 clip**（border-box 不变）+ 完整 `writing-mode` 逻辑映射（BM10；BM12 的 padding-box 仍不做）。细则 [`box_model.md`](engine/box_model.md)。
 
 #### WP-2.9 验收（可判定）
 
 | 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
 |------|-------------|----------|----------|
-| **A 盒模型测（权威）** | `cargo test -p rui --lib box_model_contract` | BorderBox/ContentBox 外缘；outline 不扩 hit；border 可点；overflow+padding clip=父 border-box | 任一 `FAILED` |
+| **A 盒模型测（权威）** | `cargo test -p rui --lib box_model` | 契约测 + `box_model_gallery_colors`（洋葱层令牌可分辨；paint 含分边色） | 任一 `FAILED` |
 | **A′ 百分比回归** | `cargo test -p rui --lib percent_content_box` | 全绿（含 `percent_width_is_parent_content_box_not_border_box`） | `FAILED` |
 | **A″ em / 视口** | `cargo test -p rui --lib em_resolves_against_root`；`box_model_contract` 中 vw/em/calc | `IntoDimension` 的 `1em` ≡ 根 16px；布局期局部 em + 真 vw/vh/dvh + calc | `FAILED` |
 | **A‴ utility** | `cargo test -p rui_style_tokens`；`cargo test -p rui --lib apply_box_sizing_utilities` | `box-border`/`box-content` 已知并写入 `box_sizing` | 未知类 / 未改 sizing |
-| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.9 / B15)」 | `box-content` 明显宽于 `box-border`；洋葱图四边异色；点描边内侧 +1、点 outline 外扩不加 | 两盒同宽；分边同色同宽；点红描边也 +1 |
+| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.9 / B15)」 | `box-content` 明显宽于 `box-border`；洋葱图四边异色且 padding≠margin 灰；点描边内侧 +1、点 outline 外扩不加 | 两盒同宽；分边同色同宽；层糊成一块；点红描边也 +1 |
 
 **签署规则**：A+A′+A″+A‴ 绿即可勾 WP-2.9；B 不替代库测。2.9.6 / B15 分边 border 已签。
 

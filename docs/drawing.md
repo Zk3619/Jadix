@@ -91,12 +91,12 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 结构 / 引用 | `defs` / `use` / `symbol` / `clipPath` | `a` / `switch` / `view` / `title` / `desc` / `metadata` | `script` / `foreignObject` |
 | 渐变 | `linearGradient` / `radialGradient` / `stop` | （同左亦可走 Elem） | — |
 | 文本 | — | `text` / `tspan` / `textPath` | — |
-| 图像 / 图案 / 标记 / 遮罩 | — | `image`（仅贴图键 / data URI / 本地约定）/ `pattern` / `marker` / `mask` | 任意外链 `href="https://…"` 自动拉取 |
+| 图像 / 图案 / 标记 / 遮罩 | — | `image`（贴图键 / data URI / 本地约定；**产品** `<Image src="https://…">` 见 feature `remote-asset` + [`RemoteAssetFetcher`](../ops/remote_asset.md)）/ `pattern` / `marker` / `mask` | SVG 场景内外链 `href="https://…"` 自动拉取 |
 | 滤镜 | — | `filter` / `fe*` | 自研 CPU filter 光栅 |
 | SMIL | bake：`animate` / `set` / `animateTransform` | 透传：`animateMotion` / `mpath`（本轮不 bake） | 完整时间线语义 / 脚本改树 |
 | 呈现属性 | 高频 typed helpers | 长尾 `.attr`（`vector-effect` / `paint-order` / `marker-*` 等） | 浏览器 CSS 选中 SVG 子元素 / 样式表驱动 SVG |
 
-**禁区（类 Web DOM）**：`<script>`、事件、SVG DOM API、脚本改树；CSS 选 SVG 子；宿主 HTML（`foreignObject`）；任意外链 image 自动拉取。
+**禁区（类 Web DOM）**：`<script>`、事件、SVG DOM API、脚本改树；CSS 选 SVG 子；宿主 HTML（`foreignObject`）；**SVG 场景图**内外链 image 自动拉取。产品面远程位图走可选 feature [`remote-asset`](ops/remote_asset.md)，不经 SVG `href`。
 
 **验收（MVP）**：Gallery「绘制」：圆 + path 描边/填充；`ui!` 与 Builder 各一例；离屏或 layout 测证明叶尺寸正确。  
 **落地（2026-08-18）**：`primitives/svg`；子形状 flatten 进叶；`rui_path_fit_leaf` 让 viewBox 跟叶；与 Chart 共用 `PathCommand` / `register_path_scene`。  

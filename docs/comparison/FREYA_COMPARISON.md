@@ -254,7 +254,7 @@ RUI 的样式赌注是「**写过 Tailwind 的人零学习曲线**」；Freya �
 | F15 | **Titlebar 控件** | `TitlebarButton` · `titlebar` | 无对等一等控件 | 后置 / 与 chrome 合并评估 |
 | F16 | **SDK / Tokio 集成** | `freya-sdk` · `sdk-tokio` | 弱 | 后置文档 |
 | F17 | **Performance overlay 插件** | `freya-performance-plugin` · `performance` | 无对等插件；有 damage/scroll 审计文档 | 学形态 |
-| F18 | **远程 HTTP 资源** | `remote-asset` → Image/Gif HTTP | 本地/`rfd` 为主；无一等 remote-asset | 后置 |
+| F18 | **远程 HTTP 资源** | `remote-asset` → Image/Gif HTTP | **`remote-asset` feature**（默认关）：widget 接受 `http(s)` `src`；传输为 [`RemoteAssetFetcher`](../../crates/rui/src/media/remote.rs) 注入。手册 [`remote_asset.md`](../ops/remote_asset.md) | 已落地（入口，非内置 HTTP） |
 | F19 | **Zoom 快捷键** | `zoom-shortcuts` | — | P2 |
 | F20 | **独立 DevTools App** | `freya-devtools` + `freya-devtools-app` | 进程内 `devtools` Inspector | 学产品形态；不必拆 app |
 | F21 | **无头测试一等 crate** | `freya-testing` | `crate_tests` / offscreen / `headless.md` | **学 API 形态（P0）** |

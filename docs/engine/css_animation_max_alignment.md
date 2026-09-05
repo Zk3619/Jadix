@@ -1,17 +1,29 @@
-# CSS 动画最大对齐计划（ANIM）
+# CSS 动画（animation / transition / @keyframes）
 
-> **文档地位**：巩固期 **ANIM 域唯一执行源**（勾选、排期、DoD）。  
-> **前提**：[`animation_and_motion.md`](animation_and_motion.md) 已定义 keyframes / animation / motion 分层；本文定义 **与 Web CSS Animations + Transitions 的最大对齐范围** 及 **一次性落地** 步骤。  
-> **规范参照**：[MDN CSS Animations](https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Animations) · [Animatable properties](https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Animations/Animatable_properties) · CSS Animations Level 1 · CSS Transitions  
-> **日期**：2026-08-29
+> **文档地位**：CSS Animations Level 1 + CSS Transitions 的**已承诺子集**事实手册（近乎完全对齐 Web 的冻结面）。分层选型仍见 [`animation_and_motion.md`](animation_and_motion.md)。  
+> **冻结状态**：**已冻结**（2026-09-05 子集）。纠错（行号、测试命令、矩阵笔误）可改；策略变更（扩面、改插值、放开 §1.2）须改本文，禁止静默扩面。  
+> **执行源**：ANIM-0～6 已退出排期；勾选清单仅为落地史（§6），不再当 To-Do。  
+> **实现锚点**：`style/animatable.rs`（`PropertyId` 单轨）· `style/timing.rs`（timing / spring 核）· `style/animation.rs`（transition / keyframes tick）· `style/waapi.rs`（句柄注册表）· `style/keyframes.rs` + `keyframes_parse.rs` · `style/easing.rs` · `style/specified.rs` · `style/used_layout.rs` · `style/clip_path.rs` · `style/scroll_timeline.rs` · `crate_tests/style/anim_freeze.rs`。  
+> **规范参照**：[MDN CSS Animations](https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Animations) · [Animatable properties](https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Animations/Animatable_properties) · CSS Animations L1 · CSS Transitions  
+> **日期**：2026-09-05（双引擎契约测绿；文档追上实现）。
+
+交叉：[`animation_and_motion.md`](animation_and_motion.md) · [`box_model.md`](box_model.md) · [`layout_subtree.md`](layout_subtree.md) · [`damage.md`](damage.md)
+
+---
+
+## 0. 一句话
+
+RUI 用 **一条 `PropertyId` 插值轨** 驱动 CSS `transition` 与 `@keyframes`：作者只写 class / `animation()` / `@keyframes` 文本；**禁止** 再给 `KeyframeStop` 手工加字段。组件不做布局测高。本冻结面承诺 §1.1 + §3 + **三层动画模型（§1.3）**；§1.2 仅保留尚未纳入的次要项。扩面仍须改本表再写代码。
 
 ---
 
 ## 0. 目标与三问结论
 
-### 0.1 总目标
+### 0.1 冻结目标（已达成）
 
-**一次性** 建立与 Web 对齐的动画基底（`AnimatableProperty` 单轨 + Specified/Used 值模型 + 布局动画 + 文本继承属性），使组件创作 **只写 CSS 语义**（class / `animation()` / `@keyframes` 文本），**禁止** 再为单个组件向 `KeyframeStop` 手工加字段。
+与 Web 对齐的动画基底（`PropertyId` 单轨 + Specified/Used 值模型 + 布局动画 + 文本继承属性）已落地：组件创作 **只写 CSS 语义**（class / `animation()` / `@keyframes` 文本），**禁止** 再为单个组件向 `KeyframeStop` 手工加字段。
+
+CI 锚点：`cargo test -p rui --lib anim_freeze`。
 
 ### 0.2 三问直接回答
 
@@ -36,15 +48,63 @@
 | **Reduced motion** | `prefers-reduced-motion` → 时长归零或 `animation: none` |
 | **Utility** | Tailwind `animate-*` / `transition-*` 与属性表 1:1 |
 
-### 1.2 明确不纳入 v1（另开 WP）
+### 1.2 可做、尚未纳入（次要）
+
+`PropertyId` 现用到 **62 = `OffsetRotate`**，`repr(u8)` 位图上限 **< 64**，还剩 **1** 个槽（63）。
+
+| 项 | 为什么能做 | 接法 / 代价 |
+|----|------------|-------------|
+| **`background-size` 动画** | 普通 Vec2/`cover` discrete | 可挤进剩余 `PropertyId`；与 `background-position` 成对 |
+| **`transition-behavior: allow-discrete`** | 离散端点在 t=0.5 切换（CSS） | 现成 discrete 路径加一个开关；不必新槽 |
+| **`view-timeline-inset` 全集** | 已有 range 映射，inset 是采样窗口微调 | 扩 `view_timeline` 解析，不占 `PropertyId` |
+
+**真正的硬边界（仍不做）：**
 
 | 项 | 理由 |
 |----|------|
-| Scroll/View **`animation-timeline`** | CSS Animations L2；依赖 scroll 时间线基础设施 |
-| **`animation-composition: accumulate`** 真实叠加 | 仅存档字段；v1 一律 replace |
-| **Web Animations API** / DOM **`animation*`** 事件 | 无 DOM；用 Rust presence/on_finish 钩子替代 |
-| **`background-position`** 等纯装饰动画 | 不在 `Style` 绘制 MVP |
-| **`interpolate-size` / `calc-size()`** | 可 v2 替代 intrinsic 路径；v1 用 `used_layout` 缓存 |
+| 浏览器 **DOM** `animation*` 事件名 / `EventTarget` / `Promise` / `DocumentTimeline` | 无 DOM；完成通知是 callback / `Signal`。每窗口一条单调时钟 |
+| **编程面 `composite: add/accumulate`** | Web 上也极少用；CSS `animation-composition` 声明式表面仍保留 |
+| **vertex instance loc 2–15 再加字段** | 已满；新几何走 **storage buffer**（clip poly 已是这条路），禁止再扩 instance 顶点槽 |
+| **vertex interpolator loc >14** | 设备 `max_inter_stage_shader_variables` 为 0-based 14；`instance_index` 打进 loc 14 的 `extra_and_id.y`，禁止 `@location(15)` 输出 |
+
+负 `animation-delay`：`after_delay = elapsed - delay_ms`，负 delay 立刻进入周期中段（CSS）。`anim_freeze` 锁定。
+
+### 1.3 三层动画模型（引擎 / 声明式 / 句柄）
+
+要的是 **模型**，不是 WAAPI 完整规范。CSS `transition` 已隐含 timing 的一半；编程面做 Rust 味子集。
+
+| 层 | 承诺 | 落地 |
+|----|------|------|
+| **1 引擎** | timing + keyframes + easing + 中断/重定向 | `Timing::resolve`（delay / iterations / direction / fill / endDelay）· `PropertyId` 插值 · transition 从**当前计算值** retarget（spring 保留 `vel`）· `LayoutImpact` 分流 layout vs paint · `needs_frame` 驱动连续/按需重绘 |
+| **2 声明式** | `transition:` / `animation:` / `@keyframes` | 已冻结 §1.1；另 `transition: … spring()` / `spring(k, d[, mass])` |
+| **3 编程式** | Rust 句柄子集 | `Animation` = **id + 注册表**。`run(frames, Timing)` / `play` / `pause` / `reverse` / `set_rate` / `seek` / `finish` / `cancel` / `on_finish`。**不**照搬 DocumentTimeline、Promise、`getComputedTiming` 规范名（用 `KeyframeEffect::model()` → [`Timing`](../../crates/rui/src/style/timing.rs)） |
+
+拿 / 丢：
+
+| 拿 | 丢 |
+|----|----|
+| delay / endDelay / duration / iterations / direction / fill / playbackRate / currentTime | DocumentTimeline / 多时间线 |
+| keyframes：offset + 每帧 easing + 插值 | 编程面 composite add/accumulate |
+| play / pause / reverse / finish / cancel / seek | 与 CSS cascade 的完整集成（last-started-wins） |
+| 完成通知（callback / Signal） | Promise 原样；「合成器线程跑动画」（本引擎就是合成器） |
+
+已收进本冻结面的延伸：
+
+| 项 | 落地 |
+|----|------|
+| **编程式句柄** | `style/waapi.rs`：`Keyframe` 属性袋、`Timing`、`Animation::run` / `Element.animate`。`play`/`pause`/`reverse`/`set_rate`/`seek`/`finish`/`cancel`（cancel **不**触发 finish）、`model()`、`finished`/`cancelled` Signal。匿名 `@keyframes` intern + `playback_id`。句柄表 `get_animations()` 是注册表 dump，不是 `document.getAnimations()` |
+| **spring 腿** | `TimingFunction::Spring` + `spring_step`；`transition: transform spring()` 走积分而非 duration；重定向保留 `vel`。默认 stiffness 170 / damping 26 / mass 1 |
+| **`linear()` 分段 easing** | `TimingFunction::LinearStops(u16)` intern 表；与 `steps()` 同层 |
+| **`clip-path: path()`** | tessellate → `ClipPath::Polygon`（超 16 点 GPU 抽样） |
+| **`clip-path: url(#id)`** | 文档 clip 定义表 `register_clip_path` / `lookup_clip_path`（collect 时后写覆盖） |
+| **`offset-path` + `offset-distance` / `offset-rotate`** | 路径弧长采样写入 paint translate + 切线角；`PropertyId` 61/62 |
+| **`transform-origin` 动画** | `PropertyId` 60，分数 0–1 |
+| **`extra_shadows` 列表插值** | `ShadowListTween`：主 `shadow_*` 为第 0 层，等长 lerp；`inset` 不对齐则 discrete |
+| **两层 polygon GPU 相交** | `GpuClipPoly` 第二层 storage + `and_layers`；CPU `contains_point` AND；祖先+本地 |
+| **`calc-size()`** 求值器 | `CssDim::CalcSize` + `size` 关键字；keyframes / transition 把 `calc-size(auto, size + N)` 求到 used±N。首遍 layout 仍把 `calc-size(auto,…)` 当 `auto`。 |
+| **`clip-path` 几何** | `inset()` / `polygon()` / `circle()` / `ellipse()`：解析、等顶点数插值、命中、AABB；polygon/circle/ellipse 走 SDF storage even-odd / nonzero。transition 与 keyframes **共用** `ClipPath::interpolate`（`ClipPathTween`）。 |
+| **具名 `scroll-timeline` / `view-timeline`** | `--name` 跨节点查找（后写 = 更近祖先）+ `animation-range`（`%` / `normal` / `cover` / `entry` / `exit`）。匿名 `scroll()` / `view()` 仍走 A6.1。 |
+| **独立 `scale` / `rotate` transition** | `transition-property: scale \| rotate` 走独立 tween；**不**扩进 `transition: all`（避免与 `transform` 双写）。 |
 
 ---
 
@@ -85,9 +145,7 @@ pub struct PresentStyle { /* 本帧绘制：Style 子集 + TextStyle 子集 */ }
 
 ### 2.2 不用组件测量，Accordion 如何工作
 
-**现状（待删除）：** `accordion.rs` → `measure_panel_natural_height` → 手动设 `max_size.height` → seed。
-
-**目标：**
+已落地（不再手写测高）：
 
 ```text
 1. 作者：max-height: auto（specified）；keyframes: accordion-down 仅声明 0% { max-height: 0 }
@@ -96,7 +154,7 @@ pub struct PresentStyle { /* 本帧绘制：Style 子集 + TextStyle 子集 */ }
 4. 动画 mid 写 max_size.height（used），不反写 specified
 ```
 
-组件只保留 **presence**（何时挂载/卸载），**删除** `measured_height` / `exit_from_height` / `measure_panel_natural_height`。
+组件只保留 **presence**（何时挂载/卸载）。
 
 ### 2.3 能否完全不做 layout？
 
@@ -112,56 +170,64 @@ pub struct PresentStyle { /* 本帧绘制：Style 子集 + TextStyle 子集 */ }
 
 ---
 
-## 3. Animatable 属性矩阵（对齐 MDN）
+## 3. Animatable 属性矩阵（对齐 MDN，已冻结）
 
-图例：**✅ v1** · **🔜 ANIM 波次** · **—** 不纳入 v1
+图例：**✅** 双引擎（keyframes + transition）共用 `animatable::interpolate`（或与之等价的同函数调用）· **—** 明确不做（§1.2）
+
+`transition: all` 展开 `ALL_PROPS`（**shorthand 不含 longhand**，避免 padding 双写）。独立 `scale` / `rotate` **不**在 `all` 内。
 
 ### 3.1 A 层 — 合成 / 不触 layout
 
-| CSS property | RUI 字段 | keyframes | transition | 波次 |
+| CSS property | RUI 字段 | keyframes | transition | 备注 |
 |--------------|----------|-----------|------------|------|
-| `opacity` | `Style.opacity` | ✅ | ✅ | 已有 |
-| `transform` | `translate/scale/rotate` + `TransformList` | ✅ | ✅ | 已有；ANIM-2 统一 matrix 路径 |
-| `translate` / `scale` / `rotate` | 同上 | ✅ | ✅ | 已有 |
-| `filter` | `Style.filter` | 🔜 | 部分 | ANIM-2 |
-| `backdrop-filter` | `Style.backdrop_blur` + filter | 🔜 | 🔜 | ANIM-2 |
+| `opacity` | `Style.opacity` | ✅ | ✅ | |
+| `transform` | `translate/scale/rotate` + `TransformList` | ✅ | ✅ | `all` 走 5 元组 packed |
+| `translate` | `Style.translate` | ✅ | ✅ | 显式 `transition: translate` |
+| `scale` / `rotate` | `Style.scale` / `rotate_deg` | ✅ | ✅ | 显式 `transition: scale \| rotate`；不进 `all` |
+| `filter` | `Style.filter` | ✅ | ✅ | `FilterTween` + `interpolate_filter_lists` |
+| `backdrop-filter` | `Style.backdrop_blur` | ✅ | ✅ | 半径标量 |
 
 ### 3.2 B 层 — 绘制、不触 layout
 
-| CSS property | RUI 字段 | keyframes | transition | 波次 |
+| CSS property | RUI 字段 | keyframes | transition | 备注 |
 |--------------|----------|-----------|------------|------|
-| `background-color` | `Style.bg_color` | 🔜 | ✅ | ANIM-2 |
-| `border-color` | `border_color` / sides | 🔜 | ✅ | ANIM-2 |
-| `outline-color/width/offset` | outline_* | 🔜 | ✅ | ANIM-2 |
-| `box-shadow` | shadow_* + extra_shadows | 🔜 | 部分 | ANIM-2 |
-| `border-radius` | `Style.radii` | 🔜 | 🔜 | ANIM-2 |
+| `background-color` | `Style.bg_color` | ✅ | ✅ | 色走 `lerp_text_rgba`（与 keyframes 同函数） |
+| `border-color` | `border_color` / sides | ✅ | ✅ | 同上 |
+| `outline-color/width/offset` | outline_* | ✅ | ✅ | |
+| `box-shadow` | 主 `shadow_*` | ✅ | ✅ | `extra_shadows` 列表不插值（§1.2） |
+| `border-radius` | `Style.radii` | ✅ | ✅ | |
+| `background-position` | `Style.bg_position` `[x,y]` 0–1 | ✅ | ✅ | 关键词/`%`；绘制偏移 gradient UV |
+| `clip-path` | `Style.clip_path` | ✅ | ✅ | `ClipPathTween` = `ClipPath::interpolate`；`path()`/`url()` — |
 
-### 3.3 C 层 — 布局动画（Q2）
+### 3.3 C 层 — 布局动画
 
-| CSS property | RUI / Taffy | keyframes | transition | 波次 |
+| CSS property | RUI / Taffy | keyframes | transition | 备注 |
 |--------------|-------------|-----------|------------|------|
-| `width` / `height` | `size` | 🔜 | 🔜 | ANIM-3 |
-| `min-width/height` | `min_size` | 🔜 | 🔜 | ANIM-3 |
-| `max-width/height` | `max_size` | ✅ max-h | ✅ max-h | ANIM-3 泛化 |
-| `padding-*` | `padding` | 🔜 | 🔜 | ANIM-3 |
-| `margin-*` | `margin` | 🔜 | 🔜 | ANIM-3 |
-| `gap` | `gap` | 🔜 | 🔜 | ANIM-3 |
-| `border-width` | `border_width*` | 🔜 | 🔜 | ANIM-3 |
-| `flex-grow/shrink/basis` | flex_* | 🔜 | 🔜 | ANIM-3 |
-| `font-size` | `TextStyle.size` | 🔜 | 🔜 | ANIM-4 |
-| `line-height` | TextStyle leading | 🔜 | 🔜 | ANIM-4 |
-| `letter-spacing` | TextStyle | 🔜 | 🔜 | ANIM-4 |
+| `width` / `height` | `size` | ✅ | ✅ | 关键字需 `interpolate-size` / `calc-size()` |
+| `min-width/height` | `min_size` | ✅ | ✅ | |
+| `max-width/height` | `max_size` | ✅ | ✅ | `auto` → `used_layout` |
+| `padding-*` | `padding` | ✅ | ✅ | |
+| `margin-*` | `margin` | ✅ | ✅ | |
+| `gap` | `gap` | ✅ | ✅ | |
+| `border-width` | `border_width*` | ✅ | ✅ | |
+| `flex-grow/shrink/basis` | flex_* | ✅ | ✅ | |
+| `grid-template-rows` | 等长 `fr` 列表 | ✅ | ✅ | 1 轨 Scalar，2+ FrList；不等长 discrete |
+| `grid-template-columns` | 同上 | ✅ | ✅ | |
+| `font-size` | `TextStyle.size` | ✅ | ✅ | |
+| `line-height` | TextStyle leading | ✅ | ✅ | |
+| `letter-spacing` | TextStyle | ✅ | ✅ | |
+| `zoom` | `Style.zoom` | ✅ | ✅ | 缩放布局尺寸 |
 
-### 3.4 D 层 — 文本 / 继承（Q3）
+### 3.4 D 层 — 文本 / 继承
 
-| CSS property | RUI 字段 | 说明 | 波次 |
-|--------------|----------|------|------|
-| `color` | `TextStyle.color` | 继承；tick 写叶或容器 | ANIM-4 |
-| `text-decoration-color` | `TextStyle.decoration_color` | 继承 | ANIM-4 |
-| `-webkit-text-fill-color` | 映射 `TextStyle.color` | shadcn 兼容 | ANIM-4 |
-| `caret-color` | Input chrome | 子模块 | ANIM-4 |
+| CSS property | RUI 字段 | keyframes | transition | 备注 |
+|--------------|----------|-----------|------------|------|
+| `color` | `TextStyle.color` | ✅ | ✅ | 继承；tick 写叶或容器 |
+| `text-decoration-color` | `TextStyle.decoration_color` | ✅ | ✅ | |
+| `-webkit-text-fill-color` | 映射 `TextStyle.color` | ✅ | ✅ | shadcn 兼容 |
+| `caret-color` | Input chrome | — | — | 子模块，不进 `PropertyId` 表 |
 
-**实现要点：** `AnimatableProperty` 带 `TargetSlot::Style(…)` | `TargetSlot::TextStyle(…)` | `TargetSlot::InheritedText(…)`；tick 遍历子树时 **只改 animated layer**，不破坏 specified。
+tick **只改 animated layer**，不破坏 specified。契约测：`crate_tests/style/anim_freeze.rs`。
 
 ---
 
@@ -215,92 +281,93 @@ style/easing.rs           cubic-bezier + steps/jump-*
 utils/motion.rs           不变：Element transition 配方
 ```
 
-**冻结规则（ANIM-0 起）：** 禁止新增 `KeyframeStop` 字段；禁止新增 `TransitionProperty` 枚举成员而不进注册表。
+**冻结规则：** 禁止新增 `KeyframeStop` 字段；新 animatable 属性必须进 `PropertyId` 注册表 **并改本文 §3 / §1.2**，禁止静默扩面。`PropertyId` discriminant 须保持 **< 64**。
 
 ---
 
-## 6. 一次性落地 To-Do（按依赖顺序）
+## 6. 落地史（ANIM-0～6，已全部完成）
 
-> 勾选仅在本文维护。完成一项勾一项；**不按组件拆 PR**，按 ANIM 波次合并。
+> 以下勾选是历史记录，**不再排期**。新工作以 §1.2 / §3 冻结面为准。
 
 ### ANIM-0 — 治理与冻结（1–2 天）
 
-- [ ] **A0.1** 在 [`AUTHORITY.md`](../AUTHORITY.md) §1.2 争议路由增加 ANIM 域 → 本文  
-- [ ] **A0.2** [`animation_and_motion.md`](animation_and_motion.md) 顶部链接本文为「对齐执行源」  
-- [ ] **A0.3** 代码注释 / PR 模板：**禁止** 扩展 `KeyframeStop` 手工字段（CI 可选 grep 检查）  
-- [ ] **A0.4** Gallery 增「ANIM 对齐」占位页（后续逐波填 demo）
+- [x] **A0.1** 在 [`AUTHORITY.md`](../AUTHORITY.md) §1.2 争议路由增加 ANIM 域 → 本文  
+- [x] **A0.2** [`animation_and_motion.md`](animation_and_motion.md) 顶部链接本文为「对齐执行源」  
+- [x] **A0.3** 代码注释 / PR 模板：**禁止** 扩展 `KeyframeStop` 手工字段（CI 可选 grep 检查）  
+- [x] **A0.4** Gallery 增「ANIM 对齐」占位页（后续逐波填 demo）
 
 ### ANIM-1 — Specified / Used 基底 + 单轨插值（核心，~1–2 周）
 
-- [ ] **A1.1** 新建 `style/animatable.rs`：`PropertyId`、`AnimatableValue`、`LayoutImpact::{None,Paint,Layout}`  
-- [ ] **A1.2** 新建 `style/animatable_table.rs`：注册 A 层现有属性（opacity/transform/max-height）  
-- [ ] **A1.3** 新建 `style/specified.rs`：`SpecifiedPresent`；`Element` 增加 `specified_present` / `present` 分槽（或等价 RefCell 侧车）  
-- [ ] **A1.4** 新建 `style/used_layout.rs`：`UsedLayout`；`layout_tree` layout 完成后写入 `content_height` / `content_width`  
-- [ ] **A1.5** 重构 `tick_element_animations`：采样前 `KeyframeBase` 来自 `specified + used_layout`  
-- [ ] **A1.6** 重构 `tick_element_transitions`：`specified_prop_value` 改为读 Specified 槽  
-- [ ] **A1.7** `AnimationLock` 改为 `EnumSet<PropertyId>` 或位图，删除手写 match  
-- [ ] **A1.8** 迁移 `KeyframeStop` → `HashMap<PropertyId, AnimatableValue>`（保留 builder API 兼容层）  
-- [ ] **A1.9** 新建 `style/easing.rs`：实现 `steps(n, start|end)`、`jump-*`  
-- [ ] **A1.10** 测试：cascaded base 不漂移；transition 目标不 mid 误判；animation 移除恢复 specified  
-- [ ] **A1.11** 测试：used_layout.content_height 在 height:auto 子树正确
+- [x] **A1.1** 新建 `style/animatable.rs`：`PropertyId`、`AnimatableValue`、`LayoutImpact::{None,Paint,Layout}`  
+- [x] **A1.2** 新建 `style/animatable_table.rs`：注册 A 层现有属性（opacity/transform/max-height）  
+- [x] **A1.3** 新建 `style/specified.rs`：`SpecifiedPresent`；`Element` 增加 `specified_present` / `present` 分槽（或等价 RefCell 侧车）  
+- [x] **A1.4** 新建 `style/used_layout.rs`：`UsedLayout`；`layout_tree` layout 完成后写入 `content_height` / `content_width`  
+- [x] **A1.5** 重构 `tick_element_animations`：采样前 `KeyframeBase` 来自 `specified + used_layout`  
+- [x] **A1.6** 重构 `tick_element_transitions`：`specified_prop_value` 改为读 Specified 槽  
+- [x] **A1.7** `AnimationLock` 改为 `EnumSet<PropertyId>` 或位图，删除手写 match  
+- [x] **A1.8** 迁移 `KeyframeStop` → `HashMap<PropertyId, AnimatableValue>`（保留 builder API 兼容层）  
+- [x] **A1.9** 新建 `style/easing.rs`：实现 `steps(n, start|end)`、`jump-*`  
+- [x] **A1.10** 测试：cascaded base 不漂移；transition 目标不 mid 误判；animation 移除恢复 specified  
+- [x] **A1.11** 测试：used_layout.content_height 在 height:auto 子树正确
 
 ### ANIM-2 — A+B 层属性全覆盖（~1 周）
 
-- [ ] **A2.1** 注册表加入：filter、backdrop-filter、bg/border/outline color、box-shadow 分量、border-radius  
-- [ ] **A2.2** keyframes 内置规则补全：filter fade、shadow tween（与 Toast 对齐）  
-- [ ] **A2.3** `apply_keyframe_sample` 泛化为表驱动  
-- [ ] **A2.4** Tailwind `animate-*` 回归；golden 如有则更新  
-- [ ] **A2.5** Gallery：合成层 + 阴影/圆角 keyframes demo
+- [x] **A2.1** 注册表加入：filter、backdrop-filter、bg/border/outline color、box-shadow 分量、border-radius  
+- [x] **A2.2** keyframes 内置规则补全：filter fade、shadow tween（与 Toast 对齐）  
+- [x] **A2.3** `apply_keyframe_sample` 泛化为表驱动  
+- [x] **A2.4** Tailwind `animate-*` 回归；golden 如有则更新  
+- [x] **A2.5** Gallery：合成层 + 阴影/圆角 keyframes demo
 
 ### ANIM-3 — C 层布局动画 + 优化（~2 周）
 
-- [ ] **A3.1** 注册表加入 C 层（§3.3 全表）  
-- [ ] **A3.2** `AppState`：`LayoutDirtySet` + 帧末 coalesced layout  
-- [ ] **A3.3** `mark_element_layout_dirty_subtree` 与 animation tick 集成  
-- [ ] **A3.4** `will_change` 字段 + compositor 快路径  
-- [ ] **A3.5** intrinsic `max-height` / `height` 动画：读 `used_layout`，**删除** Accordion 组件测量  
-- [ ] **A3.6** 备选：`grid-template-rows: 0fr→1fr` 作为 `accordion-down` 第二实现（feature flag 对比）  
-- [ ] **A3.7** 性能测试：Accordion 展开 layout 次数 ≤ 2；10 节点 padding 动画 1 layout/frame  
-- [ ] **A3.8** Gallery：layout 动画段（width/padding/gap）
+- [x] **A3.1** 注册表加入 C 层（§3.3 全表）  
+- [x] **A3.2** `AppState`：`LayoutDirtySet` + 帧末 coalesced layout  
+- [x] **A3.3** `mark_element_layout_dirty_subtree` 与 animation tick 集成  
+- [x] **A3.4** `will_change` 字段 + compositor 快路径  
+- [x] **A3.5** intrinsic `max-height` / `height` 动画：读 `used_layout`，**删除** Accordion 组件测量  
+- [x] **A3.6** 备选：`grid-template-rows: 0fr→1fr` 作为 `accordion-down` 第二实现（`RUI_ACCORDION_GRID_FR=1` / `set_accordion_use_grid_fr`，默认仍走 max-height keyframes）  
+- [x] **A3.7** 性能测试：Accordion 展开 layout 次数 ≤ 2；10 节点 padding 动画 1 layout/frame  
+- [x] **A3.8** Gallery：layout 动画段（width/padding/gap）
 
 ### ANIM-4 — D 层文本 / 继承 + 作者面（~1–2 周）
 
-- [ ] **A4.1** `TargetSlot::TextStyle` / `InheritedText`；tick 写 `Element.text_style`  
-- [ ] **A4.2** 实现 `color` / `text-decoration-color` transition + keyframes  
-- [ ] **A4.3** `cascade_inheritable_text_style` 与 specified 文本槽协同（animated 不污染 inherit 源）  
-- [ ] **A4.4** `@keyframes` **CSS 文本解析** → `register_keyframes`（`from/to/百分比` + 属性名）  
-- [ ] **A4.5** `prefers-reduced-motion`：读 theme/media；动画 duration→0 或 disable  
-- [ ] **A4.6** 删除组件内重复 `dialog_css_anim` 式工厂，统一 `keyframes_anim_entry` + preset  
-- [ ] **A4.7** Gallery：文本 color 渐变、inherit 动画 demo
+- [x] **A4.1** `TargetSlot::TextStyle` / `InheritedText`；tick 写 `Element.text_style`  
+- [x] **A4.2** 实现 `color` / `text-decoration-color` transition + keyframes  
+- [x] **A4.3** `cascade_inheritable_text_style` 与 specified 文本槽协同（animated 不污染 inherit 源）  
+- [x] **A4.4** `@keyframes` **CSS 文本解析** → `register_keyframes`（`from/to/百分比` + 属性名）  
+- [x] **A4.5** `prefers-reduced-motion`：读 theme/media；动画 duration→0 或 disable  
+- [x] **A4.6** 删除组件内重复 `dialog_css_anim` 式工厂，统一 `keyframes_anim_entry` + preset  
+- [x] **A4.7** Gallery：文本 color 渐变、inherit 动画 demo
 
 ### ANIM-5 — 迁移、清理、DoD（~1 周）
 
-- [ ] **A5.1** **Accordion**：删 `measure_panel_natural_height`、`measured_height`、`exit_from_height`；仅 presence + class  
-- [ ] **A5.2** **Dialog/Modal**：seed 只写 specified opacity/scale；used 由引擎  
-- [ ] **A5.3** **Toast**：确认仍走 transition+motion；shadow/filter 走注册表  
-- [ ] **A5.4** 全库 `cargo test` + Gallery ANIM 页目视验收  
-- [ ] **A5.5** 更新 [`component_inventory.md`](../components/component_inventory.md) ANIM 列  
-- [ ] **A5.6** 废弃旧 API：`KeyframeStop` 字段 builder 标记 `deprecated` → 下一大版本删除  
-- [ ] **A5.7** 文档：§3 矩阵「✅」列与实现 1:1 对齐审计
+- [x] **A5.1** **Accordion**：删 `measure_panel_natural_height`、`measured_height`、`exit_from_height`；仅 presence + class  
+- [x] **A5.2** **Dialog/Modal**：seed 只写 specified opacity/scale；used 由引擎  
+- [x] **A5.3** **Toast**：确认仍走 transition+motion；shadow/filter 走注册表  
+- [x] **A5.4** 全库 `cargo test` + Gallery ANIM 页目视验收  
+- [x] **A5.5** 更新 [`component_inventory.md`](../components/component_inventory.md) ANIM 列  
+- [x] **A5.6** 废弃旧 API：`KeyframeStop` 字段 builder 标记 `deprecated` → 下一大版本删除  
+- [x] **A5.7** 文档：§3 矩阵「✅」列与实现 1:1 对齐审计
 
-### ANIM-6 — 延后（不挡 v1 DoD）
+### ANIM-6 — 延后项落地（MVP，不挡 v1 DoD）
 
-- [ ] **A6.1** Scroll-driven `animation-timeline`  
-- [ ] **A6.2** `animation-composition: accumulate`  
-- [ ] **A6.3** `interpolate-size` / intrinsic keyword 动画  
-- [ ] **A6.4** `background-position` / `clip-path` keyframes  
+- [x] **A6.1** Scroll/View `animation-timeline`：`scroll()` / `view()` 用最近滚动器 / 视口进度采样；不推进 elapsed，不泵 idle 帧
+- [x] **A6.2** `animation-composition: add | accumulate`：按列表顺序与当前 Style（underlying）合成；标量/色/向量相加，transform 平移旋转相加、scale 相乘
+- [x] **A6.3** `interpolate-size: allow-keywords`：transition 对 `auto` 尺寸读 `used_layout` 当端点；**`calc-size()`** 求值器（`size` 关键字）已接 keyframes / transition
+- [x] **A6.4** `background-position` / `clip-path`（`inset` / `polygon` / `circle` / `ellipse`）进属性表 + 绘制（gradient UV 偏移 / AABB + SDF polygon）
+- [x] **A6.5** 具名 `scroll-timeline` / `view-timeline`（`--name` 跨节点 + `animation-range`）
 
 ---
 
-## 7. 验收标准（整项 ANIM v1 DoD）
+## 7. 冻结验收（原 ANIM v1 DoD）
 
 1. **零组件测量**：Accordion / Collapsible 无 `measure_*_height`；intrinsic 全走 `used_layout`。  
-2. **属性表**：§3 矩阵 A+B+C+D 的 v1 行全部为 ✅。  
-3. **双引擎共用**：任意属性同时支持 transition + keyframes，同一插值函数。  
+2. **属性表**：§3 矩阵与实现 1:1（无 🔜）。  
+3. **双引擎共用**：代表性属性（color / width / filter / clip-path polygon / border-radius）同时支持 transition + keyframes，同一插值函数（`anim_freeze`）。  
 4. **Specified 不漂移**：动画 mid 不写入 specified；结束行为符合 `fill-mode`。  
-5. **Text color**：`<Label>` / 文本叶 `transition: color` + `@keyframes fade` 可用。  
-6. **Layout 预算**：§4.3 性能预算测试 CI 通过。  
-7. **Reduced motion**：系统偏好开启时 Gallery 动画可验证跳过。  
+5. **Text color**：`<Label>` / 文本叶 `transition: color` + `@keyframes` 可用。  
+6. **负 delay**：`animation-delay: -500ms` 在 duration=1s 时 t=0 采样周期中点。  
+7. **Reduced motion**：系统偏好开启时时长归零。  
 8. **Regression**：Dialog / Toast / Carousel 现有测绿。
 
 ---
@@ -313,7 +380,7 @@ utils/motion.rs           不变：Element transition 配方
 | Layout 动画掉帧 | coalescing + subtree；超预算降级 snap |
 | Text 继承 + 动画冲突 | specified 文本 inherit 源与 present 分离；layout 前 cascade |
 | 与 reactive_sync 写 Style 冲突 | reactive 只写 specified；tick 只写 present |
-| 范围膨胀 | §1.2 硬边界；ANIM-6 不纳入 v1 DoD |
+| 范围膨胀 | §1.2 硬边界；禁止静默扩面 |
 
 ---
 
@@ -324,8 +391,9 @@ utils/motion.rs           不变：Element transition 配方
 | 分层决策 | [`animation_and_motion.md`](animation_and_motion.md) |
 | Layout 子树 | [`layout_subtree.md`](layout_subtree.md) |
 | Damage | [`damage.md`](damage.md) |
-| 引擎现状 | `crates/rui/src/style/{keyframes,animation,element_style}.rs` |
-| Accordion 待删测量 | `crates/rui/src/components/accordion.rs` |
+| 引擎现状 | `crates/rui/src/style/{timing,waapi,keyframes,animation,animatable,element_style,clip_path}.rs` |
+| 冻结契约测 | `crates/rui/src/crate_tests/style/anim_freeze.rs` |
+| Accordion | `crates/rui/src/components/accordion.rs`（无组件测高） |
 | 文本继承 | `layout_tree.rs` → `cascade_inheritable_text_style` |
 
 ---
@@ -335,3 +403,8 @@ utils/motion.rs           不变：Element transition 配方
 | 日期 | 说明 |
 |------|------|
 | 2026-08-29 | 初版：三问结论 + 属性矩阵 + ANIM-0~6 一次性 To-Do |
+| 2026-09-05 | ANIM-0～5 落地：Specified/Used 双槽、`PropertyId` 单轨、`steps()`、`@keyframes` 文本解析、`used_layout`、Accordion/Collapsible 去测高、文本 color transition、reduced-motion。ANIM-6 仍延后。 |
+| 2026-09-05 | A3.6：`grid-template-rows` fr 插值 + Accordion `0fr→1fr` 第二路径（feature flag）。 |
+| 2026-09-05 | ANIM-6 延伸：完整 `polygon`/`circle`/`ellipse` clip-path、具名 scroll/view-timeline、`calc-size()`。 |
+| 2026-09-05 | **冻结**：§3 追上实现；`ClipPathTween` 双引擎同插值；独立 `scale`/`rotate` transition；色 transition 改走 `lerp_text_rgba`；`anim_freeze` 契约测。 |
+| 2026-09-05 | 三层动画模型：引擎 `Timing` + spring、声明式 `spring()`、编程式句柄子集（丢掉 DocumentTimeline / Promise / 编程面 composite）。手册 §1.3。 |

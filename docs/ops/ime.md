@@ -2,6 +2,8 @@
 
 对应实现计划 [ENGINEERING_IMPLEMENTATION_PLAN.md](../archive/ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-1.1**。
 
+> **平台层说明**：Win32 IME 大块代码仍在 [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs)，尚未迁入 [`platform/`](../../crates/rui/src/platform/)。`platform` 职责边界与重构方向见 [`platform.md`](../engine/platform.md)。
+
 ## 目标
 
 1. **preedit 稳定上屏**：中日韩组字预览正确；Commit 不丢字、不插错位；有选区时组字开始先删选区。  

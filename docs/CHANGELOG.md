@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- **2026-09-06 平台层文档**：新增 [`platform.md`](engine/platform.md)——`crate::platform` 现状（OS 级 `cfg`、Windows 特化 vs macOS/Linux stub）、散落 OS 逻辑清单与 desktop/mobile/embedded 目标结构；更新 AUTHORITY / ENGINEERING / multi_window / ime / stack 等引用。
+
 ### Experimental（未进 SemVer 承诺面）
 
 | API | 路径 | 说明 |
@@ -18,10 +20,17 @@
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
 | `tray_icon` / `TrayIcon` / `request_exit` / `system_tray_native` | `app/tray.rs` · `ui_bridge.rs` | WP-3.6；默认 stub；`system-tray` 才有原生副作用 |
+| `is_remote_src` / `set_remote_asset_fetcher` / `fetch_remote_bytes` / `RemoteAssetFetcher` | `media/remote.rs` | **remote-asset**：远程 `src` 入口；HTTP 由应用注入；默认关 |
 | `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
 | `virtual_masonry` / `VirtualMasonryBuilder` | `components/virtual_masonry.rs` · `utils/virtual_masonry.rs` | WP-3.10；变高瀑布流虚拟化；`item_height` + 测宽缓存；未进 SemVer |
 
-- **2026-09-05 Sidebar `collapsible="icon"`**：rail 宽 200ms linear 收到 3rem 图标轨；分组标题/搜索框按 ShadCN `-mt-8 opacity-0` 收高度；菜单按钮 `size-8` + `p-2`，非图标文案淡出并退出 flex。选中项不再切换字重（400↔500 会让 cosmic-text 重测字形、标签下跳）。
+- **2026-09-05 三层动画模型**：引擎 `Timing` + spring 积分；声明式 `transition: … spring()`；编程式 `Animation` 句柄（`run` / `seek` / `set_rate` / `on_finish`）。丢掉 DocumentTimeline、Promise、编程面 composite。手册 [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) §1.3。
+- **2026-09-05 gallery wgpu 管线**：`inst_id` 从 VertexOutput loc 15 打进 loc 14 `extra_and_id`，避开 `max_inter_stage_shader_variables`（0..=14）。
+- **2026-09-05 动画扩面收进冻结面**：编程式句柄（`Animation`/`KeyframeEffect`）、`linear()` intern、`clip-path: path()`/`url(#id)`、`offset-path`、`transform-origin` 动画（槽 60）、`extra_shadows` 列表 lerp、两层 `GpuClipPoly` AND。手册 §1.2 / §1.3。
+- **2026-09-05 动画域已冻结**：[`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) 追上实现；`clip-path` transition 与 keyframes 共用 `ClipPath::interpolate`；独立 `scale`/`rotate` `transition-property`；色 transition 走同一 `lerp_text_rgba`。CI `anim_freeze`。
+- **2026-09-05 overflow 圆角 clip**：子级裁剪走 SDF 圆角盒（与填充同一 `sd_round_box`），不再用 16 顶点折线切成八角。Gallery「布局 / 文本」增加 `writing-mode` 五值卡片。
+- **2026-09-05 ANIM-6 延伸**：完整 `clip-path`（`polygon` / `circle` / `ellipse` 命中 + SDF even-odd）、具名 `scroll-timeline` / `view-timeline` + `animation-range`、`calc-size()` 求值器（`size` 关键字）。
+- **2026-09-05 ANIM-6**：`grid-template-rows/columns` 等长 `fr` 列表为通用 C 层动画；`animation-composition` add/accumulate；`interpolate-size: allow-keywords`；`scroll()`/`view()` timeline；`background-position` / `clip-path: inset()`。
 - **2026-09-05 文档收口**：`docs/` 根目录只留权威规范 + changelog；手册进 `docs/components` / `engine` / `ops` / `comparison`；冻结计划与 scratch 进 `docs/archive`。Gallery 产品面走查后 inventory 升 `verified`（SemVer 0.1 名单不自动扩大，见 `COMPONENT_LIBRARY.md` §5.2.1）。
 - Timeline 默认圆点 20px、图标按圆点 70% 缩放（约 14px），避免指示过小。
 - **2026-09-05 ADR-10 第 1 档**：`Element` 改为 `Box<ElementInner>` 堆句柄（`size_of` = 指针）；TLS 回收卸载的 `ElementInner`（保留树对应 GPUI arena，**不是**每帧 bump）；`stack_budget` 断言句柄契约与 slab 回收。
@@ -59,6 +68,11 @@
 - 盒模型单位：布局期真 `vw`/`vh`/`dvh`、局部 `em`、`calc(A ± B)`（含 `calc(100% - Npx)` 相对父 content box）；逻辑 `*-inline`/`*-block` 双值；`row-gap`/`column-gap`。
 - B15 分边 border：`border_left` / `border_top_width` / `borderWidth="4px 8px"`（1–4 值）；Taffy 分边；均匀 SDF、非均匀四边条绘制。
 - 窗口缩放 fast 布局会重烘焙 `vw`/`vh`/`em`/`calc`，视口单位随窗口实时变化。
+
+- **2026-09-06 字体覆盖验收**：Gallery **文本** 卡「7) 字体族 / 字重 / 行高覆盖」；手册 [`font_strategy.md`](engine/font_strategy.md) 写清签署后冻结口径（默认栈 / VF / CSS 匹配 / 伪粗）。`bundled-inter` 仍未实现。
+- **2026-09-06 WP-OVL.1**：无头壳 [`utils/viewport_modal`](../crates/rui/src/utils/viewport_modal.rs) — underlay + 视口舞台 + `ModalSurfaceMotion`；RSX `<ViewportModal>` / `<ViewportModalContent>`；Gallery `ViewportModalShowcase`（DialogFade RSX + SheetSlide Builder）。不进 prelude。存量 Dialog/Sheet 薄包装仍归 WP-OVL.4。DialogFade 对齐 Dialog 的 `{id}__modal_zoom`，否则遮罩停在 opacity 0、退场 ExitGate 完不成。SheetSlide 入场须传入视口滑行距离；退场重建须重新种面板 transform，否则遮罩淡出后面板停在贴边、卸树后右上角残留。局部 `Portal mount=` 跟宿主裁剪/滚动，不按根 portal 逃逸。
+- **2026-09-05 WP-OVL.2 / WP-OVL.3**：无头壳 [`utils/anchored_overlay`](../crates/rui/src/utils/anchored_overlay.rs) — Trigger / Point / Unanchored 三种定位；RSX `<AnchoredOverlay>` / `<AnchoredOverlayContent>`；Point 用 `Signal<[f32;2]>` + `drag_handle`。Gallery「浮层 / 反馈」`AnchoredOverlayShowcase`。不进 prelude。
+- **2026-09-05 Unanchored 开合**：去掉多余视口舞台；身份 `ATTR_FLOATING` + 开关 `ATTR_FLOATING_TRIGGER`（`focusId` / `.trigger_id`），避免外点关闭与 toggle 对打。作者 `fixed` / inset 相对窗口即可。
 
 ### Notes
 

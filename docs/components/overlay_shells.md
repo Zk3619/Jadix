@@ -1,9 +1,9 @@
 # 浮层无头壳：`anchored_overlay` 与 `viewport_modal`
 
-> **状态**：设计收敛（**未落地**）。  
+> **状态**：**WP-OVL.1 ☑** `utils/viewport_modal` + RSX `<ViewportModal*>`；**WP-OVL.2 ☑** `utils/anchored_overlay` 三种定位 + RSX `<AnchoredOverlay*>`；**WP-OVL.3 ☑** Gallery 双写展示（含 Point 标题栏拖拽）。**WP-OVL.4** 存量 Dialog/Popover 薄包装仍未做。  
 > **从属**：[COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §4.4（浮层单一路径 · WP-3.4 ☑）、[headless.md](headless.md)、[custom_components.md](custom_components.md)。  
 > **背景**：[custom_components_suggestions.md](custom_components_suggestions.md)（薄壳 + 下沉原语）、[plans/组件交互下沉_145e4c9e.plan.md](../plans/组件交互下沉_145e4c9e.plan.md)（WP-PRIM.1–4 已 ☑）。  
-> **日期**：2026-09-02  
+> **日期**：2026-09-02；**落地** 2026-09-05  
 
 本文把 [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §4.4 的两条浮层路径，收敛为 **`utils` 层两个一等无头编排壳**。目标是：新做一个中等浮层（含自定义随意放置面板）可在数百行内完成，且不复制 Popover / Dialog 里的 portal / presence / motion 仪式。
 
@@ -49,7 +49,7 @@
         │
         ▼
 ┌───────────────────────────────────────────────────┐
-│  utils/anchored_overlay.rs   utils/viewport_modal.rs │  ← 本文：编排壳（计划）
+│  utils/anchored_overlay.rs   utils/viewport_modal.rs │  ← 本文：编排壳（均已落地）
 └───────────────────────────────────────────────────┘
         │
         ├── utils/presence · utils/motion · utils/keyed_overlay
@@ -74,8 +74,8 @@ primitives/portal · primitives/overlay · layout hoist
 - `reactive_anchor` + 0×0 占位（或等价 view id）
 - 浮层体 `isolate_reads`（**禁止** `untrack` 包整棵面板）
 - `use_floating_presence` + `apply_floating_panel_motion`（委托 internal，逐步升为 `pub` 或迁入壳模块）
-- 按定位模式调用 `mark_floating` / `mark_floating_at_point` / 无 `mark_floating`
-- `apply_stored_floating_place` + `mount_anchored_overlay`（或 unanchored 时 `panel_block_clicks`）
+- 按定位模式调用 `mark_floating` / `mark_floating_at_point` / Unanchored 只打身份 `ATTR_FLOATING`（无 PLACEMENT / POINT）
+- `apply_stored_floating_place`（Trigger / Point）+ 一律 `mount_anchored_overlay`（**不要**为 Unanchored 再套视口舞台）
 
 对应 [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §4.4 第一行：**锚定浮层**。
 
@@ -87,12 +87,12 @@ primitives/portal · primitives/overlay · layout hoist
 |------|--------------|----------|----------|
 | **Trigger** | `Placement::Trigger { focus_id, side, align, gap }` | trigger 的 layout 矩形 + `compute_anchored_placement` | Select、Dropdown、有锚 Popover、Tooltip |
 | **Point** | `Placement::Point { x, y, gap }` | 视口坐标 + `compute_cursor_menu_placement` | ContextMenu、**随意放置面板**、拖拽后更新 `(x,y)` |
-| **Unanchored** | `Placement::Unanchored` | 不 `mark_floating`；面板自管 `fixed` / `inset` / flex | 无锚 Popover、布局驱动（居中条、贴角 HUD） |
+| **Unanchored** | `Placement::Unanchored` | 作者自管 `fixed` / `inset` / flex；身份 `ATTR_FLOATING` 不跑 placement sync | 无锚 Popover、贴角 HUD |
 
 **随意放置**走 **Point** 或 **Unanchored**，不走视口模态。
 
 - **Point**：坐标是唯一真相；拖拽 = 更新 `Signal<[f32; 2]>` 后重建或刷新 `ATTR_FLOATING_POINT`。  
-- **Unanchored**：不用 `sync_floating_placement` 写 xy；适合百分比 / flex 居中。  
+- **Unanchored**：不用 `sync_floating_placement` 写 xy；`fixed` + `bottom`/`right` 相对**窗口**解析，**不要**再包全视口 stage。开关按钮须登记 `focusId` / `.trigger_id`（或 `{id}__ao_trigger`），否则外点关闭会与 toggle 对打。每个实例独立 `open` 信号。  
 - ContextMenu 先例：点定位后可 `remove(ATTR_FLOATING_TRIGGER)`，避免误判为「点在 trigger 上」。
 
 可选第四态（后续）：`Placement::Manual` — `sync` 在 `strategy=manual` 时跳过 xy 重算，只读 `{id}__floating_place` 信号（拖拽按住期间减少与 placement 引擎打架）。**首版可不做**，Point 模式更新坐标即可。
@@ -117,29 +117,23 @@ anchored_overlay("color-picker")
     })
     .kind(OverlayKind::Popover)
     .motion(FloatingMotionKind::Fade)
-    .child(|| isolate_reads(|| build_panel()))
-    .into()
+    .child(|| build_panel())
 
-// Point 模式 — 随意放置 / 可拖拽改坐标
+// Point 模式 — 随意放置 / 可拖拽改坐标（`pos` 必须是 Signal，岛内 get() 才能订阅）
 let pos = use_signal("palette-pos", || [120.0_f32, 80.0]);
 anchored_overlay("palette")
     .open(open)
-    .placement(Placement::Point {
-        x: pos.get()[0],
-        y: pos.get()[1],
-        gap: 0.0,
-    })
+    .placement(Placement::Point { pos, gap: 0.0 })
     .kind(OverlayKind::Popover)
     .child(|| build_palette())
-    .into()
 
-// Unanchored 模式
+// Unanchored 模式 — 开关按钮的 id 必须登记，否则点按钮=外点关 + toggle 再开
 anchored_overlay("hud")
     .open(open)
+    .trigger_id("hud-btn")
     .placement(Placement::Unanchored)
     .kind(OverlayKind::Popover)
-    .child(|| panel.fixed().inset("1rem", "auto", "auto", "1rem").child(...))
-    .into()
+    .child(|| panel.fixed().top("1rem").right("1rem").child(...))
 ```
 
 壳内部固定顺序（作者不得打乱）：
@@ -148,10 +142,10 @@ anchored_overlay("hud")
 2. `reactive_anchor(view_id, \|\| { ... })`  
 3. `floating_portal_phase(id, open, presence, kind, mode)` → `None` 则返回 0×0  
 4. `isolate_reads(\|\| child())` 构建 panel  
-5. 按 `Placement` 打 `mark_floating*` / 或跳过  
+5. 按 `Placement` 打 `mark_floating*`；Unanchored 只设 `ATTR_FLOATING` + 可选 `ATTR_FLOATING_TRIGGER`（无 PLACEMENT / POINT）  
 6. `apply_stored_floating_place`（Trigger / Point）  
 7. `apply_floating_panel_motion(...)`  
-8. `mount_anchored_overlay(panel, oz.panel)` 或 unanchored 时 `panel_block_clicks(panel, oz.panel)`  
+8. `mount_anchored_overlay(panel, oz.panel)`（三种模式同一入口；Unanchored **禁止** `mount_viewport_portal_stage`）  
 9. 外包 `reactive_placeholder_sized(view_id, 0, 0).pointer_events_box_none()`
 
 ### 3.4 与现有组件映射
@@ -302,7 +296,7 @@ Dialog / Sheet / CommandDialog 迁移后应只剩：**语义 Context、触发器
 |------|-----|------|
 | **原语（已有）** | [`primitives/overlay`](../../crates/rui/src/primitives/overlay.rs) · `overlay(z)` | 全屏 underlay：`color` / `opacity` / `backdrop_blur` / `close_on_click`；内部 `portal_panel` 提升到根叠层 |
 | **便捷封装（已有）** | [`utils/popup::underlay_close_on_click`](../../crates/rui/src/utils/popup.rs) | 模态点击关闭；委托 `overlay` |
-| **模态默认（internal）** | `build_modal_overlay` · [`modal_shell`](../../crates/rui/src/components/internal/modal_shell.rs) | Dialog/Sheet 默认 alpha / blur；**WP-OVL.1** 随 `viewport_modal` 公开为 `ShellOverlayOpts` |
+| **模态默认** | `build_modal_overlay` · [`viewport_modal::ShellOverlayOpts`](../../crates/rui/src/utils/viewport_modal.rs) | Dialog/Sheet 默认 alpha / blur；**WP-OVL.1 ☑** 公开 |
 | **产品样式** | Dialog / Sheet / AlertDialog | 在壳之上填语义色、variant scrim（[`semantic_tone`](../../crates/rui/src/style/semantic_tone.rs)） |
 
 **原则**：遮罩 = **无头原语 + 可选 utils 封装**；带圆角、variant、文案的仍是产品组件，不是第二层 Mask 组件。
@@ -364,6 +358,37 @@ ui! {
 
 局部遮罩**不进** Esc 栈亦可；若要与全局 Modal 叠层，需单独评估 `portal_sync` 与 z。
 
+#### 关键场景（Gallery `LocalOverlayShowcase`）
+
+圆角蓝底宿主为 100%。以其几何中心为中心，铺一层 **75% × 75%** 的圆角 scrim（半透明，宿主四边约 12.5% 露出）。再以 **遮罩中心** 为中心，在 scrim **上层** 放 **50% × 50%**（相对遮罩）的圆角黑底容器，容器内居中白字 `Label`。
+
+比例关系：黑底边长 = 宿主边长 × 0.75 × 0.50 = 宿主的 37.5%，且与宿主同心。
+
+`mount` 才决定叠层落点：源码写在宿主内或旁边都可以，布局都会把内容搬进宿主。局部遮罩**推荐写在宿主内**，关系更清楚，也避免 Portal 默认 `absolute inset 0` 在提升前对错 containing block。
+
+```rust
+ui! {
+    <Box id="card-host" relative=true w="22rem" h="14rem"
+         rounded="0.75rem" bg="#2563eb" overflow="hidden">
+        <Label color="white">"蓝色宿主"</Label>
+        <Portal id="card-scrim" mount="card-host">
+            <Box w="100%" h="100%" items="center" justify="center">
+                <Box w="75%" h="75%" rounded="0.65rem"
+                     bg="rgba(15,23,42,0.55)" backdrop_blur="12"
+                     items="center" justify="center">
+                    <Box w="50%" h="50%" rounded="0.5rem" bg="black"
+                         items="center" justify="center">
+                        <Label color="white">"遮罩上层说明"</Label>
+                    </Box>
+                </Box>
+            </Box>
+        </Portal>
+    </Box>
+}
+```
+
+不要对外层 scrim 设 `opacity`（会连黑底和白字一起变淡）；半透明写在 `bg` 的 alpha 上。模糊用 `backdrop_blur`。宿主必须 `overflow: hidden`：局部 `mount=` **不**走根 portal 的 `position:fixed` / 逃逸裁剪，滚动与圆角裁剪跟宿主走。
+
 ### 7.4 与两个浮层壳的分工
 
 | 壳 | 默认遮罩 |
@@ -376,7 +401,7 @@ ui! {
 ### 7.5 WP-OVL 对遮罩的交付
 
 - **不新增** `components/scrim.rs`。  
-- `viewport_modal` 公开 `ShellOverlayOpts`（从 `modal_shell` 提升）。  
+- `viewport_modal` 公开 `ShellOverlayOpts`（**WP-OVL.1 ☑**）。  
 - 在本文 + [`headless.md`](headless.md) 写清：**全屏 → `overlay`；局部 → `Portal mount`**。
 
 ---
@@ -439,10 +464,10 @@ reactive_placeholder_sized(view_id.clone(), 0.0, 0.0).pointer_events_box_none().
 ```rust
 anchored_overlay("my-float")
     .open(open)
-    .placement(Placement::Point { x: pos.get()[0], y: pos.get()[1], gap: 0.0 })
+    .placement(Placement::Point { pos, gap: 0.0 })
     .kind(OverlayKind::Popover)
     .motion(FloatingMotionKind::Fade)
-    .on_panel(|_| {
+    .on_panel(|| {
         vstack()
             .p("1rem")
             .bg(tokens::popover())
@@ -450,7 +475,6 @@ anchored_overlay("my-float")
             .child(/* 任意内容 */)
             .into()
     })
-    .into()
 ```
 
 **扩展点（草案）**：
@@ -458,6 +482,7 @@ anchored_overlay("my-float")
 | 方法 | 作用 |
 |------|------|
 | `.placement(...)` | Trigger / Point / Unanchored |
+| `.trigger_id(...)` | Unanchored / 外点豁免：开关按钮 `focus_id` |
 | `.kind(OverlayKind::…)` | Esc 互斥 |
 | `.motion(...)` | Fade / Expand |
 | `.match_trigger_width(bool)` | 等同 `ATTR_FLOATING_MATCH_TRIGGER` |
@@ -566,8 +591,7 @@ ui! {
     <AnchoredOverlay id="palette" openSignal={open}>
         <AnchoredOverlayContent
             placement="point"
-            x={pos.get()[0]}
-            y={pos.get()[1]}
+            pos={pos}
             kind="popover"
         >
             {build_palette()}
@@ -613,7 +637,7 @@ anchored_overlay("palette")
         Element::from(
             anchored_overlay_content(
                 AnchoredOverlayContentOpts::default()
-                    .placement(Placement::Point { x: pos.get()[0], y: pos.get()[1], gap: 0.0 })
+                    .placement(Placement::Point { pos, gap: 0.0 })
                     .kind(OverlayKind::Popover),
                 || build_palette(),
             ),
@@ -676,37 +700,25 @@ pub fn my_palette(open: Signal<bool>, body: impl FnOnce() -> Element) -> Element
 
 | 字段 | 说明 |
 |------|------|
-| `x`, `y` | 视口/client 空间原点（通常面板左上角展开方向为右下，与 ContextMenu 一致） |
+| `pos: Signal<[f32; 2]>` | 视口/client 空间原点（通常面板左上角展开方向为右下，与 ContextMenu 一致）。**必须用 Signal**：岛只注册一次，捕获 `f32` 会冻住坐标。RSX 也可写 `x`/`y`（写入 `{id}__ao_point`） |
 | `gap` | 相对点的偏移；`0` 常见 |
-| `trigger_focus_id` | 可传 `""` 并 `remove(ATTR_FLOATING_TRIGGER)`，避免外点判定当成「点在 trigger 上」 |
+| `trigger_focus_id` | 壳内 `remove(ATTR_FLOATING_TRIGGER)`，避免外点判定当成「点在 trigger 上」 |
 
 **程序设位**（非拖拽）：
 
 ```rust
-pos.set([x, y]); // open 为 true 时 reactive 重建 → mark_floating_at_point 读新坐标
+pos.set([x, y]); // 岛内 `pos.get()` 订阅 → mark_floating_at_point 读新坐标
 ```
 
 **与 Unanchored 选型**：要参与 `sync` 的视口钳位、max_h → **Point**；纯 flex 居中 / 百分比 → **Unanchored**。
 
 ### 9.2 拖拽改位（浮动面板）
 
-今日**没有** `DragKind::FloatingPanel`；用 [`pointer_drag`](../../crates/rui/src/utils/pointer_drag.rs) 自管会话，**更新 `pos` Signal** 为唯一坐标真相。
+[`DragKind::FloatingPanel`](../../crates/rui/src/utils/pointer_drag.rs) + [`begin_floating_panel_drag`](../../crates/rui/src/utils/anchored_overlay.rs) / [`drag_handle`](../../crates/rui/src/utils/anchored_overlay.rs)：标题栏按下后由 `window_events` tick，**更新 `pos` Signal** 为唯一坐标真相。
 
 ```rust
-// 标题栏按下
-.on_pointer_down(move |e| {
-    pointer_drag::begin(DragKind::/* 待扩展 FloatingPanel */, id, e.x, e.y);
-})
-// app 指针路由 / window_events 中
-if let Some(sess) = pointer_drag::tick(x, y) {
-    if sess.kind == /* FloatingPanel */ && sess.id == id {
-        let [px, py] = pos.peek();
-        let (dx, dy) = pointer_drag::dx_dy(&sess);
-        pos.set([px + dx, py + dy]);
-        pointer_drag::begin(/* 重置 start 为当前指针，避免累加漂移 */ ...);
-    }
-}
-.on_pointer_up(|_| { pointer_drag::clear(); })
+// 标题栏
+drag_handle("palette", pos, title_bar)
 ```
 
 **与 placement 引擎**：
@@ -727,25 +739,25 @@ if let Some(sess) = pointer_drag::tick(x, y) {
 | 能力 | 现状 | 与本文关系 |
 |------|------|------------|
 | 列表重排 | [`utils/drag_reorder`](../../crates/rui/src/utils/drag_reorder.rs) + app 指针路由 | 与浮层壳正交 |
-| 指针会话 | [`utils/pointer_drag`](../../crates/rui/src/utils/pointer_drag.rs)（Slider/Toast/Carousel…） | Point 浮层拖拽可扩展 `DragKind::FloatingPanel` |
+| 指针会话 | [`utils/pointer_drag`](../../crates/rui/src/utils/pointer_drag.rs)（Slider/Toast/Carousel/`FloatingPanel`） | Point 浮层拖拽走 `DragKind::FloatingPanel` + `drag_handle` |
 | **拖拽替身浮层**（sortable 的 drag ghost） | **未做** | solid-dnd 典型需求：拖起时 `anchored_overlay` **Point** 跟指针，或 `OverlayMode::Pinned` + `translate`；需碰撞检测与 list 索引 |
 | 跨容器拖放 / 改父级 | **未做** | 超出 overlay_shells；归 solid-dnd WP |
 | 浮层入退场 | `floating_motion` / `modal_motion` 已有；产品化加深见 bugs | 壳统一 `motion` 参数 |
 
 **推荐演进**（文档化，非承诺排期）：
 
-1. **WP-OVL.3**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
-2. **WP-DND.1**（建议）：`pointer_drag::DragKind::FloatingPanel` + `anchored_overlay::drag_handle(...)` 辅助。  
+1. **WP-OVL.3 ☑**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
+2. **WP-DND.1**（建议）：sortable ghost 与碰撞检测仍独立；`DragKind::FloatingPanel` / `drag_handle` 已随 OVL.3 可用。  
 3. **WP-DND.2**：sortable ghost — `drag_reorder` 提交前用 Point 浮层显示替身，落点碰撞检测。  
 4. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Point `anchored_overlay` + Pinned z**。
 
 ### 9.4 点定位 + 拖拽检查清单
 
-- [ ] 坐标存 `Signal`，不手写第二套 `left/top` sync  
-- [ ] `remove(ATTR_FLOATING_TRIGGER)`（无 trigger 时）  
-- [ ] 拖拽更新 `pos` 后 `mark_floating_at_point` 同步  
-- [ ] `portal_sync` + `mount_anchored_overlay`；非模态不加全屏 `overlay`  
-- [ ] `pointer_drag` 释放时 `clear()`  
+- [x] 坐标存 `Signal`，不手写第二套 `left/top` sync  
+- [x] `remove(ATTR_FLOATING_TRIGGER)`（无 trigger 时）  
+- [x] 拖拽更新 `pos` 后 `mark_floating_at_point` 同步（`drag_handle`）  
+- [x] `portal_sync` + `mount_anchored_overlay`；非模态不加全屏 `overlay`  
+- [x] `pointer_drag` 释放时 `clear()`  
 - [ ] solid-dnd 级 sortable ghost / 改父级：**另开 WP**，不阻塞 WP-OVL
 
 ---
@@ -754,9 +766,9 @@ if let Some(sess) = pointer_drag::tick(x, y) {
 
 | 阶段 | 工作 | 验收 |
 |------|------|------|
-| **WP-OVL.1** | 新增 `utils/viewport_modal.rs` + RSX 标签（`ViewportModal*`）+ `rui_macros` 展开 | Dialog 库测不回归；Gallery Builder + RSX 各一例 |
-| **WP-OVL.2** | 新增 `utils/anchored_overlay.rs` + RSX 标签（`AnchoredOverlay*`） | Popover 抽 1 调用点；`mount_anchored_overlay_is_zero_anchor` 仍绿 |
-| **WP-OVL.3** | Gallery：Point 浮层 + 标题栏拖拽；**RSX 与 Builder 双示例** | < 500 行；见 [§9](#9-点定位与拖拽solid-dnd-关联) |
+| **WP-OVL.1** ☑ | 新增 `utils/viewport_modal.rs` + RSX 标签（`ViewportModal*`）+ `rui_macros` 展开 | Dialog 库测不回归；Gallery Builder + RSX 各一例（`ViewportModalShowcase`） |
+| **WP-OVL.2** ☑ | 新增 `utils/anchored_overlay.rs` + RSX 标签（`AnchoredOverlay*`） | 三种 `Placement` 库测绿；`mount_anchored_overlay_is_zero_anchor` 仍绿。Popover 薄包装归 **WP-OVL.4** |
+| **WP-OVL.3** ☑ | Gallery：Point 浮层 + 标题栏拖拽；**RSX 与 Builder 双示例** | `AnchoredOverlayShowcase`；见 [§9](#9-点定位与拖拽solid-dnd-关联) |
 | **WP-OVL.4** | 存量 Dialog/Popover 薄包装迁移；文档链入 [§8.5](#85-双书写面rsx--builder) | 新 PR 禁止手抄 portal 配方 |
 | **WP-DND.***（建议，非 OVL 阻塞） | `DragKind::FloatingPanel`、sortable drag ghost、碰撞检测 | 见 [bugs.md](../archive/bugs.md) solid-dnd；[§9.3](#93-与-bugsmdsolid-dnd愿望的关系) |
 
@@ -780,7 +792,7 @@ if let Some(sess) = pointer_drag::tick(x, y) {
 
 ## 12. 相关链接
 
-- 遮罩原语：[`primitives/overlay.rs`](../../crates/rui/src/primitives/overlay.rs)  
+- 遮罩原语：[`primitives/overlay.rs`](../../crates/rui/src/primitives/overlay.rs)（全屏 underlay）；局部关键场景见 [§7.3](#73-独立容器内遮罩portal-mount--绝对铺满)，Gallery `LocalOverlayShowcase`  
 - 浮层单一路径（已签）：[AUTHORITY.md](../AUTHORITY.md) WP-3.4  
 - 作者四条红线：[custom_components.md](custom_components.md) §复合控件配方  
 - 双书写面权威：[COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §3（ADR-9）  

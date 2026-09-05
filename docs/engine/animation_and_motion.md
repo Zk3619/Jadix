@@ -1,7 +1,7 @@
 # CSS 动画与 Motion 分层决策
 
 > **文档地位**：操作手册 — 说明 `style/keyframes`、`style/animation`、`utils/motion` 各写什么，以及组件层应保留什么。  
-> **对齐执行源**：一次性落地范围、Specified/Used 模型、ANIM To-Do → [`css_animation_max_alignment.md`](css_animation_max_alignment.md)  
+> **冻结状态**：CSS `animation` / `transition` / `@keyframes` 子集 **已冻结**（2026-09-05）。事实手册 → [`css_animation_max_alignment.md`](css_animation_max_alignment.md)。本文只讲分层选型；策略变更须改冻结手册。  
 > **读者**：写/改 Accordion、Dialog、Toast 等带进退场的组件，或自定义浮层/通知的作者。  
 > **相关**：[`custom_components.md`](../components/custom_components.md) · [`headless.md`](../components/headless.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §2.1
 
@@ -16,7 +16,7 @@ style/keyframes.rs     ── WHAT   可命名的 @keyframes 曲线（KeyframeSt
 style/animation.rs     ── HOW    CSS transition / @keyframes 运行时（tick、snapshot、lock）
 utils/motion.rs        ── RECIPE transition 路径的 Element 侧配方（只写目标、保 mid）
 utils/presence.rs      ── WHEN   何时挂载/卸载（ExitGate；与曲线无关）
-components/*           ── WIRE   产品语义、布局测量、DOM 结构、seed 时机
+components/*           ── WIRE   产品语义、presence、DOM 结构、seed 时机
 components/internal/   ── SHARE  多组件共享的 presence + 动效编排（如 modal_motion）
 ```
 
@@ -30,6 +30,8 @@ components/internal/   ── SHARE  多组件共享的 presence + 动效编排�
 | `animation::CubicTween` | 类似 `transition`，但走 **Signal** | 少数非 Element 路径（如 Slider）；与 `motion` 正交 |
 
 另有 [`style/timeline.rs`](../../crates/rui/src/style/timeline.rs)（通用时间线 / B17 文字特效），与本文 CSS 动效栈并列，**不**替代 `keyframes` / `transition` MVP。
+
+三层模型（详见冻结手册 §1.3）：**引擎**（`Timing::resolve` + 插值 + 中断）必做；**声明式**（`transition` / `animation` / `@keyframes`，含 `spring()`）是前端承诺；**编程式**是 id 句柄 + `play`/`pause`/`reverse`/`seek`/`set_rate`，不是 WAAPI 规范对象。Spring 是与 duration easing 并列的驱动源。
 
 ---
 
@@ -116,7 +118,7 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 ### 不应放在这里
 
 - `AnimationEntry` 的 duration / timing / fill-mode **预设**（见 §4，可放 `animation.rs`）
-- presence、何时 seed、布局测量
+- presence、何时 seed（intrinsic 高度走引擎 `used_layout`）
 - 组件 DOM 结构（Dialog 的 overlay + zoom 双层）
 - `Element` / `reactive_sync` / damage 相关逻辑
 
@@ -199,8 +201,8 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 | 保留在组件 | 原因 |
 |------------|------|
 | `ExitGate` / `needs_enter` / `needs_exit_anim` | 生命周期与卸载时机 |
-| `seed_*_enter_anim` / `seed_*_exit_anim` | 依赖布局的初态（opacity=0、measured height） |
-| 布局测量 | Accordion `measure_panel_natural_height` |
+| `seed_*_enter_anim` / `seed_*_exit_anim` | 挂 named `@keyframes`；specified 保持 `auto` |
+| 引擎 `used_layout` | Accordion / Collapsible / Expand 读 intrinsic，禁止组件测高 |
 | DOM 结构 | Dialog overlay + zoom 内层 |
 | 引擎选型 | Dialog 用 keyframes，Sheet 用 motion |
 | 产品参数 | Toast 堆叠、拖拽、tone shadow |
@@ -247,7 +249,7 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 
 | 组件 | 引擎 | 曲线 / 配置位置 | 编排位置 |
 |------|------|-----------------|----------|
-| Accordion 面板 | `@keyframes` | `keyframes`: `accordion-down/up` | `accordion.rs`: presence + 测高 + seed |
+| Accordion 面板 | `@keyframes`（默认）或 `transition`（flag） | `keyframes`: `accordion-down/up`；备选 **通用** `grid-template-rows` `0fr→1fr`（`RUI_ACCORDION_GRID_FR=1`） | `accordion.rs` 只是消费者；属性表与任意 grid 容器共用 |
 | Accordion chevron | `transition` | 组件内 `TransitionEntry` | 简单 rotate，无需 `MotionStyle` |
 | Dialog | `@keyframes` | `keyframes`: `fade-in-0`, `zoom-in-90`, … | `internal/modal_motion.rs` |
 | Sheet / Drawer | `transition` + `motion` | `modal_motion`: slide entries | `MotionStyle` + presence |
@@ -266,7 +268,7 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 5. **Presence**：挂载/卸载 → `utils/presence`，keyframes 退场未完成时 **禁止** ExitGate 提前卸载。
 6. **产品逻辑**：留在 `components/` 或 `components/internal/`，勿污染引擎层。
 
-**ANIM 冻结（2026-08-29 起）：** 新 animatable 属性只通过 [`css_animation_max_alignment.md`](css_animation_max_alignment.md) ANIM-1+ 注册表落地；禁止扩展 `KeyframeStop` 手工字段。
+**动画冻结（2026-09-05）：** 新 animatable 属性只通过 [`css_animation_max_alignment.md`](css_animation_max_alignment.md) 注册表落地，并改该手册 §3 / §1.2；禁止扩展 `KeyframeStop` 手工字段。
 
 ---
 
@@ -275,7 +277,9 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 | 路径 | 说明 |
 |------|------|
 | [`crates/rui/src/style/keyframes.rs`](../../crates/rui/src/style/keyframes.rs) | `@keyframes` 注册与采样 |
+| [`crates/rui/src/style/timing.rs`](../../crates/rui/src/style/timing.rs) | `Timing::resolve` + `spring_step` |
 | [`crates/rui/src/style/animation.rs`](../../crates/rui/src/style/animation.rs) | transition / animation tick |
+| [`crates/rui/src/style/waapi.rs`](../../crates/rui/src/style/waapi.rs) | 编程式句柄（id + 注册表） |
 | [`crates/rui/src/utils/motion.rs`](../../crates/rui/src/utils/motion.rs) | MotionStyle 配方 |
 | [`crates/rui/src/utils/presence.rs`](../../crates/rui/src/utils/presence.rs) | ExitGate |
 | [`crates/rui/src/components/internal/modal_motion.rs`](../../crates/rui/src/components/internal/modal_motion.rs) | Dialog/Sheet 共享编排 |

@@ -2,7 +2,7 @@
 
 > **文档地位**：OS 线程栈预算、`Element` 堆句柄与对标框架差异的**领域规范**（「是什么 / 该学什么」）。**已冻结**（2026-09-05）。  
 > **执行源**：巩固期排期仍以 [`AUTHORITY.md`](../AUTHORITY.md) 为准；本文**不**单独开 WP 编号。  
-> **事实来源**：`crates/rui/src/core/tree.rs`、`layout/layout_tree.rs`、`core/reactivity.rs::with_ui_build_stack`、`platform/windows/stack.rs`、`crate_tests/layout/stack_budget.rs`、`examples/gallery/src/mount_tests.rs`；对标目录 `Reference/`（GPUI、Floem、egui、Slint、Xilem、Iced 等）。  
+> **事实来源**：`crates/rui/src/core/tree.rs`、`layout/layout_tree.rs`、`core/reactivity.rs::with_ui_build_stack`、`platform/windows/stack.rs`、`crate_tests/layout/stack_budget.rs`、`examples/gallery/src/mount_tests.rs`；OS 平台层全貌见 [`platform.md`](platform.md)；对标目录 `Reference/`（GPUI、Floem、egui、Slint、Xilem、Iced 等）。  
 > **审计日期**：2026-09-05（句柄 / 堆 DFS / stacksafe 同构 / TLS 节点 slab / 组件壳走树）。  
 > **禁区**：禁止用 PE `/STACK`、无条件 `stacker::grow` 或 **fork taffy** 绕过栈预算。策略变更须修订 ADR-10，不得默默回潮。
 
@@ -185,6 +185,7 @@ pub struct Element {
 | [`ENGINEERING_GRADE_FRAMEWORK.md`](../ENGINEERING_GRADE_FRAMEWORK.md) | ADR-10；巩固期禁区 |
 | [`REFERENCE_COMPARISON.md`](../comparison/REFERENCE_COMPARISON.md) | 六参考「该学 / 不该搬」总表 |
 | [`size_and_memory.md`](../ops/size_and_memory.md) | RSS / Element 节点计数（栈预算见本文） |
+| [`platform.md`](platform.md) | `crate::platform` OS 层；`windows/stack.rs` opt-in 上下文 |
 | [`bugs.md`](../archive/bugs.md) | 历史「计算器需 8MB」已关闭，指向本文 |
 | [`reactivity_and_hot_reload.md`](../ops/reactivity_and_hot_reload.md) | 结构岛 / `isolate_reads` 与构建帧 |
 

@@ -148,8 +148,8 @@
 | Scrollbar | `scrollbar` / `Scrollbar` | **verified** | id 参数存在；常跟 target | CV.1 与 ScrollArea 连带走查 |
 | ScrollViewport | `scroll_viewport` / `ScrollViewport` | **verified** | 必填；`SCROLL_VIEWPORT_FOCUS_PREFIX` | Gallery 2026-09-05 |
 | Resizable | `resizable` / 复合 `ResizablePanelGroup`+`Panel`+`Handle` | **verified** | 可选实例键 | Gallery 2026-09-05 |
-| Accordion | `accordion` / `Accordion*` | **verified** | 必填实例键（开合） | Gallery 2026-09-05 |
-| Collapsible | `collapsible` / `Collapsible*` | **verified** | 必填实例键或受控 Signal | Gallery 2026-09-05 |
+| Accordion | `accordion` / `Accordion*` | **verified** | 必填实例键（开合） | Gallery 2026-09-05；ANIM：`used_layout` 驱动 `accordion-down/up`，无组件测高 |
+| Collapsible | `collapsible` / `Collapsible*` | **verified** | 必填实例键或受控 Signal | Gallery 2026-09-05；ANIM：同 Accordion，读引擎 `used_layout` |
 
 ### 1.7 文本（Gallery `text`）
 

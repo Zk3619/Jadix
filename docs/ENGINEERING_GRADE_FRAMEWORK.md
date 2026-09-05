@@ -180,7 +180,7 @@ crates/
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](engine/glyphon_audit.md) |
 | P1 渲染 | 逻辑细粒度 damage 正式默认；GPU retain / 树级 DL → B8 | 见 [`damage.md`](engine/damage.md) ADR；勿用「只重绘组件」替代脏区 |
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
-| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](engine/box_model.md)；P2 加深 = B15 |
+| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；2026-09-05 手册追上实现 + padding/margin `%` 对齐 CSS；Gallery 展示色 + CI；见 [`box_model.md`](engine/box_model.md) **已冻结** |
 | P1 内核 | Windows 默认 ~1 MiB 栈下可构建/布局；`Element` 子节点指针化（对标 GPUI/Iced） | ☑ 冻结：句柄 + TLS slab + 堆 DFS；64 KiB 红区热点；不 fork taffy → [`stack_and_element_model.md`](engine/stack_and_element_model.md) |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | backdrop-blur 缓存、移动/鸿蒙一等公民 | Inspector P0–P2 已落地（`devtools` feature）；选择器级联 / 样式表仍不做 |
@@ -220,7 +220,7 @@ crates/
 权威清单：[`PUBLISH.md`](ops/PUBLISH.md)。
 
 - 发布顺序：`rui_style_tokens` → `rui_macros` → `rui`
-- 默认 feature **空集**（无大字体嵌入、无 resvg）；`tracing` / `system-tray` / `backend-dx12` / `bundled-*` / `emoji-svg` 按需开启
+- 默认 feature **空集**（无大字体嵌入、无 resvg）；`tracing` / `system-tray` / `remote-asset` / `backend-dx12` / `bundled-*` / `emoji-svg` 按需开启
 - SemVer：0.x 允许 breaking，但必须在 CHANGELOG 写明「承诺面」与「实验面」
 
 ### 6.3 体积与内存的正确叙事
@@ -247,7 +247,7 @@ component_inventory.md              ← 分桶数据表
 ├─ 从属手册：reactivity_and_hot_reload · headless · custom_components
 │            keyboard_nav · ime · desktop_smoke · a11y_smoke · color · font_strategy · font
 │            multi_window · tray · glyphon_audit · size_and_memory · stack_and_element_model
-│            PUBLISH · emoji_gpu_compat_matrix · site/README
+│            platform · PUBLISH · emoji_gpu_compat_matrix · site/README
 ├─ 历史审计（非执行源）：gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
 └─ archive/                         ← 选型过程 / 早期随笔（已冻结，仅供追溯）
 ```
@@ -363,7 +363,7 @@ flowchart LR
 | [COMPONENT_LIBRARY_PLAN.md](archive/COMPONENT_LIBRARY_PLAN.md) | 组件 WP 冻结展开（勾选作废） |
 | [REACTIVITY.md](REACTIVITY.md) | **细粒度响应式领域规范** |
 | [element_identity.md](element_identity.md) | **跨层身份契约**（`id` / `focus_id` / `template_id` / AccessKit） |
-| [box_model.md](engine/box_model.md) | 类 CSS 盒模型契约与缺口（WP-2.9） |
+| [box_model.md](engine/box_model.md) | 类 CSS 盒模型契约（WP-2.9 ☑；**已冻结** 2026-09-05） |
 | [gap_analysis.md](comparison/gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
 | [STAGE7_ROADMAP.md](archive/STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
 | [PROJECT.md](archive/PROJECT.md) | 愿景与分层初衷 |
@@ -378,6 +378,7 @@ flowchart LR
 | [PUBLISH.md](ops/PUBLISH.md) | crates.io 清单 |
 | [size_and_memory.md](ops/size_and_memory.md) | 体积与内存事实 |
 | [stack_and_element_model.md](engine/stack_and_element_model.md) | **Windows 默认栈、`Element` 堆句柄与对标框架**（ADR-10） |
+| [platform.md](engine/platform.md) | **`crate::platform` OS 层现状、cfg 边界与目标结构** |
 | [font_strategy.md](engine/font_strategy.md) | 字体打包策略 |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
 | [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |

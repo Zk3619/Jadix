@@ -40,6 +40,7 @@ cargo package -p jadix_hot_reload --allow-dirty
 | `runtime-logging` | 关 | 控制台（stderr）+ 可选 `RUI_LOG_FILE`（`env_logger`） |
 | `tracing` | 关 | 热路径 span |
 | `system-tray` | 关 | 原生托盘（`tray-icon`）；见 [`tray.md`](tray.md) |
+| `remote-asset` | 关 | 远程 `src` 走应用 [`RemoteAssetFetcher`](../../crates/rui/src/media/remote.rs)；无 HTTP 依赖。见 [`remote_asset.md`](remote_asset.md) |
 | `backend-dx12` | 关 | Windows D3D12 |
 | `bundled-*` / `fonts-*` | 关 | 字体策略 |
 | `emoji-svg` | 关 | resvg Twemoji |

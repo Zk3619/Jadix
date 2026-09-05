@@ -227,6 +227,7 @@ hstack().w("100%").pointer_events("none").child(separator()).into();
 | 先 `.into()` 再改属性，而链上可一次写完 | 破坏 fluent 一致性；见 **§3.1.1** 链式优先 |
 | 为 `w("50%")` 等开放域强造枚举 | 应用 `IntoCssDim`；见 **§3.1.1** · [`box_model.md`](engine/box_model.md) |
 | 复合组件为每个槽发明 `*PartsClass` / 十余个 `*_class` 字段 | 维护 N 份平行结构体；与 §3.3「组合面调样式」冲突；数据糖例外见 §3.3.4 |
+| 闭包装配为每个内部槽发明 `*_with` / `*SlotBuilder` / `*Parts` | 根 Builder 穿透；内部格子用 `.slot("data-slot", …)` 或零件自己的 `class`/`base` |
 | `From<*Builder>` 代建第二棵 `class: None` 树、且无 `.child()` / `*_scope` | Tier 3 成为唯一路径；RSX 与 Builder 样式能力不对等 |
 
 代码锚点（同一按钮 · 双面）：
@@ -344,11 +345,12 @@ RSX 与上例 **同一棵零件树、同一套 `class`**，仅书写面不同。
 | 需求 | 做法 | 禁止 |
 |------|------|------|
 | 改某一槽间距/字号/颜色 | 该零件 `class="…"` 或 RSX 布局属性（进 `base`） | 指望根 Builder 穿透所有槽 |
+| 闭包装配的内部格子（日历日、滑块拇指、图轴） | 根 `.slot("calendar-day", \|c\| c.class(..).style(..))`；节点打 `data-slot` | 每组件 `*_with` / `*SlotBuilder` / `*Parts` |
 | 改根纵向节奏 | scope / 根 Builder 的 `.class()`（如 `gap-8`） | 在 Tier 3 里硬编码且不可覆盖 |
 | 改带行为的内容壳 | Tier 2 `{Comp}ContentOpts { class, … }` | 为纯 `class` 单独再发明 Opts 枚举 |
 | 数据糖场景偶尔改壳 | 题级/项级 `class` 字段（见 §3.3.4） | 全库复制 `*PartsClass` 十数字段 |
 
-**合并顺序**（与 ShadCN `cn(defaults, className)` 一致）：先组件默认 utility，再用户 `class`；后写覆盖冲突项。共享 helper 可放在 `style/utility`（如 `merge_slot_class`），**不要**每组件一份 `*PartsClass` 除非有充分数据 DSL 理由（§3.3.4）。
+**合并顺序**（与 ShadCN `cn(defaults, className)` 一致）：先组件默认 utility，再用户 `class`；后写覆盖冲突项。共享 helper 可放在 `style/utility`（如 `merge_slot_class`），**不要**每组件一份 `*PartsClass` 除非有充分数据 DSL 理由（§3.3.4）。闭包装配没有独立零件 Builder 时，用框架 `SlotMap`（根 `.slot("data-slot-name", …)`）；应用级「所有实例统一」走 `[data-slot=…]` 样式表（见 [global-stylesheet-loader.md](plans/global-stylesheet-loader.md)），不要每个实例点名槽。
 
 #### 3.3.4 Tier 3 与 `*PartsClass` 的边界
 
@@ -393,6 +395,7 @@ RSX 与上例 **同一棵零件树、同一套 `class`**，仅书写面不同。
 | P1 | `From<*Builder>` 抽 **`render_*`**，去掉重复 `class: None` | Accordion `.item()`、Carousel `From`、Sidebar `From` |
 | P2 | 已有 **`*Opts`** 的补 `class` 文档与 Builder 链式透传 | `MenubarContentOpts`、`DropdownMenuContentOpts` |
 | P3 | Tier 3 文档降级为「快速原型」；Gallery 补 Tier 1 示例 | 与 §6.3 联动 |
+| P4 | 闭包装配内部槽走根 `.slot("data-slot", …)`，不要每组件 `*_with` / `*Parts` | 新复合件直接遵守；Pagination / Carousel 存量另扫 |
 | 例外 | 数据 DSL 保留 `.parts()` / 项级 `class`，不推广 `*PartsClass` | Questionnaire |
 
 **Stepper** 等仍无 scope/零件拆分的，应按 §3.3.2 拆为 `stepper_scope` + 零件，而不是在单文件过程式渲染里堆 `class` API。
@@ -490,7 +493,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 ### 4.4 浮层
 
-> **编排收敛（设计 · 未落地）**：[`overlay_shells.md`](components/overlay_shells.md) — `utils/anchored_overlay` + `utils/viewport_modal`（WP-OVL）。落地前仍按下表直接调用 `popup` / `portal_overlay`。
+> **编排收敛**：[overlay_shells.md](components/overlay_shells.md) — **`utils/anchored_overlay`（WP-OVL.2/3 ☑）与 `utils/viewport_modal`（WP-OVL.1 ☑）已落地**。新浮层走壳；存量产品组件 WP-OVL.4 再薄包装。
 
 必用 API（新组件不得绕开）：
 

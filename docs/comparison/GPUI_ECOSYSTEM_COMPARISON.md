@@ -88,6 +88,8 @@ GPUI 生态与 RUI **不是同一条哲学路线**，但在 **「纯 Rust GPU �
 | 层 | RUI | GPUI | gpui-component | gpuix / gpui-vue |
 |----|-----|------|----------------|------------------|
 | **窗口** | winit | **平台原生**（`gpui_macos` / `gpui_windows` / `gpui_linux`）+ `gpui_platform` | 同 GPUI | 同 GPUI（经 N-API 线程模型） |
+
+RUI 当前 `crate::platform` 仅为 winit 上的 OS hook 薄层（Windows DWM 等），尚未达到 GPUI `gpui_platform` 粒度；见 [`platform.md`](../engine/platform.md)。
 | **GPU** | wgpu（可选 dx12/vulkan feature） | Metal / DX11 / **wgpu**（`gpui_wgpu`） | 同 GPUI | 同 GPUI；gpuix 另有 **Wasm WebGPU** |
 | **布局** | taffy Flex/Grid | **taffy** | 同 GPUI | 同 GPUI；样式经 `StyleDesc` 降级 |
 | **文本** | glyphon / cosmic-text 定制 | 平台文本 + wgpu 路径 cosmic-text；自研 wrap | 富文本 / 编辑器 / LSP | 原生 `text` / `input` / `markdown` / `code` 元素 |

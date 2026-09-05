@@ -1,5 +1,9 @@
 
-下面分两块说清：**字重为什么「像失效」**，以及**笔画为什么像被裁掉**。这两件事在 RUI（glyphon + cosmic-text + fontdb + Swash）和浏览器（CSS + 各自文本栈）里机制本来就不一样，所以即使用了和 ShadCN 一样的 **class 语义**（`text-sm`、`font-medium`、`leading-none`），**像素结果仍可能对不齐**。
+下面分两块说清：**字重为什么「像失效」**，以及**笔画为什么像被裁掉**。这两件事在 RUI（glyphon + cosmic-text + fontdb + Swash）和浏览器（CSS + 各自文本栈）里机制本来就不一样，所以即使用了和 ShadCN 一样的 **class 语义**（`text-sm`、`font-medium`），**像素结果仍可能对不齐**。
+
+> **配置速查**（与 [font_strategy.md](font_strategy.md) 同步）：全局可用 **`RUI_FONT_FAMILY` / `RUI_FONT_SIZE` / `RUI_FONT_WEIGHT`**、**`rui::set_text_defaults`** 或 **`WindowOptions::default_font*`**。局部可用 `class` 的 `font-sans` / `text-sm` / `font-medium` / `leading-none`，或 RSX 的 `font_family` / `text_size` / `font_weight` / `leading`。可变字体走 `wght` 插值；无 Medium 面时默认 **synthetic bold**（`RUI_SYNTHETIC_BOLD=0` 可关）。
+>
+> **Gallery**：`cargo run -p gallery` → 侧栏 **文本** → **7) 字体族 / 字重 / 行高覆盖（验收）**。冻结口径见 [font_strategy.md](font_strategy.md)「文档冻结」（签署前未冻结）。
 
 ---
 
@@ -7,7 +11,14 @@
 
 **浏览器里** `font-weight: 500` 会走一整套逻辑：选族、选字重轴、可变字体插值、**没有 Medium 面时还可能做伪粗（synthetic bold）**，而且这套规则随平台（DirectWrite/CoreText）和字体而不同。
 
-**RUI 里** 字重会进 `Attrs::weight(fontdb::Weight(...))`，由 **fontdb 按离散字重选「某一个字体文件」**；没有 500 时通常是 **就近选一个已有面**（常见是仍是 400），**不会像 CSS 那样自动给你画一层伪粗**。所以同样标成 500，Web 上可能略粗一点，RUI 上看起来就像「没加重」。
+**RUI 里** 现在按同一条流水线靠拢：
+
+1. **选族** `resolve_family`（CSS 逗号列表 + `system-ui` / `ui-sans-serif` 等泛型）。
+2. **可变字体** 若族内 `wght` 轴覆盖请求值，把 **请求字重原样** 交给 cosmic-text 插值（不再把 Inter Variable 的 500 snap 成 400）。
+3. **静态面** 用 CSS Fonts 4 匹配：Segoe 仅有 400/600/700 时，500 匹配 **Regular 400**（不会误跳 Semibold）。
+4. **Synthetic bold**：匹配面轻于请求且请求 ≥ 500 时，绘制阶段用与文字同色的细阴影加粗（CSS `font-synthesis: weight`）。Lucide 除外。
+
+因此 `font-medium` 在仅有系统 Segoe Regular 时也会比 400 略重；装上 Inter Variable 时则是真 500 轴。关闭：`RUI_SYNTHETIC_BOLD=0` 或 `WindowOptions::synthetic_bold(false)`。
 
 另外：
 
@@ -62,7 +73,7 @@ Label 对齐 ShadCN 用了 **`leading-none`**，在 RUI 里对应 **`line_height
 
 未设置 `line_height_px` / `line_height_scale` 的文本，在 `prepare_text`、`text_hit` 与 `layout_tree` 测量里都会走上述回退。
 
-**Label** 仍通过 `apply_label_defaults` 使用 **`leading-none`（倍率 1.0）**，与 ShadCN Label 一致，**不**走 `tailwind_default_leading_scale`。
+**Label** 仍通过 `apply_label_defaults` 使用 **`leading-none`（倍率 1.0）**，与 ShadCN Label 一致，**不**走 `tailwind_default_leading_scale`。`class="leading-none"` 与属性 `leading="none"` 等价。
 
 ---
 
@@ -85,7 +96,7 @@ cargo run -p gallery
 | `input` | **输入框内联文本**：`template_id` 为 `__rui_input:…:text`（**含失焦**，不再要求本帧有光标） |
 | 其它任意字符串 | **子串匹配** `template_id`（不区分大小写），例如 `gal-s2`、`__rui_input`、`gal-s6`、`gal-s11` |
 
-`gallery` 中为对照方便预留了 id：`gal-s2-input-a`、`gal-s6-label-cjk`、`gal-s11-virt-title`；输入框内联文本的 `template_id` 形如 `__rui_input:<field_id>:text`。
+`gallery` 中为对照方便预留了 id：`gal-font-*`（字体覆盖卡）、`gal-s2-input-a`、`gal-s6-label-cjk`、`gal-s11-virt-title`；输入框内联文本的 `template_id` 形如 `__rui_input:<field_id>:text`。过滤可用 `RUI_TEXT_DEBUG=gal-font`。
 
 每行含：`tid`、`kind`（`input` 表示输入相关）、`caret=y|n`（本帧是否绘制 IME/插入符；失焦时为 `caret=n`）、`shape=adv|basic`（cosmic shaping）、`extra=`（`shape_suffix` 码位，Input 为 `U+2009` 薄空格）、`w`（字重）、`sz`/`lh`（逻辑像素）、`lh_src`（显式倍率或 `tw-v4≈…`）、`hit=reuse|reshape`、`req`/`attrs`、`=> […]`（**按 glyph 顺序**出现的全部字面，含拉丁/薄空格等）、`cjk=>[…]`（**仅**簇内带 CJK/全角等相关码位的 glyph 所用字面）、文本预览。
 
@@ -99,11 +110,6 @@ cargo run -p gallery
 
 - `req=Segoe UI` / `attrs=Segoe UI`：来自 `best_font_family`，未单独设 `font_family`。
 - `=> [Yu Gothic | DengXian]`：中文等码位 **fallback** 到系统日文字体 / 等线，**不是**「族名从 Segoe 变成别的」的 bug，而是多字面混排时的正常现象。
-- `lh_src=1.5000`：该 Label 在 RSX 里写了 **`leading="normal"`**，行高倍率为 **1.5**，故 `lh≈21`（14×1.5）；若要与 ShadCN Label 的 **`leading-none`** 一致，应去掉 `leading="normal"` 或改用 `leading="none"`。
+- `lh_src=1.5000`：该 Label 在 RSX 里写了 **`leading="normal"`** 或 `class="leading-normal"`，行高倍率为 **1.5**，故 `lh≈21`（14×1.5）；若要与 ShadCN Label 的 **`leading-none`** 一致，改用 `leading="none"` 或 `class="leading-none"`。
 
 **刷屏：** 只要整帧文本缓存失效（例如插入符闪烁相位、滚动导致 `text_nodes` 变化），就会再次进入 `prepare_text_frame`，过滤命中时会每帧打印。设 **`RUI_TEXT_DEBUG_RESHAPE_ONLY=1`** 时，仅在 **`hit=reshape`**（本段文本重新 shape）时输出，适合抓「字体何时变化」。
-
-
-调整日志输出格式与下面一致！！！
-[2026-03-28T12:01:21Z WARN  rui::app::state] render profile(last ~1003ms): fps≈151.5, pre=0.39ms, layout=1.34ms, draw=3.60ms [upload=0.23, acquire=1.27, text=1.13, encode=0.42, submit=0.50, present=0.04]
-[2026-03-28T12:01:21Z WARN  rui::app::state] scroll prepass avg(last ~1010ms): fps≈150.5, total=245.64, viewports_only=2.92, full=242.72 nodes/frame
