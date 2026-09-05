@@ -27,6 +27,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - name: Clippy (remote-asset)
+        run: cargo clippy -p rui --all-targets --no-deps --features remote-asset -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -48,6 +50,10 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: Test
         run: cargo test --workspace
+      - name: Box model contract (freeze)
+        run: cargo test -p rui --lib box_model -- --nocapture
+      - name: CSS animation contract (freeze)
+        run: cargo test -p rui --lib anim_freeze -- --nocapture
 
   offscreen:
     name: offscreen smoke (${{ matrix.os }})
@@ -80,3 +86,9 @@ jobs:
       - name: Library unit tests (smoke)
         # Golden / smoke companion: fast lib tests without full workspace matrix cost.
         run: cargo test -p rui --lib -- --skip golden_component
+      - name: Box model contract (freeze)
+        run: cargo test -p rui --lib box_model -- --nocapture
+      - name: CSS animation contract (freeze)
+        run: cargo test -p rui --lib anim_freeze -- --nocapture
+      - name: Remote-asset fetcher seam
+        run: cargo test -p rui --lib --features remote-asset remote -- --nocapture
