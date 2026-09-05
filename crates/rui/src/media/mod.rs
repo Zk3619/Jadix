@@ -8,6 +8,7 @@ mod animation;
 mod decode;
 pub mod gif;
 pub mod image;
+pub(crate) mod remote;
 pub mod svg_raster;
 
 pub use animation::{DecodedAnimation, DecodedFrame};
@@ -18,4 +19,8 @@ pub use image::{
     blur, brighten, contrast, crop, encode_jpeg, encode_png, encode_webp, flip_horizontal,
     flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90,
     to_rgba_image, unsharpen, FilterType,
+};
+pub use remote::{
+    clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
+    remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
 };

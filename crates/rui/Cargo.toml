@@ -76,6 +76,9 @@ scene3d = []
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
 # Opt-in; not in default release surface (see docs/ops/devtools.md).
 devtools = []
+# Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
+# [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
+remote-asset = []
 
 [dependencies]
 winit = { workspace = true }

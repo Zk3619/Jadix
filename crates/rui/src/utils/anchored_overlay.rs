@@ -1,0 +1,878 @@
+//! Headless anchored overlay shell ([`docs/components/overlay_shells.md`](../../../../docs/components/overlay_shells.md)).
+//!
+//! Three placement modes share one portal / presence / motion recipe:
+//! [`Placement::Trigger`], [`Placement::Point`], [`Placement::Unanchored`].
+//! Not in `prelude` — `use rui::utils::anchored_overlay::{…}`.
+
+use std::cell::RefCell;
+use std::sync::OnceLock;
+
+use crate::app::pointer_events::{EventPhase, PointerEvent};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+};
+use crate::core::reactivity::{
+    create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
+};
+use crate::core::tree::Element;
+use crate::utils::popup::{
+    apply_stored_floating_place, mark_floating_at_point, mark_floating_with_gap,
+    mount_anchored_overlay, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
+    ATTR_FLOATING_W,
+};
+
+pub use crate::components::internal::floating_motion::FloatingMotionKind;
+
+// ---------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------
+
+/// Flip with the viewport (default) or pin to the preferred trigger side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FloatingStrategy {
+    #[default]
+    Auto,
+    Fixed,
+}
+
+impl FloatingStrategy {
+    pub fn from_attr(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("fixed") {
+            Self::Fixed
+        } else {
+            Self::Auto
+        }
+    }
+
+    fn as_attr(self) -> Option<&'static str> {
+        match self {
+            Self::Fixed => Some("fixed"),
+            Self::Auto => None,
+        }
+    }
+}
+
+/// Where an anchored overlay is positioned.
+///
+/// Point coordinates must be a [`Signal`] so drag / click-to-place updates
+/// re-run the island (captured `f32` would freeze after the first register).
+///
+/// [`Self::Unanchored`] is **not** [`Self::Point`] at `(0, 0)`: it skips
+/// `mark_floating` / `sync_floating_placement` and lays out against a viewport
+/// stage (`fixed` / inset / flex). Folding the two would drop `%` / flex centering.
+#[derive(Clone)]
+pub enum Placement {
+    Trigger {
+        focus_id: String,
+        placement: PopupPlacement,
+        gap: f32,
+        strategy: FloatingStrategy,
+    },
+    Point {
+        pos: Signal<[f32; 2]>,
+        gap: f32,
+    },
+    Unanchored,
+}
+
+impl Placement {
+    pub fn trigger(
+        focus_id: impl Into<String>,
+        placement: PopupPlacement,
+        gap: f32,
+        strategy: FloatingStrategy,
+    ) -> Self {
+        Self::Trigger {
+            focus_id: focus_id.into(),
+            placement,
+            gap,
+            strategy,
+        }
+    }
+
+    pub fn point(pos: Signal<[f32; 2]>, gap: f32) -> Self {
+        Self::Point { pos, gap }
+    }
+
+    /// RSX `x`/`y` without `pos`: per-overlay signal, updated when Content rebuilds.
+    pub fn point_xy(overlay_id: &str, x: f32, y: f32, gap: f32) -> Self {
+        let key = format!("{overlay_id}__ao_point");
+        let pos = use_signal(key.as_str(), || [x, y]);
+        if pos.peek() != [x, y] {
+            pos.set([x, y]);
+        }
+        Self::Point { pos, gap }
+    }
+}
+
+pub fn parse_overlay_kind(s: &str) -> OverlayKind {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "menu" => OverlayKind::Menu,
+        "tooltip" => OverlayKind::Tooltip,
+        "modal" => OverlayKind::Modal,
+        _ => OverlayKind::Popover,
+    }
+}
+
+pub fn parse_floating_motion(s: &str) -> FloatingMotionKind {
+    if s.trim().eq_ignore_ascii_case("expand") {
+        FloatingMotionKind::Expand
+    } else {
+        FloatingMotionKind::Fade
+    }
+}
+
+/// Build [`Placement`] from RSX attrs. Call from [`anchored_overlay_content`] (has overlay id).
+pub fn placement_from_rsx(
+    overlay_id: &str,
+    mode: &str,
+    side: &str,
+    align: &str,
+    side_offset: f32,
+    focus_id: &str,
+    strategy: &str,
+    pos: Option<Signal<[f32; 2]>>,
+    x: f32,
+    y: f32,
+    gap: f32,
+) -> Placement {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "point" => {
+            if let Some(pos) = pos {
+                Placement::Point { pos, gap }
+            } else {
+                Placement::point_xy(overlay_id, x, y, gap)
+            }
+        }
+        "unanchored" => Placement::Unanchored,
+        _ => Placement::Trigger {
+            focus_id: focus_id.to_string(),
+            placement: PopupPlacement::from_side_align(side, align),
+            gap: side_offset,
+            strategy: FloatingStrategy::from_attr(strategy),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Context / scope
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct AnchoredOverlayCtx {
+    pub open: Signal<bool>,
+    pub id: String,
+    pub trigger_fid: Signal<String>,
+}
+
+fn overlay_context() -> Context<AnchoredOverlayCtx> {
+    static CTX: OnceLock<Context<AnchoredOverlayCtx>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<AnchoredOverlayCtx>)
+}
+
+pub fn use_anchored_overlay() -> Option<AnchoredOverlayCtx> {
+    use_context(overlay_context())
+}
+
+fn require_anchored_overlay(part: &str) -> AnchoredOverlayCtx {
+    use_anchored_overlay().unwrap_or_else(|| {
+        panic!("{part} must be used within <AnchoredOverlay> / anchored_overlay_scope");
+    })
+}
+
+pub fn anchored_overlay_scope(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    let id = crate::utils::resolve_instance_id(id, "anchored_overlay");
+    let open = open.unwrap_or_else(|| use_signal(format!("{id}__ao_open").as_str(), || false));
+    let trigger_fid = use_signal(format!("{id}__ao_trigger_fid").as_str(), || {
+        format!("{id}__ao_trigger")
+    });
+    let mut root = with_child_owner(|| {
+        provide_context(
+            overlay_context(),
+            AnchoredOverlayCtx {
+                open,
+                id: id.clone(),
+                trigger_fid,
+            },
+        );
+        body()
+    });
+    if root.template_id.is_none() {
+        root.template_id = Some(format!("{id}__anchored_overlay"));
+    }
+    root
+}
+
+// ---------------------------------------------------------------------------
+// Builder
+// ---------------------------------------------------------------------------
+
+pub struct AnchoredOverlayBuilder {
+    id: String,
+    open: Option<Signal<bool>>,
+    placement: Option<Placement>,
+    kind: Option<OverlayKind>,
+    motion: Option<FloatingMotionKind>,
+    match_trigger_width: bool,
+    max_h: Option<String>,
+    width: Option<String>,
+    /// Toggle / open button `focus_id`. Used by Unanchored for outside-press
+    /// exemption (not placement). Trigger mode prefers [`Placement::Trigger::focus_id`].
+    trigger_id: String,
+}
+
+pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
+    AnchoredOverlayBuilder {
+        id: id.into(),
+        open: None,
+        placement: None,
+        kind: None,
+        motion: None,
+        match_trigger_width: false,
+        max_h: None,
+        width: None,
+        trigger_id: String::new(),
+    }
+}
+
+impl AnchoredOverlayBuilder {
+    pub fn open(mut self, open: Signal<bool>) -> Self {
+        self.open = Some(open);
+        self
+    }
+
+    pub fn open_signal(self, open: Signal<bool>) -> Self {
+        self.open(open)
+    }
+
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = Some(placement);
+        self
+    }
+
+    pub fn kind(mut self, kind: OverlayKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    pub fn motion(mut self, motion: FloatingMotionKind) -> Self {
+        self.motion = Some(motion);
+        self
+    }
+
+    pub fn match_trigger_width(mut self, yes: bool) -> Self {
+        self.match_trigger_width = yes;
+        self
+    }
+
+    pub fn max_h(mut self, h: impl Into<String>) -> Self {
+        self.max_h = Some(h.into());
+        self
+    }
+
+    pub fn width(mut self, w: impl Into<String>) -> Self {
+        self.width = Some(w.into());
+        self
+    }
+
+    /// Register a toggle button `focus_id` for outside-press (Unanchored / Point).
+    ///
+    /// Trigger placement still uses [`Placement::Trigger::focus_id`]. Empty falls
+    /// back to `{overlay_id}__ao_trigger`.
+    pub fn trigger_id(mut self, id: impl Into<String>) -> Self {
+        self.trigger_id = id.into();
+        self
+    }
+
+    /// Panel body when [`Self::placement`] is set; otherwise compound Trigger/Content tree.
+    pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
+        if let Some(placement) = self.placement {
+            let opts = AnchoredOverlayContentOpts {
+                placement: Some(placement),
+                placement_mode: String::new(),
+                side: String::new(),
+                align: String::new(),
+                side_offset: 4.0,
+                focus_id: self.trigger_id,
+                strategy: String::new(),
+                pos: None,
+                x: 0.0,
+                y: 0.0,
+                gap: 0.0,
+                kind: self.kind.unwrap_or(OverlayKind::Popover),
+                motion: self.motion.unwrap_or(FloatingMotionKind::Fade),
+                match_trigger_width: self.match_trigger_width,
+                max_h: self.max_h,
+                width: self.width,
+            };
+            anchored_overlay_scope(self.id, self.open, move || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![anchored_overlay_content(opts, body)])
+            })
+        } else {
+            anchored_overlay_scope(self.id, self.open, body)
+        }
+    }
+
+    /// Alias of [`Self::child`] for the one-shot panel API.
+    pub fn on_panel(self, body: impl Fn() -> Element + 'static) -> Element {
+        self.child(body)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content opts
+// ---------------------------------------------------------------------------
+
+/// Shared by Builder [`.placement`](AnchoredOverlayBuilder::placement) and RSX `<AnchoredOverlayContent>`.
+#[derive(Clone)]
+pub struct AnchoredOverlayContentOpts {
+    pub placement: Option<Placement>,
+    pub placement_mode: String,
+    pub side: String,
+    pub align: String,
+    pub side_offset: f32,
+    pub focus_id: String,
+    pub strategy: String,
+    pub pos: Option<Signal<[f32; 2]>>,
+    pub x: f32,
+    pub y: f32,
+    pub gap: f32,
+    pub kind: OverlayKind,
+    pub motion: FloatingMotionKind,
+    pub match_trigger_width: bool,
+    pub max_h: Option<String>,
+    pub width: Option<String>,
+}
+
+impl Default for AnchoredOverlayContentOpts {
+    fn default() -> Self {
+        Self {
+            placement: None,
+            placement_mode: "trigger".into(),
+            side: "bottom".into(),
+            align: "start".into(),
+            side_offset: 4.0,
+            focus_id: String::new(),
+            strategy: String::new(),
+            pos: None,
+            x: 0.0,
+            y: 0.0,
+            gap: 0.0,
+            kind: OverlayKind::Popover,
+            motion: FloatingMotionKind::Fade,
+            match_trigger_width: false,
+            max_h: None,
+            width: None,
+        }
+    }
+}
+
+impl AnchoredOverlayContentOpts {
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = Some(placement);
+        self
+    }
+
+    pub fn kind(mut self, kind: OverlayKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn motion(mut self, motion: FloatingMotionKind) -> Self {
+        self.motion = motion;
+        self
+    }
+
+    pub fn match_trigger_width(mut self, yes: bool) -> Self {
+        self.match_trigger_width = yes;
+        self
+    }
+
+    pub fn max_h(mut self, h: impl Into<String>) -> Self {
+        self.max_h = Some(h.into());
+        self
+    }
+
+    pub fn width(mut self, w: impl Into<String>) -> Self {
+        self.width = Some(w.into());
+        self
+    }
+
+    fn resolve(&self, overlay_id: &str) -> Placement {
+        if let Some(p) = self.placement.clone() {
+            return p;
+        }
+        placement_from_rsx(
+            overlay_id,
+            &self.placement_mode,
+            &self.side,
+            &self.align,
+            self.side_offset,
+            &self.focus_id,
+            &self.strategy,
+            self.pos,
+            self.x,
+            self.y,
+            self.gap,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content
+// ---------------------------------------------------------------------------
+
+pub fn anchored_overlay_content(
+    opts: AnchoredOverlayContentOpts,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
+    let ctx = require_anchored_overlay("AnchoredOverlayContent");
+    let open = ctx.open;
+    let id = ctx.id.clone();
+    let trigger_fid = ctx.trigger_fid;
+    let view_id = format!("{id}__view");
+    let presence = use_floating_presence(&id, opts.motion);
+
+    reactive_anchor(view_id.clone(), move || {
+        assemble_panel(
+            &id,
+            open,
+            trigger_fid,
+            &presence,
+            &opts,
+            isolate_reads(|| body()),
+        )
+    });
+    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+}
+
+/// RSX `<AnchoredOverlayContent>` entry (same implementation as [`anchored_overlay_content`]).
+pub fn anchored_overlay_content_from_rsx(
+    opts: AnchoredOverlayContentOpts,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
+    anchored_overlay_content(opts, body)
+}
+
+fn assemble_panel(
+    id: &str,
+    open: Signal<bool>,
+    trigger_fid: Signal<String>,
+    presence: &crate::components::internal::floating_motion::FloatingPresenceHandle,
+    opts: &AnchoredOverlayContentOpts,
+    mut panel: Element,
+) -> Element {
+    let Some((phase, oz)) =
+        floating_portal_phase(id, open, presence, opts.kind, OverlayMode::Stacked)
+    else {
+        return Element::new().w(0.0).h(0.0);
+    };
+
+    let placement = opts.resolve(id);
+    apply_placement(
+        &mut panel,
+        id,
+        &placement,
+        trigger_fid,
+        opts.focus_id.as_str(),
+        opts.match_trigger_width,
+        opts.max_h.as_deref(),
+        opts.width.as_deref(),
+    );
+    match &placement {
+        Placement::Trigger { .. } | Placement::Point { .. } => {
+            apply_stored_floating_place(&mut panel, id);
+        }
+        Placement::Unanchored => {}
+    }
+    if apply_floating_panel_motion(
+        id,
+        &mut panel,
+        opts.motion,
+        phase,
+        presence,
+        open,
+        opts.kind,
+        OverlayMode::Stacked,
+        None,
+    ) {
+        crate::app::runtime::request_redraw();
+    }
+    // Same 0×0 portal mount as Trigger/Point. Unanchored must not wrap a viewport
+    // stage: author `fixed` / inset already resolve against the window.
+    mount_anchored_overlay(panel, oz.panel)
+}
+
+fn apply_placement(
+    panel: &mut Element,
+    overlay_id: &str,
+    placement: &Placement,
+    trigger_fid: Signal<String>,
+    content_focus_id: &str,
+    match_trigger_width: bool,
+    max_h: Option<&str>,
+    width: Option<&str>,
+) {
+    match placement {
+        Placement::Trigger {
+            focus_id,
+            placement,
+            gap,
+            strategy,
+        } => {
+            let fid = if focus_id.trim().is_empty() {
+                trigger_fid.peek()
+            } else {
+                focus_id.clone()
+            };
+            mark_floating_with_gap(panel, overlay_id, &fid, *placement, *gap);
+            if let Some(s) = strategy.as_attr() {
+                panel.set_attr(ATTR_FLOATING_STRATEGY, s);
+            }
+            apply_size_attrs(panel, match_trigger_width, max_h, width);
+            take_absolute(panel);
+        }
+        Placement::Point { pos, gap } => {
+            let [x, y] = pos.get();
+            mark_floating_at_point(panel, overlay_id, "", x, y, *gap);
+            panel.attrs.remove(ATTR_FLOATING_TRIGGER);
+            apply_size_attrs(panel, match_trigger_width, max_h, width);
+            take_absolute(panel);
+        }
+        Placement::Unanchored => {
+            // Identity only: portal key + outside-press. No PLACEMENT / POINT so
+            // sync_floating_placement does not move author `fixed` / inset.
+            panel.set_attr(ATTR_FLOATING, overlay_id);
+            let fid = if !content_focus_id.trim().is_empty() {
+                content_focus_id.trim().to_string()
+            } else {
+                trigger_fid.peek()
+            };
+            if !fid.trim().is_empty() {
+                panel.set_attr(ATTR_FLOATING_TRIGGER, fid);
+            }
+        }
+    }
+}
+
+fn take_absolute(panel: &mut Element) {
+    let mut taken = Element::new();
+    std::mem::swap(panel, &mut taken);
+    *panel = taken.absolute();
+}
+
+fn apply_size_attrs(
+    panel: &mut Element,
+    match_trigger_width: bool,
+    max_h: Option<&str>,
+    width: Option<&str>,
+) {
+    panel.set_attr(
+        ATTR_FLOATING_MATCH_TRIGGER,
+        if match_trigger_width { "1" } else { "0" },
+    );
+    panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+    if let Some(w) = width.map(str::trim).filter(|s| !s.is_empty()) {
+        panel.set_attr(ATTR_FLOATING_W, w);
+    }
+    if let Some(h) = max_h.map(str::trim).filter(|s| !s.is_empty()) {
+        panel.set_attr(ATTR_FLOATING_MAX_H, h);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Point-mode title-bar drag (WP-OVL.3)
+// ---------------------------------------------------------------------------
+
+struct FloatingPanelDrag {
+    pos: Signal<[f32; 2]>,
+    origin: [f32; 2],
+    start_pointer: [f32; 2],
+}
+
+thread_local! {
+    static FLOATING_DRAG: RefCell<Option<FloatingPanelDrag>> = const { RefCell::new(None) };
+}
+
+pub fn begin_floating_panel_drag(id: impl Into<String>, pos: Signal<[f32; 2]>, x: f32, y: f32) {
+    crate::utils::pointer_drag::begin(
+        crate::utils::pointer_drag::DragKind::FloatingPanel,
+        id,
+        x,
+        y,
+    );
+    FLOATING_DRAG.with(|d| {
+        *d.borrow_mut() = Some(FloatingPanelDrag {
+            pos,
+            origin: pos.peek(),
+            start_pointer: [x, y],
+        });
+    });
+}
+
+pub fn is_floating_panel_dragging() -> bool {
+    FLOATING_DRAG.with(|d| d.borrow().is_some())
+}
+
+pub fn tick_floating_panel_drag(x: f32, y: f32) -> bool {
+    FLOATING_DRAG.with(|d| {
+        let (pos, next) = {
+            let guard = d.borrow();
+            let Some(drag) = guard.as_ref() else {
+                return false;
+            };
+            (
+                drag.pos,
+                [
+                    drag.origin[0] + x - drag.start_pointer[0],
+                    drag.origin[1] + y - drag.start_pointer[1],
+                ],
+            )
+        };
+        if pos.peek() != next {
+            pos.set(next);
+        }
+        true
+    })
+}
+
+pub fn clear_floating_panel_drag() {
+    let had = FLOATING_DRAG.with(|d| d.borrow_mut().take().is_some());
+    if had {
+        crate::utils::pointer_drag::clear();
+        crate::app::release_pointer_capture();
+    }
+}
+
+/// Title-bar (or other) handle: pointer-down starts a Point-mode drag of `pos`.
+pub fn drag_handle(id: impl Into<String>, pos: Signal<[f32; 2]>, mut el: Element) -> Element {
+    let id = id.into();
+    let fid = format!("{id}__ao_drag");
+    if el.focus_id.is_none() {
+        el = el.focus_id(fid.as_str());
+    }
+    let capture = el.focus_id.clone().unwrap_or(fid);
+    el = el.cursor("grab");
+    el.on_pointer_down(move |e: &PointerEvent| {
+        if e.phase == EventPhase::Capture {
+            return;
+        }
+        begin_floating_panel_drag(id.clone(), pos, e.x, e.y);
+        crate::app::set_pointer_capture(capture.clone());
+        e.stop_propagation();
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::portal_overlay::clear_overlay_stack;
+    use crate::core::reactivity::create_root;
+    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+    use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_POINT, ATTR_FLOATING_TRIGGER};
+
+    fn is_zero_len(el: &Element) -> bool {
+        crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
+            && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0)
+    }
+
+    fn find_attr<'a>(el: &'a Element, key: &str) -> Option<&'a str> {
+        el.attrs
+            .get(key)
+            .map(String::as_str)
+            .or_else(|| el.children.iter().find_map(|c| find_attr(c, key)))
+    }
+
+    #[test]
+    fn builder_and_opts_share_scope_template() {
+        let (_o, (a, b)) = create_root(|| {
+            let open = use_signal("ao-dual-open", || false);
+            let a = anchored_overlay("ao-dual")
+                .open(open)
+                .placement(Placement::Unanchored)
+                .child(|| Element::new().text("a"));
+            let b = anchored_overlay_scope("ao-dual-opts", Some(open), || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![anchored_overlay_content(
+                    AnchoredOverlayContentOpts::default().placement(Placement::Unanchored),
+                    || Element::new().text("b"),
+                )])
+            });
+            (a, b)
+        });
+        assert_eq!(a.template_id.as_deref(), Some("ao-dual__anchored_overlay"));
+        assert_eq!(
+            b.template_id.as_deref(),
+            Some("ao-dual-opts__anchored_overlay")
+        );
+        assert!(is_zero_len(&a) || a.children.iter().any(is_zero_len));
+        fn find_view(el: &Element, suffix: &str) -> bool {
+            el.template_id
+                .as_deref()
+                .is_some_and(|t| t.ends_with(suffix))
+                || el.children.iter().any(|c| find_view(c, suffix))
+        }
+        assert!(find_view(&a, "__view"), "one-shot must mount 0×0 view");
+        assert!(find_view(&b, "__view"), "opts content must mount 0×0 view");
+    }
+
+    #[test]
+    fn placement_trigger_marks_floating() {
+        create_root(|| {
+            let mut panel = Element::new().text("p");
+            apply_placement(
+                &mut panel,
+                "ao-t",
+                &Placement::Trigger {
+                    focus_id: "btn".into(),
+                    placement: PopupPlacement::BottomStart,
+                    gap: 4.0,
+                    strategy: FloatingStrategy::Fixed,
+                },
+                Signal::new(String::new()),
+                "",
+                false,
+                Some("24rem"),
+                None,
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING), Some("ao-t"));
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_TRIGGER), Some("btn"));
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_STRATEGY), Some("fixed"));
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_MAX_H), Some("24rem"));
+            assert!(find_attr(&panel, ATTR_FLOATING_POINT).is_none());
+        });
+    }
+
+    #[test]
+    fn placement_point_drops_trigger_attr() {
+        create_root(|| {
+            let pos = Signal::new([120.0_f32, 80.0]);
+            let mut panel = Element::new().text("p");
+            apply_placement(
+                &mut panel,
+                "ao-p",
+                &Placement::Point { pos, gap: 0.0 },
+                Signal::new(String::new()),
+                "",
+                false,
+                None,
+                None,
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING), Some("ao-p"));
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_POINT), Some("120,80"));
+            assert!(
+                find_attr(&panel, ATTR_FLOATING_TRIGGER).is_none(),
+                "Point must not look like a trigger hit-target"
+            );
+        });
+    }
+
+    #[test]
+    fn placement_unanchored_identity_floating() {
+        create_root(|| {
+            let mut panel = Element::new().text("p");
+            apply_placement(
+                &mut panel,
+                "ao-u",
+                &Placement::Unanchored,
+                Signal::new("hud-btn".into()),
+                "",
+                false,
+                None,
+                None,
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING), Some("ao-u"));
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_TRIGGER), Some("hud-btn"));
+            assert!(find_attr(&panel, ATTR_FLOATING_POINT).is_none());
+            assert!(
+                find_attr(&panel, crate::utils::popup::ATTR_FLOATING_PLACEMENT).is_none(),
+                "Unanchored must not set placement (sync would move author inset)"
+            );
+        });
+    }
+
+    #[test]
+    fn placement_unanchored_prefers_content_focus_id() {
+        create_root(|| {
+            let mut panel = Element::new().text("p");
+            apply_placement(
+                &mut panel,
+                "ao-u2",
+                &Placement::Unanchored,
+                Signal::new("default-trig".into()),
+                "rsx-btn",
+                false,
+                None,
+                None,
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_TRIGGER), Some("rsx-btn"));
+        });
+    }
+
+    #[test]
+    fn open_unanchored_uses_zero_anchor_without_viewport_stage() {
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let presence = use_floating_presence("ao-open-u", FloatingMotionKind::Fade);
+            let opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover);
+            let mounted = assemble_panel(
+                "ao-open-u",
+                open,
+                Signal::new("hud-btn".into()),
+                &presence,
+                &opts,
+                Element::new().text("hud").fixed().top("1rem").right("1rem"),
+            );
+            assert!(
+                is_zero_len(&mounted),
+                "Unanchored keeps the same 0×0 document-flow mount as Trigger"
+            );
+            assert_eq!(
+                find_attr(&mounted, ATTR_PORTAL_KEY),
+                Some("panel:ao-open-u"),
+                "portal key must be instance-unique, not panel:{{z}}"
+            );
+            assert_eq!(
+                find_attr(&mounted, ATTR_FLOATING),
+                Some("ao-open-u"),
+                "identity ATTR_FLOATING so panel hits are not outside-press"
+            );
+            assert_eq!(
+                find_attr(&mounted, ATTR_FLOATING_TRIGGER),
+                Some("hud-btn"),
+                "toggle focus_id must be registered for outside-press exemption"
+            );
+            assert!(
+                find_attr(&mounted, crate::utils::popup::ATTR_FLOATING_PLACEMENT).is_none(),
+                "must not place against the trigger"
+            );
+        });
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn point_drag_updates_pos_signal() {
+        create_root(|| {
+            let pos = Signal::new([10.0_f32, 20.0]);
+            begin_floating_panel_drag("ao-drag", pos, 10.0, 20.0);
+            assert!(tick_floating_panel_drag(25.0, 40.0));
+            assert_eq!(pos.peek(), [25.0, 40.0]);
+            clear_floating_panel_drag();
+            assert!(!is_floating_panel_dragging());
+        });
+    }
+}

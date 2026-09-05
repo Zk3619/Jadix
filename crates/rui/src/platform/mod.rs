@@ -4,6 +4,8 @@
 //! Win32 DWM glass and process metrics live under [`windows`].
 //! macOS / Linux currently only apply winit `set_blur`.
 //!
+//! Architecture audit and target layout: `docs/engine/platform.md`.
+//!
 //! The framework does not emit PE `/STACK` or require a large main-thread stack.
 //! Deep UI trees are walked with heap work queues instead of unbounded recursion.
 

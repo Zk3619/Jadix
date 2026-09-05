@@ -1,4 +1,5 @@
 pub mod activate_registry;
+pub mod anchored_overlay;
 pub mod block_on;
 pub mod clipboard;
 pub mod controlled;
@@ -30,6 +31,7 @@ pub mod text_texture;
 pub mod text_vector_spike;
 pub mod toggle_state;
 pub mod tree_model;
+pub mod viewport_modal;
 pub mod virtual_list;
 pub mod virtual_masonry;
 

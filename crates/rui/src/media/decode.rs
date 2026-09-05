@@ -58,7 +58,7 @@ pub fn decode_bytes(bytes: &[u8], _opts: DecodeOptions) -> Option<DecodedImage> 
     super::image::decode_raster(bytes).and_then(accept_valid)
 }
 
-/// 解析 `data:`、本地路径（禁止 http(s)）。
+/// 解析 `data:`、本地路径。`http(s)` 始终返回 `None`（远程拉取见 feature `remote-asset`）。
 pub fn load_src(src: &str, opts: DecodeOptions) -> Option<DecodedImage> {
     let bytes = read_src_bytes(src)?;
     decode_bytes(&bytes, opts)
@@ -374,6 +374,13 @@ fn decode_svg(_bytes: &[u8]) -> Option<DecodedImage> {
 mod tests {
     use super::*;
     use crate::media::encode_png;
+
+    #[test]
+    fn read_src_bytes_still_rejects_http() {
+        assert!(read_src_bytes("https://example.com/a.png").is_none());
+        assert!(read_src_bytes("http://127.0.0.1/a.png").is_none());
+        assert!(load_src("https://example.com/a.png", DecodeOptions::image()).is_none());
+    }
 
     #[test]
     fn large_png_decodes_without_cap() {

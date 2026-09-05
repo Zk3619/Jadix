@@ -296,8 +296,11 @@ pub fn text_edit_default_leading_scale() -> f32 {
     1.5
 }
 
-/// 末行下方 ink 余量（见 `docs/engine/font.md`）：只加在内容块底部与 glyphon buffer，
+/// 字形墨水余量（逻辑 px）。`leading-none` 行盒盖不住 CJK / 降部；TextEdit 内容块
+/// 用此值垫高，避免按叶高硬裁后看起来像溢出。
 /// **不要**再做 `y += top_ink` 绘制偏移——否则叶高/裁切与字形原点脱节，表现为半截字。
+/// 静态 Label 不要共用此垫高：glyphon buffer 变高会把最后一行墨水画过祖先
+/// `overflow:hidden`（Gallery 侧栏最后一项会盖住 footer 分隔线）。
 pub fn text_edit_ink_pad_px(font_size_px: f32) -> f32 {
     (font_size_px * 0.25).max(4.0)
 }

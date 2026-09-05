@@ -42,6 +42,110 @@ pub fn caret_move_right(s: &str, caret: usize) -> usize {
     caret + c.len_utf8()
 }
 
+/// ← at hard line start jumps to previous line end (skips `\n` stop).
+pub fn caret_move_left_line_aware(s: &str, caret: usize) -> usize {
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    if caret == 0 {
+        return 0;
+    }
+    let home = caret_line_home(s, caret);
+    if caret == home && home > 0 {
+        return caret_line_end(s, home - 1);
+    }
+    caret_move_left(s, caret)
+}
+
+/// → at hard line end jumps to next line start (skips `\n`).
+pub fn caret_move_right_line_aware(s: &str, caret: usize) -> usize {
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    if caret >= s.len() {
+        return s.len();
+    }
+    let end = caret_line_end(s, caret);
+    if caret >= end {
+        if s[caret..].starts_with('\n') {
+            return (caret + 1).min(s.len());
+        }
+        return s.len();
+    }
+    caret_move_right(s, caret)
+}
+
+/// ← at soft visual line start jumps to previous visual line end.
+pub fn caret_move_left_visual(s: &str, ranges: &[(usize, usize)], caret: usize) -> usize {
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    if caret == 0 {
+        return 0;
+    }
+    if ranges.is_empty() {
+        return caret_move_left_line_aware(s, caret);
+    }
+    let line_i = crate::text::caret_visual_line_index(ranges, caret);
+    let (start, _) = ranges[line_i];
+    if caret <= start && line_i > 0 {
+        return ranges[line_i - 1].1;
+    }
+    caret_move_left(s, caret)
+}
+
+/// → at soft visual line end jumps to next visual line start.
+pub fn caret_move_right_visual(s: &str, ranges: &[(usize, usize)], caret: usize) -> usize {
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    if caret >= s.len() {
+        return s.len();
+    }
+    if ranges.is_empty() {
+        return caret_move_right_line_aware(s, caret);
+    }
+    let line_i = crate::text::caret_visual_line_index(ranges, caret);
+    let (_, end) = ranges[line_i];
+    if caret >= end && line_i + 1 < ranges.len() {
+        return ranges[line_i + 1].0;
+    }
+    caret_move_right(s, caret)
+}
+
+/// Multiline horizontal nav: soft-wrap visual lines when `ranges` is set.
+pub fn caret_move_left_multiline(
+    s: &str,
+    caret: usize,
+    visual_ranges: Option<&[(usize, usize)]>,
+) -> usize {
+    match visual_ranges {
+        Some(r) if !r.is_empty() => caret_move_left_visual(s, r, caret),
+        _ => caret_move_left_line_aware(s, caret),
+    }
+}
+
+pub fn caret_move_right_multiline(
+    s: &str,
+    caret: usize,
+    visual_ranges: Option<&[(usize, usize)]>,
+) -> usize {
+    match visual_ranges {
+        Some(r) if !r.is_empty() => caret_move_right_visual(s, r, caret),
+        _ => caret_move_right_line_aware(s, caret),
+    }
+}
+
+/// PageUp/PageDown: move by `lines_per_page` visual or hard lines.
+pub fn caret_move_page_vertical(
+    s: &str,
+    ranges: Option<&[(usize, usize)]>,
+    caret_xs: Option<&[Vec<(usize, f32)>]>,
+    caret: usize,
+    delta_pages: i32,
+    lines_per_page: usize,
+    preferred_x: Option<f32>,
+) -> usize {
+    let delta_lines = delta_pages * lines_per_page.max(1) as i32;
+    if let Some(ranges) = ranges.filter(|r| !r.is_empty()) {
+        caret_move_vertical_visual_pref(s, ranges, caret_xs, caret, delta_lines, preferred_x)
+    } else {
+        caret_move_vertical(s, caret, delta_lines)
+    }
+}
+
 /// Home：当前 hard 行行首。
 pub fn caret_line_home(s: &str, caret: usize) -> usize {
     let (line_i, _) = caret_line_and_local(s, caret);
@@ -307,5 +411,25 @@ mod tests {
         let after_a = "a".len();
         let down2 = caret_move_vertical(s2, after_a, 1);
         assert_eq!(down2, "ab\n".len() + "x".len());
+    }
+
+    #[test]
+    fn line_aware_horizontal_skips_newline() {
+        let s = "abc\ndef";
+        let line2 = "abc\n".len();
+        assert_eq!(caret_move_left_line_aware(s, line2), "abc".len());
+        assert_eq!(caret_move_right_line_aware(s, "abc".len()), line2);
+    }
+
+    #[test]
+    fn visual_horizontal_wraps_at_line_boundaries() {
+        use crate::text::{build_visual_lines, LineBreakSource};
+        let text = "hello world wrap";
+        let model = build_visual_lines(text, 14.0, 400, 21.0, 60.0, LineBreakSource::SoftWord);
+        assert!(model.line_count() >= 2);
+        let (_, end0) = model.ranges[0];
+        let (start1, _) = model.ranges[1];
+        assert_eq!(caret_move_right_visual(text, &model.ranges, end0), start1);
+        assert_eq!(caret_move_left_visual(text, &model.ranges, start1), end0);
     }
 }

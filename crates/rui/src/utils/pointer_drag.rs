@@ -12,6 +12,8 @@ pub enum DragKind {
     Toast,
     Carousel,
     Resizable,
+    /// Point-mode [`crate::utils::anchored_overlay`] title-bar drag.
+    FloatingPanel,
 }
 
 #[derive(Clone, Debug)]

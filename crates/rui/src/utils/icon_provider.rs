@@ -45,7 +45,7 @@ pub const ATTR_ICON_SRC: &str = "rui_icon_src";
 pub enum IconSource {
     /// Font glyph (Lucide PUA or a custom family).
     Glyph { family: String, glyph: String },
-    /// Local path or `data:` URL (PNG / JPEG / WebP / GIF / ICO; SVG with `svg` feature).
+    /// Local path, `data:` URL, or `http(s)` when `remote-asset` + [`crate::set_remote_asset_fetcher`].
     Src(String),
 }
 

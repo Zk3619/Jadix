@@ -100,6 +100,26 @@ impl PopupPlacement {
         }
     }
 
+    /// ShadCN `side` + `align` → placement（`bottom-start` 等组合写在 `side` 时忽略 `align`）。
+    pub fn from_side_align(side: &str, align: &str) -> Self {
+        let side = side.trim().to_ascii_lowercase();
+        let align = align.trim().to_ascii_lowercase();
+        if side.contains('-') {
+            return Self::from_attr(&side);
+        }
+        match (side.as_str(), align.as_str()) {
+            ("bottom", "start") => Self::BottomStart,
+            ("bottom", "end") => Self::BottomEnd,
+            ("bottom", _) => Self::BottomCenter,
+            ("top", "start") => Self::TopStart,
+            ("top", "end") => Self::TopEnd,
+            ("top", _) => Self::TopCenter,
+            ("right", _) => Self::RightStart,
+            ("left", _) => Self::LeftStart,
+            _ => Self::BottomStart,
+        }
+    }
+
     fn is_horizontal(self) -> bool {
         matches!(self, Self::RightStart | Self::LeftStart)
     }
@@ -811,6 +831,20 @@ fn apply_floating_menus(
         return;
     };
 
+    // Unanchored overlays set ATTR_FLOATING (+ optional TRIGGER) so outside-press
+    // treats the panel / toggle as inside — without PLACEMENT or POINT, do not
+    // rewrite left/top (author `fixed` / inset is the geometry).
+    let has_point = floating_point_of(el).is_some();
+    let has_placement_attr = el.attrs.get(ATTR_FLOATING_PLACEMENT).is_some()
+        || el.attrs.get("rui_select_placement").is_some();
+    let is_select = el.attrs.contains_key("rui_select_menu");
+    if !has_point && !has_placement_attr && !is_select {
+        for c in &mut el.children {
+            apply_floating_menus(c, triggers, viewport, changed);
+        }
+        return;
+    }
+
     let point = floating_point_of(el);
     let trigger_fid = floating_trigger_of(el);
     let tb = if let Some(pt) = point {
@@ -1231,6 +1265,28 @@ mod tests {
         let mut n = 0usize;
         visit_floating_panels(&root, |_| n += 1);
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn identity_floating_skips_xy_even_with_trigger() {
+        let mut btn = Element::new().w(40.0).h(20.0);
+        btn = btn.focus_id("hud-btn");
+        btn.layout_bounds = [8.0, 8.0, 40.0, 20.0];
+        let mut panel = Element::new()
+            .fixed()
+            .top("1rem")
+            .right("1rem")
+            .w(80.0)
+            .h(40.0);
+        panel.set_attr(ATTR_FLOATING, "hud");
+        panel.set_attr(ATTR_FLOATING_TRIGGER, "hud-btn");
+        let left_before = panel.style.inset.left;
+        let mut root = Element::new().child(btn).child(panel);
+        assert!(
+            !sync_floating_placement(&mut root, 800.0, 600.0),
+            "identity-only ATTR_FLOATING must not rewrite author inset"
+        );
+        assert_eq!(root.children[1].style.inset.left, left_before);
     }
 
     #[test]

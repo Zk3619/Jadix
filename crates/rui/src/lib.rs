@@ -17,6 +17,7 @@ pub mod components;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
 pub mod logging;
 /// OS hooks: Windows DWM / optional stack helpers, macOS-linux blur.
+/// 架构与重构方向见 `docs/engine/platform.md`。
 pub mod platform;
 /// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。
 pub mod prelude;
@@ -68,6 +69,28 @@ macro_rules! reactive {
             let __rui_anchor_id: &'static str = concat!(file!(), ":", line!(), ":", column!());
             $crate::app::reactive::reactive_view(__rui_anchor_id, $closure)
         }
+    }};
+}
+
+/// Join utility class fragments into one space-separated string (ShadCN `cn`, without the cryptic name).
+///
+/// Skips empty / `None`. `("token", bool)` includes the token only when the flag is true
+/// (Solid `classList`). Pass the result to RSX `class={…}` or [`style::with_class_list`](crate::style::with_class_list).
+///
+/// ```ignore
+/// class={classes!("flex gap-2", extra, ("animate-spin", busy))}
+/// ```
+#[macro_export]
+macro_rules! classes {
+    () => {
+        ::std::string::String::new()
+    };
+    ($($part:expr),+ $(,)?) => {{
+        let mut __rui_classes = ::std::string::String::new();
+        $(
+            $crate::style::push_class_part(&mut __rui_classes, $part);
+        )+
+        __rui_classes
     }};
 }
 
@@ -168,7 +191,8 @@ pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
     crate::app::pending_images::queue_image_from_bytes(id, bytes)
 }
 
-/// 从本地路径 / `data:` URL 解码并排队。禁止 `http(s)`。
+/// 从本地路径 / `data:` URL 解码并排队。默认禁止 `http(s)`；
+/// `features = ["remote-asset"]` 时对远程 URL 调用已安装的 [`RemoteAssetFetcher`]。
 pub fn queue_image_from_src(id: impl Into<String>, src: impl AsRef<str>) -> bool {
     crate::app::pending_images::queue_image_from_src(id, src.as_ref())
 }
@@ -182,10 +206,15 @@ pub fn decode_image_bytes(bytes: &[u8]) -> Option<crate::media::DecodedImage> {
     crate::media::decode_bytes(bytes, crate::media::DecodeOptions::image())
 }
 
-/// 从路径或 `data:` URL 解码为 RGBA8。
+/// 从路径或 `data:` URL 解码为 RGBA8（同步；不含 `http(s)`）。
 pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedImage> {
     crate::media::load_src(src.as_ref(), crate::media::DecodeOptions::image())
 }
+
+pub use crate::media::{
+    clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
+    remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
+};
 
 /// 注册自定义图标名（覆盖 Lucide / [`set_icon_provider`]）。路径、`data:` URL 或内联 SVG。
 pub fn register_icon(name: impl Into<String>, source: impl Into<crate::utils::IconSource>) {
@@ -216,6 +245,10 @@ pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgb
     crate::style::register_cursor_rgba8(id, width, height, rgba);
 }
 
+pub use crate::utils::font::{
+    default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
+    set_text_defaults, text_defaults, TextDefaults,
+};
 pub use app::damage::{
     full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
 };
@@ -223,7 +256,10 @@ pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
-pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled, with_ui_build_stack};
+pub use app::{
+    mouse_content_pan_enabled, run, run_with, set_mouse_content_pan_enabled, with_ui_build_stack,
+    WindowBackdrop, WindowOptions,
+};
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
     visible_item_range, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,

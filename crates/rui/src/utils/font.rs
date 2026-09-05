@@ -1,23 +1,134 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use glyphon::fontdb::Database;
 use glyphon::Family;
 
 thread_local! {
-    /// (family_hash, requested_weight) -> effective_weight
-    static WEIGHT_NORMALIZE_CACHE: RefCell<HashMap<(u64, u16), u16>> = RefCell::new(HashMap::new());
+    static LOCAL_MATCH_GEN: Cell<u64> = const { Cell::new(0) };
 
-    /// family_hash -> sorted unique face weights reported by fontdb
-    static FAMILY_FACE_WEIGHTS_CACHE: RefCell<HashMap<u64, Vec<u16>>> = RefCell::new(HashMap::new());
+    /// (family_hash, requested_weight) -> attrs weight passed to cosmic-text
+    static WEIGHT_NORMALIZE_CACHE: RefCell<HashMap<(u64, u16), ResolvedFaceWeight>> =
+        RefCell::new(HashMap::new());
+
+    /// family_hash -> discrete face weights + optional `wght` axis range
+    static FAMILY_PROFILE_CACHE: RefCell<HashMap<u64, FamilyWeightProfile>> =
+        RefCell::new(HashMap::new());
+}
+
+static FONT_MATCH_GEN: AtomicU64 = AtomicU64::new(1);
+
+fn bump_font_match_caches() {
+    FONT_MATCH_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
+fn ensure_local_caches_current() {
+    let gen = FONT_MATCH_GEN.load(Ordering::Relaxed);
+    LOCAL_MATCH_GEN.with(|local| {
+        if local.get() == gen {
+            return;
+        }
+        WEIGHT_NORMALIZE_CACHE.with(|c| c.borrow_mut().clear());
+        FAMILY_PROFILE_CACHE.with(|c| c.borrow_mut().clear());
+        RESOLVE_FAMILY_CACHE.with(|c| c.borrow_mut().clear());
+        local.set(gen);
+    });
 }
 
 fn family_name_hash(name: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     name.hash(&mut h);
     h.finish()
+}
+
+/// Process-wide default type: family stack, size, weight, and `font-synthesis: weight`.
+///
+/// Override with [`set_text_defaults`], [`crate::app::WindowOptions`] (`default_font*`),
+/// or env (`RUI_FONT_FAMILY` / `RUI_FONT_SIZE` / `RUI_FONT_WEIGHT` / `RUI_SYNTHETIC_BOLD`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextDefaults {
+    /// CSS `font-family` list. `None` = `RUI_FONT_FAMILY` then the built-in UI stack.
+    pub family: Option<String>,
+    pub size_px: f32,
+    pub weight: u16,
+    /// When no Medium (or requested) face exists, thicken Regular (CSS `font-synthesis: weight`).
+    pub synthetic_bold: bool,
+}
+
+impl Default for TextDefaults {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl TextDefaults {
+    fn from_env() -> Self {
+        let size_px = std::env::var("RUI_FONT_SIZE")
+            .ok()
+            .and_then(|s| s.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(16.0);
+        let weight = std::env::var("RUI_FONT_WEIGHT")
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+            .map(|w| w.clamp(100, 900))
+            .unwrap_or(400);
+        let synthetic_bold = match std::env::var("RUI_SYNTHETIC_BOLD") {
+            Ok(raw) => {
+                let v = raw.trim().to_ascii_lowercase();
+                !matches!(v.as_str(), "0" | "false" | "off" | "no")
+            }
+            Err(_) => true,
+        };
+        Self {
+            family: None,
+            size_px,
+            weight,
+            synthetic_bold,
+        }
+    }
+}
+
+static TEXT_DEFAULTS: Mutex<Option<TextDefaults>> = Mutex::new(None);
+static FAMILY_LIST_CACHE: Mutex<FamilyListCache> = Mutex::new(FamilyListCache {
+    sans: None,
+    serif: None,
+    mono: None,
+});
+
+struct FamilyListCache {
+    sans: Option<&'static str>,
+    serif: Option<&'static str>,
+    mono: Option<&'static str>,
+}
+
+/// Current process-wide text defaults (initialized from env on first access).
+pub fn text_defaults() -> TextDefaults {
+    let mut g = TEXT_DEFAULTS.lock().unwrap_or_else(|e| e.into_inner());
+    if g.is_none() {
+        *g = Some(TextDefaults::from_env());
+    }
+    g.clone().unwrap_or_else(TextDefaults::from_env)
+}
+
+/// Replace process-wide text defaults (family stack, size, weight, synthetic bold).
+///
+/// Call before the first layout, or from [`crate::app::WindowOptions`] at `run_with`.
+/// Invalidates family / weight match caches.
+pub fn set_text_defaults(defaults: TextDefaults) {
+    let mut defaults = defaults;
+    defaults.size_px = defaults.size_px.max(1.0);
+    defaults.weight = defaults.weight.clamp(100, 900);
+    *TEXT_DEFAULTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(defaults);
+    *FAMILY_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = FamilyListCache {
+        sans: None,
+        serif: None,
+        mono: None,
+    };
+    bump_font_match_caches();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,20 +182,45 @@ fn first_present_family<'a>(db: &Database, names: &[&'a str]) -> Option<&'a str>
     names.iter().copied().find(|n| family_present(db, n))
 }
 
-/// Built-in UI sans priority when `RUI_FONT_FAMILY` is unset: project → platform → CJK fallback.
-const BUILT_IN_UI_SANS_CANDIDATES: &[&str] = &[
+fn is_css_generic_family(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "sans-serif"
+            | "sans"
+            | "serif"
+            | "monospace"
+            | "mono"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-sans-serif"
+            | "ui-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+    )
+}
+
+/// Latin / platform UI faces. CJK must not win [`resolved_default_sans_family`] when these exist.
+const BUILT_IN_UI_SANS_LATIN: &[&str] = &[
     "Inter",
     "Inter Variable",
     "Inter Display",
     "Segoe UI",
+    "SF Pro Text",
+    "SF Pro Display",
     "San Francisco",
     "Helvetica Neue",
+    ".AppleSystemUIFont",
     "Arial",
+];
+
+/// CJK / locale UI faces — later CSS-stack fallbacks; lazy-loaded, not the chrome family.
+const BUILT_IN_UI_SANS_CJK: &[&str] = &[
+    "PingFang SC",
+    "Hiragino Sans GB",
     "Microsoft YaHei UI",
     "Microsoft YaHei",
     "Malgun Gothic",
-    "PingFang SC",
-    "Hiragino Sans GB",
     "Apple SD Gothic Neo",
     "Leelawadee UI",
     "Noto Sans CJK SC",
@@ -93,9 +229,46 @@ const BUILT_IN_UI_SANS_CANDIDATES: &[&str] = &[
     "Noto Sans CJK TC",
     "Source Han Sans SC",
     "WenQuanYi Micro Hei",
+    "Noto Sans",
+];
+
+fn ui_sans_stack_candidates() -> Vec<&'static str> {
+    let mut v = Vec::with_capacity(BUILT_IN_UI_SANS_LATIN.len() + BUILT_IN_UI_SANS_CJK.len());
+    v.extend_from_slice(BUILT_IN_UI_SANS_LATIN);
+    v.extend_from_slice(BUILT_IN_UI_SANS_CJK);
+    v
+}
+
+const BUILT_IN_UI_SERIF_CANDIDATES: &[&str] = &[
+    "Iowan Old Style",
+    "Palatino Linotype",
+    "Palatino",
+    "Noto Serif CJK SC",
+    "Noto Serif CJK JP",
+    "Noto Serif CJK TC",
+    "Noto Serif",
+    "Times New Roman",
+    "Georgia",
+];
+
+const BUILT_IN_UI_MONO_CANDIDATES: &[&str] = &[
+    "Cascadia Code",
+    "Cascadia Mono",
+    "Consolas",
+    "SF Mono",
+    "Menlo",
+    "Monaco",
+    "Courier New",
 ];
 
 fn user_font_family_list() -> Option<String> {
+    if let Some(family) = text_defaults().family {
+        let t = family.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+        return None;
+    }
     std::env::var("RUI_FONT_FAMILY")
         .ok()
         .map(|s| s.trim().to_string())
@@ -105,14 +278,7 @@ fn user_font_family_list() -> Option<String> {
 fn first_concrete_family_in_list(db: &Database, family_list: &str) -> Option<&'static str> {
     for raw_name in family_list.split(',') {
         let name = raw_name.trim().trim_matches(|c| c == '\'' || c == '"');
-        if name.is_empty() {
-            continue;
-        }
-        let lower = name.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "sans-serif" | "sans" | "serif" | "monospace" | "mono" | "cursive" | "fantasy"
-        ) {
+        if name.is_empty() || is_css_generic_family(name) {
             continue;
         }
         if family_present(db, name) {
@@ -122,36 +288,108 @@ fn first_concrete_family_in_list(db: &Database, family_list: &str) -> Option<&'s
     None
 }
 
-/// CSS-style default UI sans stack: user config first, then project/platform faces, then CJK fallback.
-///
-/// Override the primary face(s) with `RUI_FONT_FAMILY` (comma-separated, CSS `font-family` syntax).
-/// Faces are loaded from `RUI_FONT_DIR` / `assets/` / `fonts/` beside the executable.
-pub fn default_ui_sans_family_list() -> &'static str {
-    static LIST: OnceLock<String> = OnceLock::new();
-    LIST.get_or_init(|| {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(user) = user_font_family_list() {
-            for raw in user.split(',') {
-                let name = raw.trim();
-                if !name.is_empty() {
-                    parts.push(name.to_string());
-                }
+fn join_css_stack(user: Option<String>, candidates: &[&str], generics: &[&str]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(user) = user {
+        for raw in user.split(',') {
+            let name = raw.trim();
+            if !name.is_empty() {
+                parts.push(name.to_string());
             }
         }
-        parts.extend(BUILT_IN_UI_SANS_CANDIDATES.iter().map(|s| (*s).to_string()));
-        parts.push("sans-serif".to_string());
-        parts.join(", ")
-    })
+    }
+    for name in candidates {
+        if !parts.iter().any(|p| p == name) {
+            parts.push((*name).to_string());
+        }
+    }
+    for g in generics {
+        if !parts.iter().any(|p| p.eq_ignore_ascii_case(g)) {
+            parts.push((*g).to_string());
+        }
+    }
+    parts.join(", ")
+}
+
+fn intern_list(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// CSS-style default UI sans stack: user config first, then project/platform faces, then CJK.
+///
+/// Override the primary face(s) with `RUI_FONT_FAMILY` / [`set_text_defaults`] /
+/// [`crate::app::WindowOptions::default_font`].
+pub fn default_ui_sans_family_list() -> &'static str {
+    let mut cache = FAMILY_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = cache.sans {
+        return s;
+    }
+    let candidates = ui_sans_stack_candidates();
+    let s = intern_list(join_css_stack(
+        user_font_family_list(),
+        &candidates,
+        &["system-ui", "ui-sans-serif", "sans-serif"],
+    ));
+    cache.sans = Some(s);
+    s
+}
+
+/// Default serif stack for `font-serif` / CSS `serif`.
+pub fn default_ui_serif_family_list() -> &'static str {
+    let mut cache = FAMILY_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = cache.serif {
+        return s;
+    }
+    let s = intern_list(join_css_stack(
+        None,
+        BUILT_IN_UI_SERIF_CANDIDATES,
+        &["ui-serif", "serif"],
+    ));
+    cache.serif = Some(s);
+    s
+}
+
+/// Default monospace stack for `font-mono` / CSS `monospace`.
+pub fn default_ui_mono_family_list() -> &'static str {
+    let mut cache = FAMILY_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = cache.mono {
+        return s;
+    }
+    let s = intern_list(join_css_stack(
+        None,
+        BUILT_IN_UI_MONO_CANDIDATES,
+        &["ui-monospace", "monospace"],
+    ));
+    cache.mono = Some(s);
+    s
 }
 
 /// First concrete sans-serif family for `fontdb` defaults and `Family::SansSerif` mapping.
+///
+/// Prefers Latin/platform UI faces so lazy CJK coverage cannot steal the chrome family.
 pub fn resolved_default_sans_family(db: &Database) -> &'static str {
     if let Some(user) = user_font_family_list() {
         if let Some(name) = first_concrete_family_in_list(db, &user) {
             return name;
         }
     }
-    first_present_family(db, BUILT_IN_UI_SANS_CANDIDATES).unwrap_or("Segoe UI")
+    if let Some(name) = first_present_family(db, BUILT_IN_UI_SANS_LATIN) {
+        return name;
+    }
+    if let Some(name) = first_present_family(db, BUILT_IN_UI_SANS_CJK) {
+        return name;
+    }
+    db.faces()
+        .find_map(|face| {
+            face.families.iter().find_map(|(f, _)| {
+                if f.eq_ignore_ascii_case("lucide") {
+                    None
+                } else {
+                    Some(leak_family_name(f))
+                }
+            })
+        })
+        .unwrap_or("Segoe UI")
 }
 
 fn resolved_noto_sans_cjk_family(db: &Database) -> Option<&'static str> {
@@ -187,29 +425,34 @@ fn leak_family_name(name: &str) -> &'static str {
     })
 }
 
-fn resolved_default_serif_family(db: &Database) -> &'static str {
+pub fn resolved_default_serif_family(db: &Database) -> &'static str {
     if let Some(locale) = cjk_locale_from_env() {
         let preferred = noto_serif_family_for_locale(locale);
         if family_present(db, preferred) {
             return preferred;
         }
     }
+    first_present_family(db, BUILT_IN_UI_SERIF_CANDIDATES).unwrap_or("Times New Roman")
+}
+
+/// First concrete monospace family for `fontdb` `Family::Monospace`.
+pub fn resolved_default_mono_family(db: &Database) -> &'static str {
     first_present_family(
         db,
         &[
-            "Noto Serif CJK SC",
-            "Noto Serif CJK JP",
-            "Noto Serif CJK TC",
-            "Noto Serif",
-            "Times New Roman",
-            "Georgia",
+            "Cascadia Code",
+            "Cascadia Mono",
+            "Consolas",
+            "SF Mono",
+            "Menlo",
+            "Monaco",
+            "Courier New",
         ],
     )
-    .unwrap_or("Times New Roman")
+    .unwrap_or("Consolas")
 }
 
 fn resolved_emoji_family(db: &Database) -> Option<&'static str> {
-    // Prefer bundled Noto Color Emoji family names, then OS emoji faces.
     const CANDIDATES: &[&str] = &[
         "Noto Color Emoji",
         "Noto Color Emoji Windows Compatible",
@@ -224,88 +467,226 @@ fn resolved_emoji_family(db: &Database) -> Option<&'static str> {
         .map(|v| v as _)
 }
 
-/// 将 `requested_weight` 归一到同一字体家族可用的“最接近权重”，以避免
-/// `fontdb` 在找不到精确权重时跨家族回退（典型问题：`Segoe UI` 的 500 回退到 `Dubai`）。
-pub fn normalize_weight_for_family<'a>(
+/// Result of CSS-like family + weight matching for one shaping request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedFaceWeight {
+    /// Value passed to `Attrs::weight` (VF: requested; static: CSS-matched face).
+    pub attrs_weight: u16,
+    /// Family has a `wght` axis covering the request — cosmic interpolates.
+    pub variable: bool,
+    /// No matching bolder face; paint may thicken Regular (`font-synthesis: weight`).
+    pub synthetic_bold: bool,
+}
+
+#[derive(Clone, Debug)]
+struct FamilyWeightProfile {
+    discrete: Vec<u16>,
+    wght: Option<(f32, f32)>,
+}
+
+const WGHT_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"wght");
+
+fn face_wght_range(db: &Database, id: glyphon::fontdb::ID) -> Option<(f32, f32)> {
+    db.with_face_data(id, |data, index| {
+        let face = ttf_parser::Face::parse(data, index).ok()?;
+        let axis = face
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == WGHT_TAG)?;
+        Some((axis.min_value, axis.max_value))
+    })
+    .flatten()
+}
+
+fn family_weight_profile(db: &Database, name: &str) -> FamilyWeightProfile {
+    let family_h = family_name_hash(name);
+    ensure_local_caches_current();
+    if let Some(hit) = FAMILY_PROFILE_CACHE.with(|c| c.borrow().get(&family_h).cloned()) {
+        return hit;
+    }
+
+    let mut ids_weights: Vec<(glyphon::fontdb::ID, u16)> = Vec::new();
+    for face in db.faces() {
+        if face.families.iter().any(|(n, _)| *n == name) {
+            ids_weights.push((face.id, face.weight.0));
+        }
+    }
+
+    let mut discrete: Vec<u16> = ids_weights.iter().map(|(_, w)| *w).collect();
+    discrete.sort_unstable();
+    discrete.dedup();
+
+    let mut wght_min = f32::MAX;
+    let mut wght_max = f32::MIN;
+    let mut found_vf = false;
+    for (id, _) in ids_weights {
+        if let Some((a, b)) = face_wght_range(db, id) {
+            found_vf = true;
+            wght_min = wght_min.min(a);
+            wght_max = wght_max.max(b);
+        }
+    }
+
+    let profile = FamilyWeightProfile {
+        discrete,
+        wght: found_vf.then_some((wght_min, wght_max)),
+    };
+    FAMILY_PROFILE_CACHE.with(|c| {
+        c.borrow_mut().insert(family_h, profile.clone());
+    });
+    profile
+}
+
+/// CSS Fonts 4 font-style matching for the weight axis (discrete faces).
+pub fn css_fonts4_match_weight(desired: u16, available: &[u16]) -> Option<u16> {
+    if available.is_empty() {
+        return None;
+    }
+    if available.binary_search(&desired).is_ok() {
+        return Some(desired);
+    }
+    let desired_i = desired as i32;
+    if (400..=500).contains(&desired) {
+        if let Some(w) = available
+            .iter()
+            .copied()
+            .filter(|w| (*w as i32) >= desired_i && *w <= 500)
+            .min()
+        {
+            return Some(w);
+        }
+        if let Some(w) = available
+            .iter()
+            .copied()
+            .filter(|w| (*w as i32) < desired_i)
+            .max()
+        {
+            return Some(w);
+        }
+        return available.iter().copied().filter(|w| *w > 500).min();
+    }
+    if desired < 400 {
+        if let Some(w) = available
+            .iter()
+            .copied()
+            .filter(|w| (*w as i32) <= desired_i)
+            .max()
+        {
+            return Some(w);
+        }
+        return available
+            .iter()
+            .copied()
+            .filter(|w| (*w as i32) > desired_i)
+            .min();
+    }
+    if let Some(w) = available
+        .iter()
+        .copied()
+        .filter(|w| (*w as i32) >= desired_i)
+        .min()
+    {
+        return Some(w);
+    }
+    available
+        .iter()
+        .copied()
+        .filter(|w| (*w as i32) < desired_i)
+        .max()
+}
+
+fn resolve_face_weight_uncached(
+    db: &Database,
+    name: &str,
+    requested_weight: u16,
+) -> ResolvedFaceWeight {
+    let profile = family_weight_profile(db, name);
+    if let Some((min, max)) = profile.wght {
+        let req = requested_weight as f32;
+        if req >= min - 0.5 && req <= max + 0.5 {
+            return ResolvedFaceWeight {
+                attrs_weight: requested_weight,
+                variable: true,
+                synthetic_bold: false,
+            };
+        }
+    }
+
+    let matched =
+        css_fonts4_match_weight(requested_weight, &profile.discrete).unwrap_or(requested_weight);
+
+    let synth_enabled = text_defaults().synthetic_bold;
+    let needs_synth = synth_enabled
+        && requested_weight >= 500
+        && matched < requested_weight
+        && profile.wght.is_none();
+
+    ResolvedFaceWeight {
+        attrs_weight: matched,
+        variable: false,
+        synthetic_bold: needs_synth,
+    }
+}
+
+/// CSS Fonts 4 + variable `wght` matching for `family` at `requested_weight`.
+pub fn resolve_face_weight<'a>(
     db: &Database,
     family: Family<'a>,
     requested_weight: u16,
-) -> u16 {
+) -> ResolvedFaceWeight {
     let name = match family {
         Family::Name(n) => n,
-        // Generic families map to our renderer defaults.
         Family::SansSerif => resolved_default_sans_family(db),
         Family::Serif => resolved_default_serif_family(db),
-        // For other generics, keep original requested weight.
-        Family::Monospace | Family::Cursive | Family::Fantasy => {
-            return requested_weight;
+        Family::Monospace => resolved_default_mono_family(db),
+        Family::Cursive | Family::Fantasy => {
+            return ResolvedFaceWeight {
+                attrs_weight: requested_weight,
+                variable: false,
+                synthetic_bold: false,
+            };
         }
     };
 
-    if requested_weight == 0 {
-        return requested_weight;
+    if requested_weight == 0 || name.eq_ignore_ascii_case("lucide") {
+        return ResolvedFaceWeight {
+            attrs_weight: requested_weight,
+            variable: false,
+            synthetic_bold: false,
+        };
     }
 
+    ensure_local_caches_current();
     let family_h = family_name_hash(name);
-
-    if let Some(hit) = WEIGHT_NORMALIZE_CACHE
-        .with(|cache| cache.borrow().get(&(family_h, requested_weight)).copied())
+    if let Some(hit) =
+        WEIGHT_NORMALIZE_CACHE.with(|c| c.borrow().get(&(family_h, requested_weight)).copied())
     {
         return hit;
     }
 
-    let weights = FAMILY_FACE_WEIGHTS_CACHE.with(|cache| {
-        if let Some(v) = cache.borrow().get(&family_h).cloned() {
-            return v;
-        }
-
-        let mut seen = Vec::new();
-        for face in db.faces() {
-            if face.families.iter().any(|(n, _)| *n == name) {
-                seen.push(face.weight.0);
-            }
-        }
-        seen.sort_unstable();
-        seen.dedup();
-        let out = seen;
-
-        cache.borrow_mut().insert(family_h, out.clone());
-        out
-    });
-
-    let effective = if weights.is_empty() || weights.binary_search(&requested_weight).is_ok() {
-        requested_weight
-    } else {
-        // Pick the nearest available face weight within the same family.
-        *weights
-            .iter()
-            .min_by_key(|w| {
-                let candidate = **w;
-                let dist = (candidate as i32 - requested_weight as i32).abs();
-                // When distances are equal (e.g. 600 between 500/700), prefer the heavier one
-                // so UI weights remain visually distinguishable.
-                let tie_break = if candidate < requested_weight {
-                    1u8
-                } else {
-                    0u8
-                };
-                (dist, tie_break)
-            })
-            .unwrap_or(&requested_weight)
-    };
-
+    let resolved = resolve_face_weight_uncached(db, name, requested_weight);
     WEIGHT_NORMALIZE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.len() > 4096 {
             cache.clear();
         }
-        cache.insert((family_h, requested_weight), effective);
+        cache.insert((family_h, requested_weight), resolved);
     });
-
-    effective
+    resolved
 }
 
-#[derive(Clone, Copy)]
+/// Weight passed to `Attrs` after family matching (VF interpolates; static uses CSS Fonts 4).
+///
+/// Prefer [`resolve_face_weight`] when the caller needs the synthetic-bold flag.
+pub fn normalize_weight_for_family<'a>(
+    db: &Database,
+    family: Family<'a>,
+    requested_weight: u16,
+) -> u16 {
+    resolve_face_weight(db, family, requested_weight).attrs_weight
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedFamilyCached {
     Named(&'static str),
     SansSerif,
@@ -319,9 +700,10 @@ thread_local! {
     static RESOLVE_FAMILY_CACHE: RefCell<HashMap<String, ResolvedFamilyCached>> = RefCell::new(HashMap::new());
 }
 
-/// Clears the process-local [`resolve_family`] cache (e.g. after bundled fonts load).
+/// Clears the process-local [`resolve_family`] / weight caches (e.g. after bundled fonts load).
 pub fn clear_resolve_family_cache() {
-    RESOLVE_FAMILY_CACHE.with(|c| c.borrow_mut().clear());
+    bump_font_match_caches();
+    ensure_local_caches_current();
 }
 
 fn family_name_present(db: &Database, name: &str) -> bool {
@@ -336,11 +718,7 @@ fn is_specific_family_request(family_list: &str) -> bool {
         if name.is_empty() {
             return false;
         }
-        let lower = name.to_ascii_lowercase();
-        !matches!(
-            lower.as_str(),
-            "sans-serif" | "sans" | "serif" | "monospace" | "mono" | "cursive" | "fantasy"
-        )
+        !is_css_generic_family(name)
     })
 }
 
@@ -349,6 +727,7 @@ fn is_specific_family_request(family_list: &str) -> bool {
 ///
 /// If no font in the list is found, it returns `Family::SansSerif` by default.
 pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
+    ensure_local_caches_current();
     let cached = RESOLVE_FAMILY_CACHE.with(|c| c.borrow().get(family_list).copied());
     if let Some(entry) = cached {
         match entry {
@@ -399,6 +778,28 @@ pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
     result
 }
 
+fn map_generic_sans<'a>(db: &Database) -> Family<'a> {
+    let mapped = resolved_default_sans_family(db);
+    if db
+        .faces()
+        .any(|face| face.families.iter().any(|(f, _)| f == mapped))
+    {
+        return Family::Name(mapped);
+    }
+    Family::SansSerif
+}
+
+fn map_generic_serif<'a>(db: &Database) -> Family<'a> {
+    let mapped = resolved_default_serif_family(db);
+    if db
+        .faces()
+        .any(|face| face.families.iter().any(|(f, _)| f == mapped))
+    {
+        return Family::Name(mapped);
+    }
+    Family::Serif
+}
+
 fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
     for raw_name in family_list.split(',').map(|s| s.trim()) {
         let name = raw_name.trim_matches(|c| c == '\'' || c == '"');
@@ -406,36 +807,20 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
             continue;
         }
 
-        // Handle standard generic families.
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
-            "sans-serif" | "sans" => {
-                let mapped = resolved_default_sans_family(db);
-                if db
-                    .faces()
-                    .any(|face| face.families.iter().any(|(f, _)| f == mapped))
-                {
-                    return Family::Name(mapped);
-                }
-                return Family::SansSerif;
+            "sans-serif" | "sans" | "system-ui" | "ui-sans-serif" | "ui-rounded" => {
+                return map_generic_sans(db);
             }
-            "serif" => {
-                let mapped = resolved_default_serif_family(db);
-                if db
-                    .faces()
-                    .any(|face| face.families.iter().any(|(f, _)| f == mapped))
-                {
-                    return Family::Name(mapped);
-                }
-                return Family::Serif;
+            "serif" | "ui-serif" => {
+                return map_generic_serif(db);
             }
-            "monospace" | "mono" => return Family::Monospace,
+            "monospace" | "mono" | "ui-monospace" => return Family::Monospace,
             "cursive" => return Family::Cursive,
             "fantasy" => return Family::Fantasy,
             _ => {}
         }
 
-        // Locale-aware aliases within Noto CJK families.
         let alias = match lower.as_str() {
             "noto sans cjk" => resolved_noto_sans_cjk_family(db),
             "noto serif cjk" => Some(resolved_default_serif_family(db)),
@@ -461,7 +846,6 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
             }
         }
 
-        // Query the database to see if this specific face exists by checking families directly.
         if db
             .faces()
             .any(|face| face.families.iter().any(|(f, _)| f == name))
@@ -505,5 +889,66 @@ mod resolve_family_cache_tests {
         assert_eq!(sans, "Segoe UI");
         std::env::remove_var("RUI_FONT_FAMILY");
         clear_resolve_family_cache();
+    }
+
+    #[test]
+    fn css_fonts4_weight_matching_examples() {
+        let segoe = [400_u16, 600, 700];
+        assert_eq!(css_fonts4_match_weight(400, &segoe), Some(400));
+        assert_eq!(css_fonts4_match_weight(500, &segoe), Some(400));
+        assert_eq!(css_fonts4_match_weight(600, &segoe), Some(600));
+        assert_eq!(css_fonts4_match_weight(700, &segoe), Some(700));
+        assert_eq!(css_fonts4_match_weight(800, &segoe), Some(700));
+        assert_eq!(css_fonts4_match_weight(300, &segoe), Some(400));
+        let only_reg = [400_u16];
+        assert_eq!(css_fonts4_match_weight(500, &only_reg), Some(400));
+        assert_eq!(css_fonts4_match_weight(700, &only_reg), Some(400));
+        let gap = [400_u16, 700];
+        assert_eq!(css_fonts4_match_weight(600, &gap), Some(700));
+    }
+
+    #[test]
+    fn segoe_medium_uses_regular_plus_synthetic_bold() {
+        let fs = create_font_system();
+        let family = crate::renderer::text_hit::best_font_family(&fs);
+        let resolved = resolve_face_weight(fs.db(), family, 500);
+        if resolved.variable {
+            assert_eq!(resolved.attrs_weight, 500);
+            assert!(!resolved.synthetic_bold);
+        } else {
+            assert!(
+                resolved.attrs_weight <= 500,
+                "CSS match for 500 should not jump past Medium (got {})",
+                resolved.attrs_weight
+            );
+            if resolved.attrs_weight < 500 {
+                assert!(
+                    resolved.synthetic_bold,
+                    "no Medium face → font-synthesis: weight"
+                );
+            }
+        }
+        let bold = resolve_face_weight(fs.db(), family, 700);
+        assert!(
+            bold.attrs_weight >= 600,
+            "Bold should land on a real bolder face when loaded (got {})",
+            bold.attrs_weight
+        );
+    }
+
+    #[test]
+    fn set_text_defaults_overrides_size_and_weight() {
+        let prev = text_defaults();
+        set_text_defaults(TextDefaults {
+            family: prev.family.clone(),
+            size_px: 18.0,
+            weight: 500,
+            synthetic_bold: false,
+        });
+        let d = text_defaults();
+        assert_eq!(d.size_px, 18.0);
+        assert_eq!(d.weight, 500);
+        assert!(!d.synthetic_bold);
+        set_text_defaults(prev);
     }
 }

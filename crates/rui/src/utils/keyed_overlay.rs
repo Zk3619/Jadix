@@ -65,12 +65,24 @@ fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
         .template_id
         .as_deref()
         .is_some_and(|t| t.ends_with("__modal_zoom"));
+    // Fresh already seeded exit; do not replace it with leftover enter.
+    if fresh
+        .style
+        .animations
+        .iter()
+        .any(|a| a.name == "fade-out-0" || a.name.starts_with("rui-modal-slide-out-"))
+    {
+        return;
+    }
     let enter_mid_rebuild = prev.style.opacity + 0.02 < fresh.style.opacity
         || (is_zoom && (prev.style.scale[0] + 0.02 < fresh.style.scale[0]));
     if !modal_shell_should_preserve_motion(prev) && !enter_mid_rebuild {
         return;
     }
     copy_keyed_motion_state(fresh, prev);
+    fresh.style.opacity = prev.style.opacity;
+    fresh.style.translate = prev.style.translate;
+    fresh.style.translate_pct = prev.style.translate_pct;
     if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
         fresh.style.transition = prev.style.transition.clone();
     }
@@ -102,6 +114,8 @@ fn preserve_floating_panel_motion(fresh: &mut Element, prev: &Element) {
         return;
     }
     copy_keyed_motion_state(fresh, prev);
+    // Fade 动画拥有 opacity；copy_keyed 只抄 transition / snapshot 属性。
+    fresh.style.opacity = prev.style.opacity;
     // Expand 动画拥有 max-height；copy_keyed 默认只在 transition 时抄。
     fresh.style.max_size.height = prev.style.max_size.height;
     fresh.style.min_size.height = prev.style.min_size.height;
@@ -178,6 +192,8 @@ pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -
     let preserve = !fresh.style.transition.is_empty()
         && (is_keyed_motion_item(fresh.template_id.as_deref())
             || prev.transition_snapshot.has_active_tweens()
+            || prev.transition_snapshot.has_any_tweens()
+            || !prev.style.transition.is_empty()
             || css_transition_needs_frame(&prev.style, &prev.transition_snapshot));
     if preserve {
         copy_keyed_motion_state(fresh, prev);
@@ -276,20 +292,11 @@ fn preserve_keyed_motion_on_hoist(fresh: &mut Element, prev: &Element) {
 fn copy_keyed_motion_state(fresh: &mut Element, prev: &Element) {
     fresh.transition_snapshot = prev.transition_snapshot.clone();
     fresh.animation_snapshot = prev.animation_snapshot.clone();
-    fresh.style.translate = prev.style.translate;
-    fresh.style.opacity = prev.style.opacity;
-    fresh.style.scale = prev.style.scale;
-    fresh.style.rotate_deg = prev.style.rotate_deg;
-    fresh.style.shadow_color = prev.style.shadow_color;
-    if prev
-        .style
-        .transition
-        .iter()
-        .any(|e| e.property == crate::style::TransitionProperty::MaxHeight)
-        || prev.transition_snapshot.has_active_tweens()
-    {
-        fresh.style.max_size.height = prev.style.max_size.height;
-    }
+    crate::style::copy_transition_used_values(
+        &mut fresh.style,
+        &prev.style,
+        &prev.transition_snapshot,
+    );
 }
 
 fn take_templated_descendants(node: &mut Element, out: &mut HashMap<String, Element>) {
@@ -359,7 +366,10 @@ mod tests {
 
         adopt_keyed_overlay(&mut fresh, &mut prev);
         assert!((fresh.style.translate[0] - 10.0).abs() < f32::EPSILON);
-        assert!((fresh.style.opacity - 0.5).abs() < f32::EPSILON);
+        assert!(
+            (fresh.style.opacity - 1.0).abs() < f32::EPSILON,
+            "opacity is not in the declared transition list and must not be whitelist-copied"
+        );
     }
 
     #[test]
@@ -390,7 +400,10 @@ mod tests {
 
         assert!(preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
         assert!((fresh.style.scale[0] - 0.9).abs() < f32::EPSILON);
-        assert!((fresh.style.shadow_color[3] - 0.4).abs() < f32::EPSILON);
+        assert!(
+            (fresh.style.shadow_color[3] - 0.0).abs() < f32::EPSILON,
+            "box-shadow is not an active tween property here"
+        );
     }
 
     #[test]
@@ -553,6 +566,90 @@ mod tests {
             (fresh.style.opacity - 1.0).abs() < f32::EPSILON,
             "panel must stay opaque during enter"
         );
+
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn modal_shell_exit_seed_survives_adopt_over_settled_enter() {
+        let mut prev = Element::new().template_id("sheet__modal_overlay");
+        prev.style.opacity = 1.0;
+        prev.style.animations = vec![crate::style::keyframes_anim_entry(
+            "fade-in-0",
+            450.0,
+            crate::style::TimingFunction::EaseOut,
+            crate::style::AnimationFillMode::Both,
+        )];
+
+        let mut fresh = Element::new().template_id("sheet__modal_overlay");
+        fresh.style.opacity = 1.0;
+        fresh.style.animations = vec![crate::style::keyframes_anim_entry(
+            "fade-out-0",
+            400.0,
+            crate::style::TimingFunction::EaseIn,
+            crate::style::AnimationFillMode::Both,
+        )];
+
+        adopt_keyed_overlay(&mut fresh, &mut prev);
+        assert!(
+            fresh
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-out-0"),
+            "exit fade-out-0 must not be replaced by leftover fade-in-0"
+        );
+    }
+
+    #[test]
+    fn preserve_copies_active_width_tween_on_non_keyed_node() {
+        use crate::style::{
+            set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,
+        };
+        use taffy::style::Dimension;
+
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+
+        let mut prev = Element::new().template_id("prov__rail_open");
+        prev.style.size.width = Dimension::length(256.0);
+        prev.style.min_size.width = Dimension::length(256.0);
+        prev.style.transition.push(TransitionEntry {
+            property: TransitionProperty::Width,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        prev.style.transition.push(TransitionEntry {
+            property: TransitionProperty::MinWidth,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let _ = prev.tick_css_transitions(0.0);
+        prev.style.size.width = Dimension::length(48.0);
+        prev.style.min_size.width = Dimension::length(48.0);
+        let _ = prev.tick_css_transitions(0.0);
+        set_css_transition_timeline_ms(80.0);
+        let _ = prev.tick_css_transitions(0.0);
+        let mid = crate::layout::dim_length_px(prev.style.size.width).unwrap_or(-1.0);
+        assert!(
+            mid > 48.0 && mid < 256.0,
+            "sanity: prev should be mid-collapse, got {mid}"
+        );
+
+        let mut fresh = Element::new().template_id("prov__rail_open");
+        fresh.style.size.width = Dimension::length(256.0);
+        fresh.style.min_size.width = Dimension::length(256.0);
+        fresh.style.transition = prev.style.transition.clone();
+
+        assert!(preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
+        let kept = crate::layout::dim_length_px(fresh.style.size.width).unwrap_or(-1.0);
+        assert!(
+            (kept - mid).abs() < 0.5,
+            "used width must survive rebuild paint 16rem, mid={mid} got {kept}"
+        );
+        assert!(fresh.transition_snapshot.has_active_tweens());
 
         set_css_transition_virtual_timeline(false);
     }
