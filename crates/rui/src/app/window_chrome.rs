@@ -43,6 +43,14 @@ pub struct WindowOptions {
     /// Enable runtime Inspector (F12). Requires `rui` crate feature `devtools`.
     #[cfg(feature = "devtools")]
     pub devtools: bool,
+    /// CSS `font-family` list applied as the document default (overrides `RUI_FONT_FAMILY`).
+    pub default_font_family: Option<String>,
+    /// Default font size in logical px (overrides `RUI_FONT_SIZE`, cascade root).
+    pub default_font_size: Option<f32>,
+    /// Default `font-weight` (overrides `RUI_FONT_WEIGHT`, cascade root).
+    pub default_font_weight: Option<u16>,
+    /// CSS `font-synthesis: weight`. `None` = env `RUI_SYNTHETIC_BOLD` (default on).
+    pub synthetic_bold: Option<bool>,
 }
 
 impl Default for WindowOptions {
@@ -57,6 +65,10 @@ impl Default for WindowOptions {
             backdrop: WindowBackdrop::Acrylic,
             #[cfg(feature = "devtools")]
             devtools: false,
+            default_font_family: None,
+            default_font_size: None,
+            default_font_weight: None,
+            synthetic_bold: None,
         }
     }
 }
@@ -107,6 +119,48 @@ impl WindowOptions {
     pub fn devtools(mut self, enabled: bool) -> Self {
         self.devtools = enabled;
         self
+    }
+
+    /// Document default `font-family` (CSS comma-separated list).
+    pub fn default_font(mut self, family: impl Into<String>) -> Self {
+        self.default_font_family = Some(family.into());
+        self
+    }
+
+    /// Document default font size in logical pixels.
+    pub fn default_font_size(mut self, px: f32) -> Self {
+        self.default_font_size = Some(px.max(1.0));
+        self
+    }
+
+    /// Document default `font-weight` (100–900).
+    pub fn default_font_weight(mut self, weight: u16) -> Self {
+        self.default_font_weight = Some(weight.clamp(100, 900));
+        self
+    }
+
+    /// CSS `font-synthesis: weight` when a requested face (e.g. Medium 500) is missing.
+    pub fn synthetic_bold(mut self, enabled: bool) -> Self {
+        self.synthetic_bold = Some(enabled);
+        self
+    }
+
+    /// Push these options into process-wide [`crate::utils::font::TextDefaults`].
+    pub(crate) fn install_text_defaults(&self) {
+        let mut d = crate::utils::font::text_defaults();
+        if let Some(ref family) = self.default_font_family {
+            d.family = Some(family.clone());
+        }
+        if let Some(size) = self.default_font_size {
+            d.size_px = size;
+        }
+        if let Some(weight) = self.default_font_weight {
+            d.weight = weight;
+        }
+        if let Some(synth) = self.synthetic_bold {
+            d.synthetic_bold = synth;
+        }
+        crate::utils::font::set_text_defaults(d);
     }
 
     /// Surface / clear color must expose alpha (transparent **or** blur).

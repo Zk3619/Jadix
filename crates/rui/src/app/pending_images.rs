@@ -2,6 +2,9 @@
 //!
 //! [`SrcLoadState`] 供 [`crate::components::AvatarImage`] 等在解码失败或 `src` 为空时回退到
 //! [`crate::components::AvatarFallback`]。
+//!
+//! `http(s)` `src`：默认立即 [`SrcLoadState::Failed`]；`features = ["remote-asset"]` 时后台调用
+//! 应用安装的 [`crate::media::RemoteAssetFetcher`]（见 [`crate::media::is_remote_src`]）。
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -9,7 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::core::reactivity::Signal;
-use crate::media::{decode_bytes, load_src, DecodeOptions, DecodedAnimation, DecodedImage};
+use crate::media::{
+    decode_bytes, is_remote_src, load_src, DecodeOptions, DecodedAnimation, DecodedImage,
+};
 
 static PENDING: Mutex<Vec<(String, Vec<u8>, u32, u32)>> = Mutex::new(Vec::new());
 /// Decoded `src` images kept on CPU so TexturePool eviction can rehydrate.
@@ -138,6 +143,9 @@ pub fn ensure_src_loaded(key: &str, src: &str) -> SrcLoadState {
         }
         return state;
     }
+    if is_remote_src(src) {
+        return begin_remote_src_load(key, src, None);
+    }
     publish_src_load_state(key, SrcLoadState::Pending);
     let ok = decode_and_queue_src(key, src);
     let state = if ok {
@@ -147,6 +155,50 @@ pub fn ensure_src_loaded(key: &str, src: &str) -> SrcLoadState {
     };
     publish_src_load_state(key, state);
     state
+}
+
+/// `http(s)`：无 feature 立即失败；有 feature 则 Pending，worker 上调 [`crate::media::fetch_remote_bytes`]。
+fn begin_remote_src_load(key: &str, src: &str, mask: Option<AvatarImageMask>) -> SrcLoadState {
+    #[cfg(not(feature = "remote-asset"))]
+    {
+        let _ = mask;
+        log::debug!("rui: remote src ignored (enable features = [\"remote-asset\"]): {src}");
+        publish_src_load_state(key, SrcLoadState::Failed);
+        SrcLoadState::Failed
+    }
+    #[cfg(feature = "remote-asset")]
+    {
+        publish_src_load_state(key, SrcLoadState::Pending);
+        let key_owned = key.to_string();
+        let src_owned = src.to_string();
+        super::ui_bridge::spawn_blocking(
+            move || fetch_decode_remote(&src_owned, mask),
+            move |result| match result {
+                Ok(img) => {
+                    cache_decoded(key_owned.clone(), &img);
+                    mark_src_needed(&key_owned);
+                    queue_decoded(&key_owned, &img);
+                    publish_src_load_state(&key_owned, SrcLoadState::Ready);
+                }
+                Err(err) => {
+                    log::warn!("rui: remote-asset failed for {key_owned}: {err}");
+                    publish_src_load_state(&key_owned, SrcLoadState::Failed);
+                }
+            },
+        );
+        SrcLoadState::Pending
+    }
+}
+
+#[cfg(feature = "remote-asset")]
+fn fetch_decode_remote(src: &str, mask: Option<AvatarImageMask>) -> Result<DecodedImage, String> {
+    let bytes = crate::media::fetch_remote_bytes(src)?;
+    let mut img = decode_bytes(&bytes, DecodeOptions::image())
+        .ok_or_else(|| "unsupported or corrupt image".to_string())?;
+    if let Some(mask) = mask {
+        apply_shape_alpha_mask(&mut img.rgba, img.width, img.height, mask);
+    }
+    Ok(img)
 }
 
 fn decode_and_queue_src(key: &str, src: &str) -> bool {
@@ -313,6 +365,9 @@ pub fn ensure_avatar_src_loaded(key: &str, src: &str, mask: AvatarImageMask) -> 
         }
         return state;
     }
+    if is_remote_src(src) {
+        return begin_remote_src_load(key, src, Some(mask));
+    }
     publish_src_load_state(key, SrcLoadState::Pending);
     let ok = decode_and_queue_avatar_src(key, src, mask);
     let state = if ok {
@@ -386,8 +441,9 @@ pub fn queue_image_from_path(id: impl Into<String>, path: impl AsRef<str>) -> bo
     queue_image_from_src(id, path.as_ref())
 }
 
-/// Decode and queue from `data:` / local path. The same `id` is decoded only once; after GPU eviction it is
-/// [`flush_src_textures`] 从 CPU 缓存回补。禁止 `http(s)`。
+/// Decode and queue from `data:` / local path / (with `remote-asset`) `http(s)`.
+/// The same `id` is decoded only once; after GPU eviction it is
+/// [`flush_src_textures`] 从 CPU 缓存回补。无 feature 时 `http(s)` 失败。
 pub fn queue_image_from_src(id: impl Into<String>, src: &str) -> bool {
     let id = id.into();
     ensure_src_loaded(&id, src).is_ready()
@@ -530,6 +586,128 @@ mod tests {
     fn ensure_src_loaded_empty_src_is_failed() {
         let state = ensure_src_loaded("rui-test-src-empty", "");
         assert_eq!(state, SrcLoadState::Failed);
+    }
+
+    #[cfg(not(feature = "remote-asset"))]
+    #[test]
+    fn ensure_src_loaded_http_fails_without_feature() {
+        let key = "rui-test-src-http-disabled";
+        let state = ensure_src_loaded(key, "https://example.invalid/rui-test.png");
+        assert_eq!(state, SrcLoadState::Failed);
+        assert_eq!(src_load_state_for_key(key), SrcLoadState::Failed);
+        assert!(!queue_image_from_src(
+            key,
+            "https://example.invalid/rui-test.png"
+        ));
+    }
+
+    #[cfg(feature = "remote-asset")]
+    #[test]
+    fn ensure_src_loaded_remote_uses_installed_fetcher() {
+        use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
+        use crate::media::encode_png;
+        use crate::media::remote::with_remote_fetcher;
+
+        let png = encode_png(&DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 255, 0, 255],
+            intrinsic_hotspot: None,
+            animation: None,
+        })
+        .expect("png");
+        let url = "https://rui.test/remote-src.png";
+        let key = format!("rui-test-remote-src:{url}");
+        with_remote_fetcher(
+            {
+                let png = png.clone();
+                move |u: &str| {
+                    assert_eq!(u, url);
+                    Ok(png.clone())
+                }
+            },
+            || {
+                let _ui = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                assert_eq!(ensure_src_loaded(&key, url), SrcLoadState::Pending);
+                for _ in 0..200 {
+                    drain_ui_tasks();
+                    if src_load_state_for_key(&key).is_ready() {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                drain_ui_tasks();
+                assert_eq!(
+                    src_load_state_for_key(&key),
+                    SrcLoadState::Ready,
+                    "installed fetcher should supply PNG bytes"
+                );
+            },
+        );
+    }
+
+    #[cfg(feature = "remote-asset")]
+    #[test]
+    fn ensure_src_loaded_remote_fails_without_fetcher() {
+        use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
+        use crate::media::remote::{clear_remote_asset_fetcher, FETCHER_TEST_LOCK};
+
+        let _fetch = FETCHER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_remote_asset_fetcher();
+        let _ui = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let url = "https://rui.test/missing-fetcher.png";
+        let key = format!("rui-test-remote-nofetch:{url}");
+        assert_eq!(ensure_src_loaded(&key, url), SrcLoadState::Pending);
+        for _ in 0..200 {
+            drain_ui_tasks();
+            if src_load_state_for_key(&key) == SrcLoadState::Failed {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        drain_ui_tasks();
+        assert_eq!(src_load_state_for_key(&key), SrcLoadState::Failed);
+    }
+
+    #[cfg(feature = "remote-asset")]
+    #[test]
+    fn ensure_avatar_src_loaded_remote_uses_installed_fetcher() {
+        use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
+        use crate::media::encode_png;
+        use crate::media::remote::with_remote_fetcher;
+
+        let png = encode_png(&DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 255, 255],
+            intrinsic_hotspot: None,
+            animation: None,
+        })
+        .expect("png");
+        let url = "https://rui.test/remote-avatar.png";
+        let key = format!("rui-test-remote-avatar:{url}");
+        with_remote_fetcher(
+            {
+                let png = png.clone();
+                move |_: &str| Ok(png.clone())
+            },
+            || {
+                let _ui = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                assert_eq!(
+                    ensure_avatar_src_loaded(&key, url, AvatarImageMask::Circle),
+                    SrcLoadState::Pending
+                );
+                for _ in 0..200 {
+                    drain_ui_tasks();
+                    if src_load_state_for_key(&key).is_ready() {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                drain_ui_tasks();
+                assert_eq!(src_load_state_for_key(&key), SrcLoadState::Ready);
+            },
+        );
     }
 
     #[test]

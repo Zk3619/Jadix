@@ -160,6 +160,63 @@ pub(super) fn decay_scroll_velocity(vx: f32, vy: f32, dt: f32, friction_per_sec:
     [nx, ny]
 }
 
+/// Quantize a logical scroll offset to whole device pixels so glyphs, synthetic-bold
+/// shadows, and page fills move on the same grid (avoids chase-tail jitter).
+pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32 {
+    let s = ui_scale.max(0.01);
+    (offset * s).round() / s
+}
+
+/// Ease `current` toward `target` on the device-pixel grid.
+///
+/// A hidden subpixel phase + `round()` for paint made the tail chatter against
+/// glyphon / synthetic-bold (inertia jitter). The last 16 device pixels are a
+/// regular 1px staircase — no leftover phase, and never dump 2px after a stall.
+/// Returns `(paint_offset, still_animating)`.
+pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f32) -> (f32, bool) {
+    const TAU_SEC: f32 = 0.14;
+    const MAX_ALPHA: f32 = 0.18;
+    const TAIL_DEVICE_PX: f32 = 16.0;
+    let scale = ui_scale.max(0.01);
+    let device_px = 1.0 / scale;
+    let target = snap_scroll_offset_to_device_px(target, scale);
+    let current = snap_scroll_offset_to_device_px(current, scale);
+    let remaining = target - current;
+    if !remaining.is_finite() {
+        return (target, false);
+    }
+    if remaining.abs() < device_px * 0.5 {
+        return (target, false);
+    }
+
+    let sign = remaining.signum();
+    let dist_px = remaining.abs() / device_px;
+    let step1 = snap_scroll_offset_to_device_px(current + device_px * sign, scale);
+
+    if dist_px <= TAIL_DEVICE_PX {
+        if (remaining > 0.0 && step1 >= target) || (remaining < 0.0 && step1 <= target) {
+            return (target, false);
+        }
+        return (step1, true);
+    }
+
+    let raw_alpha = 1.0 - (-dt.max(0.0) / TAU_SEC).exp();
+    let alpha = raw_alpha.min(MAX_ALPHA).clamp(0.0, 1.0);
+    let mut next = snap_scroll_offset_to_device_px(current + remaining * alpha, scale);
+    if remaining > 0.0 {
+        next = next.min(target);
+    } else {
+        next = next.max(target);
+    }
+    if (next - current).abs() < device_px * 0.25 {
+        next = step1;
+        if (remaining > 0.0 && next >= target) || (remaining < 0.0 && next <= target) {
+            return (target, false);
+        }
+    }
+    (next, true)
+}
+
 fn collect_descendant_extent(
     el: &Element,
     max_right: &mut f32,
@@ -551,6 +608,101 @@ pub(crate) fn set_scroll_offset_with_behavior(
     ty.set_silent(target_y);
 }
 
+/// Apply keyboard / page scroll delta respecting viewport `scroll_behavior`.
+/// Returns `true` when smooth mode wrote targets (caller should keep animating).
+pub(crate) fn apply_scroll_navigation_delta(
+    rest: &str,
+    dx: f32,
+    dy: f32,
+    max_x: f32,
+    max_y: f32,
+) -> bool {
+    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+    let behavior = crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+        crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+    })
+    .peek();
+    let is_smooth = crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
+
+    let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32);
+    let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32);
+    let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
+    let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
+
+    if is_smooth {
+        let next_x = (tx.peek() - dx).clamp(0.0, max_x);
+        let next_y = (ty.peek() - dy).clamp(0.0, max_y);
+        tx.set_silent(next_x);
+        ty.set_silent(next_y);
+        if dx.abs() > 0.1 || dy.abs() > 0.1 {
+            crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32).set_silent(1.0);
+        }
+        true
+    } else {
+        let next_x = (tx.peek() - dx).clamp(0.0, max_x);
+        let next_y = (ty.peek() - dy).clamp(0.0, max_y);
+        set_scroll_offset_with_behavior(rest, next_x, next_y, true);
+        false
+    }
+}
+
+/// Jump to absolute scroll offset (Home/End), honoring smooth vs jump behavior.
+/// Returns `true` when smooth mode wrote targets.
+pub(crate) fn apply_scroll_navigation_absolute(
+    rest: &str,
+    target_x: f32,
+    target_y: f32,
+    max_x: f32,
+    max_y: f32,
+) -> bool {
+    let tx = target_x.clamp(0.0, max_x.max(0.0));
+    let ty = target_y.clamp(0.0, max_y.max(0.0));
+    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+    let behavior = crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+        crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+    })
+    .peek();
+    if crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior) {
+        crate::core::reactivity::use_signal(keys.target_x.as_str(), || 0.0_f32).set_silent(tx);
+        crate::core::reactivity::use_signal(keys.target_y.as_str(), || 0.0_f32).set_silent(ty);
+        crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32).set_silent(1.0);
+        true
+    } else {
+        set_scroll_offset_with_behavior(rest, tx, ty, true);
+        false
+    }
+}
+
+/// Nudge a scroll viewport along Y (positive `delta` scrolls content up / decreases offset).
+/// Returns `Some(is_smooth)` when scrolled, `None` when unchanged.
+pub(crate) fn nudge_scroll_viewport_y(rest: &str, delta: f32) -> Option<bool> {
+    if delta.abs() < 0.5 {
+        return None;
+    }
+    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+    let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
+    let vh = crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek();
+    let ch = crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32).peek();
+    let max_y = (ch - vh).max(0.0);
+    if max_y < 0.5 {
+        return None;
+    }
+    let next = (sy - delta).clamp(0.0, max_y);
+    if (next - sy).abs() < 0.5 {
+        return None;
+    }
+    let vw = crate::core::reactivity::use_signal(keys.viewport_w.as_str(), || 0.0_f32).peek();
+    let cw = crate::core::reactivity::use_signal(keys.content_w.as_str(), || 0.0_f32).peek();
+    let max_x = (cw - vw).max(0.0);
+    Some(apply_scroll_navigation_delta(
+        rest,
+        0.0,
+        sy - next,
+        max_x,
+        max_y,
+    ))
+}
+
 pub fn get_system_scroll_lines() -> f32 {
     crate::platform::system_scroll_lines()
 }
@@ -569,6 +721,107 @@ mod inertia_tests {
             v = decay_scroll_velocity(v[0], v[1], 0.016, 4.5);
         }
         assert_eq!(v, [0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod smooth_scroll_step_tests {
+    use super::{smooth_scroll_step, snap_scroll_offset_to_device_px};
+
+    #[test]
+    fn snap_aligns_to_device_pixel() {
+        assert!((snap_scroll_offset_to_device_px(10.4, 1.0) - 10.0).abs() < 1e-4);
+        assert!((snap_scroll_offset_to_device_px(10.4, 1.25) - 10.4).abs() < 1e-4);
+        assert!((snap_scroll_offset_to_device_px(10.2, 2.0) - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn chase_tail_snaps_onto_device_grid() {
+        let (next, anim) = smooth_scroll_step(10.2, 10.4, 0.016, 1.0);
+        assert!(
+            !anim,
+            "sub-pixel remainder must snap, still_animating={anim}"
+        );
+        assert!((next - 10.0).abs() < 1e-4);
+        let (done, anim2) = smooth_scroll_step(next, 10.4, 0.016, 1.0);
+        assert!(!anim2);
+        assert!((done - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn tail_does_not_overshoot_then_snap_back() {
+        let target = 10.7_f32;
+        let snapped_t = snap_scroll_offset_to_device_px(target, 1.0);
+        let mut y = 8.0_f32;
+        let mut prev = y;
+        for _ in 0..80 {
+            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
+            assert!(
+                next + 1e-4 >= prev && next <= snapped_t + 1e-4,
+                "non-monotonic or overshoot: {prev} -> {next} (target {snapped_t})"
+            );
+            assert!(
+                (next - prev).abs() <= 1.01 + 1e-3,
+                "tail must not dump >1px: {prev} -> {next}"
+            );
+            y = next;
+            prev = next;
+            if !anim {
+                break;
+            }
+        }
+        assert!((y - snapped_t).abs() < 1e-4);
+    }
+
+    #[test]
+    fn long_chase_paint_stays_on_device_grid() {
+        let mut y = 0.0_f32;
+        let target = 240.0;
+        let scale = 1.25_f32;
+        let mut frames = 0u32;
+        loop {
+            let (next, anim) = smooth_scroll_step(y, target, 0.016, scale);
+            let device = (next * scale).round() / scale;
+            assert!(
+                (next - device).abs() < 1e-4,
+                "offset {next} not on device grid at scale {scale}"
+            );
+            y = next;
+            frames += 1;
+            if !anim {
+                break;
+            }
+            assert!(frames < 400, "chase did not settle");
+        }
+        assert!((y - snap_scroll_offset_to_device_px(target, scale)).abs() < 1e-3);
+        assert!(frames > 4, "should ease over several frames, got {frames}");
+    }
+
+    #[test]
+    fn tail_paint_steps_are_single_device_pixels() {
+        let scale = 1.0_f32;
+        let device_px = 1.0 / scale;
+        let target = 48.0;
+        let mut y = 0.0_f32;
+        let mut frames = 0u32;
+        loop {
+            let (next, anim) = smooth_scroll_step(y, target, 0.016, scale);
+            let remaining = (target - y).abs();
+            let delta = (next - y).abs();
+            if remaining <= 16.0 * device_px + 1e-3 {
+                assert!(
+                    delta <= device_px * 1.01 + 1e-3,
+                    "tail jumped {y} -> {next} (delta {delta}) with {remaining}px left"
+                );
+            }
+            y = next;
+            frames += 1;
+            if !anim {
+                break;
+            }
+            assert!(frames < 400, "chase did not settle");
+        }
+        assert!((y - target).abs() < 1e-3);
     }
 }
 

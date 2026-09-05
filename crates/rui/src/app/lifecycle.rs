@@ -945,6 +945,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
 ) {
     crate::logging::init();
 
+    window_options.install_text_defaults();
     crate::init();
 
     let event_loop = EventLoop::<super::RuiUserEvent>::with_user_event()

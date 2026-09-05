@@ -12,7 +12,9 @@ use winit::window::Window;
 
 use crate::core::reactivity::OwnerHandle;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
-use crate::renderer::{prepare_text_frame, scale_instances, RuiPipeline, RuiTextRenderer};
+use crate::renderer::{
+    prepare_text_frame, scale_clip_polys_in_place, scale_instances, RuiPipeline, RuiTextRenderer,
+};
 
 /// Factory for a secondary window's root [`Element`].
 ///
@@ -144,7 +146,7 @@ impl SecondaryWindowState {
         surface.configure(&device, &config);
         super::window_chrome::apply_created_window(&window, &chrome, false);
 
-        let pipeline = RuiPipeline::new(&device, &config);
+        let mut pipeline = RuiPipeline::new(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
@@ -164,6 +166,12 @@ impl SecondaryWindowState {
         let render_result =
             layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
         let scaled_instances = scale_instances(&render_result.instances, scale);
+        let mut clip_polys = render_result.clip_polys;
+        scale_clip_polys_in_place(&mut clip_polys, scale);
+        while clip_polys.len() < scaled_instances.len() {
+            clip_polys.push(crate::style::GpuClipPoly::NONE);
+        }
+        pipeline.ensure_clip_polys(&device, &queue, &clip_polys);
         let num_instances = render_result.instances.len() as u32;
 
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -226,7 +234,7 @@ impl SecondaryWindowState {
         } = gpu;
         super::window_chrome::apply_created_window(&window, &chrome, true);
 
-        let pipeline = RuiPipeline::new(&device, &config);
+        let mut pipeline = RuiPipeline::new(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
@@ -245,6 +253,12 @@ impl SecondaryWindowState {
         let render_result =
             layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
         let scaled_instances = scale_instances(&render_result.instances, scale);
+        let mut clip_polys = render_result.clip_polys;
+        scale_clip_polys_in_place(&mut clip_polys, scale);
+        while clip_polys.len() < scaled_instances.len() {
+            clip_polys.push(crate::style::GpuClipPoly::NONE);
+        }
+        pipeline.ensure_clip_polys(&device, &queue, &clip_polys);
         let num_instances = render_result.instances.len() as u32;
         let size = PhysicalSize::new(config.width, config.height);
 
@@ -458,6 +472,11 @@ impl SecondaryWindowState {
             .overlay_split
             .chrome_start
             .min(scaled_input_chrome.len());
+        let mut clip_polys = render_result.clip_polys;
+        scale_clip_polys_in_place(&mut clip_polys, scale);
+        while clip_polys.len() < scaled_instances.len() {
+            clip_polys.push(crate::style::GpuClipPoly::NONE);
+        }
 
         if scaled_instances.len() > self.instance_buffer_capacity {
             self.instance_buffer =
@@ -475,6 +494,8 @@ impl SecondaryWindowState {
                 bytemuck::cast_slice(&scaled_instances),
             );
         }
+        self.pipeline
+            .ensure_clip_polys(&self.device, &self.queue, &clip_polys);
         self.layout_status = LayoutStatus::Clean;
         self.last_render_scroll_metrics = render_result.scroll_metrics.clone();
         super::scroll_support::merge_scroll_metrics_cache(
@@ -587,7 +608,8 @@ impl SecondaryWindowState {
             });
 
             render_pass.set_pipeline(&self.pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+            render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
+            render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(
@@ -623,6 +645,7 @@ impl SecondaryWindowState {
             if overlay_chrome_start > 0 {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
                 let chrome_buffer =
@@ -647,6 +670,7 @@ impl SecondaryWindowState {
             if !prep.caret_instances.is_empty() {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let caret_buffer =
                     self.device
@@ -673,7 +697,8 @@ impl SecondaryWindowState {
             for (band_i, band) in overlay_band_ranges.iter().enumerate() {
                 if band.instance.0 < band.instance.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
+                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                     render_pass.set_index_buffer(
@@ -690,6 +715,7 @@ impl SecondaryWindowState {
                 if band.chrome.0 < band.chrome.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
                     let chrome_buffer =
@@ -715,6 +741,7 @@ impl SecondaryWindowState {
                     if !ul.is_empty() {
                         render_pass.set_pipeline(&self.pipeline.render_pipeline);
                         render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                         render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                         let underline_buffer =
                             self.device

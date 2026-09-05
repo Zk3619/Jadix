@@ -755,7 +755,7 @@ impl super::App {
         super::scroll_support::retain_future_instants(&mut self.scrollbar_visible_until, now)
     }
 
-    fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
+    pub(super) fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
         // Small window to bridge discrete wheel ticks (prevents "move-stop-move").
         let until = now + std::time::Duration::from_millis(200);
         self.smooth_active_until.insert(rest.to_string(), until);
@@ -1196,11 +1196,14 @@ impl super::App {
         let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
         let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
         let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
+        let floating_panel_dragging =
+            crate::utils::anchored_overlay::tick_floating_panel_drag(x, y);
         if slider_dragging
             || toast_dragging
             || color_dragging
             || carousel_dragging
             || resizable_dragging
+            || floating_panel_dragging
             || drawer_dragging
             || crate::components::internal::modal_motion::tick_modal_presence()
             || crate::components::internal::floating_motion::tick_floating_presence()
@@ -1272,7 +1275,7 @@ impl super::App {
                             &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
                             || 0.0_f32,
                         )
-                        .get(),
+                        .peek(),
                         true,
                     )
                 }
@@ -1283,7 +1286,7 @@ impl super::App {
                             &crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest),
                             || 0.0_f32,
                         )
-                        .get(),
+                        .peek(),
                         new_offset,
                         true,
                     )
@@ -1312,6 +1315,7 @@ impl super::App {
             && !crate::components::slider::is_slider_dragging()
             && !crate::components::color_picker::is_color_dragging()
             && !crate::components::resizable::is_resizable_dragging()
+            && !crate::utils::anchored_overlay::is_floating_panel_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -2008,6 +2012,7 @@ impl super::App {
             crate::components::carousel::clear_carousel_drag_if_any();
             crate::components::resizable::clear_resizable_drag_if_any();
             crate::components::drawer::clear_drawer_drag_if_any();
+            crate::utils::anchored_overlay::clear_floating_panel_drag();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -2290,6 +2295,189 @@ impl super::App {
         window.request_redraw();
     }
 
+    /// Keyboard scroll: arrows / PageUp·Down / Home·End on the deepest scrollport under
+    /// the cursor (same chain as wheel). `prefer_rest` pins a viewport (textarea inner).
+    /// Returns true when the key was consumed.
+    pub(super) fn try_keyboard_scroll(
+        &mut self,
+        event: &winit::event::KeyEvent,
+        prefer_rest: Option<&str>,
+    ) -> bool {
+        use winit::event::ElementState;
+        use winit::keyboard::{Key, NamedKey};
+
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        if self.modifiers.shift_key() || self.modifiers.alt_key() {
+            return false;
+        }
+        // Ctrl+scroll keys scroll the page while a field keeps focus (caret nav uses plain keys).
+        if self.modifiers.control_key()
+            && !matches!(
+                &event.logical_key,
+                Key::Named(NamedKey::PageUp | NamedKey::PageDown | NamedKey::Home | NamedKey::End)
+            )
+        {
+            return false;
+        }
+
+        enum ScrollAction {
+            Delta(f32, f32),
+            Absolute(f32, f32),
+        }
+
+        let lines = super::scroll_support::get_system_scroll_lines();
+        let line_height = 25.0;
+        let action = match &event.logical_key {
+            Key::Named(NamedKey::ArrowUp) => ScrollAction::Delta(0.0, lines * line_height),
+            Key::Named(NamedKey::ArrowDown) => ScrollAction::Delta(0.0, -lines * line_height),
+            Key::Named(NamedKey::ArrowLeft) => ScrollAction::Delta(lines * line_height, 0.0),
+            Key::Named(NamedKey::ArrowRight) => ScrollAction::Delta(-lines * line_height, 0.0),
+            Key::Named(NamedKey::PageUp) => ScrollAction::Delta(0.0, 0.0), // resolved per viewport
+            Key::Named(NamedKey::PageDown) => ScrollAction::Delta(0.0, 0.0),
+            Key::Named(NamedKey::Home) => ScrollAction::Absolute(0.0, 0.0),
+            Key::Named(NamedKey::End) => ScrollAction::Absolute(f32::NAN, f32::NAN),
+            _ => return false,
+        };
+
+        let mut state_borrow = self.state.borrow_mut();
+        let state = match (*state_borrow).as_mut() {
+            Some(s) => s,
+            None => return false,
+        };
+
+        let scale_factor = state.window.scale_factor() as f32;
+        let x = self.cursor_pos.x as f32 / scale_factor.max(1.0);
+        let y = self.cursor_pos.y as f32 / scale_factor.max(1.0);
+
+        let wheel_path = super::pointer_events::hit_path(&state.root_element, x, y);
+        if super::portal_overlay::overlay_blocks_page_wheel(&wheel_path) {
+            return false;
+        }
+
+        let mut target_rests = Vec::new();
+        if let Some(rest) = prefer_rest.filter(|r| !r.is_empty()) {
+            target_rests.push(rest.to_string());
+        }
+        super::scroll_support::collect_scroll_rest_chain_at(
+            &state.root_element,
+            x,
+            y,
+            [0.0, 0.0],
+            &mut target_rests,
+        );
+        if let Some(rest) = prefer_rest.filter(|r| !r.is_empty()) {
+            target_rests.retain(|r| r != rest);
+            target_rests.insert(0, rest.to_string());
+        }
+
+        let metrics_for_rest = |rest: &str| {
+            super::scroll_support::wheel_metrics_for_rest(rest, &self.scroll_metrics_cache)
+        };
+
+        let mut captured: Option<(String, ScrollAction, f32, f32)> = None;
+        for rest in target_rests {
+            let Some((bounds, [max_x, max_y], _)) = metrics_for_rest(&rest) else {
+                continue;
+            };
+            let vh = bounds[3].max(1.0);
+            let resolved = match action {
+                ScrollAction::Delta(dx, dy) => {
+                    let (dx, dy) = match &event.logical_key {
+                        Key::Named(NamedKey::PageUp) => (0.0, vh),
+                        Key::Named(NamedKey::PageDown) => (0.0, -vh),
+                        _ => (dx, dy),
+                    };
+                    ScrollAction::Delta(dx, dy)
+                }
+                ScrollAction::Absolute(tx, ty) => {
+                    let tx = if tx.is_nan() { max_x } else { tx };
+                    let ty = if ty.is_nan() { max_y } else { ty };
+                    ScrollAction::Absolute(tx, ty)
+                }
+            };
+
+            let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
+                &rest,
+                &mut self.scroll_signal_key_cache,
+            );
+            let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32).peek();
+            let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
+            let bx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx).peek();
+            let by = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy).peek();
+
+            let can_apply = match resolved {
+                ScrollAction::Delta(dx, dy) => {
+                    let can_move_x = (dx > 0.0 && bx > 0.0) || (dx < 0.0 && bx < max_x);
+                    let can_move_y = (dy > 0.0 && by > 0.0) || (dy < 0.0 && by < max_y);
+                    can_move_x || can_move_y
+                }
+                ScrollAction::Absolute(tx, ty) => {
+                    (tx - bx).abs() > 0.5
+                        || (ty - by).abs() > 0.5
+                        || (tx > 0.5 && bx < tx)
+                        || (ty > 0.5 && by < ty)
+                }
+            };
+            if can_apply {
+                captured = Some((rest, resolved, max_x, max_y));
+                break;
+            }
+        }
+
+        let window = state.window.clone();
+        drop(state_borrow);
+        if let Some((rest, resolved, max_x, max_y)) = captured {
+            let now = std::time::Instant::now();
+            match resolved {
+                ScrollAction::Delta(dx, dy) => {
+                    if dx.abs() > 0.1 {
+                        self.bump_scrollbar_visible_until_axis(
+                            &rest,
+                            super::scroll_support::ScrollAxis::X,
+                            now,
+                        );
+                    }
+                    if dy.abs() > 0.1 {
+                        self.bump_scrollbar_visible_until_axis(
+                            &rest,
+                            super::scroll_support::ScrollAxis::Y,
+                            now,
+                        );
+                    }
+                    self.commit_wheel_delta(rest, dx, dy, max_x, max_y);
+                }
+                ScrollAction::Absolute(tx, ty) => {
+                    if tx > 0.5 {
+                        self.bump_scrollbar_visible_until_axis(
+                            &rest,
+                            super::scroll_support::ScrollAxis::X,
+                            now,
+                        );
+                    }
+                    if ty > 0.5 {
+                        self.bump_scrollbar_visible_until_axis(
+                            &rest,
+                            super::scroll_support::ScrollAxis::Y,
+                            now,
+                        );
+                    }
+                    let smooth = super::scroll_support::apply_scroll_navigation_absolute(
+                        &rest, tx, ty, max_x, max_y,
+                    );
+                    if smooth {
+                        crate::components::chart::set_chart_hover_frozen(true);
+                        self.bump_smooth_active_until(&rest, now);
+                    }
+                }
+            }
+            window.request_redraw();
+            return true;
+        }
+        false
+    }
+
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();
@@ -2316,7 +2504,7 @@ impl super::App {
                 let file = super::hmr_log::display_path(&hot_reload.last_patch_file);
 
                 if hot_reload.force_reload {
-                    let new_root = super::with_grown_ui_stack(|| (self.app_builder.borrow_mut())());
+                    let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
                     super::hmr_log::update("full reload");
@@ -2509,17 +2697,15 @@ impl super::App {
             smooth_scroll_animating = true;
         }
 
-        // First-order exponential smoothing toward wheel targets — no velocity ring / overshoot
-        // (previous mass–spring used ζ≈0.98, slightly under-damped). τ chosen near Chromium smooth-scroll.
-        // Content-pan fling seeds `scroll_velocity` above; this loop eases `offset` toward `target`.
-        const SMOOTH_SCROLL_TAU_SEC: f32 = 0.095;
-        /// Cap per-frame blend so a long `dt` (e.g. first frame after idle) or a single wheel tick
-        /// never moves more than ~this fraction of remaining distance in one frame — avoids a visible
-        /// "jump" on one tick; nested outer scroll (large range) benefits most.
-        const SMOOTH_SCROLL_MAX_ALPHA: f32 = 0.20;
-        const SMOOTH_SCROLL_SNAP_PX: f32 = 0.20;
-        /// Keep requesting redraws until this close to target (slightly tighter than before).
-        const SMOOTH_SCROLL_ANIM_EPS: f32 = 0.06;
+        // First-order exponential smoothing toward wheel targets, quantized to device
+        // pixels so glyphon glyphs and synthetic-bold shadow quads share one grid.
+        let ui_scale = {
+            let g = self.state.borrow();
+            g.as_ref()
+                .map(|s| s.window.scale_factor() as f32)
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .unwrap_or(1.0)
+        };
         const SMOOTH_SCROLL_EDGE_SNAP_PX: f32 = 0.45;
 
         let mut pre_render_data = Vec::new();
@@ -2615,11 +2801,21 @@ impl super::App {
                 } else if (raw_max_y - target_y).abs() <= SMOOTH_SCROLL_EDGE_SNAP_PX {
                     target_y = raw_max_y;
                 }
+                target_x =
+                    super::scroll_support::snap_scroll_offset_to_device_px(target_x, ui_scale)
+                        .clamp(0.0, raw_max_x);
+                target_y =
+                    super::scroll_support::snap_scroll_offset_to_device_px(target_y, ui_scale)
+                        .clamp(0.0, raw_max_y);
+                if (tx.peek() - target_x).abs() > 0.001 {
+                    tx.set_silent(target_x);
+                }
+                if (ty.peek() - target_y).abs() > 0.001 {
+                    ty.set_silent(target_y);
+                }
                 // Nested ScrollArea: skip work for areas already at target (outer idle while inner scrolls).
-                const SMOOTH_IDLE_EPS: f32 = 0.04;
-                if (target_x - old_sx).abs() < SMOOTH_IDLE_EPS
-                    && (target_y - old_sy).abs() < SMOOTH_IDLE_EPS
-                {
+                let idle_eps = (1.0 / ui_scale.max(0.01)) * 0.51;
+                if (target_x - old_sx).abs() < idle_eps && (target_y - old_sy).abs() < idle_eps {
                     // Idle, but still clamp offset into max (stale offset after max shrink).
                     pre_render_data.push((
                         rest.clone(),
@@ -2632,30 +2828,13 @@ impl super::App {
                     ));
                     continue;
                 }
-                let raw_alpha = 1.0 - (-scroll_dt / SMOOTH_SCROLL_TAU_SEC).exp();
-                let alpha = raw_alpha.min(SMOOTH_SCROLL_MAX_ALPHA);
-                let mut cur_x = old_sx + (target_x - old_sx) * alpha;
-                let mut cur_y = old_sy + (target_y - old_sy) * alpha;
-                if (target_x - cur_x).abs() < SMOOTH_SCROLL_SNAP_PX {
-                    cur_x = target_x;
-                }
-                if (target_y - cur_y).abs() < SMOOTH_SCROLL_SNAP_PX {
-                    cur_y = target_y;
-                }
-                // Tail settle: once we are very close, snap offsets+targets together to stop micro-jitter.
-                if (target_x - cur_x).abs() <= SMOOTH_SCROLL_ANIM_EPS {
-                    cur_x = target_x;
-                    tx.set_silent(target_x);
-                }
-                if (target_y - cur_y).abs() <= SMOOTH_SCROLL_ANIM_EPS {
-                    cur_y = target_y;
-                    ty.set_silent(target_y);
-                }
-                // Do not zero `scroll_velocity` here: fling inertia decays in the block above.
-                // Thumb drag still clears velocity in the `else` branch.
-                if (target_x - cur_x).abs() > SMOOTH_SCROLL_ANIM_EPS
-                    || (target_y - cur_y).abs() > SMOOTH_SCROLL_ANIM_EPS
-                {
+                let (cur_x, ax) = super::scroll_support::smooth_scroll_step(
+                    old_sx, target_x, scroll_dt, ui_scale,
+                );
+                let (cur_y, ay) = super::scroll_support::smooth_scroll_step(
+                    old_sy, target_y, scroll_dt, ui_scale,
+                );
+                if ax || ay {
                     smooth_scroll_animating = true;
                 }
                 pre_render_data.push((
@@ -2775,12 +2954,15 @@ impl super::App {
             || !self.scroll_accum.is_empty()
             || scrollbar_fade_busy;
 
-        let scrollbar_skip_flex_layout = self.scrollbar_drag.is_none() && scrollbar_fade_busy;
+        let scrollbar_drag_active = self.scrollbar_drag.is_some();
+        let scrollbar_skip_flex_layout =
+            scrollbar_drag_active || (self.scrollbar_drag.is_none() && scrollbar_fade_busy);
         // Do NOT fold `smooth_active_until` into paint-only: the 200ms wheel bridge would skip
         // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
         // but the caret does not install until the bridge expires.
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
-        let scroll_paint_only = smooth_scroll_animating || scrollbar_fade_busy;
+        let scroll_paint_only =
+            smooth_scroll_animating || scrollbar_fade_busy || scrollbar_drag_active;
         crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());

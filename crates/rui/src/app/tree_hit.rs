@@ -85,6 +85,14 @@ pub(crate) fn element_self_pointer_hit(el: &Element, x: f32, y: f32, vx: f32, vy
     if x < vx || x > vx + b[2] || y < vy || y > vy + b[3] {
         return false;
     }
+    if !el.style.clip_path.is_none()
+        && !el
+            .style
+            .clip_path
+            .contains_point([vx, vy, b[2], b[3]], [x, y])
+    {
+        return false;
+    }
     let mode = el.pointer_events_mode();
     if mode == PointerEvents::BoundingBox {
         return true;
@@ -284,11 +292,19 @@ fn hit_enter_clipped(
     let escaped = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, escaped);
-    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
+    if !is_body_portal
+        && crate::core::tree::element_clips_overflow(el)
+        && !crate::core::tree::overflow_clip_contains_point(el, [vx, vy, b[2], b[3]], [x, y])
+    {
         return None;
+    }
+    if !el.style.clip_path.is_none() {
+        let box_xywh = [vx, vy, b[2], b[3]];
+        if !el.style.clip_path.contains_point(box_xywh, [x, y]) {
+            return None;
+        }
     }
     let next_acc = if is_body_portal {
         escaped
@@ -1067,8 +1083,21 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
                 el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
             if !is_body_portal && crate::core::tree::element_clips_overflow(el) {
                 let [vx, vy] = visual_xy(el, escaped);
-                let in_layout = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
-                if !in_layout {
+                if !crate::core::tree::overflow_clip_contains_point(
+                    el,
+                    [vx, vy, b[2], b[3]],
+                    [x, y],
+                ) {
+                    return None;
+                }
+            }
+            if !el.style.clip_path.is_none() {
+                let [vx, vy] = visual_xy(el, escaped);
+                if !el
+                    .style
+                    .clip_path
+                    .contains_point([vx, vy, b[2], b[3]], [x, y])
+                {
                     return None;
                 }
             }
@@ -1130,7 +1159,19 @@ pub(crate) fn find_click(
             let b = el.layout_bounds;
             let [vx, vy] = visual_xy(el, scroll_acc);
             if crate::core::tree::element_clips_overflow(el)
-                && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
+                && !crate::core::tree::overflow_clip_contains_point(
+                    el,
+                    [vx, vy, b[2], b[3]],
+                    [x, y],
+                )
+            {
+                return None;
+            }
+            if !el.style.clip_path.is_none()
+                && !el
+                    .style
+                    .clip_path
+                    .contains_point([vx, vy, b[2], b[3]], [x, y])
             {
                 return None;
             }
@@ -2532,10 +2573,16 @@ fn pick_element_path_acc(
                 }
                 let escaped = escape_scroll_acc(frame.el, frame.scroll_acc);
                 let vb = visual_border_box(frame.el, escaped);
-                let inside = x >= vb[0] && x <= vb[0] + vb[2] && y >= vb[1] && y <= vb[1] + vb[3];
                 let is_body_portal = frame.el.template_id.as_deref()
                     == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-                if !is_body_portal && crate::core::tree::element_clips_overflow(frame.el) && !inside
+                if !is_body_portal
+                    && crate::core::tree::element_clips_overflow(frame.el)
+                    && !crate::core::tree::overflow_clip_contains_point(frame.el, vb, [x, y])
+                {
+                    continue;
+                }
+                if !frame.el.style.clip_path.is_none()
+                    && !frame.el.style.clip_path.contains_point(vb, [x, y])
                 {
                     continue;
                 }

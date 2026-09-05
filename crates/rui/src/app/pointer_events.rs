@@ -399,7 +399,7 @@ fn hit_path_rec(
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     if !is_body_portal
         && crate::core::tree::element_clips_overflow(el)
-        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
+        && !crate::core::tree::overflow_clip_contains_point(el, [vx, vy, b[2], b[3]], [x, y])
     {
         return false;
     }

@@ -742,32 +742,39 @@ where
         .expect("bind_prop: template_id assigned above");
 
     let initial = untrack(&mut compute);
+
+    if crate::core::reactivity::is_tracking() {
+        let existing_hook = REGISTERED_BINDINGS.with(|registry| {
+            registry
+                .borrow()
+                .get(&registry_key)
+                .and_then(|registration| registration.hook.upgrade())
+        });
+        if let Some(hook) = existing_hook {
+            let effect_alive = REGISTERED_BINDINGS.with(|registry| {
+                registry
+                    .borrow()
+                    .get(&registry_key)
+                    .and_then(|registration| registration.effect_id)
+                    .is_some_and(effect_is_alive)
+            });
+            if effect_alive {
+                // Rebuild fragment: the live tree already has this binding. Applying
+                // `initial` here would seed CSS transitions from paint values
+                // (sidebar width 16rem) and skip the standing tween.
+                let _ = initial;
+                return chain_unmount_hook(el, hook);
+            }
+            REGISTERED_BINDINGS.with(|registry| {
+                registry.borrow_mut().remove(&registry_key);
+            });
+        }
+    }
+
     let _ = apply(&mut el, initial);
 
     if !crate::core::reactivity::is_tracking() {
         return el;
-    }
-
-    let existing_hook = REGISTERED_BINDINGS.with(|registry| {
-        registry
-            .borrow()
-            .get(&registry_key)
-            .and_then(|registration| registration.hook.upgrade())
-    });
-    if let Some(hook) = existing_hook {
-        let effect_alive = REGISTERED_BINDINGS.with(|registry| {
-            registry
-                .borrow()
-                .get(&registry_key)
-                .and_then(|registration| registration.effect_id)
-                .is_some_and(effect_is_alive)
-        });
-        if effect_alive {
-            return chain_unmount_hook(el, hook);
-        }
-        REGISTERED_BINDINGS.with(|registry| {
-            registry.borrow_mut().remove(&registry_key);
-        });
     }
 
     let hook_key = registry_key.clone();
@@ -935,8 +942,10 @@ where
 pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> LayoutStatus {
     let dim = next.into_css_dim();
     let slot = match axis {
-        "w" | "width" | "inline_size" | "inlineSize" => UnitSlot::Width,
-        "h" | "height" | "block_size" | "blockSize" => UnitSlot::Height,
+        "w" | "width" => UnitSlot::Width,
+        "inline_size" | "inlineSize" => UnitSlot::InlineSize,
+        "h" | "height" => UnitSlot::Height,
+        "block_size" | "blockSize" => UnitSlot::BlockSize,
         "min_w" | "minWidth" | "min_width" => UnitSlot::MinWidth,
         "min_h" | "minHeight" | "min_height" => UnitSlot::MinHeight,
         "max_w" | "maxWidth" | "max_width" => UnitSlot::MaxWidth,
@@ -944,6 +953,14 @@ pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> 
         _ => return LayoutStatus::Clean,
     };
     let before_specs = el.style.unit_specs.clone();
+    if slot.is_logical() {
+        el.style.set_css_dim(slot, dim);
+        return if before_specs == el.style.unit_specs {
+            LayoutStatus::Clean
+        } else {
+            LayoutStatus::LayoutChanged
+        };
+    }
     let before_taffy = match slot {
         UnitSlot::Width => el.style.size.width,
         UnitSlot::Height => el.style.size.height,

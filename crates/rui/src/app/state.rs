@@ -8,9 +8,10 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
-    cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_instances_in_place,
-    scale_textured_draws, BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline,
-    RuiTextRenderer, ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline,
+    cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
+    scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
+    PresentRetainPipeline, RuiPipeline, RuiTextRenderer, ScaledTexturedDraw, TexturedInstanceInput,
+    TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -26,7 +27,6 @@ use crate::{
         scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
         scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
         scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-        scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
         scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
     },
 };
@@ -166,6 +166,7 @@ pub(super) struct AppState {
     shadow_tex_cache: std::collections::HashMap<u64, super::image_registry::GpuImageTexture>,
     shadow_rect_cache: std::collections::HashMap<u64, [f32; 4]>,
     last_shadow_tex_draws: Vec<crate::renderer::prepare_text::ShadowTexDraw>,
+    last_page_stack_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>>,
     /// Accumulated dirty rect in logical px for partial redraw (`x,y,w,h`).
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) force_full_redraw: bool,
@@ -282,6 +283,8 @@ fn draw_shadow_tex_draws<'pass>(
         let Some(gpu_img) = shadow_tex_cache.get(&sd.cache_key) else {
             continue;
         };
+        let (clip_pos, clip_size) =
+            crate::renderer::prepare_text::shadow_tex_instance_clip(sd.clip);
         let inst = TexturedInstanceInput {
             rect_pos: [sd.rect[0], sd.rect[1]],
             rect_size: [sd.rect[2], sd.rect[3]],
@@ -290,7 +293,9 @@ fn draw_shadow_tex_draws<'pass>(
             uv_scale: [1.0, 1.0],
             transform: crate::style::transform::MAT2D_IDENTITY,
             flags: 0.0,
-            _pad: [0.0; 3],
+            clip_pos,
+            clip_size,
+            _pad: 0.0,
         };
         let shadow_inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Shadow instance"),
@@ -340,6 +345,7 @@ fn draw_paint_ops<'pass>(
     textured_instance_buffer: &'pass wgpu::Buffer,
     image_textures: &'pass HashMap<String, super::image_registry::GpuImageTexture>,
     scaled_tex: &'pass [ScaledTexturedDraw],
+    backdrop: &'pass wgpu::BindGroup,
 ) {
     use crate::layout::layout_tree::PaintOp;
     let hi = hi.min(ops.len());
@@ -347,8 +353,7 @@ fn draw_paint_ops<'pass>(
     for op in &ops[lo..hi] {
         match *op {
             PaintOp::Rects { start, count } if count > 0 => {
-                pass.set_pipeline(&pipeline.render_pipeline);
-                pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pipeline.bind_sdf(pass, true, backdrop);
                 pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, instance_buffer.slice(..));
                 pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -370,6 +375,318 @@ fn draw_paint_ops<'pass>(
             _ => {}
         }
     }
+}
+
+fn draw_page_stack_band_to_pass<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    band_i: usize,
+    band: &crate::layout::layout_tree::OverlayBandRange,
+    paint_ops: &[crate::layout::layout_tree::PaintOp],
+    pipeline: &'pass RuiPipeline,
+    instance_buffer: &'pass wgpu::Buffer,
+    textured_pipeline: &'pass TexturedQuadPipeline,
+    textured_instance_buffer: &'pass wgpu::Buffer,
+    image_textures: &'pass HashMap<String, super::image_registry::GpuImageTexture>,
+    scaled_tex: &'pass [ScaledTexturedDraw],
+    scaled_input_chrome: &'pass [InstanceInput],
+    device: &'pass wgpu::Device,
+    page_stack_band_underlines: &[Vec<InstanceInput>],
+    page_stack_band_shadows: &[Vec<crate::renderer::prepare_text::ShadowTexDraw>],
+    shadow_tex_cache: &'pass HashMap<u64, super::image_registry::GpuImageTexture>,
+    backdrop: &'pass wgpu::BindGroup,
+) {
+    if band.paint_ops.0 < band.paint_ops.1 {
+        draw_paint_ops(
+            pass,
+            paint_ops,
+            band.paint_ops.0,
+            band.paint_ops.1,
+            pipeline,
+            instance_buffer,
+            textured_pipeline,
+            textured_instance_buffer,
+            image_textures,
+            scaled_tex,
+            backdrop,
+        );
+    } else if band.instance.0 < band.instance.1 {
+        pipeline.bind_sdf(pass, true, backdrop);
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        pass.set_index_buffer(
+            pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.draw_indexed(
+            0..pipeline.num_indices,
+            0,
+            band.instance.0 as u32..band.instance.1 as u32,
+        );
+        if band.textured.0 < band.textured.1 {
+            draw_packed_textured_runs(
+                pass,
+                textured_pipeline,
+                textured_instance_buffer,
+                image_textures,
+                scaled_tex,
+                band.textured.0,
+                band.textured.1,
+            );
+        }
+    }
+
+    if band.chrome.0 < band.chrome.1 {
+        pipeline.bind_sdf(pass, false, backdrop);
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+        let chrome_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Page Stack Chrome Buffer"),
+            contents: bytemuck::cast_slice(chrome_slice),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+        pass.set_index_buffer(
+            pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.draw_indexed(
+            0..pipeline.num_indices,
+            0,
+            0..chrome_slice.len() as u32,
+        );
+    }
+
+    if let Some(ul) = page_stack_band_underlines.get(band_i) {
+        if !ul.is_empty() {
+            pipeline.bind_sdf(pass, false, backdrop);
+            pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+            let underline_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Page Stack Underline Buffer"),
+                contents: bytemuck::cast_slice(ul),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            pass.set_vertex_buffer(1, underline_buffer.slice(..));
+            pass.set_index_buffer(
+                pipeline.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
+            pass.draw_indexed(
+                0..pipeline.num_indices,
+                0,
+                0..ul.len() as u32,
+            );
+        }
+    }
+
+    if let Some(sds) = page_stack_band_shadows.get(band_i) {
+        draw_shadow_tex_draws(
+            pass,
+            sds,
+            shadow_tex_cache,
+            textured_pipeline,
+            device,
+        );
+    }
+}
+
+fn capture_page_stack_local_backdrop(
+    backdrop: &mut BackdropBlurPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    surface_w: u32,
+    surface_h: u32,
+    surface_format: wgpu::TextureFormat,
+    band: &crate::layout::layout_tree::OverlayBandRange,
+    page_stack_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
+    band_i: usize,
+    radius_px: f32,
+    clear_color: wgpu::Color,
+    paint_ops: &[crate::layout::layout_tree::PaintOp],
+    pipeline: &RuiPipeline,
+    instance_buffer: &wgpu::Buffer,
+    textured_pipeline: &TexturedQuadPipeline,
+    textured_instance_buffer: &wgpu::Buffer,
+    image_textures: &HashMap<String, super::image_registry::GpuImageTexture>,
+    scaled_tex: &[ScaledTexturedDraw],
+    scaled_input_chrome: &[InstanceInput],
+    page_stack_band_underlines: &[Vec<InstanceInput>],
+    page_stack_band_shadows: &[Vec<crate::renderer::prepare_text::ShadowTexDraw>],
+    shadow_tex_cache: &HashMap<u64, super::image_registry::GpuImageTexture>,
+    text_renderer: &crate::renderer::RuiTextRenderer,
+    page_stack_band_text_renderers: &[crate::renderer::RuiTextRenderer],
+) {
+    let dummy = pipeline.dummy_backdrop();
+    backdrop.ensure_size(device, surface_w, surface_h, surface_format);
+    let Some(scene_view) = backdrop.scene_view() else {
+        return;
+    };
+
+    {
+        let mut scene_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Local Backdrop Scene Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: scene_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pipeline.bind_sdf(&mut scene_pass, true, dummy);
+        scene_pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        scene_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        scene_pass.set_index_buffer(
+            pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+
+        if band_i == 0 {
+            draw_page_stack_prefix_to_pass(
+                &mut scene_pass,
+                band,
+                paint_ops,
+                pipeline,
+                instance_buffer,
+                textured_pipeline,
+                textured_instance_buffer,
+                image_textures,
+                scaled_tex,
+                scaled_input_chrome,
+                device,
+                dummy,
+            );
+            if band.text.0 > 0 {
+                text_renderer.render(&mut scene_pass);
+            }
+        } else {
+            for (j, prev) in page_stack_band_ranges.iter().enumerate().take(band_i) {
+                draw_page_stack_band_to_pass(
+                    &mut scene_pass,
+                    j,
+                    prev,
+                    paint_ops,
+                    pipeline,
+                    instance_buffer,
+                    textured_pipeline,
+                    textured_instance_buffer,
+                    image_textures,
+                    scaled_tex,
+                    scaled_input_chrome,
+                    device,
+                    page_stack_band_underlines,
+                    page_stack_band_shadows,
+                    shadow_tex_cache,
+                    dummy,
+                );
+                if prev.text.0 < prev.text.1 {
+                    if j == 0 {
+                        text_renderer.render(&mut scene_pass);
+                    } else if let Some(tr) = page_stack_band_text_renderers.get(j - 1) {
+                        tr.render(&mut scene_pass);
+                    }
+                }
+            }
+        }
+    }
+
+    backdrop.blur(device, queue, encoder, radius_px);
+}
+
+fn draw_page_stack_prefix_to_pass<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    band: &crate::layout::layout_tree::OverlayBandRange,
+    paint_ops: &[crate::layout::layout_tree::PaintOp],
+    pipeline: &'pass RuiPipeline,
+    instance_buffer: &'pass wgpu::Buffer,
+    textured_pipeline: &'pass TexturedQuadPipeline,
+    textured_instance_buffer: &'pass wgpu::Buffer,
+    image_textures: &'pass HashMap<String, super::image_registry::GpuImageTexture>,
+    scaled_tex: &'pass [ScaledTexturedDraw],
+    scaled_input_chrome: &'pass [InstanceInput],
+    device: &'pass wgpu::Device,
+    backdrop: &'pass wgpu::BindGroup,
+) {
+    if band.paint_ops.0 > 0 {
+        draw_paint_ops(
+            pass,
+            paint_ops,
+            0,
+            band.paint_ops.0,
+            pipeline,
+            instance_buffer,
+            textured_pipeline,
+            textured_instance_buffer,
+            image_textures,
+            scaled_tex,
+            backdrop,
+        );
+    } else if band.instance.0 > 0 {
+        pipeline.bind_sdf(pass, true, backdrop);
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        pass.set_index_buffer(
+            pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.draw_indexed(
+            0..pipeline.num_indices,
+            0,
+            0..band.instance.0 as u32,
+        );
+        if band.textured.0 > 0 {
+            draw_packed_textured_runs(
+                pass,
+                textured_pipeline,
+                textured_instance_buffer,
+                image_textures,
+                scaled_tex,
+                0,
+                band.textured.0,
+            );
+        }
+    }
+    if band.chrome.0 > 0 {
+        pipeline.bind_sdf(pass, false, backdrop);
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        let chrome_slice = &scaled_input_chrome[0..band.chrome.0];
+        let chrome_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Page Stack Prefix Chrome Buffer"),
+            contents: bytemuck::cast_slice(chrome_slice),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+        pass.set_index_buffer(
+            pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.draw_indexed(
+            0..pipeline.num_indices,
+            0,
+            0..chrome_slice.len() as u32,
+        );
+    }
+}
+
+fn band_instance_backdrop_blur(
+    instances: &[InstanceInput],
+    band: &crate::layout::layout_tree::OverlayBandRange,
+) -> f32 {
+    let lo = band.instance.0.min(instances.len());
+    let hi = band.instance.1.min(instances.len());
+    if lo >= hi {
+        return 0.0;
+    }
+    instances[lo..hi]
+        .iter()
+        .map(|i| i.backdrop_blur)
+        .fold(0.0_f32, f32::max)
 }
 
 impl AppState {
@@ -649,7 +966,7 @@ impl AppState {
         surface.configure(&device, &config);
         super::window_chrome::apply_created_window(&window, &chrome, composition_swapchain);
 
-        let pipeline = RuiPipeline::new(&device, &config);
+        let mut pipeline = RuiPipeline::new(&device, &config);
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
@@ -672,6 +989,12 @@ impl AppState {
         let render_result =
             layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
         let scaled_instances = scale_instances(&render_result.instances, scale);
+        let mut clip_polys = render_result.clip_polys;
+        scale_clip_polys_in_place(&mut clip_polys, scale);
+        while clip_polys.len() < scaled_instances.len() {
+            clip_polys.push(crate::style::GpuClipPoly::NONE);
+        }
+        pipeline.ensure_clip_polys(&device, &queue, &clip_polys);
         let num_instances = render_result.instances.len() as u32;
         let last_render_scroll_metrics = render_result.scroll_metrics;
         let last_hover_cursor = render_result.hover_cursor;
@@ -765,6 +1088,7 @@ impl AppState {
             shadow_tex_cache: std::collections::HashMap::new(),
             shadow_rect_cache: std::collections::HashMap::new(),
             last_shadow_tex_draws: Vec::new(),
+            last_page_stack_band_shadows: Vec::new(),
             damage_rect: None,
             force_full_redraw: true,
             has_presented_frame: false,
@@ -853,6 +1177,52 @@ impl AppState {
                     &self.config,
                     font_ptr,
                 ));
+        }
+    }
+
+    /// Glyphon `prepare` is consumed by the first `render`. Local backdrop capture
+    /// must happen *before* the surface pass, then this rebuilds prefix glyphs so
+    /// the 12.5% host margin still paints sharp text.
+    fn reprepare_page_stack_text_prefix(
+        &mut self,
+        page_stack_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
+        prefix_end: usize,
+        overlay_text_start: usize,
+        ui_scale: f32,
+        text_fast: bool,
+        shadow_cached_keys: &std::collections::HashSet<u64>,
+    ) {
+        for (band_i, band) in page_stack_band_ranges.iter().enumerate().take(prefix_end) {
+            let text_lo = band.text.0.min(overlay_text_start);
+            let text_hi = band.text.1.min(overlay_text_start);
+            if text_lo >= text_hi {
+                continue;
+            }
+            if band_i == 0 {
+                let _ = prepare_text_frame(
+                    &mut self.text_renderer,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &self.text_nodes[text_lo..text_hi],
+                    ui_scale,
+                    text_fast,
+                    shadow_cached_keys,
+                    &self.shadow_rect_cache,
+                );
+            } else {
+                let _ = prepare_text_frame(
+                    &mut self.page_stack_band_text_renderers[band_i - 1],
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &self.text_nodes[text_lo..text_hi],
+                    ui_scale,
+                    text_fast,
+                    shadow_cached_keys,
+                    &self.shadow_rect_cache,
+                );
+            }
         }
     }
 
@@ -1506,9 +1876,10 @@ impl AppState {
         // collect draws the track/thumb with the scroll signal (same path as ViewportsOnly).
         scrollbar_skip_flex_layout: bool,
         // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
-        // caret paint). Class `:hover` is **frozen** here — content sliding under a still cursor
-        // must not enter/leave every `transition-transform` tile (gallery layout WP area jank +
-        // sidebar hover flash). Active CSS tweens still advance via `tick_active_css_transitions`.
+        // caret paint). Class `:hover` **enter** is frozen here — content sliding onto a still
+        // cursor must not light up every `transition-transform` tile (gallery layout WP jank +
+        // sidebar hover flash). Already-hovered nodes still **leave** when the pointer is no
+        // longer on their paint AABB. Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         // Collect / Taffy / GPU do not map tree depth onto the OS stack.
@@ -1533,18 +1904,25 @@ impl AppState {
         scrollbar_skip_flex_layout: bool,
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
-        // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
-        // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
+        // Scroll/drag fast path for prepare perf. Layout fit skip applies during live
+        // window resize and sidebar rail-width tweens — scrolling must still compute
+        // fit so bidi labels do not overflow.
         // Settle is deferred one frame after `inner_size` matches the last Resized event so the
         // final drag frame stays fluid; that next frame must run with fast=false + LayoutChanged.
-        let settling = self.needs_text_settle && self.last_resized_event.is_none();
+        if crate::components::sidebar::take_sidebar_rail_text_settle() {
+            self.needs_text_settle = true;
+        }
+        let rail_anim = crate::components::sidebar::sidebar_rail_width_anim_active();
+        let settling = self.needs_text_settle && self.last_resized_event.is_none() && !rail_anim;
         if settling {
             self.needs_text_settle = false;
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             // Geometry may match the last fast frame; force prepare so Exact/Bounds apply fit wrap.
             self.last_text_nodes_cache.clear();
         }
-        let layout_fast = self.last_resized_event.is_some();
+        // Sidebar width tweens reflow the app shell every frame — same wrap churn as live
+        // window resize. Fast-path FIT_CACHE for the 200ms tween, then settle once.
+        let layout_fast = self.last_resized_event.is_some() || rail_anim;
         crate::text::set_layout_text_fast_mode(layout_fast);
         let text_fast = text_force_fast_mode || layout_fast;
         let _text_backend = self.text_backend;
@@ -1726,6 +2104,9 @@ impl AppState {
             if scroll_paint_only {
                 crate::style::tick_active_css_transitions_subtree(
                     &mut self.root_element,
+                    variant_mouse,
+                    focused.as_str(),
+                    dark,
                     viewport_w,
                     viewport_h,
                     [0.0, 0.0],
@@ -2132,6 +2513,12 @@ impl AppState {
         let ui_scale_now = self.ui_scale();
         scale_instances_in_place(&mut render_result.instances, ui_scale_now);
         scale_instances_in_place(&mut render_result.input_chrome_instances, ui_scale_now);
+        scale_clip_polys_in_place(&mut render_result.clip_polys, ui_scale_now);
+        while render_result.clip_polys.len() < render_result.instances.len() {
+            render_result
+                .clip_polys
+                .push(crate::style::GpuClipPoly::NONE);
+        }
         let scaled_instances = std::mem::take(&mut render_result.instances);
         let scaled_input_chrome = std::mem::take(&mut render_result.input_chrome_instances);
         self.num_instances = scaled_instances.len() as u32;
@@ -2189,6 +2576,8 @@ impl AppState {
                 bytemuck::cast_slice(&scaled_instances),
             );
         }
+        self.pipeline
+            .ensure_clip_polys(&self.device, &self.queue, &render_result.clip_polys);
         self.layout_status = crate::core::tree::LayoutStatus::Clean;
         if crate::core::tree_stats::tree_stats_enabled()
             && !Self::is_bootstrap_root(&self.root_element)
@@ -2430,7 +2819,14 @@ impl AppState {
                 if prep_out.culled_skip_prepare {
                     culled_any = true;
                     underlines.push(Vec::new());
-                    shadow_bands.push(Vec::new());
+                    // Keep last textured shadows for this band (same as glyphon vertices).
+                    // Pushing empty made synthetic-bold quads vanish for a frame on scroll.
+                    shadow_bands.push(
+                        self.last_page_stack_band_shadows
+                            .get(band_i)
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
                     continue;
                 }
                 for bm in &prep_out.shadow_new_bitmaps {
@@ -2483,6 +2879,7 @@ impl AppState {
                 }
                 page_stack_band_underlines = underlines;
                 page_stack_band_shadows = shadow_bands;
+                self.last_page_stack_band_shadows = page_stack_band_shadows.clone();
                 (Vec::new(), caret_all, shadow_all)
             }
         } else if text_cache_valid {
@@ -2867,7 +3264,8 @@ impl AppState {
                         multiview_mask: None,
                     });
                     page_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    page_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
+                    page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                     page_pass.set_index_buffer(
@@ -2888,10 +3286,16 @@ impl AppState {
                                     &self.textured_instance_buffer,
                                     &self.image_textures,
                                     &scaled_tex,
+                                    self.pipeline.dummy_backdrop(),
                                 );
                             } else if band.instance.0 < band.instance.1 {
                                 page_pass.set_pipeline(&self.pipeline.render_pipeline);
-                                page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                page_pass.set_bind_group(
+                                    0,
+                                    &self.pipeline.bind_group_clip_poly,
+                                    &[],
+                                );
+                                page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                                 page_pass
                                     .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -2919,6 +3323,7 @@ impl AppState {
                             if band.chrome.0 < band.chrome.1 {
                                 page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                 page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                                 page_pass
                                     .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 let chrome_slice =
@@ -2945,6 +3350,7 @@ impl AppState {
                                 if !ul.is_empty() {
                                     page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                     page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                    page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                                     page_pass.set_vertex_buffer(
                                         0,
                                         self.pipeline.vertex_buffer.slice(..),
@@ -2998,6 +3404,7 @@ impl AppState {
                             &self.textured_instance_buffer,
                             &self.image_textures,
                             &scaled_tex,
+                            self.pipeline.dummy_backdrop(),
                         );
                     } else {
                         page_pass.draw_indexed(
@@ -3021,6 +3428,7 @@ impl AppState {
                         if !underline_instances.is_empty() {
                             page_pass.set_pipeline(&self.pipeline.render_pipeline);
                             page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                             page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                             let underline_buffer =
                                 self.device
@@ -3052,6 +3460,7 @@ impl AppState {
                     if overlay_chrome_start > 0 {
                         page_pass.set_pipeline(&self.pipeline.render_pipeline);
                         page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                         page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                         let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
                         let chrome_buffer =
@@ -3100,6 +3509,64 @@ impl AppState {
             color_load
         };
 
+        let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
+        let mut band_backdrop_idx: Vec<Option<usize>> =
+            vec![None; page_stack_band_ranges.len()];
+        // Capture *before* the surface pass so glyphon prefix glyphs land in the
+        // blur texture (a mid-pass recapture sees an already-consumed prepare).
+        if allow_primitives && !use_backdrop_blur && has_page_stack_bands {
+            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                let local_blur = band_instance_backdrop_blur(&render_result.instances, band);
+                if local_blur <= 0.5 {
+                    continue;
+                }
+                capture_page_stack_local_backdrop(
+                    &mut self.backdrop_blur,
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    self.config.width,
+                    self.config.height,
+                    self.config.format,
+                    band,
+                    &page_stack_band_ranges,
+                    band_i,
+                    local_blur * ui_scale,
+                    clear_color,
+                    &render_result.paint_ops,
+                    &self.pipeline,
+                    &self.instance_buffer,
+                    &self.textured_pipeline,
+                    &self.textured_instance_buffer,
+                    &self.image_textures,
+                    &scaled_tex,
+                    &scaled_input_chrome,
+                    &page_stack_band_underlines,
+                    &page_stack_band_shadows,
+                    &self.shadow_tex_cache,
+                    &self.text_renderer,
+                    &self.page_stack_band_text_renderers,
+                );
+                if let Some(view) = self.backdrop_blur.blurred_view() {
+                    let idx = live_backdrops.len();
+                    live_backdrops.push(self.pipeline.make_backdrop_bind_group(
+                        &self.device,
+                        view,
+                        self.backdrop_blur.sampler(),
+                    ));
+                    band_backdrop_idx[band_i] = Some(idx);
+                }
+                self.reprepare_page_stack_text_prefix(
+                    &page_stack_band_ranges,
+                    band_i,
+                    overlay_text_start,
+                    ui_scale,
+                    text_fast,
+                    &shadow_cached_keys,
+                );
+            }
+        }
+
         {
             let color_view = if draw_to_retain {
                 self.present_retain
@@ -3130,7 +3597,11 @@ impl AppState {
             }
 
             render_pass.set_pipeline(&self.pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+            self.pipeline.bind_sdf(
+                &mut render_pass,
+                true,
+                self.pipeline.dummy_backdrop(),
+            );
             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(
@@ -3144,106 +3615,29 @@ impl AppState {
             if allow_primitives && !use_backdrop_blur {
                 if has_page_stack_bands {
                     for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
-                        if band.paint_ops.0 < band.paint_ops.1 {
-                            draw_paint_ops(
-                                &mut render_pass,
-                                &render_result.paint_ops,
-                                band.paint_ops.0,
-                                band.paint_ops.1,
-                                &self.pipeline,
-                                &self.instance_buffer,
-                                &self.textured_pipeline,
-                                &self.textured_instance_buffer,
-                                &self.image_textures,
-                                &scaled_tex,
-                            );
-                        } else if band.instance.0 < band.instance.1 {
-                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                            render_pass.set_index_buffer(
-                                self.pipeline.index_buffer.slice(..),
-                                wgpu::IndexFormat::Uint16,
-                            );
-                            render_pass.draw_indexed(
-                                0..self.pipeline.num_indices,
-                                0,
-                                band.instance.0 as u32..band.instance.1 as u32,
-                            );
-                            if band.textured.0 < band.textured.1 {
-                                draw_packed_textured_runs(
-                                    &mut render_pass,
-                                    &self.textured_pipeline,
-                                    &self.textured_instance_buffer,
-                                    &self.image_textures,
-                                    &scaled_tex,
-                                    band.textured.0,
-                                    band.textured.1,
-                                );
-                            }
-                        }
-
-                        if band.chrome.0 < band.chrome.1 {
-                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                            let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
-                            let chrome_buffer =
-                                self.device
-                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                        label: Some("Page Stack Chrome Buffer"),
-                                        contents: bytemuck::cast_slice(chrome_slice),
-                                        usage: wgpu::BufferUsages::VERTEX,
-                                    });
-                            render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-                            render_pass.set_index_buffer(
-                                self.pipeline.index_buffer.slice(..),
-                                wgpu::IndexFormat::Uint16,
-                            );
-                            render_pass.draw_indexed(
-                                0..self.pipeline.num_indices,
-                                0,
-                                0..chrome_slice.len() as u32,
-                            );
-                        }
-
-                        if let Some(ul) = page_stack_band_underlines.get(band_i) {
-                            if !ul.is_empty() {
-                                render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                                render_pass
-                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                                let underline_buffer = self.device.create_buffer_init(
-                                    &wgpu::util::BufferInitDescriptor {
-                                        label: Some("Page Stack Underline Buffer"),
-                                        contents: bytemuck::cast_slice(ul),
-                                        usage: wgpu::BufferUsages::VERTEX,
-                                    },
-                                );
-                                render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
-                                render_pass.set_index_buffer(
-                                    self.pipeline.index_buffer.slice(..),
-                                    wgpu::IndexFormat::Uint16,
-                                );
-                                render_pass.draw_indexed(
-                                    0..self.pipeline.num_indices,
-                                    0,
-                                    0..ul.len() as u32,
-                                );
-                            }
-                        }
-
-                        if let Some(sds) = page_stack_band_shadows.get(band_i) {
-                            draw_shadow_tex_draws(
-                                &mut render_pass,
-                                sds,
-                                &self.shadow_tex_cache,
-                                &self.textured_pipeline,
-                                &self.device,
-                            );
-                        }
-
+                        let band_backdrop = band_backdrop_idx
+                            .get(band_i)
+                            .and_then(|idx| *idx)
+                            .and_then(|idx| live_backdrops.get(idx))
+                            .unwrap_or_else(|| self.pipeline.dummy_backdrop());
+                        draw_page_stack_band_to_pass(
+                            &mut render_pass,
+                            band_i,
+                            band,
+                            &render_result.paint_ops,
+                            &self.pipeline,
+                            &self.instance_buffer,
+                            &self.textured_pipeline,
+                            &self.textured_instance_buffer,
+                            &self.image_textures,
+                            &scaled_tex,
+                            &scaled_input_chrome,
+                            &self.device,
+                            &page_stack_band_underlines,
+                            &page_stack_band_shadows,
+                            &self.shadow_tex_cache,
+                            band_backdrop,
+                        );
                         if band.text.0 < band.text.1 {
                             if band_i == 0 {
                                 self.text_renderer.render(&mut render_pass);
@@ -3265,6 +3659,7 @@ impl AppState {
                         &self.textured_instance_buffer,
                         &self.image_textures,
                         &scaled_tex,
+                        self.pipeline.dummy_backdrop(),
                     );
                 } else if overlay_inst_start > 0 {
                     render_pass.draw_indexed(
@@ -3299,6 +3694,7 @@ impl AppState {
             if !has_page_stack_bands && !underline_instances.is_empty() && !use_backdrop_blur {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let underline_buffer =
                     self.device
@@ -3332,6 +3728,7 @@ impl AppState {
             {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
                 let chrome_buffer =
@@ -3357,6 +3754,7 @@ impl AppState {
             if !caret_instances.is_empty() {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let caret_buffer =
                     self.device
@@ -3392,10 +3790,12 @@ impl AppState {
                         &self.textured_instance_buffer,
                         &self.image_textures,
                         &scaled_tex,
+                        self.pipeline.dummy_backdrop(),
                     );
                 } else if allow_primitives && band.instance.0 < band.instance.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
+                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                     render_pass.set_index_buffer(
@@ -3423,6 +3823,7 @@ impl AppState {
                 if allow_primitives && band.chrome.0 < band.chrome.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
                     let chrome_buffer =
@@ -3448,6 +3849,7 @@ impl AppState {
                     if !ul.is_empty() {
                         render_pass.set_pipeline(&self.pipeline.render_pipeline);
                         render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                         render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                         let underline_buffer =
                             self.device
@@ -3719,37 +4121,8 @@ fn update_scrollbar_element_self(
     let allow_y = !overflow_y.eq_ignore_ascii_case("hidden")
         && !overflow_y.eq_ignore_ascii_case("clip")
         && !overflow_y.eq_ignore_ascii_case("visible");
-    // When dual-axis inside layout, corner reservation should only occur in the scenario where "opposite axis will really occupy the corner":
-    // - The opposite axis is scrollable (interactive tracks will be displayed), or
-    // - Explicit `always` for opposite axis (requires track slots to be reserved even if not scrollable).
-    // `auto && !can_scroll` If it is still reserved, it will make some inner tracks look like they have been extended.
-    let vis_x_other = use_signal(&scrollbar_visibility_signal_key(&rest, "x"), || {
-        "auto".to_string()
-    })
-    .peek();
-    let vis_y_other = use_signal(&scrollbar_visibility_signal_key(&rest, "y"), || {
-        "auto".to_string()
-    })
-    .peek();
-    let vis_x_other_trim = vis_x_other.trim().to_ascii_lowercase();
-    let vis_y_other_trim = vis_y_other.trim().to_ascii_lowercase();
-    let show_track_x = allow_x && vis_x_other_trim != "never";
-    let show_track_y = allow_y && vis_y_other_trim != "never";
-    // Use a softer threshold to avoid near-boundary flicker around 1px.
     let can_scroll_x = allow_x && cw > vw + 0.5;
     let can_scroll_y = allow_y && ch > vh + 0.5;
-    let reserve_for_x = show_track_x
-        && match vis_x_other_trim.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => can_scroll_x,
-        };
-    let reserve_for_y = show_track_y
-        && match vis_y_other_trim.as_str() {
-            "always" => true,
-            "never" => false,
-            _ => can_scroll_y,
-        };
     let axis_allows = if axis == "x" { allow_x } else { allow_y };
     let scrollable = if axis == "x" {
         can_scroll_x
@@ -3803,7 +4176,9 @@ fn update_scrollbar_element_self(
         return;
     }
 
-    // Dynamic corner reservation: trim track length at the dual-outside corner only.
+    // Overlay tracks keep the length Taffy already resolved from absolute insets.
+    // Outside flex lanes stretch to 100% of their slot so the corner is an L-join
+    // (the vertical lane owns the leftover square) instead of a dead gutter.
     let inset_x = use_signal(&scroll_scrollbar_inset_x_signal_key(&rest), || {
         "inside".to_string()
     })
@@ -3812,46 +4187,11 @@ fn update_scrollbar_element_self(
         "inside".to_string()
     })
     .peek();
-    let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(&rest), || {
-        "right".to_string()
-    })
-    .peek();
-    let x_side = use_signal(&scroll_scrollbar_x_side_signal_key(&rest), || {
-        "bottom".to_string()
-    })
-    .peek();
-    // Corner lane trim only when both axes use outside flex slots. Inside (overlay) tracks
-    // always span the full edge regardless of scrollbar_*_side.
-    let both_outside =
-        inset_x.eq_ignore_ascii_case("outside") && inset_y.eq_ignore_ascii_case("outside");
-    let y_is_left = y_side.eq_ignore_ascii_case("left");
-    let x_is_top = x_side.eq_ignore_ascii_case("top");
-    let corner_reserve = base_thickness;
-
-    let mut reserve_left = 0.0_f32;
-    let mut reserve_right = 0.0_f32;
-    let mut reserve_top = 0.0_f32;
-    let mut reserve_bottom = 0.0_f32;
-    if both_outside {
-        if axis == "x" && reserve_for_y {
-            if y_is_left {
-                reserve_left = corner_reserve;
-            } else {
-                reserve_right = corner_reserve;
-            }
-        }
-        if axis == "y" && reserve_for_x {
-            if x_is_top {
-                reserve_top = corner_reserve;
-            } else {
-                reserve_bottom = corner_reserve;
-            }
-        }
-    }
-
-    // For section4 consistency, track length should only differ by opposite-lane reservation.
-    // Subtracting edge pads here causes inside lanes to be 4px shorter than equivalent outside lanes.
-    let edge_pad_main = 0.0_f32;
+    let this_inset_outside = if axis == "x" {
+        inset_x.eq_ignore_ascii_case("outside")
+    } else {
+        inset_y.eq_ignore_ascii_case("outside")
+    };
 
     // Keep constant cross-size; show/hide is alpha-only (`v` = visibility cubic current).
     // Do not clamp alpha to 0 while 0 < v < 0.01: during fade-in `v` stays tiny for several
@@ -3874,18 +4214,35 @@ fn update_scrollbar_element_self(
         }
     };
 
+    let track_main = {
+        let laid = if axis == "x" {
+            el.layout_bounds[2]
+        } else {
+            el.layout_bounds[3]
+        };
+        if laid > 1.0 {
+            laid
+        } else {
+            main_available
+        }
+    };
+
     match axis {
         "x" => {
-            el.style.size.width = Dimension::length(
-                (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0),
-            );
+            el.style.size.width = if this_inset_outside {
+                Dimension::percent(1.0)
+            } else {
+                Dimension::auto()
+            };
             el.style.size.height = Dimension::length(cross);
         }
         _ => {
             el.style.size.width = Dimension::length(cross);
-            el.style.size.height = Dimension::length(
-                (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
-            );
+            el.style.size.height = if this_inset_outside {
+                Dimension::percent(1.0)
+            } else {
+                Dimension::auto()
+            };
         }
     }
     // The scrollbar builder sets `min_w / min_h` at build time to the initial viewport
@@ -3962,8 +4319,7 @@ fn update_scrollbar_element_self(
         {
             match axis {
                 "x" => {
-                    let track =
-                        (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
+                    let track = track_main.max(1.0);
                     let track_inner = (track - inset * 2.0).max(1.0);
                     let (tw, ml) = if scrollable {
                         let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
@@ -3986,8 +4342,7 @@ fn update_scrollbar_element_self(
                     thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(inset);
                 }
                 _ => {
-                    let track =
-                        (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+                    let track = track_main.max(1.0);
                     let track_inner = (track - inset * 2.0).max(1.0);
                     let (th, mt) = if scrollable {
                         let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);

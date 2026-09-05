@@ -11,9 +11,10 @@ use crate::utils::clipboard::{
 };
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{
-    caret_line_end, caret_line_home, caret_move_left, caret_move_right, caret_move_vertical,
-    caret_move_vertical_visual_pref, caret_visual_line_end, caret_visual_line_home,
-    delete_char_forward, extend_selection, normalized_selection, select_all_range,
+    caret_line_end, caret_line_home, caret_move_left_multiline, caret_move_page_vertical,
+    caret_move_right_multiline, caret_move_vertical, caret_move_vertical_visual_pref,
+    caret_visual_line_end, caret_visual_line_home, delete_char_forward, extend_selection,
+    normalized_selection, select_all_range,
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
@@ -345,6 +346,14 @@ impl super::App {
                         }
                     }
 
+                    if allow_primary_tree
+                        && !editing
+                        && !ime_active.get()
+                        && self.try_keyboard_scroll(&event, None)
+                    {
+                        return true;
+                    }
+
                     if !editing
                         && clipboard_shortcut_modifiers(&self.modifiers)
                         && edit_shortcut_letter(&event) == Some('c')
@@ -549,7 +558,21 @@ impl super::App {
                         } else {
                             None
                         };
+                        let visual_ranges = soft_visual_model.as_ref().map(|m| m.ranges.as_slice());
+                        let lines_per_page = if multiline {
+                            let ta_rest = crate::utils::text_field::textarea_scroll_rest(rest);
+                            let vh_key = crate::core::scroll_viewport::scroll_viewport_h_signal_key(
+                                &ta_rest,
+                            );
+                            let vh = crate::core::reactivity::use_signal(&vh_key, || 0.0_f32)
+                                .peek()
+                                .max(nav_lh);
+                            (vh / nav_lh).max(1.0).floor() as usize
+                        } else {
+                            1
+                        };
                         let mut nav_handled = false;
+                        let mut boundary_scroll_key: Option<Key> = None;
                         match &event.logical_key {
                             Key::Named(NamedKey::ArrowLeft) => {
                                 let dest = if !shift {
@@ -559,13 +582,13 @@ impl super::App {
                                         if lo < hi {
                                             lo
                                         } else {
-                                            caret_move_left(&s, caret)
+                                            caret_move_left_multiline(&s, caret, visual_ranges)
                                         }
                                     } else {
-                                        caret_move_left(&s, caret)
+                                        caret_move_left_multiline(&s, caret, visual_ranges)
                                     }
                                 } else {
-                                    caret_move_left(&s, caret)
+                                    caret_move_left_multiline(&s, caret, visual_ranges)
                                 };
                                 if shift {
                                     text_sel_sig.set(Some(extend_selection(
@@ -590,13 +613,13 @@ impl super::App {
                                         if lo < hi {
                                             hi
                                         } else {
-                                            caret_move_right(&s, caret)
+                                            caret_move_right_multiline(&s, caret, visual_ranges)
                                         }
                                     } else {
-                                        caret_move_right(&s, caret)
+                                        caret_move_right_multiline(&s, caret, visual_ranges)
                                     }
                                 } else {
-                                    caret_move_right(&s, caret)
+                                    caret_move_right_multiline(&s, caret, visual_ranges)
                                 };
                                 if shift {
                                     text_sel_sig.set(Some(extend_selection(
@@ -683,6 +706,9 @@ impl super::App {
                                     // Single-line: Up jumps to start (common field behavior).
                                     0
                                 };
+                                if dest == caret && multiline {
+                                    boundary_scroll_key = Some(event.logical_key.clone());
+                                }
                                 if shift {
                                     text_sel_sig.set(Some(extend_selection(
                                         caret,
@@ -718,6 +744,111 @@ impl super::App {
                                 } else {
                                     s.len()
                                 };
+                                if dest == caret && multiline {
+                                    boundary_scroll_key = Some(event.logical_key.clone());
+                                }
+                                if shift {
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
+                                caret_sig.set(Some(dest));
+                                nav_handled = true;
+                            }
+                            Key::Named(NamedKey::PageUp) => {
+                                let dest = if multiline {
+                                    let px = soft_visual_model.as_ref().map(|m| {
+                                        pref_x_sig
+                                            .peek()
+                                            .unwrap_or_else(|| m.caret_x_on_line(caret))
+                                    });
+                                    if let Some(ref model) = soft_visual_model {
+                                        if pref_x_sig.peek().is_none() {
+                                            if let Some(px) = px {
+                                                pref_x_sig.set_silent(Some(px));
+                                            }
+                                        }
+                                        caret_move_page_vertical(
+                                            &s,
+                                            Some(&model.ranges),
+                                            Some(&model.caret_xs),
+                                            caret,
+                                            -1,
+                                            lines_per_page,
+                                            px,
+                                        )
+                                    } else {
+                                        caret_move_page_vertical(
+                                            &s,
+                                            None,
+                                            None,
+                                            caret,
+                                            -1,
+                                            lines_per_page,
+                                            None,
+                                        )
+                                    }
+                                } else {
+                                    0
+                                };
+                                if dest == caret && multiline {
+                                    boundary_scroll_key = Some(event.logical_key.clone());
+                                }
+                                if shift {
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
+                                caret_sig.set(Some(dest));
+                                nav_handled = true;
+                            }
+                            Key::Named(NamedKey::PageDown) => {
+                                let dest = if multiline {
+                                    let px = soft_visual_model.as_ref().map(|m| {
+                                        pref_x_sig
+                                            .peek()
+                                            .unwrap_or_else(|| m.caret_x_on_line(caret))
+                                    });
+                                    if let Some(ref model) = soft_visual_model {
+                                        if pref_x_sig.peek().is_none() {
+                                            if let Some(px) = px {
+                                                pref_x_sig.set_silent(Some(px));
+                                            }
+                                        }
+                                        caret_move_page_vertical(
+                                            &s,
+                                            Some(&model.ranges),
+                                            Some(&model.caret_xs),
+                                            caret,
+                                            1,
+                                            lines_per_page,
+                                            px,
+                                        )
+                                    } else {
+                                        caret_move_page_vertical(
+                                            &s,
+                                            None,
+                                            None,
+                                            caret,
+                                            1,
+                                            lines_per_page,
+                                            None,
+                                        )
+                                    }
+                                } else {
+                                    s.len()
+                                };
+                                if dest == caret && multiline {
+                                    boundary_scroll_key = Some(event.logical_key.clone());
+                                }
                                 if shift {
                                     text_sel_sig.set(Some(extend_selection(
                                         caret,
@@ -766,11 +897,75 @@ impl super::App {
                         }
                         if nav_handled {
                             if allow_primary_tree {
+                                if multiline {
+                                    if let Some(scroll_key) = boundary_scroll_key.as_ref() {
+                                        let ta_rest =
+                                            crate::utils::text_field::textarea_scroll_rest(rest);
+                                        let delta = match scroll_key {
+                                            Key::Named(NamedKey::PageUp) => {
+                                                nav_lh * lines_per_page as f32
+                                            }
+                                            Key::Named(NamedKey::PageDown) => {
+                                                -nav_lh * lines_per_page as f32
+                                            }
+                                            Key::Named(NamedKey::ArrowUp) => nav_lh,
+                                            Key::Named(NamedKey::ArrowDown) => -nav_lh,
+                                            _ => 0.0,
+                                        };
+                                        if delta.abs() > 0.5 {
+                                            if let Some(smooth) =
+                                                super::scroll_support::nudge_scroll_viewport_y(
+                                                    &ta_rest, delta,
+                                                )
+                                            {
+                                                if smooth {
+                                                    self.bump_smooth_active_until(
+                                                        &ta_rest,
+                                                        std::time::Instant::now(),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    } else if self.modifiers.control_key()
+                                        && matches!(
+                                            &event.logical_key,
+                                            Key::Named(
+                                                NamedKey::PageUp
+                                                    | NamedKey::PageDown
+                                                    | NamedKey::Home
+                                                    | NamedKey::End
+                                            )
+                                        )
+                                    {
+                                        self.try_keyboard_scroll(&event, None);
+                                    }
+                                }
                                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                     st.window.request_redraw();
                                 }
                             }
                             return true;
+                        }
+                        if allow_primary_tree
+                            && !composing
+                            && matches!(
+                                &event.logical_key,
+                                Key::Named(
+                                    NamedKey::PageUp
+                                        | NamedKey::PageDown
+                                        | NamedKey::Home
+                                        | NamedKey::End
+                                )
+                            )
+                        {
+                            let prefer = if multiline {
+                                Some(crate::utils::text_field::textarea_scroll_rest(rest))
+                            } else {
+                                None
+                            };
+                            if self.try_keyboard_scroll(&event, prefer.as_deref()) {
+                                return true;
+                            }
                         }
                     }
                     if matches!(event.logical_key, Key::Named(NamedKey::Backspace)) {
