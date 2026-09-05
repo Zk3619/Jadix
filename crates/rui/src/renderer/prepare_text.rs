@@ -166,6 +166,9 @@ pub struct ShadowTexDraw {
     pub cache_key: u64,
     /// 屏幕矩形 [x, y, w, h]，物理像素。
     pub rect: [f32; 4],
+    /// Same space as `rect`. `None` = no fragment clip (must not be used for
+    /// scroll/overflow text — unclipped quads flicker against glyphon TextBounds).
+    pub clip: Option<[f32; 4]>,
 }
 
 /// `prepare_text_frame` 的完整输出。
@@ -281,8 +284,7 @@ fn generate_shadow_bitmap(
     };
 
     let alpha = shadow_color[3];
-    const SHARP_BLUR_EPS: f32 = 0.75;
-    let draw_blur = radius > SHARP_BLUR_EPS && alpha > 6;
+    let draw_blur = radius > TEXTURED_SHADOW_MIN_BLUR && alpha > 6;
 
     let mut stamp = |ox: f32, oy: f32, sample_alpha: u8| {
         if sample_alpha == 0 {
@@ -421,12 +423,16 @@ fn node_shape_identity_hash(
     letter_spacing: f32,
     direction: TextDirection,
     color: [u8; 4],
+    requested_weight: u16,
+    synthetic_bold: bool,
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
     ((scaled_size * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     ((line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     weight.hash(&mut h);
+    requested_weight.hash(&mut h);
+    synthetic_bold.hash(&mut h);
     family_hash(family).hash(&mut h);
     align_to_u8(align).hash(&mut h);
     let shaping_mode: u8 = match shaping {
@@ -475,6 +481,8 @@ fn node_shape_hash(
         letter_spacing,
         direction,
         color,
+        weight,
+        false,
     );
     node_shape_key_from_identity(identity, scaled_w, scaled_h, force_fast_mode)
 }
@@ -728,6 +736,29 @@ fn park_shaped_entry(
     pool.insert(entry.shape_hash, entry);
 }
 
+/// Pull a parked buffer for `shape_hash` into `cache[i]` after band-cull index shifts.
+///
+/// Only the identity pool: never swap two live slots (that painted button captions
+/// inside Inputs). `shape_hash` already includes requested weight / synthetic-bold
+/// so sidebar 「数据」 cannot reclaim the page-title buffer.
+fn reclaim_shaped_slot(
+    cache: &mut Vec<super::text::ShapedTextEntry>,
+    pool: &mut std::collections::HashMap<u64, super::text::ShapedTextEntry>,
+    i: usize,
+    shape_hash: u64,
+) {
+    if shape_hash == 0 || i >= cache.len() {
+        return;
+    }
+    if cache[i].shape_hash == shape_hash {
+        return;
+    }
+    if let Some(reclaimed) = pool.remove(&shape_hash) {
+        let displaced = std::mem::replace(&mut cache[i], reclaimed);
+        park_shaped_entry(pool, displaced);
+    }
+}
+
 /// Scroll fast-path: Exact-hit idle Input may skip `shape_until_scroll`.
 #[inline]
 pub(crate) fn scroll_fast_skips_input_reshape(
@@ -766,41 +797,100 @@ fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4
     }
 }
 
-/// Shadow layers translate the whole buffer; using the same `TextBounds` as the fill
-/// clips soft samples. Expand the node clip by outset and intersect the viewport.
+/// Overflow:hidden clips descendant shadows (including synthetic-bold). Expanding
+/// this by blur/offset let the last sidebar label paint past the footer separator.
 fn shadow_clip_for_glyphon(
     node_clip: Option<[f32; 4]>,
-    outset: f32,
+    _outset: f32,
     viewport: [f32; 4],
 ) -> Option<[f32; 4]> {
-    let c = node_clip?;
-    let expanded = [
-        c[0] - outset,
-        c[1] - outset,
-        c[2] + 2.0 * outset,
-        c[3] + 2.0 * outset,
-    ];
-    clip_rect_to_bounds(expanded, Some(viewport))
+    clip_rect_to_bounds(node_clip?, Some(viewport))
 }
 
-/// CSS `text-shadow` is active when a color is set and either blur or offset is non-zero
-/// (`blur=0` is a sharp offset shadow — gallery「横向偏移」).
+/// Integer overflow clip for glyphon `TextBounds` and textured synthetic-bold.
+///
+/// Near edges use `floor` (same as the scroll-chase coverage path — `ceil` origin
+/// shrank the box every sub-pixel step and strobed). Far edges use `floor` so
+/// overflow:hidden never grows onto the next sibling (sidebar footer separator).
+/// A sliver that snaps empty must **skip** paint; treating it as "no clip"
+/// draws the last visible row unclipped for a frame after scroll stops.
+#[inline]
+pub fn integerize_clip_rect(c: [f32; 4]) -> Option<[f32; 4]> {
+    let left = c[0].floor();
+    let top = c[1].floor();
+    let right = (c[0] + c[2]).floor();
+    let bottom = (c[1] + c[3]).floor();
+    let w = right - left;
+    let h = bottom - top;
+    if w <= 0.0 || h <= 0.0 {
+        None
+    } else {
+        Some([left, top, w, h])
+    }
+}
+
+/// GPU/glyphon clip for a node.
+///
+/// - `Some(None)`: no overflow ancestor (draw unclipped).
+/// - `Some(Some(rect))`: integer overflow scissor.
+/// - `None`: clipped away — **do not draw**, and do not pass `clip: None`
+///   to [`shadow_tex_instance_clip`] (that disables the scissor).
+#[inline]
+pub fn paint_overflow_clip(
+    clip: Option<[f32; 4]>,
+    had_overflow_clip: bool,
+) -> Option<Option<[f32; 4]>> {
+    match clip {
+        None if !had_overflow_clip => Some(None),
+        None => None,
+        Some(c) => integerize_clip_rect(c).map(Some),
+    }
+}
+
+/// Overflow clip for textured `text-shadow` quads (`clip_size[0] < 0` disables).
+#[inline]
+pub fn shadow_tex_instance_clip(clip: Option<[f32; 4]>) -> ([f32; 2], [f32; 2]) {
+    match clip {
+        Some([x, y, w, h]) if w > 0.0 && h > 0.0 => ([x, y], [w, h]),
+        _ => ([0.0, 0.0], [-1.0, -1.0]),
+    }
+}
 #[inline]
 fn text_shadow_active(shadow_color: Option<[u8; 4]>, offset: [f32; 2], blur: f32) -> bool {
     shadow_color.is_some_and(|c| c[3] > 0)
         && (blur > 0.0 || offset[0].abs() > 0.0 || offset[1].abs() > 0.0)
 }
 
+/// Blur below this is a single extra Coverage layer — not worth a separate bitmap.
+const TEXTURED_SHADOW_MIN_BLUR: f32 = 0.75;
+
+/// Bake `text-shadow` into a textured quad only when the user asked for a soft
+/// blur. Synthetic-bold (and sharp dx/dy shadows) must stay on the glyphon
+/// Coverage path: the bitmap is stamped at `physical((0,0))` while glyphs use
+/// `physical((left, top))`, so a 1 device-px chase makes complex CJK and the
+/// fake-bold halo walk out of lockstep.
+#[inline]
+fn uses_textured_shadow_bitmap(user_text_shadow: bool, blur_px: f32) -> bool {
+    user_text_shadow && blur_px > TEXTURED_SHADOW_MIN_BLUR
+}
+
 fn text_bounds_from_clip(
     clip: Option<[f32; 4]>,
     config: &SurfaceConfiguration,
 ) -> glyphon::TextBounds {
-    if let Some(b) = clip {
+    if let Some(b) = clip.and_then(integerize_clip_rect) {
         glyphon::TextBounds {
-            left: b[0].floor() as i32,
-            top: b[1].floor() as i32,
-            right: (b[0] + b[2]).ceil() as i32,
-            bottom: (b[1] + b[3]).ceil() as i32,
+            left: b[0] as i32,
+            top: b[1] as i32,
+            right: (b[0] + b[2]) as i32,
+            bottom: (b[1] + b[3]) as i32,
+        }
+    } else if clip.is_some() {
+        glyphon::TextBounds {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
         }
     } else {
         glyphon::TextBounds {
@@ -893,11 +983,12 @@ fn emoji_wrap_width_q(buffer_soft_w: f32) -> u16 {
     (buffer_soft_w / 8.0).floor().clamp(0.0, u16::MAX as f32) as u16
 }
 
+/// Isolate an explicit RTL paragraph. LTR/Auto must not inject U+200E: many CJK
+/// fallbacks draw LRM as a visible arrow/box at the start of every string.
 fn direction_mark(dir: TextDirection) -> &'static str {
     match dir {
-        TextDirection::Ltr => "\u{200E}",
         TextDirection::Rtl => "\u{200F}",
-        TextDirection::Auto => "",
+        TextDirection::Ltr | TextDirection::Auto => "",
     }
 }
 
@@ -1749,6 +1840,9 @@ pub fn prepare_text_frame(
         // nodes completely outside the pre-shape margin are skipped cheaply.
         let scaled_w = info.width * ui_scale;
         let scaled_h = info.height * ui_scale;
+        // Do not round the origin: `round()` can shift paint up to 0.5px outside the
+        // layout box (sidebar labels looked like a 1px overflow). Device-pixel scroll
+        // already keeps the fractional part stable, so glyphon and synthetic-bold stay aligned.
         let x = info.x * ui_scale;
         let y = info.y * ui_scale;
         let scaled_clip = info.clip_bounds.map(|b| {
@@ -1845,11 +1939,12 @@ pub fn prepare_text_frame(
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight_resolved() };
-        let font_weight = crate::utils::font::normalize_weight_for_family(
+        let resolved_face = crate::utils::font::resolve_face_weight(
             unsafe { &*text_renderer.font_system }.db(),
             family,
             requested_weight,
         );
+        let font_weight = resolved_face.attrs_weight;
         let scaled_size = st.size_resolved() * ui_scale;
         let mut line_height = if is_icon {
             scaled_size
@@ -1964,10 +2059,13 @@ pub fn prepare_text_frame(
             .as_ref()
             .map(|p| crate::text::layout(p, layout_w));
         let hard_lines = info.text.split('\n').count().max(1) as f32;
+        // Cosmic clips ink at buffer height. Keep a small pad for coverage AA.
+        // TextEdit uses a larger pad because the field scrolls; static labels must
+        // not grow the buffer past ancestor overflow:hidden (sidebar footer rule).
         let ink_fudge = if is_input_text {
             crate::utils::text_field::text_edit_ink_pad_px(st.size_resolved()) * ui_scale
         } else {
-            2.0
+            2.0 * ui_scale
         };
         // Height from segment arithmetic / leaf first. glyphon_fit only on Shape miss (below).
         let metrics_h = metrics
@@ -2061,22 +2159,12 @@ pub fn prepare_text_frame(
             st.letter_spacing,
             st.direction,
             st.color_resolved(),
+            requested_weight,
+            resolved_face.synthetic_bold,
         );
         // Derive Exact key from identity — do not re-hash the full string (scroll frames
         // visit every visible label; browsers keep glyphs and only translate).
         let key_hash = node_shape_key_from_identity(shape_hash, scaled_w, scaled_h, false);
-
-        if preshape_only {
-            let will_miss = text_renderer.shaped_cache.len() <= i
-                || text_renderer.shaped_cache[i].key_hash != key_hash;
-            if will_miss {
-                preshape_miss_count += 1;
-                if preshape_miss_count > effective_budget {
-                    frame_meta.push(None);
-                    continue;
-                }
-            }
-        }
 
         while text_renderer.shaped_cache.len() <= i {
             text_renderer
@@ -2084,6 +2172,27 @@ pub fn prepare_text_frame(
                 .push(make_dummy_cache_entry(unsafe {
                     &mut *text_renderer.font_system
                 }));
+        }
+
+        // shaped_cache stays index-aligned. Band-cull reordering reclaims buffers from
+        // `shaped_identity_pool` by shape_hash — never swap two live slots in the vec
+        // (that painted button captions inside Inputs).
+        reclaim_shaped_slot(
+            &mut text_renderer.shaped_cache,
+            &mut text_renderer.shaped_identity_pool,
+            i,
+            shape_hash,
+        );
+
+        if preshape_only {
+            let will_miss = text_renderer.shaped_cache[i].key_hash != key_hash;
+            if will_miss {
+                preshape_miss_count += 1;
+                if preshape_miss_count > effective_budget {
+                    frame_meta.push(None);
+                    continue;
+                }
+            }
         }
 
         // Wrap: FIT_CACHE hit always. Fast miss → leaf (smooth resize). Settle miss →
@@ -2133,25 +2242,6 @@ pub fn prepare_text_frame(
             Exact { measured: f32, wrap_w: f32 },
             Bounds { measured: f32, wrap_w: f32 },
             Miss,
-        }
-
-        // shaped_cache stays index-aligned. Band-cull reordering reclaims buffers from
-        // `shaped_identity_pool` by shape_hash — never swap two live slots in the vec
-        // (that painted button captions inside Inputs). Input stays out of bounds_only.
-        // Try reclaim before Exact/Bounds so gallery forms survive sibling band cull.
-        {
-            let entry = &text_renderer.shaped_cache[i];
-            if entry.shape_hash != shape_hash
-                && shape_hash != 0
-                && text_renderer.shaped_identity_pool.contains_key(&shape_hash)
-            {
-                let reclaimed = text_renderer
-                    .shaped_identity_pool
-                    .remove(&shape_hash)
-                    .expect("contains_key");
-                let displaced = std::mem::replace(&mut text_renderer.shaped_cache[i], reclaimed);
-                park_shaped_entry(&mut text_renderer.shaped_identity_pool, displaced);
-            }
         }
 
         // Always detect (CJK/Arabic fast-reject is cheap). Caching has_emoji on Exact was
@@ -2856,55 +2946,90 @@ pub fn prepare_text_frame(
                 glyph_dy += off_y * ui_scale;
             }
         }
-        let sdx = st.shadow_offset[0] * ui_scale;
-        let sdy = st.shadow_offset[1] * ui_scale;
-        let sblur = st.shadow_blur * ui_scale;
-        let has_shadow = text_shadow_active(st.shadow_color, [sdx, sdy], sblur);
+        let sdx0 = st.shadow_offset[0] * ui_scale;
+        let sdy0 = st.shadow_offset[1] * ui_scale;
+        let sblur0 = st.shadow_blur * ui_scale;
+        let mut sdx = sdx0;
+        let mut sdy = sdy0;
+        let mut sblur = sblur0;
+        let mut shadow_col = st.shadow_color;
+        let user_text_shadow = text_shadow_active(shadow_col, [sdx0, sdy0], sblur0);
+        // CSS `font-synthesis: weight` — thicken Regular when Medium/Bold face is missing.
+        // Reuses the existing 0-blur/soft shadow rasterizer; skipped if the node already
+        // specified a text-shadow.
+        if resolved_face.synthetic_bold && !is_icon && !user_text_shadow {
+            shadow_col = Some(st.color_resolved());
+            sdx = 0.18 * ui_scale;
+            sdy = 0.0;
+            sblur = 0.32 * ui_scale;
+        }
+        let has_shadow = text_shadow_active(shadow_col, [sdx, sdy], sblur);
 
         if has_shadow {
-            let Some(sc) = st.shadow_color else { continue };
-            let skey = shadow_cache_key(key_hash, sc, sdx, sdy, sblur);
-            if shadow_cached_keys.contains(&skey) {
-                if let Some(cached_rect) = shadow_cached_rects.get(&skey) {
-                    shadow_tex_draws.push(ShadowTexDraw {
-                        cache_key: skey,
-                        rect: [
-                            x + cached_rect[0],
-                            y + cached_rect[1],
-                            cached_rect[2],
-                            cached_rect[3],
-                        ],
-                    });
+            if let Some(sc) = shadow_col {
+                if uses_textured_shadow_bitmap(user_text_shadow, sblur) {
+                    let intersected = shadow_clip_for_glyphon(
+                        scaled_clip,
+                        sdx.abs() + sdy.abs() + sblur + 3.0,
+                        viewport_clip,
+                    );
+                    if let Some(shadow_clip) =
+                        paint_overflow_clip(intersected, scaled_clip.is_some())
+                    {
+                        let skey = shadow_cache_key(key_hash, sc, sdx, sdy, sblur);
+                        let mut drew_tex = false;
+                        if shadow_cached_keys.contains(&skey) {
+                            if let Some(cached_rect) = shadow_cached_rects.get(&skey) {
+                                shadow_tex_draws.push(ShadowTexDraw {
+                                    cache_key: skey,
+                                    rect: [
+                                        x + cached_rect[0],
+                                        y + cached_rect[1],
+                                        cached_rect[2],
+                                        cached_rect[3],
+                                    ],
+                                    clip: shadow_clip,
+                                });
+                                drew_tex = true;
+                            }
+                        } else if let Some(bmp) = generate_shadow_bitmap(
+                            &text_renderer.shaped_cache[i].buffer,
+                            unsafe { &mut *text_renderer.font_system },
+                            &mut text_renderer.swash_cache,
+                            sc,
+                            sdx,
+                            sdy,
+                            sblur,
+                        ) {
+                            shadow_tex_draws.push(ShadowTexDraw {
+                                cache_key: skey,
+                                rect: [
+                                    x + bmp.draw_rect[0],
+                                    y + bmp.draw_rect[1],
+                                    bmp.draw_rect[2],
+                                    bmp.draw_rect[3],
+                                ],
+                                clip: shadow_clip,
+                            });
+                            shadow_new_bitmaps.push(ShadowNewBitmap {
+                                cache_key: skey,
+                                rgba: bmp.rgba,
+                                width: bmp.width,
+                                height: bmp.height,
+                                draw_rect: bmp.draw_rect,
+                            });
+                            drew_tex = true;
+                        }
+                        // Only skip the glyphon fallback when a textured quad was actually queued.
+                        // Cache-key-without-rect or empty-glyph bitmap miss used to skip *and*
+                        // omit a draw → synthetic bold vanished until the next reshape (scroll flicker).
+                        if drew_tex {
+                            shadow_skip_indices.insert(i);
+                        }
+                        // Bitmap miss → glyphon multi-layer TextArea fallback below (Coverage path).
+                    }
                 }
-                shadow_skip_indices.insert(i);
-            } else if let Some(bmp) = generate_shadow_bitmap(
-                &text_renderer.shaped_cache[i].buffer,
-                unsafe { &mut *text_renderer.font_system },
-                &mut text_renderer.swash_cache,
-                sc,
-                sdx,
-                sdy,
-                sblur,
-            ) {
-                shadow_tex_draws.push(ShadowTexDraw {
-                    cache_key: skey,
-                    rect: [
-                        x + bmp.draw_rect[0],
-                        y + bmp.draw_rect[1],
-                        bmp.draw_rect[2],
-                        bmp.draw_rect[3],
-                    ],
-                });
-                shadow_new_bitmaps.push(ShadowNewBitmap {
-                    cache_key: skey,
-                    rgba: bmp.rgba,
-                    width: bmp.width,
-                    height: bmp.height,
-                    draw_rect: bmp.draw_rect,
-                });
-                shadow_skip_indices.insert(i);
             }
-            // Bitmap miss → glyphon multi-layer TextArea fallback below (Coverage path).
         }
 
         frame_meta.push(Some(FrameTextNodeMeta {
@@ -2929,7 +3054,7 @@ pub fn prepare_text_frame(
             decoration_thickness: st.decoration_thickness_resolved(),
             underline_offset: st.underline_offset_resolved(),
             color: glyph_color,
-            shadow_col: st.shadow_color,
+            shadow_col,
             shadow_dx: sdx,
             shadow_dy: sdy,
             shadow_blur: sblur,
@@ -3008,7 +3133,7 @@ pub fn prepare_text_frame(
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
+                        border_extra: 0.0, backdrop_blur: 0.0,
                     });
                 };
             for g in run.glyphs.iter() {
@@ -3041,6 +3166,9 @@ pub fn prepare_text_frame(
         let Some(tb) = tb.as_ref() else {
             continue;
         };
+        if paint_overflow_clip(tb.clip_bounds, tb.clip_bounds.is_some()).is_none() {
+            continue;
+        }
         let entry = &text_renderer.shaped_cache[i];
         if let Some(sc) = tb.shadow_col {
             if !shadow_skip_indices.contains(&i) {
@@ -3059,73 +3187,83 @@ pub fn prepare_text_frame(
                             TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
                             TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
                         };
-                    const SHARP_BLUR_EPS: f32 = 0.75;
                     let shadow_bounds_clip = shadow_clip_for_glyphon(
                         tb.clip_bounds,
                         radius + tb.shadow_dx.abs() + tb.shadow_dy.abs() + 3.0,
                         viewport_clip,
                     );
-                    let bounds = text_bounds_from_clip(shadow_bounds_clip, config);
+                    if let Some(gpu_clip) =
+                        paint_overflow_clip(shadow_bounds_clip, tb.clip_bounds.is_some())
+                    {
+                        let bounds = text_bounds_from_clip(gpu_clip, config);
 
-                    let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
-                        if layer_alpha == 0 {
-                            return;
-                        }
-                        let shadow_rect = [left, top, tb.box_w, tb.box_h];
-                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds)
-                        else {
-                            return;
+                        let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
+                            if layer_alpha == 0 {
+                                return;
+                            }
+                            let shadow_rect = [left, top, tb.box_w, tb.box_h];
+                            let Some(shadow_visible) =
+                                clip_rect_to_bounds(shadow_rect, tb.clip_bounds)
+                            else {
+                                return;
+                            };
+                            if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
+                                return;
+                            }
+                            text_areas.push(glyphon::TextArea {
+                                buffer: &entry.buffer,
+                                left,
+                                top,
+                                scale: tb.paint_scale,
+                                bounds,
+                                default_color: glyphon::Color::rgba(
+                                    sc[0],
+                                    sc[1],
+                                    sc[2],
+                                    layer_alpha,
+                                ),
+                                custom_glyphs: tb
+                                    .emoji_cache_key
+                                    .as_ref()
+                                    .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
+                            });
                         };
-                        if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
-                            return;
-                        }
-                        text_areas.push(glyphon::TextArea {
-                            buffer: &entry.buffer,
-                            left,
-                            top,
-                            scale: tb.paint_scale,
-                            bounds,
-                            default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], layer_alpha),
-                            custom_glyphs: tb
-                                .emoji_cache_key
-                                .as_ref()
-                                .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
-                        });
-                    };
 
-                    let draw_blur =
-                        radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
-                    if !draw_blur {
-                        push_shadow_layer(center_left, center_top, alpha);
-                    } else {
-                        const GOLDEN_ANGLE: f32 = 2.399_963_1;
-                        let sample_count = (base_samples as f32 + radius * radial_scale)
-                            .round()
-                            .clamp(base_samples as f32, max_samples as f32)
-                            as usize;
-                        let sigma = (radius * 0.58).max(0.75);
-                        let two_sigma2 = 2.0 * sigma * sigma;
+                        let draw_blur =
+                            radius > TEXTURED_SHADOW_MIN_BLUR && radius > min_radius && alpha > min_alpha;
+                        if !draw_blur {
+                            push_shadow_layer(center_left, center_top, alpha);
+                        } else {
+                            const GOLDEN_ANGLE: f32 = 2.399_963_1;
+                            let sample_count = (base_samples as f32 + radius * radial_scale)
+                                .round()
+                                .clamp(base_samples as f32, max_samples as f32)
+                                as usize;
+                            let sigma = (radius * 0.58).max(0.75);
+                            let two_sigma2 = 2.0 * sigma * sigma;
 
-                        let mut weight_sum = 1.0_f32;
-                        for idx in 0..sample_count {
-                            let t = (idx as f32 + 0.5) / (sample_count as f32);
-                            let r = radius * t.sqrt();
-                            let w = (-(r * r) / two_sigma2).exp();
-                            weight_sum += w;
-                        }
-                        let inv = 1.0 / weight_sum.max(0.001);
-                        let center_alpha = ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
-                        push_shadow_layer(center_left, center_top, center_alpha);
+                            let mut weight_sum = 1.0_f32;
+                            for idx in 0..sample_count {
+                                let t = (idx as f32 + 0.5) / (sample_count as f32);
+                                let r = radius * t.sqrt();
+                                let w = (-(r * r) / two_sigma2).exp();
+                                weight_sum += w;
+                            }
+                            let inv = 1.0 / weight_sum.max(0.001);
+                            let center_alpha =
+                                ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
+                            push_shadow_layer(center_left, center_top, center_alpha);
 
-                        for idx in 0..sample_count {
-                            let t = (idx as f32 + 0.5) / (sample_count as f32);
-                            let r = radius * t.sqrt();
-                            let theta = idx as f32 * GOLDEN_ANGLE;
-                            let rx = theta.cos() * r;
-                            let ry = theta.sin() * r;
-                            let w = (-(r * r) / two_sigma2).exp();
-                            let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
-                            push_shadow_layer(center_left + rx, center_top + ry, wa);
+                            for idx in 0..sample_count {
+                                let t = (idx as f32 + 0.5) / (sample_count as f32);
+                                let r = radius * t.sqrt();
+                                let theta = idx as f32 * GOLDEN_ANGLE;
+                                let rx = theta.cos() * r;
+                                let ry = theta.sin() * r;
+                                let w = (-(r * r) / two_sigma2).exp();
+                                let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
+                                push_shadow_layer(center_left + rx, center_top + ry, wa);
+                            }
                         }
                     }
                 }
@@ -3202,7 +3340,7 @@ pub fn prepare_text_frame(
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
+                        border_extra: 0.0, backdrop_blur: 0.0,
                     });
                 }
                 for g in &entry.glyphs {
@@ -3232,7 +3370,7 @@ pub fn prepare_text_frame(
                                 transform: crate::style::transform::MAT2D_IDENTITY,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                border_extra: 0.0,
+                                border_extra: 0.0, backdrop_blur: 0.0,
                             });
                         }
                     }
@@ -3301,7 +3439,7 @@ pub fn prepare_text_frame(
                     transform: crate::style::transform::MAT2D_IDENTITY,
                     clip_pos: [0.0, 0.0],
                     clip_size: InstanceInput::NO_CLIP_SIZE,
-                    border_extra: 0.0,
+                    border_extra: 0.0, backdrop_blur: 0.0,
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {
@@ -3505,6 +3643,90 @@ mod text_shadow_tests {
     }
 
     #[test]
+    fn synthetic_bold_must_not_bake_textured_shadow() {
+        // Gallery chase: sidebar 「数据」 / CSS-filter captions use font-medium
+        // synthesis (blur 0.32). A baked quad desyncs from Coverage CJK.
+        assert!(
+            !super::uses_textured_shadow_bitmap(false, 0.32),
+            "synthetic-bold must stay on the glyphon layer"
+        );
+        assert!(
+            !super::uses_textured_shadow_bitmap(true, 0.32),
+            "sharp user text-shadow must stay on the glyphon layer"
+        );
+        assert!(
+            super::uses_textured_shadow_bitmap(true, 4.0),
+            "soft user text-shadow may still bake a bitmap"
+        );
+    }
+
+    #[test]
+    fn shadow_tex_instance_clip_disables_on_empty() {
+        assert_eq!(
+            super::shadow_tex_instance_clip(None),
+            ([0.0, 0.0], [-1.0, -1.0])
+        );
+        assert_eq!(
+            super::shadow_tex_instance_clip(Some([10.0, 20.0, 0.0, 8.0])),
+            ([0.0, 0.0], [-1.0, -1.0])
+        );
+        assert_eq!(
+            super::shadow_tex_instance_clip(Some([10.0, 20.0, 100.0, 40.0])),
+            ([10.0, 20.0], [100.0, 40.0])
+        );
+    }
+
+    #[test]
+    fn integerize_clip_rect_matches_glyphon_text_bounds_edges() {
+        let i = super::integerize_clip_rect([10.2, 20.8, 30.3, 40.1]).expect("positive");
+        assert!((i[0] - 10.0).abs() < 1e-4, "floor(10.2)=10, got {}", i[0]);
+        assert!((i[1] - 20.0).abs() < 1e-4, "floor(20.8)=20, got {}", i[1]);
+        let right = i[0] + i[2];
+        let bottom = i[1] + i[3];
+        assert!(
+            (right - 40.0).abs() < 1e-4,
+            "floor(10.2+30.3)=40, got {right}"
+        );
+        assert!(
+            (bottom - 60.0).abs() < 1e-4,
+            "floor(20.8+40.1)=60, got {bottom}"
+        );
+        assert!(super::integerize_clip_rect([5.0, 5.0, 0.0, 8.0]).is_none());
+    }
+
+    #[test]
+    fn integerize_clip_rect_does_not_expand_past_overflow_edge() {
+        // Gallery sidebar: last visible label clip bottom 463.25, footer rule at 463.25.
+        let i = super::integerize_clip_rect([16.0, 458.0, 42.0, 5.25]).expect("positive");
+        let bottom = i[1] + i[3];
+        assert!(
+            bottom <= 463.25,
+            "far-edge floor must not paint past overflow:hidden (got {bottom})"
+        );
+        assert!(
+            (bottom - 463.0).abs() < 1e-4,
+            "floor(463.25)=463, got {bottom}"
+        );
+    }
+
+    #[test]
+    fn paint_overflow_clip_sliver_skips_instead_of_unclipping() {
+        assert!(
+            super::paint_overflow_clip(Some([0.0, 463.0, 80.0, 0.4]), true).is_none(),
+            "sub-pixel leftover at the clip edge must not disable the scissor"
+        );
+        assert_eq!(
+            super::paint_overflow_clip(None, false),
+            Some(None),
+            "no overflow ancestor still draws unclipped"
+        );
+        assert!(
+            super::paint_overflow_clip(None, true).is_none(),
+            "off-screen intersect must skip, not fill the viewport"
+        );
+    }
+
+    #[test]
     fn shadow_bitmap_keeps_positive_dy_mass_below_centroid() {
         // Regression: textured UV now maps top→row0; Y-flipping the shadow bitmap
         // inverted soft shadows after the Bake/capture UV fix.
@@ -3562,6 +3784,13 @@ mod shape_cache_key_tests {
     use std::time::Instant;
 
     #[test]
+    fn ltr_and_auto_do_not_inject_lrm() {
+        assert_eq!(super::direction_mark(TextDirection::Auto), "");
+        assert_eq!(super::direction_mark(TextDirection::Ltr), "");
+        assert_eq!(super::direction_mark(TextDirection::Rtl), "\u{200F}");
+    }
+
+    #[test]
     fn emoji_wrap_width_q_buckets_one_px_jitter() {
         assert_eq!(
             super::emoji_wrap_width_q(400.0),
@@ -3608,6 +3837,8 @@ mod shape_cache_key_tests {
             0.0,
             TextDirection::Auto,
             [0, 0, 0, 255],
+            400,
+            false,
         );
         let from_id = node_shape_key_from_identity(identity, 320.0, 40.0, false);
         let full = node_shape_hash(
@@ -3661,6 +3892,8 @@ mod shape_cache_key_tests {
                     0.0,
                     TextDirection::Auto,
                     [0, 0, 0, 255],
+                    400,
+                    false,
                 );
                 let _key =
                     node_shape_key_from_identity(identity, 400.0 + (i % 7) as f32, 24.0, false);
@@ -3734,6 +3967,8 @@ mod shape_cache_key_tests {
             0.0,
             TextDirection::Auto,
             color,
+            400,
+            false,
         );
         let shape_b = node_shape_identity_hash(
             text,
@@ -3746,6 +3981,8 @@ mod shape_cache_key_tests {
             0.0,
             TextDirection::Auto,
             color,
+            400,
+            false,
         );
         assert_eq!(shape_a, shape_b, "identity must ignore leaf bounds");
 
@@ -3793,6 +4030,8 @@ mod shape_cache_key_tests {
                 0.0,
                 TextDirection::Auto,
                 color,
+                400,
+                false,
             ),
             shape_a
         );
@@ -3956,9 +4195,11 @@ mod hidden_scroll_cull_tests {
 #[cfg(test)]
 mod input_shaping_stability_tests {
     use super::nowrap_layout_width_from_text;
+    use super::node_shape_identity_hash;
     use crate::renderer::font_loader;
     use crate::renderer::text_hit::best_font_family;
     use crate::renderer::text_prepare_debug::is_input_inline_text;
+    use crate::style::TextDirection;
     use crate::style::TextOverflow;
 
     fn shaped_line_w(fs: &mut glyphon::FontSystem, text: &str, shaping: glyphon::Shaping) -> f32 {
@@ -4009,28 +4250,97 @@ mod input_shaping_stability_tests {
         ));
     }
 
+    fn dummy_shaped(
+        fs: &mut glyphon::FontSystem,
+        hash: u64,
+        measured: f32,
+    ) -> crate::renderer::text::ShapedTextEntry {
+        let mut e = super::make_dummy_cache_entry(fs);
+        e.shape_hash = hash;
+        e.key_hash = hash.wrapping_mul(3);
+        e.measured_text_w = measured;
+        e
+    }
+
+    fn reclaim_dummy(
+        cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
+        pool: &mut std::collections::HashMap<u64, crate::renderer::text::ShapedTextEntry>,
+        i: usize,
+        hash: u64,
+    ) {
+        super::reclaim_shaped_slot(cache, pool, i, hash);
+    }
+
     #[test]
     fn shaped_identity_pool_reclaims_across_index_churn() {
-        // Documents: band cull reorders text_nodes; identity pool (not in-vec swap)
-        // must let the same shape_hash survive at a new index.
-        let mut pool = std::collections::HashMap::new();
         let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut a = super::make_dummy_cache_entry(&mut fs);
-        a.shape_hash = 0xA11CE;
-        a.key_hash = 0xA11CE_u64.wrapping_mul(3);
-        a.measured_text_w = 42.0;
-        super::park_shaped_entry(&mut pool, a);
-        assert!(pool.contains_key(&0xA11CE));
-
-        let mut slot = super::make_dummy_cache_entry(&mut fs);
-        slot.shape_hash = 0xB0B;
-        let reclaimed = pool.remove(&0xA11CE).expect("parked");
-        let displaced = std::mem::replace(&mut slot, reclaimed);
-        super::park_shaped_entry(&mut pool, displaced);
-        assert_eq!(slot.shape_hash, 0xA11CE);
-        assert_eq!(slot.measured_text_w, 42.0);
+        let mut cache = vec![dummy_shaped(&mut fs, 0xB0B, 7.0)];
+        let mut pool = std::collections::HashMap::new();
+        super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA11CE, 42.0));
+        reclaim_dummy(&mut cache, &mut pool, 0, 0xA11CE);
+        assert_eq!(cache[0].shape_hash, 0xA11CE);
+        assert_eq!(cache[0].measured_text_w, 42.0);
         assert!(pool.contains_key(&0xB0B));
         assert!(!pool.contains_key(&0xA11CE));
+    }
+
+    #[test]
+    fn prefix_insert_reclaims_from_identity_pool() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut cache = vec![
+            dummy_shaped(&mut fs, 0xB, 2.0),
+            dummy_shaped(&mut fs, 0xC, 3.0),
+            dummy_shaped(&mut fs, 0, 0.0),
+        ];
+        let mut pool = std::collections::HashMap::new();
+        super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA, 1.0));
+        reclaim_dummy(&mut cache, &mut pool, 0, 0xA);
+        assert_eq!(cache[0].shape_hash, 0xA);
+        assert_eq!(cache[0].measured_text_w, 1.0);
+        reclaim_dummy(&mut cache, &mut pool, 1, 0xB);
+        assert_eq!(cache[1].shape_hash, 0xB);
+        reclaim_dummy(&mut cache, &mut pool, 2, 0xC);
+        assert_eq!(cache[2].shape_hash, 0xC);
+    }
+
+    #[test]
+    fn identity_hash_includes_requested_weight() {
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let color = [30u8, 30, 30, 255];
+        let medium = node_shape_identity_hash(
+            "数据",
+            14.0,
+            14.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            500,
+            true,
+        );
+        let bold = node_shape_identity_hash(
+            "数据",
+            14.0,
+            14.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            700,
+            true,
+        );
+        assert_ne!(
+            medium, bold,
+            "sidebar medium vs page-title bold must not share shape_hash when attrs_weight matches"
+        );
     }
 
     #[test]

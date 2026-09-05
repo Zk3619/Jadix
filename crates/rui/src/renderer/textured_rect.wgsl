@@ -13,6 +13,8 @@ struct InstanceInput {
     @location(8) transform_cd: vec2<f32>,   // [c, d]
     @location(9) transform_txty: vec2<f32>, // [tx, ty]
     @location(10) flags: f32,               // >0.5 = SDF / MSDF sample
+    @location(11) clip_pos: vec2<f32>,
+    @location(12) clip_size: vec2<f32>,     // x<0 disables overflow clip
 };
 
 struct Globals {
@@ -34,6 +36,9 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) tint: vec4<f32>,
     @location(2) @interpolate(flat) flags: f32,
+    @location(3) frag_px: vec2<f32>,
+    @location(4) clip_pos: vec2<f32>,
+    @location(5) clip_size: vec2<f32>,
 };
 
 fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
@@ -67,11 +72,23 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.uv = inst.uv_offset + v.uv * inst.uv_scale;
     out.tint = inst.tint;
     out.flags = inst.flags;
+    out.frag_px = physical;
+    out.clip_pos = inst.clip_pos;
+    out.clip_size = inst.clip_size;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Overflow clip in world pixels (after rotate). Do not AABB-clip the
+    // pre-rotation quad — writing-mode Bake swaps w/h then rotates.
+    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
+        let c1 = in.clip_pos + in.clip_size;
+        if (in.frag_px.x < in.clip_pos.x || in.frag_px.x >= c1.x
+            || in.frag_px.y < in.clip_pos.y || in.frag_px.y >= c1.y) {
+            discard;
+        }
+    }
     let sample = textureSample(tex, tex_sampler, in.uv);
     var c: vec4<f32>;
     if (in.flags > 0.5) {

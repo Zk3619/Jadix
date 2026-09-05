@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::renderer::effect::{queue_capture, CaptureJob};
+use crate::renderer::effect::{CaptureJob, queue_capture};
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::svg_filter::FilterGraph;
-use crate::style::{filter_list_to_css, FilterList};
+use crate::style::{FilterList, filter_list_to_css};
 
 #[derive(Clone, Debug)]
 pub struct FilterJob {
@@ -96,7 +96,14 @@ pub fn queue_css_filter_wrap(
                 i
             })
             .collect(),
-        textured_draws,
+        textured_draws: textured_draws
+            .into_iter()
+            .map(|mut d| {
+                d.clip_pos = [0.0, 0.0];
+                d.clip_size = TexturedDraw::NO_CLIP_SIZE;
+                d
+            })
+            .collect(),
         text_nodes: Vec::new(),
     });
     queue_filter_job(FilterJob {

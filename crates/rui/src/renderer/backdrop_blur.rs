@@ -1,7 +1,8 @@
-//! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
+﻿//! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
 //!
-//! Used when a portal underlay has [`crate::style::Style::backdrop_blur`] > 0.
-//! General per-element backdrop-filter / dirty-region cache is deferred (plan B3).
+//! Modal underlays: capture the page → `blur()` → [`Self::blit_to`] the full surface.
+//! Local `mount=` scrims: the same capture + `blur()`, then the scrim's SDF instance
+//! samples the result in `rounded_rect.wgsl` (border-box + radii + overflow clip).
 //!
 //! Uniforms use a dynamic-offset ring so each pass in one encoder keeps its own
 //! σ / direction (a single shared write was overwriting prior passes and left only

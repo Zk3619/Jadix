@@ -12,7 +12,7 @@
 //! 3. Before shaping a string, [`ensure_coverage_for_text`] opens only the faces
 //!    required by the codepoints actually present.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 #[cfg(any(
     feature = "bundled-lucide",
@@ -114,16 +114,6 @@ struct LazyFontState {
     attempted: ScriptNeeds,
     /// Paths that opened successfully at least once (diagnostic / mmap hint).
     loaded_paths: HashSet<String>,
-    /// Paths already injected into a specific [`Database`] (pointer identity).
-    ///
-    /// Critical: layout-time measure and render-time glyphon use **different**
-    /// [`FontSystem`]s. A path loaded into one db must still be loaded into the other;
-    /// a process-global "already loaded" short-circuit caused CJK tofu in the renderer.
-    db_loaded: HashMap<usize, HashSet<String>>,
-}
-
-fn db_identity(db: &Database) -> usize {
-    db as *const Database as usize
 }
 
 fn family_present_any(db: &Database, names: &[&str]) -> bool {
@@ -282,31 +272,24 @@ fn find_font_file(file_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn db_has_font_path(db: &Database, path: &Path) -> bool {
+    db.faces()
+        .any(|face| matches!(&face.source, glyphon::fontdb::Source::File(p) if p.as_path() == path))
+}
+
 fn try_load_font_path(db: &mut Database, path: &Path, state: &mut LazyFontState) -> bool {
     let key = path.to_string_lossy().to_string();
-    let db_id = db_identity(db);
-    if state
-        .db_loaded
-        .get(&db_id)
-        .is_some_and(|set| set.contains(&key))
-    {
+    if db_has_font_path(db, path) {
+        state.loaded_paths.insert(key);
         return true;
     }
     match db.load_font_file(path) {
         Ok(()) => {
             log::info!("loaded font file: {}", path.display());
-            state.loaded_paths.insert(key.clone());
-            state.db_loaded.entry(db_id).or_default().insert(key);
+            state.loaded_paths.insert(key);
             true
         }
         Err(err) => {
-            if state
-                .db_loaded
-                .get(&db_id)
-                .is_some_and(|set| set.contains(&key))
-            {
-                return true;
-            }
             log::warn!("failed to load font {}: {err}", path.display());
             false
         }
@@ -387,38 +370,40 @@ fn family_present(db: &Database, name: &str) -> bool {
         .any(|face| face.families.iter().any(|(f, _)| f == name))
 }
 
-fn first_present<'a>(db: &Database, names: &[&'a str]) -> Option<&'a str> {
-    names.iter().copied().find(|n| family_present(db, n))
-}
-
 /// Pick default sans/serif family names after fonts are loaded.
 pub fn apply_default_families(db: &mut Database) {
     let sans = crate::utils::font::resolved_default_sans_family(db);
-    db.set_sans_serif_family(sans);
-    log::debug!("default sans-serif family: {sans}");
-
-    let serif = first_present(
-        db,
-        &[
-            "Noto Serif CJK SC",
-            "Noto Serif CJK JP",
-            "Noto Serif CJK TC",
-            "Noto Serif",
-            "Times New Roman",
-            "Georgia",
-        ],
-    );
-    if let Some(name) = serif {
-        db.set_serif_family(name);
-        log::debug!("default serif family: {name}");
+    if family_present(db, sans) {
+        db.set_sans_serif_family(sans);
+        log::debug!("default sans-serif family: {sans}");
+    } else {
+        let fallback = db.faces().find_map(|face| {
+            face.families.iter().find_map(|(f, _)| {
+                if f.eq_ignore_ascii_case("lucide") {
+                    None
+                } else {
+                    Some(f.clone())
+                }
+            })
+        });
+        if let Some(name) = fallback {
+            db.set_sans_serif_family(&name);
+            log::debug!("default sans-serif family (first loaded face): {name}");
+        } else {
+            log::warn!("no UI sans face in fontdb — cosmic-text has no default font");
+        }
     }
 
-    if family_present(db, "Cascadia Mono") {
-        db.set_monospace_family("Cascadia Mono");
-    } else if family_present(db, "Consolas") {
-        db.set_monospace_family("Consolas");
-    } else if family_present(db, "Courier New") {
-        db.set_monospace_family("Courier New");
+    let serif = crate::utils::font::resolved_default_serif_family(db);
+    if family_present(db, serif) {
+        db.set_serif_family(serif);
+        log::debug!("default serif family: {serif}");
+    }
+
+    let mono = crate::utils::font::resolved_default_mono_family(db);
+    if family_present(db, mono) {
+        db.set_monospace_family(mono);
+        log::debug!("default monospace family: {mono}");
     }
 }
 
@@ -843,7 +828,19 @@ fn load_eager_system_ui_fonts(db: &mut Database, state: &mut LazyFontState) {
     #[cfg(target_os = "windows")]
     {
         // Minimal weight set for UI chrome (skip arial/cour — saves mapped pages).
-        for name in ["segoeui.ttf", "segoeuib.ttf", "seguisb.ttf", "consola.ttf"] {
+        // Regular / Semibold / Bold plus Light + Semilight so the weight axis is denser
+        // (still no Segoe UI Medium 500 — that uses VF interpolation or synthetic bold).
+        for name in [
+            "segoeui.ttf",
+            "segoeuil.ttf",
+            "segoeuisl.ttf",
+            "seguisb.ttf",
+            "segoeuib.ttf",
+            "seguibl.ttf",
+            "consola.ttf",
+            "cascadiacode.ttf",
+            "CascadiaCode.ttf",
+        ] {
             try_load_system_font(db, name, state);
         }
     }

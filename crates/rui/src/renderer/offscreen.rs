@@ -142,6 +142,7 @@ impl OffscreenGpu {
             if let Some(ref ib) = instance_buffer {
                 pass.set_pipeline(&pipeline.render_pipeline);
                 pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pass.set_bind_group(1, pipeline.dummy_backdrop(), &[]);
                 pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, ib.slice(..));
                 pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);

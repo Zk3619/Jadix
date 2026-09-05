@@ -164,6 +164,17 @@ pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
     }
 }
 
+/// Scale polygon + SDF round-rect clip geometry to physical pixels
+/// (same factor as [`scale_instances_in_place`]).
+pub fn scale_clip_polys_in_place(polys: &mut [crate::style::GpuClipPoly], scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for p in polys.iter_mut() {
+        p.scale_physical(scale);
+    }
+}
+
 /// 布局收集阶段产出的纹理绘制实例（逻辑像素坐标）。
 #[derive(Clone, Debug)]
 pub struct TexturedDraw {
@@ -178,11 +189,18 @@ pub struct TexturedDraw {
     pub tint_rgb: [f32; 3],
     /// CSS/`compute_combined_transform` 矩阵（绕矩形中心）；默认单位阵。
     pub transform: [f32; 6],
+    /// Overflow clip in the same space as `rect` (`clip_size[0] < 0` = off).
+    pub clip_pos: [f32; 2],
+    pub clip_size: [f32; 2],
 }
 
 impl TexturedDraw {
+    /// Sentinel: fragment shader skips overflow discard.
+    pub const NO_CLIP_SIZE: [f32; 2] = [-1.0, -1.0];
+
     /// `full_rect` = 叶布局矩形；`clip` = 祖先 overflow。
     /// 只提交相交像素，并用 UV 取完整贴图对应区域（禁止把整图挤进可见缝）。
+    /// Axis-aligned only: rotated Bake must use [`Self::with_overflow_clip`] instead.
     pub fn clipped(
         full_rect: [f32; 4],
         clip: Option<[f32; 4]>,
@@ -205,11 +223,28 @@ impl TexturedDraw {
             opacity,
             tint_rgb: [1.0, 1.0, 1.0],
             transform: crate::style::transform::MAT2D_IDENTITY,
+            clip_pos: [0.0, 0.0],
+            clip_size: Self::NO_CLIP_SIZE,
         })
     }
 
     pub fn with_transform(mut self, transform: [f32; 6]) -> Self {
         self.transform = transform;
+        self
+    }
+
+    /// World-space overflow AABB applied after the instance transform (writing-mode Bake).
+    pub fn with_overflow_clip(mut self, clip: Option<[f32; 4]>) -> Self {
+        match clip {
+            Some([x, y, w, h]) if w > 0.0 && h > 0.0 => {
+                self.clip_pos = [x, y];
+                self.clip_size = [w, h];
+            }
+            _ => {
+                self.clip_pos = [0.0, 0.0];
+                self.clip_size = Self::NO_CLIP_SIZE;
+            }
+        }
         self
     }
 
@@ -225,6 +260,42 @@ fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let x1 = (a[0] + a[2]).min(b[0] + b[2]);
     let y1 = (a[1] + a[3]).min(b[1] + b[3]);
     [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+pub(crate) fn aabbs_disjoint(a: [f32; 4], b: [f32; 4]) -> bool {
+    let h = aabb_intersect(a, b);
+    h[2] <= 0.0 || h[3] <= 0.0
+}
+
+/// World AABB of a textured quad after the same center-pivot linear transform the VS uses.
+pub(crate) fn aabb_of_centered_transform(rect: [f32; 4], m: &[f32; 6]) -> [f32; 4] {
+    let [x, y, w, h] = rect;
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    let corners = [
+        [-0.5 * w, -0.5 * h],
+        [0.5 * w, -0.5 * h],
+        [0.5 * w, 0.5 * h],
+        [-0.5 * w, 0.5 * h],
+    ];
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for [lx, ly] in corners {
+        let px = cx + m[0] * lx + m[2] * ly + m[4];
+        let py = cy + m[1] * lx + m[3] * ly + m[5];
+        min_x = min_x.min(px);
+        min_y = min_y.min(py);
+        max_x = max_x.max(px);
+        max_y = max_y.max(py);
+    }
+    [
+        min_x,
+        min_y,
+        (max_x - min_x).max(0.0),
+        (max_y - min_y).max(0.0),
+    ]
 }
 
 /// `textured_rect` 顶点：rect 顶 → `uv.y=0`（与上传图 / 离屏 RT 行序一致）。
@@ -248,6 +319,8 @@ pub struct ScaledTexturedDraw {
     pub opacity: f32,
     pub tint_rgb: [f32; 3],
     pub transform: [f32; 6],
+    pub clip_pos: [f32; 2],
+    pub clip_size: [f32; 2],
 }
 
 impl ScaledTexturedDraw {
@@ -273,7 +346,9 @@ impl ScaledTexturedDraw {
             uv_scale: self.uv_scale,
             transform: self.transform,
             flags,
-            _pad: [0.0; 3],
+            clip_pos: self.clip_pos,
+            clip_size: self.clip_size,
+            _pad: 0.0,
         }
     }
 }
@@ -286,6 +361,14 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
             let mut t = d.transform;
             t[4] *= scale;
             t[5] *= scale;
+            let (clip_pos, clip_size) = if d.clip_size[0] >= 0.0 && d.clip_size[1] >= 0.0 {
+                (
+                    [d.clip_pos[0] * scale, d.clip_pos[1] * scale],
+                    [d.clip_size[0] * scale, d.clip_size[1] * scale],
+                )
+            } else {
+                (d.clip_pos, d.clip_size)
+            };
             ScaledTexturedDraw {
                 rect: [
                     d.rect[0] * scale,
@@ -299,6 +382,8 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
                 opacity: d.opacity,
                 tint_rgb: d.tint_rgb,
                 transform: t,
+                clip_pos,
+                clip_size,
             }
         })
         .collect()
@@ -331,6 +416,8 @@ mod textured_uv_tests {
                 opacity: 1.0,
                 tint_rgb: [1.0, 1.0, 1.0],
                 transform: crate::style::transform::MAT2D_IDENTITY,
+                clip_pos: [0.0, 0.0],
+                clip_size: TexturedDraw::NO_CLIP_SIZE,
             },
             TexturedDraw {
                 rect: [10.0, 200.0, 180.0, 180.0],
@@ -340,6 +427,8 @@ mod textured_uv_tests {
                 opacity: 1.0,
                 tint_rgb: [1.0, 1.0, 1.0],
                 transform: crate::style::transform::MAT2D_IDENTITY,
+                clip_pos: [0.0, 0.0],
+                clip_size: TexturedDraw::NO_CLIP_SIZE,
             },
         ];
         let scaled = scale_textured_draws(&draws, 1.0);
@@ -393,6 +482,54 @@ mod textured_uv_tests {
             d.uv_scale[1],
             d.rect[3] / 180.0
         );
+    }
+
+    #[test]
+    fn rotated_overflow_keeps_full_quad_and_gpu_clips() {
+        // vertical-rl bake: swap 40×120 → 120×40, then rotate 90° about center.
+        let full = [0.0, 40.0, 120.0, 40.0];
+        let parent = Some([40.0, 0.0, 40.0, 120.0]);
+        let squeezed = TexturedDraw::clipped(full, parent, "rui_text_xform_v3:cpu", 1.0)
+            .expect("cpu intersect");
+        assert!(
+            squeezed.rect[2] < 50.0,
+            "pre-rotation AABB clip is the bug: width {}",
+            squeezed.rect[2]
+        );
+
+        let keep = TexturedDraw::clipped(full, None, "rui_text_xform_v3:gpu", 1.0)
+            .expect("full")
+            .with_overflow_clip(parent);
+        assert!(
+            (keep.rect[2] - 120.0).abs() < 0.1 && (keep.uv_scale[0] - 1.0).abs() < 1e-4,
+            "rotated bake must keep the swapped quad, got rect={:?} uv={:?}",
+            keep.rect,
+            keep.uv_scale
+        );
+        assert!(
+            (keep.clip_size[0] - 40.0).abs() < 0.1 && (keep.clip_size[1] - 120.0).abs() < 0.1,
+            "GPU clip must be the overflow AABB, got {:?}",
+            keep.clip_size
+        );
+
+        let xform =
+            crate::style::mat2d_linear(&crate::style::mat2d_rotate(std::f32::consts::FRAC_PI_2));
+        let vis = super::aabb_of_centered_transform(full, &xform);
+        assert!(
+            (vis[2] - 40.0).abs() < 0.5 && (vis[3] - 120.0).abs() < 0.5,
+            "90° of swapped bake must recover the layout AABB, got {vis:?}"
+        );
+        assert!(!super::aabbs_disjoint(vis, parent.unwrap()));
+    }
+
+    #[test]
+    fn scale_textured_draws_scales_overflow_clip() {
+        let d = TexturedDraw::clipped([0.0, 0.0, 10.0, 10.0], None, "k", 1.0)
+            .unwrap()
+            .with_overflow_clip(Some([2.0, 4.0, 8.0, 16.0]));
+        let scaled = scale_textured_draws(&[d], 2.0);
+        assert!((scaled[0].clip_pos[0] - 4.0).abs() < 1e-4);
+        assert!((scaled[0].clip_size[1] - 32.0).abs() < 1e-4);
     }
 }
 

@@ -16,7 +16,10 @@ pub struct TexturedInstanceInput {
     pub transform: [f32; 6],
     /// `1.0` = sample texture.r as SDF; `0.0` = normal RGBA tint multiply.
     pub flags: f32,
-    pub _pad: [f32; 3],
+    /// Overflow clip in the same space as `rect_pos`. `clip_size[0] < 0` disables.
+    pub clip_pos: [f32; 2],
+    pub clip_size: [f32; 2],
+    pub _pad: f32,
 }
 
 impl TexturedInstanceInput {
@@ -69,6 +72,16 @@ impl TexturedInstanceInput {
                     offset: 72,
                     shader_location: 10,
                     format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 76,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 84,
+                    shader_location: 12,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }

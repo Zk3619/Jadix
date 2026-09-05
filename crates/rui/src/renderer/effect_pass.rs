@@ -358,7 +358,20 @@ impl EffectPassGpu {
                         t
                     },
                     flags,
-                    _pad: [0.0; 3],
+                    clip_pos: if d.clip_size[0] >= 0.0 && d.clip_size[1] >= 0.0 {
+                        [
+                            (d.clip_pos[0] - ox) * ui_scale,
+                            (d.clip_pos[1] - oy) * ui_scale,
+                        ]
+                    } else {
+                        d.clip_pos
+                    },
+                    clip_size: if d.clip_size[0] >= 0.0 && d.clip_size[1] >= 0.0 {
+                        [d.clip_size[0] * ui_scale, d.clip_size[1] * ui_scale]
+                    } else {
+                        d.clip_size
+                    },
+                    _pad: 0.0,
                 }
             })
             .collect();
@@ -486,6 +499,7 @@ impl EffectPassGpu {
             if !insts.is_empty() {
                 pass.set_pipeline(&rect_pipeline.render_pipeline);
                 pass.set_bind_group(0, &rect_pipeline.bind_group, &[]);
+                pass.set_bind_group(1, rect_pipeline.dummy_backdrop(), &[]);
                 pass.set_vertex_buffer(0, rect_pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, inst_buf.slice(..));
                 pass.set_index_buffer(

@@ -328,7 +328,9 @@ impl Scene3dGpu {
                         uv_scale: [1.0, 1.0],
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         flags,
-                        _pad: [0.0; 3],
+                        clip_pos: [0.0, 0.0],
+                        clip_size: [-1.0, -1.0],
+                        _pad: 0.0,
                     };
                     textured.update_resolution(queue, w, h);
                     let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

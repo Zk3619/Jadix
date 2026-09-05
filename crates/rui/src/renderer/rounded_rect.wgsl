@@ -19,7 +19,7 @@ struct InstanceInput {
     @location(12) transform_cd: vec2<f32>,   // [c, d] of 2D affine
     @location(13) transform_txty: vec2<f32>, // [tx, ty] of 2D affine
     @location(14) clip_pos: vec2<f32>,
-    @location(15) clip_size_and_extra: vec3<f32>, // xy=clip_size, z=packed border_extra
+    @location(15) clip_size_and_extra: vec4<f32>, // xy=clip_size, z=packed border_extra, w=backdrop_blur
 };
 
 struct VertexOutput {
@@ -38,7 +38,9 @@ struct VertexOutput {
     @location(11) clip_pos: vec2<f32>,
     @location(12) clip_size: vec2<f32>,
     @location(13) frag_px: vec2<f32>,
-    @location(14) border_extra: f32,
+    /// x = packed `border_extra`; y = instance index for `clip_polys[]`; z = backdrop_blur.
+    /// Must stay ≤ location 14 (`max_inter_stage_shader_variables` is 0..=14).
+    @location(14) @interpolate(flat) extra_and_id: vec3<f32>,
 };
 
 struct Globals {
@@ -48,6 +50,27 @@ struct Globals {
 
 @group(0) @binding(0)
 var<uniform> globals: Globals;
+
+struct GpuClipPoly {
+    count: u32,
+    fill: u32,
+    count2: u32,
+    fill2: u32,
+    pts: array<vec2<f32>, 16>,
+    pts2: array<vec2<f32>, 16>,
+    round_rect: vec4<f32>,
+    round_radii: vec4<f32>,
+    round_rect2: vec4<f32>,
+    round_radii2: vec4<f32>,
+};
+
+@group(0) @binding(1)
+var<storage, read> clip_polys: array<GpuClipPoly>;
+
+@group(1) @binding(0)
+var backdrop_tex: texture_2d<f32>;
+@group(1) @binding(1)
+var backdrop_samp: sampler;
 
 // Apply the linear part (2x2) of the affine transform.
 fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
@@ -67,6 +90,7 @@ fn affine_inv_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
 fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
+    @builtin(instance_index) instance_idx: u32,
 ) -> VertexOutput {
     var out: VertexOutput;
 
@@ -123,7 +147,11 @@ fn vs_main(
     out.clip_pos = instance.clip_pos;
     out.clip_size = instance.clip_size_and_extra.xy;
     out.frag_px = physical_pos;
-    out.border_extra = instance.clip_size_and_extra.z;
+    out.extra_and_id = vec3<f32>(
+        instance.clip_size_and_extra.z,
+        f32(instance_idx),
+        instance.clip_size_and_extra.w,
+    );
 
     return out;
 }
@@ -144,58 +172,58 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_sel;
 }
 
-// Angle (chamfer/bevel) corner SDF
+fn sd_aabb(p: vec2<f32>, b: vec2<f32>) -> f32 {
+    let q = abs(p) - b;
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+}
+
+// Angle (chamfer/bevel): 45° cut of size `r` from each edge.
 fn sd_angle_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    let r_sel = select_corner_radius(p, r);
-
+    let r_sel = max(select_corner_radius(p, r), 0.0);
     let q = abs(p) - b;
-    let outer = max(q.x, q.y);
-    if (outer > -r_sel) {
-        return outer + r_sel - max(0.0, r_sel - (q.x + q.y + r_sel * 2.0) * 0.5);
+    let d_box = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    if (r_sel < 0.001) {
+        return d_box;
     }
-    return outer;
+    let d_cut = (q.x + q.y + r_sel) * 0.70710678;
+    return max(d_box, d_cut);
 }
 
-// Superellipse corner SDF: |x/a|^n + |y/b|^n = 1
+// Superellipse corner SDF: same IQ round-box split, Lp instead of L2 on the outside.
+// The old interior branch returned `max(q.x,q.y)` without `- r`, so d jumped by `r` on
+// the inner-box boundary and painted a flickering axis-aligned frame (worst on the bottom).
 fn sd_superellipse_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
-    let r_sel = select_corner_radius(p, r);
-
+    let r_sel = max(select_corner_radius(p, r), 0.001);
+    let nn = max(n, 0.5);
     let q = abs(p) - b + vec2<f32>(r_sel);
-    if (q.x <= 0.0 && q.y <= 0.0) {
-        return max(q.x, q.y);
-    }
-    let qp = max(q, vec2<f32>(0.0));
-    let e = pow(pow(qp.x / max(r_sel, 0.001), n) + pow(qp.y / max(r_sel, 0.001), n), 1.0 / n) * r_sel;
-    return e - r_sel;
+    let qpos = max(q, vec2<f32>(0.0));
+    let lp = pow(
+        pow(qpos.x / r_sel, nn) + pow(qpos.y / r_sel, nn),
+        1.0 / nn
+    ) * r_sel;
+    return min(max(q.x, q.y), 0.0) + lp - r_sel;
 }
 
-// Notch corner SDF: right-angle step cut
+// Notch: rectangular step cut — union of (full-width, height-r) and (width-r, full-height).
 fn sd_notch_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    let r_sel = select_corner_radius(p, r);
-
-    let q = abs(p) - b + vec2<f32>(r_sel);
-    if (q.x <= 0.0 && q.y <= 0.0) {
-        return max(q.x, q.y);
+    let r_sel = max(select_corner_radius(p, r), 0.0);
+    if (r_sel < 0.001) {
+        return sd_aabb(p, b);
     }
-    if (q.x > 0.0 && q.y > 0.0) {
-        return max(q.x, q.y);
-    }
-    return max(q.x, q.y);
+    let d1 = sd_aabb(p, vec2<f32>(b.x, max(b.y - r_sel, 0.0)));
+    let d2 = sd_aabb(p, vec2<f32>(max(b.x - r_sel, 0.0), b.y));
+    return min(d1, d2);
 }
 
-// Scoop (concave arc) corner SDF
+// Scoop: concave quarter-circle bite centered on the sharp corner.
 fn sd_scoop_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    let r_sel = select_corner_radius(p, r);
-
+    let r_sel = max(select_corner_radius(p, r), 0.0);
     let q = abs(p) - b;
-    let outer = max(q.x, q.y);
-    // In the corner region, invert the rounding: cut inward
-    if (q.x > -r_sel && q.y > -r_sel && r_sel > 0.0) {
-        let cq = q + vec2<f32>(r_sel);
-        let corner_dist = r_sel - length(cq);
-        return max(outer, corner_dist);
+    let d_box = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    if (r_sel < 0.001) {
+        return d_box;
     }
-    return outer;
+    return max(d_box, r_sel - length(q));
 }
 
 // Unified SDF dispatch based on corner_shape
@@ -230,42 +258,358 @@ fn linearize_srgb_rgb(rgb: vec3<f32>) -> vec3<f32> {
     );
 }
 
-// Dotted pattern: returns 0 in gaps, 1 on dots
-fn dotted_mask(p: vec2<f32>, b: vec2<f32>, bw: f32) -> f32 {
-    let period = bw * 2.0;
-    // Project onto nearest edge to get edge-local coordinate
-    let q = abs(p);
-    let dx = b.x - q.x;
-    let dy = b.y - q.y;
-    var t: f32;
-    if (dx < dy) {
-        t = q.y; // on left/right edge, parameterize by y
-    } else {
-        t = q.x; // on top/bottom edge, parameterize by x
-    }
-    let phase = fract(t / period);
-    let dot_r = bw * 0.45;
-    let center = 0.25;
-    let dist = abs(phase - center) * period;
-    return smoothstep(dot_r + 0.5, dot_r - 0.5, dist);
+// CSS 3D border tones: mix toward black / white so a dark `primary` still shows a bevel.
+fn bevel_dark(c: vec3<f32>) -> vec3<f32> {
+    return c * 0.32;
+}
+fn bevel_light(c: vec3<f32>) -> vec3<f32> {
+    return mix(c, vec3<f32>(1.0), 0.58);
 }
 
-// Dashed pattern
-fn dashed_mask(p: vec2<f32>, b: vec2<f32>, bw: f32) -> f32 {
-    let dash_len = bw * 3.0;
-    let gap_len = bw * 1.5;
-    let period = dash_len + gap_len;
-    let q = abs(p);
-    let dx = b.x - q.x;
-    let dy = b.y - q.y;
-    var t: f32;
-    if (dx < dy) {
-        t = q.y;
-    } else {
-        t = q.x;
+// 1 = nearest edge is top or left (inset shadow side).
+fn side_lit_dark(p: vec2<f32>, b: vec2<f32>) -> f32 {
+    let to_left = p.x + b.x;
+    let to_right = b.x - p.x;
+    let to_top = p.y + b.y;
+    let to_bottom = b.y - p.y;
+    let is_vert = min(to_top, to_bottom) < min(to_left, to_right);
+    return select(
+        select(0.0, 1.0, to_left < to_right),
+        select(0.0, 1.0, to_top < to_bottom),
+        is_vert
+    );
+}
+
+fn bevel_tone(c: vec3<f32>, is_dark: f32) -> vec3<f32> {
+    return mix(bevel_light(c), bevel_dark(c), is_dark);
+}
+
+fn copysign2(mag: vec2<f32>, sgn: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        select(-mag.x, mag.x, sgn.x >= 0.0),
+        select(-mag.y, mag.y, sgn.y >= 0.0)
+    );
+}
+
+fn stroke_ib(c: vec2<f32>, r: f32) -> vec2<f32> {
+    return max(c - vec2<f32>(max(r, 0.0)), vec2<f32>(0.0));
+}
+
+fn stroke_peri(c: vec2<f32>, r: f32) -> f32 {
+    let ib = stroke_ib(c, r);
+    return max(4.0 * (ib.x + ib.y) + 6.2831853 * max(r, 0.0), 1.0);
+}
+
+fn wrap_peri(t: f32, peri: f32) -> f32 {
+    var s = t - peri * floor(t / peri);
+    if (s < 0.0) {
+        s = s + peri;
     }
-    let phase = fract(t / period) * period;
-    return smoothstep(0.5, -0.5, phase - dash_len);
+    return s;
+}
+
+/// Closest point on the border centerline. Sharp corners collapse to the vertex
+/// (no 45° split), so dotted/dashed see one parameter at a right angle.
+fn closest_on_centerline(p: vec2<f32>, c: vec2<f32>, r: f32) -> vec2<f32> {
+    let ib = stroke_ib(c, r);
+    let q = abs(p);
+    if (q.x > ib.x && q.y > ib.y) {
+        if (r > 0.5) {
+            let d = q - ib;
+            return copysign2(ib + (d / max(length(d), 1e-4)) * r, p);
+        }
+        return copysign2(c, p);
+    }
+    if (q.x > ib.x) {
+        return vec2<f32>(select(-c.x, c.x, p.x >= 0.0), clamp(p.y, -ib.y, ib.y));
+    }
+    if (q.y > ib.y) {
+        return vec2<f32>(clamp(p.x, -ib.x, ib.x), select(-c.y, c.y, p.y >= 0.0));
+    }
+    let dvert = c.x - q.x;
+    let dhorz = c.y - q.y;
+    if (dvert < dhorz) {
+        return vec2<f32>(select(-c.x, c.x, p.x >= 0.0), p.y);
+    }
+    return vec2<f32>(p.x, select(-c.y, c.y, p.y >= 0.0));
+}
+
+/// Clockwise arc length from the top-left of the top edge.
+fn centerline_t(q: vec2<f32>, c: vec2<f32>, r: f32) -> f32 {
+    let ib = stroke_ib(c, r);
+    let half_pi = 1.57079632;
+    let arc = half_pi * r;
+    let top = 2.0 * ib.x;
+    let side = 2.0 * ib.y;
+    let t_tr = top;
+    let t_right = t_tr + arc;
+    let t_br = t_right + side;
+    let t_bottom = t_br + arc;
+    let t_bl = t_bottom + top;
+    let t_left = t_bl + arc;
+    let t_tl = t_left + side;
+    let eps = 0.51;
+
+    if (abs(q.y + c.y) <= eps && q.x >= -ib.x - eps && q.x <= ib.x + eps) {
+        return clamp(q.x + ib.x, 0.0, top);
+    }
+    if (abs(q.x - c.x) <= eps && q.y >= -ib.y - eps && q.y <= ib.y + eps) {
+        return t_right + clamp(q.y + ib.y, 0.0, side);
+    }
+    if (abs(q.y - c.y) <= eps && q.x >= -ib.x - eps && q.x <= ib.x + eps) {
+        return t_bottom + clamp(ib.x - q.x, 0.0, top);
+    }
+    if (abs(q.x + c.x) <= eps && q.y >= -ib.y - eps && q.y <= ib.y + eps) {
+        return t_left + clamp(ib.y - q.y, 0.0, side);
+    }
+    if (r > 0.5) {
+        if (q.x >= 0.0 && q.y <= 0.0) {
+            let d = vec2<f32>(q.x - ib.x, q.y + ib.y);
+            let ang = atan2(-d.y, d.x);
+            return t_tr + clamp(half_pi - ang, 0.0, half_pi) * r;
+        }
+        if (q.x >= 0.0 && q.y >= 0.0) {
+            let d = vec2<f32>(q.x - ib.x, q.y - ib.y);
+            return t_br + clamp(atan2(d.y, d.x), 0.0, half_pi) * r;
+        }
+        if (q.x <= 0.0 && q.y >= 0.0) {
+            let d = vec2<f32>(q.x + ib.x, q.y - ib.y);
+            return t_bl + clamp(atan2(-d.x, d.y), 0.0, half_pi) * r;
+        }
+        let d = vec2<f32>(q.x + ib.x, q.y + ib.y);
+        return t_tl + clamp(atan2(-d.y, -d.x), 0.0, half_pi) * r;
+    }
+    if (q.x >= 0.0 && q.y <= 0.0) {
+        return t_tr;
+    }
+    if (q.x >= 0.0 && q.y >= 0.0) {
+        return t_br;
+    }
+    if (q.x <= 0.0 && q.y >= 0.0) {
+        return t_bl;
+    }
+    return t_tl;
+}
+
+fn centerline_point(t: f32, c: vec2<f32>, r: f32) -> vec2<f32> {
+    let ib = stroke_ib(c, r);
+    let half_pi = 1.57079632;
+    let arc = half_pi * r;
+    let top = 2.0 * ib.x;
+    let side = 2.0 * ib.y;
+    let peri = stroke_peri(c, r);
+    var s = wrap_peri(t, peri);
+    if (s <= top) {
+        return vec2<f32>(-ib.x + s, -c.y);
+    }
+    s = s - top;
+    if (s <= arc) {
+        let ang = half_pi - s / max(r, 1e-4);
+        return vec2<f32>(ib.x + cos(ang) * r, -ib.y - sin(ang) * r);
+    }
+    s = s - arc;
+    if (s <= side) {
+        return vec2<f32>(c.x, -ib.y + s);
+    }
+    s = s - side;
+    if (s <= arc) {
+        let ang = s / max(r, 1e-4);
+        return vec2<f32>(ib.x + cos(ang) * r, ib.y + sin(ang) * r);
+    }
+    s = s - arc;
+    if (s <= top) {
+        return vec2<f32>(ib.x - s, c.y);
+    }
+    s = s - top;
+    if (s <= arc) {
+        let ang = s / max(r, 1e-4);
+        return vec2<f32>(-ib.x - sin(ang) * r, ib.y + cos(ang) * r);
+    }
+    s = s - arc;
+    if (s <= side) {
+        return vec2<f32>(-c.x, ib.y - s);
+    }
+    s = s - side;
+    let ang = s / max(r, 1e-4);
+    return vec2<f32>(-ib.x - cos(ang) * r, -ib.y - sin(ang) * r);
+}
+
+fn nearest_dot_on_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, spacing: f32) -> f32 {
+    let ab = b - a;
+    let len = length(ab);
+    if (len < 1.0) {
+        return length(p - a);
+    }
+    let n = max(round(len / max(spacing, 1.0)), 1.0);
+    let t = clamp(dot(p - a, ab) / (len * len), 0.0, 1.0) * len;
+    let k = clamp(round(t * n / len), 0.0, n);
+    var dmin = 1e6;
+    for (var i = -1; i <= 1; i++) {
+        let ki = clamp(k + f32(i), 0.0, n);
+        dmin = min(dmin, length(p - mix(a, b, ki / n)));
+    }
+    return dmin;
+}
+
+/// True circular dots. Sharp corners always get a corner-centered circle.
+fn dotted_mask(p: vec2<f32>, c: vec2<f32>, bw: f32, radii: vec4<f32>) -> f32 {
+    let r = min(select_corner_radius(p, radii), min(c.x, c.y));
+    let spacing = max(bw * 2.0, 8.0);
+    let dot_r = bw * 0.48;
+    var dmin = 1e6;
+    if (r > 0.5) {
+        let q = closest_on_centerline(p, c, r);
+        let t = centerline_t(q, c, r);
+        let peri = stroke_peri(c, r);
+        let n = max(round(peri / spacing), 4.0);
+        let period = peri / n;
+        let t0 = round(t / period) * period;
+        dmin = 1e6;
+        for (var k = -1; k <= 1; k++) {
+            let dp = centerline_point(wrap_peri(t0 + f32(k) * period, peri), c, r);
+            dmin = min(dmin, length(p - dp));
+        }
+    } else {
+        let tl = vec2<f32>(-c.x, -c.y);
+        let tr = vec2<f32>(c.x, -c.y);
+        let br = vec2<f32>(c.x, c.y);
+        let bl = vec2<f32>(-c.x, c.y);
+        dmin = nearest_dot_on_segment(p, tl, tr, spacing);
+        dmin = min(dmin, nearest_dot_on_segment(p, tr, br, spacing));
+        dmin = min(dmin, nearest_dot_on_segment(p, br, bl, spacing));
+        dmin = min(dmin, nearest_dot_on_segment(p, bl, tl, spacing));
+    }
+    return 1.0 - smoothstep(dot_r - 0.55, dot_r + 0.55, dmin);
+}
+
+/// Dash pattern with a dash at both endpoints (n gaps, n+1 dashes), scaled to `len`.
+fn dash_both_ends(t: f32, len: f32, dash_len: f32, gap_len: f32) -> f32 {
+    if (len <= dash_len * 1.25) {
+        return 1.0;
+    }
+    let period_base = dash_len + gap_len;
+    let n_gaps = max(round((len - dash_len) / period_base), 1.0);
+    let n_dashes = n_gaps + 1.0;
+    let scale = len / max(n_dashes * dash_len + n_gaps * gap_len, 1.0);
+    let d = dash_len * scale;
+    let g = gap_len * scale;
+    let period = d + g;
+    let t0 = clamp(t, 0.0, len);
+    if (t0 >= len - d) {
+        return 1.0;
+    }
+    let local = t0 - period * floor(t0 / period);
+    return 1.0 - smoothstep(d - 0.6, d + 0.6, local);
+}
+
+/// Sharp corners use a square join cap (the full bw×bw L). Closest-point 1D dash
+/// still Voronoi-splits that square at 45° and "bites" a triangle out of the join.
+fn dashed_mask(p: vec2<f32>, c: vec2<f32>, bw: f32, radii: vec4<f32>) -> f32 {
+    let r = min(select_corner_radius(p, radii), min(c.x, c.y));
+    let dash_len = max(bw * 4.0, 12.0);
+    let gap_len = max(bw * 2.5, 8.0);
+
+    if (r > 0.5) {
+        let q = closest_on_centerline(p, c, r);
+        let t = centerline_t(q, c, r);
+        let peri = stroke_peri(c, r);
+        return dash_both_ends(t, peri, dash_len, gap_len);
+    }
+
+    let q = abs(p);
+    let half = bw * 0.5;
+    // Intersection of the two border strips: square join, never a 45° cut.
+    if (q.x >= c.x - half && q.y >= c.y - half) {
+        return 1.0;
+    }
+    if (q.y >= c.y - half) {
+        let len = max(2.0 * c.x, 1.0);
+        let t_local = select(p.x + c.x, c.x - p.x, p.y >= 0.0);
+        return dash_both_ends(t_local, len, dash_len, gap_len);
+    }
+    if (q.x >= c.x - half) {
+        let len = max(2.0 * c.y, 1.0);
+        let t_local = select(c.y - p.y, p.y + c.y, p.x >= 0.0);
+        return dash_both_ends(t_local, len, dash_len, gap_len);
+    }
+    return 0.0;
+}
+
+fn clip_edge_left(a: vec2<f32>, b: vec2<f32>, p: vec2<f32>) -> f32 {
+    return (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y);
+}
+
+fn round_clip_contains(p: vec2<f32>, xywh: vec4<f32>, radii: vec4<f32>) -> bool {
+    if (xywh.z < 0.5 || xywh.w < 0.5) {
+        return true;
+    }
+    let half = xywh.zw * 0.5;
+    let local = p - (xywh.xy + half);
+    return sd_round_box(local, half, radii) <= 0.0;
+}
+
+fn clip_poly_contains(p: vec2<f32>, inst_id: u32) -> bool {
+    let n = arrayLength(&clip_polys);
+    if (inst_id >= n) {
+        return true;
+    }
+    let poly = clip_polys[inst_id];
+    if (poly.count >= 3u) {
+        if (!clip_layer_contains(p, poly.count, poly.fill, poly.pts)) {
+            return false;
+        }
+    }
+    if (poly.count2 >= 3u) {
+        if (!clip_layer_contains(p, poly.count2, poly.fill2, poly.pts2)) {
+            return false;
+        }
+    }
+    if (!round_clip_contains(p, poly.round_rect, poly.round_radii)) {
+        return false;
+    }
+    if (!round_clip_contains(p, poly.round_rect2, poly.round_radii2)) {
+        return false;
+    }
+    return true;
+}
+
+fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>, 16>) -> bool {
+    if (count < 3u) {
+        return true;
+    }
+    if (fill == 0u) {
+        var inside = false;
+        var j = count - 1u;
+        for (var i = 0u; i < count; i++) {
+            let a = pts[i];
+            let b = pts[j];
+            if ((a.y > p.y) != (b.y > p.y)) {
+                let x_int = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x;
+                if (p.x < x_int) {
+                    inside = !inside;
+                }
+            }
+            j = i;
+        }
+        return inside;
+    }
+    var w = 0;
+    var jn = count - 1u;
+    for (var i = 0u; i < count; i++) {
+        let a = pts[i];
+        let b = pts[jn];
+        if (a.y <= p.y) {
+            if (b.y > p.y && clip_edge_left(a, b, p) > 0.0) {
+                w = w + 1;
+            }
+        } else {
+            if (b.y <= p.y && clip_edge_left(a, b, p) < 0.0) {
+                w = w - 1;
+            }
+        }
+        jn = i;
+    }
+    return w != 0;
 }
 
 @fragment
@@ -278,14 +622,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             discard;
         }
     }
+    if (!clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
+        discard;
+    }
 
     let b = in.rect_size * 0.5;
 
-    // Unpack border_extra: border_style + corner_shape * 16 + round(corner_param * 100) * 256
-    let packed = in.border_extra;
-    let bstyle = packed % 16.0;
-    let shape_type = floor(packed / 16.0) % 16.0;
-    let shape_param = floor(packed / 256.0) / 100.0;
+    // Unpack border_extra: style + shape*16 + round(param*100)*256 (stable subtract, not fmod)
+    let packed = in.extra_and_id.x;
+    let param_enc = floor(packed / 256.0);
+    let rem = packed - param_enc * 256.0;
+    let shape_type = floor(rem / 16.0);
+    let bstyle = rem - shape_type * 16.0;
+    let shape_param = param_enc / 100.0;
 
     // SDF distance to the edge of the shaped box
     let d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
@@ -306,13 +655,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let alpha_border = 1.0 - smoothstep(-aa, aa, d + in.border_width);
             final_color = mix(in.border_color, in.color, alpha_border);
         } else if (bstyle < 2.5) {
-            // Dotted
-            let mask = dotted_mask(in.p, b - vec2<f32>(in.border_width * 0.5), in.border_width);
-            let border_alpha = in_border * mask;
+            // Dotted — circular stamps on the centerline (not 1D slices of the L-border).
+            let bw = in.border_width;
+            let r_mid = max(in.radii - vec4<f32>(bw * 0.5), vec4<f32>(0.0));
+            let mask = dotted_mask(in.p, b - vec2<f32>(bw * 0.5), bw, r_mid);
+            let fill_clip = smoothstep(-aa, aa, d_inner);
+            let border_alpha = mask * fill_clip;
             final_color = mix(in.color, in.border_color, border_alpha);
         } else if (bstyle < 3.5) {
-            // Dashed
-            let mask = dashed_mask(in.p, b - vec2<f32>(in.border_width * 0.5), in.border_width);
+            // Dashed — per-side pattern + square corner joins (no 45° Voronoi bite).
+            let bw = in.border_width;
+            let r_mid = max(in.radii - vec4<f32>(bw * 0.5), vec4<f32>(0.0));
+            let mask = dashed_mask(in.p, b - vec2<f32>(bw * 0.5), bw, r_mid);
             let border_alpha = in_border * mask;
             final_color = mix(in.color, in.border_color, border_alpha);
         } else if (bstyle < 4.5) {
@@ -325,44 +679,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let border_alpha = max(outer_line, inner_line);
             final_color = mix(in.color, in.border_color, border_alpha);
         } else if (bstyle < 5.5) {
-            // Groove: outer half dark, inner half light
+            // Groove: outer band = inset lighting, inner band = outset (carved trench).
             let half = in.border_width * 0.5;
             let d_mid = sd_shaped_box(in.p, b - vec2<f32>(half), in.radii - vec4<f32>(half), shape_type, shape_param);
             let in_outer = in_border * (1.0 - step(0.0, d_mid));
             let in_inner_half = step(0.0, d_mid) * step(0.0, d_inner);
-            let dark = in.border_color.rgb * 0.6;
-            let light = min(in.border_color.rgb * 1.4, vec3<f32>(1.0));
-            let groove_rgb = dark * in_outer + light * in_inner_half;
-            let groove_a = max(in_outer, in_inner_half) * in.border_color.a;
-            final_color = mix(in.color, vec4<f32>(groove_rgb / max(groove_a, 0.001), groove_a), max(in_outer, in_inner_half));
+            let is_dark = side_lit_dark(in.p, b);
+            let rgb = bevel_tone(in.border_color.rgb, is_dark) * in_outer
+                + bevel_tone(in.border_color.rgb, 1.0 - is_dark) * in_inner_half;
+            let band = max(in_outer, in_inner_half);
+            final_color = mix(in.color, vec4<f32>(rgb, in.border_color.a), band);
         } else if (bstyle < 6.5) {
-            // Ridge: reverse of groove
+            // Ridge: outer = outset, inner = inset (raised ridge).
             let half = in.border_width * 0.5;
             let d_mid = sd_shaped_box(in.p, b - vec2<f32>(half), in.radii - vec4<f32>(half), shape_type, shape_param);
             let in_outer = in_border * (1.0 - step(0.0, d_mid));
             let in_inner_half = step(0.0, d_mid) * step(0.0, d_inner);
-            let light = min(in.border_color.rgb * 1.4, vec3<f32>(1.0));
-            let dark = in.border_color.rgb * 0.6;
-            let ridge_rgb = light * in_outer + dark * in_inner_half;
-            let ridge_a = max(in_outer, in_inner_half) * in.border_color.a;
-            final_color = mix(in.color, vec4<f32>(ridge_rgb / max(ridge_a, 0.001), ridge_a), max(in_outer, in_inner_half));
+            let is_dark = side_lit_dark(in.p, b);
+            let rgb = bevel_tone(in.border_color.rgb, 1.0 - is_dark) * in_outer
+                + bevel_tone(in.border_color.rgb, is_dark) * in_inner_half;
+            let band = max(in_outer, in_inner_half);
+            final_color = mix(in.color, vec4<f32>(rgb, in.border_color.a), band);
         } else if (bstyle < 7.5) {
-            // Inset: top/left dark, bottom/right light
-            let is_top_left = select(0.0, 1.0, in.p.x < 0.0 || in.p.y < 0.0);
-            let dark = in.border_color.rgb * 0.6;
-            let light = min(in.border_color.rgb * 1.4, vec3<f32>(1.0));
-            let side_rgb = mix(light, dark, is_top_left);
+            // Inset: top/left dark, bottom/right light (sunken, single tone per side).
+            let is_dark = side_lit_dark(in.p, b);
+            let side_rgb = bevel_tone(in.border_color.rgb, is_dark);
             let alpha_border = 1.0 - smoothstep(-aa, aa, d + in.border_width);
             final_color = mix(vec4<f32>(side_rgb, in.border_color.a), in.color, alpha_border);
         } else {
-            // Outset: reverse of inset
-            let is_top_left = select(0.0, 1.0, in.p.x < 0.0 || in.p.y < 0.0);
-            let dark = in.border_color.rgb * 0.6;
-            let light = min(in.border_color.rgb * 1.4, vec3<f32>(1.0));
-            let side_rgb = mix(dark, light, is_top_left);
+            // Outset: reverse of inset (raised).
+            let is_dark = 1.0 - side_lit_dark(in.p, b);
+            let side_rgb = bevel_tone(in.border_color.rgb, is_dark);
             let alpha_border = 1.0 - smoothstep(-aa, aa, d + in.border_width);
             final_color = mix(vec4<f32>(side_rgb, in.border_color.a), in.color, alpha_border);
         }
+    }
+
+    // CSS backdrop-filter: sample the blurred capture at this fragment, then composite
+    // this instance's background/border on top. SDF `alpha_bg` still clips to radii.
+    if (in.extra_and_id.z > 0.5) {
+        let uv = in.frag_px / globals.resolution;
+        let blurred = textureSampleLevel(backdrop_tex, backdrop_samp, uv, 0.0);
+        let src_a = final_color.a;
+        // Page capture is opaque → frost α=1 (CSS backdrop-filter). Dummy / empty
+        // capture has α=0 → keep the scrim's own α so already-drawn glyphs are not
+        // punched out by an opaque black hole.
+        let out_a = src_a + (1.0 - src_a) * blurred.a;
+        final_color = vec4<f32>(
+            blurred.rgb * (1.0 - src_a) + final_color.rgb * src_a,
+            out_a
+        );
     }
 
     // Compute shadow factor.

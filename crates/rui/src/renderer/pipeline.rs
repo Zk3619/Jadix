@@ -72,6 +72,9 @@ pub struct InstanceInput {
     /// border_style: 0=none, 1=solid, 2=dotted, 3=dashed, 4=double, 5=groove, 6=ridge, 7=inset, 8=outset.
     /// corner_shape: 0=round, 1=angle, 2=superellipse, 3=notch, 4=scoop.
     pub border_extra: f32,
+    /// CSS `backdrop-filter: blur()` radius in logical px. Sampled by `rounded_rect.wgsl`
+    /// against bind group 1 (blurred page capture). `0` skips sampling.
+    pub backdrop_blur: f32,
 }
 
 impl InstanceInput {
@@ -81,6 +84,15 @@ impl InstanceInput {
     /// Pack border_style (0-8), corner_shape (0-4), and corner_param into a single f32.
     pub fn pack_border_extra(border_style: f32, corner_shape: f32, corner_param: f32) -> f32 {
         border_style + corner_shape * 16.0 + (corner_param * 100.0).round() * 256.0
+    }
+
+    /// Inverse of [`Self::pack_border_extra`]. Matches `rounded_rect.wgsl` unpack.
+    pub fn unpack_border_extra(packed: f32) -> (f32, f32, f32) {
+        let param_enc = (packed / 256.0).floor();
+        let rem = packed - param_enc * 256.0;
+        let shape = (rem / 16.0).floor();
+        let style = rem - shape * 16.0;
+        (style, shape, param_enc / 100.0)
     }
 
     pub fn with_clip(mut self, clip: Option<[f32; 4]>) -> Self {
@@ -173,11 +185,11 @@ impl InstanceInput {
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x2,
                 },
-                // clip_size + border_extra
+                // clip_size + border_extra + backdrop_blur
                 wgpu::VertexAttribute {
                     offset: 136,
                     shader_location: 15,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
@@ -190,7 +202,19 @@ pub struct RuiPipeline {
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
     pub globals_buffer: wgpu::Buffer,
+    /// Safe default: a single `GpuClipPoly::NONE`. Chrome / underlines / offscreen subsets.
     pub bind_group: wgpu::BindGroup,
+    /// Per-SDF-instance polygon clip; `instance_index` matches the main instance buffer.
+    pub bind_group_clip_poly: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+    backdrop_bgl: wgpu::BindGroupLayout,
+    /// 1×1 transparent; instances with `backdrop_blur == 0` never sample it.
+    dummy_backdrop_bg: wgpu::BindGroup,
+    _dummy_backdrop_tex: wgpu::Texture,
+    _dummy_backdrop_sampler: wgpu::Sampler,
+    clip_poly_buffer: wgpu::Buffer,
+    clip_poly_none_buffer: wgpu::Buffer,
+    clip_poly_capacity: usize,
     premultiply: f32,
 }
 
@@ -241,8 +265,41 @@ impl RuiPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let (bind_group, render_pipeline) =
-            Self::bind_group_and_pipeline(device, config, &shader, &globals_buffer);
+        let clip_none = crate::style::GpuClipPoly::NONE;
+        let clip_poly_none_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Clip poly NONE"),
+            contents: bytemuck::bytes_of(&clip_none),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let clip_poly_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Clip poly storage"),
+            contents: bytemuck::bytes_of(&clip_none),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bind_group_layout = Self::create_bind_group_layout(device);
+        let backdrop_bgl = Self::create_backdrop_bind_group_layout(device);
+        let (dummy_backdrop_tex, dummy_backdrop_sampler, dummy_backdrop_bg) =
+            Self::make_dummy_backdrop(device, &backdrop_bgl);
+        let bind_group = Self::make_bind_group(
+            device,
+            &bind_group_layout,
+            &globals_buffer,
+            &clip_poly_none_buffer,
+        );
+        let bind_group_clip_poly = Self::make_bind_group(
+            device,
+            &bind_group_layout,
+            &globals_buffer,
+            &clip_poly_buffer,
+        );
+        let render_pipeline = Self::make_render_pipeline(
+            device,
+            config,
+            &shader,
+            &bind_group_layout,
+            &backdrop_bgl,
+        );
 
         let vertices = &[
             VertexInput {
@@ -284,47 +341,154 @@ impl RuiPipeline {
             num_indices: indices.len() as u32,
             globals_buffer,
             bind_group,
+            bind_group_clip_poly,
+            bind_group_layout,
+            backdrop_bgl,
+            dummy_backdrop_bg,
+            _dummy_backdrop_tex: dummy_backdrop_tex,
+            _dummy_backdrop_sampler: dummy_backdrop_sampler,
+            clip_poly_buffer,
+            clip_poly_none_buffer,
+            clip_poly_capacity: 1,
             premultiply,
         }
     }
 
-    fn bind_group_and_pipeline(
+    fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Globals Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    fn create_backdrop_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("SDF Backdrop Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    fn make_dummy_backdrop(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+    ) -> (wgpu::Texture, wgpu::Sampler, wgpu::BindGroup) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("SDF dummy backdrop"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("SDF dummy backdrop sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SDF dummy backdrop BG"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        (texture, sampler, bind_group)
+    }
+
+    fn make_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        globals_buffer: &wgpu::Buffer,
+        clip_poly_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Globals Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: clip_poly_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn make_render_pipeline(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
         shader: &wgpu::ShaderModule,
-        globals_buffer: &wgpu::Buffer,
-    ) -> (wgpu::BindGroup, wgpu::RenderPipeline) {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Globals Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Globals Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
-        });
-
+        bind_group_layout: &wgpu::BindGroupLayout,
+        backdrop_bgl: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Rui Render Pipeline Layout"),
-                bind_group_layouts: &[Some(&bind_group_layout)],
+                bind_group_layouts: &[Some(bind_group_layout), Some(backdrop_bgl)],
                 immediate_size: 0,
             });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Rui Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -360,9 +524,38 @@ impl RuiPipeline {
             },
             multiview_mask: None,
             cache: None,
-        });
+        })
+    }
 
-        (bind_group, render_pipeline)
+    /// Upload per-instance polygon clips. Empty input stores one `NONE` (wgpu forbids 0-size storage).
+    pub fn ensure_clip_polys(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        polys: &[crate::style::GpuClipPoly],
+    ) {
+        let data: Vec<crate::style::GpuClipPoly> = if polys.is_empty() {
+            vec![crate::style::GpuClipPoly::NONE]
+        } else {
+            polys.to_vec()
+        };
+        let bytes = bytemuck::cast_slice(&data);
+        if data.len() > self.clip_poly_capacity {
+            self.clip_poly_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Clip poly storage"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+            self.clip_poly_capacity = data.len();
+            self.bind_group_clip_poly = Self::make_bind_group(
+                device,
+                &self.bind_group_layout,
+                &self.globals_buffer,
+                &self.clip_poly_buffer,
+            );
+        } else {
+            queue.write_buffer(&self.clip_poly_buffer, 0, bytes);
+        }
     }
 
     /// Dev hot-reload: replace the main rect shader (entry points stay `vs_main` / `fs_main`).
@@ -376,10 +569,78 @@ impl RuiPipeline {
             label: Some("Rounded Rect Shader (hot reload)"),
             source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
         });
-        let (bind_group, render_pipeline) =
-            Self::bind_group_and_pipeline(device, config, &shader, &self.globals_buffer);
+        let (bind_group, bind_group_clip_poly, render_pipeline) = {
+            let bind_group = Self::make_bind_group(
+                device,
+                &self.bind_group_layout,
+                &self.globals_buffer,
+                &self.clip_poly_none_buffer,
+            );
+            let bind_group_clip_poly = Self::make_bind_group(
+                device,
+                &self.bind_group_layout,
+                &self.globals_buffer,
+                &self.clip_poly_buffer,
+            );
+            let render_pipeline = Self::make_render_pipeline(
+                device,
+                config,
+                &shader,
+                &self.bind_group_layout,
+                &self.backdrop_bgl,
+            );
+            (bind_group, bind_group_clip_poly, render_pipeline)
+        };
         self.bind_group = bind_group;
+        self.bind_group_clip_poly = bind_group_clip_poly;
         self.render_pipeline = render_pipeline;
+    }
+
+    /// Bind group 1 when the instance does not sample a blurred capture.
+    pub fn dummy_backdrop(&self) -> &wgpu::BindGroup {
+        &self.dummy_backdrop_bg
+    }
+
+    /// Bind group 1 for CSS `backdrop-filter` sampling (`frag_px / resolution`).
+    pub fn make_backdrop_bind_group(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SDF backdrop BG"),
+            layout: &self.backdrop_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    pub fn bind_sdf<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        clip_poly: bool,
+        backdrop: &'a wgpu::BindGroup,
+    ) {
+        pass.set_pipeline(&self.render_pipeline);
+        pass.set_bind_group(
+            0,
+            if clip_poly {
+                &self.bind_group_clip_poly
+            } else {
+                &self.bind_group
+            },
+            &[],
+        );
+        pass.set_bind_group(1, backdrop, &[]);
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
@@ -392,5 +653,35 @@ pub(crate) fn compositor_premultiply(alpha_mode: wgpu::CompositeAlphaMode) -> f3
     match alpha_mode {
         wgpu::CompositeAlphaMode::PreMultiplied => 1.0,
         _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InstanceInput;
+
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");
+    }
+
+    #[test]
+    fn pack_unpack_border_extra_roundtrip() {
+        let cases = [
+            (1.0, 0.0, 0.0), // solid + round
+            (2.0, 0.0, 0.0), // dotted + round
+            (3.0, 0.0, 0.0), // dashed
+            (1.0, 1.0, 0.0), // solid + angle
+            (1.0, 2.0, 4.0), // superellipse(4)
+            (1.0, 2.0, 8.0), // superellipse(8)
+            (1.0, 3.0, 0.0), // notch
+            (1.0, 4.0, 0.0), // scoop
+        ];
+        for (style, shape, param) in cases {
+            let packed = InstanceInput::pack_border_extra(style, shape, param);
+            let (s, sh, p) = InstanceInput::unpack_border_extra(packed);
+            approx(s, style);
+            approx(sh, shape);
+            approx(p, param);
+        }
     }
 }
