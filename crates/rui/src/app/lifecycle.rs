@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use accesskit_winit::Adapter;
@@ -23,6 +24,23 @@ fn collect_scroll_rests(
             }
         }
     });
+}
+
+/// Idle wait after `about_to_wait`. A future `WaitUntil` (caret ~520ms / long-press
+/// 500ms) must not win over a Dialog that just opened: on Windows `request_redraw`
+/// is often coalesced, so the loop would sleep until that timer — a first-open
+/// empty wait, while later opens already have a live WM_PAINT pump.
+pub(crate) fn idle_control_flow(
+    next_wake: Option<Instant>,
+    force_immediate: bool,
+) -> ControlFlow {
+    if force_immediate {
+        ControlFlow::Poll
+    } else if let Some(deadline) = next_wake {
+        ControlFlow::WaitUntil(deadline)
+    } else {
+        ControlFlow::Wait
+    }
 }
 
 impl super::App {
@@ -534,6 +552,19 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Dialog/Sheet/Drawer: `request_redraw` inside RedrawRequested / about_to_wait
+        // is coalesced on Windows. Opening arms a one-shot `Poll` so caret/long-press
+        // `WaitUntil` (~500ms) cannot be the next wake.
+        let force_immediate =
+            crate::components::internal::modal_motion::take_modal_force_immediate_wake();
+        if force_immediate
+            || crate::components::internal::modal_motion::any_modal_css_needs_frame()
+        {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+
         // Number input 增减触发器长按连发。
         if crate::components::input::tick_number_step_hold() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -560,11 +591,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
-        if let Some(deadline) = next_wake {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
+        event_loop.set_control_flow(idle_control_flow(next_wake, force_immediate));
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1019,4 +1046,27 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     // Belt-and-suspenders: if exit skipped `exiting` / CloseRequested, still drop GPU
     // before thread-local reactive Runtime destructors run.
     app.shutdown_renderer();
+}
+
+#[cfg(test)]
+mod idle_control_flow_tests {
+    use super::idle_control_flow;
+    use std::time::{Duration, Instant};
+    use winit::event_loop::ControlFlow;
+
+    #[test]
+    fn modal_open_does_not_sleep_on_caret_wait_until() {
+        let caret = Instant::now() + Duration::from_millis(520);
+        assert_eq!(
+            idle_control_flow(Some(caret), true),
+            ControlFlow::Poll,
+            "first Dialog open must Poll, not WaitUntil caret ~520ms"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), false),
+            ControlFlow::WaitUntil(caret)
+        );
+        assert_eq!(idle_control_flow(None, false), ControlFlow::Wait);
+        assert_eq!(idle_control_flow(None, true), ControlFlow::Poll);
+    }
 }

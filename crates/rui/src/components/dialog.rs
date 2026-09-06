@@ -855,4 +855,147 @@ mod tests {
         );
         clear_overlay_stack();
     }
+
+    #[test]
+    fn dialog_open_builds_content_body_once() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::internal::modal_motion::{
+            any_modal_css_needs_frame, set_modal_css_needs_frame_for_test,
+        };
+        use crate::core::reactivity::{create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let builds = Rc::new(Cell::new(0u32));
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("dlg_open_once__open", || false);
+            let builds = Rc::clone(&builds);
+            let live_e = Rc::clone(&live);
+            crate::core::reactivity::create_effect(move || {
+                let builds_once = Rc::clone(&builds);
+                let el = dialog("dlg_open_once").open(open).child(move || {
+                    dialog_content(DialogContentOpts::default(), move || {
+                        builds_once.set(builds_once.get() + 1);
+                        Element::new().text("body")
+                    })
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        assert_eq!(
+            builds.get(),
+            0,
+            "closed DialogContent must not run the body"
+        );
+
+        set_modal_css_needs_frame_for_test(false);
+        open.set(true);
+        let first = builds.get();
+        assert_eq!(
+            first, 1,
+            "first open must build DialogContent body once (not a mounted.set re-flush), got {first}"
+        );
+        assert!(
+            any_modal_css_needs_frame(),
+            "first open.set must arm about_to_wait before the first tick, or caret WaitUntil (~520ms) sleeps through the first present"
+        );
+
+        fn has_tid(el: &Element, id: &str) -> bool {
+            if el.template_id.as_deref() == Some(id) {
+                return true;
+            }
+            el.children.iter().any(|c| has_tid(c, id))
+        }
+        assert!(
+            has_tid(&live.borrow(), "dlg_open_once__modal_overlay"),
+            "first open.set must hoist overlay in the same turn, not wait for idle retry"
+        );
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn dialog_open_first_paint_is_already_fading() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::internal::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+        use crate::core::reactivity::{create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("dlg_first_paint__open", || false);
+            let live_e = Rc::clone(&live);
+            crate::core::reactivity::create_effect(move || {
+                let el = dialog("dlg_first_paint").open(open).child(move || {
+                    dialog_content(DialogContentOpts::default(), || {
+                        Element::new().text("body")
+                    })
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(2.0);
+        open.set(true);
+
+        let opacity = {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(
+                flush_modal_shell_motion_subtree(&mut tree),
+                "first paint must seed enter keyframes"
+            );
+            assert!(
+                tick_hoisted_modal_css(&mut tree),
+                "first paint must step CSS"
+            );
+            fn overlay_opacity(el: &Element) -> Option<f32> {
+                if el.template_id.as_deref() == Some("dlg_first_paint__modal_overlay") {
+                    return Some(el.style.opacity);
+                }
+                el.children.iter().find_map(overlay_opacity)
+            }
+            overlay_opacity(&tree).expect("overlay on first paint")
+        };
+        assert!(
+            opacity > 0.01 && opacity < 0.35,
+            "click → first RedrawRequested must present a fading dialog, not a blank seed frame, got {opacity}"
+        );
+
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
 }

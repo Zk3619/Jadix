@@ -366,6 +366,9 @@ impl super::App {
                     owner_slot,
                 );
             }
+            if render_ok && crate::primitives::canvas::take_canvas_wants_redraw() {
+                sec.window.request_redraw();
+            }
             (has_caret, render_ok)
         };
 
@@ -3184,7 +3187,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 {
                     if super::scroll_support::is_stale_zero_max_sample(
                         [*max_x, *max_y],
-                        self.scroll_metrics_cache.get(rest).map(|e| e.1),
+                        *bounds,
+                        [*content_w, *content_h],
+                        self.scroll_metrics_cache.get(rest),
                     ) {
                         continue;
                     }
@@ -3567,12 +3572,22 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Switch chrome only sets its tween in this render/sync (after the prior tick);
                 // pump `any_ui_animation_active` here or it stalls on frame 0.
                 let ui_anim_active = crate::style::any_ui_animation_active();
+                let modal_css_active =
+                    crate::components::internal::modal_motion::any_modal_css_needs_frame();
+                // `request_frame` sets WANT_REDRAW during collect (inside `render` above).
+                // Taking the flag *before* render drops the pulse and the clock freezes
+                // until the next pointer move.
+                let canvas_after_paint = crate::primitives::canvas::take_canvas_wants_redraw();
                 if smooth_scroll_animating
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
                     || crate::app::pending_images::any_gif_playing()
+                    || canvas_after_paint
                     || super::scroll_support::has_pending_scroll_item_align()
+                    // Dialog/Sheet/Drawer `@keyframes` are not cubic tweens; without this
+                    // the post-RedrawRequested pump drops them and `about_to_wait` sleeps.
+                    || modal_css_active
                     // `any_ui_animation_active()` is a post-tick safety net for late-set tweens.
                     // Gate it with `force_redraw_count` to avoid long-running stale animation
                     // flags keeping an idle redraw pump alive indefinitely.
@@ -3736,10 +3751,24 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
 
                 // Caret blink: wake ~once per phase (~520ms), not every frame.
+                // Do **not** plant that WaitUntil while a Dialog/Sheet enter is armed or
+                // this frame already requested a redraw — `request_redraw` inside
+                // RedrawRequested is coalesced on Windows, and the 520ms caret deadline
+                // then becomes a first-open empty wait.
                 if has_input_caret {
                     let wake = crate::renderer::caret_blink_next_toggle_at();
                     self.caret_wake_at = Some(wake);
-                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
+                    let anim_pump = smooth_scroll_animating
+                        || scrollbar_fade_animating
+                        || svg_smil_active
+                        || anim_icon_active
+                        || canvas_after_paint
+                        || modal_css_active
+                        || (ui_anim_active && self.force_redraw_count > 0)
+                        || self.force_redraw_count > 0;
+                    if !anim_pump {
+                        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
+                    }
                 } else if !self
                     .secondaries
                     .borrow()

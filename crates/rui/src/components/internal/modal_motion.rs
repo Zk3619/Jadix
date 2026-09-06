@@ -11,7 +11,7 @@
 //! 退场若再写 closed 像素 `translate` / opacity=0 当 specified，会一帧卸掉壳。
 //! [`flush_modal_shell_motion_subtree`] 仍负责入场 seed 与退场 keyframes。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -34,13 +34,16 @@ pub(crate) const MODAL_EXIT_MS: f32 = 200.0;
 pub(crate) const SLIDE_ENTER_MS: f32 = 450.0;
 /// shadcn ending-style ≈ `calc(swipe-strength * 400ms)` at full strength.
 pub(crate) const SLIDE_EXIT_MS: f32 = 400.0;
-/// shadcn Dialog enter — slightly longer than exit for a clearer reveal.
-const DIALOG_ENTER_ANIM_MS: f32 = 300.0;
+/// shadcn Dialog `duration-200`.
+const DIALOG_ENTER_ANIM_MS: f32 = 200.0;
 const DIALOG_EXIT_ANIM_MS: f32 = MODAL_EXIT_MS;
 /// Cover Sheet/Drawer slide exit (Dialog uses CSS completion, not this wall clock).
 const EXIT_DURATION: Duration = Duration::from_millis(SLIDE_EXIT_MS as u64 + 80);
 /// shadcn `zoom-in-90` — a bit more travel than `zoom-in-95`.
 const DIALOG_ENTER_SCALE: f32 = 0.90;
+/// CSS `ease` — Sheet's drawer curve (0.22,1,0.36,1) finishes a 10% zoom in the
+/// first tens of ms, so the enter looked like it skipped the middle.
+const DIALOG_ENTER_EASE: TimingFunction = TimingFunction::Ease;
 /// shadcn drawer popup easing.
 const SLIDE_ENTER_EASE: TimingFunction = TimingFunction::CubicBezier(0.22, 1.0, 0.36, 1.0);
 /// shadcn drawer overlay / ending easing.
@@ -173,6 +176,9 @@ struct ModalPresenceCell {
     needs_enter: bool,
     /// 入场 CSS 过渡进行中（防同帧二次 reactive 把 opacity 打满）。
     enter_active: bool,
+    /// Wall clock when Dialog enter was seeded. Recreated overlay/zoom nodes
+    /// (first-open layout churn) must seek to this, not restart fill-mode 0%.
+    enter_started: Option<Instant>,
     exit_armed: bool,
     /// The motion registered by the latest shell build (the only source of flush after hoist).
     shell: Option<ModalShellState>,
@@ -204,6 +210,31 @@ thread_local! {
     /// `mounted.set` / portal stack pop deferred until AppState borrow is released.
     static PENDING_MODAL_UNMOUNTS: RefCell<Vec<(Signal<bool>, String)>> =
         const { RefCell::new(Vec::new()) };
+    /// Set by [`tick_hoisted_modal_css`]. The redraw pump must see CSS keyframes
+    /// (`fade-in-0` / `zoom-in-90`) — `any_ui_animation_active` only covers cubic tweens.
+    static MODAL_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
+    /// One-shot: `about_to_wait` must `Poll` instead of caret/long-press `WaitUntil`.
+    static MODAL_FORCE_IMMEDIATE_WAKE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True while hoisted Dialog/Sheet/Drawer CSS still has frames to paint.
+pub(crate) fn any_modal_css_needs_frame() -> bool {
+    MODAL_CSS_NEEDS_FRAME.with(|c| c.get())
+}
+
+/// Consume the one-shot "do not sleep on WaitUntil" armed by [`sync_modal_presence`].
+pub(crate) fn take_modal_force_immediate_wake() -> bool {
+    MODAL_FORCE_IMMEDIATE_WAKE.with(|c| c.replace(false))
+}
+
+fn arm_modal_event_loop_wake() {
+    MODAL_CSS_NEEDS_FRAME.with(|f| f.set(true));
+    MODAL_FORCE_IMMEDIATE_WAKE.with(|f| f.set(true));
+}
+
+#[cfg(test)]
+pub(crate) fn set_modal_css_needs_frame_for_test(v: bool) {
+    MODAL_CSS_NEEDS_FRAME.with(|c| c.set(v));
 }
 
 pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
@@ -218,6 +249,7 @@ pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
             panel_motion: MotionStyle::new(),
             needs_enter: false,
             enter_active: false,
+            enter_started: None,
             exit_armed: false,
             shell: None,
             needs_exit_anim: false,
@@ -251,19 +283,25 @@ pub(crate) fn sync_modal_presence(handle: &ModalPresenceHandle, want_open: bool)
             c.enter_active = false;
             c.exit_armed = false;
             c.needs_exit_anim = false;
+            arm_modal_event_loop_wake();
         }
         if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
             c.exit_armed = true;
             c.needs_enter = false;
             c.enter_active = false;
             c.needs_exit_anim = true;
+            arm_modal_event_loop_wake();
         }
         let set_mounted = c.mounted.peek() != mounted;
         (phase, mounted, set_mounted)
     };
-    // `mounted.set` 会同步 flush reactive_view；必须在释放 RefCell 后再写。
+    // Opening is already running inside `{id}__dialog_view` (it tracks `open.get()`).
+    // `mounted.set` would enqueue that same view again and flush it after this turn —
+    // a second `body()` + reconcile before the first paint. That is the whole-program
+    // first-open wait (cold tree twice); later opens hit warm named signals and feel
+    // instant. Unmount still uses `mounted.set(false)` from `tick_modal_presence`.
     if set_mounted {
-        mounted_sig.set(mounted);
+        mounted_sig.set_silent(mounted);
     }
     phase
 }
@@ -380,6 +418,23 @@ fn dialog_closed_scale(nested_scale: f32) -> f32 {
     (nested_scale * DIALOG_ENTER_SCALE).clamp(0.88, 1.0)
 }
 
+fn extra_to_translate_pct(
+    motion: ModalSurfaceMotion,
+    extra: [f32; 2],
+    slide_axis_px: f32,
+) -> [f32; 2] {
+    let axis = slide_axis_px.max(1.0);
+    match motion {
+        ModalSurfaceMotion::DialogFade => [0.0, 0.0],
+        ModalSurfaceMotion::SlideFromBottom | ModalSurfaceMotion::SlideFromTop => {
+            [0.0, extra[1] / axis]
+        }
+        ModalSurfaceMotion::SlideFromLeft | ModalSurfaceMotion::SlideFromRight => {
+            [extra[0] / axis, 0.0]
+        }
+    }
+}
+
 fn panel_motion_target(
     motion: ModalSurfaceMotion,
     open_visual: bool,
@@ -389,7 +444,8 @@ fn panel_motion_target(
 ) -> MotionTransform {
     if open_visual {
         return MotionTransform {
-            translate: extra_translate,
+            translate: [0.0, 0.0],
+            translate_pct: extra_to_translate_pct(motion, extra_translate, slide_axis_px),
             opacity: 1.0,
             scale: [nested_scale, nested_scale],
         };
@@ -404,6 +460,7 @@ fn panel_motion_target(
     let _ = extra_translate;
     MotionTransform {
         translate: base,
+        translate_pct: motion.closed_translate_pct(),
         opacity: 1.0,
         scale: [scale, scale],
     }
@@ -425,6 +482,7 @@ fn open_frac_from_extra(motion: ModalSurfaceMotion, extra: [f32; 2], slide_axis_
 fn overlay_motion_target(open_visual: bool) -> MotionTransform {
     MotionTransform {
         translate: [0.0, 0.0],
+        translate_pct: [0.0, 0.0],
         opacity: if open_visual { 1.0 } else { 0.0 },
         scale: [1.0, 1.0],
     }
@@ -458,17 +516,18 @@ fn enter_visual_settled(
     panel: &Element,
     motion: ModalSurfaceMotion,
     target_translate: [f32; 2],
+    slide_axis_px: f32,
 ) -> bool {
     let overlay_ok = (overlay.style.opacity - 1.0).abs() < 0.02;
     let nested = 1.0_f32;
     let panel_ok = if motion == ModalSurfaceMotion::DialogFade {
         (panel.style.scale[0] - nested).abs() < 0.02
     } else {
-        let dx = (panel.style.translate[0] - target_translate[0]).abs();
-        let dy = (panel.style.translate[1] - target_translate[1]).abs();
-        let pct_ok =
-            panel.style.translate_pct[0].abs() < 0.04 && panel.style.translate_pct[1].abs() < 0.04;
-        dx < 2.0 && dy < 2.0 && pct_ok
+        let target_pct = extra_to_translate_pct(motion, target_translate, slide_axis_px);
+        let pct_ok = (panel.style.translate_pct[0] - target_pct[0]).abs() < 0.04
+            && (panel.style.translate_pct[1] - target_pct[1]).abs() < 0.04;
+        let px_ok = panel.style.translate[0].abs() < 2.0 && panel.style.translate[1].abs() < 2.0;
+        pct_ok && px_ok
     };
     overlay_ok && panel_ok
 }
@@ -495,8 +554,9 @@ fn enter_animation_running(
     panel: &Element,
     motion: ModalSurfaceMotion,
     target_translate: [f32; 2],
+    slide_axis_px: f32,
 ) -> bool {
-    if enter_visual_settled(overlay, panel, motion, target_translate) {
+    if enter_visual_settled(overlay, panel, motion, target_translate, slide_axis_px) {
         return false;
     }
     true
@@ -527,6 +587,7 @@ fn write_modal_shell_tick_targets(
         shell.slide_axis_px,
     );
     panel.style.translate = p_target.translate;
+    panel.style.translate_pct = p_target.translate_pct;
     panel.style.opacity = 1.0;
     panel.style.scale = p_target.scale;
     overlay.style.opacity = o_target.opacity;
@@ -555,8 +616,9 @@ fn settle_modal_enter_if_ready(
     panel: &Element,
     motion: ModalSurfaceMotion,
     target_translate: [f32; 2],
+    slide_axis_px: f32,
 ) -> bool {
-    let settled = enter_visual_settled(overlay, panel, motion, target_translate);
+    let settled = enter_visual_settled(overlay, panel, motion, target_translate, slide_axis_px);
     if settled {
         let modal_id = presence
             .cell
@@ -564,7 +626,11 @@ fn settle_modal_enter_if_ready(
             .shell
             .as_ref()
             .map(|s| s.modal_id.clone());
-        presence.cell.borrow_mut().enter_active = false;
+        {
+            let mut c = presence.cell.borrow_mut();
+            c.enter_active = false;
+            c.slide_settle = false;
+        }
         crate::utils::popup::arm_underlay_close();
         if let Some(id) = modal_id {
             crate::components::drawer::on_modal_slide_settle_complete(&id);
@@ -585,6 +651,23 @@ fn reset_dialog_css_anim_snapshots(overlay: &mut Element, zoom: &mut Element) {
     zoom.animation_snapshot = Default::default();
 }
 
+fn dialog_enter_anim_entries() -> Vec<crate::style::AnimationEntry> {
+    vec![
+        keyframes_anim_entry(
+            "fade-in-0",
+            DIALOG_ENTER_ANIM_MS,
+            DIALOG_ENTER_EASE,
+            AnimationFillMode::Both,
+        ),
+        keyframes_anim_entry(
+            "zoom-in-90",
+            DIALOG_ENTER_ANIM_MS,
+            DIALOG_ENTER_EASE,
+            AnimationFillMode::Both,
+        ),
+    ]
+}
+
 fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
     clear_motion(overlay);
     clear_motion(zoom);
@@ -597,24 +680,32 @@ fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
     overlay.style.animations = vec![keyframes_anim_entry(
         "fade-in-0",
         DIALOG_ENTER_ANIM_MS,
-        TimingFunction::EaseOut,
+        DIALOG_ENTER_EASE,
         AnimationFillMode::Both,
     )];
-    zoom.style.animations = vec![
-        keyframes_anim_entry(
+    zoom.style.animations = dialog_enter_anim_entries();
+    reset_dialog_css_anim_snapshots(overlay, zoom);
+}
+
+/// Rebuilds can drop the animation list. Restore names without resetting the mid pose
+/// (full [`seed_dialog_enter_anim`] would flash closed → open).
+fn ensure_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
+    if !overlay
+        .style
+        .animations
+        .iter()
+        .any(|a| a.name == "fade-in-0")
+    {
+        overlay.style.animations = vec![keyframes_anim_entry(
             "fade-in-0",
             DIALOG_ENTER_ANIM_MS,
-            TimingFunction::EaseOut,
+            DIALOG_ENTER_EASE,
             AnimationFillMode::Both,
-        ),
-        keyframes_anim_entry(
-            "zoom-in-90",
-            DIALOG_ENTER_ANIM_MS,
-            TimingFunction::EaseOut,
-            AnimationFillMode::Both,
-        ),
-    ];
-    reset_dialog_css_anim_snapshots(overlay, zoom);
+        )];
+    }
+    if !zoom.style.animations.iter().any(|a| a.name == "zoom-in-90") {
+        zoom.style.animations = dialog_enter_anim_entries();
+    }
 }
 
 fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
@@ -809,17 +900,20 @@ fn apply_dialog_css_keyframe_motion(
     let exiting = phase == PresencePhase::Exiting;
     let open_visual = phase == PresencePhase::Present && !exiting;
 
-    let (needs_enter, needs_exit_anim) = {
+    let (needs_enter, needs_exit_anim, enter_active) = {
         let mut c = presence.cell.borrow_mut();
         let needs_enter = c.needs_enter;
         let needs_exit_anim = c.needs_exit_anim;
         if needs_enter && open_visual {
             c.needs_enter = false;
+            c.enter_active = true;
+            c.enter_started = Some(Instant::now());
         }
         if needs_exit_anim && exiting {
             c.needs_exit_anim = false;
+            c.enter_started = None;
         }
-        (needs_enter, needs_exit_anim)
+        (needs_enter, needs_exit_anim, c.enter_active)
     };
 
     if exiting && (needs_exit_anim || !dialog_has_exit_anim(overlay)) {
@@ -850,16 +944,27 @@ fn apply_dialog_css_keyframe_motion(
     }
 
     if open_visual {
+        if enter_active {
+            ensure_dialog_enter_anim(overlay, zoom);
+        }
         let animating = dialog_css_animating(overlay, zoom);
-        if !animating {
+        // Nail only when the pose is already rest. A 2% cutoff snapped the last
+        // compositor blit (dest AABB + bitmap rows) onto Coverage in one frame.
+        let zoom_done = (zoom.style.scale[0] - 1.0).abs() < 0.002 && overlay.style.opacity > 0.97;
+        if !animating && zoom_done {
             overlay.style.opacity = 1.0;
             overlay.style.animations.clear();
             zoom.style.opacity = 1.0;
             zoom.style.scale = [1.0, 1.0];
             zoom.style.animations.clear();
+            presence.cell.borrow_mut().enter_active = false;
+            presence.cell.borrow_mut().enter_started = None;
             crate::utils::popup::arm_underlay_close();
+            return false;
         }
-        return animating;
+        // Match Sheet `enter_in_progress`: keep flush requesting frames for the
+        // whole enter, not only while `animation_run_active` is true.
+        return animating || enter_active;
     }
 
     false
@@ -899,8 +1004,8 @@ fn apply_modal_shell_motion_inner(
             c.needs_exit_anim = false;
         }
         if slide_settle {
-            c.slide_settle = false;
-            // Reuse enter CSS tick so drag-release snap keeps advancing after the seed frame.
+            // Keep the flag until visual settle so continuation frames do not
+            // look like a lost enter and re-seed `@keyframes` from 100%.
             c.enter_active = true;
         }
         (
@@ -977,7 +1082,11 @@ fn apply_modal_shell_motion_inner(
     let nested = nested_panel_scale(modal_id);
     let o_target = overlay_motion_target(open_visual);
     let p_target = panel_motion_target(motion, open_visual, nested, extra_translate, slide_axis_px);
-    let bootstrap = Some(MotionBootstrap::SnapAfterEnsure);
+    let bootstrap = if settle_snap && settle_from.is_none() {
+        Some(MotionBootstrap::EnsureOnly)
+    } else {
+        Some(MotionBootstrap::SnapAfterEnsure)
+    };
 
     if dragging {
         overlay.style.animations.clear();
@@ -997,6 +1106,7 @@ fn apply_modal_shell_motion_inner(
             .unwrap_or_else(|| open_frac_from_extra(motion, extra_translate, slide_axis_px));
         overlay.style.opacity = frac.clamp(0.0, 1.0);
         panel.style.translate = p_target.translate;
+        panel.style.translate_pct = p_target.translate_pct;
         panel.style.opacity = 1.0;
         panel.style.scale = p_target.scale;
         return true;
@@ -1005,7 +1115,8 @@ fn apply_modal_shell_motion_inner(
     // Seed drag-release mid before prepare_motion_sync snapshots the baseline.
     if settle_snap {
         if let Some(from) = settle_from {
-            panel.style.translate = from;
+            panel.style.translate = [0.0, 0.0];
+            panel.style.translate_pct = extra_to_translate_pct(motion, from, slide_axis_px);
             panel.style.opacity = 1.0;
             overlay.style.opacity = open_frac_from_extra(motion, from, slide_axis_px);
         }
@@ -1013,7 +1124,7 @@ fn apply_modal_shell_motion_inner(
 
     let entering_mid = open_visual
         && enter_was_active
-        && !enter_visual_settled(overlay, panel, motion, extra_translate)
+        && !enter_visual_settled(overlay, panel, motion, extra_translate, slide_axis_px)
         && modal_shell_enter_css_active(overlay, panel);
 
     if animate_overlay {
@@ -1046,6 +1157,7 @@ fn apply_modal_shell_motion_inner(
         clear_motion(panel);
         c.panel_motion.reset();
         panel.style.translate = p_target.translate;
+        panel.style.translate_pct = p_target.translate_pct;
         panel.style.opacity = 1.0;
         panel.style.scale = p_target.scale;
     }
@@ -1076,7 +1188,7 @@ fn apply_modal_shell_motion_inner(
     }
 
     if open_visual && enter_was_active {
-        if enter_animation_running(overlay, panel, motion, extra_translate)
+        if enter_animation_running(overlay, panel, motion, extra_translate, slide_axis_px)
             || modal_shell_enter_css_active(overlay, panel)
         {
             needs_frame = true;
@@ -1124,13 +1236,35 @@ pub(crate) fn patch_modal_panel_transform(root: &mut Element, modal_id: &str, tr
     let Some(panel) = find_template_id_mut(root, &panel_tid) else {
         return;
     };
+    let (motion, axis) = PRESENCE_REGISTRY.with(|reg| {
+        for cell in reg.borrow().iter() {
+            if let Some(s) = cell.borrow().shell.as_ref() {
+                if s.modal_id == modal_id {
+                    return (s.motion, s.slide_axis_px.max(1.0));
+                }
+            }
+        }
+        (ModalSurfaceMotion::SlideFromBottom, 1.0)
+    });
+    let pct = extra_to_translate_pct(motion, translate, axis);
     clear_motion(panel);
-    let prev = panel.style.translate;
-    panel.style.translate = translate;
+    let prev_px = panel.style.translate;
+    let prev_pct = panel.style.translate_pct;
+    let w = panel.layout_bounds[2].max(1.0);
+    let h = panel.layout_bounds[3].max(1.0);
+    panel.style.translate = [0.0, 0.0];
+    panel.style.translate_pct = pct;
     panel.style.opacity = 1.0;
     crate::app::damage::push_frame_paint_damage(panel.layout_bounds);
-    crate::app::damage::push_frame_paint_damage(translated_bounds(panel.layout_bounds, prev));
-    crate::app::damage::push_frame_paint_damage(translated_bounds(panel.layout_bounds, translate));
+    crate::app::damage::push_frame_paint_damage(translated_bounds(panel.layout_bounds, prev_px));
+    crate::app::damage::push_frame_paint_damage(translated_bounds(
+        panel.layout_bounds,
+        [prev_pct[0] * w, prev_pct[1] * h],
+    ));
+    crate::app::damage::push_frame_paint_damage(translated_bounds(
+        panel.layout_bounds,
+        [pct[0] * w, pct[1] * h],
+    ));
 }
 
 /// 拖拽跟手：遮罩透明度随 open_frac（对齐 shadcn `--drawer-swipe-progress`）。
@@ -1256,6 +1390,7 @@ pub(crate) fn tick_modal_enter_css_subtree(root: &mut Element) -> bool {
                 panel,
                 shell.motion,
                 shell.extra_translate,
+                shell.slide_axis_px,
             ) {
                 needs_frame = true;
             } else {
@@ -1295,11 +1430,16 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
 /// [`flush_modal_shell_motion_subtree`] so seed/targets exist and this is the only stepper.
 pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
     // Overlay fade-out-0 / panel slide-out advance by `dt`, not Instant. After idle,
-    // `frame_dt` can be seconds. Clamping to 80ms (window_events DT_MAX) still skips
-    // the visible middle: 80ms is 20% of the 400ms exit, and shadcn's ease-out dumps
-    // ~65% of travel into that window. Cap at one display frame so close-after-idle
-    // plays the curve instead of presenting the end pose.
-    let dt = crate::style::utility::frame_dt().clamp(0.0, 1.0 / 60.0);
+    // `frame_dt` can be seconds. Cap only those jumps to one display frame so close
+    // still plays mids; 30 Hz frames (~33ms) must not be slowed to 16ms.
+    let raw = crate::style::utility::frame_dt().max(0.0);
+    // Idle jumps (>80ms) → one 60 Hz step. Other frames never skip more than ~33ms
+    // so a 200ms Dialog enter still has visible mids (a 50ms dt ate 25% of the zoom).
+    let dt = if raw > 0.08 {
+        1.0 / 60.0
+    } else {
+        raw.min(1.0 / 30.0)
+    };
     let mut any = false;
     PRESENCE_REGISTRY.with(|reg| {
         for cell_rc in reg.borrow().iter() {
@@ -1316,6 +1456,7 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                 }
                 shell
             };
+            let enter_started = cell_rc.borrow().enter_started;
             let overlay_tid = format!("{}__modal_overlay", shell.modal_id);
             let motion_tid = if shell.motion == ModalSurfaceMotion::DialogFade {
                 dialog_fade_motion_tid(root, &shell.modal_id)
@@ -1329,14 +1470,44 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                 continue;
             };
             let (overlay, motion_el) = unsafe { (&mut *overlay_ptr, &mut *motion_ptr) };
-            if tick_element_css(overlay, dt) {
+            // Recreated nodes (first-open layout churn) have empty snapshots — seek to
+            // `enter_started` instead of restarting at 0%.
+            //
+            // Same-turn seed+tick used to pass the raw idle `frame_dt` (seconds) and jump
+            // a 200ms zoom-in-90 to settle. `dt` is already capped to one display frame,
+            // so a 0-step "hold seed" present is no longer needed — and that blank
+            // present was the wait before the popup appeared: click → expensive first
+            // layout at opacity 0 → extra vsync before any pixels.
+            let hold_seed = overlay.animation_snapshot.runs.is_empty()
+                && motion_el.animation_snapshot.runs.is_empty();
+            let step = if hold_seed {
+                if shell.motion == ModalSurfaceMotion::DialogFade {
+                    match enter_started {
+                        Some(t) => {
+                            let elapsed = t.elapsed().as_secs_f32();
+                            if elapsed < 0.0005 {
+                                dt
+                            } else {
+                                elapsed.min(DIALOG_ENTER_ANIM_MS / 1000.0)
+                            }
+                        }
+                        None => dt,
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                dt
+            };
+            if tick_element_css(overlay, step) {
                 any = true;
             }
-            if tick_element_css(motion_el, dt) {
+            if tick_element_css(motion_el, step) {
                 any = true;
             }
         }
     });
+    MODAL_CSS_NEEDS_FRAME.with(|c| c.set(any));
     any
 }
 
@@ -1465,7 +1636,7 @@ pub(crate) fn apply_modal_shell_motion(
         }
         dragging
             || matches!(phase, PresencePhase::Present | PresencePhase::Exiting)
-            || (c.enter_active && motion != ModalSurfaceMotion::DialogFade)
+            || c.enter_active
             || needs_enter
             || (motion == ModalSurfaceMotion::DialogFade
                 && matches!(phase, PresencePhase::Exiting | PresencePhase::Present))
@@ -1479,6 +1650,7 @@ mod tests {
     use crate::core::reactivity::{create_effect, create_root};
     use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};
     use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage};
+    use std::time::{Duration, Instant};
 
     fn attach_dialog_zoom_shell(modal_id: &str, panel: &mut Element) {
         panel.template_id = Some(format!("{modal_id}__modal_panel"));
@@ -1488,15 +1660,55 @@ mod tests {
     }
 
     #[test]
+    fn dialog_open_arms_event_loop_wake_before_first_tick() {
+        create_root(|| {
+            set_modal_css_needs_frame_for_test(false);
+            let _ = take_modal_force_immediate_wake();
+            let handle = use_modal_presence("wake-before-tick");
+            assert!(
+                !any_modal_css_needs_frame(),
+                "precondition: idle CSS pump must be off"
+            );
+            sync_modal_presence(&handle, true);
+            assert!(
+                handle.cell.borrow().needs_enter,
+                "open must set needs_enter"
+            );
+            assert!(
+                any_modal_css_needs_frame(),
+                "open must arm about_to_wait before flush/tick"
+            );
+            assert!(
+                take_modal_force_immediate_wake(),
+                "open must force one Poll so caret/long-press WaitUntil (~500ms) is not the next wake"
+            );
+            assert!(
+                !take_modal_force_immediate_wake(),
+                "immediate wake is one-shot; later frames use the CSS pump"
+            );
+        });
+    }
+
+    #[test]
     fn sync_modal_presence_survives_mounted_effect_reentry() {
+        use std::cell::Cell;
+        use std::rc::Rc;
         create_root(|| {
             let handle = use_modal_presence("reentry-test");
             let mounted = mounted_signal(&handle);
+            let runs = Rc::new(Cell::new(0u32));
+            let runs_eff = Rc::clone(&runs);
             create_effect(move || {
                 let _ = mounted.get();
+                runs_eff.set(runs_eff.get() + 1);
             });
             assert_eq!(sync_modal_presence(&handle, true), PresencePhase::Present);
             assert!(mounted.get());
+            assert_eq!(
+                runs.get(),
+                1,
+                "opening must set_silent mounted; set() re-flushed the view (first-open double body)"
+            );
             assert_eq!(sync_modal_presence(&handle, true), PresencePhase::Present);
         });
     }
@@ -1533,7 +1745,10 @@ mod tests {
                     .any(|a| a.name == "fade-in-0"),
                 "overlay must run fade-in keyframes"
             );
-            assert!(!handle.cell.borrow().enter_active);
+            assert!(
+                handle.cell.borrow().enter_active,
+                "Dialog enter must keep enter_active like Sheet so flush keeps requesting frames"
+            );
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let overlay = find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap();
             assert!(
@@ -1677,6 +1892,10 @@ mod tests {
                 "enter animation should settle to opaque, got {}",
                 overlay.style.opacity
             );
+            assert!(
+                !handle.cell.borrow().enter_active,
+                "settled Dialog must drop enter_active so the redraw pump stops"
+            );
         });
     }
 
@@ -1721,6 +1940,65 @@ mod tests {
             assert!(
                 (elapsed_after - elapsed_before).abs() < 1.0,
                 "second flush must not restart fade-in, before={elapsed_before} after={elapsed_after}"
+            );
+        });
+    }
+
+    #[test]
+    fn dialog_enter_recreated_nodes_seek_enter_started() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg", &mut panel);
+            let handle = use_modal_presence("enter-seek");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            handle.cell.borrow_mut().enter_started =
+                Some(Instant::now() - Duration::from_millis(80));
+
+            let mut overlay2 = Element::new();
+            let mut panel2 = Element::new();
+            attach_dialog_zoom_shell("dlg", &mut panel2);
+            apply_modal_shell_motion(
+                "dlg",
+                &mut overlay2,
+                &mut panel2,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.clear();
+            root.children.push(overlay2);
+            root.children.push(panel2);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            let _ = tick_hoisted_modal_css(&mut root);
+            let zoom = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap();
+            assert!(
+                zoom.style.opacity > 0.12,
+                "recreated zoom must seek mid-enter, not restart at 0%; got {}",
+                zoom.style.opacity
+            );
+            assert!(
+                zoom.style.scale[0] > 0.92,
+                "recreated zoom must seek scale past 0.90; got {}",
+                zoom.style.scale[0]
             );
         });
     }
@@ -1891,6 +2169,127 @@ mod tests {
     }
 
     #[test]
+    fn tick_hoisted_modal_css_keeps_redraw_flag_while_dialog_enter_plays() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-pump", &mut panel);
+            let handle = use_modal_presence("enter-pump");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-pump",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            assert!(
+                tick_hoisted_modal_css(&mut root),
+                "enter keyframes must still need frames after the first tick"
+            );
+            assert!(
+                any_modal_css_needs_frame(),
+                "redraw pump must see Dialog CSS as active (not only cubic tweens)"
+            );
+        });
+    }
+
+    #[test]
+    fn tick_hoisted_modal_css_first_frame_leaves_seed_without_settling() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-hold", &mut panel);
+            let handle = use_modal_presence("enter-hold");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-hold",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            assert!(tick_hoisted_modal_css(&mut root));
+            let zoom = find_template_id_mut(&mut root, "dlg-hold__modal_zoom").unwrap();
+            assert!(
+                zoom.style.scale[0] > DIALOG_ENTER_SCALE + 0.002,
+                "first present after click must leave the 0.90 seed pose, got {}",
+                zoom.style.scale[0]
+            );
+            assert!(
+                zoom.style.opacity > 0.01 && zoom.style.opacity < 0.5,
+                "first present must already be fading in, not blank or settled, got {}",
+                zoom.style.opacity
+            );
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            assert!(tick_hoisted_modal_css(&mut root));
+            let zoom = find_template_id_mut(&mut root, "dlg-hold__modal_zoom").unwrap();
+            let elapsed = zoom
+                .animation_snapshot
+                .runs
+                .iter()
+                .map(|r| r.elapsed_ms)
+                .fold(0.0_f32, f32::max);
+            assert!(
+                elapsed > 20.0,
+                "second tick must consume frame dt, elapsed_ms={elapsed}"
+            );
+        });
+    }
+
+    #[test]
+    fn tick_hoisted_modal_css_idle_jump_does_not_settle_enter() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(2.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-idle", &mut panel);
+            let handle = use_modal_presence("enter-idle");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-idle",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            assert!(tick_hoisted_modal_css(&mut root));
+            let overlay = find_template_id_mut(&mut root, "dlg-idle__modal_overlay").unwrap();
+            assert!(
+                overlay.style.opacity > 0.01 && overlay.style.opacity < 0.35,
+                "idle click must paint one 16ms step, not a blank seed or a settled dialog, got {}",
+                overlay.style.opacity
+            );
+        });
+    }
+
+    #[test]
     fn dialog_exit_seeds_fade_and_zoom_out() {
         create_root(|| {
             let mut root = Element::new();
@@ -1961,7 +2360,8 @@ mod tests {
                     &overlay,
                     &panel,
                     ModalSurfaceMotion::SlideFromBottom,
-                    [0.0, 0.0]
+                    [0.0, 0.0],
+                    400.0,
                 ),
                 "opacity=1 must not settle a slide that is still translated"
             );
@@ -1971,7 +2371,8 @@ mod tests {
                 &overlay,
                 &panel,
                 ModalSurfaceMotion::SlideFromBottom,
-                [0.0, 0.0]
+                [0.0, 0.0],
+                400.0,
             ));
         });
     }
@@ -2524,21 +2925,41 @@ mod tests {
             overlay.style.opacity = 1.0;
             overlay.style.transition.clear();
             overlay.style.animations.clear();
-            panel.style.translate = [0.0, 240.0];
+            panel.style.translate = [0.0, 0.0];
+            panel.style.translate_pct = [0.0, 0.4];
             panel.style.transition.clear();
             root.children.push(overlay);
             root.children.push(panel);
             arm_modal_slide_settle("slide-s", [0.0, 240.0]);
             assert!(flush_modal_shell_motion_subtree(&mut root));
-            let ty = find_template_id_mut(&mut root, "slide-s__modal_panel")
-                .unwrap()
-                .style
-                .translate[1];
-            set_css_transition_virtual_timeline(false);
+            let p = find_template_id_mut(&mut root, "slide-s__modal_panel").unwrap();
+            let pct_y = p.style.translate_pct[1];
             assert!(
-                ty > 100.0 && ty < 280.0,
-                "release snap must continue from the drag pose, not re-enter from off-screen, got {ty}"
+                pct_y > 0.15 && pct_y < 0.55,
+                "release snap must continue from the drag pose, not re-enter from off-screen, got {pct_y}"
             );
+            assert!(
+                !p.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name.starts_with("rui-modal-slide-in-")),
+                "snap must not seed enter keyframes"
+            );
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            let p = find_template_id_mut(&mut root, "slide-s__modal_panel").unwrap();
+            assert!(
+                p.style.translate_pct[1] > 0.1 && p.style.translate_pct[1] < 0.55,
+                "second settle frame must not jump to closed 100%, got {}",
+                p.style.translate_pct[1]
+            );
+            assert!(
+                !p.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name.starts_with("rui-modal-slide-in-")),
+                "continuation must not re-seed enter from 100%"
+            );
+            set_css_transition_virtual_timeline(false);
         });
     }
 }

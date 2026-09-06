@@ -453,9 +453,47 @@ pub(crate) fn wheel_sticky_matches_deepest(sticky: &str, chain: &[String]) -> bo
 
 pub(crate) type ScrollMetricsEntry = ([f32; 4], [f32; 2], [f32; 2]);
 
+/// True when a freshly collected `max=0` is a clip/band-cull collapse, not a real
+/// "content now fits" state.
+///
+/// Nested viewports scrolled out of the parent clip can report `content == viewport`
+/// (flex-shrink / skipped children). Overwriting the cache with that sample would
+/// clamp their offset to 0.
+///
+/// The opposite case is a **grown** viewport that still measures the previous
+/// content and now covers it (short sidebar + window taller). That must be
+/// accepted so offset/target clamp instead of staying scrolled into empty space.
 #[inline]
-pub(crate) fn is_stale_zero_max_sample(fresh_max: [f32; 2], prev_max: Option<[f32; 2]>) -> bool {
-    fresh_max[0] < 0.5 && fresh_max[1] < 0.5 && prev_max.is_some_and(|p| p[0] > 0.5 || p[1] > 0.5)
+pub(crate) fn is_stale_zero_max_sample(
+    fresh_max: [f32; 2],
+    fresh_bounds: [f32; 4],
+    fresh_content: [f32; 2],
+    prev: Option<&ScrollMetricsEntry>,
+) -> bool {
+    if fresh_max[0] >= 0.5 || fresh_max[1] >= 0.5 {
+        return false;
+    }
+    let Some((prev_bounds, prev_max, prev_content)) = prev else {
+        return false;
+    };
+    if prev_max[0] < 0.5 && prev_max[1] < 0.5 {
+        return false;
+    }
+    const EPS: f32 = 0.5;
+    let y_was_scrollable = prev_max[1] > EPS;
+    let x_was_scrollable = prev_max[0] > EPS;
+    let grew_h = fresh_bounds[3] > prev_bounds[3] + EPS;
+    let grew_w = fresh_bounds[2] > prev_bounds[2] + EPS;
+    // Content did not collapse to the new viewport (cull samples drop content_h
+    // down to vh). Stretching with the viewport (`fresh >= prev`) is still a grow.
+    let content_kept_y = fresh_content[1] + EPS >= prev_content[1];
+    let content_kept_x = fresh_content[0] + EPS >= prev_content[0];
+    if (y_was_scrollable && grew_h && content_kept_y)
+        || (x_was_scrollable && grew_w && content_kept_x)
+    {
+        return false;
+    }
+    true
 }
 
 /// Replace cache from this frame's collect, but do not let a band-cull / clip-cull
@@ -468,7 +506,7 @@ pub(crate) fn merge_scroll_metrics_cache(
 ) {
     let old = std::mem::take(cache);
     for (rest, bounds, max, content) in fresh {
-        if is_stale_zero_max_sample(max, old.get(&rest).map(|e| e.1)) {
+        if is_stale_zero_max_sample(max, bounds, content, old.get(&rest)) {
             if let Some(prev) = old.get(&rest) {
                 cache.insert(rest, *prev);
                 continue;
@@ -573,7 +611,7 @@ pub(super) fn retain_future_instants(map: &mut HashMap<String, Instant>, now: In
 /// (gallery `scroll_behavior="smooth"`) will re-seek the old target after a later
 /// shrink — top content jumps out of view instead of keeping the top and letting the
 /// bottom overflow.
-pub(super) fn clamp_scroll_offset_and_target(offset: f32, target: f32, max: f32) -> (f32, f32) {
+pub(crate) fn clamp_scroll_offset_and_target(offset: f32, target: f32, max: f32) -> (f32, f32) {
     let max = max.max(0.0);
     (offset.clamp(0.0, max), target.clamp(0.0, max))
 }
@@ -932,9 +970,68 @@ mod scroll_metrics_merge_tests {
 
     #[test]
     fn stale_zero_max_detects_cull_sample() {
-        assert!(is_stale_zero_max_sample([0.0, 0.0], Some([0.0, 100.0])));
-        assert!(!is_stale_zero_max_sample([0.0, 80.0], Some([0.0, 100.0])));
-        assert!(!is_stale_zero_max_sample([0.0, 0.0], None));
+        let prev = ([0.0, 100.0, 320.0, 384.0], [0.0, 100.0], [320.0, 484.0]);
+        assert!(is_stale_zero_max_sample(
+            [0.0, 0.0],
+            [0.0, 80.0, 320.0, 384.0],
+            [320.0, 384.0],
+            Some(&prev),
+        ));
+        assert!(!is_stale_zero_max_sample(
+            [0.0, 80.0],
+            [0.0, 80.0, 320.0, 384.0],
+            [320.0, 464.0],
+            Some(&prev),
+        ));
+        assert!(!is_stale_zero_max_sample(
+            [0.0, 0.0],
+            [0.0, 0.0, 320.0, 384.0],
+            [320.0, 384.0],
+            None,
+        ));
+    }
+
+    #[test]
+    fn expand_viewport_until_fit_is_not_stale_zero() {
+        // Scrolled sidebar: vh=300, content=500, max=200. Window grows to vh=600.
+        let prev = ([0.0, 48.0, 208.0, 300.0], [0.0, 200.0], [208.0, 500.0]);
+        assert!(
+            !is_stale_zero_max_sample(
+                [0.0, 0.0],
+                [0.0, 48.0, 208.0, 600.0],
+                [208.0, 500.0],
+                Some(&prev),
+            ),
+            "grown viewport that covers previous content must clamp, not keep the short-screen max"
+        );
+    }
+
+    #[test]
+    fn expand_viewport_until_fit_replaces_cache_and_clamps() {
+        let mut cache = HashMap::new();
+        cache.insert(
+            "gal-clip__sidebar-content".into(),
+            ([0.0, 48.0, 208.0, 300.0], [0.0, 200.0], [208.0, 500.0]),
+        );
+        merge_scroll_metrics_cache(
+            &mut cache,
+            [(
+                "gal-clip__sidebar-content".into(),
+                [0.0, 48.0, 208.0, 600.0],
+                [0.0, 0.0],
+                [208.0, 500.0],
+            )],
+        );
+        let entry = cache
+            .get("gal-clip__sidebar-content")
+            .expect("sidebar viewport kept");
+        assert!(
+            entry.1[1] < 0.5,
+            "expand-to-fit must publish max=0, got {:?}",
+            entry.1
+        );
+        let (offset, target) = super::clamp_scroll_offset_and_target(180.0, 180.0, entry.1[1]);
+        assert_eq!((offset, target), (0.0, 0.0));
     }
 
     #[test]

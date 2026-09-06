@@ -518,28 +518,18 @@ fn drawer_y_max_h(vh: f32) -> f32 {
     (vh - DRAWER_Y_INSET_PX).max(120.0)
 }
 
-/// Rest visible height for a Y-axis snap (frac × max-h). Drag/settle keep [`drawer_y_max_h`]
-/// plus translate so swipe does not relayout every frame.
+/// Visible height for a Y-axis snap or drag (frac × max-h). Swipe follows this
+/// box size rather than laying out at max-h and translating the overflow away.
 fn drawer_y_visible_h(frac: f32, vh: f32) -> f32 {
     (frac.clamp(0.0, 1.0) * drawer_y_max_h(vh)).max(64.0)
 }
 
 /// `(visible_px, extra_translate)` for a vertical drawer.
 ///
-/// Rest uses the snap height so `DrawerBody` can overflow-scroll. Drag and snap-settle
-/// keep full max-h + edge translate (visually equivalent, no per-frame layout).
-fn drawer_y_shell_metrics(
-    frac: f32,
-    vh: f32,
-    follow_translate: bool,
-    direction: DrawerDirection,
-) -> (f32, [f32; 2]) {
-    let max_h = drawer_y_max_h(vh);
-    if follow_translate {
-        (max_h, drawer_drag_translate(direction, frac, max_h))
-    } else {
-        (drawer_y_visible_h(frac, vh), [0.0, 0.0])
-    }
+/// Height tracks `frac` at rest **and** while dragging. Extra translate stays 0 so
+/// the layout box is the visible panel, not a max-h sheet slid off-screen.
+fn drawer_y_shell_metrics(frac: f32, vh: f32) -> (f32, [f32; 2]) {
+    (drawer_y_visible_h(frac, vh), [0.0, 0.0])
 }
 
 /// 对齐 shadcn `cn-drawer-popup`：底滑默认顶圆角、`max-h: calc(100dvh - 6rem)`。
@@ -661,9 +651,8 @@ fn drawer_shell_frame(
     let _ = drawer_layout_bump(modal_id).get();
     let frac = drawer_open_fraction_tracked(modal_id);
     let dragging = is_drawer_dragging(modal_id);
-    let follow_translate = dragging || is_drawer_y_settling(modal_id);
     let (visible_px, extra) = if direction.is_vertical() {
-        let (h, extra) = drawer_y_shell_metrics(frac, vh, follow_translate, direction);
+        let (h, extra) = drawer_y_shell_metrics(frac, vh);
         (Some(h), extra)
     } else {
         (None, drawer_drag_translate(direction, frac, axis))
@@ -1001,6 +990,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
         let mut inner = body();
         inner = inner
             .w("100%")
+            .h("100%")
             .min_h("0")
             .flex_col()
             .flex_grow(1.0)
@@ -1113,20 +1103,28 @@ pub fn DrawerBody(children: Option<Element>) -> Element {
     let ctx = require_drawer("DrawerBody");
     let child = children.unwrap_or_else(Element::new);
     let scroll_id = format!("{}__body", ctx.id);
-    scroll_area(scroll_id.as_str())
+    // `scroll_area` defaults to `h: 100%`. As a flex sibling of Header/Footer that
+    // preferred size plus `min-h: 0` shrinks the body to 0 on a half-open rest
+    // height — Header+Footer remain, content cannot scroll.
+    let mut body: Element = scroll_area(scroll_id.as_str())
         .overflow_x("hidden")
         .overflow_y("auto")
         .scrollbar_visibility("auto")
         .w("100%")
+        .h("auto")
         .min_h("0")
         .flex_grow(1.0)
         .flex_shrink(1.0)
         .px("1rem")
         .child(child)
-        .into()
+        .into();
+    body = body.flex_basis(0.0);
+    body
 }
 
-/// Sticky footer (`mt-auto flex flex-col gap-2 p-4`).
+/// Sticky footer (`mt-auto flex flex-col gap-2 p-4`). Pins to the **visible**
+/// bottom of the panel — on a half-open snap that is the drawer edge, not the
+/// end of the scrolling copy. Put actions in [`DrawerBody`] when they should scroll.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerFooter(children: Option<Element>) -> Element {
@@ -1235,7 +1233,7 @@ thread_local! {
     static DRAWER_SCALE_BG: RefCell<Option<DrawerScaleBg>> = const { RefCell::new(None) };
     static DRAWER_SNAP_FRACS: RefCell<HashMap<String, Vec<f32>>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG_APPLIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// After a Y-axis snap, keep max-h + translate until CSS settle finishes, then rest height.
+    /// After a Y-axis snap CSS settle (horizontal drawers). Vertical snap resizes height immediately.
     static DRAWER_Y_SETTLING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
@@ -1265,8 +1263,6 @@ struct DrawerDrag {
     /// Handle starts committed; panel waits for [`DRAWER_DRAG_COMMIT_PX`].
     committed: bool,
     captured: bool,
-    /// Grow from rest height to max-h on the next rebuild (vertical, start_frac < 1).
-    pending_grow: bool,
 }
 
 /// 由窗口事件循环每帧写入逻辑视口（供吸附 travel 计算）。
@@ -1288,16 +1284,6 @@ fn drawer_layout_bump(id: &str) -> Signal<u32> {
 
 fn bump_drawer_shell_layout(id: &str) {
     drawer_layout_bump(id).update(|n| *n = n.wrapping_add(1));
-}
-
-fn mark_drawer_y_settling(id: &str) {
-    DRAWER_Y_SETTLING.with(|s| {
-        s.borrow_mut().insert(id.to_string());
-    });
-}
-
-fn is_drawer_y_settling(id: &str) -> bool {
-    DRAWER_Y_SETTLING.with(|s| s.borrow().contains(id))
 }
 
 fn clear_drawer_y_settling(id: &str) {
@@ -1418,16 +1404,13 @@ fn begin_drawer_drag(
     if exclusive {
         set_pointer_capture(capture_id.clone());
     }
-    // Rest Y pose is height=visible extra=0. Do not write max-h translate until the
-    // panel has grown (commit + pending_grow rebuild), or a 0.5-height panel jumps
-    // off-screen.
+    // Y-axis swipe resizes height from `frac`; extra stays 0. Horizontal still translates.
     let extra = if direction.is_vertical() {
         [0.0, 0.0]
     } else {
         drawer_drag_translate(direction, start_frac, axis_px)
     };
     crate::components::internal::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
-    let grow_id = id.clone();
     DRAWER_DRAG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerDrag {
             id,
@@ -1446,13 +1429,8 @@ fn begin_drawer_drag(
             capture_id,
             committed: exclusive,
             captured: exclusive,
-            pending_grow: false,
         });
     });
-    if exclusive && direction.is_vertical() && start_frac < 0.999 {
-        bump_drawer_shell_layout(&grow_id);
-        request_redraw();
-    }
 }
 
 fn nearest_snap_index(snap_fracs: &[f32], frac: f32) -> usize {
@@ -1624,29 +1602,38 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
             set_pointer_capture(drag.capture_id.clone());
             drag.captured = true;
         }
-        // Half-open rest is a short panel. Grow to max-h before applying edge
-        // translate, otherwise the compact sheet is shoved off-screen.
-        if drag.direction.is_vertical() && drag.start_frac < 0.999 {
-            drag.pending_grow = true;
-            DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag.clone()));
-            bump_drawer_shell_layout(&drag.id);
-            return true;
-        }
-    }
-    if drag.pending_grow {
-        drag.pending_grow = false;
     }
 
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
-    let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
-    crate::components::internal::modal_motion::note_modal_shell_drag(&drag.id, extra, true, next);
-    crate::components::internal::modal_motion::patch_modal_panel_transform(root, &drag.id, extra);
-    crate::components::internal::modal_motion::patch_modal_overlay_opacity(
-        root,
-        &drag.id,
-        next.clamp(0.0, 1.0),
-    );
+    if drag.direction.is_vertical() {
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id,
+            [0.0, 0.0],
+            true,
+            next,
+        );
+        crate::components::internal::modal_motion::patch_modal_overlay_opacity(
+            root,
+            &drag.id,
+            next.clamp(0.0, 1.0),
+        );
+        bump_drawer_shell_layout(&drag.id);
+        request_redraw();
+    } else {
+        let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id, extra, true, next,
+        );
+        crate::components::internal::modal_motion::patch_modal_panel_transform(
+            root, &drag.id, extra,
+        );
+        crate::components::internal::modal_motion::patch_modal_overlay_opacity(
+            root,
+            &drag.id,
+            next.clamp(0.0, 1.0),
+        );
+    }
     DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
     true
 }
@@ -1694,14 +1681,23 @@ pub(crate) fn clear_drawer_drag_if_any() {
     } else {
         nearest_snap(&drag.snap_fracs, frac)
     };
-    if drag.direction.is_vertical() {
-        mark_drawer_y_settling(&drag.id);
-    }
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
-    let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
-    let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
-    crate::components::internal::modal_motion::note_modal_shell_drag(&drag.id, to, false, target);
-    crate::components::internal::modal_motion::arm_modal_slide_settle(&drag.id, from);
+    if drag.direction.is_vertical() {
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id,
+            [0.0, 0.0],
+            false,
+            target,
+        );
+        bump_drawer_shell_layout(&drag.id);
+    } else {
+        let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
+        let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id, to, false, target,
+        );
+        crate::components::internal::modal_motion::arm_modal_slide_settle(&drag.id, from);
+    }
     if target < DRAWER_CLOSE_THRESHOLD {
         drag.open.set(false);
     }
@@ -1907,14 +1903,14 @@ mod tests {
     fn drawer_y_rest_height_follows_open_frac() {
         let vh = 800.0;
         let max_h = drawer_y_max_h(vh);
-        let (full_h, full_extra) = drawer_y_shell_metrics(1.0, vh, false, DrawerDirection::Down);
+        let (full_h, full_extra) = drawer_y_shell_metrics(1.0, vh);
         assert!((full_h - max_h).abs() < 0.5);
         assert!(
             full_extra[1].abs() < 0.01,
             "rest extra is 0, got {}",
             full_extra[1]
         );
-        let (half_h, half_extra) = drawer_y_shell_metrics(0.5, vh, false, DrawerDirection::Down);
+        let (half_h, half_extra) = drawer_y_shell_metrics(0.5, vh);
         assert!(
             (half_h - max_h * 0.5).abs() < 0.5,
             "0.5 snap rest height should be half max-h, got {half_h}"
@@ -1924,9 +1920,16 @@ mod tests {
             half_h + 1.0 < max_h,
             "half-open must be shorter than full so body can scroll"
         );
-        let (drag_h, drag_extra) = drawer_y_shell_metrics(0.5, vh, true, DrawerDirection::Down);
-        assert!((drag_h - max_h).abs() < 0.5, "drag/settle keep max-h");
-        assert!((drag_extra[1] - max_h * 0.5).abs() < 0.5);
+        let (drag_h, drag_extra) = drawer_y_shell_metrics(0.5, vh);
+        assert!(
+            (drag_h - half_h).abs() < 0.5,
+            "drag must resize height, not keep max-h, got {drag_h}"
+        );
+        assert!(
+            drag_extra[1].abs() < 0.01,
+            "drag extra must stay 0 (no max-h translate), got {}",
+            drag_extra[1]
+        );
     }
 
     #[test]
@@ -1943,5 +1946,102 @@ mod tests {
             "open page shrinks (Vaul), got {open}"
         );
         assert!(mid > open && mid < closed);
+    }
+
+    #[test]
+    fn rest_height_plus_max_h_translate_shoves_top_to_viewport_bottom() {
+        let vh = 800.0;
+        let max_h = drawer_y_max_h(vh);
+        let (rest_h, rest_extra) = drawer_y_shell_metrics(0.5, vh);
+        assert!(rest_extra[1].abs() < 0.01);
+        let premature = drawer_drag_translate(DrawerDirection::Down, 0.5, max_h);
+        let visual_top = vh - rest_h + premature[1];
+        assert!(
+            visual_top + 1.0 >= vh,
+            "writing max-h pixel extra onto rest height pins the handle at the viewport bottom (got top={visual_top}, vh={vh})"
+        );
+    }
+
+    #[test]
+    fn exclusive_redrag_from_half_snap_resizes_height() {
+        use crate::core::reactivity::{create_root, use_signal};
+        create_root(|| {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            set_drawer_viewport_size(800.0, 800.0);
+            let open = use_signal("drawer-redrag-open", || true);
+            let id = "drawer-redrag";
+            drawer_frac_signal(id).set(0.5);
+            begin_drawer_drag(
+                id.to_string(),
+                DrawerDirection::Down,
+                400.0,
+                600.0,
+                &[
+                    DrawerSnapPoint::Fraction(0.5),
+                    DrawerSnapPoint::Fraction(1.0),
+                ],
+                false,
+                open,
+                format!("{id}__handle"),
+                true,
+            );
+            let drag = DRAWER_DRAG.with(|d| d.borrow().clone()).expect("drag");
+            assert!(drag.committed, "handle drag starts committed");
+            let mut root = Element::new();
+            let moved = tick_drawer_drag(&mut root, 400.0, 640.0);
+            assert!(moved);
+            let live = drawer_open_fraction(id);
+            let axis = drawer_y_max_h(800.0);
+            let expected = (0.5 - 40.0 / axis).clamp(0.0, 1.15);
+            assert!(
+                (live - expected).abs() < 0.01,
+                "live frac must follow the pointer, got {live} want {expected}"
+            );
+            let (h, extra) = drawer_y_shell_metrics(live, 800.0);
+            assert!(
+                extra[1].abs() < 0.01,
+                "Y drag must not use max-h translate, extra={}",
+                extra[1]
+            );
+            assert!(
+                (h - expected * axis).abs() < 1.0,
+                "Y drag height must track frac×max-h ({expected}*{axis}={}), got {h}",
+                expected * axis
+            );
+            assert!(
+                h + 1.0 < axis,
+                "half-open drag must not grow to max-h, h={h} max={axis}"
+            );
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+        });
+    }
+
+    #[test]
+    fn content_press_does_not_grow_half_open_rest() {
+        use crate::core::reactivity::{create_root, use_signal};
+        create_root(|| {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            set_drawer_viewport_size(800.0, 800.0);
+            let open = use_signal("drawer-click-open", || true);
+            let id = "drawer-click";
+            drawer_frac_signal(id).set(0.5);
+            begin_drawer_drag(
+                id.to_string(),
+                DrawerDirection::Down,
+                400.0,
+                500.0,
+                &[
+                    DrawerSnapPoint::Fraction(0.5),
+                    DrawerSnapPoint::Fraction(1.0),
+                ],
+                false,
+                open,
+                format!("{id}__panel_drag"),
+                false,
+            );
+            let drag = DRAWER_DRAG.with(|d| d.borrow().clone()).expect("drag");
+            assert!(!drag.committed);
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+        });
     }
 }

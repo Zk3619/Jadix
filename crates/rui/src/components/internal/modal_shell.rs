@@ -13,7 +13,7 @@ use crate::tokens;
 
 /// 模态遮罩默认不透明度（alpha）。
 pub const DEFAULT_MODAL_OVERLAY_OPACITY: f32 = 0.25;
-/// 模态遮罩默认 backdrop 模糊（逻辑 px；相对文档示例 `8` 减半，对齐 `backdrop-blur-sm`）。
+/// 模态遮罩默认 backdrop 模糊（逻辑 px；轻于 Tailwind `backdrop-blur-xs` 的 4px）。
 pub const DEFAULT_MODAL_OVERLAY_BLUR: f32 = 2.0;
 
 /// Portal underlay / panel z-index（[`modal_sync`]）。
