@@ -215,7 +215,7 @@ pub enum KnownUtility<'a> {
     OutlineOffset(f32),
     /// `outline-<color>` (color token).
     OutlineColor(&'a str),
-    /// Tailwind `blur-*` → CSS `filter: blur(...)`.
+    /// Tailwind `blur-*` → CSS `filter: blur(...)` (v4 `--blur-*`, logical px).
     FilterBlur(f32),
     /// Tailwind `brightness-*` → CSS `filter: brightness(...)`.
     FilterBrightness(f32),
@@ -233,8 +233,10 @@ pub enum KnownUtility<'a> {
     FilterHueRotate(f32),
     /// Tailwind `drop-shadow` / `drop-shadow-*` / `drop-shadow-[...]`.
     FilterDropShadow(&'a str),
-    /// Tailwind `filter-none` → clear CSS `filter`.
+    /// Tailwind `filter-none` / `blur-none` → clear CSS `filter`.
     FilterNone,
+    /// Tailwind `backdrop-blur-*` → `backdrop-filter: blur(...)` (same v4 scale as `blur-*`).
+    BackdropBlur(f32),
     /// shadcn `shimmer` — streaming-text highlight (`background-clip: text` analog).
     Shimmer,
     /// `shimmer-once` — one sweep then settle (`shimmer-count-1`).
@@ -904,33 +906,28 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::LetterSpacing(px));
     }
 
-    // CSS `filter` utilities (Tailwind v3)
+    // CSS `filter` / `backdrop-filter` — Tailwind v4 `--blur-*`.
     if token == "filter-none" {
         return Some(KnownUtility::FilterNone);
     }
     if token == "blur" {
+        // v3 default `blur` ≡ v4 `blur-sm`.
         return Some(KnownUtility::FilterBlur(8.0));
     }
     if let Some(rest) = token.strip_prefix("blur-") {
-        let px = match rest {
-            "none" => 0.0,
-            "sm" => 4.0,
-            "md" => 12.0,
-            "lg" => 16.0,
-            "xl" => 24.0,
-            "2xl" => 40.0,
-            "3xl" => 64.0,
-            _ => {
-                if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                    let inner = inner.trim();
-                    let raw = inner.strip_suffix("px").unwrap_or(inner);
-                    raw.parse().ok()?
-                } else {
-                    return None;
-                }
-            }
+        return match classify_tw_blur_rest(rest)? {
+            TwBlur::None => Some(KnownUtility::FilterNone),
+            TwBlur::Px(px) => Some(KnownUtility::FilterBlur(px)),
         };
-        return Some(KnownUtility::FilterBlur(px));
+    }
+    if token == "backdrop-blur" {
+        return Some(KnownUtility::BackdropBlur(8.0));
+    }
+    if let Some(rest) = token.strip_prefix("backdrop-blur-") {
+        return match classify_tw_blur_rest(rest)? {
+            TwBlur::None => Some(KnownUtility::BackdropBlur(0.0)),
+            TwBlur::Px(px) => Some(KnownUtility::BackdropBlur(px)),
+        };
     }
     if let Some(rest) = token.strip_prefix("brightness-") {
         return parse_filter_factor_token(rest).map(KnownUtility::FilterBrightness);
@@ -1130,6 +1127,75 @@ fn parse_opacity_token(rest: &str) -> Option<f32> {
             None
         }
     }
+}
+
+/// Tailwind v4 `@theme` `--blur-*` (logical px).
+fn tailwind_v4_blur_px(scale: &str) -> Option<f32> {
+    Some(match scale {
+        "xs" => 4.0,
+        "sm" => 8.0,
+        "md" => 12.0,
+        "lg" => 16.0,
+        "xl" => 24.0,
+        "2xl" => 40.0,
+        "3xl" => 64.0,
+        _ => return None,
+    })
+}
+
+enum TwBlur {
+    None,
+    Px(f32),
+}
+
+fn classify_tw_blur_rest(rest: &str) -> Option<TwBlur> {
+    if rest == "none" {
+        return Some(TwBlur::None);
+    }
+    if let Some(px) = tailwind_v4_blur_px(rest) {
+        return Some(TwBlur::Px(px));
+    }
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return parse_tw_blur_arbitrary_px(inner).map(TwBlur::Px);
+    }
+    if let Some(inner) = rest.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        return parse_tw_blur_custom_property_px(inner).map(TwBlur::Px);
+    }
+    None
+}
+
+/// `blur-[<value>]`: unitless is rem (same as RSX lengths). `1px` / `1rem` / `1em` allowed.
+fn parse_tw_blur_arbitrary_px(inner: &str) -> Option<f32> {
+    let inner = inner.trim().replace('_', "");
+    if inner.contains('%') {
+        return None;
+    }
+    if let Some(raw) = inner.strip_suffix("px") {
+        return parse_nonneg_f32(raw);
+    }
+    if let Some(raw) = inner.strip_suffix("rem") {
+        return parse_nonneg_f32(raw).map(|v| v * 16.0);
+    }
+    if let Some(raw) = inner.strip_suffix("em") {
+        return parse_nonneg_f32(raw).map(|v| v * 16.0);
+    }
+    parse_nonneg_f32(&inner).map(|v| v * 16.0)
+}
+
+/// `blur-(--blur-sm)` → theme scale. Unknown custom properties are not classified.
+fn parse_tw_blur_custom_property_px(inner: &str) -> Option<f32> {
+    let name = inner.trim();
+    let name = name.strip_prefix("--").unwrap_or(name);
+    let scale = name.strip_prefix("blur-").unwrap_or(name);
+    tailwind_v4_blur_px(scale)
+}
+
+fn parse_nonneg_f32(s: &str) -> Option<f32> {
+    s.trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .map(|v| v.max(0.0))
 }
 
 /// Tailwind filter factor tokens (`brightness-*` / `contrast-*` / `saturate-*`):
@@ -1541,12 +1607,44 @@ mod tests {
             Some(KnownUtility::FilterBlur(8.0))
         ));
         assert!(matches!(
+            classify_utility("blur-xs"),
+            Some(KnownUtility::FilterBlur(4.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-sm"),
+            Some(KnownUtility::FilterBlur(8.0))
+        ));
+        assert!(matches!(
             classify_utility("blur-lg"),
             Some(KnownUtility::FilterBlur(16.0))
         ));
         assert!(matches!(
+            classify_utility("blur-none"),
+            Some(KnownUtility::FilterNone)
+        ));
+        assert!(matches!(
             classify_utility("blur-[10px]"),
             Some(KnownUtility::FilterBlur(10.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-[1]"),
+            Some(KnownUtility::FilterBlur(16.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-[1rem]"),
+            Some(KnownUtility::FilterBlur(16.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-(--blur-xl)"),
+            Some(KnownUtility::FilterBlur(24.0))
+        ));
+        assert!(matches!(
+            classify_utility("backdrop-blur-sm"),
+            Some(KnownUtility::BackdropBlur(8.0))
+        ));
+        assert!(matches!(
+            classify_utility("backdrop-blur-none"),
+            Some(KnownUtility::BackdropBlur(px)) if px == 0.0
         ));
         assert!(matches!(
             classify_utility("brightness-50"),

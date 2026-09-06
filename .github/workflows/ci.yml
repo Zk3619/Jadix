@@ -29,6 +29,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
       - name: Clippy (remote-asset)
         run: cargo clippy -p rui --all-targets --no-deps --features remote-asset -- -D warnings
+      - name: Clippy (image-stream)
+        run: cargo clippy -p rui --all-targets --no-deps --features image-stream -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -54,6 +56,8 @@ jobs:
         run: cargo test -p rui --lib box_model -- --nocapture
       - name: CSS animation contract (freeze)
         run: cargo test -p rui --lib anim_freeze -- --nocapture
+      - name: Color contract (freeze)
+        run: cargo test -p rui --lib color_freeze -- --nocapture
 
   offscreen:
     name: offscreen smoke (${{ matrix.os }})
@@ -76,6 +80,8 @@ jobs:
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
       - name: Offscreen clear/readback + golden
         run: cargo test -p rui --lib offscreen -- --nocapture
+      - name: ImageStream YUV GPU convert (WP-M.3)
+        run: cargo test -p rui --lib --features image-stream yuv_convert -- --nocapture
       - name: Component golden (WP-2.6)
         if: runner.os != 'Windows'
         # Serialize GPU device creation — software adapters dislike parallel request_device.
@@ -90,5 +96,9 @@ jobs:
         run: cargo test -p rui --lib box_model -- --nocapture
       - name: CSS animation contract (freeze)
         run: cargo test -p rui --lib anim_freeze -- --nocapture
+      - name: Color contract (freeze)
+        run: cargo test -p rui --lib color_freeze -- --nocapture
       - name: Remote-asset fetcher seam
         run: cargo test -p rui --lib --features remote-asset remote -- --nocapture
+      - name: ImageStream YUV (WP-M.3)
+        run: cargo test -p rui --lib --features image-stream yuv -- --nocapture

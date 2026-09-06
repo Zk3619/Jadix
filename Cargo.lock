@@ -3778,6 +3778,7 @@ dependencies = [
  "stacker",
  "swash",
  "taffy",
+ "toml",
  "tracing",
  "tray-icon",
  "ttf-parser",

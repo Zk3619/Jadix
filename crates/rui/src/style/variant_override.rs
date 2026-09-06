@@ -4,7 +4,7 @@
 //! - 用户经 RSX `bg` / `border_color` / `shadow` / `p` / `text_size`（或 [`BaseComponentBuilder`]）写入时打标，重绘跳过对应字段。
 
 use crate::core::tree::{Element, LayoutStatus};
-use crate::style::{SemanticChrome, apply_semantic_border, apply_semantic_shadow};
+use crate::style::{apply_semantic_border, apply_semantic_shadow, SemanticChrome};
 
 pub const ATTR_VARIANT_CHROME: &str = "rui_variant_chrome";
 pub const ATTR_OVERRIDE_BG: &str = "rui_override_bg";
@@ -128,8 +128,8 @@ pub fn apply_user_fg(el: &mut Element, color: [u8; 4]) -> LayoutStatus {
 mod tests {
     use super::*;
     use crate::style::{
-        SemanticChromeDecor, SemanticChromeOpts, SemanticSurface, SemanticTone, parse_color,
-        semantic_chrome,
+        parse_color, semantic_chrome, SemanticChromeDecor, SemanticChromeOpts, SemanticSurface,
+        SemanticTone,
     };
 
     #[test]

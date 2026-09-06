@@ -63,7 +63,7 @@ impl UsedLayout {
 
 /// After collect stamps `layout_bounds`, refresh used-layout on `el`.
 pub fn stamp_element_used_layout(el: &mut crate::core::tree::Element) {
-    use crate::layout::{DimKind, dim_kind};
+    use crate::layout::{dim_kind, DimKind};
     let clips = match dim_kind(el.style.max_size.height) {
         DimKind::Length(px) => px + 0.5 < el.layout_bounds[3].max(el.used_layout.intrinsic_height),
         _ => false,

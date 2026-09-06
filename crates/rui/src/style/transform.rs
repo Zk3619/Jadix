@@ -4,7 +4,7 @@
 //! and 2D affine matrix resolution. 3D functions are stored but projected
 //! to 2D at resolve time (true `preserve-3d` requires a 3D pipeline).
 
-use crate::layout::dimension::{CssAngle, CssDim, parse_css_angle, parse_css_dim};
+use crate::layout::dimension::{parse_css_angle, parse_css_dim, CssAngle, CssDim};
 
 // ---------------------------------------------------------------------------
 // Value types
@@ -438,7 +438,11 @@ pub fn parse_transform(s: &str) -> Option<TransformList> {
         list.push(func);
     }
 
-    if list.is_empty() { None } else { Some(list) }
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
 }
 
 fn find_matching_paren(s: &str) -> Option<usize> {

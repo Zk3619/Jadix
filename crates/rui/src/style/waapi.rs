@@ -15,7 +15,7 @@ use super::element_style::{
     AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
     AnimationIterationCount, AnimationPlayState, TimingFunction,
 };
-use super::keyframes::{KeyframeStop, register_keyframes};
+use super::keyframes::{register_keyframes, KeyframeStop};
 use super::keyframes_parse::parse_declared_value;
 use super::timing::Timing;
 
@@ -618,7 +618,7 @@ pub(crate) fn observe_time(id: u64, elapsed_ms: f32, run_finished: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::animation::{AnimationSnapshot, tick_element_animations};
+    use crate::style::animation::{tick_element_animations, AnimationSnapshot};
 
     #[test]
     fn play_pause_current_time_and_finished_signal() {

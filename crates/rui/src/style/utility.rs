@@ -5,7 +5,7 @@
 //! classes against the same catalog.
 
 use rui_style_tokens::{
-    KnownUtility, ParsedClassList, VariantSelector, classify_utility, parse_class_list,
+    classify_utility, parse_class_list, KnownUtility, ParsedClassList, VariantSelector,
 };
 
 use std::borrow::Cow;
@@ -15,7 +15,7 @@ use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::style::{
-    Style, TextStyle, VariantStyleField, mark_variant_style_override, parse_color, parse_text_color,
+    mark_variant_style_override, parse_color, parse_text_color, Style, TextStyle, VariantStyleField,
 };
 
 thread_local! {
@@ -433,7 +433,11 @@ fn variant_ctx_fingerprint(
         }
     }
     mix_fp(&mut h, attrs_h);
-    if h == 0 { 1 } else { h }
+    if h == 0 {
+        1
+    } else {
+        h
+    }
 }
 
 /// Walk the tree and resolve class variants (chrome sync).
@@ -2057,6 +2061,15 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             el,
             crate::style::FilterFunction::Blur(Some(crate::layout::dimension::CssDim::Px(px))),
         ),
+        KnownUtility::BackdropBlur(px) => {
+            let px = px.max(0.0);
+            if (el.style.backdrop_blur - px).abs() < 1e-4 {
+                LayoutStatus::Clean
+            } else {
+                el.style.backdrop_blur = px;
+                LayoutStatus::StyleChanged
+            }
+        }
         KnownUtility::FilterBrightness(v) => {
             set_single_filter(el, crate::style::FilterFunction::Brightness(Some(v)))
         }
@@ -2299,6 +2312,24 @@ mod tests {
 
         apply_class_list(&mut el, "filter-none");
         assert!(el.style.filter.is_none());
+
+        apply_class_list(&mut el, "blur-none");
+        assert!(el.style.filter.is_none());
+
+        apply_class_list(&mut el, "blur-[1]");
+        assert_eq!(
+            el.style.filter,
+            Some(vec![FilterFunction::Blur(Some(CssDim::Px(16.0)))])
+        );
+
+        apply_class_list(&mut el, "blur-(--blur-xs)");
+        assert_eq!(
+            el.style.filter,
+            Some(vec![FilterFunction::Blur(Some(CssDim::Px(4.0)))])
+        );
+
+        apply_class_list(&mut el, "backdrop-blur-lg");
+        assert!((el.style.backdrop_blur - 16.0).abs() < 0.01);
 
         apply_class_list(&mut el, "drop-shadow-sm");
         assert!(el.style.filter.is_some());
@@ -2591,11 +2622,10 @@ mod p1_utility_tests {
         crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
         let leaf = &root.children[0];
         assert!(leaf.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
-        assert!(
-            leaf.attrs
-                .get(crate::renderer::ATTR_GLYPH_FX)
-                .is_none_or(|s| s.is_empty())
-        );
+        assert!(leaf
+            .attrs
+            .get(crate::renderer::ATTR_GLYPH_FX)
+            .is_none_or(|s| s.is_empty()));
         assert_eq!(
             leaf.attrs
                 .get(crate::renderer::ATTR_SHIMMER_COUNT)

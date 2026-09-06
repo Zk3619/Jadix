@@ -4,7 +4,7 @@
 //! SVG [`FilterGraph`](super::svg_filter::FilterGraph) (see `svg_filter::lower_css`).
 
 use crate::layout::dimension::{
-    CSS_ROOT_FONT_SIZE_PX, CssAngle, CssDim, parse_css_angle, parse_css_dim,
+    parse_css_angle, parse_css_dim, CssAngle, CssDim, CSS_ROOT_FONT_SIZE_PX,
 };
 
 use super::color::try_parse_color;
@@ -119,7 +119,11 @@ pub fn parse_filter(s: &str) -> Option<FilterList> {
         list.push(func);
     }
 
-    if list.is_empty() { None } else { Some(list) }
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
 }
 
 fn find_matching_paren(s: &str) -> Option<usize> {

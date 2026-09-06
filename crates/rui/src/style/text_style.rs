@@ -674,8 +674,8 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 #[cfg(test)]
 mod tests {
     use super::{
-        TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan, TextSpanKind,
-        TextStyle, WhiteSpace, parse_text_shadow,
+        parse_text_shadow, TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan,
+        TextSpanKind, TextStyle, WhiteSpace,
     };
 
     #[test]

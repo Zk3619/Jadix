@@ -73,6 +73,9 @@ images = []
 cursor-images = []
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
 scene3d = []
+# WP-M.3: YUV (NV12 / I420 / P010) → BT.709 RGBA for ImageStream. Off by default.
+# Zero decoder crates — applications inject demux.
+image-stream = []
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
 # Opt-in; not in default release surface (see docs/ops/devtools.md).
 devtools = []
@@ -91,6 +94,7 @@ log = { workspace = true }
 tracing = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 rui_macros = { path = "../rui_macros" }
 rui_style_tokens = { path = "../rui_style_tokens" }
 # Scoped grow around `app_builder` / `ui!` (Windows PE ~1 MiB). Not a PE `/STACK` bump.

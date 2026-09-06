@@ -20,7 +20,7 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::parse_color;
-use crate::style::theme::{FocusRingStyle, focus_ring_style};
+use crate::style::theme::{focus_ring_style, FocusRingStyle};
 
 /// Soft focus-ring blur in logical px (`FocusRingStyle::Soft`).
 pub const FOCUS_RING_SOFT_BLUR: f32 = 3.0;
@@ -155,7 +155,7 @@ pub fn sync_focus_ring_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::theme::{FocusRingStyle, set_focus_ring_style};
+    use crate::style::theme::{set_focus_ring_style, FocusRingStyle};
 
     fn with_style<R>(style: FocusRingStyle, f: impl FnOnce() -> R) -> R {
         let prev = focus_ring_style();

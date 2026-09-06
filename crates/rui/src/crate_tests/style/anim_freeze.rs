@@ -1,19 +1,19 @@
 //! CSS animation / transition / keyframes freeze contract.
 //!
-//! Anchors [`docs/engine/css_animation_max_alignment.md`]: dual-engine (transition +
-//! keyframes) share one interpolator; `clip-path` polygon/inset lerp on **both**
-//! engines; independent `scale`/`rotate` `transition-property`; CSS negative
-//! `animation-delay` seeks into the cycle.
+//! Anchors [`docs/engine/animation_and_motion.md`] (full freeze): dual-engine interpolator,
+//! Specified/Used, fill-mode, reduced-motion, `PropertyId` 64-slot bitmap, presence
+//! `animation_run_active` vs frame pump.
 
 use crate::layout::dim_length_px;
 use crate::layout::dimension::CssDim;
 use crate::style::{
-    keyframes_anim_entry, parse_filter, register_keyframes, set_css_transition_timeline_ms,
-    set_css_transition_virtual_timeline, tick_element_animations, tick_element_animations_ex,
+    animation_run_active, css_animation_needs_frame, keyframes_anim_entry, parse_filter,
+    register_keyframes, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+    set_prefers_reduced_motion, tick_element_animations, tick_element_animations_ex,
     tick_element_transitions, tick_element_transitions_with_text, AnimatableValue, AnimationEntry,
     AnimationFillMode, AnimationLock, AnimationSnapshot, ClipCoord, ClipPath, FilterFunction,
     FilterList, KeyframeStop, PropertyId, TimingFunction, TransitionEntry, TransitionProperty,
-    TransitionSnapshot,
+    TransitionSnapshot, UsedLayout,
 };
 
 fn linear_transition(prop: TransitionProperty, duration_ms: f32) -> TransitionEntry {
@@ -544,10 +544,138 @@ fn spring_timing_parses_and_retargets() {
 }
 
 #[test]
-fn property_id_new_slots_are_under_64() {
-    assert!(PropertyId::TransformOrigin as u8 == 60);
-    assert!(PropertyId::OffsetDistance as u8 == 61);
-    assert!(PropertyId::OffsetRotate as u8 == 62);
-    assert!(PropertyId::TranslatePct as u8 == 63);
-    assert!(PropertyId::ALL.len() <= 64);
+fn property_id_table_is_full_u8_bitmap() {
+    assert_eq!(PropertyId::TransformOrigin as u8, 60);
+    assert_eq!(PropertyId::OffsetDistance as u8, 61);
+    assert_eq!(PropertyId::OffsetRotate as u8, 62);
+    assert_eq!(PropertyId::TranslatePct as u8, 63);
+    assert_eq!(
+        PropertyId::ALL.len(),
+        64,
+        "repr(u8) bitmap is full; new PropertyId requires expanding the freeze"
+    );
+    assert_eq!(PropertyId::ALL[0] as u8, 0);
+    assert_eq!(PropertyId::ALL[63] as u8, 63);
+}
+
+#[test]
+fn reduced_motion_snaps_keyframes_to_end() {
+    set_prefers_reduced_motion(Some(true));
+    let mut style = crate::style::Style::default();
+    style.opacity = 1.0;
+    style.animations.push(keyframes_anim_entry(
+        "fade-out-0",
+        400.0,
+        TimingFunction::Linear,
+        AnimationFillMode::Forwards,
+    ));
+    let mut snap = AnimationSnapshot::default();
+    let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+    assert!(
+        style.opacity < 0.05,
+        "reduced motion must jump to the end sample, got {}",
+        style.opacity
+    );
+    set_prefers_reduced_motion(None);
+}
+
+#[test]
+fn fill_mode_none_restores_specified_opacity() {
+    register_keyframes(
+        "anim-freeze-fade-out",
+        vec![
+            KeyframeStop::at(0.0).opacity(1.0),
+            KeyframeStop::at(1.0).opacity(0.0),
+        ],
+    );
+    let mut style = crate::style::Style::default();
+    style.opacity = 1.0;
+    style.animations.push(keyframes_anim_entry(
+        "anim-freeze-fade-out",
+        80.0,
+        TimingFunction::Linear,
+        AnimationFillMode::None,
+    ));
+    let mut snap = AnimationSnapshot::default();
+    let _ = tick_element_animations(&mut style, &mut snap, 0.0);
+    let _ = tick_element_animations(&mut style, &mut snap, 0.04);
+    assert!(
+        style.opacity > 0.05 && style.opacity < 0.95,
+        "mid fade-out must leave specified 1.0, got {}",
+        style.opacity
+    );
+    for _ in 0..20 {
+        let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+    }
+    assert!(
+        !animation_run_active(&style, &snap),
+        "finite fill:none run must finish"
+    );
+    assert!(
+        (style.opacity - 1.0).abs() < 0.02,
+        "fill-mode:none must restore specified opacity, got {}",
+        style.opacity
+    );
+}
+
+#[test]
+fn fill_mode_forwards_holds_end_opacity() {
+    register_keyframes(
+        "anim-freeze-fade-out-fwd",
+        vec![
+            KeyframeStop::at(0.0).opacity(1.0),
+            KeyframeStop::at(1.0).opacity(0.0),
+        ],
+    );
+    let mut style = crate::style::Style::default();
+    style.opacity = 1.0;
+    style.animations.push(keyframes_anim_entry(
+        "anim-freeze-fade-out-fwd",
+        80.0,
+        TimingFunction::Linear,
+        AnimationFillMode::Forwards,
+    ));
+    let mut snap = AnimationSnapshot::default();
+    for _ in 0..20 {
+        let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+    }
+    assert!(!animation_run_active(&style, &snap));
+    assert!(
+        css_animation_needs_frame(&style, &snap),
+        "forwards keeps style.animations non-empty → frame-pump API stays true"
+    );
+    assert!(
+        style.opacity < 0.05,
+        "fill-mode:forwards must hold the last sample, got {}",
+        style.opacity
+    );
+}
+
+#[test]
+fn specified_max_height_stays_auto_during_accordion_down() {
+    let mut style = crate::style::Style::default();
+    style.max_size.height = taffy::style::Dimension::auto();
+    style.animations.push(keyframes_anim_entry(
+        "accordion-down",
+        200.0,
+        TimingFunction::Linear,
+        AnimationFillMode::Both,
+    ));
+    let mut text = crate::style::TextStyle::default();
+    let mut used = UsedLayout::default();
+    used.stamp_border_box([0.0, 0.0, 100.0, 80.0], false);
+    let mut snap = AnimationSnapshot::default();
+    let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.0);
+    let h0 = dim_length_px(style.max_size.height).unwrap_or(999.0);
+    assert!(h0 < 2.0, "fill-mode both at t=0 must start at 0, got {h0}");
+    let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.1);
+    let mid = dim_length_px(style.max_size.height).unwrap_or(0.0);
+    assert!(
+        mid > 1.0 && mid < 80.0,
+        "mid accordion-down interpolates toward used height, got {mid}"
+    );
+    match snap.specified.get(PropertyId::MaxHeight) {
+        Some(AnimatableValue::Auto) | None => {}
+        other => panic!("specified max-height must stay auto, got {other:?}"),
+    }
 }

@@ -396,7 +396,11 @@ fn interpolate_resolved(this: &ClipPath, other: &ClipPath, t: f32) -> ClipPath {
 }
 
 fn discrete(a: &ClipPath, b: &ClipPath, t: f32) -> ClipPath {
-    if t >= 0.5 { b.clone() } else { a.clone() }
+    if t >= 0.5 {
+        b.clone()
+    } else {
+        a.clone()
+    }
 }
 
 fn tessellate_ellipse(cx: f32, cy: f32, rx: f32, ry: f32, n: usize) -> Vec<[f32; 2]> {
@@ -749,6 +753,58 @@ impl GpuClipPoly {
         }
         Self::scale_round_slot(&mut self.round_rect, &mut self.round_radii, scale);
         Self::scale_round_slot(&mut self.round_rect2, &mut self.round_radii2, scale);
+    }
+
+    /// Scale clip geometry about a world-space pivot (Dialog zoom inner chrome).
+    pub fn scale_about(&mut self, sx: f32, sy: f32, cx: f32, cy: f32) {
+        if (sx - 1.0).abs() <= f32::EPSILON && (sy - 1.0).abs() <= f32::EPSILON {
+            return;
+        }
+        let n1 = (self.count as usize).min(GPU_CLIP_MAX_PTS);
+        if self.count >= 3 {
+            for i in 0..n1 {
+                self.pts[i][0] = cx + (self.pts[i][0] - cx) * sx;
+                self.pts[i][1] = cy + (self.pts[i][1] - cy) * sy;
+            }
+        }
+        let n2 = (self.count2 as usize).min(GPU_CLIP_MAX_PTS);
+        if self.count2 >= 3 {
+            for i in 0..n2 {
+                self.pts2[i][0] = cx + (self.pts2[i][0] - cx) * sx;
+                self.pts2[i][1] = cy + (self.pts2[i][1] - cy) * sy;
+            }
+        }
+        Self::scale_round_slot_about(&mut self.round_rect, &mut self.round_radii, sx, sy, cx, cy);
+        Self::scale_round_slot_about(
+            &mut self.round_rect2,
+            &mut self.round_radii2,
+            sx,
+            sy,
+            cx,
+            cy,
+        );
+    }
+
+    fn scale_round_slot_about(
+        xywh: &mut [f32; 4],
+        radii: &mut [f32; 4],
+        sx: f32,
+        sy: f32,
+        cx: f32,
+        cy: f32,
+    ) {
+        if !Self::round_slot_active(*xywh) {
+            return;
+        }
+        xywh[0] = cx + (xywh[0] - cx) * sx;
+        xywh[1] = cy + (xywh[1] - cy) * sy;
+        xywh[2] *= sx;
+        xywh[3] *= sy;
+        let s = sx.abs().min(sy.abs());
+        radii[0] *= s;
+        radii[1] *= s;
+        radii[2] *= s;
+        radii[3] *= s;
     }
 }
 

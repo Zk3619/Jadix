@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use super::graph::FilterGraph;
-use super::parse::{FilterParseError, parse_svg_filters_document};
+use super::parse::{parse_svg_filters_document, FilterParseError};
 
 thread_local! {
     static REGISTRY: RefCell<HashMap<String, FilterGraph>> = RefCell::new(HashMap::new());

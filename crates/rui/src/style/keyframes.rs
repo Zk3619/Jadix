@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use super::animatable::{AnimatableValue, PropertyId, PropertySet, interpolate};
+use super::animatable::{interpolate, AnimatableValue, PropertyId, PropertySet};
 use super::element_style::TimingFunction;
 
 /// One stop in a `@keyframes` rule (`offset` ∈ [0, 1]).

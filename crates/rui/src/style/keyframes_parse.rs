@@ -1,8 +1,8 @@
 //! Parse CSS `@keyframes { ... }` text into [`register_keyframes`].
 
-use super::animatable::{AnimatableValue, PropertyId, parse_css_length_px};
+use super::animatable::{parse_css_length_px, AnimatableValue, PropertyId};
 use super::element_style::TimingFunction;
-use super::keyframes::{KeyframeStop, register_keyframes};
+use super::keyframes::{register_keyframes, KeyframeStop};
 use super::{parse_color, parse_filter, parse_transform};
 
 /// Parse one or more `@keyframes name { ... }` rules and register them.
@@ -295,10 +295,7 @@ fn parse_translate_pct(s: &str) -> Option<AnimatableValue> {
     let s = s.trim();
     let mut parts = s.split_whitespace();
     let x = parse_pct_frac(parts.next()?)?;
-    let y = parts
-        .next()
-        .and_then(parse_pct_frac)
-        .unwrap_or(0.0);
+    let y = parts.next().and_then(parse_pct_frac).unwrap_or(0.0);
     Some(AnimatableValue::Vec2([x, y]))
 }
 
@@ -417,10 +414,8 @@ mod tests {
         )
         .unwrap();
         let stops = lookup_keyframes("flash-bg").unwrap();
-        assert!(
-            stops
-                .iter()
-                .any(|s| s.get(PropertyId::BackgroundColor).is_some())
-        );
+        assert!(stops
+            .iter()
+            .any(|s| s.get(PropertyId::BackgroundColor).is_some()));
     }
 }

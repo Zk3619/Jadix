@@ -165,7 +165,11 @@ pub(crate) fn direction_local_t(
         AnimationDirection::Alternate => iteration_index % 2 == 1,
         AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
     };
-    if reverse { 1.0 - cycle_t } else { cycle_t }
+    if reverse {
+        1.0 - cycle_t
+    } else {
+        cycle_t
+    }
 }
 
 /// One implicit-Euler spring step. `pos` is the current value, `target` the rest length.

@@ -13,6 +13,8 @@ use crate::style::{css_transition_needs_frame, TransitionEntry, TransitionSnapsh
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MotionTransform {
     pub translate: [f32; 2],
+    /// CSS `translate` percentage of the border box (independent of pixel translate).
+    pub translate_pct: [f32; 2],
     pub opacity: f32,
     pub scale: [f32; 2],
 }
@@ -21,6 +23,7 @@ impl MotionTransform {
     pub fn uniform_scale(translate: [f32; 2], opacity: f32, scale: f32) -> Self {
         Self {
             translate,
+            translate_pct: [0.0, 0.0],
             opacity,
             scale: [scale, scale],
         }
@@ -31,6 +34,7 @@ impl MotionTransform {
 #[derive(Clone, Copy, Debug)]
 pub struct MotionEpsilon {
     pub translate: f32,
+    pub translate_pct: f32,
     pub opacity: f32,
     pub scale: f32,
 }
@@ -39,6 +43,7 @@ impl Default for MotionEpsilon {
     fn default() -> Self {
         Self {
             translate: 0.5,
+            translate_pct: 0.002,
             opacity: 0.001,
             scale: 0.001,
         }
@@ -76,6 +81,8 @@ impl MotionStyle {
             Some(prev) => {
                 (prev.translate[0] - target.translate[0]).abs() > eps.translate
                     || (prev.translate[1] - target.translate[1]).abs() > eps.translate
+                    || (prev.translate_pct[0] - target.translate_pct[0]).abs() > eps.translate_pct
+                    || (prev.translate_pct[1] - target.translate_pct[1]).abs() > eps.translate_pct
                     || (prev.opacity - target.opacity).abs() > eps.opacity
                     || (prev.scale[0] - target.scale[0]).abs() > eps.scale
                     || (prev.scale[1] - target.scale[1]).abs() > eps.scale
@@ -93,6 +100,7 @@ impl MotionStyle {
     ) -> bool {
         let changed = self.target_changed(target, eps);
         style.translate = target.translate;
+        style.translate_pct = target.translate_pct;
         style.opacity = target.opacity;
         style.scale = target.scale;
         if changed {

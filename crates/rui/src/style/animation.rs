@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 
 thread_local! {
     static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = const { RefCell::new(Vec::new()) };
@@ -180,6 +180,8 @@ pub fn any_ui_animation_active() -> bool {
 // Timeline source is a **monotonic** clock (`std::time::Instant`), never
 // `SystemTime` / wall clock (NTP jumps must not seek animations).
 // Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
+// After `Wait`, Instant can jump past `duration` — duration tweens cap that delta
+// per tick (`CSS_TRANSITION_DEFAULT_MAX_STEP_MS`) so ease-out cannot skip mids.
 
 use super::clip_path::ClipPath;
 use super::element_style::{
@@ -187,16 +189,25 @@ use super::element_style::{
     AnimationIterationCount, AnimationPlayState, AnimationTimeline, BoxShadow, TimingFunction,
     TransitionEntry, TransitionProperty, UnitSlot,
 };
-use super::filter::{FilterList, interpolate_filter_lists};
+use super::filter::{interpolate_filter_lists, FilterList};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
+
+/// After `ControlFlow::Wait`, Instant can jump past `duration`. Cap **only**
+/// those idle jumps (see [`duration_tween_elapsed_ms`]); normal frames keep
+/// wall-clock progress so 30/60 Hz does not crawl.
+const CSS_TRANSITION_IDLE_JUMP_MS: f32 = 80.0;
+const CSS_TRANSITION_DEFAULT_MAX_STEP_MS: f32 = 1000.0 / 60.0;
 
 thread_local! {
     /// Monotonic origin for the document CSS-transition timeline (`performance.now()`-like).
     static CSS_TIMELINE_ORIGIN: RefCell<Option<Instant>> = const { RefCell::new(None) };
     /// When `Some`, overrides [`css_timeline_now_ms`] (unit tests / virtual clock).
     static CSS_TIMELINE_VIRTUAL_MS: Cell<Option<f64>> = const { Cell::new(None) };
+    /// `None` = uncapped (virtual-timeline tests that seek exactly). `Some` = max ms/tick.
+    static CSS_TRANSITION_MAX_STEP_MS: Cell<Option<f32>> =
+        const { Cell::new(Some(CSS_TRANSITION_DEFAULT_MAX_STEP_MS)) };
 }
 
 fn css_timeline_now_ms() -> f64 {
@@ -218,9 +229,17 @@ fn css_timeline_now_ms() -> f64 {
 pub fn set_css_transition_virtual_timeline(on: bool) {
     if on {
         CSS_TIMELINE_VIRTUAL_MS.set(Some(CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0).max(0.0)));
+        // Exact seeks in tests; production Instant idle uses the default cap.
+        CSS_TRANSITION_MAX_STEP_MS.set(None);
     } else {
         CSS_TIMELINE_VIRTUAL_MS.set(None);
+        CSS_TRANSITION_MAX_STEP_MS.set(Some(CSS_TRANSITION_DEFAULT_MAX_STEP_MS));
     }
+}
+
+/// Cap duration-tween Instant delta per tick (`None` = uncapped).
+pub fn set_css_transition_max_step_ms(ms: Option<f32>) {
+    CSS_TRANSITION_MAX_STEP_MS.set(ms.map(|v| v.max(0.0)));
 }
 
 /// Seek the virtual CSS timeline to an absolute monotonic time (ms since origin).
@@ -318,10 +337,10 @@ pub fn prefers_reduced_motion() -> bool {
 /// Per-property in-flight tween state (CSS transition segment).
 #[derive(Clone, Debug)]
 struct PropertyTween {
-    /// Packed components (opacity=1, color=4, transform=5: tx/ty/sx/sy/rotate).
+    /// Packed components (opacity=1, color=4, transform=7: tx/ty/sx/sy/rotate/tpx/tpy).
     from: [f32; 8],
     to: [f32; 8],
-    /// Number of meaningful components (1 for scalar, 4 for color, 5 for transform).
+    /// Number of meaningful components (1 scalar, 4 color/translate+pct, 7 transform).
     components: u8,
     /// Monotonic timeline time (ms) when this segment started.
     start_ms: f64,
@@ -666,7 +685,7 @@ fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
 }
 
 fn max_height_dim_matches(style: taffy::style::Dimension, base: taffy::style::Dimension) -> bool {
-    use crate::layout::{DimKind, dim_kind};
+    use crate::layout::{dim_kind, DimKind};
     match (dim_kind(style), dim_kind(base)) {
         (DimKind::Auto, DimKind::Auto) => true,
         (DimKind::Length(a), DimKind::Length(b)) => (a - b).abs() <= 1e-3,
@@ -789,7 +808,7 @@ pub fn tick_element_animations_ex_named(
     named: &[(String, f32)],
 ) -> bool {
     use super::element_style::AnimationPlayState;
-    use super::keyframes::{KeyframeBase, keyframe_coverage, lookup_keyframes};
+    use super::keyframes::{keyframe_coverage, lookup_keyframes, KeyframeBase};
 
     if style.animations.is_empty() {
         if let (Some(base), Some(written)) = (snap.base, snap.written) {
@@ -1137,7 +1156,7 @@ fn specified_clip_value(tween: &ClipPathTween, current: &ClipPath) -> ClipPath {
 /// without this guard `max-height: auto` reads back as `0`, and the tween then pins the
 /// box to zero height — turning a decorative `transition: all` into an invisible element.
 fn prop_is_interpolable(style: &super::Style, prop: TransitionProperty) -> bool {
-    use crate::layout::{DimKind, dim_kind, lp_kind, lpa_kind};
+    use crate::layout::{dim_kind, lp_kind, lpa_kind, DimKind};
     let keywords = style.interpolate_size.allows_keywords();
     let calc = |slot: UnitSlot| {
         style
@@ -1215,7 +1234,7 @@ fn pack4(a: f32, b: f32, c: f32, d: f32) -> ([f32; 8], u8) {
 
 fn dim_px_transition(style: &super::Style, d: taffy::style::Dimension, slot: UnitSlot) -> f32 {
     use crate::layout::dimension::{PercentAxis, UnitCtx};
-    use crate::layout::{DimKind, dim_kind};
+    use crate::layout::{dim_kind, DimKind};
     let height = matches!(
         slot,
         UnitSlot::Height | UnitSlot::MinHeight | UnitSlot::MaxHeight
@@ -1472,23 +1491,32 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8
         }
         TransitionProperty::OffsetDistance => pack1(style.offset_distance),
         TransitionProperty::OffsetRotate => pack1(style.offset_rotate_deg.unwrap_or(0.0)),
+        TransitionProperty::Translate => (
+            [
+                style.translate[0],
+                style.translate[1],
+                style.translate_pct[0],
+                style.translate_pct[1],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            4,
+        ),
         // Independent transform props: translate → rotate → scale (matches resolve order).
-        TransitionProperty::Transform | TransitionProperty::Translate => (
+        TransitionProperty::Transform => (
             [
                 style.translate[0],
                 style.translate[1],
                 style.scale[0],
                 style.scale[1],
                 style.rotate_deg,
-                0.0,
-                0.0,
+                style.translate_pct[0],
+                style.translate_pct[1],
                 0.0,
             ],
-            if matches!(prop, TransitionProperty::Translate) {
-                2
-            } else {
-                5
-            },
+            7,
         ),
         // Handled via [`FilterTween`] + [`interpolate_filter_lists`].
         TransitionProperty::Filter => ([0.0; 8], 0),
@@ -1632,9 +1660,15 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]
             style.translate = [val[0], val[1]];
             style.scale = [val[2], val[3]];
             style.rotate_deg = val[4];
+            if comps >= 7 {
+                style.translate_pct = [val[5], val[6]];
+            }
         }
         TransitionProperty::Translate => {
             style.translate = [val[0], val[1]];
+            if comps >= 4 {
+                style.translate_pct = [val[2], val[3]];
+            }
         }
         TransitionProperty::Scale => {
             style.scale = [val[0], val[1]];
@@ -1774,7 +1808,7 @@ fn is_color_transition_prop(prop: TransitionProperty) -> bool {
 
 /// Same interpolator as keyframes (`AnimatableValue::Color` → `lerp_text_rgba`).
 fn lerp_packed_color(from: &[f32; 8], to: &[f32; 8], t: f32) -> [f32; 8] {
-    use super::animatable::{AnimatableValue, interpolate};
+    use super::animatable::{interpolate, AnimatableValue};
     let a = AnimatableValue::Color([from[0], from[1], from[2], from[3]]);
     let b = AnimatableValue::Color([to[0], to[1], to[2], to[3]]);
     match interpolate(&a, &b, t) {
@@ -1901,8 +1935,22 @@ pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSna
     false
 }
 
-fn tween_elapsed_ms(tween: &PropertyTween, now_ms: f64) -> f32 {
-    (now_ms - tween.start_ms).max(0.0) as f32
+fn duration_tween_elapsed_ms(tween: &mut PropertyTween, now_ms: f64) -> f32 {
+    let raw = (now_ms - tween.start_ms).max(0.0);
+    let Some(max_step) = CSS_TRANSITION_MAX_STEP_MS.get() else {
+        tween.last_ms = now_ms;
+        return raw as f32;
+    };
+    let progressed = (tween.last_ms - tween.start_ms).max(0.0);
+    let since_last = (now_ms - tween.last_ms).max(0.0);
+    let step = if since_last > CSS_TRANSITION_IDLE_JUMP_MS as f64 {
+        since_last.min(max_step as f64)
+    } else {
+        since_last
+    };
+    let elapsed = (progressed + step).min(raw);
+    tween.last_ms = tween.start_ms + elapsed;
+    elapsed as f32
 }
 
 fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 8], f32) {
@@ -1917,7 +1965,7 @@ fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 
     {
         return tween_sample_spring(tween, now_ms, dt_secs, stiffness, damping, mass);
     }
-    let elapsed_ms = tween_elapsed_ms(tween, now_ms);
+    let elapsed_ms = duration_tween_elapsed_ms(tween, now_ms);
     let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
     let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
     let eased = tween.timing.eval(linear_t);
@@ -1935,7 +1983,7 @@ fn tween_sample_spring(
     damping: f32,
     mass: f32,
 ) -> ([f32; 8], f32) {
-    let elapsed_ms = tween_elapsed_ms(tween, now_ms);
+    let elapsed_ms = (now_ms - tween.start_ms).max(0.0) as f32;
     if elapsed_ms < tween.delay_ms {
         return (tween.from, 0.0);
     }
@@ -2550,8 +2598,8 @@ pub fn tick_element_transitions_locked(
 #[cfg(test)]
 mod css_transition_dt_tests {
     use super::*;
-    use crate::style::TimingFunction;
     use crate::style::element_style::{TransitionEntry, TransitionProperty};
+    use crate::style::TimingFunction;
 
     #[test]
     fn spring_transition_retargets_from_current_value() {
@@ -2731,6 +2779,93 @@ mod css_transition_dt_tests {
             style.translate[0]
         );
         assert!(!snap.has_active_tweens());
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn duration_tween_idle_instant_jump_keeps_a_mid_frame() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_max_step_ms(Some(1000.0 / 60.0));
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.translate = [0.0, 0.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 300.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::EaseOut,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.translate = [0.0, 800.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(400.0);
+        style.translate = [0.0, 800.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            snap.has_active_tweens(),
+            "idle Instant jump must not finish a 300ms tween in one tick"
+        );
+        assert!(
+            style.translate[1] > 1.0 && style.translate[1] < 400.0,
+            "first post-idle sample must be a mid, not the end (got {})",
+            style.translate[1]
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn translate_transition_interpolates_percent() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.translate_pct = [0.0, 0.5];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.translate_pct = [0.0, 0.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(50.0);
+        style.translate_pct = [0.0, 0.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate_pct[1] - 0.25).abs() < 0.02,
+            "mid translate_pct should be ~0.25, got {}",
+            style.translate_pct[1]
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn duration_tween_sub_idle_frame_is_realtime() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_max_step_ms(Some(1000.0 / 60.0));
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.translate = [0.0, 0.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 300.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.translate = [0.0, 300.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(33.0);
+        style.translate = [0.0, 300.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate[1] - 33.0).abs() < 1.5,
+            "33ms frame must not be slowed to 16ms (got {})",
+            style.translate[1]
+        );
         set_css_transition_virtual_timeline(false);
     }
 
@@ -3275,8 +3410,8 @@ mod tests {
 
     #[test]
     fn max_height_keyframes_pin_min_height_zero_and_restore_on_clear() {
-        use crate::layout::DimKind;
         use crate::layout::dim_kind;
+        use crate::layout::DimKind;
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.max_size.height = taffy::style::Dimension::length(48.0);
@@ -3335,7 +3470,7 @@ mod tests {
 
     #[test]
     fn opacity_animation_preserves_auto_max_height() {
-        use crate::layout::{DimKind, dim_kind};
+        use crate::layout::{dim_kind, DimKind};
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.size.height = taffy::style::Dimension::length(32.0);
@@ -3559,8 +3694,8 @@ mod tests {
     #[test]
     fn animation_composition_add_stacks_opacity() {
         use crate::style::{
-            AnimationComposition, AnimationFillMode, KeyframeStop, TimingFunction,
-            register_keyframes,
+            register_keyframes, AnimationComposition, AnimationFillMode, KeyframeStop,
+            TimingFunction,
         };
         register_keyframes(
             "anim6-hold-03",
@@ -3742,7 +3877,7 @@ mod tests {
     #[test]
     fn named_scroll_timeline_drives_descendant_animation() {
         use crate::core::tree::Element;
-        use crate::style::{AnimationFillMode, AnimationTimeline, push_named_timelines};
+        use crate::style::{push_named_timelines, AnimationFillMode, AnimationTimeline};
         use taffy::style::Overflow;
 
         let mut scroller = Element::new();
@@ -3798,8 +3933,8 @@ mod tests {
     fn calc_size_keyframes_animate_to_used_plus_n() {
         use crate::layout::dimension::parse_css_dim;
         use crate::style::{
-            AnimatableValue, AnimationFillMode, KeyframeStop, PropertyId, UsedLayout,
-            register_keyframes,
+            register_keyframes, AnimatableValue, AnimationFillMode, KeyframeStop, PropertyId,
+            UsedLayout,
         };
         register_keyframes(
             "calc-size-grow",
@@ -3839,8 +3974,8 @@ mod tests {
     #[test]
     fn clip_path_polygon_keyframes_lerp_vertices() {
         use crate::style::{
-            AnimatableValue, AnimationFillMode, ClipCoord, ClipPath, KeyframeStop, PropertyId,
-            register_keyframes,
+            register_keyframes, AnimatableValue, AnimationFillMode, ClipCoord, ClipPath,
+            KeyframeStop, PropertyId,
         };
         let from =
             crate::style::parse_clip_path("polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)").unwrap();

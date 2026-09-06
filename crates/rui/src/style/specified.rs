@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::animatable::{AnimatableValue, PropertyId, values_close};
+use super::animatable::{values_close, AnimatableValue, PropertyId};
 use super::element_style::Style;
 use super::text_style::TextStyle;
 use super::used_layout::UsedLayout;

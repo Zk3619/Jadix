@@ -282,14 +282,12 @@ pub fn set_theme(theme: Theme) {
     CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
 }
 
-/// Switch light/dark tokens while preserving the current [`FocusRingStyle`].
+/// Switch light/dark tokens while preserving the current [`FocusRingStyle`] unless
+/// [`ThemeOverrides::focus_ring_style`] is set.
 pub fn set_theme_mode(mode: ThemeMode) {
-    let style = focus_ring_style();
-    let mut next = match mode {
-        ThemeMode::Light => Theme::light(),
-        ThemeMode::Dark => Theme::dark(),
-    };
-    next.focus_ring_style = style;
+    let fallback_ring = focus_ring_style();
+    let mut next = crate::style::theme_override::compose_theme(mode);
+    crate::style::theme_override::apply_stored_focus_ring(&mut next, fallback_ring);
     set_theme(next);
 }
 

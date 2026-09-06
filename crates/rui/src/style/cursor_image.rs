@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{CustomCursor, Window};
 
-use crate::media::{DecodeOptions, DecodedImage, decode_bytes, decode_data_url, load_src};
+use crate::media::{decode_bytes, decode_data_url, load_src, DecodeOptions, DecodedImage};
 
 use super::cursor::{CursorUrl, CursorValue};
 
