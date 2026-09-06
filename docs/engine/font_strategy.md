@@ -1,5 +1,8 @@
 # 字体策略（Stage 8）
 
+> **文档地位**：字体加载、族栈、字重匹配与配置的**策略契约**。诊断手册见 [font.md](font.md)。  
+> **冻结状态**：**已冻结**（2026-09-06；Gallery **7) 字体族 / 字重 / 行高覆盖（验收）** 走查通过）。纠错（行号、验收步骤、Gallery id）可改；策略变更（默认栈顺序、CSS 匹配、伪粗、懒加载边界）须改本文，禁止静默改行为。  
+> **实现锚点**：[`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs) · [`utils/font.rs`](../../crates/rui/src/utils/font.rs) · [`prepare_text.rs`](../../crates/rui/src/renderer/prepare_text.rs) · Gallery [`text.rs`](../../examples/gallery/src/pages/text.rs)（`FontOverrideShowcase`）。  
 > 从属文本轨道（巩固期 WP-2.1 / golden 确定性）。Dubai→Inter 根因与提案过程见 [archive/implementation_plan.md](../archive/implementation_plan.md)（**勿与** `ENGINEERING_IMPLEMENTATION_PLAN.md` 混淆）。各 OS 字体路径仍在 [`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs)（未迁入 [`platform/`](../../crates/rui/src/platform/)）；见 [`platform.md`](platform.md)。
 
 短计划：UI 默认西文用 **Inter**（或平台 UI 字体），CJK / emoji / 符号仍走懒加载回退。实现入口见 [`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs) 与 [`utils/font.rs`](../../crates/rui/src/utils/font.rs)。
@@ -7,7 +10,7 @@
 ## 原则
 
 1. **禁止**启动时 `FontSystem::new()` 全量 `load_system_fonts()`（Windows 上数百 MB RSS）。
-2. **启动只装**：UI sans（Inter 磁盘/嵌入候选 + 平台 Segoe UI / SF 近亲若干字重面）+ Lucide。
+2. **启动只装**：UI sans（Inter 等**磁盘候选** + 平台 Segoe UI / SF 近亲若干字重面）+ Lucide。Inter 文件由**应用**随包提供（见下文「Inter 分发」），核心不 embed。
 3. **按需打开**：CJK / Hangul / Thai / emoji / symbols / Arabic 等由 `ensure_coverage_for_text` 按码点打开。
 
 ## 全局配置入口
@@ -95,25 +98,33 @@ cargo run -p gallery
 
 ## 文档冻结
 
-**未冻结。** Gallery 本卡签署通过后，可将 **本文** 升为冻结（与 [`box_model.md`](box_model.md) 同口径）：纠错（行号、验收步骤、Gallery id）可改；策略变更（默认栈顺序、CSS 匹配、伪粗、懒加载边界）须改本文，禁止静默改行为。
+**已冻结**（2026-09-06；Gallery **7) 字体族 / 字重 / 行高覆盖（验收）** 走查通过）。与 [`box_model.md`](box_model.md) 同口径：纠错（行号、验收步骤、Gallery id）可改；策略变更（默认栈顺序、CSS 匹配、伪粗、懒加载边界）须改本文，禁止静默改行为。
 
-签署前须接受为 **已知差距**（不挡冻结）：
+**已知差距**（接受为冻结后常态，不视为欠账）：
 
 | 项 | 状态 |
 |----|------|
-| feature `bundled-inter` 嵌入面 | **未实现**（仍靠 `RUI_FONT_DIR` / 旁路 `fonts/`） |
+| Inter 核心嵌入（`bundled-inter`） | **刻意不做**；应用级 `fonts/` / `RUI_FONT_DIR` / 自行 `include_bytes!`（见 [`assets_and_icons_architecture.md`](assets_and_icons_architecture.md) §2.1） |
 | CJK fallback 独立字重轴 | 不做；中文常整段 Regular |
 | synthetic bold | 同色细阴影，不是轮廓加粗 |
 | `leading-none` 裁切 | 布局/绘制策略，不单靠改 token |
 
-诊断手册 [font.md](font.md) 可与本文一并冻结为「契约 + 已知差距」；`RUI_TEXT_DEBUG` 输出格式仍可改，不算策略变更。
+诊断手册 [font.md](font.md) 与本文一并冻结为「契约 + 已知差距」；`RUI_TEXT_DEBUG` 输出格式仍可改，不算策略变更。
 
-## Inter 打包计划
+## Inter 分发（应用级）
+
+Inter 是 UI **设计选择**，不是引擎硬依赖。框架提供加载机制与默认族栈；字体文件由**使用框架的应用**决定是否随包分发。
+
+| 方式 | 责任方 | 说明 |
+|------|--------|------|
+| 应用旁路 `fonts/` | **应用作者**（推荐） | 发布时带上 `Inter-Variable.ttf`；`font_search_dirs()` 自动搜索 exe 旁 `fonts/`、`assets/` |
+| `RUI_FONT_DIR` | 应用 / 运维 | 开发或 CI 指定字体目录 |
+| 应用自行 embed | 应用作者 | 单文件 exe 时在应用内 `include_bytes!` 并注册 fontdb |
+| 核心 `bundled-inter` | **不做** | 与 [`assets_and_icons_architecture.md`](assets_and_icons_architecture.md) 一致；未来若有需要由独立 crate（如 `jadix_fonts_inter`）提供，不堆在 `rui` feature 里 |
 
 | 步骤 | 状态 | 内容 |
 |------|------|------|
-| 嵌入面 | **未实现** | feature `bundled-inter` — **Cargo.toml 中尚无此 feature** |
-| 运行时目录 | ✅ | `RUI_FONT_DIR` / 可执行文件旁 `fonts/` / `crates/rui/assets/` 加载 `Inter-Variable.ttf` 等 |
+| 运行时目录 | ✅ | `RUI_FONT_DIR` / exe 旁 `fonts/` / `crates/rui/assets/` 加载 `Inter-Variable.ttf` 等（`load_eager_project_ui_fonts`） |
 | 平台瘦加载 | ✅ | Windows：Regular / Light / Semilight / Semibold / Bold / Black（仍无独立 Medium 500） |
 | 回退链 | ✅ | Inter VF → Segoe / SF → 懒加载 CJK |
 | 测宽对齐 | ✅ | 布局与绘制共用 `resolve_face_weight` |

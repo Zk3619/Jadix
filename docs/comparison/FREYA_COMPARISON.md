@@ -238,8 +238,8 @@ RUI 的样式赌注是「**写过 Tailwind 的人零学习曲线**」；Freya �
 | # | 能力 | Freya | RUI | 建议 |
 |---|------|-------|-----|------|
 | F01 | **WebView** | `freya-webview` · feature `webview` | — | 明确不做（至底座稳）；体积/安全面 |
-| F02 | **Video** | `freya-video` · `video` | — | 后置能力表 |
-| F03 | **Camera** | `freya-camera` · `camera` | — | 后置能力表 |
+| F02 | **Video** | `freya-video` · `video` | — | 后置能力表；规范 [`engine/media.md`](../engine/media.md)（核只收帧；播放器独立 crate） |
+| F03 | **Camera** | `freya-camera` · `camera` | — | 后置能力表；预览 = ImageStream（[`media.md`](../engine/media.md) M.9） |
 | F04 | **Terminal** | `freya-terminal` · `terminal` | — | 后置能力表 |
 | F05 | **Code editor** | `freya-code-editor` · `code-editor` | — | 学能力清单；依赖文本/编辑硬化 |
 | F06 | **Markdown 渲染包** | `freya-markdown`（可挂 code-editor） | 仅 `text::parse_markdown_inline` 级；**块级 MD 缺失** | 后置；密度项 |

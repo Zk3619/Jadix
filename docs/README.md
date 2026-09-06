@@ -21,11 +21,11 @@
 | 目录 | 内容 |
 |------|------|
 | [components/](components/component_inventory.md) | 分桶表、variant 词汇、分层对照、自定义组件 / headless / 浮层壳 |
-| [engine/](engine/box_model.md) | 盒模型、布局、字体、颜色、动效、damage、资源 |
+| [engine/](engine/box_model.md) | 盒模型、布局、字体、颜色、动效、damage、资源、媒体槽 |
 | [ops/](ops/desktop_smoke.md) | 冒烟、IME、键盘、发布、托盘、多窗口、DevTools、热重载 |
-| [comparison/](comparison/gap_analysis.md) | 对照审计（非执行源） |
+| [comparison/](comparison/gap_analysis.md) | 对照审计（非执行源）；含 [EUI 视觉专章](comparison/EUI_NEO_VISUAL.md)（§9 GPUI 三角） |
 | [archive/](archive/README.md) | 冻结计划、愿景稿、早期随笔 |
-| [plans/](plans/global-stylesheet-loader.md) | 进行中的专题计划 |
+| [plans/](plans/global-stylesheet-loader.md) | 进行中的专题计划（含 [media-av.md](plans/media-av.md) 音视频 WP-M） |
 | [site/](site/README.md) | 文档站 stub（WP-4.4） |
 
 ### 组件
@@ -39,8 +39,8 @@
 ### 引擎
 
 - [box_model.md](engine/box_model.md)（WP-2.9 ☑ **已冻结**）· [layout_subtree.md](engine/layout_subtree.md) · [stack_and_element_model.md](engine/stack_and_element_model.md)（ADR-10 ☑ 冻结）· [platform.md](engine/platform.md)
-- [color.md](engine/color.md) · [font.md](engine/font.md) · [font_strategy.md](engine/font_strategy.md) · [text_align.md](engine/text_align.md)
-- [animation_and_motion.md](engine/animation_and_motion.md) · [css_animation_max_alignment.md](engine/css_animation_max_alignment.md)（**已冻结**）
+- [color.md](engine/color.md) · [color_advanced.md](engine/color_advanced.md) · [theme.md](engine/theme.md) · [media.md](engine/media.md)（动态纹理 / 音视频边界；计划 [plans/media-av.md](plans/media-av.md)）· [font_strategy.md](engine/font_strategy.md)（**已冻结**）· [font.md](engine/font.md)（**已冻结**）· [text_align.md](engine/text_align.md)
+- [animation_and_motion.md](engine/animation_and_motion.md)（分层选型 + CSS 子集，**已冻结** 2026-09-06）
 - [damage.md](engine/damage.md) · [glyphon_audit.md](engine/glyphon_audit.md) · [assets_and_icons_architecture.md](engine/assets_and_icons_architecture.md)
 
 ### 运维 / 验收
@@ -52,6 +52,6 @@
 
 ### 非执行源
 
-- 对照：[REFERENCE_COMPARISON.md](comparison/REFERENCE_COMPARISON.md) · [GPUI_ECOSYSTEM_COMPARISON.md](comparison/GPUI_ECOSYSTEM_COMPARISON.md) · [FREYA_COMPARISON.md](comparison/FREYA_COMPARISON.md) · [gap_analysis.md](comparison/gap_analysis.md)
+- 对照：[REFERENCE_COMPARISON.md](comparison/REFERENCE_COMPARISON.md) · [GPUI_ECOSYSTEM_COMPARISON.md](comparison/GPUI_ECOSYSTEM_COMPARISON.md) · [FREYA_COMPARISON.md](comparison/FREYA_COMPARISON.md) · [EUI_NEO_VISUAL.md](comparison/EUI_NEO_VISUAL.md) · [gap_analysis.md](comparison/gap_analysis.md)
 - 冻结计划：[ENGINEERING_IMPLEMENTATION_PLAN.md](archive/ENGINEERING_IMPLEMENTATION_PLAN.md) · [COMPONENT_LIBRARY_PLAN.md](archive/COMPONENT_LIBRARY_PLAN.md) · [REACTIVITY_PLAN.md](archive/REACTIVITY_PLAN.md)
 - 历史：[PROJECT.md](archive/PROJECT.md) · [STAGE7_ROADMAP.md](archive/STAGE7_ROADMAP.md) · [NAMING_DECISION.md](archive/NAMING_DECISION.md)（已锁定 `jadix` / 琢玉）

@@ -100,18 +100,17 @@ RUI 的 gallery 在 Windows **默认 ~1 MiB** 主线程栈上曾溢出，**主�
 
 `Element` 是 `Box<ElementInner>` 句柄（对标 Iced `Box<dyn Widget>` / GPUI arena-box）。`Element::new` 标 `#[inline(never)]`，避免 MSVC debug 把 `ElementInner` 临时量内联进宽 `ui!` 调用帧。公开字段经 `Deref` 保持 `el.style` / `el.children` 写法；同一调用要拆两个字段时走 `el.inner` 或 `tick_css_*`。
 
-```802:805:crates/rui/src/core/tree.rs
+```885:887:crates/rui/src/core/tree.rs
 pub struct ElementInner {
     pub style: Box<crate::style::Style>,
     pub children: Vec<Element>,
 ```
 
-```996:1000:crates/rui/src/core/tree.rs
+```1085:1088:crates/rui/src/core/tree.rs
 pub struct Element {
     /// Heap payload. Prefer `el.field` via `Deref`; use `el.inner.a` / `el.inner.b`
     /// when one call must mutably borrow two fields (Deref cannot split-borrow).
     pub inner: Box<ElementInner>,
-}
 ```
 
 `stack_budget` 测试 `layout_type_sizes_are_documented` 实测（debug）：`size_of::<Element>()` = **8**；`size_of::<ElementInner>()` ≈ **2.4 KiB**（2408）。旧「按值 Element ≈ 3.6 KiB」口径作废。子树仍是 `Vec<Element>`（句柄向量）。卸载的子节点 `Box<ElementInner>` 进 TLS slab（cap 4096），`Element::new` 优先 pop；**不是** GPUI 那种每帧 `clear` 的 bump arena（保留树跨帧持有 `layout_node`）。
@@ -186,7 +185,7 @@ pub struct Element {
 | [`REFERENCE_COMPARISON.md`](../comparison/REFERENCE_COMPARISON.md) | 六参考「该学 / 不该搬」总表 |
 | [`size_and_memory.md`](../ops/size_and_memory.md) | RSS / Element 节点计数（栈预算见本文） |
 | [`platform.md`](platform.md) | `crate::platform` OS 层；`windows/stack.rs` opt-in 上下文 |
-| [`bugs.md`](../archive/bugs.md) | 历史「计算器需 8MB」已关闭，指向本文 |
+| [`bugs.md`](../bugs.md) | 历史「计算器需 8MB」已关闭，指向本文 |
 | [`reactivity_and_hot_reload.md`](../ops/reactivity_and_hot_reload.md) | 结构岛 / `isolate_reads` 与构建帧 |
 
 ---

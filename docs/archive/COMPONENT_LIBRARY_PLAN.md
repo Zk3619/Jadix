@@ -55,7 +55,7 @@
 | 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖**；三平台未签署 |
 | 原语 | `primitives/`：box / interactive / overlay / text / path / portal；**无**独立 toggle 模块 |
 | 浮层 | `utils/popup.rs` 统一 placement；Dialog 模态壳在 `components/dialog.rs`；开合状态仍多在各组件 |
-| 主题 | `style/theme.rs` + `color_space.rs` 对齐 shadcn v4 OKLCH；light/dark（见 [`color.md`](../engine/color.md)） |
+| 主题 | `style/theme.rs` + `theme_override.rs` 对齐 shadcn v4 OKLCH；light/dark（见 [`theme.md`](../engine/theme.md)） |
 | Gallery | 八分区**已落地**（与总计划 WP-3.1 同步 ☑）；示例侧常堆 `gal-*` **id**（示范习惯 ≠ API 必填） |
 | **身份债** | 多数 Builder 首位强制 `id`；空串/`template_id` 曾致 AccessKit 重复 NodeId；全局 `use_signal("{id}__…")` 揉焦点/锚点 → [`element_identity.md`](../element_identity.md) / C-WP-V.5 / C-WP-2.6 / 总计划 WP-2.4 |
 | 总计划重叠 | W1 焦点/a11y；W2 golden；W3 Gallery/选器/浮层打磨；W4 发布与索引 |
@@ -259,7 +259,7 @@ flowchart TB
 | **路径** | `style/theme.rs`、`tokens/colors.rs`、各组件 chrome 函数 |
 | **任务** | ① 组件内禁止魔法色；② dark 切换后 Gallery 抽查 Button/Input/Dialog；③ focus ring 用 theme.ring |
 | **验收** | 换肤冒烟条目；代码审无大量裸 OKLCH（theme 外） |
-| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8）；Toast 去魔法绿/琥珀；焦点环 theme `ring`；[`color.md`](../engine/color.md) 换肤冒烟 |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8）；Toast 去魔法绿/琥珀；焦点环 theme `ring`；[`theme.md`](../engine/theme.md) 换肤冒烟 |
 
 ### C-WP-2.3 受控 API 一致性
 

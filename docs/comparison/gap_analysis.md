@@ -35,7 +35,7 @@
 |----|------|----------|----------|------------|
 | 编程模型 | 自研 Solid 式 | [`SolidJS`](../../reference/SolidJS) | 组件跑一次、Signal 驱动局部更新；Owner / cleanup / Context；`Show` / `For` / memo 心智 | 浏览器 DOM、SSR / hydration、Web 专用并发调度 |
 | 样式与组件体验 | utility + headless | [`ShadCN-UI`](../../reference/ShadCN-UI) / [`TailwindCSS`](../../reference/TailwindCSS) / [`UnoCSS`](../../reference/UnoCSS) | a11y 契约、无头交互拆分、变体命名 | Web 专有 CSS 特性 |
-| 产品完整度与渲染纪律 | wgpu 主线 | [`EUI-NEO-main`](../../reference/EUI-NEO-main) | 组件密度标尺（其 `components/` 有 barchart / linechart / piechart / markdown / datepicker / timepicker / carousel / stepper / segmented / virtualmasonry 等 38+ 控件）、batch 与资源纪律、gallery 驱动开发、多后端抽象样本 | 命令式 / DSL 架构本身 |
+| 产品完整度与渲染纪律 | wgpu 主线 | [`EUI-NEO-main`](../../reference/EUI-NEO-main) | 组件密度标尺（其 `components/` 有 barchart / linechart / piechart / markdown / datepicker / timepicker / carousel / stepper / segmented / virtualmasonry 等 38+ 控件）、batch 与资源纪律、gallery 驱动开发、多后端抽象样本；**视觉 / 2.5D / Shadertoy 叶**见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)（2026-09-06 补） | 命令式 / DSL 架构本身 |
 | 盒模型布局 | `taffy` | — | — | 不动 |
 | 文本排版 | `cosmic-text` / `glyphon` | [`pretext-main`](../../reference/pretext-main) | `prepare` 一次（分段 + 测量 + glue 缓存）/ `layout` 纯算术的分层；真实断行；逐行变宽（绕排）；`walkLineRanges` 式稳定行高测量；rich inline flow | 不当布局总方案，不原样移植 JS |
 
@@ -252,7 +252,7 @@
 
 历史计数「26 / 3 / 21」已过时。**现行清单与分桶**见 [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §5 + [component_inventory.md](../components/component_inventory.md)（约 43 产品模块；`verified` / `stable-candidate` / `experimental` / `broken`）。关键产品空洞均有 MVP；Router wired、托盘 stub。
 
-**EUI 只作密度标尺**（不作架构 / API 参照，见 §1）。完整对照表在 inventory §3；此处仅保留仍落后的密度项：
+**EUI 密度标尺**（不作架构 / API 参照，见 §1）。完整对照表在 inventory §3；此处仅保留仍落后的密度项。**视觉 / 2.5D / Shadertoy 不是密度表的事**，见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)（GPUI 也不是视觉上限，同文 §9）。
 
 | EUI 已有 | RUI 现状 | 密度结论 |
 |----------|----------|----------|

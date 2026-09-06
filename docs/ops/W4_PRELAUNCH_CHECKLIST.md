@@ -76,7 +76,7 @@
 
 - [ ] **WP-STY.0**：`ThemeColorPatch` + `load_theme_patch`（`.toml` / `.json` / `globals.css` `:root` 变量子集）+ `install_theme_patch`；`set_theme_mode` 保留用户 patch。
 - [ ] **WP-STY.1**：库内产品色令牌化（shadow elevation、overlay scrim、`TRANSPARENT` 常量）；CI `check-token-colors` 挡裸 RGBA/hex。
-- [ ] `color.md` 增「应用级主题覆盖」；Gallery 演示 `theme.toml` 覆盖 `destructive`。
+- [ ] [`theme.md`](../engine/theme.md) — 应用主题覆盖与多预设架构；Gallery 演示 `theme.toml` 覆盖 `destructive`。
 
 
 

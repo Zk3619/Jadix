@@ -306,6 +306,12 @@ Sprint 4（按需）
 
 ---
 
+## 禁区依赖（音视频）
+
+[`engine/media.md`](../engine/media.md)：**禁止** 在 `crates/rui/Cargo.toml` 加入 FFmpeg / GStreamer / libmpv / cpal / 摄像头 SDK（即使 `optional = true`）。解码只允许出现在独立 `examples/` 或后置 crate。体积门与本审计同一纪律。
+
+---
+
 ## 量化验证命令
 
 每个 Sprint 后用这些对比：

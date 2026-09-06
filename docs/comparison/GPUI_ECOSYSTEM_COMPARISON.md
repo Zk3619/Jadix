@@ -2,8 +2,8 @@
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](../AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) §2–§3。  
 > **对照源**：`Reference/gpui` · `Reference/gpui-component-main` · `Reference/gpui-vue-main` · `Reference/gpuix-main`；RUI 以 `crates/` 与工程文档为准。  
-> **关联**：[REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md)（六参考 + 市场切割）· [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（Freya 专章）· [component_inventory.md](../components/component_inventory.md)（RUI 分桶）  
-> **日期**：2026-09-02（首版；基于 Reference 树快照与代码扫描）
+> **关联**：[REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md)（六参考 + 市场切割）· [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（Freya 专章）· [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)（视觉 / 2.5D / 动画；**§9 三角对照**）· [component_inventory.md](../components/component_inventory.md)（RUI 分桶）  
+> **日期**：2026-09-02（首版；基于 Reference 树快照与代码扫描）；**2026-09-06** 补 **§6.5** 视觉 / 2.5D / 动画轴（此前专章几乎只写原生深度与组件密度）
 
 ---
 
@@ -20,7 +20,7 @@ GPUI 生态与 RUI **不是同一条哲学路线**，但在 **「纯 Rust GPU �
 
 一句话路线：
 
-> **用 GPUI / gpui-component 的验收标准与密度清单卡自己；用 gpuix / gpui-vue 偷师「桥接层测试与热重载契约」；底座与反应性模型坚决不换。**
+> **用 GPUI / gpui-component 的验收标准与密度清单卡自己；用 gpuix / gpui-vue 偷师「桥接层测试与热重载契约」；底座与反应性模型坚决不换。创意视觉 / 2.5D / Shadertoy 跟 EUI，不跟 GPUI（见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9）。**
 
 与 [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md) §8 市场结论一致：RUI 争的是 **D 赛道（纯 Rust 自绘保留模式桌面）** 里 **Solid + ShadCN 味** 的空位，不是 React/Vue-on-GPUI 的替代品，也不是 Zed 内核的 fork。
 
@@ -282,7 +282,8 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 | 层 | RUI 现状 | GPUI 生态强项 | RUI 差距 / 行动 |
 |----|----------|---------------|-----------------|
 | 窗口 | winit；次窗 MVP | GPUI 原生多窗、菜单、托盘 | 契约表扩写；托盘从 stub → 可演示 |
-| 渲染 | wgpu SDF；FullClear 默认 | GPUI Scene；EUI 脏矩形（另参考） | PartialLoad backlog；Scene 批优化研究 |
+| 渲染 | wgpu SDF；FullClear 默认；`<svg>`/`<canvas>`/`<scene3d>`/`effect_wrap` | GPUI Scene 批绘（quad/path/sprite）；**无** 2.5D / 用户 shader | PartialLoad = B8；2.5D / Shadertoy 跟 EUI，见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9 |
+| 动画 | CSS 冻结子集 + `motion` + `spring()` | GPUI `with_animation`；gpui-base `transition`/`spring` | 时间轴 **RUI 更完整**；学 `repeat_synced` 与 spring `with_travel(false)` |
 | 布局 | taffy + 子树 dirty；**不 fork**（ADR-10 **已冻结**） | 同 taffy；component Dock/Tiles | VirtualMasonry ☑；上溢升父；栈预算见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md) |
 | 文本 | glyphon 深定制 | component **20 万行编辑器** + LSP | 块级 MD；wrap 解耦（gpui P3） |
 | 表格 | Table experimental | **数十万行**虚拟表 | 列固定/调整/选区对标 component |
@@ -302,9 +303,27 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 |----|-----|----------------|------------------|
 | 组件数 | ≈59 模块；verified 子集 | **60+** 生产级 | 宿主元素 + 少量复合 |
 | 编辑器 | Input/Textarea | **Code editor + LSP** | `<code>` syntect |
-| 图表 | `chart` grammar experimental | `chart` `plot` | canvas 命令 |
+| 图表 | `chart` grammar experimental | `chart` `plot`（含 K 线 / sankey） | canvas 命令；gpui-vue 走宿主 canvas |
 | 测试 | golden×7；crate_tests | story + CI | kittest 式 automation |
 | 发布 | 未 crates.io | **crates.io 0.5.x** | npm `@gpuix/*` |
+
+### 6.5 视觉 · 2.5D · 动画（2026-09-06）
+
+2026-09-02 专章几乎没写这一层。深对照（含 EUI 三角）见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) **§9**。此处只钉代码事实：
+
+| 能力 | GPUI 核 | gpui-component / gpui-base | RUI | 跟谁 |
+|------|---------|----------------------------|-----|------|
+| 2.5D 透视 | **无**；`Transformation` 仅 2D scale/translate/rotate，不影响 hit/layout | 无 | 解析有、resolve 压扁 | **EUI**，不是 GPUI |
+| 用户 shader | 无 | 无 | `effect_wrap` 具名 | **EUI** Shadertoy 契约 |
+| mesh 3D | 无 | 无 | `<scene3d>` opt-in | **RUI 已超前** |
+| Canvas | `canvas(prepaint, paint)` 立即 Scene API，非 WHATWG | `plot`/`chart` 走 path | Canvas2D MVP | RUI 叶更完整；图表密度跟 component |
+| 动态纹理 | macOS `CVPixelBuffer` surface | — | 无 YUV | EUI `ImageStream` 跨平台契约 |
+| 时间轴 | `with_animation`；`repeat` / **`repeat_synced`**（全 App **一个**纪元；同 duration 锁相，错落要自己加 offset） | `EffectTransition`（fade/slide）包一层 | `@keyframes` / 句柄 / `steps()` **领先** | 学锁相纪元；波浪用 delay/offset；**勿拆 keyframes** |
+| 目标值 | 无属性表；闭包自己改元素 | `transition(id, target)` 从采样点改道；`spring` 保速度；`with_travel(false)` 拖拽跟手 | `motion` + CSS `spring()` **同构** | 对齐叙事与拖拽配方 |
+| reduce motion | `App::reduce_motion` 一等：oneshot→终态，repeat→始态，停帧泵 | 跳终态、不 `request_animation_frame` | `prefers-reduced-motion` 跳终态 | 文档对齐即可 |
+| 产品观感 | SVG 旋转示例；偏 IDE/编辑器 | Skeleton 呼吸、Spinner 转圈、Dialog/Sheet **入场** | ShadCN + ANIM Gallery | 创意 workshop **跟 EUI** |
+
+**不**把 GPUI 当视觉上限：Zed / Longbridge 的观感来自原生控件密度，不是 2.5D 翻牌。
 
 ---
 
@@ -329,7 +348,7 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 | Command palette | ~ experimental | ✓ command |
 | Rating / Tag / Badge | ~ / ✓ | ✓ |
 | Native menu / Title bar | - / 部分 chrome | ✓ native_menu / title_bar |
-| Motion / Spring | utility + CSS anim | base `motion` |
+| Motion / Spring | CSS `transition`/`@keyframes`/`spring()` + `utils/motion` | GPUI `with_animation` + base `transition`/`spring` |
 | Hot reload | TCP CLI | - / Story |
 | React/Vue 绑定 | - | gpuix / gpui-vue |
 
@@ -341,8 +360,8 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 
 | 参考 | 该学 | 不该搬 | 优先级 |
 |------|------|--------|--------|
-| **GPUI** | IME/光标区；多窗生命周期；Scene 缓存；AccessKit 深度；Actions 分层 | 弃 winit 换全原生分叉；Entity 取代 Signal | P0 原生 |
-| **gpui-component** | **密度清单**：Table/Editor/Dock/MD；`gpui-base` 行为分层文档；Story 驱动；i18n | GPUI+component 整栈迁移；C++ 式整页 render 主路径 | P1 产品 |
+| **GPUI** | IME/光标区；多窗生命周期；Scene 缓存；AccessKit 深度；Actions 分层；**`repeat_synced` 共享相位**；`reduce_motion` 绑帧泵 | 弃 winit 换全原生分叉；Entity 取代 Signal；Metal/DX 双栈；用 2D SVG rotate 冒充 2.5D | P0 原生 |
+| **gpui-component** | **密度清单**：Table/Editor/Dock/MD；`gpui-base` 行为分层文档；Story 驱动；i18n；**`transition`/`spring` 目标值 API**；`Spring::with_travel(false)` 拖拽跟手 | GPUI+component 整栈迁移；C++ 式整页 render 主路径；把 `EffectTransition` 当唯一动效模型 | P1 产品 |
 | **gpuix** | mutation 批处理测试；`bun --hot` 同窗契约；CLI 上手路径；Wasm 单例热更策略 | React 主路径；Node 运行时依赖 | P1 对照 |
 | **gpui-vue** | `mountGpui` / Automation API；headless 复合件形状；多窗 `createWindow` | Vue 绑定；N-API 架构 | P1 对照 |
 
@@ -351,7 +370,7 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 | 类别 | 内容 |
 |------|------|
 | **坚持** | Solid Owner/Signal；winit + wgpu；taffy；glyphon；`ui!` + Builder；AccessKit |
-| **优先偷师** | component 的 Table/Editor/Dock；GPUI IME/多窗；gpuix/vue 的无头测试形态；base 的「行为在下、样式在上」文档 |
+| **优先偷师** | component 的 Table/Editor/Dock；GPUI IME/多窗；gpuix/vue 的无头测试形态；base 的「行为在下、样式在上」文档；**视觉/2.5D 跟 EUI 不跟 GPUI**（[EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9） |
 | **明确避免** | 迁 GPUI 平台栈；引入 React/Vue 桥；用 `Render` trait 替换 Signal；为密度短期 fork gpui-component |
 | **观察不跟** | remorses/zed fork 与上游合并节奏；gpui-component 对 Zed git 的硬依赖——仅在战略合作或栈统一时评估 |
 
@@ -376,11 +395,13 @@ RUI 在「自绘 + 细粒度」轴上**相对 GPUI 全系最干净**；gpuix/gpu
 - Table：对标虚拟滚动、列固定、单元格选区——**实现仍走 RUI Signal + taffy**。
 - 块级 Markdown / 代码高亮：优先读 component `text`/`highlighter` **交互契约**，不引入 GPUI 依赖。
 - 文档：学习 `gpui-base` ARCHITECTURE.md 的「行为 vs 呈现」叙述，用于 [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) 复合件章节。
+- Motion：`transition`/`spring` 与 RUI `motion` **同构**；抄 `with_travel(false)` 拖拽配方，**不要**把 `EffectTransition` 当唯一动效模型。
 
 **← GPUI**
 
 - [desktop_smoke.md](../ops/desktop_smoke.md) 扩成与 GPUI `InputHandler` 对齐的契约表。
 - 文本：推进 [text_i18n_wrap_reference.md](../engine/text_i18n_wrap_reference.md) P3（整形/换行解耦）。
+- 动画：学 `repeat_synced` 与 `reduce_motion` 帧泵；**不要**用 2D `Transformation` 当 2.5D。视觉轴见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9。
 
 **← gpuix / gpui-vue**
 
@@ -428,6 +449,8 @@ gpui-component 的 `Collapsible` 合计 ~221 行，RUI 同功能 ~1108 行——
 | [REACTIVITY.md](../REACTIVITY.md) | 细粒度机制；GPUI 不在反应性主标尺 |
 | [headless.md](../components/headless.md) | 无头 harness 目标 |
 | [desktop_smoke.md](../ops/desktop_smoke.md) | 原生冒烟 |
+| [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) | EUI 视觉 / 2.5D / Shadertoy / 动画；**§9** 与本文三角对照 |
+| [animation_and_motion.md](../engine/animation_and_motion.md) | RUI 动效冻结手册；GPUI 对照见附录 §21 |
 
 ---
 

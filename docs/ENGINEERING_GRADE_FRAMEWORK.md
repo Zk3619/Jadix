@@ -93,7 +93,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 响应式 | 自研 Solid 式（`core/reactivity`、`store`、`resource`） | Signal / Owner / Effect | 不对齐 DOM/SSR |
 | 样式 | `rui_style_tokens` + utility 变体引擎 | Tailwind/Uno 心智、theme、dark | 不实现完整 CSSOM |
 | 组件 | primitives → tokens → components；行为工具在 `utils/` | ShadCN 式无头骨架 + 样式产品面 | 交互状态机不永久粘在样式层；浮层几何走 `utils/popup` |
-| 颜色 | `style/color_space` + `theme`（OKLCH 令牌 → display sRGB） | 与 shadcn v4 语义色同源；CPU 混色用 linear / Oklab | 不接完整 ICC / HDR（见 [`color.md`](engine/color.md)） |
+| 颜色 | `style/color_space` + `theme`（OKLCH 令牌 → display sRGB） | 与 shadcn v4 语义色同源；CPU 混色用 linear / Oklab | 不接完整 ICC / HDR（设计见 [`color_advanced.md`](engine/color_advanced.md)）；主题运行时见 [`theme.md`](engine/theme.md) |
 | DX | `rui_macros` + `rui_hot_reload_cli` + 公开 `*Builder` | `ui!` 与纯 Rust Builder **双书写面**；热补丁 `template_id` | 热重载不替代正确性测试；**不废弃无标签写法** |
 
 **锁定栈（不可再开选型分叉）**：`winit` + `accesskit_winit` · `wgpu` · `taffy` · `glyphon`/`cosmic-text` · `palette`（OKLCH）。否决：Skia 主线、弃 wgpu 追体积、stretch、完整 CSSOM。选型过程见 [`archive/Tech-Select.md`](archive/Tech-Select.md)。
@@ -120,7 +120,7 @@ crates/
 | 图协议 | **Leptos `reactive_graph`** | Owner 树；Clean/Check/Dirty 思想；RenderEffect vs Effect 分层 | 换核依赖；SSR；tachys HTML |
 | 原生绑定 | **Floem `floem_reactive`** | `UpdaterEffect`（订阅/应用拆开）；Scope dispose；`dyn_stack` diff 纪律 | 整套 API 改名；Web 式 Resource |
 | 样式与组件体验 | **ShadCN-UI** + **Tailwind** + **UnoCSS** | a11y 契约、无头拆分、变体命名、原子类心智、shortcuts 思想 | Web 专有 CSS、DOM 选择器、完整 Attributify 运行时 |
-| 产品完整度 | **EUI-NEO** | 组件密度标尺（chart / markdown / datepicker / virtualmasonry 等）；gallery 驱动；batch 纪律 | 命令式 DSL；为缩体积弃 wgpu |
+| 产品完整度 | **EUI-NEO** | 组件密度标尺（chart / markdown / datepicker / virtualmasonry 等）；gallery 驱动；batch 纪律；**视觉契约**（2.5D / Shadertoy 叶 / workshop，见 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)） | 命令式 DSL；为缩体积弃 wgpu；用 mesh 3D 模拟 UI 翻牌 |
 | 文本算法 | **pretext** | `prepare` 一次 / `layout` 纯算术；变宽绕排；稳定行高 | 不当布局总方案；不原样移植 JS |
 | DX 热重载 | **Dioxus** | 监视源码、免全量重编的补丁心智；RSX 体验 | **VDOM / 组件级 diff 当细粒度**；WebView 桌面壳 |
 | 性能上限对照 | **Xilem** / **Freya** | 保留树、增量更新讨论 | 不强制对齐其公开 API |
@@ -370,7 +370,10 @@ flowchart LR
 | [reactivity_and_hot_reload.md](ops/reactivity_and_hot_reload.md) | 三档更新与热重载契约 |
 | [headless.md](components/headless.md) | 无头三层契约（从属组件规范） |
 | [custom_components.md](components/custom_components.md) | 用户自定义组件指南 |
-| [color.md](engine/color.md) | OKLCH 令牌 / 线性混色 / outline≠CSS outline |
+| [color.md](engine/color.md) | OKLCH 色空间 / 线性混色 / semantic_tone / outline≠CSS outline |
+| [color_advanced.md](engine/color_advanced.md) | Display P3 / 色彩管理 / HDR·PQ 设计方案（未实现） |
+| [media.md](engine/media.md) | 动态纹理槽 / 音视频分层（未实现；不挡 0.1）· 计划 [plans/media-av.md](plans/media-av.md) |
+| [theme.md](engine/theme.md) | DesignTokens / 明暗 / `theme.toml` 覆盖 / 多预设架构 |
 | [keyboard_nav.md](ops/keyboard_nav.md) | Tab / Escape / focus_trap / roving |
 | [desktop_smoke.md](ops/desktop_smoke.md) | 真窗口冒烟 |
 | [ime.md](ops/ime.md) | WP-1.1 IME 验收与诊断 |
@@ -379,7 +382,8 @@ flowchart LR
 | [size_and_memory.md](ops/size_and_memory.md) | 体积与内存事实 |
 | [stack_and_element_model.md](engine/stack_and_element_model.md) | **Windows 默认栈、`Element` 堆句柄与对标框架**（ADR-10） |
 | [platform.md](engine/platform.md) | **`crate::platform` OS 层现状、cfg 边界与目标结构** |
-| [font_strategy.md](engine/font_strategy.md) | 字体打包策略 |
+| [font_strategy.md](engine/font_strategy.md) | 字体策略契约（**已冻结** 2026-09-06）· [font.md](engine/font.md) 诊断手册 |
+| [animation_and_motion.md](engine/animation_and_motion.md) | CSS 动画 / Motion 分层 + 冻结子集（**已冻结** 2026-09-06） |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
 | [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |
 

@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- **2026-09-07 音视频槽 MVP**：[`engine/media.md`](engine/media.md) 分层落地 WP-M.1/M.2/M.3/M.6。同键 `write_texture`；[`queue_media_frame`](../crates/rui/src/media/stream.rs)（RGBA 默认；`image-stream` 时 NV12/I420/P010 → BT.709）；Gallery「绘制」合成色条（1×1 canvas 时钟已修）。无 FFmpeg、无播放器 crate。
+- **2026-09-06 对照**：[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §9 补 RUI × EUI × GPUI / gpui-component **视觉 / 2.5D / 动画**三角；[`GPUI_ECOSYSTEM_COMPARISON.md`](comparison/GPUI_ECOSYSTEM_COMPARISON.md) §6.5；动效手册附录 §21。不改冻结面、不新开 WP。
 - **2026-09-06 平台层文档**：新增 [`platform.md`](engine/platform.md)——`crate::platform` 现状（OS 级 `cfg`、Windows 特化 vs macOS/Linux stub）、散落 OS 逻辑清单与 desktop/mobile/embedded 目标结构；更新 AUTHORITY / ENGINEERING / multi_window / ime / stack 等引用。
 
 ### Experimental（未进 SemVer 承诺面）
@@ -20,14 +22,15 @@
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
 | `tray_icon` / `TrayIcon` / `request_exit` / `system_tray_native` | `app/tray.rs` · `ui_bridge.rs` | WP-3.6；默认 stub；`system-tray` 才有原生副作用 |
+| `queue_media_frame` / `MediaFrame` / `PixelLayout` / `TextureColorSpace` | `media/stream.rs` | **B18 / WP-M.2–M.3**：动态纹理槽；`image-stream` 开 YUV；不解码、不播放；HDR 后置 |
 | `is_remote_src` / `set_remote_asset_fetcher` / `fetch_remote_bytes` / `RemoteAssetFetcher` | `media/remote.rs` | **remote-asset**：远程 `src` 入口；HTTP 由应用注入；默认关 |
 | `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
 | `virtual_masonry` / `VirtualMasonryBuilder` | `components/virtual_masonry.rs` · `utils/virtual_masonry.rs` | WP-3.10；变高瀑布流虚拟化；`item_height` + 测宽缓存；未进 SemVer |
 
-- **2026-09-05 三层动画模型**：引擎 `Timing` + spring 积分；声明式 `transition: … spring()`；编程式 `Animation` 句柄（`run` / `seek` / `set_rate` / `on_finish`）。丢掉 DocumentTimeline、Promise、编程面 composite。手册 [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) §1.3。
+- **2026-09-05 三层动画模型**：引擎 `Timing` + spring 积分；声明式 `transition: … spring()`；编程式 `Animation` 句柄（`run` / `seek` / `set_rate` / `on_finish`）。丢掉 DocumentTimeline、Promise、编程面 composite。手册 [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分 §11.5。
 - **2026-09-05 gallery wgpu 管线**：`inst_id` 从 VertexOutput loc 15 打进 loc 14 `extra_and_id`，避开 `max_inter_stage_shader_variables`（0..=14）。
 - **2026-09-05 动画扩面收进冻结面**：编程式句柄（`Animation`/`KeyframeEffect`）、`linear()` intern、`clip-path: path()`/`url(#id)`、`offset-path`、`transform-origin` 动画（槽 60）、`extra_shadows` 列表 lerp、两层 `GpuClipPoly` AND。手册 §1.2 / §1.3。
-- **2026-09-05 动画域已冻结**：[`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) 追上实现；`clip-path` transition 与 keyframes 共用 `ClipPath::interpolate`；独立 `scale`/`rotate` `transition-property`；色 transition 走同一 `lerp_text_rgba`。CI `anim_freeze`。
+- **2026-09-05 动画域已冻结**：[`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分追上实现；`clip-path` transition 与 keyframes 共用 `ClipPath::interpolate`；独立 `scale`/`rotate` `transition-property`；色 transition 走同一 `lerp_text_rgba`。CI `anim_freeze`。
 - **2026-09-05 overflow 圆角 clip**：子级裁剪走 SDF 圆角盒（与填充同一 `sd_round_box`），不再用 16 顶点折线切成八角。Gallery「布局 / 文本」增加 `writing-mode` 五值卡片。
 - **2026-09-05 ANIM-6 延伸**：完整 `clip-path`（`polygon` / `circle` / `ellipse` 命中 + SDF even-odd）、具名 `scroll-timeline` / `view-timeline` + `animation-range`、`calc-size()` 求值器（`size` 关键字）。
 - **2026-09-05 ANIM-6**：`grid-template-rows/columns` 等长 `fr` 列表为通用 C 层动画；`animation-composition` add/accumulate；`interpolate-size: allow-keywords`；`scroll()`/`view()` timeline；`background-position` / `clip-path: inset()`。
@@ -69,7 +72,11 @@
 - B15 分边 border：`border_left` / `border_top_width` / `borderWidth="4px 8px"`（1–4 值）；Taffy 分边；均匀 SDF、非均匀四边条绘制。
 - 窗口缩放 fast 布局会重烘焙 `vw`/`vh`/`em`/`calc`，视口单位随窗口实时变化。
 
-- **2026-09-06 字体覆盖验收**：Gallery **文本** 卡「7) 字体族 / 字重 / 行高覆盖」；手册 [`font_strategy.md`](engine/font_strategy.md) 写清签署后冻结口径（默认栈 / VF / CSS 匹配 / 伪粗）。`bundled-inter` 仍未实现。
+- **2026-09-06 字体手册冻结**：Gallery **文本** 卡「7) 字体族 / 字重 / 行高覆盖」走查通过；[`font_strategy.md`](engine/font_strategy.md) + [`font.md`](engine/font.md) **已冻结**（默认栈 / VF / CSS 匹配 / 伪粗 / 懒加载；Inter 应用级 `fonts/`，核心不做 `bundled-inter`）。
+- **2026-09-06 动画手册全文冻结**：[`animation_and_motion.md`](engine/animation_and_motion.md) 第一部分（分层 ADR）+ 第二部分（CSS 子集）**已冻结**；`PropertyId` 64 槽满；CI `anim_freeze` 20 项（reduced-motion、fill-mode、Specified 不漂移）。
+- **2026-09-06 动画文档合并**：[`animation_and_motion.md`](engine/animation_and_motion.md) 吸收原 CSS 冻结子集；旧独立文件已删除。
+- **2026-09-06 主题文档拆分**：新建 [`theme.md`](engine/theme.md)（DesignTokens、明暗、`ThemeOverrides`/`theme.toml`、多预设）；[`color.md`](engine/color.md) 聚焦色空间/混色/`semantic_tone`。
+- **2026-09-06 颜色与主题覆盖实现**：[`theme_override.rs`](../crates/rui/src/style/theme_override.rs)（`load_theme_overrides` / `install_theme_overrides` / `compose_theme`）；CI `color_freeze`；`check-token-colors` 脚本（未接入 CI，WP-STY.1 阴影未令牌化会误报）。
 - **2026-09-06 WP-OVL.1**：无头壳 [`utils/viewport_modal`](../crates/rui/src/utils/viewport_modal.rs) — underlay + 视口舞台 + `ModalSurfaceMotion`；RSX `<ViewportModal>` / `<ViewportModalContent>`；Gallery `ViewportModalShowcase`（DialogFade RSX + SheetSlide Builder）。不进 prelude。存量 Dialog/Sheet 薄包装仍归 WP-OVL.4。DialogFade 对齐 Dialog 的 `{id}__modal_zoom`，否则遮罩停在 opacity 0、退场 ExitGate 完不成。SheetSlide 入场须传入视口滑行距离；退场重建须重新种面板 transform，否则遮罩淡出后面板停在贴边、卸树后右上角残留。局部 `Portal mount=` 跟宿主裁剪/滚动，不按根 portal 逃逸。
 - **2026-09-05 WP-OVL.2 / WP-OVL.3**：无头壳 [`utils/anchored_overlay`](../crates/rui/src/utils/anchored_overlay.rs) — Trigger / Point / Unanchored 三种定位；RSX `<AnchoredOverlay>` / `<AnchoredOverlayContent>`；Point 用 `Signal<[f32;2]>` + `drag_handle`。Gallery「浮层 / 反馈」`AnchoredOverlayShowcase`。不进 prelude。
 - **2026-09-05 Unanchored 开合**：去掉多余视口舞台；身份 `ATTR_FLOATING` + 开关 `ATTR_FLOATING_TRIGGER`（`focusId` / `.trigger_id`），避免外点关闭与 toggle 对打。作者 `fixed` / inset 相对窗口即可。

@@ -90,7 +90,7 @@ experimental 备注（不挡本包）：Toggle `default`/`outline` + `sm`/`defau
 |------|------|
 | chrome 色 | `parse_color("primary")` / [`tokens::*`](../../crates/rui/src/tokens/colors.rs) / Theme OKLCH；**禁止**组件内魔法 hex / 裸 `[r,g,b]` 当品牌色 |
 | 焦点环 | [`focus_ring_color`](../../crates/rui/src/style/focus_ring.rs) = theme `ring` |
-| Toast success / warning | `chart-2` / `chart-4` + 语义前景（随 dark 换肤） |
+| Toast success / warning | [`semantic_tone`](../../crates/rui/src/style/semantic_tone.rs)：`green-600` / `orange-600`（边框 `green-300` / `orange-300`）；**不是** `chart-*` |
 | 海拔阴影 | 可用 token 名（`foreground` / `destructive` / `chart-*`）；勿写死 `#16a34a` |
 
 **换肤冒烟（建议，不替代库测）**：Gallery → 切 dark → 抽查 Button / Input / Dialog：主色、边框、焦点环仍来自 Theme，无残浅色魔法绿/琥珀。

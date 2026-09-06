@@ -18,7 +18,10 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4
 | Reactivity & hot reload | 响应式与热重载 | [reactivity_and_hot_reload.md](../ops/reactivity_and_hot_reload.md) |
 | Headless patterns | Headless 模式 | [headless.md](../components/headless.md) |
 | Color tokens | 颜色与混色 | [color.md](../engine/color.md) |
+| Wide gamut / HDR | 广色域与 HDR | [color_advanced.md](../engine/color_advanced.md) |
+| Theme / design tokens | 主题与令牌 | [theme.md](../engine/theme.md) |
 | Box model | 类 CSS 盒模型 | [box_model.md](../engine/box_model.md) |
+| Animation / motion | CSS 动画与 Motion（**已冻结**） | [animation_and_motion.md](../engine/animation_and_motion.md) |
 | Drawing (Svg/Canvas/3D) | 公开自绘面 | [drawing.md](../drawing.md) |
 
 ### Dual writing · 双书写（Button / Input）

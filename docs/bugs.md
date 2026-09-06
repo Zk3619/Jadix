@@ -25,6 +25,7 @@
 
 ## Bugs
 
-- sidebar 展开/收起时常发生卡顿、突变的问题
+- sidebar 展开/收起时常发生卡顿、突变的问题，因为动画期间每帧都在因布局重算而全树重建
 - 程序启动时首屏白屏的问题
-- transition 按像素的滑出：中间被跳过。Sheet/Drawer 开/关改走 `@keyframes` + `translate_pct` 只换了产品路径，没有修 `transition` 本身：`transition: translate` 仍只插值像素、进度走 `Instant`（空闲后下一帧可落到终态）、ease-out 把可见行程压在开头。拖拽松手吸附等仍走这条路径。由此引出拖拽松手吸附行为也存在bug：观察到吸附一次后再次拖拽，drawer瞬间塌陷导致与鼠标之间被隔开大量间距从而导致drawer顶部被压倒视口底部边缘
+- sheet/drawer 入场动画末段存在一帧瞬跳
+- caret 的 520ms WaitUntil 等类似的强制等待是否为兜底策略？这种强制等待兜底在工程项目中似乎不应存在

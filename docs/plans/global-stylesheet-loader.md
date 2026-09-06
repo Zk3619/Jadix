@@ -2,7 +2,7 @@
 
 > **文档地位**：样式承诺面（[`component_inventory.md`](../components/component_inventory.md) §1.8）的**发版前 P0** + **发版后深化**计划。  
 > **约束**：[`AUTHORITY.md`](../AUTHORITY.md) 巩固期明确**不实现完整 CSSOM**（选择器级联 / 浏览器样式表）；本计划是**受控子集**，不是 CSS 引擎。  
-> **关联**：[`color.md`](../engine/color.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5.2.2 · [`devtools.md`](../ops/devtools.md)  
+> **关联**：[`theme.md`](../engine/theme.md) · [`color.md`](../engine/color.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5.2.2 · [`devtools.md`](../ops/devtools.md)  
 > **日期**：2026-08-29
 
 ---
@@ -43,12 +43,12 @@
 
 ### 缺口
 
-| 缺口 | 影响 |
-|------|------|
-| **无文件加载 API** | 用户只能 Rust 代码里 `set_theme` 手改 `DesignTokens` 字段 |
-| **无部分覆盖 / merge** | `set_theme_mode` 会整表替换 light/dark，无法「只改 3 个色」 |
-| **无全局样式表** | 无法按 `data-slot` 统一规则，只能 RSX 逐节点 `class` |
-| **库内仍有硬编码色** | 浮层 shadow、导航 scrim 等用裸 `[0,0,0,α]`（见 §2.3 审计） |
+| 缺口 | 影响 | 状态（2026-09-06） |
+|------|------|-------------------|
+| **无文件加载 API** | 用户只能 Rust 代码里 `set_theme` 手改 `DesignTokens` 字段 | ☑ [`theme_override.rs`](../../crates/rui/src/style/theme_override.rs)：`load_theme_overrides` / `load_and_install_theme_overrides` |
+| **无部分覆盖 / merge** | `set_theme_mode` 会整表替换 light/dark，无法「只改 3 个色」 | ☑ `ThemeOverrides` + `compose_theme`；`set_theme_mode` 保留已安装 patch |
+| **无全局样式表** | 无法按 `data-slot` 统一规则，只能 RSX 逐节点 `class` | 发版后 Phase 1–3 |
+| **库内仍有硬编码色** | 浮层 shadow、导航 scrim 等用裸 `[0,0,0,α]`（见 §2.3 审计） | WP-STY.1 进行中 |
 
 ---
 
@@ -146,7 +146,7 @@ destructive = "oklch(0.704 0.191 22.216)"
 
 #### 2.1.6 文档
 
-- [`color.md`](../engine/color.md) 增 §「应用级主题覆盖」
+- [`theme.md`](../engine/theme.md) — 应用级主题覆盖 §3–§4
 - Gallery 增 **Theme** 分区子页：`theme.toml` 热加载演示（可选 `jadix_hot_reload` 监听）
 
 ---
@@ -454,5 +454,5 @@ gantt
 - [ ] [`AUTHORITY.md`](../AUTHORITY.md) — WP-STY.0–4 + 发版前挡板
 - [ ] [`W4_PRELAUNCH_CHECKLIST.md`](../ops/W4_PRELAUNCH_CHECKLIST.md) — §A3
 - [ ] [`component_inventory.md`](../components/component_inventory.md) — §1.8 增样式表行（Phase 1 后）
-- [ ] [`color.md`](../engine/color.md) — 应用主题覆盖 §
+- [ ] [`theme.md`](../engine/theme.md) — 应用级主题覆盖 §3–§4（已实现 `theme_override.rs`；Gallery 演示待补）
 - [ ] [`CHANGELOG.md`](../CHANGELOG.md) — Phase 0 条目

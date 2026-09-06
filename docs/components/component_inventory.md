@@ -5,7 +5,7 @@
 > **参考分工**（只取所需，不搬架构）：  
 > - [`Reference/ShadCN-UI`](../../reference/ShadCN-UI) → 产品面命名 / `variant`·`size` / 分区对标  
 > - [`Reference/SolidJS`](../../reference/SolidJS) → 受控 Signal、细粒度 sync、非组件清单  
-> - [`Reference/EUI-NEO-main`](../../reference/EUI-NEO-main) → **仅密度标尺**（§3）；禁作 API/架构参照  
+> - [`Reference/EUI-NEO-main`](../../reference/EUI-NEO-main) → **密度标尺**（§3）+ **视觉契约**见 [`EUI_NEO_VISUAL.md`](../comparison/EUI_NEO_VISUAL.md)；禁作 API/架构参照  
 > **日期**：2026-09-05（Gallery 产品面走查；根目录文档收口）。前史：2026-08-12 CV 分桶；2026-08-13 §1.10 公开自绘面（含 B16 / B17）  
 
 交叉：[`AUTHORITY.md`](../AUTHORITY.md) WP-CV.0 · WP-CV.1 · WP-CV.3 · WP-CV.4 · WP-3.11–3.13 · [`drawing.md`](../drawing.md) · [`element_identity.md`](../element_identity.md) · [`gap_analysis.md`](../comparison/gap_analysis.md) §6
@@ -164,7 +164,7 @@
 
 | 公开 API | 位置 | SemVer | 验收归属 | 笔记 |
 |----------|------|--------|----------|------|
-| Theme / `set_theme_mode` | `style/theme.rs` | 0.1 承诺 | WP-2.9、[`color.md`](../engine/color.md)、换肤冒烟 | light/dark 与 chrome 同源 |
+| Theme / `set_theme_mode` | `style/theme.rs` | 0.1 承诺 | WP-2.9、[`theme.md`](../engine/theme.md)、换肤冒烟 | light/dark 与 chrome 同源 |
 | Theme 文件覆盖（计划） | `style/theme_load.rs`（WP-STY.0） | 0.1 承诺 | [`plans/global-stylesheet-loader.md`](../plans/global-stylesheet-loader.md) Phase 0 | `.toml`/`.json`/`.css` `:root` 变量；`ThemeColorPatch` |
 | 全局样式表（计划） | `style/stylesheet/`（WP-STY.2+） | 发版后 | 同上 Phase 1–3 | 有限选择器 → utility；**非** CSSOM |
 | utility `class` 主集 | `rui_style_tokens` + `class`/`tw` | 0.1 承诺 | WP-2.9 ☑、[`box_model.md`](../engine/box_model.md) | 含 `box-border` / `box-content`；未知类名编译期提示 |
@@ -201,7 +201,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 ### 1.10 公开自绘面（W3 · `planned` → 落地先 `experimental`）
 
-规范 [`drawing.md`](../drawing.md)；执行 AUTHORITY **WP-3.11 / 3.12 / 3.13**；创意库 **B16 / B17**。  
+规范 [`drawing.md`](../drawing.md)；执行 AUTHORITY **WP-3.11 / 3.12 / 3.13**；创意库 **B16 / B17**；动态纹理槽 **B18**（[`media.md`](../engine/media.md)，不挡 0.1）。  
 **不是** ShadCN registry 对位；emoji-svg 光栅 ≠ 公开 `<svg>`。
 
 | 规划名 | 建议 Gallery | 优先级 | id 策略 | 笔记 |
@@ -211,6 +211,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | **Scene3d**（`<scene3d>` / `scene3d()`） | 绘制（可选） | **experimental**（WP-3.13 ☑） | 展示型不要求 | feature `scene3d` 默认关；透视立方；无 glTF |
 | **canvas-ui 式 fx**（Liquid/Glass/…） | 绘制 / 实验分区 | P2 · B16 | 包住子树；命中仍走底层 Element | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**不搬** HTML-in-canvas |
 | **react-bits 式 bits**（BlurText / 背景 / …） | 绘制 / 动效实验区 | P2 · B17 | 展示型不要求；动效内 peek | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；glyphon 字形动效 + Canvas 背景；**不搬**每字 DOM span / CSS 运行时 |
+| **MediaSurface / ImageStream** | 绘制（可选） | **experimental** · B18 | 展示型不要求 | `queue_media_frame` + `<Image texture>`；RGBA ☑；`image-stream` YUV ☑；**不是**播放器；规范 [`media.md`](../engine/media.md) |
 
 ---
 
@@ -286,7 +287,8 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 ## 3. EUI 密度标尺（只保留完整度对照）
 
 对照 [`Reference/EUI-NEO-main/components`](../../reference/EUI-NEO-main) 头文件清单与 gap §6。  
-**禁止**：搬 EUI 命令式 DSL、脏矩形架构、GL 后端叙事。
+**禁止**：搬 EUI 命令式 DSL、脏矩形架构、GL 后端叙事。  
+**视觉 / workshop**：控件密度「不跟」≠ 禁止参考 2.5D / Shadertoy / 创意分桶；那一层见 [`EUI_NEO_VISUAL.md`](../comparison/EUI_NEO_VISUAL.md)，产品目录挂 B16/B17，**不进** SemVer 稳定面。
 
 | EUI | RUI | 密度结论 |
 |-----|-----|----------|
@@ -301,7 +303,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | segmented | 无独立模块；用 **ToggleGroup** | 可接受等价 |
 | card / image / panel | Card / Image；panel≈布局原语 | 齐 |
 | **virtualmasonry** | **有（experimental）** | WP-3.10 ☑ 密度空洞关闭；升格见 B5 |
-| heart_switch / neumorphic / tilt_card / layout_debug | 不跟 | 非目标 |
+| heart_switch / neumorphic / tilt_card / layout_debug | **不进稳定面**；tilt/新拟态心智 → B16/B17（[`EUI_NEO_VISUAL.md`](../comparison/EUI_NEO_VISUAL.md)） | 创意目录参考，非 shadcn 默认 |
 | mousearea | ≈ `interactive` 原语 | 非组件清单项 |
 
 **计数标尺（约）**：EUI 公开控件头 ≈ 40；RUI `components/` 产品模块 ≈ 70。密度已超过标尺；剩余差距在 **SemVer 承诺面宽度**、golden 覆盖与个别空洞（块级 md / Spinner），不在「再抄一套 EUI API」。

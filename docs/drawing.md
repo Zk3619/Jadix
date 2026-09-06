@@ -2,10 +2,10 @@
 
 > **文档地位**：绘制原语与公开标签的**领域规范**（「是什么 / 禁区」）。  
 > **执行勾选**：[`AUTHORITY.md`](AUTHORITY.md) **WP-3.2 / WP-3.11 / WP-3.12 / WP-3.13**；未来创意库 **B16**（canvas-ui）· **B17**（react-bits）。  
-> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**；**2026-08-18 2D/3D 能力层 Phase 1–6 ☑**（RenderGraph / TexturePool / Canvas2D 正式面 / GPU 2D 可选 / 子树 effect / scene3d camera·light / Timeline·glyph_fx）。**B16/B17 产品目录仍不挡 Beta**。  
-> **对照**：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（包住子树的 shader/paint）· [react-bits](https://github.com/DavidHDev/react-bits)（文字动效 / 背景 / 动画 UI）；**禁止**搬 HTML-in-canvas / Chrome flag / DOM 纹理 / CSS-in-JS 运行时。
+> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**；**2026-08-18 2D/3D 能力层 Phase 1–6 ☑**（RenderGraph / TexturePool / Canvas2D 正式面 / GPU 2D 可选 / 子树 effect / scene3d camera·light / Timeline·glyph_fx）。**B16/B17 产品目录仍不挡 Beta**。**2026-09-06** 补 EUI-NEO 视觉对照（2.5D resolve 仍压成 2D；用户 shader graph 缺）。  
+> **对照**：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（包住子树的 shader/paint）· [react-bits](https://github.com/DavidHDev/react-bits)（文字动效 / 背景 / 动画 UI）；**EUI-NEO 视觉契约**见 [`comparison/EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)（2.5D / Shadertoy 叶 / workshop；**禁止**搬 compose DSL / GL 双后端）。**禁止**搬 HTML-in-canvas / Chrome flag / DOM 纹理 / CSS-in-JS 运行时。
 
-交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](components/component_inventory.md) · [`damage.md`](engine/damage.md) · [`box_model.md`](engine/box_model.md) · Chart → WP-3.2
+交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](components/component_inventory.md) · [`damage.md`](engine/damage.md) · [`box_model.md`](engine/box_model.md) · Chart → WP-3.2 · Scene3d 8-bit bake 与 HDR 中间目标见 [`color_advanced.md`](engine/color_advanced.md) §5.4 · 动态纹理 / 视频槽见 [`engine/media.md`](engine/media.md)（**不**在本面做播放器）
 
 ---
 
@@ -147,7 +147,9 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
   - **Msdf**：缩放越出约 0.5–2 或 3D label — 覆盖率→SDF（`rui_text_msdf_v1:`）+ FS `median`/`pxRange`；`scene3d().label` 经 mat4 投影 billboard。
   - **Vector / Vello**：outline→`PathCommand`→`RUI_GPU_2D` 仅 spike（`utils/text_vector_spike.rs`）；Vello 对照不替换 glyphon。
 
-对照后续：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（B16 包住子树）· [react-bits](https://github.com/DavidHDev/react-bits)（B17 文字/背景/动画 UI）依赖本层，本包不搬 HTML-in-canvas / CSS-in-JS。
+**2.5D 缺口（对照 EUI · 2026-09-06）**：`style/transform.rs` **解析**了 `rotateX/Y`、`perspective`、`translate3d`，但 `func_to_mat2d` 把 `RotateX` 压成 `scaleY(cos)`、`Perspective` 空操作、`TranslateZ` 丢弃。EUI 的卡片翻转 / tilt 是 **UI 平面真透视**（无 depth buffer，绘制序仍是树 + z-index），不是 `<scene3d>` mesh。加深挂本包能力层 + B16 tilt 前置，**不挡 Beta**、不新开 WP。细则 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §3.2。
+
+对照后续：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（B16 包住子树）· [react-bits](https://github.com/DavidHDev/react-bits)（B17 文字/背景/动画 UI）· EUI-NEO Shadertoy/workshop（同文）。本包不搬 HTML-in-canvas / CSS-in-JS / EUI compose。
 
 ---
 
@@ -241,6 +243,26 @@ W3 **退出不要求** 3.13 3D 产品化 / B16 / B17 目录；3.11/3.12 MVP **�
 - 用 Canvas 每帧清整棵 UI 树（即时模式退回 egui 禁区）  
 - CSS-in-JS / Framer Motion / GSAP / 每字 DOM `<span>` 作为 B17 运行时  
 - 用 B16/B17 替换 shadcn 默认产品面  
+- 搬 EUI 命令式 compose / GLFW+GL 双后端；用 `<scene3d>` 模拟每张 UI 卡片的 2.5D 翻转  
+
+---
+
+## 9. 对照 EUI-NEO 视觉栈（2026-09-06）
+
+EUI-NEO 证明：**不嵌浏览器**也能把 Shader 特效、2.5D 卡片、动态纹理做成与 `rect` 同级的叶。RUI 该学契约，不换底座。专章 [`comparison/EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)。
+
+| EUI | 学 | 不搬 | RUI 挂靠 |
+|-----|----|------|----------|
+| `ui.shadertoy()` 多 Pass `mainImage` | 用户 shader **叶**：布局/圆角/clip/命中/dirty 与普通 UI 相同；失败保留上帧 | 运行时 GLSL 编译器；cubemap/audio/video channel | B16 全幅叶；WGSL + `RenderGraph`；opt-in feature |
+| `rotateX/Y` + `perspective` | UI **平面透视**；无 depth buffer | 为翻牌开 mesh 世界 | §5 加深；今日 resolve 仍压 2D |
+| `runtimePointerTiltFrom` | hover 倾斜 **不 compose** | 每帧 `set` 整卡状态 | `bind_*` / peek 专用通道 |
+| `components/workshop/` | 创意件与 shadcn 稳定面分桶；CSS 阴影→多层 rect | 把新拟态做成默认 Button | B16/B17 目录 |
+| `ImageStream` YUV | 核只收帧；解码在应用/示例 | 默认链 FFmpeg | **规范** [`engine/media.md`](engine/media.md)；计划 [`plans/media-av.md`](plans/media-av.md)（B18，不挡 0.1） |
+| 视觉脏区 `union(old,new)` 含 shadow/blur/transform | B8 输入语义 | 改 damage 哲学 | [`damage.md`](engine/damage.md) |
+
+`effect_wrap` 已覆盖「包住子树」底座；EUI Shadertoy 覆盖的是 **叶内用户 graph**（背景/粒子不必 wrap 子树）。两者可并存，不要互相替代。
+
+**GPUI 不是这一层的标尺**（2026-09-06）：`Transformation` 仅 2D；无用户 shader；`canvas()` 是立即 Scene 回调，不是 WHATWG Canvas2D。图表密度可跟 gpui-component `plot`，2.5D / Shadertoy 仍跟 EUI。三角对照 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §9。
 
 ---
 

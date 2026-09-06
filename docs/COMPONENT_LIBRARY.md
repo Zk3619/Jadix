@@ -2,10 +2,10 @@
 
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](archive/COMPONENT_LIBRARY_PLAN.md)。  
-> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](components/headless.md)、[`color.md`](engine/color.md)、[`drawing.md`](drawing.md)。  
+> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](components/headless.md)、[`theme.md`](engine/theme.md)、[`color.md`](engine/color.md)、[`drawing.md`](drawing.md)。  
 > **日期**：2026-08-12 起分域规范；**2026-09-05** Gallery 产品面走查 + 文档目录收口。中间修订见文内 WP 标注。
 
-交叉文档：[`component_inventory.md`](components/component_inventory.md) · [`component_variants.md`](components/component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](components/custom_components.md) · [`custom_components_suggestions.md`](components/custom_components_suggestions.md) · [`COMPONENT_LAYERING.md`](components/COMPONENT_LAYERING.md) · [`keyboard_nav.md`](ops/keyboard_nav.md) · [`desktop_smoke.md`](ops/desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md) · [`color.md`](engine/color.md) · [`a11y_smoke.md`](ops/a11y_smoke.md) · [`drawing.md`](drawing.md)
+交叉文档：[`component_inventory.md`](components/component_inventory.md) · [`component_variants.md`](components/component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](components/custom_components.md) · [`custom_components_suggestions.md`](components/custom_components_suggestions.md) · [`COMPONENT_LAYERING.md`](components/COMPONENT_LAYERING.md) · [`keyboard_nav.md`](ops/keyboard_nav.md) · [`desktop_smoke.md`](ops/desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](ops/reactivity_and_hot_reload.md) · [`theme.md`](engine/theme.md) · [`color.md`](engine/color.md) · [`a11y_smoke.md`](ops/a11y_smoke.md) · [`drawing.md`](drawing.md)
 
 ---
 
@@ -65,7 +65,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
 | 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](components/component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
-| 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](engine/color.md)） |
+| 设计令牌 | `style/theme.rs`、`theme_override.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark、应用 patch | 业务状态机；完整 ICC/HDR（见 [`color_advanced.md`](engine/color_advanced.md)）；主题契约见 [`theme.md`](engine/theme.md) |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
 
@@ -484,7 +484,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |------|------|
 | `variant` | **产品默认字符串**（对齐 shadcn：`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；对内枚举真源；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`"outline"` 与 `XxxVariant::Outline`）。通用口径 **§3.1.1**；**冻结表 + §0** [`component_variants.md`](components/component_variants.md) |
 | `size` | 同上：字符串产品面 + 可选 `Into<XxxSize>`；合法阶梯 `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
-| 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](engine/color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
+| 颜色 | 经 `parse_color("primary")` 等语义名；令牌表与明暗见 [`theme.md`](engine/theme.md)；OKLCH→display sRGB 数学见 [`color.md`](engine/color.md)；禁止组件内硬编码与 Theme 无关的色值 |
 | `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](engine/color.md) |
 | 焦点环 | 默认走 `style/focus_ring` + theme `ring`；`focus-visible` 行为与冒烟表一致 |
 | 动效 | hover/focus 可用 spring/cubic（Button 已用 spring + 线性 sRGB lerp）；paint sync 优先，避免整树 rebuild |
@@ -541,7 +541,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 **分桶权威表**（`experimental` / `verified` / `planned` / `broken` + **id 策略**）：[`component_inventory.md`](components/component_inventory.md)。  
 粗口径：**Gallery 验证** = 对应分区可演示且无未分类 P0（2026-09-05 产品面已走查）；**工程** = 满足 §1；**SemVer 0.1** = §5.2.1（窄于 Gallery 验证面）；样式承诺面见 §5.2.2；尚未 `pub use` 的对位为 `planned`（inventory §1.9）。
 
-参考分工：ShadCN → 产品命名与分区；Solid → 受控 Signal / 细粒度 sync（非组件表）；EUI → **仅密度标尺**（见 inventory §3），不搬架构。
+参考分工：ShadCN → 产品命名与分区；Solid → 受控 Signal / 细粒度 sync（非组件表）；EUI → **密度标尺**（inventory §3）+ **视觉契约**（[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)），不搬架构。
 
 ### 5.1 按 Gallery 分区
 
@@ -585,7 +585,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |----------------------------|-------------|
 | Theme / `set_theme_mode`、utility `class` 主集（`rui_style_tokens`，含 `box-border`/`box-content`） | 完整 CSSOM、分边 border、真视口单位、局部 `em` 见 [`box_model.md`](engine/box_model.md) / AUTHORITY B15 |
 
-验收归属工程域：WP-2.9、[`color.md`](engine/color.md)、换肤冒烟；**禁止**用 Gallery 控件走查或 verified/stable-candidate 分桶标记。
+验收归属工程域：WP-2.9、[`theme.md`](engine/theme.md)、换肤冒烟；**禁止**用 Gallery 控件走查或 verified/stable-candidate 分桶标记。
 
 #### 5.2.3 `components/` 发布模式（W4 决策）
 
@@ -656,7 +656,7 @@ crates/rui/src/prelude.rs          ← `use rui::prelude::*`
 archive/COMPONENT_LIBRARY_PLAN.md  ← 冻结展开（C-WP 细则）
 components/headless.md · custom_components.md
 ops/keyboard_nav.md · a11y_smoke.md · reactivity_and_hot_reload.md
-engine/color.md
+engine/theme.md · engine/color.md · engine/color_advanced.md
 comparison/gap_analysis.md §6      ← 历史 EUI 密度摘要（真源转 inventory §3）
 ```
 

@@ -1,8 +1,8 @@
 # RUI × 六参考项目对照
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](../AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) §2–§3；**细粒度反应性**见 [REACTIVITY.md](../REACTIVITY.md)（Solid / Leptos / Floem / Dioxus **机制**对照 + §5.7 完整 FG 不变量）。  
-> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `Reference/leptos-main` · `Reference/floem-main` · `Reference/SolidJS` · `Reference/dioxus`；**GPUI 生态专章**见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)（`gpui` · `gpui-component-main` · `gpui-vue-main` · `gpuix-main`）；**组件体量分层**见 [COMPONENT_LAYERING.md](../components/COMPONENT_LAYERING.md)；**Freya 专章**见 [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（`reference/freya-main`）；RUI 以 `crates/` 与工程文档为准。  
-> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；**2026-08-18** 反应性源码对照见 [REACTIVITY.md](../REACTIVITY.md) §5.10；**2026-09-02** GPUI 生态四项目拆至专章；公开自绘面见 [`drawing.md`](../drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）
+> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `Reference/leptos-main` · `Reference/floem-main` · `Reference/SolidJS` · `Reference/dioxus`；**GPUI 生态专章**见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)（`gpui` · `gpui-component-main` · `gpui-vue-main` · `gpuix-main`）；**组件体量分层**见 [COMPONENT_LAYERING.md](../components/COMPONENT_LAYERING.md)；**Freya 专章**见 [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（`reference/freya-main`）；**EUI 视觉 / 2.5D / Shadertoy 专章**见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)；RUI 以 `crates/` 与工程文档为准。  
+> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；**2026-08-18** 反应性源码对照见 [REACTIVITY.md](../REACTIVITY.md) §5.10；**2026-09-02** GPUI 生态四项目拆至专章；公开自绘面见 [`drawing.md`](../drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）；**2026-09-06** EUI 角色补视觉层（不再只当密度标尺）；同日补 GPUI **视觉 / 动画**轴（[EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9 · [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md) §6.5）
 
 ---
 
@@ -17,11 +17,11 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | **GPUI** | 原生桌面深度上限（生态详见 [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md)） |
 | **Slint** | 产品化工具链与发布契约 |
 | **Xilem / Masonry** | 测试 / pass / a11y 纪律 |
-| **EUI-NEO** | 组件密度与脏绘纪律 |
+| **EUI-NEO** | 组件密度、脏绘纪律、**视觉 / 2.5D / Shadertoy 叶** |
 | **Iced** | 同栈近邻（winit/wgpu/cosmic-text）与 Elm 产品面 / DevTools |
 | **egui** | 即时模式采用上限；集成 / kittest 对照；**禁搬架构** |
 
-一句话路线：**用 GPUI/Slint 的验收标准卡自己，用 Xilem 的测试纪律硬化内核，用 EUI 的密度填洞，用 Iced 校准同栈产品与调试体验，用 egui 卡住「不做什么」——底座不动。**
+一句话路线：**用 GPUI/Slint 的验收标准卡自己，用 Xilem 的测试纪律硬化内核，用 EUI 的密度填洞、用它的视觉契约（2.5D / Shadertoy 叶 / workshop 分桶）校准自绘产品感，用 Iced 校准同栈产品与调试体验，用 egui 卡住「不做什么」——底座不动。**
 
 市场结论见 §9：**完善后可在「纯 Rust 保留模式 + 产品感桌面」赛道争头部席位，但无法独占半壁江山**——Rust UI 是多赛道割据，不是单赢家市场。
 
@@ -35,7 +35,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | **GPUI** | Rust · Apache-2.0 | pre-1.0 / 已产（Zed） | Entity/View + 原生窗口；GPU UI | ≈ **116k** `.rs` | 原生深度上限；无 Solid 信号图 |
 | **Slint** | Rust 核 · 三许可 | **1.18** 稳定 | `.slint` DSL + AOT；多语言/嵌入式/桌面 | Rust ≈ **298k** + `.slint` 大量 | 产品化标杆；非纯 Rust UI |
 | **Xilem** | Rust · Apache-2.0 | **0.4** alpha | View-diff → Masonry；Vello/Parley | 树 ≈ **80k** LOC | 测试/pass/a11y 近邻 |
-| **EUI-NEO** | C++17 · Apache-2.0 | **0.5.5** | 命令式 compose DSL；脏矩形 + 组件密度 | 自有 C++ ≈ **54k** | 产品密度标尺；禁搬架构 |
+| **EUI-NEO** | C++17 · Apache-2.0 | **0.5.5** | 命令式 compose DSL；脏矩形 + 组件密度 + **2.5D / Shadertoy 图元** | 自有 C++ ≈ **54k** | 产品密度与视觉契约标尺；禁搬架构 |
 | **Iced** | Rust · MIT | **0.14** 发布 / 树内 **0.15.0-dev** | Elm TEA（State/Message/Update/View）；wgpu + tiny-skia | ≈ **84k** `.rs` | **栈最近邻**；粗粒度重建 vs Signal |
 | **egui** | Rust · MIT/Apache-2.0 | **0.36.x**；接口仍流动 | 即时模式；任意三角形后端可嵌 | ≈ **107k** `.rs` | 工具/游戏 UI 采用王；纲领已否决架构 |
 
@@ -80,7 +80,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | **GPUI** | IME/菜单/多窗/原生 GPU 已产；测试 harness 强；Scene 缓存成熟 | Entity 粒度非信号；平台分叉重；组件库靠拼 `div`；Zed 耦合感强 |
 | **Slint** | 稳定 API、主题控件、LSP/预览、多语言多目标、行为测试海量 | DSL 税；许可复杂；默认非 wgpu-first；与「UI as Rust」目标相悖 |
 | **Xilem** | Pass 系统清晰；截图测试文化；AccessKit/IME 一等；Masonry 控件基线 | rebuild/diff 非细粒度；无 taffy；alpha；eager view 需 memoize |
-| **EUI-NEO** | 图表/Markdown/Picker/VirtualMasonry 密度；脏矩形与静态层缓存文档极深；体积路径友好 | C++；整页 recompose；布局弱于 taffy；a11y/发布叙事弱于 RUI 目标栈 |
+| **EUI-NEO** | 图表/Markdown/Picker/VirtualMasonry 密度；脏矩形与静态层缓存文档极深；体积路径友好；**2.5D 真透视、Shadertoy 一等叶、workshop 创意分桶** | C++；整页 recompose；布局弱于 taffy；a11y/发布叙事弱于 RUI 目标栈；无 `@keyframes` |
 | **Iced** | 与 RUI **同族栈**；TEA 心智清晰；0.14 起 IME/无头测/time-travel/devtools/热重载；widget 面宽（table/grid/markdown/pane_grid） | 非细粒度；无 AccessKit；布局非 taffy Flex/Grid；外观偏「框架默认」非 ShadCN 产品感；长期 experimental 叙事 |
 | **egui** | 上手最快；crates.io 依赖面最大；引擎可嵌；AccessKit + kittest；Rerun 等已产 | 即时模式难撑无头/Portal/复杂 a11y 产品面；外观非原生；接口持续 breaking；纲领明确否决 |
 
@@ -105,7 +105,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | 层 | RUI 现状 | 对标强项 | RUI 差距 |
 |----|----------|----------|----------|
 | 窗口 | winit；次窗 MVP | GPUI 原生多窗/菜单；Slint muda/tray；Iced 多窗 + window | 托盘 stub；次窗焦点/Portal TLS |
-| 渲染 | wgpu SDF + FullClear 默认 | EUI 脏矩形/层缓存；GPUI Scene；Iced layer merge / reactive rendering | GPU PartialLoad = B8；缺场景批优化 |
+| 渲染 | wgpu SDF + FullClear 默认；`<svg>`/`<canvas>`/`<scene3d>`/`effect_wrap` 叶 | EUI 脏矩形/层缓存 + **2.5D 平面 / Shadertoy 叶**（见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)）；GPUI Scene 批绘（**无** 2.5D / 用户 shader，见同文 §9）；Iced layer merge / reactive rendering | GPU PartialLoad = B8；2.5D resolve 仍压成 2D；用户 shader graph 缺 |
 | 布局 | taffy Flex/Grid + 子树 dirty MVP | GPUI/Slint 同族 taffy；Iced row/column/grid；Xilem 自研 | 上溢升父规则未签；VirtualMasonry 缺 |
 | 文本 | glyphon；WP-2.1 Win 签 | Xilem Parley↔a11y；GPUI 平台文本；Iced cosmic-text + shaping 策略 | paint 再 shape；golden 矩阵未齐 |
 
@@ -137,10 +137,10 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 | 参考 | 该学 | 不该搬 | 优先级 |
 |------|------|--------|--------|
-| **GPUI** | IME/光标区契约；多窗生命周期；Scene/view 缓存思路；`#[test]` harness；Actions 键位分层；**arena 子节点 + `stacksafe` 热点换栈**（RUI 已对齐红区并在绘制/命中走迭代；**不 fork taffy**；栈规范已冻结，见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md)） | 弃 winit 换全原生平台分叉；Entity 取代 Signal；Metal/DX 双栈；只抄递归不抄指针化；fork taffy | P0 原生 |
+| **GPUI** | IME/光标区契约；多窗生命周期；Scene/view 缓存思路；`#[test]` harness；Actions 键位分层；**arena 子节点 + `stacksafe` 热点换栈**（RUI 已对齐红区并在绘制/命中走迭代；**不 fork taffy**；栈规范已冻结，见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md)）；**`repeat_synced` 共享相位**；reduce-motion 绑帧泵（视觉/动画轴见 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9） | 弃 winit 换全原生平台分叉；Entity 取代 Signal；Metal/DX 双栈；只抄递归不抄指针化；fork taffy；用 2D SVG rotate 冒充 2.5D | P0 原生 |
 | **Slint** | 行为用例矩阵；主题/控件验收表；partial dirty 策略文档化；发布 feature 门 | `.slint` DSL / AOT 主路径；换 FemtoVG/Skia 默认；三许可模型 | P1 工程 |
 | **Xilem** | Pass 语义（event→layout→paint→a11y）；TestHarness + 截图；WidgetMut 式元数据一致；IME signal 边界 | View-diff 取代 Signal；弃 taffy/glyphon 换 Parley/Vello 全家桶 | P0/P1 |
-| **EUI-NEO** | Gallery 驱动；脏矩形合并策略；静态层缓存；图表/MD/Picker 密度清单 | 整页 compose DSL；GLFW/GL 换栈；FreeType 独占文本 | P1 产品 |
+| **EUI-NEO** | Gallery 驱动；脏矩形合并策略；静态层缓存；图表/MD/Picker 密度清单；**2.5D 透视、Shadertoy 叶契约、workshop 分桶、指针 tilt 不 compose**（[EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)） | 整页 compose DSL；GLFW/GL 换栈；FreeType 独占文本；用 scene3d 模拟每张卡片翻转 | P1 产品 |
 | **Iced** | 同栈工程成熟度：IME、无头/e2e、devtools、reactive rendering、layer 合并；widget 能力清单（table/editor/markdown）；feature 拆分与 CHANGELOG 节奏；**`Box<dyn Widget>` 构建帧**（见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md)） | Elm TEA 取代 Signal；弃 taffy；为对齐 Iced 砍 AccessKit；整树 view 重建主路径 | P0/P1 同栈 |
 | **egui** | `egui_kittest` + AccessKit 验收形态；极简集成边界；「工具 UI」与「产品 UI」市场切割话术 | 即时模式主路径；为体积/上手度放弃保留树与无头组件；epaint 换 glyphon | P1 对照 / **架构禁区** |
 
@@ -149,7 +149,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | 类别 | 内容 |
 |------|------|
 | **坚持** | Solid Owner/Signal；winit + wgpu；taffy；glyphon；`ui!` + Builder 双面；AccessKit |
-| **优先偷师** | Xilem 截图门禁；GPUI IME/多窗契约 + arena/`stacksafe`；Floem 绘制迭代 DFS；EUI 密度与脏绘文档；Slint 用例矩阵；**Iced 同栈测试/DevTools/IME**；egui kittest 形态；栈预算见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md) |
+| **优先偷师** | Xilem 截图门禁；GPUI IME/多窗契约 + arena/`stacksafe`；Floem 绘制迭代 DFS；EUI 密度与脏绘文档 + **视觉契约（2.5D / Shadertoy 叶 / workshop）**；Slint 用例矩阵；**Iced 同栈测试/DevTools/IME**；egui kittest 形态；栈预算见 [`stack_and_element_model.md`](../engine/stack_and_element_model.md) |
 | **明确避免** | VDOM；EUI 命令式主模型；**egui 即时模式**；弃 wgpu 追体积；Slint DSL 主路径；GPUI 全平台自写窗口；**Iced TEA 换核** |
 | **观察不跟** | Parley/Vello 生态（Xilem）；FemtoVG-wgpu（Slint）；GPUI Linux wgpu 文本栈；Iced tiny-skia 默认双渲染器——仅在 glyphon/体积瓶颈时再评估 |
 
@@ -174,6 +174,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 - 把 [desktop_smoke.md](../ops/desktop_smoke.md) 扩成「契约表」：IME 光标区、候选窗、次窗焦点、菜单/快捷键分层。
 - 中期：View/Scene 式 paint op 缓存研究（**不改** Signal）；短期勿分叉 Metal/DX。
+- **视觉 / 2.5D / Shadertoy 不跟 GPUI**（核无透视、无用户 shader）；动画学 `repeat_synced` 与 gpui-base `spring` 拖拽配方，专章 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) §9。
 
 **← Slint**
 
@@ -189,6 +190,8 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 - 组件优先级按 EUI gallery：Pie、VirtualMasonry、MD 块级、Picker 键盘；脏区文档继续写清默认 FullClear（见 [damage.md](../engine/damage.md)）。
 - 体积：接受 wgpu 税；用 feature 拆分追「可裁剪」，不追 OpenGL 量级（见 [size_and_memory.md](../ops/size_and_memory.md)）。
+- **视觉（2026-09-06）**：2.5D 真透视（勿用 `<scene3d>` 翻卡片）、Shadertoy 式用户 shader 叶（WGSL/opt-in）、workshop 与 shadcn 分桶、指针 tilt 不 compose。专章 [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md)；挂 B16/B17 / drawing.md §5，**不新开 WP**。
+- **动画（同日）**：学目标声明 + hover 不 compose + 阴影藏 alpha + Gallery 速度条；**不**拆 `@keyframes` / presence。见同文 **§8**。
 
 **← Iced**
 
@@ -274,6 +277,7 @@ RUI 的设计目标落在 **D**，并额外押注 **Solid 细粒度 + ShadCN 产
 | [GPUI_ECOSYSTEM_COMPARISON.md](GPUI_ECOSYSTEM_COMPARISON.md) | GPUI · gpui-component · gpui-vue · gpuix **生态专章** |
 | [COMPONENT_LAYERING.md](../components/COMPONENT_LAYERING.md) | 组件体量 × gpui-component 分层；P0 collapse 去重 |
 | [FREYA_COMPARISON.md](FREYA_COMPARISON.md) | Freya 专章 |
+| [EUI_NEO_VISUAL.md](EUI_NEO_VISUAL.md) | EUI 视觉 / 2.5D / Shadertoy / workshop；**§9** 与 GPUI / gpui-component 三角对照（密度表仍见本文 + inventory §3） |
 | [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) | 组件领域规范；CV 见 AUTHORITY Wave CV |
 | [desktop_smoke.md](../ops/desktop_smoke.md) · [ime.md](../ops/ime.md) · [damage.md](../engine/damage.md) · [PUBLISH.md](../ops/PUBLISH.md) | 原生 / 脏区 / 发布细则 |
 | [size_and_memory.md](../ops/size_and_memory.md) | 体积叙事：不追 egui/EUI 量级而弃 wgpu |

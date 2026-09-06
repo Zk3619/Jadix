@@ -374,7 +374,7 @@ ui! {
         <Portal id="card-scrim" mount="card-host">
             <Box w="100%" h="100%" items="center" justify="center">
                 <Box w="75%" h="75%" rounded="0.65rem"
-                     bg="rgba(15,23,42,0.55)" backdrop_blur="12"
+                     bg="rgba(15,23,42,0.55)" backdrop_blur="1"
                      items="center" justify="center">
                     <Box w="50%" h="50%" rounded="0.5rem" bg="black"
                          items="center" justify="center">

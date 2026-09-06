@@ -172,7 +172,7 @@ Modal / floating hoist 后另有 `flush_modal_shell_motion_subtree`、`tick_hois
 2. **Animatable 属性** — 长期：`PropertyId` + 静态表 → **运行时 animatable 插件表**（或 `rui-style` 子 crate 持有 enum，组件 feature 扩展）。短期：文档冻结「仅 core 列出的属性可 keyframes」。
 3. **CSS tick** — `tick_animations`、`tick_active_css_transitions_subtree` **留在 runtime**，组件不注册；组件只注册 **定义**（keyframes 名、clip id）。
 
-详见 [css_animation_max_alignment.md](css_animation_max_alignment.md)、[animation_and_motion.md](animation_and_motion.md)。
+详见 [`animation_and_motion.md`](animation_and_motion.md)（第一部分分层 · 第二部分冻结子集）。
 
 ---
 

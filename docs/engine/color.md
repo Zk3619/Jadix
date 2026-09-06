@@ -1,45 +1,57 @@
 # RUI 颜色方案
 
-> **从属**：[COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §4.3（外观）与纲领样式层。组件内禁止硬编码与 Theme 无关的色值。
+> **文档地位**：**色空间、混色数学、语义变体色**的策略契约（不含 Theme 运行时与 `theme.toml`）。主题 / 明暗 / 多预设见 [`theme.md`](theme.md)。Display P3 / 色彩管理 / HDR 见 [`color_advanced.md`](color_advanced.md)。变体词汇见 [`component_variants.md`](../components/component_variants.md)。  
+> **冻结状态**：**未冻结**（2026-09-06；`color_freeze` CI 已接入）。纠错可改；策略变更须改本文。  
+> **实现锚点**：`style/color_space.rs` · `style/color.rs` · `style/semantic_tone.rs` · `renderer/rounded_rect.wgsl` · `crate_tests/style/color_freeze.rs`。
 
-本仓库的 UI 颜色分四层理解；实现上 **A（令牌）** 与 **B（混合）** 已落地在 `crates/rui/src/style/color_space.rs` 与默认主题中。
+> **从属**：[COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §4.3（外观）。组件内禁止硬编码与 Theme 无关的色值；语义名解析依赖 [`theme.md`](theme.md) 中的 `DesignTokens`。
+
+本仓库已落地的 UI **颜色数学**是 **display-referred sRGB LDR**（§1–§2 / §A–§B）；**主题令牌表**见 [`theme.md`](theme.md)。广色域与 HDR **未实现**，设计方案在 [`color_advanced.md`](color_advanced.md)，不改变本文默认输出编码。
 
 ## 1. OKLab / OKLCH 作为设计令牌空间
 
-- **用途**：主题、设计稿、与 **CSS Color 4 / Tailwind v4 / shadcn/ui v4**（`oklch(...)`）对齐；在感知上均匀的插值与变亮变暗。
-- **实现**：默认 `DesignTokens` 由 **OKLCH** 数值经 `palette` 转为 **display sRGB**（`[f32; 4]`，0–1），再供 `parse_color` / 渲染使用。
-- **说明**：GPU 与现有管线仍以 **display sRGB + alpha** 为主，避免一次性改动整栈。
-- **sRGB 交换链**：swapchain / offscreen 目标多为 `*Srgb`。wgpu 要求片元输出 **线性光**，写入时再编码。矩形着色器（`rounded_rect.wgsl`）在写出前对 display 色做 `linearize`；否则会出现二次编码（如 `#333`→`#7B`、`#F5F5F5`→`#FBFBFB`）。主题令牌与 `oklch_to_display_srgba` / `color_mix_over_background` 在 CPU 侧与 Web 一致，勿用改 token 掩盖此问题。
+- **用途**：主题录入、设计稿、与 **CSS Color 4 / Tailwind v4 / shadcn/ui v4**（`oklch(...)`）对齐；感知均匀插值。
+- **实现**：[`theme.rs`](../../crates/rui/src/style/theme.rs) 中 `DesignTokens` 由 OKLCH 经 `oklch_to_display_srgba` 转为 **display sRGB**（`[f32; 4]`），再供 `parse_color` / 渲染使用（见 [`theme.md`](theme.md)）。
+- **说明**：GPU 管线仍以 **display sRGB + alpha** 为主。
+- **sRGB 交换链**：swapchain / offscreen 多为 `*Srgb`。wgpu 要求片元输出 **线性光**再编码。`rounded_rect.wgsl` 写出前 `linearize`；否则二次编码（`#333`→`#7B`）。勿用改 token 掩盖此问题。
 
 ## 2. 线性 sRGB 作为合成与插值空间
 
-- **用途**：在 **CPU 上**对两色做 **lerp**、或需要「光强线性」的运算时，应在线性 sRGB 下算，再编码回 display sRGB。
+- **用途**：CPU 上 **lerp**、光强线性运算。
 - **实现**：`linearize_display_srgb`、`encode_display_srgb`、`lerp_display_srgb_linear`。
-- **说明**：片段着色器经 swapchain **sRGB 格式**输出时，硬件对混合的处理与引擎内部 **手算混色** 需区分；后者以本模块为准。
+- **说明**：swapchain sRGB 输出的硬件混合 vs 引擎手算混色须区分；后者以本模块为准。
 
-## 3. 广色域（Display P3）与系统色彩管理
+## 3. 广色域与 HDR
 
-- **方向**：内部可扩展为 **线性 Display P3** 或 ICC 工作空间；输出前映射到目标色域。
-- **现状**：未接系统 ICC；令牌仍落在 **sRGB 三角** 内，与当前 shadcn 默认浅色主题一致。
-
-## 4. HDR / 场景线性 / PQ
-
-- **用途**：高动态范围 UI、与 3D/视频管线统一。
-- **现状**：未实现；若未来需要，应在 **场景线性 + tone-map** 后再进现有 8-bit 管线。
+未实现。令牌与交换链仍在 **sRGB LDR**。设计方案（P3-A/B/C、HDR-A/B/C、`DisplayTransform`、默认像素不变）见 [`color_advanced.md`](color_advanced.md)。落地前 transition / `color-mix` 走下文 §B。视频 / 动态纹理作为 HDR **媒体叶**的边界见 [`media.md`](media.md)，不在本文扩播放器。
 
 ---
 
-## A. 令牌层（已实现）
+## A. 色空间与默认令牌来源（已实现）
 
-- 默认主题对齐 **shadcn/ui v4** 文档站 `apps/v4/app/globals.css` 中 `:root` / `.dark` 的 **全部** `@theme inline` 语义色（含 `card`、`popover`、`chart-1..5`、`sidebar-*`、`surface`、`code*`、`selection*`；`--radius: 0.625rem`）。
-- `chart-*` 引用 Tailwind v4 默认 `--color-blue-300..800`（见 `Reference/TailwindCSS/packages/tailwindcss/theme.css`）。
+- shadcn v4 `@theme inline` 语义色定义在 [`theme.rs`](../../crates/rui/src/style/theme.rs)；**表结构与运行时**见 [`theme.md`](theme.md) §1。
 - 转换：`oklch_to_display_srgba`（`palette::Oklch` → `Srgb`）。
 
 ## B. 线性混合（已实现）
 
-- **线性 lerp**：`lerp_display_srgb_linear` — 两色在线性 sRGB 下插值，用于动画、渐变、任意 CPU 侧混色。
-- **CSS 式混色**：`mix_display_srgb_in_oklab` — 在 **Oklab** 中按比例混合，接近 `color-mix(in oklab, ...)`，与 **令牌/设计意图** 一致时常用。
-- **与半透明直通道**：仅改 `alpha`、交给 GPU alpha blend 的路径（如 `with_alpha` 只改 `w`）保持原样；物理上更敏感的是 **两色在 CPU 上合成**时用上述函数。
+- **线性 lerp**：`lerp_display_srgb_linear` — 动画、渐变、CPU 混色。
+- **CSS 式混色**：`mix_display_srgb_in_oklab` — 接近 `color-mix(in oklab, ...)`。
+- **半透明直通道**：仅改 `alpha`、GPU blend 的路径保持原样；CPU 两色合成用上式。
+
+---
+
+## 语义变体色（`semantic_tone.rs`）
+
+**产品 `variant` 语气色**与 **Theme `chart-*`** 分离，由 [`semantic_tone.rs`](../../crates/rui/src/style/semantic_tone.rs) 管理（主题边界见 [`theme.md`](theme.md) §1）：
+
+| 语气 | accent 前景 | 边框（非填充） | 阴影色相 | 默认图标 |
+|------|-------------|----------------|----------|----------|
+| `info` | `blue-600` | `blue-300` | `blue-500` | `info` |
+| `success` | `green-600` | `green-300` | `green-500` | `circle-check` |
+| `warning` | `orange-600` | `orange-300` | `orange-500` | `circle-alert` |
+| `destructive` | theme `destructive` | `red-300` | `red-500` | `circle-x` |
+
+**消费方**：Button soft tint、Alert、Badge、Toast、Bubble 等。不得单独硬编码 `green-600` / `chart-2` 作 success。
 
 ---
 
@@ -47,38 +59,35 @@
 
 **更推荐：以「令牌一致」为主，在需要处叠加「物理/感知混合工具」。**
 
-- **shadcn 风格**的首要目标是与 **CSS 变量、Tailwind、无障碍对比度** 一致；令牌用 **OKLCH/OKLab** 与官方主题同源最省事。
-- **物理混合**（线性光强）在 **渐变、动画插值、多层半透明在 CPU 上合成** 时减少发灰、偏色；不必替代 CSS 的 `color-mix(in oklab, …)` 语义，二者可并存：**设计对齐用 OKLab mix，物理光强用 linear lerp**。
+- shadcn 首要对齐 **CSS 变量 / Tailwind / 对比度**；令牌 OKLCH 与官方同源（[`theme.md`](theme.md)）。
+- 物理混合用于渐变、动画插值、CPU 多层合成；**设计对齐用 Oklab mix，光强用 linear lerp**。
 
 ---
 
 ## 与 shadcn / 浏览器：`border`、`outline`、焦点环
 
-- **组件名 `variant="outline"`** 在 shadcn 里对应的是 Tailwind 的 **`border` 类**（盒模型边框、参与占位），**不是** CSS 属性 `outline`（画在边框外侧、默认不占流式布局尺寸）。
-- **焦点环**：shadcn / Tailwind 的 **`ring-*`** 在浏览器里通常由 **`box-shadow`** 实现，与 CSS `outline` 也不是同一套属性。
-- **RUI**：`outline` 变体按钮使用 **`border` 语义色**（`parse_color("border")`）+ 背景/字色；焦点高亮使用 **`Style::shadow_*`（单槽 box-shadow）**，与「边框 + 投影环」的分工和 shadcn 的常见实现方式一致。若将来要像素级复刻 `outline-style` 等，可再接入 `Style::outline_*`，但与当前 shadcn Button 默认写法无关。
+- **`variant="outline"`** = Tailwind **`border` 类**（盒模型），不是 CSS `outline`。
+- **焦点环**：Web 上 `ring-*` 多为 **box-shadow**；RUI 用 `parse_color("border")` + `Style::shadow_*` + theme `ring`（几何见 [`theme.md`](theme.md) §5）。
 
 ## `transition` 与按钮 hover（RUI）
 
-- 浏览器里 `transition-all` 多为 **ease + 固定时长** 的插值。
-- RUI **Button** hover 色直接写目标 `bg` / `border`，由 CSS **`transition-colors`**（~150ms `cubic-bezier(0.4, 0, 0.2, 1)`）插值；**Switch** 拇指位移 / 轨道色同理用 `transition-transform` / `transition-colors`。
-- Gallery / 类名上的 **`transition-transform` / `transition-opacity`** 走同一套 `tick_element_transitions`。
-- 变体 utility 对齐文档站 Aria Button 采样：`primary/80`、`secondary` + `foreground 5%` mix、destructive `/10`→`/20` + 不透明 `destructive` 字色。
+- **Button** hover 由 **`transition-colors`**（~150ms）插值；目标色来自 Theme / `parse_color`。
+- **Switch** 同理 `transition-transform` / `transition-colors`。
+- 变体采样：`primary/80`、`secondary` + `foreground 5%` mix、destructive `/10`→`/20`。
+
+换肤验收见 [`theme.md`](theme.md) §6。
 
 ---
 
-## 换肤冒烟（WP-3.8）
+## CI 契约
 
-Gallery 切 **dark** 后抽查：
-
-| 控件 | 期望 |
+| 门禁 | 命令 |
 |------|------|
-| Button default / outline / destructive | chrome 来自 Theme token，无残浅色硬编码 |
-| Input 焦点环 | theme `ring` |
-| Dialog 面板 / 遮罩 | `card`/`background` 语义色 |
-| Toast success / warning | `chart-2` / `chart-4`（随主题变），不是固定 `green-600` |
+| 颜色 + 主题相关冻结 | `cargo test -p rui --lib color_freeze` |
+| 色空间单测 | `cargo test -p rui --lib color_space` |
+| 裸 RGBA 扫描（本地，WP-STY.1） | `scripts/check-token-colors.ps1` / `.sh` |
 
-库测不替代本条；签署以 [`component_variants.md`](../components/component_variants.md) §3 为准。
+策略变更（混色函数、`semantic_tone` 表）须改本文；**令牌默认 / patch merge** 须改 [`theme.md`](theme.md)；**P3 / HDR / 输出编码** 须改 [`color_advanced.md`](color_advanced.md)。
 
 ---
 
@@ -86,8 +95,10 @@ Gallery 切 **dark** 后抽查：
 
 | 模块 | 说明 |
 |------|------|
-| `style/color_space.rs` | OKLCH 转 display sRGB、线性化/编码、linear lerp、Oklab mix |
-| `style/theme.rs` | `DesignTokens` 默认值（OKLCH 源） |
-| `style/color.rs` | 语义名解析为 `get_theme()` 中的 sRGB |
-| `style/animation.rs` | CSS `tick_element_transitions`；`CubicTween`（Slider 等少数路径） |
-| `components/button.rs` | hover CSS transition-colors + 与 shadcn 对齐的边框/阴影分工 |
+| `style/color_space.rs` | OKLCH 转 sRGB、linearize/encode、lerp、Oklab mix |
+| `style/color.rs` | `parse_color`、语义名、`color_mix_over_background` |
+| `style/semantic_tone.rs` | 跨组件语气色 |
+| `style/theme.rs` | 默认 `DesignTokens`（见 [`theme.md`](theme.md)） |
+| `style/animation.rs` | 色 transition：`lerp_text_rgba` |
+| `components/button.rs` | hover transition-colors |
+| （未实现） | P3 / HDR 设计见 [`color_advanced.md`](color_advanced.md) |

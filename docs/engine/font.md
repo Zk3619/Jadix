@@ -1,9 +1,11 @@
 
 下面分两块说清：**字重为什么「像失效」**，以及**笔画为什么像被裁掉**。这两件事在 RUI（glyphon + cosmic-text + fontdb + Swash）和浏览器（CSS + 各自文本栈）里机制本来就不一样，所以即使用了和 ShadCN 一样的 **class 语义**（`text-sm`、`font-medium`），**像素结果仍可能对不齐**。
 
-> **配置速查**（与 [font_strategy.md](font_strategy.md) 同步）：全局可用 **`RUI_FONT_FAMILY` / `RUI_FONT_SIZE` / `RUI_FONT_WEIGHT`**、**`rui::set_text_defaults`** 或 **`WindowOptions::default_font*`**。局部可用 `class` 的 `font-sans` / `text-sm` / `font-medium` / `leading-none`，或 RSX 的 `font_family` / `text_size` / `font_weight` / `leading`。可变字体走 `wght` 插值；无 Medium 面时默认 **synthetic bold**（`RUI_SYNTHETIC_BOLD=0` 可关）。
+> **文档地位**：字重 / 裁切 / 调试的**诊断手册**（「为何与 Web 不一致」）。策略契约见 [font_strategy.md](font_strategy.md)。**已冻结**（2026-09-06；与 `font_strategy.md` 同批签署）。纠错可改；策略变更须改 `font_strategy.md`。
 >
-> **Gallery**：`cargo run -p gallery` → 侧栏 **文本** → **7) 字体族 / 字重 / 行高覆盖（验收）**。冻结口径见 [font_strategy.md](font_strategy.md)「文档冻结」（签署前未冻结）。
+> **配置速查**（与 [font_strategy.md](font_strategy.md) 同步）：全局可用 **`RUI_FONT_FAMILY` / `RUI_FONT_SIZE` / `RUI_FONT_WEIGHT`**、**`rui::set_text_defaults`** 或 **`WindowOptions::default_font*`**。局部可用 `class` 的 `font-sans` / `text-sm` / `font-medium` / `leading-none`，或 RSX 的 `font_family` / `text_size` / `font_weight` / `leading`。可变字体走 `wght` 插值；无 Medium 面时默认 **synthetic bold**（`RUI_SYNTHETIC_BOLD=0` 可关）。Inter 字体文件由**应用**随包提供（`fonts/` / `RUI_FONT_DIR`），核心不 embed。
+>
+> **Gallery**：`cargo run -p gallery` → 侧栏 **文本** → **7) 字体族 / 字重 / 行高覆盖（验收）**。冻结口径见 [font_strategy.md](font_strategy.md)「文档冻结」。
 
 ---
 

@@ -130,6 +130,10 @@ cargo test -p rui --lib damage::
 RUI_PARTIAL_DAMAGE=1
 ```
 
+## 对照 EUI-NEO（视觉盒 / 层排除 · 非执行源）
+
+EUI 动画脏区是 `union(oldVisualRect, newVisualRect)`，visual 含 **frame + shadow + blur + transform**（含父 2.5D 继承）。静态 **保留层缓存** 自动建离屏纹理，但 backdrop blur、动画、滚动、timer、image、SVG **切断或不进缓存**；新建层当帧不采样。这是 B8「谁不能 cache」的现成验收表，不是换 RUI 四层模型。专章 [`EUI_NEO_VISUAL.md`](../comparison/EUI_NEO_VISUAL.md) §3.5。
+
 ## 何时做 GPU PartialLoad / 树级 DL（规划）
 
 | 时机 | 建议 |

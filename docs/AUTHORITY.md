@@ -51,9 +51,9 @@ docs/                                ★ 根目录 = 权威 + changelog
 │   component_variants.md            variant/size/受控命名（WP-3.8）
 │   custom_components · headless · overlay_shells · COMPONENT_LAYERING
 │
-├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算 / 平台层
+├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算 / 平台层 / 媒体槽
 │   box_model · layout_subtree · stack_and_element_model · platform · color · font* · text_align
-│   animation_and_motion · css_animation_max_alignment · damage · glyphon_audit
+│   animation_and_motion · damage · glyphon_audit · media（动态纹理槽；B18 不挡 Beta）
 │
 ├─ ops/                              验收手册（不是第二套 WP）
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
@@ -63,6 +63,7 @@ docs/                                ★ 根目录 = 权威 + changelog
 │
 ├─ comparison/                       对照审计（非执行源）
 │   gap_analysis · REFERENCE_COMPARISON · GPUI_ECOSYSTEM_COMPARISON · FREYA_COMPARISON
+│   EUI_NEO_VISUAL（EUI 视觉 / 2.5D / Shadertoy / §9 GPUI 三角，非密度表）
 │
 ├─ archive/                          冻结计划 / 愿景 / 早期随笔（勾选作废）
 │   *_PLAN.md · PROJECT · STAGE7_ROADMAP · NAMING_DECISION · bugs · rui.md
@@ -78,11 +79,12 @@ docs/                                ★ 根目录 = 权威 + changelog
 | 要不要换 VDOM / 弃 wgpu / 废 Builder | 纲领 ADR + 本文 §3 | 在组件 PR 里静默改哲学 |
 | 默认交付面 = shadcn？双书写？ | `COMPONENT_LIBRARY.md` | 另起纯无头产品包 |
 | 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid；**Solid × 原生 GUI 终极目标** | `REACTIVITY.md`（§0.1 / **§0.2** / §5.7 / **§5.9 记分牌** / **§5.10 源码对照**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
-| `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
+| `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md)；EUI 视觉契约见 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)（非执行源；GPUI 三角见该文 §9） | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范；搬 EUI compose / GL 双后端；用 GPUI 2D rotate 冒充 2.5D |
+| 音视频进不进核心？播放器 crate？ | [`engine/media.md`](engine/media.md)；计划 [`plans/media-av.md`](plans/media-av.md)（B18，**不挡 Beta**） | 核链 FFmpeg；HWND 视频浮层；0.1 加 `<Video>`；现在建空 `rui_video` |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](components/custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
-| `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) | 在组件里重复实现 tick；把 presence 塞进 `keyframes` |
-| CSS 动画 / transition / `@keyframes` 冻结子集、Specified/Used 模型 | [`css_animation_max_alignment.md`](engine/css_animation_max_alignment.md) | 静默扩面不改该手册 §1.2 / §3；`KeyframeStop` 手工字段；冒充 DOM `animation*` 事件 |
+| `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) 第一部分（**已冻结**） | 在组件里重复实现 tick；把 presence 塞进 `keyframes`；把 `motion` 迁入 `style/` |
+| CSS 动画 / transition / `@keyframes` 冻结子集、Specified/Used 模型 | [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分（**已冻结**） | 静默扩面不改 §11.4 / §13；`KeyframeStop` 手工字段；冒充 DOM `animation*` 事件；不跑 `anim_freeze` |
 | `platform` OS 层该放哪、cfg 边界、mobile/embedded | [`platform.md`](engine/platform.md) | 在 `app/` 或 `renderer/` 静默新增 Win32 块而不更新该手册 |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（回写规范 §5.2.1） | 只改 Gallery 文案 |
@@ -253,7 +255,7 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 **CV.3**（2026-08-12）：稳定面 inventory 文档手工验证修错后签署；无未分类 P0，不降级。  
 **CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → **WP-2.8 ☑**。  
 **CV.5**：不单独开工；golden 五场景 → **WP-2.6**。  
-**样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](engine/color.md)。
+**样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`theme.md`](engine/theme.md)。
 
 ### 5.4 Wave 2 — 文本、像素与内核硬化
 
@@ -430,7 +432,7 @@ WP-3.11 任务要点（已签）：`primitives/svg` 叶 + 场景图 flatten；`u
 
 WP-3.12 任务要点（已签）：`primitives/canvas` 叶 + `paint` / `Canvas2D` MVP（clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip / save·restore）；CPU pixmap → `rui_canvas:`；paint 包 `untrack`（peek 不订根）；`ui!` `<canvas>` 与 `canvas()` 双入口；Gallery「绘制」拖线。不搬 WHATWG Canvas2D 全家桶。**交互（同日）**：path 按段描边；dirty 缓存（滚动不重跑 paint）；指针按住才标 dirty。
 
-WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。**能力层加深（2026-08-18，不挡 Beta）**：`RenderGraph` / `TexturePool`；Canvas2D 曲线/图像/命中；`RUI_GPU_2D=1` 可选 tessellate；`effect_wrap` 子树捕获+shader；`scene3d` camera/light/material；`Timeline` + `glyph_fx`。B16/B17 **产品目录**仍 backlog。
+WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。**能力层加深（2026-08-18，不挡 Beta）**：`RenderGraph` / `TexturePool`；Canvas2D 曲线/图像/命中；`RUI_GPU_2D=1` 可选 tessellate；`effect_wrap` 子树捕获+shader；`scene3d` camera/light/material；`Timeline` + `glyph_fx`。B16/B17 **产品目录**仍 backlog。**2.5D 真透视 / 用户 shader 叶**对照 EUI，见 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)；今日 `rotateX/Y` resolve 仍压 2D，加深不挡 Beta、不新开编号。
 
 WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](ops/keyboard_nav.md)。
 
@@ -555,7 +557,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | 子项 | 任务 | 状态 |
 |------|------|------|
 | **3.8.1** | 词汇表 [`component_variants.md`](components/component_variants.md)；Button 标杆；Scrollbar/Toast/Label 差异登记 | ☑ |
-| **3.8.2** | Token：Toast success/warning → `chart-*`；焦点环 theme `ring`；[`color.md`](engine/color.md) 换肤冒烟 | ☑ |
+| **3.8.2** | Token：Toast success/warning → `semantic_tone`（`green-600`/`orange-600`）；焦点环 theme `ring`；[`theme.md`](engine/theme.md) 换肤冒烟 | ☑ |
 | **3.8.3** | 受控命名 `value_signal` / `checked_signal` / `open_signal`；Button variant + Input 外部 set 测 | ☑ |
 | **3.8.4** | 双书写审计表；Input RSX `value`；site README Button/Input 双片段 | ☑ |
 
@@ -842,8 +844,9 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
 | B5 | VirtualMasonry 产品化（升格 / 密度打磨） | 工程 WP-3.10 MVP ☑ 2026-08-18；升 `verified` 仍 backlog |
 | B6 | 完整 3D/矩阵变换 | **并入 WP-3.13**（2026-08-13）；不再单列挡 W3 |
-| B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
-| B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
+| B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui) + EUI `workshop` / Shadertoy 叶契约（[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)）；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas / EUI compose；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
+| B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits) + EUI tilt/2.5D 产品形状（同文）；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
+| B18 | **音视频分层**：引擎只收动态纹理槽（ImageStream）；解码永不进 `rui`；ArtPlayer 式播放器后置 crate。**不挡** W3/Beta / 0.1 | [`engine/media.md`](engine/media.md) · 计划 [`plans/media-av.md`](plans/media-av.md)；对照 EUI ImageStream、Freya F02 |
 | B7 | 真窗口 CI | 工程 |
 | B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list（树级剪枝）+ draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；ADR 见 [`damage.md`](engine/damage.md)；[`size_and_memory.md`](ops/size_and_memory.md) §7 |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
