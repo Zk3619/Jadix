@@ -154,7 +154,7 @@ impl OffscreenGpu {
     }
 }
 
-fn readback_texture(
+pub(crate) fn readback_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,

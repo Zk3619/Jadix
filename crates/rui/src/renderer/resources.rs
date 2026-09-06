@@ -51,7 +51,10 @@ impl ResourceKind {
             Self::Canvas
         } else if key.starts_with("rui_scene3d:") {
             Self::Scene3d
-        } else if key.starts_with("rui_capture:") || key.starts_with("rui_filter_cap:") {
+        } else if key.starts_with("rui_capture:")
+            || key.starts_with("rui_filter_cap:")
+            || key.starts_with("rui_zoom_cap:")
+        {
             Self::Capture
         } else if key.starts_with("rui_fx:") || key.starts_with("rui_filter:") {
             Self::Effect
@@ -80,6 +83,8 @@ pub struct TexturePool {
     meta: HashMap<String, TextureMeta>,
     frame: u64,
     max_entries: usize,
+    /// GPU objects created via [`Self::insert_with_size`] (not in-place overwrites).
+    create_count: u64,
 }
 
 impl TexturePool {
@@ -89,6 +94,7 @@ impl TexturePool {
             meta: HashMap::new(),
             frame: 0,
             max_entries: DEFAULT_MAX_ENTRIES,
+            create_count: 0,
         }
     }
 
@@ -109,6 +115,45 @@ impl TexturePool {
 
     pub fn max_entries(&self) -> usize {
         self.max_entries
+    }
+
+    pub fn create_count(&self) -> u64 {
+        self.create_count
+    }
+
+    /// In-place `write_texture` when the pooled slot matches `width`×`height`×`format`.
+    /// Does not bump [`Self::create_count`].
+    pub fn try_overwrite_rgba8(
+        &mut self,
+        key: &str,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        let Some(gpu) = self.map.get(key) else {
+            return false;
+        };
+        if !crate::app::image_registry::texture_allows_rgba8_overwrite(
+            &gpu._texture,
+            width,
+            height,
+            format,
+        ) {
+            return false;
+        }
+        if !crate::app::image_registry::write_rgba8_texels(
+            queue,
+            &gpu._texture,
+            rgba,
+            width,
+            height,
+        ) {
+            return false;
+        }
+        self.touch(key);
+        true
     }
 
     /// Entries not touched for more than `max_age` frames (relative to current frame).
@@ -141,6 +186,7 @@ impl TexturePool {
     }
 
     pub fn insert_with_size(&mut self, key: String, tex: GpuImageTexture, width: u32, height: u32) {
+        self.create_count = self.create_count.saturating_add(1);
         let kind = ResourceKind::from_key(&key);
         self.meta.insert(
             key.clone(),
@@ -258,6 +304,10 @@ mod tests {
         );
         assert_eq!(
             ResourceKind::from_key("rui_filter_cap:x"),
+            ResourceKind::Capture
+        );
+        assert_eq!(
+            ResourceKind::from_key("rui_zoom_cap:x"),
             ResourceKind::Capture
         );
         assert_eq!(ResourceKind::from_key("rui_fx:blur"), ResourceKind::Effect);

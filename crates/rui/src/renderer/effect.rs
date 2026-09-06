@@ -4,6 +4,8 @@
 //! Hit-testing stays on the Element tree — this module never swallows pointer targets.
 
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -238,6 +240,67 @@ pub fn queue_subtree_wrap_with_text(
     Some(out_key)
 }
 
+/// Capture a Dialog/Alert `__modal_zoom` subtree at rest, then blit the texture at CSS `scale`.
+///
+/// Independent `scale` otherwise flows to glyphon `TextArea.scale` (atlas churn) or sticky Bake
+/// (Coverage+Bake ghosting). One compositor layer matches Sheet: geometry stays at 1.0, the GPU
+/// scales a single quad. Cache id ignores dest scale so enter frames reuse the RT.
+pub fn queue_zoom_layer_wrap(
+    bounds: [f32; 4],
+    instances: Vec<crate::renderer::InstanceInput>,
+    textured_draws: Vec<crate::renderer::TexturedDraw>,
+    text_nodes: Vec<crate::layout::layout_tree::TextLayoutInfo>,
+) -> String {
+    let id = zoom_layer_cache_id(bounds, &instances, &textured_draws, &text_nodes);
+    let cap_key = format!("rui_zoom_cap:{id:016x}");
+    // Keep descendant overflow clips (remapped in `render_capture`). Stripping them
+    // let inner shells paint the layout AABB and cover rounded corners / the shadow pad.
+    queue_capture(CaptureJob {
+        key: cap_key.clone(),
+        bounds,
+        instances,
+        textured_draws,
+        text_nodes,
+    });
+    cap_key
+}
+
+fn zoom_layer_cache_id(
+    bounds: [f32; 4],
+    instances: &[crate::renderer::InstanceInput],
+    textured_draws: &[crate::renderer::TexturedDraw],
+    text_nodes: &[crate::layout::layout_tree::TextLayoutInfo],
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (bounds[2].round() as i32).hash(&mut hasher);
+    (bounds[3].round() as i32).hash(&mut hasher);
+    instances.len().hash(&mut hasher);
+    for i in instances {
+        ((i.rect_pos[0] - bounds[0]).to_bits()).hash(&mut hasher);
+        ((i.rect_pos[1] - bounds[1]).to_bits()).hash(&mut hasher);
+        i.rect_size[0].to_bits().hash(&mut hasher);
+        i.rect_size[1].to_bits().hash(&mut hasher);
+        for c in i.color {
+            c.to_bits().hash(&mut hasher);
+        }
+    }
+    textured_draws.len().hash(&mut hasher);
+    for d in textured_draws {
+        d.texture_key.hash(&mut hasher);
+        ((d.rect[0] - bounds[0]).to_bits()).hash(&mut hasher);
+        ((d.rect[1] - bounds[1]).to_bits()).hash(&mut hasher);
+        d.rect[2].to_bits().hash(&mut hasher);
+        d.rect[3].to_bits().hash(&mut hasher);
+    }
+    text_nodes.len().hash(&mut hasher);
+    for t in text_nodes {
+        t.text.hash(&mut hasher);
+        t.width.to_bits().hash(&mut hasher);
+        t.height.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +332,21 @@ mod tests {
         assert_eq!(fx.len(), 1);
         assert_eq!(fx[0].kind, EffectKind::Blur);
         assert!((fx[0].strength - 0.8).abs() < 1e-4);
+    }
+
+    #[test]
+    fn queue_zoom_layer_wrap_ignores_origin() {
+        let _ = take_capture_jobs();
+        let a = queue_zoom_layer_wrap([10.0, 20.0, 64.0, 32.0], Vec::new(), Vec::new(), Vec::new());
+        let _ = take_capture_jobs();
+        let b = queue_zoom_layer_wrap(
+            [100.0, 200.0, 64.0, 32.0],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let _ = take_capture_jobs();
+        assert!(a.starts_with("rui_zoom_cap:"));
+        assert_eq!(a, b, "scroll/origin must not bust the zoom capture cache");
     }
 }

@@ -113,6 +113,8 @@ fn vs_main(
     }
 
     // Grow AABB enough to cover all four transformed corners.
+    // Capture (`zoom_layer_shadow_outset`) must use this same `ext` or the RT
+    // clips the halo to a sharp rectangle that pops off when Coverage takes over.
     let half = instance.rect_size * 0.5 + ext;
     let c0 = abs(affine_linear(vec2<f32>( half.x,  half.y), ab, cd));
     let c1 = abs(affine_linear(vec2<f32>( half.x, -half.y), ab, cd));

@@ -3,22 +3,22 @@
 //! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use taffy::prelude::*;
 
 use crate::components::scrollbar::{
-    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX, scrollbar_min_thumb_along_track,
-    scrollbar_track_content_inset, scrollbar_visibility_signal_key,
+    scrollbar_min_thumb_along_track, scrollbar_track_content_inset,
+    scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
-    SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
-    scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
-    scroll_overflow_y_signal_key, scroll_viewport_axis_offset, scroll_viewport_h_signal_key,
-    scroll_viewport_w_signal_key,
+    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+    scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
+    scroll_viewport_axis_offset, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+    SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
@@ -844,7 +844,8 @@ fn push_per_side_border_strips(
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0, backdrop_blur: 0.0,
+                        border_extra: 0.0,
+                        backdrop_blur: 0.0,
                     }
                     .with_clip(parent_clip),
                 );
@@ -880,7 +881,8 @@ fn push_per_side_border_strips(
                             transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: 0.0, backdrop_blur: 0.0,
+                            border_extra: 0.0,
+                            backdrop_blur: 0.0,
                         }
                         .with_clip(parent_clip),
                     );
@@ -2059,6 +2061,9 @@ pub struct LayoutTree {
     /// Test spy: last node passed to `compute_layout_with_measure` (app root or subtree parent).
     #[cfg(test)]
     pub(crate) last_compute_root: Option<NodeId>,
+    /// Test spy: Taffy measure-function invocations in the last compute (text leaves).
+    #[cfg(test)]
+    pub(crate) text_measure_calls: std::cell::Cell<u32>,
     /// Frame-local collect output; `std::mem::take` hands buffers to [`RenderResult`].
     collect_scratch: CollectScratch,
 }
@@ -2417,6 +2422,13 @@ struct CollectPainted {
     filter_capture: bool,
     filter_cap_inst0: usize,
     filter_cap_tex0: usize,
+    /// Dialog `__modal_zoom` CSS scale: capture at rest, blit scaled. `None` when idle.
+    scale_layer: Option<[f32; 2]>,
+    scale_cap_inst0: usize,
+    scale_cap_tex0: usize,
+    scale_cap_text0: usize,
+    /// Rest layout border box (not CSS-scaled `render_rect`) for zoom capture dest.
+    layout_border: [f32; 4],
     is_body_portal_layer: bool,
     thumb_rect_for_child: Option<[f32; 4]>,
     layout_size: taffy::geometry::Size<f32>,
@@ -2443,6 +2455,7 @@ struct CollectWalk {
     cap_children: bool,
     cap_inst0: usize,
     cap_tex0: usize,
+    cap_text0: usize,
     parent_tl: [f32; 2],
     child_ancestor_scale: [f32; 2],
     child_ancestor_linear: crate::style::Mat2d,
@@ -2543,10 +2556,18 @@ impl LayoutTree {
         crate::core::reactivity::with_ui_build_stack(|| {
             let tm = &self.text_measurements;
             let mcache = &self.measure_layout_cache;
+            #[cfg(test)]
+            self.text_measure_calls.set(0);
+            #[cfg(test)]
+            let measure_calls = &self.text_measure_calls;
             self.taffy.compute_layout_with_measure(
                 node,
                 available_space,
                 |known_dimensions, available_space, node_id, _context, _style| {
+                    #[cfg(test)]
+                    if tm.contains_key(&node_id) {
+                        measure_calls.set(measure_calls.get().saturating_add(1));
+                    }
                     measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
                 },
             )
@@ -2571,6 +2592,8 @@ impl LayoutTree {
             mark_dirty_calls: 0,
             #[cfg(test)]
             last_compute_root: None,
+            #[cfg(test)]
+            text_measure_calls: std::cell::Cell::new(0),
             collect_scratch: CollectScratch::default(),
         }
     }
@@ -2820,7 +2843,8 @@ impl LayoutTree {
         root.style.size.height = Dimension::length(height);
         cascade_inheritable_text_style(root, None);
 
-        self.text_measurements.clear();
+        // Keep prior text-measure metas. Clearing here forced every portal hoist
+        // (Dialog open) to remasure the whole gallery. Unvisited nodes are pruned below.
         self.visited_nodes.clear();
         // DO NOT clear taffy anymore; we rely on reconciliation and selective removal.
         let root_node = self.build_taffy_node_mut(root, Some(width), Some(height), None);
@@ -3260,8 +3284,25 @@ impl LayoutTree {
 
                     let node_id = if let Some(existing_id) = element.layout_node {
                         if self.total_nodes.contains(&existing_id) {
-                            self.taffy.set_style(existing_id, style).unwrap();
-                            self.taffy.set_children(existing_id, &child_nodes).unwrap();
+                            // set_style / set_children dirty the node even when the value is
+                            // identical. Portal hoist (Dialog open) rewrites only the overlay
+                            // layer — the page walk must not remasure every gallery text leaf.
+                            let style_changed = self
+                                .taffy
+                                .style(existing_id)
+                                .ok()
+                                .map_or(true, |old| old != &style);
+                            if style_changed {
+                                self.taffy.set_style(existing_id, style).unwrap();
+                            }
+                            let kids_changed = self
+                                .taffy
+                                .children(existing_id)
+                                .ok()
+                                .map_or(true, |old| old.as_slice() != child_nodes.as_slice());
+                            if kids_changed {
+                                self.taffy.set_children(existing_id, &child_nodes).unwrap();
+                            }
                             existing_id
                         } else if is_text_leaf {
                             let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
@@ -3745,11 +3786,17 @@ impl LayoutTree {
             let _ = crate::app::devtools::refresh_highlight_slot(element);
         }
 
-        let opacity = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
+        let zoom_layer_scale = modal_zoom_compositor_scale(element);
+        let fade = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
+        // Own chrome (rounded border / shadow) paints with the fade. Capture children
+        // stay opaque; fade lives on the inner blit so the RT is content-stable.
+        let opacity = fade;
         // Stamped Inspector highlight rects are already in paint/visual space — never
         // subtract ancestor scroll again (that shifts the overlay upward).
-        let scroll_for_render = if element.style.position_fixed || devtools_highlight_rect.is_some()
-        {
+        // Local `mount=` portals must keep ancestor scroll even if a prior body-mount
+        // frame left `position_fixed` set (`escapes_ancestor_overflow` already restored
+        // `scroll_acc`). Using `position_fixed` here un-scrolled the scrim for a frame.
+        let scroll_for_render = if escape_overflow_clip || devtools_highlight_rect.is_some() {
             [0.0_f32, 0.0_f32]
         } else {
             scroll_acc
@@ -3882,29 +3929,34 @@ impl LayoutTree {
         if let Some(name) = element.style.clip_path_name.as_deref() {
             crate::style::register_clip_path(name, element.style.clip_path.clone());
         }
-        let gpu_poly = {
-            let inherited = if escape_overflow_clip {
-                crate::style::GpuClipPoly::NONE
-            } else {
-                parent_clip_poly
-            };
-            let clip_path_poly = if element.style.clip_path.is_none() {
-                crate::style::GpuClipPoly::NONE
-            } else {
-                element.style.clip_path.to_gpu(layout_border)
-            };
-            let local = if clip_path_poly.is_active() {
-                clip_path_poly
-            } else if overflow_clips
-                && !escape_overflow_clip
-                && crate::style::radii_affect_clip(element.style.radii)
-            {
-                crate::style::GpuClipPoly::from_rounded_rect(layout_border, element.style.radii)
-            } else {
-                crate::style::GpuClipPoly::NONE
-            };
-            crate::style::GpuClipPoly::and_layers(inherited, local)
+        let inherited_clip_poly = if escape_overflow_clip {
+            crate::style::GpuClipPoly::NONE
+        } else {
+            parent_clip_poly
         };
+        let clip_path_poly = if element.style.clip_path.is_none() {
+            crate::style::GpuClipPoly::NONE
+        } else {
+            element.style.clip_path.to_gpu(layout_border)
+        };
+        let overflow_clip_poly = if overflow_clips
+            && !escape_overflow_clip
+            && crate::style::radii_affect_clip(element.style.radii)
+        {
+            crate::style::GpuClipPoly::from_rounded_rect(layout_border, element.style.radii)
+        } else {
+            crate::style::GpuClipPoly::NONE
+        };
+        // Descendants: overflow + clip-path. Own chrome: clip-path only —
+        // overflow must not scissor outset box-shadow (Dialog/Drawer/Sheet).
+        let descendant_local = if clip_path_poly.is_active() {
+            clip_path_poly
+        } else {
+            overflow_clip_poly
+        };
+        let gpu_poly = crate::style::GpuClipPoly::and_layers(inherited_clip_poly, descendant_local);
+        let own_clip_poly =
+            crate::style::GpuClipPoly::and_layers(inherited_clip_poly, clip_path_poly);
         let visible_rect = intersect_rect(clip, render_rect);
 
         // Clip-cull: skip paint + descendants when this box (plus shadow/transform outset)
@@ -4005,6 +4057,10 @@ impl LayoutTree {
         // CSS `filter` must capture this node's own paint (bg/border/shadow) + descendants.
         // Record buffer indices *before* own paint; `rui_fx` still captures children only.
         let filter_capture = element.style.filter.as_ref().is_some_and(|l| !l.is_empty());
+        let scale_layer_capture = zoom_layer_scale.is_some() && !filter_capture;
+        // Filter SourceGraphic includes this node's own paint. Zoom capture must
+        // **not**: own rounded chrome stays live SDF (the blit dest was the extra
+        // rectangular stroke). Record zoom indices after own paint.
         let filter_cap_inst0 = if filter_capture { instances.len() } else { 0 };
         let filter_cap_tex0 = if filter_capture {
             textured_draws.len()
@@ -4126,10 +4182,10 @@ impl LayoutTree {
                         shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
                         transform,
                         clip_pos: [0.0, 0.0],
-                            clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: sdf_border_extra,
-                            backdrop_blur: instance_backdrop_blur,
-                        }
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        border_extra: sdf_border_extra,
+                        backdrop_blur: instance_backdrop_blur,
+                    }
                     .with_clip(paint_parent_clip),
                 );
             }
@@ -4176,7 +4232,8 @@ impl LayoutTree {
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0, backdrop_blur: 0.0,
+                        border_extra: 0.0,
+                        backdrop_blur: 0.0,
                     }
                     .with_clip(paint_parent_clip),
                 );
@@ -4253,7 +4310,8 @@ impl LayoutTree {
                                 },
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                border_extra: 0.0, backdrop_blur: 0.0,
+                                border_extra: 0.0,
+                                backdrop_blur: 0.0,
                             }
                             .with_clip(clip),
                         );
@@ -4345,7 +4403,8 @@ impl LayoutTree {
                             transform: q_xf,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: 0.0, backdrop_blur: 0.0,
+                            border_extra: 0.0,
+                            backdrop_blur: 0.0,
                         }
                         .with_clip(paint_parent_clip),
                     );
@@ -4403,7 +4462,8 @@ impl LayoutTree {
                             transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: 0.0, backdrop_blur: 0.0,
+                            border_extra: 0.0,
+                            backdrop_blur: 0.0,
                         }
                         .with_clip(paint_parent_clip),
                     );
@@ -4457,7 +4517,8 @@ impl LayoutTree {
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: outline_extra, backdrop_blur: 0.0,
+                        border_extra: outline_extra,
+                        backdrop_blur: 0.0,
                     }
                     .with_clip(paint_parent_clip),
                 );
@@ -4739,11 +4800,10 @@ impl LayoutTree {
                         } else {
                             crate::renderer::BAKE_OVERSAMPLE
                         };
+                        let src_w = (text_w * text_scale).max(1.0);
+                        let src_h = (text_h * text_scale).max(1.0);
                         let draw_w = text_w * text_scale;
                         let draw_h = text_h * text_scale;
-                        // CSS `scale` is baked into vis rect / draw_w (not `world_linear`). Rasterize
-                        // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
-                        // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
                         let bake_font_size = text_style.size_resolved() * text_scale;
                         // Expand to line-height + ink pad (+ text-shadow extent); draw the padded
                         // quad so glyphs/shadow aren't clipped. Intersect only with ancestor scroll
@@ -4785,8 +4845,8 @@ impl LayoutTree {
                         };
                         let (bake_w, bake_h, pad) =
                             crate::utils::text_texture::text_xform_bake_box_ex(
-                                draw_w.max(1.0),
-                                draw_h.max(1.0),
+                                src_w,
+                                src_h,
                                 bake_font_size,
                                 shadow_extra,
                             );
@@ -4794,7 +4854,7 @@ impl LayoutTree {
                         let is_input_text = text_style.input_caret.is_some();
                         let hard_lines_n = text.split('\n').count().max(1);
                         let glyph_dy = crate::utils::text_texture::bake_glyph_layout_dy(
-                            draw_h,
+                            src_h,
                             bake_font_size,
                             hard_lines_n,
                             nowrap,
@@ -4811,8 +4871,8 @@ impl LayoutTree {
                                 bake_font_size,
                                 text_style.weight_resolved(),
                                 text_style.color_resolved(),
-                                draw_w.max(1.0),
-                                draw_h.max(1.0),
+                                src_w,
+                                src_h,
                                 bake_w,
                                 bake_h,
                                 pad,
@@ -4827,8 +4887,8 @@ impl LayoutTree {
                                 bake_font_size,
                                 text_style.weight_resolved(),
                                 text_style.color_resolved(),
-                                draw_w.max(1.0),
-                                draw_h.max(1.0),
+                                src_w,
+                                src_h,
                                 bake_w,
                                 bake_h,
                                 pad,
@@ -4992,16 +5052,36 @@ impl LayoutTree {
             } // else !icon_spin_paint
         }
 
-        stamp_clip_polys(clip_polys, instances.len(), gpu_poly);
+        stamp_clip_polys(clip_polys, instances.len(), own_clip_poly);
 
         paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
+
+        let scale_cap_inst0 = if scale_layer_capture {
+            instances.len()
+        } else {
+            0
+        };
+        let scale_cap_tex0 = if scale_layer_capture {
+            textured_draws.len()
+        } else {
+            0
+        };
+        let scale_cap_text0 = if scale_layer_capture {
+            text_nodes.len()
+        } else {
+            0
+        };
 
         CollectPaintOutcome::Ready(CollectPainted {
             abs_x,
             abs_y,
             lay_w,
             lay_h,
-            opacity,
+            opacity: if zoom_layer_scale.is_some() {
+                ancestor_opacity.clamp(0.0, 1.0)
+            } else {
+                opacity
+            },
             clip,
             parent_clip,
             clip_poly: gpu_poly,
@@ -5015,6 +5095,11 @@ impl LayoutTree {
             filter_capture,
             filter_cap_inst0,
             filter_cap_tex0,
+            scale_layer: zoom_layer_scale,
+            scale_cap_inst0,
+            scale_cap_tex0,
+            scale_cap_text0,
+            layout_border,
             is_body_portal_layer,
             thumb_rect_for_child,
             layout_size: layout.size,
@@ -5109,26 +5194,34 @@ impl LayoutTree {
         } else {
             0
         };
-        let (cap_inst0, cap_tex0, cap_children) = if painted.filter_capture {
-            (painted.filter_cap_inst0, painted.filter_cap_tex0, true)
+        let (cap_inst0, cap_tex0, cap_text0, cap_children) = if painted.filter_capture {
+            (painted.filter_cap_inst0, painted.filter_cap_tex0, 0, true)
+        } else if painted.scale_layer.is_some() {
+            (
+                painted.scale_cap_inst0,
+                painted.scale_cap_tex0,
+                painted.scale_cap_text0,
+                true,
+            )
         } else if fx_capture_children {
-            (fx_cap_inst0, fx_cap_tex0, true)
+            (fx_cap_inst0, fx_cap_tex0, 0, true)
         } else {
-            (0, 0, false)
+            (0, 0, 0, false)
         };
 
-        let (child_clip, child_clip_poly) = if painted.filter_capture {
-            filter_source_overflow_clip(&element.style, abs_x, abs_y, lay_w, lay_h)
-        } else {
-            (painted.clip, painted.clip_poly)
-        };
+        let (child_clip, child_clip_poly) =
+            if painted.filter_capture || painted.scale_layer.is_some() {
+                filter_source_overflow_clip(&element.style, abs_x, abs_y, lay_w, lay_h)
+            } else {
+                (painted.clip, painted.clip_poly)
+            };
 
         let parent_tl = [
             abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
             abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
         ];
-        let parent_scales =
-            (painted.paint_sx - 1.0).abs() > 1e-4 || (painted.paint_sy - 1.0).abs() > 1e-4;
+        let parent_scales = painted.scale_layer.is_none()
+            && ((painted.paint_sx - 1.0).abs() > 1e-4 || (painted.paint_sy - 1.0).abs() > 1e-4);
         let parent_rotates = !crate::style::mat2d_is_axis_aligned(&painted.local_linear)
             || !crate::style::mat2d_is_axis_aligned(&ancestor_linear);
         let parent_translates = element.style.translate[0].abs() > 0.05
@@ -5152,7 +5245,11 @@ impl LayoutTree {
         };
 
         CollectWalkStart::Ready(CollectWalk {
-            child_ancestor_scale: [painted.paint_sx, painted.paint_sy],
+            child_ancestor_scale: if painted.scale_layer.is_some() {
+                [1.0, 1.0]
+            } else {
+                [painted.paint_sx, painted.paint_sy]
+            },
             child_ancestor_linear: painted.world_linear,
             child_sticky_xform: ancestor_sticky_xform
                 || crate::renderer::element_wants_sticky_xform(element),
@@ -5178,6 +5275,7 @@ impl LayoutTree {
             cap_children,
             cap_inst0,
             cap_tex0,
+            cap_text0,
             child_nodes,
             cursor: 0,
             stopped: false,
@@ -5437,7 +5535,7 @@ impl LayoutTree {
         node: NodeId,
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
-        _text_nodes: &mut Vec<TextLayoutInfo>,
+        text_nodes: &mut Vec<TextLayoutInfo>,
         input_chrome_instances: &mut Vec<InstanceInput>,
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
         overlay_split: &mut OverlayPaintSplit,
@@ -5453,6 +5551,7 @@ impl LayoutTree {
             cap_children,
             cap_inst0,
             cap_tex0,
+            cap_text0,
             ancestor_scroll_viewport_rest,
             ..
         } = walk;
@@ -5465,6 +5564,8 @@ impl LayoutTree {
             visible_rect,
             transform,
             filter_capture,
+            scale_layer,
+            layout_border,
             layout_size,
             clip,
             ..
@@ -5474,7 +5575,10 @@ impl LayoutTree {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_sub(1);
         }
 
-        if cap_children && (instances.len() > cap_inst0 || textured_draws.len() > cap_tex0) {
+        let has_cap_payload = instances.len() > cap_inst0
+            || textured_draws.len() > cap_tex0
+            || text_nodes.len() > cap_text0;
+        if cap_children && has_cap_payload {
             let filter_outset = if filter_capture {
                 element
                     .style
@@ -5487,20 +5591,78 @@ impl LayoutTree {
             } else {
                 0.0
             };
-            let output_vis = if filter_capture {
-                intersect_rect(
-                    parent_clip,
-                    inflate_rect(render_rect, filter_outset, filter_outset),
-                )
+            let (capture_bounds, draw_rect) = if filter_capture {
+                let inflated = inflate_rect(render_rect, filter_outset, filter_outset);
+                let b = [
+                    inflated[0],
+                    inflated[1],
+                    inflated[2].max(1.0),
+                    inflated[3].max(1.0),
+                ];
+                (b, b)
+            } else if let Some([sx, sy]) = scale_layer {
+                // Inner content only — own rounded chrome is live SDF in the main pass.
+                // Dest is the scaled padding box (not a shadow-outset AABB around the card).
+                // That AABB was the extra rectangular stroke that vanished at rest.
+                let [bt, br, bb, bl] = element.style.resolved_border_widths();
+                let capture = [
+                    layout_border[0] + bl,
+                    layout_border[1] + bt,
+                    (layout_border[2] - bl - br).max(1.0),
+                    (layout_border[3] - bt - bb).max(1.0),
+                ];
+                let cx = layout_border[0] + layout_border[2] * 0.5;
+                let cy = layout_border[1] + layout_border[3] * 0.5;
+                (capture, scale_rect_about(capture, sx, sy, cx, cy))
             } else {
-                visible_rect
+                (visible_rect, visible_rect)
             };
+            let output_vis = intersect_rect(parent_clip, draw_rect);
             if output_vis[2] <= 0.0 || output_vis[3] <= 0.0 {
                 // Fully outside ancestor clip (including filter halo) — drop captured draws.
                 instances.truncate(cap_inst0);
                 textured_draws.truncate(cap_tex0);
+                text_nodes.truncate(cap_text0);
                 clip_polys.truncate(cap_inst0);
                 paint_rec.truncate_from(cap_inst0, cap_tex0);
+            } else if let Some([sx, sy]) = scale_layer {
+                // Hairline SDF (Select trigger border, inner cards) stays live, scaled
+                // about the card center. A 1px stroke in the blit dest goes thick/dark
+                // under linear minification and snaps thin at Coverage.
+                let child_tex: Vec<TexturedDraw> = textured_draws.drain(cap_tex0..).collect();
+                let child_text: Vec<TextLayoutInfo> = text_nodes.drain(cap_text0..).collect();
+                textured_draws.truncate(cap_tex0);
+                paint_rec.truncate_from(instances.len(), cap_tex0);
+                let fade = element.style.opacity.clamp(0.0, 1.0);
+                let cx = layout_border[0] + layout_border[2] * 0.5;
+                let cy = layout_border[1] + layout_border[3] * 0.5;
+                for inst in &mut instances[cap_inst0..] {
+                    scale_zoom_child_instance(inst, sx, sy, cx, cy, fade);
+                }
+                for poly in clip_polys[cap_inst0..].iter_mut() {
+                    poly.scale_about(sx, sy, cx, cy);
+                }
+                let out_key = if !child_tex.is_empty() || !child_text.is_empty() {
+                    Some(crate::renderer::queue_zoom_layer_wrap(
+                        capture_bounds,
+                        Vec::new(),
+                        child_tex,
+                        child_text,
+                    ))
+                } else {
+                    None
+                };
+                if let Some(out_key) = out_key {
+                    let blit_clip = clip;
+                    let blit_fade = (opacity * fade).clamp(0.0, 1.0);
+                    if let Some(draw) =
+                        TexturedDraw::clipped(draw_rect, blit_clip, out_key, blit_fade)
+                    {
+                        let tex_i = textured_draws.len();
+                        textured_draws.push(draw);
+                        paint_rec.push_textured(tex_i, 1);
+                    }
+                }
             } else {
                 let child_insts = instances[cap_inst0..].to_vec();
                 let child_tex = textured_draws[cap_tex0..].to_vec();
@@ -5508,22 +5670,11 @@ impl LayoutTree {
                 textured_draws.truncate(cap_tex0);
                 clip_polys.truncate(cap_inst0);
                 paint_rec.truncate_from(cap_inst0, cap_tex0);
-                let filter_bounds = if filter_capture {
-                    let inflated = inflate_rect(render_rect, filter_outset, filter_outset);
-                    [
-                        inflated[0],
-                        inflated[1],
-                        inflated[2].max(1.0),
-                        inflated[3].max(1.0),
-                    ]
-                } else {
-                    visible_rect
-                };
                 let out_key = if filter_capture {
                     element.style.filter.as_ref().and_then(|list| {
                         crate::renderer::queue_css_filter_wrap(
                             list,
-                            filter_bounds,
+                            capture_bounds,
                             child_insts,
                             child_tex,
                         )
@@ -5537,13 +5688,7 @@ impl LayoutTree {
                     )
                 };
                 if let Some(out_key) = out_key {
-                    let draw_rect = if filter_capture {
-                        filter_bounds
-                    } else {
-                        visible_rect
-                    };
-                    if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity)
-                    {
+                    if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity) {
                         let tex_i = textured_draws.len();
                         textured_draws.push(draw);
                         paint_rec.push_textured(tex_i, 1);
@@ -5760,6 +5905,98 @@ fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {
     ]
 }
 
+fn scale_rect_about(rect: [f32; 4], sx: f32, sy: f32, cx: f32, cy: f32) -> [f32; 4] {
+    [
+        cx + (rect[0] - cx) * sx,
+        cy + (rect[1] - cy) * sy,
+        (rect[2] * sx).max(1.0),
+        (rect[3] * sy).max(1.0),
+    ]
+}
+
+/// Scale a zoom-layer descendant SDF about the **card** center. `border_width` stays
+/// 1px (CSS scale would be a bitmap hairline that reads thick/dark then snaps thin).
+fn scale_zoom_child_instance(
+    inst: &mut InstanceInput,
+    sx: f32,
+    sy: f32,
+    cx: f32,
+    cy: f32,
+    fade: f32,
+) {
+    let scaled = scale_rect_about(
+        [
+            inst.rect_pos[0],
+            inst.rect_pos[1],
+            inst.rect_size[0],
+            inst.rect_size[1],
+        ],
+        sx,
+        sy,
+        cx,
+        cy,
+    );
+    inst.rect_pos = [scaled[0], scaled[1]];
+    inst.rect_size = [scaled[2], scaled[3]];
+    inst.color[3] *= fade;
+    inst.border_color[3] *= fade;
+    inst.shadow_color[3] *= fade;
+    let s = sx.abs().min(sy.abs());
+    inst.radii = inst.radii.map(|r| r * s);
+    inst.shadow_offset[0] *= sx;
+    inst.shadow_offset[1] *= sy;
+    inst.shadow_blur *= s;
+    inst.shadow_spread *= s;
+    if inst.clip_size[0] >= 0.0 && inst.clip_size[1] >= 0.0 {
+        let clip = scale_rect_about(
+            [
+                inst.clip_pos[0],
+                inst.clip_pos[1],
+                inst.clip_size[0],
+                inst.clip_size[1],
+            ],
+            sx,
+            sy,
+            cx,
+            cy,
+        );
+        inst.clip_pos = [clip[0], clip[1]];
+        inst.clip_size = [clip[2], clip[3]];
+    }
+}
+
+/// Dialog `__modal_zoom` during `zoom-in-90` / `zoom-out-90`: capture **text/icons** at rest,
+/// GPU-scale one inner blit. Own rounded chrome and descendant SDF (Select 1px border)
+/// stay live — a capture dest AABB, or a minified 1px stroke in that blit, was the extra
+/// rectangular / thick-dark frame that vanished at rest.
+///
+/// Live CSS scale on each descendant bakes about *that node's* center, so body rows
+/// crawl toward/away from the card origin while glyphon `paint_scale` churns the atlas.
+/// Children inherit scale `[1,1]` into the RT; the blit matches CSS `transform-origin`.
+fn modal_zoom_compositor_scale(el: &Element) -> Option<[f32; 2]> {
+    let tid = el.template_id.as_deref()?;
+    if !tid.ends_with("__modal_zoom") {
+        return None;
+    }
+    let sx = el.style.scale[0];
+    let sy = el.style.scale[1];
+    if !sx.is_finite() || !sy.is_finite() || sx <= 0.0 || sy <= 0.0 {
+        return None;
+    }
+    let zoom_kf = el.style.animations.iter().any(|a| {
+        matches!(
+            a.name.as_str(),
+            "zoom-in-90" | "zoom-out-90" | "zoom-in-95" | "zoom-out-95"
+        )
+    });
+    // Drain only after keyframes are cleared. Fill-mode can hold scale=1 while
+    // `zoom-in-90` is still listed — dropping then popped dest AABB + bitmap rows.
+    if (sx - 1.0).abs() <= 1e-5 && (sy - 1.0).abs() <= 1e-5 && !zoom_kf {
+        return None;
+    }
+    Some([sx, sy])
+}
+
 /// Outset past `layout_bounds` that can still paint into the clip (shadow / outline / transform).
 fn paint_outset_pad(style: &crate::style::Style, lay_w: f32, lay_h: f32) -> f32 {
     let outset = |blur: f32, spread: f32, ox: f32, oy: f32, inset: bool| {
@@ -5841,7 +6078,7 @@ fn hidden_input_text_clip(parent_clip: Option<[f32; 4]>, leaf: [f32; 4]) -> Opti
 /// Extract a definite px value from `LengthPercentageAuto`, returning `None` for `Auto`.
 #[inline]
 fn lpa_to_px(v: taffy::style::LengthPercentageAuto) -> Option<f32> {
-    use crate::layout::dimension::{DimKind, lpa_kind};
+    use crate::layout::dimension::{lpa_kind, DimKind};
     match lpa_kind(v) {
         DimKind::Length(px) => Some(px),
         DimKind::Percent(_) | DimKind::Auto => None,
@@ -5904,7 +6141,8 @@ fn push_shimmer_box_overlay(
                 transform,
                 clip_pos: [0.0, 0.0],
                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                border_extra: 0.0, backdrop_blur: 0.0,
+                border_extra: 0.0,
+                backdrop_blur: 0.0,
             }
             .with_clip(Some(box_clip)),
         );
@@ -6000,7 +6238,8 @@ fn push_chrome_rect(
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: InstanceInput::NO_CLIP_SIZE,
-            border_extra: 0.0, backdrop_blur: 0.0,
+            border_extra: 0.0,
+            backdrop_blur: 0.0,
         }
         .with_clip(clip),
     );
@@ -6099,7 +6338,11 @@ fn push_input_chrome_instances(
         let mut e = sa.max(sb).min(text.len());
         s = text.floor_char_boundary(s);
         e = text.floor_char_boundary(e);
-        if s < e { Some((s, e)) } else { None }
+        if s < e {
+            Some((s, e))
+        } else {
+            None
+        }
     } else if let Some((a, b)) = caret.overwrite_highlight {
         if !crate::renderer::caret_blink_visible() {
             None
@@ -6108,7 +6351,11 @@ fn push_input_chrome_instances(
             let mut e = a.max(b).min(text.len());
             s = text.floor_char_boundary(s);
             e = text.floor_char_boundary(e);
-            if s < e { Some((s, e)) } else { None }
+            if s < e {
+                Some((s, e))
+            } else {
+                None
+            }
         }
     } else {
         None
@@ -7119,16 +7366,12 @@ mod portal_hoist_tests {
             "overlay must contribute text nodes after the split"
         );
         // Page glyphs are collected before the portal suffix.
-        assert!(
-            result.text_nodes[..result.overlay_split.text_start]
-                .iter()
-                .any(|t| t.text == "page")
-        );
-        assert!(
-            result.text_nodes[result.overlay_split.text_start..]
-                .iter()
-                .any(|t| t.text == "overlay")
-        );
+        assert!(result.text_nodes[..result.overlay_split.text_start]
+            .iter()
+            .any(|t| t.text == "page"));
+        assert!(result.text_nodes[result.overlay_split.text_start..]
+            .iter()
+            .any(|t| t.text == "overlay"));
         assert!(
             !result.overlay_split.bands.is_empty(),
             "each portal child should open a paint band"
@@ -7208,16 +7451,12 @@ mod portal_hoist_tests {
             b.text.0 >= a.text.1,
             "upper band text follows lower band text"
         );
-        assert!(
-            result.text_nodes[a.text.0..a.text.1]
-                .iter()
-                .any(|t| t.text == "lower-glyph")
-        );
-        assert!(
-            result.text_nodes[b.text.0..b.text.1]
-                .iter()
-                .any(|t| t.text == "upper-glyph")
-        );
+        assert!(result.text_nodes[a.text.0..a.text.1]
+            .iter()
+            .any(|t| t.text == "lower-glyph"));
+        assert!(result.text_nodes[b.text.0..b.text.1]
+            .iter()
+            .any(|t| t.text == "upper-glyph"));
     }
 
     #[test]
@@ -7779,6 +8018,495 @@ mod portal_hoist_tests {
         );
     }
 
+    /// `__modal_zoom` at 0.90: live rounded chrome + one inner blit of rest children.
+    /// Fade lives on chrome and the blit; the RT stays content-stable.
+    #[test]
+    fn modal_zoom_layer_paints_as_one_scaled_capture() {
+        let _ = crate::renderer::take_capture_jobs();
+        let title = Element::new().text("Dialog title");
+        let mut card = Element::new()
+            .w(240.0)
+            .h(120.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .child(title);
+        card.template_id = Some("dlg__modal_zoom".into());
+        card.style.scale = [0.90, 0.90];
+        card.style.opacity = 0.5;
+        let mut root = Element::new().w(400.0).h(400.0).child(card);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+
+        let caps = crate::renderer::take_capture_jobs();
+        let cap = caps
+            .iter()
+            .find(|c| c.key.starts_with("rui_zoom_cap:"))
+            .expect("zoom capture");
+        assert!(
+            (cap.bounds[2] - 240.0).abs() < 0.5,
+            "capture is rest layout (no shadow pad); got {}",
+            cap.bounds[2]
+        );
+        let live = result
+            .instances
+            .iter()
+            .find(|i| i.rect_size[0] > 100.0)
+            .expect("live chrome in main pass");
+        assert!(
+            (live.rect_size[0] - 216.0).abs() < 1.0,
+            "live chrome bakes CSS scale; got {}",
+            live.rect_size[0]
+        );
+        assert!(
+            (live.color[3] - 0.5).abs() < 0.05,
+            "fade lives on live chrome; a={}",
+            live.color[3]
+        );
+        let blit = result
+            .textured_draws
+            .iter()
+            .find(|d| d.texture_key.starts_with("rui_zoom_cap:"))
+            .expect("zoom blit dest");
+        assert!(
+            (blit.rect[2] - 216.0).abs() < 0.5,
+            "dest w should be layout×0.90 about card center; got {}",
+            blit.rect[2]
+        );
+        assert!(
+            (blit.opacity - 0.5).abs() < 1e-3,
+            "fade lives on the blit; got {}",
+            blit.opacity
+        );
+        let title = cap
+            .text_nodes
+            .iter()
+            .find(|t| t.text == "Dialog title")
+            .expect("title in capture at rest");
+        assert!(
+            (title.paint_scale - 1.0).abs() < 1e-4,
+            "capture freezes CSS scale; got {}",
+            title.paint_scale
+        );
+        assert!(
+            result.text_nodes.iter().all(|t| t.text != "Dialog title"),
+            "title must not also paint in the main pass"
+        );
+
+        root.children[0].style.scale = [0.995, 0.995];
+        let _ = crate::renderer::take_capture_jobs();
+        let near_one = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        assert!(
+            crate::renderer::take_capture_jobs()
+                .iter()
+                .any(|c| c.key.starts_with("rui_zoom_cap:")),
+            "scale 0.995 must stay on the compositor (1e-3 used to drain early)"
+        );
+        assert!(near_one
+            .textured_draws
+            .iter()
+            .any(|d| d.texture_key.starts_with("rui_zoom_cap:")));
+
+        root.children[0].style.scale = [1.0, 1.0];
+        root.children[0].style.animations = vec![crate::style::keyframes_anim_entry(
+            "zoom-in-90",
+            200.0,
+            crate::style::TimingFunction::Ease,
+            crate::style::AnimationFillMode::Both,
+        )];
+        let _ = crate::renderer::take_capture_jobs();
+        let at_one = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        assert!(
+            crate::renderer::take_capture_jobs()
+                .iter()
+                .any(|c| c.key.starts_with("rui_zoom_cap:")),
+            "fill-mode scale=1 must keep the 1:1 blit until zoom-in-90 is cleared"
+        );
+        assert!(at_one
+            .textured_draws
+            .iter()
+            .any(|d| d.texture_key.starts_with("rui_zoom_cap:")));
+        assert!(
+            at_one.text_nodes.iter().all(|t| t.text != "Dialog title"),
+            "1:1 blit must not also emit live Coverage (that pop is the row jitter)"
+        );
+
+        root.children[0].style.animations.clear();
+        root.children[0].style.opacity = 1.0;
+        let settled = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let idle = settled
+            .text_nodes
+            .iter()
+            .find(|t| t.text == "Dialog title")
+            .expect("idle Coverage");
+        assert!((idle.paint_scale - 1.0).abs() < 1e-4);
+        assert!(
+            crate::renderer::take_capture_jobs()
+                .iter()
+                .all(|c| !c.key.starts_with("rui_zoom_cap:")),
+            "scale ≈ 1 must not capture"
+        );
+    }
+
+    /// Dialog `shadow-lg` + rounded overflow: chrome stays live SDF in the main pass
+    /// (rounded border + halo). Capture is the inner padding box, not a dest AABB
+    /// around the shadow that reads as a rectangular stroke.
+    #[test]
+    fn modal_zoom_capture_includes_box_shadow_outset() {
+        let _ = crate::renderer::take_capture_jobs();
+        let mut card = Element::new()
+            .w(240.0)
+            .h(120.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .rounded(8.0)
+            .border_style("solid")
+            .border_width(1.0)
+            .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+            .overflow_y("hidden")
+            .child(Element::new().text("Dialog title"));
+        card.template_id = Some("dlg__modal_zoom".into());
+        card.style.scale = [0.90, 0.90];
+        let mut root = Element::new().w(400.0).h(400.0).child(card);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let caps = crate::renderer::take_capture_jobs();
+        let cap = caps
+            .iter()
+            .find(|c| c.key.starts_with("rui_zoom_cap:"))
+            .expect("zoom capture");
+        assert!(
+            (cap.bounds[2] - 238.0).abs() < 0.5,
+            "capture is padding box (240−2×1px border); got {}",
+            cap.bounds[2]
+        );
+        let blit = result
+            .textured_draws
+            .iter()
+            .find(|d| d.texture_key.starts_with("rui_zoom_cap:"))
+            .expect("zoom blit dest");
+        assert!(
+            (blit.rect[2] - 214.2).abs() < 0.5,
+            "dest w should be padding×0.90; got {}",
+            blit.rect[2]
+        );
+        assert!(
+            cap.instances
+                .iter()
+                .all(|i| i.shadow_blur < 15.0 || i.rect_size[0] < 1.0),
+            "shadow chrome must not enter the inner capture"
+        );
+        let chrome = result
+            .instances
+            .iter()
+            .find(|i| i.shadow_blur > 15.0 && i.rect_size[0] > 1.0)
+            .expect("dialog chrome live in main pass");
+        assert!(
+            chrome.radii.iter().all(|r| *r > 7.0),
+            "live chrome must stay rounded SDF; got {:?}",
+            chrome.radii
+        );
+        assert!(
+            (chrome.border_width - 1.0).abs() < 0.15,
+            "1px border stays on the live SDF instance; got {}",
+            chrome.border_width
+        );
+        assert!(
+            chrome.clip_size == InstanceInput::NO_CLIP_SIZE || chrome.clip_size[0] < 0.0,
+            "own overflow must not AABB-clip the shadow; clip_size={:?}",
+            chrome.clip_size
+        );
+        assert!(
+            (chrome.rect_size[0] - 216.0).abs() < 1.0,
+            "live chrome bakes CSS scale 0.90; got {}",
+            chrome.rect_size[0]
+        );
+    }
+
+    /// Select-style 1px outline must stay live SDF (not a minified blit hairline).
+    #[test]
+    fn modal_zoom_inner_border_stays_live_one_px() {
+        let _ = crate::renderer::take_capture_jobs();
+        let trigger = Element::new()
+            .w(200.0)
+            .h(32.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .rounded(8.0)
+            .border_style("solid")
+            .border_width(1.0)
+            .border_color([0.7, 0.7, 0.7, 1.0])
+            .child(Element::new().text("Pick an option"));
+        let mut card = Element::new()
+            .w(240.0)
+            .h(120.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .rounded(8.0)
+            .child(trigger);
+        card.template_id = Some("dlg__modal_zoom".into());
+        card.style.scale = [0.90, 0.90];
+        let mut root = Element::new().w(400.0).h(400.0).child(card);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let caps = crate::renderer::take_capture_jobs();
+        let cap = caps
+            .iter()
+            .find(|c| c.key.starts_with("rui_zoom_cap:"))
+            .expect("zoom capture");
+        assert!(
+            cap.instances
+                .iter()
+                .all(|i| (i.border_width - 1.0).abs() > 0.5 || i.rect_size[1] > 40.0),
+            "1px trigger chrome must not enter the blit"
+        );
+        let trigger = result
+            .instances
+            .iter()
+            .find(|i| i.border_width > 0.5 && i.rect_size[1] < 40.0)
+            .expect("live 1px trigger in main pass");
+        assert!(
+            (trigger.border_width - 1.0).abs() < 0.15,
+            "hairline stays 1px SDF; got {}",
+            trigger.border_width
+        );
+        assert!(
+            (trigger.rect_size[0] - 180.0).abs() < 2.0,
+            "trigger scales about the card center (200×0.90); got {}",
+            trigger.rect_size[0]
+        );
+        assert!(
+            trigger.radii.iter().all(|r| *r > 6.0 && *r < 8.0),
+            "radii scale with the card; got {:?}",
+            trigger.radii
+        );
+    }
+
+    fn text_geom(info: &TextLayoutInfo) -> (f32, f32, f32, f32) {
+        (info.x, info.y, info.width, info.height)
+    }
+
+    /// Gallery Dialog shell at enter: live rounded chrome in the main pass;
+    /// 「行 1–6」 stay at rest inside the inner capture (no per-leaf crawl).
+    #[test]
+    fn modal_zoom_dialog_enter_captures_rows_at_rest() {
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::components::base::SlotChrome;
+        use crate::components::dialog::dialog_shell_frame;
+        use crate::components::internal::modal_motion::{
+            flush_modal_shell_motion_subtree, sync_modal_presence, use_modal_presence,
+        };
+        use crate::components::internal::modal_shell::{
+            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        };
+        use crate::components::scroll_area::scroll_area;
+        use crate::core::reactivity::{create_root, Signal};
+        use crate::utils::presence::PresencePhase;
+
+        let _ = crate::renderer::take_capture_jobs();
+        clear_overlay_stack();
+        let modal_id = "gal-dialog";
+        let (_owner, mut host) = create_root(|| {
+            let open = Signal::new(true);
+            let handle = use_modal_presence(modal_id);
+            sync_modal_presence(&handle, true);
+            let zs = modal_sync(modal_id, open).expect("modal_sync");
+            let overlay_opts = ShellOverlayOpts {
+                color: default_modal_overlay_color(None, Some(0.5)),
+                close_on_click: true,
+                backdrop_blur: 0.0,
+            };
+            let mut rows = Element::new().w("100%").flex_col().gap(8.0);
+            for i in 1..=6 {
+                rows = rows.child(Element::new().text(format!("行 {i}")).text_size(14.0));
+            }
+            let body_id = format!("{modal_id}__body");
+            let scroll: Element = scroll_area(body_id.as_str())
+                .overflow_x("hidden")
+                .overflow_y("auto")
+                .scrollbar_visibility("auto")
+                .w("100%")
+                .h("auto")
+                .min_h("0")
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .child(rows)
+                .into();
+            let inner = Element::new()
+                .w("100%")
+                .flex_col()
+                .child(
+                    Element::new()
+                        .text("Gallery Dialog")
+                        .text_size(18.0)
+                        .font_weight(600.0),
+                )
+                .child(scroll);
+            let shell = dialog_shell_frame(
+                modal_id,
+                open,
+                &zs,
+                inner,
+                &overlay_opts,
+                None,
+                false,
+                &handle,
+                PresencePhase::Present,
+                None,
+                None,
+                None,
+                None,
+                SlotChrome::default(),
+            );
+            Element::new().w(800.0).h(600.0).child(shell)
+        });
+        assert!(hoist_portal_subtrees(&mut host) >= 2);
+        let _ = flush_modal_shell_motion_subtree(&mut host);
+
+        let mut tree = LayoutTree::new();
+        let zooming = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);
+        let caps = crate::renderer::take_capture_jobs();
+        let cap = caps
+            .iter()
+            .find(|c| c.key.starts_with("rui_zoom_cap:"))
+            .expect("enter must capture __modal_zoom");
+        assert!(
+            zooming
+                .textured_draws
+                .iter()
+                .any(|d| d.texture_key.starts_with("rui_zoom_cap:")),
+            "main pass blits the capture"
+        );
+        let chrome = zooming
+            .instances
+            .iter()
+            .find(|i| i.shadow_blur > 15.0 && i.radii[0] > 1.0)
+            .expect("rounded dialog chrome live in main pass");
+        assert!(
+            chrome.radii.iter().all(|r| *r > 7.0),
+            "live chrome must stay rounded SDF; got {:?}",
+            chrome.radii
+        );
+        assert!(
+            (chrome.border_width - 1.0).abs() < 0.15,
+            "1px border stays on live chrome; got {}",
+            chrome.border_width
+        );
+        for i in 1..=6 {
+            let needle = format!("行 {i}");
+            let node = cap
+                .text_nodes
+                .iter()
+                .find(|t| t.text == needle)
+                .unwrap_or_else(|| panic!("missing capture {needle}"));
+            assert!(
+                (node.paint_scale - 1.0).abs() < 1e-4,
+                "{needle} must stay rest-size in the RT; paint_scale={}",
+                node.paint_scale
+            );
+            assert!(
+                zooming.text_nodes.iter().all(|t| t.text != needle),
+                "{needle} must not also paint as live Coverage (per-leaf crawl)"
+            );
+        }
+    }
+
+    fn find_text<'a>(nodes: &'a [TextLayoutInfo], needle: &str) -> &'a TextLayoutInfo {
+        nodes
+            .iter()
+            .find(|t| t.text == needle)
+            .unwrap_or_else(|| panic!("missing text {needle:?}"))
+    }
+
+    /// Capture text is rest layout (same boxes as idle). The GPU scales the whole
+    /// layer about the card center — rows must not crawl toward/away from the title.
+    #[test]
+    fn modal_zoom_capture_text_geometry_matches_idle() {
+        let _ = crate::renderer::take_capture_jobs();
+        let chevron = Element::new()
+            .font_family("lucide")
+            .text("v")
+            .text_size(16.0)
+            .w(16.0)
+            .h(16.0);
+        let trigger = Element::new()
+            .w(220.0)
+            .h(32.0)
+            .flex_row()
+            .items_center()
+            .child(
+                Element::new()
+                    .text("Pick an option")
+                    .text_size(14.0)
+                    .white_space("nowrap"),
+            )
+            .child(chevron);
+        let mut body = Element::new().w(240.0).flex_col().child(trigger);
+        for i in 1..=6 {
+            body = body.child(
+                Element::new()
+                    .text(format!("行 {i}"))
+                    .text_size(14.0)
+                    .text_leading_none(),
+            );
+        }
+        let mut card = Element::new()
+            .w(240.0)
+            .h(280.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .child(body);
+        card.template_id = Some("dlg__modal_zoom".into());
+        card.style.scale = [0.90, 0.90];
+        let mut root = Element::new().w(400.0).h(400.0).child(card);
+
+        let mut tree = LayoutTree::new();
+        let _zooming = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let caps = crate::renderer::take_capture_jobs();
+        let cap = caps
+            .iter()
+            .find(|c| c.key.starts_with("rui_zoom_cap:"))
+            .expect("zoom capture");
+
+        root.children[0].style.scale = [1.0, 1.0];
+        let idle = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let _ = crate::renderer::take_capture_jobs();
+
+        for needle in [
+            "Pick an option",
+            "行 1",
+            "行 2",
+            "行 3",
+            "行 4",
+            "行 5",
+            "行 6",
+        ] {
+            let z = find_text(&cap.text_nodes, needle);
+            let i = find_text(&idle.text_nodes, needle);
+            let (zx, zy, zw, zh) = text_geom(z);
+            let (ix, iy, iw, ih) = text_geom(i);
+            assert!(
+                (zx - ix).abs() < 1.0 && (zy - iy).abs() < 1.0,
+                "{needle}: capture ({zx:.2},{zy:.2}) must match idle rest ({ix:.2},{iy:.2})"
+            );
+            assert!(
+                (zw - iw).abs() < 0.5 && (zh - ih).abs() < 0.5,
+                "{needle} layout size jumped: capture {zw:.2}x{zh:.2} idle {iw:.2}x{ih:.2}"
+            );
+            assert!((z.paint_scale - 1.0).abs() < 1e-4);
+            assert!((i.paint_scale - 1.0).abs() < 1e-4);
+        }
+
+        let z_icon = cap
+            .text_nodes
+            .iter()
+            .find(|t| t.style.font_family.as_deref() == Some("lucide"))
+            .expect("capture lucide");
+        let i_icon = idle
+            .text_nodes
+            .iter()
+            .find(|t| t.style.font_family.as_deref() == Some("lucide"))
+            .expect("idle lucide");
+        assert!((z_icon.style.size_resolved() - i_icon.style.size_resolved()).abs() < 1e-3);
+    }
+
     /// Dialog `zoom-in-95` keeps `scale` < 1 during entrance; soft-wrapping description
     /// must still use layout width (not forced nowrap) so lines match the stable frame.
     #[test]
@@ -7880,20 +8608,28 @@ mod portal_hoist_tests {
         let mut tree = LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
 
-        let panel_inst = result
+        let panel_idx = result
             .instances
             .iter()
-            .find(|i| {
+            .position(|i| {
                 i.shadow_blur > 0.0
                     && i.color[3] > 0.5
                     && (i.rect_size[0] - 120.0).abs() < 1.0
                     && (i.rect_size[1] - 80.0).abs() < 1.0
             })
             .expect("panel chrome with shadow");
+        let panel_inst = &result.instances[panel_idx];
         assert!(
             panel_inst.clip_size == InstanceInput::NO_CLIP_SIZE || panel_inst.clip_size[0] < 0.0,
             "own overflow must not clip outset shadow; clip_size={:?}",
             panel_inst.clip_size
+        );
+        assert!(
+            result
+                .clip_polys
+                .get(panel_idx)
+                .is_none_or(|p| !p.is_active()),
+            "rounded overflow clip-poly on own chrome also kills the halo (Dialog/Drawer)"
         );
 
         let child_clipped = result.instances.iter().any(|i| {
@@ -8042,6 +8778,191 @@ mod portal_hoist_tests {
             "labels must paint in an earlier band than the scrim so capture includes them; text_band={text_band} blur_band={blur_band} bands={}",
             bands.len()
         );
+        let blur = &result.instances[blur_at];
+        assert!(
+            blur.clip_size[0] > 0.5 && blur.clip_size[1] > 0.5,
+            "local scrim must inherit host overflow clip so backdrop capture can scissor to the host; clip={:?}",
+            (blur.clip_pos, blur.clip_size)
+        );
+    }
+
+    #[test]
+    fn local_mount_scrim_follows_scroll_with_stale_position_fixed() {
+        // Keyed overlay adopt can copy `position_fixed` onto a local mount. Scroll
+        // must still subtract ancestor `scroll_acc` or the 75% mask stays put while
+        // the host moves — off-host glyphs then occupy the mask for a frame.
+        let labels = Element::new()
+            .absolute()
+            .inset(0.0)
+            .z_index(0)
+            .text("YELLOW 高对比 BLUR");
+        let scrim = Element::new()
+            .w(165.0)
+            .h(105.0)
+            .rounded(10.0)
+            .bg([1.0, 1.0, 1.0, 0.55])
+            .backdrop_blur(12.0)
+            .template_id("local-scrim");
+        let mut overlay = Element::new()
+            .w("100%")
+            .h("100%")
+            .absolute()
+            .inset(0.0)
+            .z_index(2)
+            .child(scrim);
+        overlay.set_attr("rui_portal", "1");
+        overlay.set_attr(ATTR_PORTAL_MOUNT, "card-host");
+        overlay.set_attr(ATTR_PORTAL_KEY, "local-scrim");
+        let host = Element::new()
+            .relative()
+            .w(220.0)
+            .h(140.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden")
+            .template_id("card-host")
+            .children([labels, overlay]);
+        let spacer = Element::new().w(220.0).h(80.0).flex_shrink(0.0);
+        let mut viewport = Element::new()
+            .w(240.0)
+            .h(200.0)
+            .overflow_y("scroll")
+            .flex_col()
+            .children([spacer, host]);
+        assert!(hoist_portal_subtrees(&mut viewport) >= 1);
+
+        let mut tree = LayoutTree::new();
+        let before = tree.build_and_layout(&mut viewport, 240.0, 200.0, [-1.0, -1.0]);
+        let y0 = before
+            .instances
+            .iter()
+            .find(|i| i.backdrop_blur > 0.5)
+            .map(|i| i.rect_pos[1])
+            .expect("scrim");
+
+        crate::core::tree::walk_elements_mut(&mut viewport, |el| {
+            if el.attrs.get(ATTR_HOISTED_MOUNT).is_some() {
+                el.style.position_fixed = true;
+            }
+        });
+        viewport.scroll_offset = [0.0, 40.0];
+        let after =
+            tree.build_and_layout_fast(&mut viewport, 240.0, 200.0, [-1.0, -1.0], true, false);
+        let y1 = after
+            .instances
+            .iter()
+            .find(|i| i.backdrop_blur > 0.5)
+            .map(|i| i.rect_pos[1])
+            .expect("scrim after scroll");
+        assert!(
+            (y0 - y1 - 40.0).abs() < 1.5,
+            "local mount scrim must follow host scroll even with leftover position_fixed; y0={y0} y1={y1}"
+        );
+    }
+
+    #[test]
+    fn local_backdrop_blur_keeps_label_band_before_scrim_on_scroll() {
+        let mut page = Element::new().w(400.0).h(800.0).flex_col();
+        page.set_attr("data-stacking-context", "1");
+        page.style.z_index = 0;
+        page = page.child(
+            Element::new()
+                .w(400.0)
+                .h(120.0)
+                .flex_shrink(0.0)
+                .text("OUTSIDE ABOVE"),
+        );
+        let labels = Element::new()
+            .absolute()
+            .inset(0.0)
+            .z_index(0)
+            .text("YELLOW 高对比 BLUR");
+        let scrim = Element::new()
+            .w(165.0)
+            .h(105.0)
+            .rounded(10.0)
+            .bg([1.0, 1.0, 1.0, 0.55])
+            .backdrop_blur(12.0)
+            .template_id("local-scrim");
+        let mut overlay = Element::new()
+            .w("100%")
+            .h("100%")
+            .absolute()
+            .inset(0.0)
+            .z_index(2)
+            .child(scrim);
+        overlay.set_attr("rui_portal", "1");
+        overlay.set_attr(ATTR_PORTAL_MOUNT, "card-host");
+        overlay.set_attr(ATTR_PORTAL_KEY, "local-scrim");
+        let host = Element::new()
+            .relative()
+            .w(220.0)
+            .h(140.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden")
+            .flex_shrink(0.0)
+            .template_id("card-host")
+            .children([labels, overlay]);
+        page = page.child(host).child(
+            Element::new()
+                .w(400.0)
+                .h(120.0)
+                .flex_shrink(0.0)
+                .text("OUTSIDE BELOW"),
+        );
+        let mut viewport = Element::new()
+            .w(400.0)
+            .h(200.0)
+            .overflow_y("scroll")
+            .child(page);
+        assert!(hoist_portal_subtrees(&mut viewport) >= 1);
+
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut viewport, 400.0, 200.0, [-1.0, -1.0]);
+        for sy in [0.0_f32, 40.0, 80.0, 120.0] {
+            viewport.scroll_offset = [0.0, sy];
+            let result =
+                tree.build_and_layout_fast(&mut viewport, 400.0, 200.0, [-1.0, -1.0], true, false);
+            let bands = result.overlay_split.page_stack_band_ranges();
+            let Some(blur_at) = result.instances.iter().position(|i| i.backdrop_blur > 0.5) else {
+                continue;
+            };
+            let Some(text_at) = result
+                .text_nodes
+                .iter()
+                .position(|t| t.text.contains("YELLOW"))
+            else {
+                continue;
+            };
+            let blur_band = bands
+                .iter()
+                .position(|b| b.instance.0 <= blur_at && blur_at < b.instance.1)
+                .expect("blur instance in a page_stack band");
+            let text_band = bands
+                .iter()
+                .position(|b| b.text.0 <= text_at && text_at < b.text.1)
+                .expect("label in a page_stack band");
+            assert!(
+                text_band < blur_band,
+                "scroll_only sy={sy}: labels must stay in an earlier band than the scrim; text_band={text_band} blur_band={blur_band}"
+            );
+            let blur = &result.instances[blur_at];
+            for node in &result.text_nodes {
+                if !node.text.contains("OUTSIDE") {
+                    continue;
+                }
+                let overlap_x = node.x < blur.rect_pos[0] + blur.rect_size[0]
+                    && node.x + node.width > blur.rect_pos[0];
+                let overlap_y = node.y < blur.rect_pos[1] + blur.rect_size[1]
+                    && node.y + node.height > blur.rect_pos[1];
+                assert!(
+                    !(overlap_x && overlap_y),
+                    "scroll_only sy={sy}: outside text {:?} must not overlap the scrim {:?} {:?}",
+                    (node.text.as_str(), node.x, node.y),
+                    blur.rect_pos,
+                    blur.rect_size
+                );
+            }
+        }
     }
 }
 

@@ -163,6 +163,19 @@ pub fn element_wants_sticky_xform(el: &Element) -> bool {
     false
 }
 
+/// CSS `scale` used for **raster** (Bake font size / glyphon `TextArea.scale`).
+///
+/// Near-identity zooms (`zoom-in-90` is 0.90→1.0) must bake at rest and let the
+/// draw quad carry the scale. Multiplying font size by 0.90 every frame forces a
+/// new glyph atlas — Dialog stutter vs Sheet `translate` (paint_scale stays 1).
+pub fn bake_source_scale(paint_scale: f32) -> f32 {
+    if paint_scale >= 0.85 && paint_scale <= 1.15 {
+        1.0
+    } else {
+        paint_scale.max(0.01)
+    }
+}
+
 /// Average absolute scale from a 2×2 linear matrix.
 pub fn mat2d_uniform_scale(m: &Mat2d) -> f32 {
     let sx = (m[0] * m[0] + m[1] * m[1]).sqrt();
@@ -247,13 +260,28 @@ mod tests {
     }
 
     #[test]
-    fn uniform_scale_is_not_sticky() {
+    fn zoom_in_90_animation_is_not_sticky() {
+        use crate::style::{keyframes_anim_entry, AnimationFillMode};
         let mut el = Element::new();
-        el.style.scale = [0.95, 0.95];
+        el.style.animations.push(keyframes_anim_entry(
+            "zoom-in-90",
+            200.0,
+            TimingFunction::EaseOut,
+            AnimationFillMode::Both,
+        ));
         assert!(
             !element_wants_sticky_xform(&el),
-            "scale-only motion must keep Coverage + paint_scale, not Bake"
+            "Dialog zoom must not sticky-bake: Coverage+Bake double-paint is the enter ghost"
         );
+    }
+
+    #[test]
+    fn bake_source_scale_identity_band() {
+        assert!((bake_source_scale(0.90) - 1.0).abs() < 1e-6);
+        assert!((bake_source_scale(1.0) - 1.0).abs() < 1e-6);
+        assert!((bake_source_scale(1.10) - 1.0).abs() < 1e-6);
+        assert!((bake_source_scale(1.5) - 1.5).abs() < 1e-6);
+        assert!((bake_source_scale(0.5) - 0.5).abs() < 1e-6);
     }
 
     #[test]
@@ -310,7 +338,7 @@ mod tests {
         el.style.scale = [0.95, 0.95];
         assert!(
             !element_wants_sticky_xform(&el),
-            "Toast/Dialog zoom: transition-transform without hover:scale stays Coverage"
+            "Toast/Dialog without zoom-* keyframes: transition-transform stays Coverage"
         );
     }
 

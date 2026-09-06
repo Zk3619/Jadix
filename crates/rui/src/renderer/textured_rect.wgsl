@@ -91,7 +91,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     let sample = textureSample(tex, tex_sampler, in.uv);
     var c: vec4<f32>;
-    if (in.flags > 0.5) {
+    // `flags`: 0 = RGBA, 1 = MSDF, 2 = sparse capture blit (zoom/filter).
+    // Must not treat 2 as MSDF — empty dest texels would skip the discard below.
+    if (in.flags > 0.5 && in.flags < 1.5) {
         // Median of RGB: true MSDF when channels diverge; single-channel SDF when R=G=B.
         // Packing: 0.5 = edge, >0.5 inside (see text_texture / SDF_SPREAD_PX).
         let sd = median3(sample.r, sample.g, sample.b);
@@ -104,6 +106,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         c = vec4<f32>(in.tint.rgb, coverage * in.tint.a);
     } else {
         c = sample * in.tint;
+        // Sparse offscreen blit. Empty padded texels must not write: ALPHA_BLENDING
+        // of (0,0,0,ε) darkens the scrim into a sharp rectangular frame around Dialog.
+        if (in.flags > 1.5 && c.a < (1.0 / 255.0)) {
+            discard;
+        }
     }
     var rgb = c.rgb;
     if (globals.premultiply > 0.5) {

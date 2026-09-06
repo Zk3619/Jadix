@@ -58,7 +58,8 @@ pub fn quads_to_instances(
                 transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
                 clip_pos,
                 clip_size,
-                border_extra: 0.0, backdrop_blur: 0.0,
+                border_extra: 0.0,
+                backdrop_blur: 0.0,
             }
         })
         .collect()

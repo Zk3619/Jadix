@@ -2382,7 +2382,8 @@ impl Element {
         self
     }
 
-    /// Backdrop blur radius in logical px (`0` disables). See [`crate::style::Style::backdrop_blur`].
+    /// Backdrop blur radius (`0` disables). See [`crate::style::Style::backdrop_blur`].
+    /// RSX unitless `"1"` is 1rem (16px); builder `16.0` / `16` is 16px.
     pub fn backdrop_blur(mut self, blur: impl IntoF32) -> Self {
         self.style.backdrop_blur = blur.into_f32().max(0.0);
         self

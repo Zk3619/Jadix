@@ -636,6 +636,11 @@ impl BackdropBlurPipeline {
         self.full.as_ref().map(|r| &r.view)
     }
 
+    #[cfg(test)]
+    pub(crate) fn blurred_texture(&self) -> Option<&wgpu::Texture> {
+        self.full.as_ref().map(|r| &r._texture)
+    }
+
     pub fn sampler(&self) -> &wgpu::Sampler {
         &self.sampler
     }

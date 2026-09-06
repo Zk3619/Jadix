@@ -293,13 +293,8 @@ impl RuiPipeline {
             &globals_buffer,
             &clip_poly_buffer,
         );
-        let render_pipeline = Self::make_render_pipeline(
-            device,
-            config,
-            &shader,
-            &bind_group_layout,
-            &backdrop_bgl,
-        );
+        let render_pipeline =
+            Self::make_render_pipeline(device, config, &shader, &bind_group_layout, &backdrop_bgl);
 
         let vertices = &[
             VertexInput {

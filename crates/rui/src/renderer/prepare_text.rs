@@ -874,10 +874,7 @@ fn uses_textured_shadow_bitmap(user_text_shadow: bool, blur_px: f32) -> bool {
     user_text_shadow && blur_px > TEXTURED_SHADOW_MIN_BLUR
 }
 
-fn text_bounds_from_clip(
-    clip: Option<[f32; 4]>,
-    config: &SurfaceConfiguration,
-) -> glyphon::TextBounds {
+fn text_bounds_from_clip(clip: Option<[f32; 4]>, width: u32, height: u32) -> glyphon::TextBounds {
     if let Some(b) = clip.and_then(integerize_clip_rect) {
         glyphon::TextBounds {
             left: b[0] as i32,
@@ -896,9 +893,50 @@ fn text_bounds_from_clip(
         glyphon::TextBounds {
             left: 0,
             top: 0,
-            right: config.width as i32,
-            bottom: config.height as i32,
+            right: width as i32,
+            bottom: height as i32,
         }
+    }
+}
+
+/// Coverage line box (device px). Lucide uses 1em — Tailwind leading would drop the
+/// glyph in a size-4 leaf (Select chevron during Dialog zoom capture).
+pub(crate) fn coverage_line_height(
+    st: &crate::style::TextStyle,
+    ui_scale: f32,
+    is_input_text: bool,
+) -> f32 {
+    let is_icon = st.font_family.as_deref() == Some("lucide");
+    let scaled_size = st.size_resolved() * ui_scale;
+    let mut line_height = if is_icon {
+        scaled_size
+    } else if let Some(line_height_px) = st.line_height_px {
+        line_height_px * ui_scale
+    } else {
+        let scale = st
+            .line_height_scale
+            .unwrap_or_else(|| tailwind_default_leading_scale(st.size_resolved()));
+        scaled_size * scale
+    };
+    if is_input_text {
+        let min_lh = scaled_size * crate::utils::text_field::text_edit_default_leading_scale();
+        line_height = line_height.max(min_lh);
+    }
+    line_height
+}
+
+/// Vertical origin inside a taller nowrap leaf. Cosmic lays out from the buffer top.
+pub(crate) fn coverage_nowrap_glyph_dy(
+    is_input_text: bool,
+    nowrap: bool,
+    hard_lines: usize,
+    scaled_h: f32,
+    line_height: f32,
+) -> f32 {
+    if !is_input_text && nowrap && hard_lines == 1 && scaled_h > line_height + 1.0 {
+        (scaled_h - line_height) * 0.5
+    } else {
+        0.0
     }
 }
 
@@ -1777,13 +1815,40 @@ pub fn prepare_text_frame(
     shadow_cached_keys: &std::collections::HashSet<u64>,
     shadow_cached_rects: &std::collections::HashMap<u64, [f32; 4]>,
 ) -> PrepareTextOutput {
+    prepare_text_frame_at(
+        text_renderer,
+        device,
+        queue,
+        config.width,
+        config.height,
+        text_nodes,
+        ui_scale,
+        force_fast_mode,
+        shadow_cached_keys,
+        shadow_cached_rects,
+    )
+}
+
+/// Like [`prepare_text_frame`] for an offscreen RT (`width`×`height` device px).
+pub fn prepare_text_frame_at(
+    text_renderer: &mut RuiTextRenderer,
+    device: &Device,
+    queue: &Queue,
+    width: u32,
+    height: u32,
+    text_nodes: &[TextLayoutInfo],
+    ui_scale: f32,
+    force_fast_mode: bool,
+    shadow_cached_keys: &std::collections::HashSet<u64>,
+    shadow_cached_rects: &std::collections::HashMap<u64, [f32; 4]>,
+) -> PrepareTextOutput {
     let perf_mode = if force_fast_mode {
         TextPerfMode::Fast
     } else {
         text_perf_mode()
     };
     if text_nodes.is_empty() {
-        text_renderer.prepare(device, queue, config, std::iter::empty());
+        text_renderer.prepare_resolution(device, queue, width, height, std::iter::empty());
         return PrepareTextOutput {
             underline_instances: Vec::new(),
             caret_instances: Vec::new(),
@@ -1805,7 +1870,7 @@ pub fn prepare_text_frame(
     let estimated = text_nodes.len().saturating_mul(3);
     let cap = text_renderer.text_area_capacity_hint.max(estimated);
     let mut text_areas = Vec::with_capacity(cap);
-    let viewport_clip = [0.0, 0.0, config.width as f32, config.height as f32];
+    let viewport_clip = [0.0, 0.0, width as f32, height as f32];
 
     if text_renderer.shaped_cache.len() > text_nodes.len() {
         for entry in text_renderer.shaped_cache.drain(text_nodes.len()..) {
@@ -1901,8 +1966,8 @@ pub fn prepare_text_frame(
             let expanded_vp = [
                 -margin,
                 -margin,
-                config.width as f32 + 2.0 * margin,
-                config.height as f32 + 2.0 * margin,
+                width as f32 + 2.0 * margin,
+                height as f32 + 2.0 * margin,
             ];
             let in_margin = clip_rect_to_bounds(node_rect, expanded_clip)
                 .and_then(|c| clip_rect_to_bounds(c, Some(expanded_vp)))
@@ -1946,26 +2011,9 @@ pub fn prepare_text_frame(
         );
         let font_weight = resolved_face.attrs_weight;
         let scaled_size = st.size_resolved() * ui_scale;
-        let mut line_height = if is_icon {
-            scaled_size
-        } else if let Some(line_height_px) = st.line_height_px {
-            line_height_px * ui_scale
-        } else {
-            let scale = st
-                .line_height_scale
-                .unwrap_or_else(|| tailwind_default_leading_scale(st.size_resolved()));
-            scaled_size * scale
-        };
-
         let is_input_text =
             super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref());
-        // Input/Textarea: never allow leading-none / cascade to crush Metrics below
-        // leading-normal — that packs CJK into a flat strip while the caret (style lh)
-        // still looks normal-height.
-        if is_input_text {
-            let min_lh = scaled_size * crate::utils::text_field::text_edit_default_leading_scale();
-            line_height = line_height.max(min_lh);
-        }
+        let line_height = coverage_line_height(st, ui_scale, is_input_text);
         // Input field text must keep a stable shaping mode across focus: caret install used to
         // flip ASCII placeholders (e.g. password "Password") from Basic → Advanced and tighten
         // glyph advances. Labels may still use Basic for scroll perf.
@@ -2914,11 +2962,8 @@ pub fn prepare_text_frame(
         // Padded ContentBox chips (Tabs): leaf border is taller than one line. Cosmic lays out
         // from the top of the buffer — without a dy, labels sit in the top padding (and look
         // top-biased). Center a single nowrap line in the border box.
-        let dy = if !is_input_text && nowrap && hard_lines_n == 1 && scaled_h > line_height + 1.0 {
-            (scaled_h - line_height) * 0.5
-        } else {
-            0.0
-        };
+        let dy =
+            coverage_nowrap_glyph_dy(is_input_text, nowrap, hard_lines_n, scaled_h, line_height);
         let mut glyph_color = st.color_resolved();
         let mut glyph_dy = dy;
         if let Some(raw) = info.glyph_fx.as_deref() {
@@ -3133,7 +3178,8 @@ pub fn prepare_text_frame(
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0, backdrop_blur: 0.0,
+                        border_extra: 0.0,
+                        backdrop_blur: 0.0,
                     });
                 };
             for g in run.glyphs.iter() {
@@ -3195,7 +3241,7 @@ pub fn prepare_text_frame(
                     if let Some(gpu_clip) =
                         paint_overflow_clip(shadow_bounds_clip, tb.clip_bounds.is_some())
                     {
-                        let bounds = text_bounds_from_clip(gpu_clip, config);
+                        let bounds = text_bounds_from_clip(gpu_clip, width, height);
 
                         let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
                             if layer_alpha == 0 {
@@ -3229,8 +3275,9 @@ pub fn prepare_text_frame(
                             });
                         };
 
-                        let draw_blur =
-                            radius > TEXTURED_SHADOW_MIN_BLUR && radius > min_radius && alpha > min_alpha;
+                        let draw_blur = radius > TEXTURED_SHADOW_MIN_BLUR
+                            && radius > min_radius
+                            && alpha > min_alpha;
                         if !draw_blur {
                             push_shadow_layer(center_left, center_top, alpha);
                         } else {
@@ -3270,7 +3317,7 @@ pub fn prepare_text_frame(
             }
         }
 
-        let bounds = text_bounds_from_clip(tb.clip_bounds, config);
+        let bounds = text_bounds_from_clip(tb.clip_bounds, width, height);
         if let Some(info) = text_nodes.get(i) {
             if textarea_diag_enabled()
                 && super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref())
@@ -3340,7 +3387,8 @@ pub fn prepare_text_frame(
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0, backdrop_blur: 0.0,
+                        border_extra: 0.0,
+                        backdrop_blur: 0.0,
                     });
                 }
                 for g in &entry.glyphs {
@@ -3370,7 +3418,8 @@ pub fn prepare_text_frame(
                                 transform: crate::style::transform::MAT2D_IDENTITY,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                border_extra: 0.0, backdrop_blur: 0.0,
+                                border_extra: 0.0,
+                                backdrop_blur: 0.0,
                             });
                         }
                     }
@@ -3439,7 +3488,8 @@ pub fn prepare_text_frame(
                     transform: crate::style::transform::MAT2D_IDENTITY,
                     clip_pos: [0.0, 0.0],
                     clip_size: InstanceInput::NO_CLIP_SIZE,
-                    border_extra: 0.0, backdrop_blur: 0.0,
+                    border_extra: 0.0,
+                    backdrop_blur: 0.0,
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {
@@ -3526,13 +3576,9 @@ pub fn prepare_text_frame(
     // Keep viewport in sync on resize even when every node is culled — but never
     // `prepare([])` while nodes exist (wipes atlas → blank text until geometry drifts
     // enough to bust text_cache_valid).
-    text_renderer.viewport.update(
-        queue,
-        glyphon::Resolution {
-            width: config.width,
-            height: config.height,
-        },
-    );
+    text_renderer
+        .viewport
+        .update(queue, glyphon::Resolution { width, height });
 
     let text_area_count = text_areas.len();
     if text_area_count == 0 {
@@ -3551,8 +3597,8 @@ pub fn prepare_text_frame(
         let mut warmup_areas: Vec<glyphon::TextArea> = Vec::with_capacity(preshape_warmup.len());
         for &(idx, _px, _py, pw, ph) in &preshape_warmup {
             let entry = &text_renderer.shaped_cache[idx];
-            let bw = pw.ceil().min(config.width as f32) as i32;
-            let bh = ph.ceil().min(config.height as f32) as i32;
+            let bw = pw.ceil().min(width as f32) as i32;
+            let bh = ph.ceil().min(height as f32) as i32;
             warmup_areas.push(glyphon::TextArea {
                 buffer: &entry.buffer,
                 left: 0.0,
@@ -3624,6 +3670,74 @@ pub fn prepare_text_frame(
         shadow_tex_draws,
         needs_warmup: !text_renderer.pending_warmup.is_empty(),
         culled_skip_prepare: false,
+    }
+}
+
+#[cfg(test)]
+mod coverage_placement_tests {
+    use super::{coverage_line_height, coverage_nowrap_glyph_dy};
+    use crate::style::{tailwind_default_leading_scale, TextStyle, WhiteSpace};
+
+    /// The deleted capture `Buffer::set_text` recipe (Tailwind leading, no lucide 1em).
+    fn naive_capture_line_height(st: &TextStyle, ui_scale: f32) -> f32 {
+        let size = (st.size_resolved() * ui_scale).max(1.0);
+        if let Some(px) = st.line_height_px {
+            px * ui_scale
+        } else if let Some(sc) = st.line_height_scale {
+            size * sc
+        } else {
+            size * tailwind_default_leading_scale(st.size_resolved())
+        }
+    }
+
+    #[test]
+    fn lucide_line_height_is_em_not_tailwind_leading() {
+        let mut st = TextStyle::default();
+        st.font_family = Some("lucide".into());
+        st.size = Some(16.0);
+        let coverage = coverage_line_height(&st, 1.0, false);
+        assert!(
+            (coverage - 16.0).abs() < 1e-4,
+            "lucide Coverage line box must be 1em; got {coverage}"
+        );
+        let naive = naive_capture_line_height(&st, 1.0);
+        assert!(
+            (naive - coverage).abs() > 1.0,
+            "Select chevron sat low because capture used Tailwind leading ({naive}) instead of 1em"
+        );
+    }
+
+    #[test]
+    fn nowrap_single_line_centers_in_tall_leaf() {
+        // SelectTrigger is h-8 (32px) with items-center; a nowrap caption leaf can
+        // still be taller than its line box if padding wins. Coverage centers it.
+        let lh = 14.0 * 1.25;
+        let dy = coverage_nowrap_glyph_dy(false, true, 1, 32.0, lh);
+        assert!((dy - (32.0 - lh) * 0.5).abs() < 1e-4, "got dy={dy}");
+        let naive_top = 0.0;
+        assert!(
+            (dy - naive_top).abs() > 4.0,
+            "capture-without-dy would sit at the leaf top"
+        );
+    }
+
+    #[test]
+    fn wrapping_cjk_label_does_not_invent_dy() {
+        assert_eq!(coverage_nowrap_glyph_dy(false, false, 1, 32.0, 14.0), 0.0);
+    }
+
+    #[test]
+    fn label_leading_none_agrees_with_naive_capture_lh() {
+        // Gallery Dialog rows use Label defaults (leading-none). Line-height matched;
+        // remaining jitter was wrap/weight/shaping — which only unify via prepare_text_frame.
+        let mut st = TextStyle::default();
+        st.size = Some(14.0);
+        st.line_height_scale = Some(1.0);
+        st.white_space = WhiteSpace::Normal;
+        let coverage = coverage_line_height(&st, 1.0, false);
+        let naive = naive_capture_line_height(&st, 1.0);
+        assert!((coverage - naive).abs() < 1e-4);
+        assert!((coverage - 14.0).abs() < 1e-4);
     }
 }
 
@@ -4194,8 +4308,8 @@ mod hidden_scroll_cull_tests {
 
 #[cfg(test)]
 mod input_shaping_stability_tests {
-    use super::nowrap_layout_width_from_text;
     use super::node_shape_identity_hash;
+    use super::nowrap_layout_width_from_text;
     use crate::renderer::font_loader;
     use crate::renderer::text_hit::best_font_family;
     use crate::renderer::text_prepare_debug::is_input_inline_text;

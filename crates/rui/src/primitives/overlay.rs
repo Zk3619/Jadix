@@ -42,7 +42,7 @@ impl OverlayBuilder {
         self
     }
 
-    /// Backdrop 模糊半径（逻辑 px）；`0` 关闭。
+    /// Backdrop 模糊半径；`0` 关闭。RSX 无单位为 rem，Builder 数字为 px。
     pub fn backdrop_blur(mut self, blur: impl crate::core::tree::IntoF32) -> Self {
         self.backdrop_blur = blur.into_f32().max(0.0);
         self

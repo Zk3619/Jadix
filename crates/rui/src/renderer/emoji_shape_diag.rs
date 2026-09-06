@@ -520,7 +520,9 @@ mod tests {
         // Simulated tight clip mistaken for "font-size tall" leaf (leading-none residual).
         let tight_clip_h = size;
         let overshoot_if_tight = bottom - tight_clip_h;
-        println!("lh={lh} emoji=[{top},{bottom}] tight_clip={tight_clip_h} overshoot={overshoot_if_tight}");
+        println!(
+            "lh={lh} emoji=[{top},{bottom}] tight_clip={tight_clip_h} overshoot={overshoot_if_tight}"
+        );
         assert!(
             overshoot_if_tight > 1.0,
             "documents the failure mode when leaf clip ≈ font-size"

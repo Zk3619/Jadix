@@ -237,6 +237,10 @@ pub fn mark_canvas_dirty_hex(hex: &str) {
 }
 
 /// `CursorMoved` / 按下 在 dispatch 之后取走：需要 `window.request_redraw`。
+///
+/// Also take **after** layout collect / `render`: `request_frame` sets the flag
+/// during paint, which runs inside collect. Taking before collect drops the pulse
+/// and a clock canvas freezes until the next pointer event.
 pub(crate) fn take_canvas_wants_redraw() -> bool {
     WANT_REDRAW.replace(false)
 }
@@ -655,6 +659,9 @@ fn run_paint(id: u64, width: u32, height: u32) -> Option<(Vec<f32>, LayoutStatus
         Some(untrack(|| paint(&mut canvas, size)))
     })?;
     let status = if canvas.want_frame {
+        // Keep PAINT_DIRTY *and* wake the window. StyleChanged alone does not
+        // request_redraw; without WANT_REDRAW a clock canvas paints once then freezes.
+        WANT_REDRAW.set(true);
         status.merge(LayoutStatus::StyleChanged)
     } else {
         status
@@ -979,5 +986,40 @@ mod tests {
             "pointer dirty must wake a frame; CursorMoved does not redraw by default"
         );
         assert!(!take_canvas_wants_redraw(), "flag is edge-triggered");
+    }
+
+    #[test]
+    fn request_frame_keeps_dirty_and_wakes_redraw() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let runs = Rc::new(Cell::new(0u32));
+        let _ = take_canvas_wants_redraw();
+        let el: Element = canvas()
+            .w(8.0)
+            .h(8.0)
+            .paint({
+                let runs = Rc::clone(&runs);
+                move |ctx, _| {
+                    runs.set(runs.get() + 1);
+                    ctx.request_frame();
+                    LayoutStatus::Clean
+                }
+            })
+            .into();
+        canvas_raster_from_element_attrs(&el.attrs, 8.0, 8.0).expect("first");
+        assert!(
+            take_canvas_wants_redraw(),
+            "request_frame must wake the window, not only keep PAINT_DIRTY"
+        );
+        canvas_raster_from_element_attrs(&el.attrs, 8.0, 8.0).expect("second");
+        assert_eq!(
+            runs.get(),
+            2,
+            "request_frame must keep the leaf dirty so the next collect repaints"
+        );
+        assert!(
+            take_canvas_wants_redraw(),
+            "the window event loop must take this *after* collect, not before"
+        );
     }
 }

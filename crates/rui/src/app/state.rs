@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use crate::core::tree::{Element, LayoutTree};
+use crate::core::tree::{Element, LayoutProfileMs, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
     scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
@@ -141,6 +141,8 @@ pub(super) struct AppState {
     #[cfg(debug_assertions)]
     scroll_prepass_log_frames: u32,
     render_prof_last: Instant,
+    /// End of the previous `render()`; slow-frame logs use this as `idle=` (ms since last paint).
+    last_render_at: Instant,
     render_prof_frames: u32,
     render_prof_pre_ms: f32,
     render_prof_layout_ms: f32,
@@ -166,7 +168,6 @@ pub(super) struct AppState {
     shadow_tex_cache: std::collections::HashMap<u64, super::image_registry::GpuImageTexture>,
     shadow_rect_cache: std::collections::HashMap<u64, [f32; 4]>,
     last_shadow_tex_draws: Vec<crate::renderer::prepare_text::ShadowTexDraw>,
-    last_page_stack_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>>,
     /// Accumulated dirty rect in logical px for partial redraw (`x,y,w,h`).
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) force_full_redraw: bool,
@@ -413,10 +414,7 @@ fn draw_page_stack_band_to_pass<'pass>(
         pipeline.bind_sdf(pass, true, backdrop);
         pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        pass.set_index_buffer(
-            pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(
             0..pipeline.num_indices,
             0,
@@ -445,15 +443,8 @@ fn draw_page_stack_band_to_pass<'pass>(
             usage: wgpu::BufferUsages::VERTEX,
         });
         pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-        pass.set_index_buffer(
-            pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-        pass.draw_indexed(
-            0..pipeline.num_indices,
-            0,
-            0..chrome_slice.len() as u32,
-        );
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..pipeline.num_indices, 0, 0..chrome_slice.len() as u32);
     }
 
     if let Some(ul) = page_stack_band_underlines.get(band_i) {
@@ -466,26 +457,13 @@ fn draw_page_stack_band_to_pass<'pass>(
                 usage: wgpu::BufferUsages::VERTEX,
             });
             pass.set_vertex_buffer(1, underline_buffer.slice(..));
-            pass.set_index_buffer(
-                pipeline.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
-            pass.draw_indexed(
-                0..pipeline.num_indices,
-                0,
-                0..ul.len() as u32,
-            );
+            pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..pipeline.num_indices, 0, 0..ul.len() as u32);
         }
     }
 
     if let Some(sds) = page_stack_band_shadows.get(band_i) {
-        draw_shadow_tex_draws(
-            pass,
-            sds,
-            shadow_tex_cache,
-            textured_pipeline,
-            device,
-        );
+        draw_shadow_tex_draws(pass, sds, shadow_tex_cache, textured_pipeline, device);
     }
 }
 
@@ -493,7 +471,6 @@ fn capture_page_stack_local_backdrop(
     backdrop: &mut BackdropBlurPipeline,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    encoder: &mut wgpu::CommandEncoder,
     surface_w: u32,
     surface_h: u32,
     surface_format: wgpu::TextureFormat,
@@ -518,12 +495,18 @@ fn capture_page_stack_local_backdrop(
 ) {
     let dummy = pipeline.dummy_backdrop();
     backdrop.ensure_size(device, surface_w, surface_h, surface_format);
-    let Some(scene_view) = backdrop.scene_view() else {
-        return;
-    };
 
+    // Own encoder + submit, same as `effect_pass::render_capture`. Prefix glyphon and the
+    // later surface pass share vertex buffers / atlas; recording both into the frame encoder
+    // left the scene RT with SDF fills (host blue) and no glyphs on GLES.
+    let mut cap_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Local Backdrop Capture Encoder"),
+    });
     {
-        let mut scene_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let Some(scene_view) = backdrop.scene_view() else {
+            return;
+        };
+        let mut scene_pass = cap_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Local Backdrop Scene Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: scene_view,
@@ -539,14 +522,8 @@ fn capture_page_stack_local_backdrop(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pipeline.bind_sdf(&mut scene_pass, true, dummy);
-        scene_pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
-        scene_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        scene_pass.set_index_buffer(
-            pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
 
+        // `band_i == 0`: only intra-band SDF prefix exists (no prior paint band).
         if band_i == 0 {
             draw_page_stack_prefix_to_pass(
                 &mut scene_pass,
@@ -562,41 +539,38 @@ fn capture_page_stack_local_backdrop(
                 device,
                 dummy,
             );
-            if band.text.0 > 0 {
-                text_renderer.render(&mut scene_pass);
-            }
-        } else {
-            for (j, prev) in page_stack_band_ranges.iter().enumerate().take(band_i) {
-                draw_page_stack_band_to_pass(
-                    &mut scene_pass,
-                    j,
-                    prev,
-                    paint_ops,
-                    pipeline,
-                    instance_buffer,
-                    textured_pipeline,
-                    textured_instance_buffer,
-                    image_textures,
-                    scaled_tex,
-                    scaled_input_chrome,
-                    device,
-                    page_stack_band_underlines,
-                    page_stack_band_shadows,
-                    shadow_tex_cache,
-                    dummy,
-                );
-                if prev.text.0 < prev.text.1 {
-                    if j == 0 {
-                        text_renderer.render(&mut scene_pass);
-                    } else if let Some(tr) = page_stack_band_text_renderers.get(j - 1) {
-                        tr.render(&mut scene_pass);
-                    }
+        }
+        for (j, prev) in page_stack_band_ranges.iter().enumerate().take(band_i) {
+            draw_page_stack_band_to_pass(
+                &mut scene_pass,
+                j,
+                prev,
+                paint_ops,
+                pipeline,
+                instance_buffer,
+                textured_pipeline,
+                textured_instance_buffer,
+                image_textures,
+                scaled_tex,
+                scaled_input_chrome,
+                device,
+                page_stack_band_underlines,
+                page_stack_band_shadows,
+                shadow_tex_cache,
+                dummy,
+            );
+            if prev.text.0 < prev.text.1 {
+                if j == 0 {
+                    text_renderer.render(&mut scene_pass);
+                } else {
+                    page_stack_band_text_renderers[j - 1].render(&mut scene_pass);
                 }
             }
         }
     }
 
-    backdrop.blur(device, queue, encoder, radius_px);
+    backdrop.blur(device, queue, &mut cap_encoder, radius_px);
+    queue.submit(std::iter::once(cap_encoder.finish()));
 }
 
 fn draw_page_stack_prefix_to_pass<'pass>(
@@ -631,15 +605,8 @@ fn draw_page_stack_prefix_to_pass<'pass>(
         pipeline.bind_sdf(pass, true, backdrop);
         pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, instance_buffer.slice(..));
-        pass.set_index_buffer(
-            pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-        pass.draw_indexed(
-            0..pipeline.num_indices,
-            0,
-            0..band.instance.0 as u32,
-        );
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..pipeline.num_indices, 0, 0..band.instance.0 as u32);
         if band.textured.0 > 0 {
             draw_packed_textured_runs(
                 pass,
@@ -662,15 +629,8 @@ fn draw_page_stack_prefix_to_pass<'pass>(
             usage: wgpu::BufferUsages::VERTEX,
         });
         pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-        pass.set_index_buffer(
-            pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
-        );
-        pass.draw_indexed(
-            0..pipeline.num_indices,
-            0,
-            0..chrome_slice.len() as u32,
-        );
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..pipeline.num_indices, 0, 0..chrome_slice.len() as u32);
     }
 }
 
@@ -687,6 +647,117 @@ fn band_instance_backdrop_blur(
         .iter()
         .map(|i| i.backdrop_blur)
         .fold(0.0_f32, f32::max)
+}
+
+/// Physical scissor for local `backdrop-filter` capture: the host overflow clip of
+/// blur instances in `band`. `instances` must already be in framebuffer pixels
+/// (the layout buffer is `take`n into `scaled_instances` before capture).
+/// Kept for regression tests; the capture pass itself uses a full-surface scissor
+/// so glyphon prefix glyphs are not dropped.
+#[cfg(test)]
+fn local_backdrop_host_scissor_physical(
+    instances: &[InstanceInput],
+    band: &crate::layout::layout_tree::OverlayBandRange,
+    surface_w: u32,
+    surface_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let lo = band.instance.0.min(instances.len());
+    let hi = band.instance.1.min(instances.len());
+    if lo >= hi {
+        return None;
+    }
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    let mut found = false;
+    for inst in &instances[lo..hi] {
+        if inst.backdrop_blur <= 0.5 {
+            continue;
+        }
+        let (x, y, w, h) = if inst.clip_size[0] > 0.5 && inst.clip_size[1] > 0.5 {
+            (
+                inst.clip_pos[0],
+                inst.clip_pos[1],
+                inst.clip_size[0],
+                inst.clip_size[1],
+            )
+        } else {
+            (
+                inst.rect_pos[0],
+                inst.rect_pos[1],
+                inst.rect_size[0],
+                inst.rect_size[1],
+            )
+        };
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        found = true;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x + w);
+        max_y = max_y.max(y + h);
+    }
+    if !found {
+        return None;
+    }
+    let x0 = min_x.floor().max(0.0) as u32;
+    let y0 = min_y.floor().max(0.0) as u32;
+    let x1 = max_x.ceil().min(surface_w as f32).max(0.0) as u32;
+    let y1 = max_y.ceil().min(surface_h as f32).max(0.0) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)))
+}
+
+#[cfg(test)]
+mod local_backdrop_capture_tests {
+    use super::*;
+    use crate::layout::layout_tree::OverlayBandRange;
+    use bytemuck::Zeroable;
+
+    fn band_instances(lo: usize, hi: usize) -> OverlayBandRange {
+        OverlayBandRange {
+            instance: (lo, hi),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            backdrop_blur: 0.0,
+            underlay_opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn local_blur_radius_is_zero_when_instance_buffer_was_taken() {
+        // Regression: `mem::take(render_result.instances)` left an empty vec; looking
+        // there for backdrop_blur skipped capture and the scrim sampled the dummy.
+        let band = band_instances(0, 4);
+        assert_eq!(band_instance_backdrop_blur(&[], &band), 0.0);
+    }
+
+    #[test]
+    fn local_blur_radius_reads_scaled_instance_buffer() {
+        let mut inst = InstanceInput::zeroed();
+        inst.backdrop_blur = 16.0;
+        inst.rect_size = [100.0, 80.0];
+        inst.clip_size = InstanceInput::NO_CLIP_SIZE;
+        let band = band_instances(0, 1);
+        assert!((band_instance_backdrop_blur(&[inst], &band) - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn host_scissor_uses_physical_clip_without_rescaling() {
+        let mut inst = InstanceInput::zeroed();
+        inst.backdrop_blur = 16.0;
+        inst.clip_pos = [100.0, 200.0];
+        inst.clip_size = [220.0, 140.0];
+        let band = band_instances(0, 1);
+        let sc = local_backdrop_host_scissor_physical(&[inst], &band, 800, 600).expect("scissor");
+        assert_eq!(sc, (100, 200, 220, 140));
+    }
 }
 
 impl AppState {
@@ -1064,6 +1135,7 @@ impl AppState {
             #[cfg(debug_assertions)]
             scroll_prepass_log_frames: 0,
             render_prof_last: Instant::now(),
+            last_render_at: Instant::now(),
             render_prof_frames: 0,
             render_prof_pre_ms: 0.0,
             render_prof_layout_ms: 0.0,
@@ -1088,7 +1160,6 @@ impl AppState {
             shadow_tex_cache: std::collections::HashMap::new(),
             shadow_rect_cache: std::collections::HashMap::new(),
             last_shadow_tex_draws: Vec::new(),
-            last_page_stack_band_shadows: Vec::new(),
             damage_rect: None,
             force_full_redraw: true,
             has_presented_frame: false,
@@ -1165,6 +1236,17 @@ impl AppState {
         }
     }
 
+    /// Drop GPU glyph vertices for a page-stack band. Culled bands used to keep last
+    /// frame's glyphon buffer; on scroll-up those stale glyphs sit in the local mask.
+    fn clear_page_stack_band_glyphon(&mut self, band_i: usize) {
+        if band_i == 0 {
+            self.text_renderer
+                .prepare(&self.device, &self.queue, &self.config, std::iter::empty());
+        } else if let Some(tr) = self.page_stack_band_text_renderers.get_mut(band_i - 1) {
+            tr.prepare(&self.device, &self.queue, &self.config, std::iter::empty());
+        }
+    }
+
     /// Grow shared-font page stacking pipelines (band 0 = [`Self::text_renderer`]).
     fn ensure_page_stack_band_text_renderers(&mut self, band_count: usize) {
         let extra_needed = band_count.saturating_sub(1);
@@ -1177,52 +1259,6 @@ impl AppState {
                     &self.config,
                     font_ptr,
                 ));
-        }
-    }
-
-    /// Glyphon `prepare` is consumed by the first `render`. Local backdrop capture
-    /// must happen *before* the surface pass, then this rebuilds prefix glyphs so
-    /// the 12.5% host margin still paints sharp text.
-    fn reprepare_page_stack_text_prefix(
-        &mut self,
-        page_stack_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
-        prefix_end: usize,
-        overlay_text_start: usize,
-        ui_scale: f32,
-        text_fast: bool,
-        shadow_cached_keys: &std::collections::HashSet<u64>,
-    ) {
-        for (band_i, band) in page_stack_band_ranges.iter().enumerate().take(prefix_end) {
-            let text_lo = band.text.0.min(overlay_text_start);
-            let text_hi = band.text.1.min(overlay_text_start);
-            if text_lo >= text_hi {
-                continue;
-            }
-            if band_i == 0 {
-                let _ = prepare_text_frame(
-                    &mut self.text_renderer,
-                    &self.device,
-                    &self.queue,
-                    &self.config,
-                    &self.text_nodes[text_lo..text_hi],
-                    ui_scale,
-                    text_fast,
-                    shadow_cached_keys,
-                    &self.shadow_rect_cache,
-                );
-            } else {
-                let _ = prepare_text_frame(
-                    &mut self.page_stack_band_text_renderers[band_i - 1],
-                    &self.device,
-                    &self.queue,
-                    &self.config,
-                    &self.text_nodes[text_lo..text_hi],
-                    ui_scale,
-                    text_fast,
-                    shadow_cached_keys,
-                    &self.shadow_rect_cache,
-                );
-            }
         }
     }
 
@@ -1927,6 +1963,7 @@ impl AppState {
         let text_fast = text_force_fast_mode || layout_fast;
         let _text_backend = self.text_backend;
         let render_begin = Instant::now();
+        let idle_ms = self.last_render_at.elapsed().as_secs_f32() * 1000.0;
         let inner = self.window.inner_size();
         if inner.width > 0 && inner.height > 0 {
             let target = Self::resolve_surface_size(inner, self.last_resized_event);
@@ -2413,6 +2450,15 @@ impl AppState {
                 && scroll_only)
             || active_drag_rest.is_some();
         crate::style::set_gradient_raster_dpi(self.ui_scale());
+        let mut layout_passes = 0u32;
+        let mut layout_prof_sum = LayoutProfileMs::default();
+        let mut acc_layout_prof = |p: &LayoutProfileMs| {
+            layout_passes += 1;
+            layout_prof_sum.rebuild_ms += p.rebuild_ms;
+            layout_prof_sum.setup_ms += p.setup_ms;
+            layout_prof_sum.taffy_compute_ms += p.taffy_compute_ms;
+            layout_prof_sum.collect_ms += p.collect_ms;
+        };
         let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
@@ -2431,6 +2477,7 @@ impl AppState {
                 layout_subtree_root,
             )
         };
+        acc_layout_prof(&render_result.prof);
         if !scroll_paint_only {
             let mut overflow_impact = crate::core::tree::LayoutStatus::Clean;
             crate::components::bubble::sync_bubble_reactions_subtree(
@@ -2459,6 +2506,7 @@ impl AppState {
                     scrollbar_overlay_collect,
                     None,
                 );
+                acc_layout_prof(&render_result.prof);
             }
         }
         // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
@@ -2480,6 +2528,7 @@ impl AppState {
                 scrollbar_overlay_collect,
                 None,
             );
+            acc_layout_prof(&render_result.prof);
         }
         // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
         let floating_needs_frame =
@@ -2505,8 +2554,10 @@ impl AppState {
                 scrollbar_overlay_collect,
                 None,
             );
+            acc_layout_prof(&render_result.prof);
             self.window.request_redraw();
         }
+        drop(acc_layout_prof);
         let layout_done = Instant::now();
 
         let overlay_split = render_result.overlay_split;
@@ -2549,11 +2600,10 @@ impl AppState {
             self.mark_full_redraw();
         }
         {
-            let p = &render_result.prof;
-            self.render_prof_layout_rebuild_ms += p.rebuild_ms;
-            self.render_prof_layout_setup_ms += p.setup_ms;
-            self.render_prof_layout_taffy_ms += p.taffy_compute_ms;
-            self.render_prof_layout_collect_ms += p.collect_ms;
+            self.render_prof_layout_rebuild_ms += layout_prof_sum.rebuild_ms;
+            self.render_prof_layout_setup_ms += layout_prof_sum.setup_ms;
+            self.render_prof_layout_taffy_ms += layout_prof_sum.taffy_compute_ms;
+            self.render_prof_layout_collect_ms += layout_prof_sum.collect_ms;
         }
 
         // Export collected metrics and hover state for window_events.rs to avoid redundant traversals.
@@ -2642,6 +2692,17 @@ impl AppState {
             // supersample AA and blurred sticky 0° / rotate samples.
             let is_text_xform = id.starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
                 || id.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX);
+            let format = if is_text_xform {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            };
+            if self
+                .image_textures
+                .try_overwrite_rgba8(&id, &self.queue, &rgba, w, h, format)
+            {
+                continue;
+            }
             let gpu = if is_text_xform {
                 super::image_registry::upload_rgba8_linear(
                     &self.device,
@@ -2681,6 +2742,8 @@ impl AppState {
         let captures = crate::renderer::take_capture_jobs();
         let effects = crate::renderer::take_effect_jobs();
         let filters = crate::renderer::take_filter_jobs();
+        let capture_n = captures.len();
+        let fx_begin = Instant::now();
         let mut fx_dirty = false;
         if self.effect_pass.flush(
             &self.device,
@@ -2711,6 +2774,7 @@ impl AppState {
         if fx_dirty {
             self.window.request_redraw();
         }
+        let fx_done = Instant::now();
         // Capture/effect passes rewrite pipeline globals.resolution to RT size.
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
@@ -2815,18 +2879,13 @@ impl AppState {
                 // A band whose glyphs are all clip-culled must not abort the rest of the page:
                 // instances for other bands were already uploaded at the new scroll offset.
                 // Breaking here leaves glyphon vertices on the previous frame (background
-                // scrolls, text does not follow). Keep this band's last vertices and continue.
+                // scrolls, text does not follow). Clear this band's GPU vertices instead of
+                // keeping them: stale glyphs land in the local mask for one frame on scroll-up.
                 if prep_out.culled_skip_prepare {
                     culled_any = true;
+                    self.clear_page_stack_band_glyphon(band_i);
                     underlines.push(Vec::new());
-                    // Keep last textured shadows for this band (same as glyphon vertices).
-                    // Pushing empty made synthetic-bold quads vanish for a frame on scroll.
-                    shadow_bands.push(
-                        self.last_page_stack_band_shadows
-                            .get(band_i)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
+                    shadow_bands.push(Vec::new());
                     continue;
                 }
                 for bm in &prep_out.shadow_new_bitmaps {
@@ -2879,7 +2938,6 @@ impl AppState {
                 }
                 page_stack_band_underlines = underlines;
                 page_stack_band_shadows = shadow_bands;
-                self.last_page_stack_band_shadows = page_stack_band_shadows.clone();
                 (Vec::new(), caret_all, shadow_all)
             }
         } else if text_cache_valid {
@@ -3035,7 +3093,6 @@ impl AppState {
                 self.window.request_redraw();
             }
         }
-        self.trim_all_glyph_atlases();
         if crate::core::texture_stats::texture_stats_enabled()
             && !Self::is_bootstrap_root(&self.root_element)
         {
@@ -3134,6 +3191,23 @@ impl AppState {
                 && !self.force_full_redraw
                 && frame_fp == self.last_gpu_frame_fp
             {
+                let total_ms = render_begin.elapsed().as_secs_f32() * 1000.0;
+                if total_ms >= 200.0 {
+                    eprintln!(
+                        "slow render {total_ms:.0}ms skip_present=true idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} captures={capture_n} modal_css={}",
+                        (pre_done - render_begin).as_secs_f32() * 1000.0,
+                        (layout_done - pre_done).as_secs_f32() * 1000.0,
+                        layout_prof_sum.rebuild_ms,
+                        layout_prof_sum.taffy_compute_ms,
+                        layout_prof_sum.collect_ms,
+                        layout_prof_sum.setup_ms,
+                        use_full_taffy_rebuild,
+                        (upload_done - layout_done).as_secs_f32() * 1000.0,
+                        (fx_done - fx_begin).as_secs_f32() * 1000.0,
+                        (text_done - fx_done).as_secs_f32() * 1000.0,
+                        crate::components::internal::modal_motion::any_modal_css_needs_frame(),
+                    );
+                }
                 if !self.needs_text_settle {
                     self.layout_status = crate::core::tree::LayoutStatus::Clean;
                 }
@@ -3142,6 +3216,7 @@ impl AppState {
                     std::mem::take(&mut render_result.textured_draws),
                     scaled_input_chrome,
                 );
+                self.last_render_at = Instant::now();
                 return Ok(());
             }
             self.last_gpu_frame_fp = frame_fp;
@@ -3350,7 +3425,11 @@ impl AppState {
                                 if !ul.is_empty() {
                                     page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                     page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                                    page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                                    page_pass.set_bind_group(
+                                        1,
+                                        self.pipeline.dummy_backdrop(),
+                                        &[],
+                                    );
                                     page_pass.set_vertex_buffer(
                                         0,
                                         self.pipeline.vertex_buffer.slice(..),
@@ -3510,13 +3589,15 @@ impl AppState {
         };
 
         let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
-        let mut band_backdrop_idx: Vec<Option<usize>> =
-            vec![None; page_stack_band_ranges.len()];
-        // Capture *before* the surface pass so glyphon prefix glyphs land in the
-        // blur texture (a mid-pass recapture sees an already-consumed prepare).
+        let mut band_backdrop_idx: Vec<Option<usize>> = vec![None; page_stack_band_ranges.len()];
+        // Capture submits its own encoder (like subtree `render_capture`) so prefix
+        // glyphon is flushed to the scene RT before this frame encoder reuses the
+        // same vertex buffers on the swapchain.
         if allow_primitives && !use_backdrop_blur && has_page_stack_bands {
             for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
-                let local_blur = band_instance_backdrop_blur(&render_result.instances, band);
+                // `render_result.instances` was `take`n into `scaled_instances` (physical).
+                // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
+                let local_blur = band_instance_backdrop_blur(&scaled_instances, band);
                 if local_blur <= 0.5 {
                     continue;
                 }
@@ -3524,7 +3605,6 @@ impl AppState {
                     &mut self.backdrop_blur,
                     &self.device,
                     &self.queue,
-                    &mut encoder,
                     self.config.width,
                     self.config.height,
                     self.config.format,
@@ -3556,14 +3636,6 @@ impl AppState {
                     ));
                     band_backdrop_idx[band_i] = Some(idx);
                 }
-                self.reprepare_page_stack_text_prefix(
-                    &page_stack_band_ranges,
-                    band_i,
-                    overlay_text_start,
-                    ui_scale,
-                    text_fast,
-                    &shadow_cached_keys,
-                );
             }
         }
 
@@ -3597,11 +3669,8 @@ impl AppState {
             }
 
             render_pass.set_pipeline(&self.pipeline.render_pipeline);
-            self.pipeline.bind_sdf(
-                &mut render_pass,
-                true,
-                self.pipeline.dummy_backdrop(),
-            );
+            self.pipeline
+                .bind_sdf(&mut render_pass, true, self.pipeline.dummy_backdrop());
             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(
@@ -3900,6 +3969,11 @@ impl AppState {
         }
         let encode_done = Instant::now();
 
+        // Glyphon hello-world: prepare → render → trim. Trimming before capture/surface
+        // `render` emptied `glyphs_in_use` so a later prepare could LRU-evict atlas
+        // slots the already-recorded passes still sample.
+        self.trim_all_glyph_atlases();
+
         let submit_begin = Instant::now();
         self.queue.submit(std::iter::once(encoder.finish()));
         let submit_done = Instant::now();
@@ -3920,6 +3994,28 @@ impl AppState {
             self.render_prof_upload_ms += (upload_done - layout_done).as_secs_f32() * 1000.0;
             self.render_prof_text_ms += (text_done - upload_done).as_secs_f32() * 1000.0;
             self.render_prof_encode_ms += (encode_done - acquire_done).as_secs_f32() * 1000.0;
+
+            let total_ms = (draw_done - render_begin).as_secs_f32() * 1000.0;
+            if total_ms >= 200.0 {
+                eprintln!(
+                    "slow render {total_ms:.0}ms skip_present=false idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} acquire={:.1} encode={:.1} submit={:.1} present={:.1} captures={capture_n} modal_css={}",
+                    (pre_done - render_begin).as_secs_f32() * 1000.0,
+                    (layout_done - pre_done).as_secs_f32() * 1000.0,
+                    layout_prof_sum.rebuild_ms,
+                    layout_prof_sum.taffy_compute_ms,
+                    layout_prof_sum.collect_ms,
+                    layout_prof_sum.setup_ms,
+                    use_full_taffy_rebuild,
+                    (upload_done - layout_done).as_secs_f32() * 1000.0,
+                    (fx_done - fx_begin).as_secs_f32() * 1000.0,
+                    (text_done - fx_done).as_secs_f32() * 1000.0,
+                    (acquire_done - acquire_begin).as_secs_f32() * 1000.0,
+                    (encode_done - acquire_done).as_secs_f32() * 1000.0,
+                    (submit_done - submit_begin).as_secs_f32() * 1000.0,
+                    (draw_done - present_begin).as_secs_f32() * 1000.0,
+                    crate::components::internal::modal_motion::any_modal_css_needs_frame(),
+                );
+            }
 
             let elapsed = self.render_prof_last.elapsed();
             if elapsed >= std::time::Duration::from_secs(1) && render_profile_log_enabled() {
@@ -3965,6 +4061,7 @@ impl AppState {
             std::mem::take(&mut render_result.textured_draws),
             scaled_input_chrome,
         );
+        self.last_render_at = Instant::now();
         Ok(())
     }
 }

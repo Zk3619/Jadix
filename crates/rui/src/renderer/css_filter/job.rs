@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::renderer::effect::{CaptureJob, queue_capture};
+use crate::renderer::effect::{queue_capture, CaptureJob};
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::svg_filter::FilterGraph;
-use crate::style::{FilterList, filter_list_to_css};
+use crate::style::{filter_list_to_css, FilterList};
 
 #[derive(Clone, Debug)]
 pub struct FilterJob {

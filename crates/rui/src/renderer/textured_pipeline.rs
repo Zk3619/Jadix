@@ -14,7 +14,7 @@ pub struct TexturedInstanceInput {
     pub uv_scale: [f32; 2],
     /// 2D affine `[a, b, c, d, tx, ty]` about rect center (identity = no rotate).
     pub transform: [f32; 6],
-    /// `1.0` = sample texture.r as SDF; `0.0` = normal RGBA tint multiply.
+    /// `0.0` = RGBA, `1.0` = MSDF, `2.0` = sparse capture blit (empty texels discard).
     pub flags: f32,
     /// Overflow clip in the same space as `rect_pos`. `clip_size[0] < 0` disables.
     pub clip_pos: [f32; 2],

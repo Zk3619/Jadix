@@ -160,7 +160,7 @@ impl EffectPassGpu {
     /// Render capture slices then apply queued effect jobs. Returns true if any work ran.
     ///
     /// When `text` is provided, capture jobs that include [`CaptureJob::text_nodes`] are
-    /// reshaped and drawn into the RT (offscreen text-xform fallback).
+    /// prepared with Coverage `prepare_text_frame_at` and drawn into the RT.
     pub fn flush(
         &mut self,
         device: &wgpu::Device,
@@ -190,7 +190,8 @@ impl EffectPassGpu {
             let w = (cap.bounds[2] * scale).round().max(2.0) as u32;
             let h = (cap.bounds[3] * scale).round().max(2.0) as u32;
             // CSS filter captures: content-keyed reuse across scroll.
-            let filter_cap = cap.key.starts_with("rui_filter_cap:");
+            let filter_cap =
+                cap.key.starts_with("rui_filter_cap:") || cap.key.starts_with("rui_zoom_cap:");
             let sources_ready = cap
                 .textured_draws
                 .iter()
@@ -303,7 +304,7 @@ impl EffectPassGpu {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let ox = cap.bounds[0];
         let oy = cap.bounds[1];
-        let insts: Vec<InstanceInput> = cap
+        let mut insts: Vec<InstanceInput> = cap
             .instances
             .iter()
             .map(|i| {
@@ -376,83 +377,46 @@ impl EffectPassGpu {
             })
             .collect();
 
-        // Shape capture text into glyphon buffers (axis-aligned; blit applies the matrix).
-        // Match main prepare_text attrs (family / weight / align) so capture ink matches
-        // unrotated labels — incomplete Attrs previously made strokes look thin/wrong.
-        let mut capture_buffers: Vec<glyphon::Buffer> = Vec::new();
+        // Capture text must share Coverage `prepare_text_frame`, not a second glyphon
+        // recipe. The old Buffer::set_text path used Tailwind leading for lucide,
+        // skipped nowrap glyph_dy, and Advanced-shaped ASCII — Dialog enter then
+        // popped when the idle frame switched to live Coverage.
+        let mut capture_text_ready = false;
         if let Some(tr) = text.as_mut() {
             if !cap.text_nodes.is_empty() {
-                let fs = tr.font_system;
-                for info in &cap.text_nodes {
-                    let size = (info.style.size_resolved() * ui_scale).max(1.0);
-                    let lh = if let Some(px) = info.style.line_height_px {
-                        px * ui_scale
-                    } else if let Some(sc) = info.style.line_height_scale {
-                        size * sc
-                    } else {
-                        size * crate::style::tailwind_default_leading_scale(
-                            info.style.size_resolved(),
-                        )
-                    };
-                    let family = if let Some(ref name) = info.style.font_family {
-                        crate::utils::font::resolve_family(unsafe { &*fs }.db(), name)
-                    } else {
-                        crate::renderer::text_hit::best_font_family(unsafe { &*fs })
-                    };
-                    let weight = crate::utils::font::normalize_weight_for_family(
-                        unsafe { &*fs }.db(),
-                        family,
-                        info.style.weight_resolved(),
-                    );
-                    let mut buffer =
-                        glyphon::Buffer::new(unsafe { &mut *fs }, glyphon::Metrics::new(size, lh));
-                    let color = info.style.color_resolved();
-                    let attrs = glyphon::Attrs::new()
-                        .family(family)
-                        .weight(glyphon::fontdb::Weight(weight))
-                        .color(glyphon::Color::rgba(color[0], color[1], color[2], color[3]));
-                    buffer.set_text(&info.text, &attrs, glyphon::Shaping::Advanced, None);
-                    let align = info.style.align_resolved().to_glyphon(info.style.direction);
-                    for line in buffer.lines.iter_mut() {
-                        line.set_align(Some(align));
-                    }
-                    let bw = (info.width * ui_scale).max(1.0);
-                    let bh = (info.height * ui_scale).max(1.0);
-                    buffer.set_size(Some(bw), Some(bh));
-                    buffer.shape_until_scroll(unsafe { &mut *fs }, false);
-                    capture_buffers.push(buffer);
-                }
-                let mut areas: Vec<glyphon::TextArea<'_>> =
-                    Vec::with_capacity(capture_buffers.len());
-                for (info, buffer) in cap.text_nodes.iter().zip(capture_buffers.iter()) {
-                    let left = (info.x - ox) * ui_scale;
-                    let top = (info.y - oy) * ui_scale;
-                    let ps = if info.paint_scale.is_finite() && info.paint_scale > 0.0 {
-                        info.paint_scale
-                    } else {
-                        1.0
-                    };
-                    areas.push(glyphon::TextArea {
-                        buffer,
-                        left,
-                        top,
-                        scale: ps,
-                        bounds: glyphon::TextBounds {
-                            left: 0,
-                            top: 0,
-                            right: w as i32,
-                            bottom: h as i32,
-                        },
-                        default_color: glyphon::Color::rgba(
-                            info.style.color_resolved()[0],
-                            info.style.color_resolved()[1],
-                            info.style.color_resolved()[2],
-                            info.style.color_resolved()[3],
-                        ),
-                        custom_glyphs: &[],
-                    });
-                }
-                tr.prepare_resolution(device, queue, w, h, areas.into_iter());
+                let local_text: Vec<_> = cap
+                    .text_nodes
+                    .iter()
+                    .cloned()
+                    .map(|mut n| {
+                        n.x -= ox;
+                        n.y -= oy;
+                        if let Some(c) = n.clip_bounds.as_mut() {
+                            c[0] -= ox;
+                            c[1] -= oy;
+                        }
+                        n.paint_origin[0] -= ox;
+                        n.paint_origin[1] -= oy;
+                        n
+                    })
+                    .collect();
+                let empty_keys = std::collections::HashSet::new();
+                let empty_rects = std::collections::HashMap::new();
+                let prep = super::prepare_text::prepare_text_frame_at(
+                    tr,
+                    device,
+                    queue,
+                    w,
+                    h,
+                    &local_text,
+                    ui_scale,
+                    false,
+                    &empty_keys,
+                    &empty_rects,
+                );
+                insts.extend(prep.underline_instances);
+                insts.extend(prep.caret_instances);
+                capture_text_ready = !prep.culled_skip_prepare;
             }
         }
 
@@ -533,7 +497,7 @@ impl EffectPassGpu {
                 }
             }
             if let Some(tr) = text.as_ref() {
-                if !cap.text_nodes.is_empty() {
+                if capture_text_ready {
                     tr.render(&mut pass);
                 }
             }
