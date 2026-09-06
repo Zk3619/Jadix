@@ -256,6 +256,129 @@ pub(crate) fn DrawingCanvasShowcase() -> Element {
     }
 }
 
+const IMAGE_STREAM_KEY: &str = "rui-gallery-stream";
+const IMAGE_STREAM_W: u32 = 320;
+const IMAGE_STREAM_H: u32 = 180;
+const STREAM_BAR_HALF: i32 = 16;
+
+#[cfg(not(feature = "image-stream"))]
+fn synthetic_stream_frame(phase: u32) -> Vec<u8> {
+    let mut rgba = vec![0u8; (IMAGE_STREAM_W * IMAGE_STREAM_H * 4) as usize];
+    let bar_x = (phase % IMAGE_STREAM_W) as i32;
+    for y in 0..IMAGE_STREAM_H {
+        for x in 0..IMAGE_STREAM_W {
+            let i = ((y * IMAGE_STREAM_W + x) * 4) as usize;
+            let on_bar = (x as i32 - bar_x).abs() < STREAM_BAR_HALF;
+            if on_bar {
+                rgba[i] = 96;
+                rgba[i + 1] = 165;
+                rgba[i + 2] = 250;
+                rgba[i + 3] = 255;
+            } else {
+                let stripe = ((x + phase / 2) / 24) % 2 == 0;
+                let g = if stripe { 52 } else { 148 };
+                rgba[i] = g;
+                rgba[i + 1] = g.saturating_add(8);
+                rgba[i + 2] = g.saturating_add(28);
+                rgba[i + 3] = 255;
+            }
+        }
+    }
+    rgba
+}
+
+#[cfg(feature = "image-stream")]
+fn synthetic_i420_frame(phase: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let w = IMAGE_STREAM_W;
+    let h = IMAGE_STREAM_H;
+    let cw = w.div_ceil(2);
+    let ch = h.div_ceil(2);
+    let mut y = vec![0u8; (w * h) as usize];
+    let mut u = vec![128u8; (cw * ch) as usize];
+    let mut v = vec![128u8; (cw * ch) as usize];
+    let bar_x = (phase % w) as i32;
+    for py in 0..h {
+        for px in 0..w {
+            let on_bar = (px as i32 - bar_x).abs() < STREAM_BAR_HALF;
+            let stripe = ((px + phase / 2) / 24) % 2 == 0;
+            y[(py * w + px) as usize] = if on_bar {
+                140
+            } else if stripe {
+                48
+            } else {
+                130
+            };
+        }
+    }
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let px = cx * 2;
+            let on_bar = (px as i32 - bar_x).abs() < STREAM_BAR_HALF;
+            let i = (cy * cw + cx) as usize;
+            if on_bar {
+                u[i] = 180;
+                v[i] = 80;
+            }
+        }
+    }
+    (y, u, v)
+}
+
+fn stream_phase() -> u32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(std::time::Instant::now);
+    (start.elapsed().as_millis() / 16) as u32
+}
+
+fn queue_synthetic_stream_frame() {
+    #[cfg(feature = "image-stream")]
+    {
+        let (y, u, v) = synthetic_i420_frame(stream_phase());
+        rui::queue_media_frame(
+            IMAGE_STREAM_KEY,
+            rui::MediaFrame::i420(IMAGE_STREAM_W, IMAGE_STREAM_H, &y, &u, &v),
+        );
+    }
+    #[cfg(not(feature = "image-stream"))]
+    {
+        let rgba = synthetic_stream_frame(stream_phase());
+        rui::queue_media_frame(
+            IMAGE_STREAM_KEY,
+            rui::MediaFrame::rgba8(IMAGE_STREAM_W, IMAGE_STREAM_H, &rgba),
+        );
+    }
+}
+
+#[component]
+pub(crate) fn ImageStreamShowcase() -> Element {
+    // Seed the GPU key before the first collect. A 1×1 clock never rasterizes
+    // (`canvas` skips w/h < 2), so the Image leaf used to draw with a missing bind group.
+    queue_synthetic_stream_frame();
+    let clock: Element = canvas()
+        .w(4.0)
+        .h(4.0)
+        .opacity(0.0)
+        .paint(move |ctx: &mut dyn Canvas2D, _size: CanvasSize| {
+            queue_synthetic_stream_frame();
+            ctx.request_frame();
+            LayoutStatus::Clean
+        })
+        .into();
+    let clock = clock.pointer_events_none();
+
+    ui! {
+        <MyCard title="ImageStream · 合成 RGBA 流（WP-M.2）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "引擎只收帧：CPU 色条 → queue_media_frame → <Image texture>。无 FFmpeg / 无播放器。应看到亮/暗竖纹 + 一条横向移动的蓝条。`--features image-stream` 时色条以 I420 投递（引擎转 RGBA），不要在热路径上再做 RGBA→YUV→RGBA 往返。"
+                </Label>
+                { clock }
+                <Image texture={IMAGE_STREAM_KEY} w="20rem" h="11.25rem" rounded="0.5rem" />
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 pub(crate) fn DrawingScene3dShowcase() -> Element {
     let cube: Element = scene3d().w(220.0).h(160.0).label("RUI 3D").into();

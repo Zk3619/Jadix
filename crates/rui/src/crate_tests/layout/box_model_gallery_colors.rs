@@ -7,7 +7,7 @@
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};
 use crate::primitives::r#box::r#box;
-use crate::style::{ThemeMode, parse_color, set_theme_mode};
+use crate::style::{parse_color, set_theme_mode, ThemeMode};
 
 const MARGIN: &str = "muted";
 const PADDING: &str = "chart-1";

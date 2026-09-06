@@ -198,6 +198,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
                     <DrawingSvgShowcase />
                     <LucideAnimatedShowcase />
                     <DrawingCanvasShowcase />
+                    <ImageStreamShowcase />
                     <DrawingScene3dShowcase />
                 </VStack>
             </ScrollArea>
@@ -359,7 +360,9 @@ pub(crate) fn GallerySectionBasics() -> Element {
 }
 
 pub(crate) fn build_gallery_app() -> Element {
-    let section = use_signal("gal_nav_section", || "basics".to_string());
+    let section = use_signal("gal_nav_section", || {
+        std::env::var("RUI_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
+    });
     let nav_menu = gallery_nav_menu(section);
 
     // Shell + a single root `<Toaster/>` (Sonner-style). Title / desc / body use `<Match scope>`

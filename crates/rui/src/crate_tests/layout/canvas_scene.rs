@@ -6,7 +6,7 @@ use crate::core::reactivity::{
 };
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::canvas::{ATTR_CANVAS_PAINT, canvas};
+use crate::primitives::canvas::{canvas, ATTR_CANVAS_PAINT};
 
 #[test]
 fn canvas_builder_leaf_layout_bounds_and_texture() {

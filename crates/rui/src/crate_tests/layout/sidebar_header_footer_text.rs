@@ -3,10 +3,10 @@
 //! the first animation layout does not — without an inherit-lock, `TextStyle::default`
 //! white flashes on light chrome then chrome-sync paints black again.
 
-use crate::components::sidebar::{SidebarMenuButton, SidebarMenuButtonProps, sidebar};
+use crate::components::sidebar::{sidebar, SidebarMenuButton, SidebarMenuButtonProps};
 use crate::core::reactivity::{create_effect, create_root};
-use crate::core::tree::{Element, LayoutStatus, LayoutTree, parse_text_color};
-use crate::layout::layout_tree::{ATTR_PORTAL_KEY, RenderResult, TextLayoutInfo};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus, LayoutTree};
+use crate::layout::layout_tree::{RenderResult, TextLayoutInfo, ATTR_PORTAL_KEY};
 
 const HEADER: &str = "HeaderChrome";
 const NAV: &str = "NavItem";

@@ -107,7 +107,7 @@ pub(crate) fn PrimitivesShowcase() -> rui::core::tree::Element {
                     <Show when={local_open.get()}>
                         <Box absolute=true inset="0" w="100%" h="100%" items="center" justify="center">
                             <Box w="85%" h="85%" rounded="0.5rem"
-                                 bg="rgba(15,23,42,0.55)" backdrop_blur="12"
+                                 bg="rgba(15,23,42,0.55)" backdrop_blur="0.75"
                                  items="center" justify="center">
                                 <VStack gap="0.5rem" p="0.75rem" bg="secondary" rounded="0.5rem" m="0.5rem">
                                     <Label font_weight="700" text_size="0.875rem">"局部 Portal"</Label>
@@ -467,7 +467,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             <Label text_size="0.875rem" font_weight="600">"Link"</Label>
                             <Input id="gal-drawer-link" value={link} class="w-full" />
                             <Label text_size="0.875rem" leading="relaxed">
-                                "Half-open snap shortens the panel — Body scrolls when content overflows."
+                                "Half-open snap shortens the panel — Body scrolls when content overflows. Put actions in Body so they scroll with the copy; DrawerFooter is sticky to the visible bottom."
                             </Label>
                             <Label text_size="0.875rem" leading="relaxed">
                                 "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
@@ -487,22 +487,20 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             <Label text_size="0.875rem" leading="relaxed">
                                 "Mollit anim id est laborum. Drag the handle to snap or dismiss."
                             </Label>
+                            <Button
+                                size="sm"
+                                on_click={move || {
+                                    toast_push("Link copied", 1500);
+                                    open.set(false);
+                                }}
+                            >
+                                "Copy link"
+                            </Button>
+                            <DrawerClose>
+                                <Button variant="outline" size="sm">Close</Button>
+                            </DrawerClose>
                         </VStack>
                     </DrawerBody>
-                    <DrawerFooter>
-                        <Button
-                            size="sm"
-                            on_click={move || {
-                                toast_push("Link copied", 1500);
-                                open.set(false);
-                            }}
-                        >
-                            "Copy link"
-                        </Button>
-                        <DrawerClose>
-                            <Button variant="outline" size="sm">Close</Button>
-                        </DrawerClose>
-                    </DrawerFooter>
                 </DrawerContent>
             </Drawer>
             }

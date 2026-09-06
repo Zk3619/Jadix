@@ -7,8 +7,8 @@ use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
-    escapes_ancestor_overflow, hoist_portal_subtrees,
+    escapes_ancestor_overflow, hoist_portal_subtrees, ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL,
+    ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
 };
 use crate::renderer::pipeline::InstanceInput;
 use crate::utils::popup::panel_block_clicks;

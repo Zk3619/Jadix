@@ -572,8 +572,8 @@ fn local_scrim_key_scene() -> Element {
                         w="75%"
                         h="75%"
                         rounded="0.65rem"
-                        bg="rgba(255,255,255,0.55)"
-                        backdrop_blur="12"
+                        bg="rgba(255,255,255,0.2)"
+                        backdrop_blur="0.125"
                         items="center"
                         justify="center"
                     >

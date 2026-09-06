@@ -215,11 +215,27 @@ pub(crate) fn FilterShowcase() -> rui::core::tree::Element {
     .map(|(label, filter, class)| filter_demo_tile(label, filter_demo_logo(filter, class)))
     .collect();
 
+    let tiles_tw_blur: Vec<Element> = [
+        ("blur-none", "blur-none"),
+        ("blur-xs · 4px", "blur-xs"),
+        ("blur-sm · 8px", "blur-sm"),
+        ("blur-md · 12px", "blur-md"),
+        ("blur-lg · 16px", "blur-lg"),
+        ("blur-xl · 24px", "blur-xl"),
+        ("blur-2xl · 40px", "blur-2xl"),
+        ("blur-3xl · 64px", "blur-3xl"),
+        ("blur-[2px]", "blur-[2px]"),
+        ("blur-(--blur-sm)", "blur-(--blur-sm)"),
+    ]
+    .into_iter()
+    .map(|(label, class)| filter_demo_tile(label, filter_demo_logo(None, Some(class))))
+    .collect();
+
     ui! {
         <MyCard title="12b) CSS filter">
             <VStack gap="1rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对齐 MDN：以彩色 Firefox logo（assets/firefox-logo.svg）为 SourceGraphic，子树捕获后按序应用 filter。支持函数列表、Tailwind（blur-md / grayscale…）与 url(#id)。"
+                    "对齐 MDN：以彩色 Firefox logo（assets/firefox-logo.svg）为 SourceGraphic，子树捕获后按序应用 filter。支持函数列表、Tailwind v4 blur-*（xs=4px…3xl=64px；无单位任意值按 rem）与 url(#id)。"
                 </Label>
                 <Label font_weight="700" text_size="0.875rem">"函数"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
@@ -229,6 +245,11 @@ pub(crate) fn FilterShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"组合 / Tailwind / url()"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     { tiles_combo }
+                </HStack>
+                <Label font_weight="700" text_size="0.875rem">"Tailwind blur-*"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { filter_demo_tile("原图", filter_demo_logo(None, None)) }
+                    { tiles_tw_blur }
                 </HStack>
             </VStack>
         </MyCard>

@@ -4,7 +4,7 @@
 //! while `:hover` leave used scale¹ (gallery red `hover:scale-x-150`).
 
 use crate::core::reactivity::{create_effect, create_root};
-use crate::core::tree::{Element, LayoutTree, visual_paint_aabb};
+use crate::core::tree::{visual_paint_aabb, Element, LayoutTree};
 use crate::primitives::r#box::r#box;
 
 #[test]

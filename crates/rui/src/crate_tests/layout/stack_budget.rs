@@ -6,7 +6,7 @@
 
 use crate::components::button::button;
 use crate::core::tree::{Element, ElementInner};
-use crate::layout::layout_tree::{LayoutTree, TextLayoutInfo, stack_probe};
+use crate::layout::layout_tree::{stack_probe, LayoutTree, TextLayoutInfo};
 use crate::primitives::{hstack, vstack};
 use crate::renderer::InstanceInput;
 use crate::style::{AnimationSnapshot, Style, TextStyle, TransitionSnapshot};

@@ -1,12 +1,12 @@
 //! WP-3.2：path 产品绘制走 TexturedDraw（CPU 覆盖率光栅）；tessellate 仅回退。
 
 use crate::components::{
-    ChartDatum, area_chart, bar_chart, define_chart, line_chart, line_y, pie_chart,
+    area_chart, bar_chart, define_chart, line_chart, line_y, pie_chart, ChartDatum,
 };
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::path::{attach_path, polyline, PathStyle, ATTR_PATH_D, ATTR_PATH_VIEWBOX};
 use crate::primitives::r#box::vstack;
-use crate::primitives::path::{ATTR_PATH_D, ATTR_PATH_VIEWBOX, PathStyle, attach_path, polyline};
 
 #[test]
 fn path_leaf_emits_textured_stroke() {

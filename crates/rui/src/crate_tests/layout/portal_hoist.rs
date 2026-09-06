@@ -3,8 +3,8 @@
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
-    PORTAL_LAYER_ID, escapes_ancestor_overflow, hoist_portal_subtrees,
+    escapes_ancestor_overflow, hoist_portal_subtrees, ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL,
+    ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT, PORTAL_LAYER_ID,
 };
 
 fn portal_layer(root: &Element) -> Option<&Element> {
@@ -246,11 +246,9 @@ fn hoist_unknown_mount_falls_back_to_root_layer() {
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(count_in_layer(&root), 1);
-    assert!(
-        find_by_tid(&root, "orphan-portal")
-            .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
-            .unwrap_or(false)
-    );
+    assert!(find_by_tid(&root, "orphan-portal")
+        .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
+        .unwrap_or(false));
 }
 
 #[test]
@@ -460,3 +458,70 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
     assert_eq!(count_in_layer(&root), 2);
 }
 
+/// Dialog open rewrites the portal layer. That must not remasure every page text leaf
+/// (whole-program first open hitch: full `build_and_layout` after hoist).
+#[test]
+fn portal_hoist_does_not_remasure_unchanged_page_text() {
+    let mut labels = Vec::new();
+    for i in 0..24 {
+        labels.push(
+            Element::new()
+                .text(format!("gallery page label {i:02} 中文"))
+                .text_size(14.0)
+                .w(400.0)
+                .template_id(format!("page-label-{i}")),
+        );
+    }
+    let page = Element::new()
+        .w(800.0)
+        .flex_col()
+        .template_id("page")
+        .children(labels);
+
+    let island = Element::new()
+        .w(0.0)
+        .h(0.0)
+        .template_id("dialog-island");
+
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .child(page)
+        .child(island);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let cold = tree.text_measure_calls.get();
+    assert!(
+        cold >= 24,
+        "cold layout must measure page labels, got {cold}"
+    );
+
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let same = tree.text_measure_calls.get();
+    assert!(
+        same < cold / 4,
+        "identical rebuild must reuse Taffy cache, not remasure the gallery; cold={cold} same={same}"
+    );
+
+    let mut dlg = Element::new()
+        .w(240.0)
+        .h(120.0)
+        .template_id("dlg-panel")
+        .child(Element::new().text("Dialog title").text_size(18.0));
+    dlg.set_attr("rui_portal", "1");
+    dlg.set_attr(ATTR_PORTAL_KEY, "dlg-panel");
+    let island = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some("dialog-island"))
+        .expect("island");
+    island.children.push(dlg);
+
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let after_hoist = tree.text_measure_calls.get();
+    assert!(
+        after_hoist < cold / 2,
+        "hoisting a dialog must measure the overlay, not every page label; cold={cold} after={after_hoist}"
+    );
+}

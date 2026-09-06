@@ -1208,3 +1208,135 @@ fn button_showcase_fits_pe_stack() {
         });
     });
 }
+
+fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    x1 > x0 && y1 > y0
+}
+
+/// Real Gallery overlays page (not the crate_tests host stub): band assignment +
+/// opaque prefix cover over YELLOW. Tall viewport so the local scrim is on-screen
+/// without scrolling (same as the user having scrolled it into view).
+#[test]
+fn overlays_local_scrim_yellow_is_in_capture_prefix() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut root = rui::core::reactivity::isolate_reads(|| {
+                    GallerySectionOverlays(GallerySectionOverlaysProps::default())
+                });
+                assert!(
+                    rui::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1,
+                    "local Portal must hoist onto gal-local-scrim-host"
+                );
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let result = layout.build_and_layout(&mut root, 1280.0, 1800.0, [-1.0, -1.0]);
+                let overlay_text_start =
+                    result.overlay_split.text_start.min(result.text_nodes.len());
+                let bands = result.overlay_split.page_stack_band_ranges();
+                let yellow_at = result
+                    .text_nodes
+                    .iter()
+                    .position(|t| t.text.contains("YELLOW"));
+                let blur_indices: Vec<usize> = result
+                    .instances
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, i)| i.backdrop_blur > 0.5)
+                    .map(|(i, _)| i)
+                    .collect();
+                let mut dump = format!(
+                    "overlay_text_start={}/{} bands={} blur_inst={:?} yellow={:?} paint_ops={}\n",
+                    overlay_text_start,
+                    result.text_nodes.len(),
+                    bands.len(),
+                    blur_indices,
+                    yellow_at,
+                    result.paint_ops.len(),
+                );
+                if let Some(yi) = yellow_at {
+                    let y = &result.text_nodes[yi];
+                    dump.push_str(&format!(
+                        "YELLOW xy=({:.1},{:.1}) {:.1}x{:.1} clip={:?}\n",
+                        y.x, y.y, y.width, y.height, y.clip_bounds
+                    ));
+                }
+                for (i, b) in bands.iter().enumerate() {
+                    let lo = b.text.0.min(overlay_text_start);
+                    let hi = b.text.1.min(overlay_text_start);
+                    dump.push_str(&format!(
+                        "  band[{i}] inst={:?} tex={:?} text={:?} paint={:?} prepare={lo}..{hi} blur={} yellow={}\n",
+                        b.instance,
+                        b.textured,
+                        b.text,
+                        b.paint_ops,
+                        blur_indices.iter().any(|&p| b.instance.0 <= p && p < b.instance.1),
+                        yellow_at.is_some_and(|p| lo <= p && p < hi),
+                    ));
+                }
+                dump.push_str("prefix cover over YELLOW:\n");
+                if let Some(yi) = yellow_at {
+                    let y = &result.text_nodes[yi];
+                    let yrect = [y.x, y.y, y.width.max(1.0), y.height.max(1.0)];
+                    let yband = bands.iter().position(|b| b.text.0 <= yi && yi < b.text.1);
+                    let local_blur_band = blur_indices.iter().find_map(|&p| {
+                        bands
+                            .iter()
+                            .position(|b| b.instance.0 <= p && p < b.instance.1)
+                    });
+                    for (bi, b) in bands.iter().enumerate() {
+                        if yband.is_some_and(|yb| bi <= yb) {
+                            continue;
+                        }
+                        if local_blur_band.is_some_and(|bb| bi >= bb) {
+                            continue;
+                        }
+                        for ii in b.instance.0..b.instance.1.min(result.instances.len()) {
+                            let inst = &result.instances[ii];
+                            if inst.color[3] <= 0.05 {
+                                continue;
+                            }
+                            let irect = [
+                                inst.rect_pos[0],
+                                inst.rect_pos[1],
+                                inst.rect_size[0],
+                                inst.rect_size[1],
+                            ];
+                            if rects_intersect(yrect, irect) {
+                                dump.push_str(&format!(
+                                    "    band{bi} inst{ii} pos={:?} size={:?} a={:.3} blur={}\n",
+                                    inst.rect_pos, inst.rect_size, inst.color[3], inst.backdrop_blur
+                                ));
+                            }
+                        }
+                    }
+                    let dump_path = std::env::temp_dir().join("gallery_local_scrim_bands.txt");
+                    let _ = std::fs::write(&dump_path, &dump);
+                    let yellow_in_page = yi < overlay_text_start;
+                    let text_band = yband;
+                    let blur_band = local_blur_band;
+                    let in_prefix = match (text_band, blur_band) {
+                        (Some(t), Some(b)) => t < b,
+                        _ => false,
+                    };
+                    assert!(
+                        yellow_in_page && in_prefix,
+                        "YELLOW not in local-scrim capture prefix (text_band={text_band:?} blur_band={blur_band:?} overlay_start={overlay_text_start})\n{dump}"
+                    );
+                } else {
+                    let dump_path = std::env::temp_dir().join("gallery_local_scrim_bands.txt");
+                    let _ = std::fs::write(&dump_path, &dump);
+                    panic!("YELLOW label missing from GallerySectionOverlays collect\n{dump}");
+                }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
