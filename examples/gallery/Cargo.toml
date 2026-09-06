@@ -27,5 +27,8 @@ devtools = ["rui/devtools"]
 # WP-3.13 rotating cube. Off by default.
 #   cargo run -p gallery --features scene3d
 scene3d = ["rui/scene3d"]
+# WP-M.3 I420 Gallery path. Off by default.
+#   cargo run -p gallery --features image-stream
+image-stream = ["rui/image-stream"]
 # Deprecated alias (raster formats are always available via rui's image core).
 images = ["rui/images"]

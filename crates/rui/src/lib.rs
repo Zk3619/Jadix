@@ -186,6 +186,15 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
 }
 
+/// Queue a stream frame for [`components::Image`](crate::components::Image) `texture`.
+///
+/// RGBA8 always. YUV (`Nv12` / `I420` / `P010`) requires `--features image-stream`.
+/// Not a decoder or player — see [`media::queue_media_frame`](crate::media::queue_media_frame)
+/// and `docs/engine/media.md`.
+pub fn queue_media_frame(id: impl Into<String>, frame: crate::media::MediaFrame<'_>) {
+    crate::media::queue_media_frame(id, frame);
+}
+
 /// 解码图像字节并排队（全格式光栅 + 可选 SVG；见 `svg` feature）。
 pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
     crate::app::pending_images::queue_image_from_bytes(id, bytes)
@@ -213,7 +222,8 @@ pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedIma
 
 pub use crate::media::{
     clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
-    remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
+    remote_asset_fetcher_installed, set_remote_asset_fetcher, MediaFrame, MediaPlanes, PixelLayout,
+    RemoteAssetFetcher, TextureColorSpace,
 };
 
 /// 注册自定义图标名（覆盖 Lucide / [`set_icon_provider`]）。路径、`data:` URL 或内联 SVG。

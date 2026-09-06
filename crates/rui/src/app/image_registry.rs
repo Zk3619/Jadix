@@ -230,36 +230,7 @@ fn upload_rgba8_with_format(
         view_formats: &[],
     });
 
-    let unpadded = width.saturating_mul(4);
-    let padded = padded_bytes_per_row(width);
-    let layout = wgpu::TexelCopyBufferLayout {
-        offset: 0,
-        bytes_per_row: Some(padded),
-        rows_per_image: Some(height),
-    };
-    let extent = wgpu::Extent3d {
-        width,
-        height,
-        depth_or_array_layers: 1,
-    };
-    let dest = wgpu::TexelCopyTextureInfo {
-        texture: &texture,
-        mip_level: 0,
-        origin: wgpu::Origin3d::ZERO,
-        aspect: wgpu::TextureAspect::All,
-    };
-    if padded == unpadded {
-        queue.write_texture(dest, rgba, layout, extent);
-    } else {
-        let mut staged = vec![0u8; padded as usize * height as usize];
-        for y in 0..height as usize {
-            let src = y * unpadded as usize;
-            let dst = y * padded as usize;
-            staged[dst..dst + unpadded as usize]
-                .copy_from_slice(&rgba[src..src + unpadded as usize]);
-        }
-        queue.write_texture(dest, &staged, layout, extent);
-    }
+    write_rgba8_mip(queue, &texture, 0, rgba, width, height);
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let bind_group = if sdf_nearest {
@@ -273,6 +244,38 @@ fn upload_rgba8_with_format(
     }
 }
 
+/// Same size / format / `COPY_DST` / single mip → in-place `write_texture` is safe.
+pub(crate) fn texture_allows_rgba8_overwrite(
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> bool {
+    texture.width() == width
+        && texture.height() == height
+        && texture.format() == format
+        && texture.mip_level_count() == 1
+        && texture.usage().contains(wgpu::TextureUsages::COPY_DST)
+}
+
+/// Write packed RGBA8 into an existing texture. Returns `false` if the buffer length is wrong.
+pub(crate) fn write_rgba8_texels(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> bool {
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if rgba.len() != expected {
+        return false;
+    }
+    write_rgba8_mip(queue, texture, 0, rgba, width, height);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::padded_bytes_per_row;
@@ -283,5 +286,138 @@ mod tests {
         assert_eq!(padded_bytes_per_row(180) % 256, 0);
         assert!(padded_bytes_per_row(180) >= 180 * 4);
         assert_eq!(padded_bytes_per_row(256), 1024);
+    }
+
+    #[test]
+    fn overwrite_requires_matching_slot() {
+        let Some(gpu) = crate::renderer::offscreen::OffscreenGpu::new() else {
+            eprintln!("skip overwrite_requires_matching_slot: no wgpu adapter");
+            return;
+        };
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rui-overwrite-slot"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        assert!(super::texture_allows_rgba8_overwrite(
+            &texture,
+            4,
+            2,
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        ));
+        assert!(
+            !super::texture_allows_rgba8_overwrite(
+                &texture,
+                8,
+                2,
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            ),
+            "size change must rebuild"
+        );
+        assert!(
+            !super::texture_allows_rgba8_overwrite(&texture, 4, 2, wgpu::TextureFormat::Rgba8Unorm),
+            "format change must rebuild"
+        );
+        let no_copy = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rui-overwrite-no-copy"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        assert!(
+            !super::texture_allows_rgba8_overwrite(
+                &no_copy,
+                4,
+                2,
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            ),
+            "RT without COPY_DST is not an image stream slot"
+        );
+    }
+
+    #[test]
+    fn same_size_overwrite_does_not_recreate() {
+        use crate::renderer::resources::TexturePool;
+        use crate::renderer::textured_pipeline::TexturedQuadPipeline;
+        use std::sync::Mutex;
+        static GPU_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let Some(gpu) = crate::renderer::offscreen::OffscreenGpu::new() else {
+            eprintln!("skip same_size_overwrite_does_not_recreate: no wgpu adapter");
+            return;
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            width: 8,
+            height: 8,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            view_formats: vec![],
+        };
+        let pipeline = TexturedQuadPipeline::new(&gpu.device, &config);
+        let mut pool = TexturePool::new();
+        let first_px = vec![
+            255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+        let first = super::upload_rgba8(&gpu.device, &gpu.queue, &pipeline, &first_px, 2, 2);
+        pool.insert_with_size("rui-test-stream".into(), first, 2, 2);
+        assert_eq!(pool.create_count(), 1);
+
+        for i in 0..30u8 {
+            let next_px = vec![i; 16];
+            assert!(
+                pool.try_overwrite_rgba8(
+                    "rui-test-stream",
+                    &gpu.queue,
+                    &next_px,
+                    2,
+                    2,
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                ),
+                "same-size write {i} must reuse the slot"
+            );
+        }
+        assert_eq!(
+            pool.create_count(),
+            1,
+            "same size must not allocate a new wgpu::Texture"
+        );
+
+        let resized = vec![3u8; 64];
+        assert!(
+            !pool.try_overwrite_rgba8(
+                "rui-test-stream",
+                &gpu.queue,
+                &resized,
+                4,
+                4,
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            ),
+            "size change must fail overwrite"
+        );
+        let second = super::upload_rgba8(&gpu.device, &gpu.queue, &pipeline, &resized, 4, 4);
+        pool.insert_with_size("rui-test-stream".into(), second, 4, 4);
+        assert_eq!(pool.create_count(), 2);
     }
 }

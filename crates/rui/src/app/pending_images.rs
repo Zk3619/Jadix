@@ -544,6 +544,14 @@ pub(crate) fn take_pending() -> Vec<(String, Vec<u8>, u32, u32)> {
 }
 
 #[cfg(test)]
+pub(crate) fn take_pending_key(id: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let mut g = PENDING.lock().unwrap();
+    let pos = g.iter().position(|(k, ..)| k == id)?;
+    let (_, rgba, w, h) = g.remove(pos);
+    Some((rgba, w, h))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

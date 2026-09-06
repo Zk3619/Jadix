@@ -3,13 +3,16 @@
 //! 光栅格式由 [`image`](https://github.com/image-rs/image) 解码（默认 PNG / JPEG / WebP / GIF / ICO；
 //! 更多格式见 `image-*` features）。`.cur` 热点与 SVG 光栅化走专用路径。
 //! GIF 多帧动画由 [`gif`] 模块经 `image` 解码并在帧循环中播放。
+//! 动态纹理槽（不解码）见 [`stream`]。
 
 mod animation;
 mod decode;
 pub mod gif;
 pub mod image;
 pub(crate) mod remote;
+pub mod stream;
 pub mod svg_raster;
+pub mod yuv;
 
 pub use animation::{DecodedAnimation, DecodedFrame};
 pub use decode::{
@@ -24,3 +27,5 @@ pub use remote::{
     clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
     remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
 };
+pub use stream::{queue_media_frame, MediaFrame, MediaPlanes, PixelLayout, TextureColorSpace};
+pub use yuv::{bt709_yuv8_to_rgb, i420_frame, rgba8_to_i420};

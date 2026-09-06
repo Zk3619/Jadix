@@ -32,6 +32,8 @@ pub(crate) mod wgpu_compat;
 
 #[cfg(feature = "scene3d")]
 pub mod scene3d;
+#[cfg(feature = "image-stream")]
+pub mod yuv_convert;
 
 pub use backdrop_blur::BackdropBlurPipeline;
 pub use css_filter::{
@@ -39,8 +41,9 @@ pub use css_filter::{
 };
 pub use effect::{
     enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
-    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob, EffectJob, EffectKind,
-    EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN, ATTR_EFFECT_STRENGTH,
+    queue_subtree_wrap, queue_zoom_layer_wrap, take_capture_jobs, take_effect_jobs, CaptureJob,
+    EffectJob, EffectKind, EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN,
+    ATTR_EFFECT_STRENGTH,
 };
 pub use effect_pass::EffectPassGpu;
 pub use emoji_config::{configured_twemoji_dir, emoji_bitmap_override_active};
@@ -67,10 +70,10 @@ pub use text_hit::{
     is_single_line_text_box, measure_prefix_width, truncate_with_ellipsis,
 };
 pub use text_xform::{
-    bake_text_texture_key_for_3d, element_wants_sticky_xform, mat2d_uniform_scale, mat4_from_mat2d,
-    mat4_identity, mat4_mul, ndc_to_pixel, project_point_mat4, resolve_glyph_raster,
-    text_xform_mode, text_xform_offscreen, GlyphRasterMode, TextXformMode, BAKE_OVERSAMPLE,
-    BAKE_SCALE_MAX, BAKE_SCALE_MIN,
+    bake_source_scale, bake_text_texture_key_for_3d, element_wants_sticky_xform,
+    mat2d_uniform_scale, mat4_from_mat2d, mat4_identity, mat4_mul, ndc_to_pixel,
+    project_point_mat4, resolve_glyph_raster, text_xform_mode, text_xform_offscreen,
+    GlyphRasterMode, TextXformMode, BAKE_OVERSAMPLE, BAKE_SCALE_MAX, BAKE_SCALE_MIN,
 };
 pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 
@@ -330,6 +333,10 @@ impl ScaledTexturedDraw {
             .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
         {
             1.0
+        } else if self.texture_key.starts_with("rui_zoom_cap:")
+            || self.texture_key.starts_with("rui_filter_cap:")
+        {
+            2.0
         } else {
             0.0
         };
@@ -403,6 +410,33 @@ mod textured_uv_tests {
         scale_instances_in_place(&mut v, 1.0);
         assert_eq!(v[0].rect_pos, [10.0, 20.0]);
         assert_eq!(v[0].rect_size, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn zoom_capture_blit_sets_sparse_sprite_flag() {
+        use super::ScaledTexturedDraw;
+        let mk = |key: &str| ScaledTexturedDraw {
+            rect: [0.0, 0.0, 10.0, 10.0],
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            texture_key: key.into(),
+            opacity: 1.0,
+            tint_rgb: [1.0, 1.0, 1.0],
+            transform: crate::style::transform::MAT2D_IDENTITY,
+            clip_pos: [0.0, 0.0],
+            clip_size: TexturedDraw::NO_CLIP_SIZE,
+        };
+        assert!((mk("rui_zoom_cap:ab").to_instance().flags - 2.0).abs() < 1e-5);
+        assert!((mk("rui_filter_cap:cd").to_instance().flags - 2.0).abs() < 1e-5);
+        assert!(mk("photo.png").to_instance().flags.abs() < 1e-5);
+        assert!(
+            (mk(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+                .to_instance()
+                .flags
+                - 1.0)
+                .abs()
+                < 1e-5
+        );
     }
 
     #[test]

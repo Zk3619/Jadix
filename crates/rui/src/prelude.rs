@@ -108,8 +108,10 @@ pub use crate::utils::{
 // ---------------------------------------------------------------------------
 
 pub use crate::style::{
-    classes, get_theme, is_dark_theme, set_theme_mode, theme_mode, toggle_theme_mode, ClassPart,
-    FocusRingStyle, Theme, ThemeMode,
+    classes, clear_theme_overrides, get_theme, install_theme_overrides, is_dark_theme,
+    load_and_install_theme_overrides, load_theme_overrides, set_theme_mode, theme_mode,
+    toggle_theme_mode, ClassPart, DesignTokensPatch, FocusRingStyle, Theme, ThemeMode,
+    ThemeOverrides,
 };
 
 // ---------------------------------------------------------------------------
