@@ -32,21 +32,16 @@ pub fn drag_commit_signal_key(list_id: &str) -> String {
     format!("__rui_drag_commit:{}", list_id)
 }
 
-/// `hover` 为指针下「目标行」在**拖拽开始前**列表中的下标；在 `from` 已 `remove` 之后应插入的位置。
-pub fn drag_insert_index_after_remove(from: usize, hover: usize) -> usize {
-    if hover > from {
-        if hover == from + 1 {
-            hover
-        } else {
-            hover - 1
-        }
-    } else {
-        hover
-    }
+/// `hover` is the **pre-remove** slot the live preview opened (`sortable_shift`
+/// / `insert_index_along_axis`). After `remove(from)` the item must land in
+/// that same slot — not `hover - 1`. The old `hover - 1` (except adjacent)
+/// made non-adjacent down-drags commit one row short; repeating that scramble
+/// the list.
+pub fn drag_insert_index_after_remove(_from: usize, hover: usize) -> usize {
+    hover
 }
 
-/// 按 [`drag_insert_index_after_remove`] 将 `from` 移到 `hover` 行位置（`hover` 为按下前的列表下标；
-/// `hover == items.len()` 表示插到末尾）。
+/// Move `from` into the preview hole at `hover` (`hover == items.len()` appends).
 pub fn apply_reorder_vec<T>(items: &mut Vec<T>, from: usize, hover: usize) {
     if from >= items.len() || hover > items.len() {
         return;
@@ -65,13 +60,13 @@ mod tests {
 
     #[test]
     fn drag_insert_adjacent_after() {
-        // 拖到正下方相邻格：`hover == from + 1` 时插入下标保持为 `hover`（见实现分支）。
         assert_eq!(drag_insert_index_after_remove(1, 2), 2);
     }
 
     #[test]
-    fn drag_insert_skip_over_removed() {
-        assert_eq!(drag_insert_index_after_remove(1, 3), 2);
+    fn drag_insert_non_adjacent_down_keeps_hover_slot() {
+        // Preview opens a hole at `hover=3`; commit must use 3, not 2.
+        assert_eq!(drag_insert_index_after_remove(1, 3), 3);
     }
 
     #[test]
@@ -80,11 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_reorder_head_to_tail() {
+    fn apply_reorder_head_to_tail_slot() {
         let mut v = vec![0, 1, 2, 3];
         apply_reorder_vec(&mut v, 0, 3);
-        // `hover` 为移除前下标；`hover - 1` 对应移除后插入位置（非相邻下移）。
-        assert_eq!(v, vec![1, 2, 0, 3]);
+        assert_eq!(v, vec![1, 2, 3, 0]);
     }
 
     #[test]
@@ -106,5 +100,40 @@ mod tests {
         let mut v = vec![1, 2, 3];
         apply_reorder_vec(&mut v, 0, 10);
         assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    fn committed_index(len: usize, from: usize, hover: usize) -> usize {
+        let mut v: Vec<usize> = (0..len).collect();
+        let id = v[from];
+        apply_reorder_vec(&mut v, from, hover);
+        v.iter().position(|&x| x == id).unwrap()
+    }
+
+    #[test]
+    fn commit_lands_on_preview_hole() {
+        // Down more than one row: hole is at `hover`, not `hover - 1`.
+        assert_eq!(committed_index(8, 0, 3), 3);
+        assert_eq!(committed_index(8, 1, 5), 5);
+        assert_eq!(committed_index(4, 0, 2), 2);
+        // Adjacent down.
+        assert_eq!(committed_index(8, 2, 3), 3);
+        // Up.
+        assert_eq!(committed_index(8, 5, 1), 1);
+        assert_eq!(committed_index(4, 3, 0), 0);
+        // Append past last midpoint (`hover == len`).
+        assert_eq!(committed_index(8, 0, 8), 7);
+        assert_eq!(committed_index(3, 0, 3), 2);
+    }
+
+    #[test]
+    fn repeated_reorders_stay_a_permutation() {
+        let mut v: Vec<usize> = (0..8).collect();
+        for &(from, hover) in &[(0, 4), (2, 7), (5, 1), (0, 8), (6, 2), (3, 3), (1, 0)] {
+            apply_reorder_vec(&mut v, from, hover);
+        }
+        let mut sorted = v.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..8).collect::<Vec<_>>());
+        assert_eq!(v.len(), 8);
     }
 }

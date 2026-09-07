@@ -67,13 +67,14 @@ impl DragHit {
         if self.disabled || !self.is_droppable {
             return false;
         }
-        if self.id == dragged.draggable_id {
+        // Another DragProvider's droppables must not steal hover. Skipping when
+        // `hit.scope_id` is empty let Gallery's hide_source list (same item
+        // names, stacked above) count as a cross-list target: the origin closed,
+        // the dimmed body translated away, and the list visually collapsed.
+        if self.scope_id != dragged.scope_id {
             return false;
         }
-        if !self.scope_id.is_empty()
-            && !dragged.scope_id.is_empty()
-            && self.scope_id != dragged.scope_id
-        {
+        if self.id == dragged.draggable_id {
             return false;
         }
         if !self.accept.is_empty() {
@@ -360,6 +361,64 @@ fn ghost_origin(sess: &DragSession, pointer: [f32; 2], viewport: [f32; 2]) -> [f
     }
 }
 
+/// Collision / insert box: the **item slot** at the ghost origin.
+///
+/// `start_bounds` and even `collect_hits` layout boxes can be the stretched
+/// `also_droppable` island (`w=100%` in a column / ScrollArea). Using that
+/// height as the dragged box puts `center` past the last row — siblings close
+/// the origin and the dimmed body only reappears as a tail insert (Gallery
+/// 单列 SortableList). Cap to the row pitch. Identity is `(scope, id)`: two
+/// Gallery lists reuse planet names.
+fn moving_item_rect(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) -> Rect {
+    let from_start = Rect::from_bounds(sess.start_bounds).translated(
+        origin[0] - sess.start_bounds[0],
+        origin[1] - sess.start_bounds[1],
+    );
+    let Some(src) = hits
+        .iter()
+        .find(|h| h.id == sess.draggable_id && h.scope_id == sess.scope_id && h.rect.is_usable())
+    else {
+        return from_start;
+    };
+    let mut width = src.rect.width.max(1.0);
+    let mut height = src.rect.height.max(1.0);
+    if let Some(list) = sess.from_list.as_deref() {
+        let stride = slot_stride_along_axis(
+            hits,
+            list,
+            sess.axis,
+            match sess.axis {
+                Axis::X => width,
+                Axis::Y | Axis::Xy => height,
+            },
+        );
+        match sess.axis {
+            Axis::X => width = width.min(stride).max(1.0),
+            Axis::Y | Axis::Xy => height = height.min(stride).max(1.0),
+        }
+    }
+    Rect {
+        x: origin[0],
+        y: origin[1],
+        width,
+        height,
+    }
+}
+
+/// `index=None` list shells have their center at mid-column. `closest-center`
+/// then prefers the shell over any row once the pointer is near half the list.
+fn closest_alg_skips_indexed_list_shell(alg: CollisionAlg) -> bool {
+    matches!(
+        alg,
+        CollisionAlg::ClosestCenter | CollisionAlg::ClosestCorners
+    )
+}
+
+fn list_has_indexed_candidate(hits: &[DragHit], sess: &DragSession, list: &str) -> bool {
+    hits.iter()
+        .any(|h| h.accepts(sess) && h.index.is_some() && h.list_id.as_deref() == Some(list))
+}
+
 /// Advance the session. `hits` must be collected from the current layout tree.
 /// Returns `true` when the UI should redraw.
 pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
@@ -390,10 +449,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     }
 
     let origin = ghost_origin(&sess, [x, y], viewport);
-    let dragged = Rect::from_bounds(sess.start_bounds).translated(
-        origin[0] - sess.start_bounds[0],
-        origin[1] - sess.start_bounds[1],
-    );
+    let dragged = moving_item_rect(&sess, hits, origin);
 
     let (collision, empty_insert, can_drop) = SCOPES.with(|m| {
         m.borrow()
@@ -401,9 +457,19 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             .map(|s| (s.collision, s.empty_insert, s.can_drop.clone()))
             .unwrap_or((CollisionAlg::default(), 0.0, None))
     });
+    let skip_shell = closest_alg_skips_indexed_list_shell(collision);
     let candidates: Vec<Candidate> = hits
         .iter()
         .filter(|h| h.accepts(&sess) && h.rect.is_usable())
+        .filter(|h| {
+            if !skip_shell || h.index.is_some() {
+                return true;
+            }
+            let Some(list) = h.list_id.as_deref() else {
+                return true;
+            };
+            !list_has_indexed_candidate(hits, &sess, list)
+        })
         .map(|h| {
             let rect = if h.index.is_none() && empty_insert > 0.0 {
                 h.rect.inflated(empty_insert)
@@ -452,6 +518,8 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             let hover_list = drop_hit
                 .and_then(|h| h.list_id.clone())
                 .filter(|s| !s.is_empty());
+            // Probe with the pointer, not `dragged.center()`. A stretched
+            // island box puts the center past the last row (Gallery: 松手永远进队尾).
             let hover_index = hover_list
                 .as_deref()
                 .and_then(|list| insert_index_along_axis(hits, list, [x, y], sess.axis))
@@ -637,6 +705,7 @@ pub fn nudge_insert(delta: i32) -> bool {
             rt.hover_list.set(Some(list));
         }
     });
+    crate::app::runtime::request_redraw();
     true
 }
 
@@ -738,8 +807,13 @@ pub fn resolve_insert_index(hit: Option<&DragHit>, fallback_len: usize) -> Optio
     hit.map(|h| h.index.unwrap_or(fallback_len))
 }
 
-/// Pointer vs item midpoints along `axis` (SortableJS). Container hits have no
-/// `index`; without this, siblings never shift and `on_drag_end` keeps `from`.
+/// Sortable insert index: which **layout slot** contains the probe along `axis`.
+///
+/// Slot end is origin + **pitch** (item size plus author gap), not the paint
+/// box height. A `w=100%` also_droppable row can report height = the whole
+/// list; using that as `end` swallows every probe into index 0, or a page-tall
+/// moving-box center past the last sibling appends. Collapsed (`!is_usable`)
+/// rows are skipped so 0-height hits do not fall through to `len`.
 pub fn insert_index_along_axis(
     hits: &[DragHit],
     list_id: &str,
@@ -748,7 +822,9 @@ pub fn insert_index_along_axis(
 ) -> Option<usize> {
     let mut items: Vec<&DragHit> = hits
         .iter()
-        .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
+        .filter(|h| {
+            h.list_id.as_deref() == Some(list_id) && h.index.is_some() && h.rect.is_usable()
+        })
         .collect();
     if items.is_empty() {
         return None;
@@ -758,16 +834,149 @@ pub fn insert_index_along_axis(
         Axis::X => pointer[0],
         Axis::Y | Axis::Xy => pointer[1],
     };
+    let fallback = match axis {
+        Axis::X => items[0].rect.width,
+        Axis::Y | Axis::Xy => items[0].rect.height,
+    }
+    .max(1.0);
+    let stride = slot_stride_along_axis(hits, list_id, axis, fallback);
     for h in &items {
-        let mid = match axis {
-            Axis::X => h.rect.x + h.rect.width * 0.5,
-            Axis::Y | Axis::Xy => h.rect.y + h.rect.height * 0.5,
+        let start = match axis {
+            Axis::X => h.rect.x,
+            Axis::Y | Axis::Xy => h.rect.y,
         };
-        if p < mid {
+        if p < start + stride {
             return h.index;
         }
     }
     items.iter().filter_map(|h| h.index).max().map(|i| i + 1)
+}
+
+/// Pitch between consecutive layout slots in `list_id` (item size **plus**
+/// author gap). Preview shift must use this, not the dragged box alone —
+/// otherwise siblings overlap by the gap and the stack visually shortens.
+pub(crate) fn slot_stride_along_axis(
+    hits: &[DragHit],
+    list_id: &str,
+    axis: Axis,
+    fallback: f32,
+) -> f32 {
+    let mut items: Vec<&DragHit> = hits
+        .iter()
+        .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
+        .collect();
+    if items.len() < 2 {
+        return fallback;
+    }
+    items.sort_by_key(|h| h.index.unwrap_or(0));
+    for w in items.windows(2) {
+        let a = w[0].index.unwrap_or(0);
+        let b = w[1].index.unwrap_or(0);
+        if b != a + 1 {
+            continue;
+        }
+        let stride = match axis {
+            Axis::X => (w[1].rect.x - w[0].rect.x).abs(),
+            Axis::Y | Axis::Xy => (w[1].rect.y - w[0].rect.y).abs(),
+        };
+        if stride > 1.0 {
+            return stride;
+        }
+    }
+    fallback
+}
+
+pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32) -> f32 {
+    let Some(list_id) = list_id else {
+        return fallback;
+    };
+    LAST_HITS.with(|h| slot_stride_along_axis(&h.borrow(), list_id, axis, fallback))
+}
+
+pub(crate) fn list_max_index(list_id: Option<&str>) -> Option<usize> {
+    let list_id = list_id?;
+    LAST_HITS.with(|h| {
+        h.borrow()
+            .iter()
+            .filter(|hit| hit.list_id.as_deref() == Some(list_id))
+            .filter_map(|hit| hit.index)
+            .max()
+    })
+}
+
+/// Layout origin of the opened insert hole in `list_id` (pre-translate slots).
+pub(crate) fn insert_hole_origin(
+    hits: &[DragHit],
+    list_id: &str,
+    hover_index: Option<usize>,
+    axis: Axis,
+    fallback_extent: f32,
+) -> Option<[f32; 2]> {
+    let mut items: Vec<&DragHit> = hits
+        .iter()
+        .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
+        .collect();
+    items.sort_by_key(|h| h.index.unwrap_or(0));
+    let stride = slot_stride_along_axis(hits, list_id, axis, fallback_extent.max(1.0));
+    if let Some(hover) = hover_index {
+        if let Some(h) = items.iter().find(|h| h.index == Some(hover)) {
+            return Some([h.rect.x, h.rect.y]);
+        }
+        if let Some(last) = items.last() {
+            let (dx, dy) = match axis {
+                Axis::X => (stride, 0.0),
+                Axis::Y | Axis::Xy => (0.0, stride),
+            };
+            return Some([last.rect.x + dx, last.rect.y + dy]);
+        }
+    }
+    hits.iter()
+        .find(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_none())
+        .map(|h| [h.rect.x, h.rect.y])
+}
+
+/// Translate that places the origin-list source onto the target insert hole.
+pub(crate) fn source_translate_to_insert_hole(
+    hits: &[DragHit],
+    from_list: &str,
+    from_index: usize,
+    hover_list: &str,
+    hover_index: Option<usize>,
+    axis: Axis,
+) -> [f32; 2] {
+    let Some(src) = hits
+        .iter()
+        .find(|h| h.list_id.as_deref() == Some(from_list) && h.index == Some(from_index))
+    else {
+        return [0.0, 0.0];
+    };
+    let fallback = match axis {
+        Axis::X => src.rect.width,
+        Axis::Y | Axis::Xy => src.rect.height,
+    };
+    let Some(hole) = insert_hole_origin(hits, hover_list, hover_index, axis, fallback) else {
+        return [0.0, 0.0];
+    };
+    [hole[0] - src.rect.x, hole[1] - src.rect.y]
+}
+
+pub(crate) fn live_cross_list_source_translate(
+    from_list: &str,
+    from_index: usize,
+    hover_list: &str,
+    hover_index: Option<usize>,
+    axis: Axis,
+) -> [f32; 2] {
+    LAST_HITS.with(|h| {
+        source_translate_to_insert_hole(
+            &h.borrow(),
+            from_list,
+            from_index,
+            hover_list,
+            hover_index,
+            axis,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1097,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_index_uses_item_midpoints_not_container() {
+    fn insert_index_uses_item_slots_not_container() {
         let mut a = hit("a", [0.0, 0.0, 40.0, 20.0], true);
         a.index = Some(0);
         let mut b = hit("b", [0.0, 20.0, 40.0, 20.0], true);
@@ -1114,12 +1323,18 @@ mod tests {
         );
         assert_eq!(
             insert_index_along_axis(&hits, "list", [10.0, 38.0], Axis::Y),
-            Some(2)
+            Some(1),
+            "still inside the last slot (20..40) must not append"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [10.0, 41.0], Axis::Y),
+            Some(2),
+            "past the last slot bottom appends"
         );
     }
 
     #[test]
-    fn insert_index_past_last_midpoint_appends() {
+    fn insert_index_past_last_slot_appends() {
         let mut a = hit("a", [0.0, 0.0, 40.0, 20.0], true);
         a.index = Some(0);
         let hits = vec![a];
@@ -1129,8 +1344,181 @@ mod tests {
         );
         assert_eq!(
             insert_index_along_axis(&hits, "list", [10.0, 16.0], Axis::Y),
+            Some(0),
+            "source centre must stay on from, or the next row slides under the dimmed body"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [10.0, 21.0], Axis::Y),
             Some(1)
         );
+    }
+
+    #[test]
+    fn insert_index_at_source_center_stays_from() {
+        let mut a = hit("a", [0.0, 0.0, 80.0, 32.0], true);
+        a.index = Some(0);
+        let mut b = hit("b", [0.0, 40.0, 80.0, 32.0], true);
+        b.index = Some(1);
+        let hits = vec![a, b];
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            Some(0),
+            "grab at row centre must not report hover=1"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 41.0], Axis::Y),
+            Some(1),
+            "entering the next layout slot opens the hole"
+        );
+    }
+
+    /// Gallery `also_droppable` island is `w=100%`. Layout can report each row's
+    /// height as the whole list; using that as `end` swallows every probe into
+    /// index 0 (or, with a page-tall moving box, past-the-end append).
+    #[test]
+    fn insert_index_uses_slot_pitch_not_stretched_island_height() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit(
+                    [
+                        "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus",
+                        "Neptune",
+                    ][i],
+                    [0.0, i as f32 * 40.0, 80.0, 320.0],
+                    true,
+                );
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            Some(0),
+            "pointer in the first pitch must stay on from"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 50.0], Axis::Y),
+            Some(1),
+            "stretched paint height must not keep hover on row 0; got {:?}",
+            insert_index_along_axis(&hits, "list", [40.0, 50.0], Axis::Y)
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 90.0], Axis::Y),
+            Some(2)
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 300.0], Axis::Y),
+            Some(7),
+            "pointer still in the last pitch must not append"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 321.0], Axis::Y),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn insert_index_skips_collapsed_zero_height_slots() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit("x", [0.0, 0.0, 80.0, 0.0], true);
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            None,
+            "0-height rows must not fall through to append (Gallery: 松手永远进队尾)"
+        );
+    }
+
+    #[test]
+    fn slot_stride_includes_gap_between_consecutive_items() {
+        let mut a = hit("a", [0.0, 0.0, 40.0, 20.0], true);
+        a.index = Some(0);
+        let mut b = hit("b", [0.0, 28.0, 40.0, 20.0], true);
+        b.index = Some(1);
+        let hits = vec![a, b];
+        assert_eq!(
+            slot_stride_along_axis(&hits, "list", Axis::Y, 20.0),
+            28.0,
+            "preview shift must use slot pitch (20 item + 8 gap), not box height"
+        );
+        assert_eq!(
+            slot_stride_along_axis(&hits, "missing", Axis::Y, 20.0),
+            20.0
+        );
+    }
+
+    #[test]
+    fn cross_list_source_translate_lands_on_target_hole() {
+        let mut src = hit("src", [0.0, 0.0, 80.0, 32.0], true);
+        src.list_id = Some("a".into());
+        src.index = Some(0);
+        let mut dst = hit("dst", [200.0, 0.0, 80.0, 32.0], true);
+        dst.list_id = Some("b".into());
+        dst.index = Some(0);
+        let mut col_b = hit("col-b", [200.0, 0.0, 80.0, 100.0], true);
+        col_b.list_id = Some("b".into());
+        col_b.index = None;
+        let hits = [src, dst, col_b];
+        assert_eq!(
+            source_translate_to_insert_hole(&hits, "a", 0, "b", Some(0), Axis::Y),
+            [200.0, 0.0]
+        );
+        assert_eq!(
+            source_translate_to_insert_hole(&hits, "a", 0, "b", Some(1), Axis::Y),
+            [200.0, 32.0],
+            "append hole is last origin + fallback extent"
+        );
+    }
+
+    #[test]
+    fn empty_target_hole_uses_container_origin() {
+        let mut src = hit("src", [0.0, 0.0, 80.0, 32.0], true);
+        src.list_id = Some("a".into());
+        src.index = Some(0);
+        let mut col_b = hit("col-b", [200.0, 8.0, 80.0, 100.0], true);
+        col_b.list_id = Some("b".into());
+        let hits = [src, col_b];
+        assert_eq!(
+            source_translate_to_insert_hole(&hits, "a", 0, "b", Some(0), Axis::Y),
+            [200.0, 8.0]
+        );
+    }
+
+    #[test]
+    fn midpoint_hover_apply_lands_in_opened_slot() {
+        use crate::utils::drag_reorder::apply_reorder_vec;
+        let mk = |id: &str, y: f32, i: usize| {
+            let mut h = hit(id, [0.0, y, 40.0, 20.0], true);
+            h.index = Some(i);
+            h
+        };
+        let hits = vec![
+            mk("a", 0.0, 0),
+            mk("b", 20.0, 1),
+            mk("c", 40.0, 2),
+            mk("d", 60.0, 3),
+        ];
+        // Inside `c` (40..60). Past `c`'s bottom (61) appends toward `d`.
+        let hover = insert_index_along_axis(&hits, "list", [10.0, 61.0], Axis::Y);
+        assert_eq!(hover, Some(3));
+        let mut v = vec![0, 1, 2, 3];
+        apply_reorder_vec(&mut v, 0, hover.unwrap());
+        assert_eq!(
+            v,
+            vec![1, 2, 3, 0],
+            "commit must occupy the preview hole at hover, not hover-1"
+        );
+        let hover2 = insert_index_along_axis(&hits, "list", [10.0, 25.0], Axis::Y);
+        assert_eq!(hover2, Some(1));
+        apply_reorder_vec(&mut v, 3, hover2.unwrap());
+        assert_eq!(v, vec![1, 0, 2, 3]);
+        let mut sorted = v.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3]);
     }
 
     /// Gallery hosts Drag in `ScrollArea`. Pointer / `current_bounds` are visual;
@@ -1317,6 +1705,435 @@ mod tests {
             hover,
             Some(1),
             "pointer over b's layout slot must keep hover=1 even if b has already shifted"
+        );
+    }
+
+    fn drop_hit(
+        id: &str,
+        scope: &str,
+        list: &str,
+        index: Option<usize>,
+        bounds: [f32; 4],
+    ) -> DragHit {
+        DragHit {
+            id: id.into(),
+            scope_id: scope.into(),
+            is_draggable: index.is_some(),
+            is_droppable: true,
+            rect: Rect::from_bounds(bounds),
+            item_type: "planet".into(),
+            accept: "planet".into(),
+            list_id: Some(list.into()),
+            index,
+            group: String::new(),
+            disabled: false,
+        }
+    }
+
+    #[test]
+    fn tick_single_column_closest_center_does_not_jump_hover_to_mid_list() {
+        let (_o, (at_lift, at_half, at_tail)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 320.0]);
+            register_scope(
+                "gal-drag-sort".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::ClosestCenter,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    hide_source: false,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-sort".into(),
+                draggable_id: "Mercury".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [40.0, 16.0],
+                // Stretched island / list box (not the 32px row). Using this
+                // center for insert-index was Gallery: 拖起塌陷, 拖到一半才出现.
+                start_bounds: [0.0, 0.0, 80.0, 320.0],
+                from_list: Some("planets".into()),
+                from_index: Some(0),
+                item_type: "planet".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let names = [
+                "Mercury", "Venus", "Earth", "Jupiter", "Uranus", "Mars", "Neptune", "Saturn",
+            ];
+            let mut hits: Vec<DragHit> = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    drop_hit(
+                        name,
+                        "gal-drag-sort",
+                        "planets",
+                        Some(i),
+                        [0.0, i as f32 * 40.0, 80.0, 32.0],
+                    )
+                })
+                .collect();
+            hits.push(drop_hit(
+                "planets",
+                "gal-drag-sort",
+                "planets",
+                None,
+                [0.0, 0.0, 80.0, 320.0],
+            ));
+            assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+            let at_lift = hover_index.peek();
+            assert!(tick(40.0, 176.0, &hits, [800.0, 600.0]));
+            let at_half = hover_index.peek();
+            assert!(tick(40.0, 300.0, &hits, [800.0, 600.0]));
+            let at_tail = hover_index.peek();
+            let _ = end(&hits);
+            (at_lift, at_half, at_tail)
+        });
+        assert_eq!(
+            at_lift,
+            Some(0),
+            "lift on row 0 must not report hover≈len/2 from a stretched start box; got {at_lift:?}"
+        );
+        assert_eq!(
+            at_half,
+            Some(4),
+            "pointer at mid-list should open the mid slot, not stay stuck or append; got {at_half:?}"
+        );
+        assert_eq!(
+            at_tail,
+            Some(7),
+            "pointer still inside the last slot must not drop the body (append); got {at_tail:?}"
+        );
+    }
+
+    /// Gallery: each `also_droppable` island can report the list height. Probing
+    /// `dragged.center()` (origin + 160) then always sits past the last 32px
+    /// sibling — hover=len, origin closes, dimmed body is translated below the
+    /// fold, drop appends (user: 半透明本体丢失, 松手永远进队尾).
+    #[test]
+    fn tick_stretched_island_hits_follow_pointer_not_box_center() {
+        let (_o, (at_lift, at_earth, at_tail)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 320.0]);
+            register_scope(
+                "gal-drag-sort".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::ClosestCenter,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    hide_source: false,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-sort".into(),
+                draggable_id: "Mercury".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 0.0, 80.0, 320.0],
+                from_list: Some("planets".into()),
+                from_index: Some(0),
+                item_type: "planet".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let names = [
+                "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+            ];
+            let mut hits: Vec<DragHit> = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    drop_hit(
+                        name,
+                        "gal-drag-sort",
+                        "planets",
+                        Some(i),
+                        [0.0, i as f32 * 40.0, 80.0, 320.0],
+                    )
+                })
+                .collect();
+            hits.push(drop_hit(
+                "planets",
+                "gal-drag-sort",
+                "planets",
+                None,
+                [0.0, 0.0, 80.0, 320.0],
+            ));
+            assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+            let at_lift = hover_index.peek();
+            assert!(tick(40.0, 90.0, &hits, [800.0, 600.0]));
+            let at_earth = hover_index.peek();
+            assert!(tick(40.0, 300.0, &hits, [800.0, 600.0]));
+            let at_tail = hover_index.peek();
+            let _ = end(&hits);
+            (at_lift, at_earth, at_tail)
+        });
+        assert_eq!(
+            at_lift,
+            Some(0),
+            "lift on row 0 must keep hover=from; got {at_lift:?}"
+        );
+        assert_eq!(
+            at_earth,
+            Some(2),
+            "pointer on Earth must open slot 2, not stay on 0 or append; got {at_earth:?}"
+        );
+        assert_eq!(
+            at_tail,
+            Some(7),
+            "pointer in the last pitch must not append; got {at_tail:?}"
+        );
+    }
+
+    #[test]
+    fn foreign_scope_hits_do_not_steal_sortable_hover() {
+        let (_o, (hover_list, hover_index)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "gal-drag-sort".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::ClosestCenter,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    hide_source: false,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-sort".into(),
+                draggable_id: "Mercury".into(),
+                pointer: [40.0, 416.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 400.0, 80.0, 32.0],
+                from_list: Some("planets".into()),
+                from_index: Some(0),
+                item_type: "planet".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            // Hide-source list stacked above (same planet names). Its last row is
+            // closer to the pointer than planets[1] if the session does not
+            // isolate scopes — that was Gallery 半透明本体 collapsing.
+            let hits = vec![
+                drop_hit(
+                    "Neptune",
+                    "gal-drag-sort-hide",
+                    "planets-hide",
+                    Some(7),
+                    [0.0, 384.0, 80.0, 32.0],
+                ),
+                drop_hit(
+                    "planets-hide",
+                    "gal-drag-sort-hide",
+                    "planets-hide",
+                    None,
+                    [0.0, 0.0, 80.0, 384.0],
+                ),
+                drop_hit(
+                    "Mercury",
+                    "gal-drag-sort",
+                    "planets",
+                    Some(0),
+                    [0.0, 400.0, 80.0, 32.0],
+                ),
+                drop_hit(
+                    "Venus",
+                    "gal-drag-sort",
+                    "planets",
+                    Some(1),
+                    [0.0, 440.0, 80.0, 32.0],
+                ),
+                drop_hit(
+                    "planets",
+                    "gal-drag-sort",
+                    "planets",
+                    None,
+                    [0.0, 400.0, 80.0, 320.0],
+                ),
+            ];
+            assert!(tick(40.0, 416.0, &hits, [800.0, 600.0]));
+            let out = (hover_list.peek(), hover_index.peek());
+            let _ = end(&hits);
+            out
+        });
+        assert_eq!(
+            hover_list.as_deref(),
+            Some("planets"),
+            "stacked hide_source list must not become hover_list; got {hover_list:?}"
+        );
+        assert_eq!(
+            hover_index,
+            Some(0),
+            "grab in the source slot must keep hover=from so the dimmed body stays; got {hover_index:?}"
+        );
+    }
+
+    #[test]
+    fn empty_scope_hit_does_not_join_named_session() {
+        let (_o, hover_list) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "named".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::ClosestCenter,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    hide_source: false,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "named".into(),
+                draggable_id: "Mercury".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [0.0, 8.0, 80.0, 32.0],
+                from_list: Some("planets".into()),
+                from_index: Some(0),
+                item_type: "planet".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits = vec![
+                drop_hit("Venus", "", "planets-hide", Some(1), [0.0, 0.0, 80.0, 80.0]),
+                drop_hit(
+                    "Earth",
+                    "named",
+                    "planets",
+                    Some(1),
+                    [0.0, 48.0, 80.0, 32.0],
+                ),
+            ];
+            assert!(tick(40.0, 20.0, &hits, [800.0, 600.0]));
+            let hover = hover_list.peek();
+            let _ = end(&hits);
+            hover
+        });
+        assert_eq!(
+            hover_list.as_deref(),
+            Some("planets"),
+            "hit with empty scope_id must not join a named DragProvider; got {hover_list:?}"
         );
     }
 }

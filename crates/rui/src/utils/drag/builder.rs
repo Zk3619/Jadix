@@ -6,27 +6,34 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use crate::app::pointer_events::{EventPhase, dom_button};
+use crate::app::pointer_events::{dom_button, EventPhase};
 use crate::app::reactive::reactive_view_sized;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
+use crate::layout::LayoutTree;
 use crate::primitives::vstack;
+use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
+use crate::utils::motion::{
+    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
+    MotionEpsilon, MotionStyle, MotionTransform,
+};
 use crate::utils::resolve_instance_id;
 
 use super::autoscroll::AutoScroll;
 use super::collision::CollisionAlg;
 use super::geometry::{Axis, Restrict, SnapGrid};
 use super::session::{
-    BeginDrag, DragHandler, DragPredicate, ScopeRuntime, active_source_translate, begin,
-    overlay_hides_source, overlay_is_registered, start_geometry,
+    active_source_translate, begin, list_max_index, list_slot_stride,
+    live_cross_list_source_translate, overlay_hides_source, overlay_is_registered, start_geometry,
+    BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
-use super::sortable::sortable_preview;
+use super::sortable::{sortable_preview, SORTABLE_FLIP_MS};
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST,
-    ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_OVER, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 #[derive(Clone)]
@@ -141,7 +148,238 @@ fn live_slot<T: Clone + PartialEq + 'static>(key: &str, value: T) -> Signal<T> {
 /// node is the `reactive_view` placeholder, reconcile misses and the item
 /// collapses to 0×0 (empty sortable list). Keep the island id on a child.
 fn keyed_item_shell(island: Element) -> Element {
-    Element::from(vstack().min_w(0.0).child(island))
+    Element::from(vstack().min_w(0.0).flex_shrink(0.0).child(island))
+}
+
+/// Same-list FLIP translate for a sortable row (source placeholder or sibling).
+fn live_sortable_translate(
+    also_droppable: bool,
+    axis: Axis,
+    list: Option<&str>,
+    index: Option<usize>,
+    from_list: Signal<Option<String>>,
+    from_index: Signal<Option<usize>>,
+    hover_list: Signal<Option<String>>,
+    hover_index: Signal<Option<usize>>,
+    drag_extent: Signal<[f32; 2]>,
+) -> [f32; 2] {
+    if !also_droppable {
+        return [0.0, 0.0];
+    }
+    let extent = drag_extent.peek();
+    let fallback = if axis == Axis::X {
+        extent[0]
+    } else {
+        extent[1]
+    };
+    let item_e = list_slot_stride(list, axis, fallback.max(1.0));
+    sortable_preview(
+        from_list.peek().as_deref(),
+        from_index.peek(),
+        hover_list.peek().as_deref(),
+        hover_index.peek(),
+        list,
+        index,
+        item_e,
+        axis,
+        list_max_index(list),
+    )
+}
+
+fn sortable_flip_entry() -> TransitionEntry {
+    TransitionEntry {
+        property: TransitionProperty::Transform,
+        duration_ms: SORTABLE_FLIP_MS,
+        delay_ms: 0.0,
+        timing: TimingFunction::Ease,
+    }
+}
+
+/// Live gap FLIP: CSS `transition: transform` (includes translate) while the session is active.
+/// Pointer-follow and session end snap — leftover tween would invert commit layout
+/// (`end` clears hover before `on_drag_end` mutates the `Vec`).
+fn apply_item_shift_motion(
+    el: &mut Element,
+    want_translate: [f32; 2],
+    want_opacity: f32,
+    follow_pointer: bool,
+    session_live: bool,
+    motion: &mut MotionStyle,
+) -> bool {
+    let snap = follow_pointer || !session_live;
+    if snap {
+        let was_animating = motion_is_animating(&el.style, &el.transition_snapshot);
+        clear_motion(el);
+        motion.reset();
+        let changed = el.style.translate != want_translate;
+        el.style.translate = want_translate;
+        changed || was_animating
+    } else {
+        let entries = [sortable_flip_entry()];
+        let bootstrap = if el.style.transition.is_empty() {
+            Some(MotionBootstrap::EnsureAfterSnap)
+        } else {
+            Some(MotionBootstrap::EnsureOnly)
+        };
+        prepare_motion_sync(el, &entries, bootstrap, motion, false);
+        let target = MotionTransform {
+            translate: want_translate,
+            translate_pct: el.style.translate_pct,
+            opacity: want_opacity,
+            scale: el.style.scale,
+        };
+        motion.apply(&mut el.style, target, MotionEpsilon::default())
+    }
+}
+
+/// Live sortable chrome (opacity / sibling translate) is paint-only.
+/// Subscribing `hover_index` / `overlay_pos` inside the island remounts every
+/// pointer move; `h=auto` placeholders then collapse and the list height jitters.
+fn apply_live_drag_chrome(
+    el: &mut Element,
+    scope: &str,
+    id: &str,
+    also_droppable: bool,
+    axis: Axis,
+    list_sig: Signal<Option<String>>,
+    index_sig: Signal<Option<usize>>,
+    active: Signal<Option<String>>,
+    overlay_open: Signal<bool>,
+    from_list: Signal<Option<String>>,
+    from_index: Signal<Option<usize>>,
+    hover_list: Signal<Option<String>>,
+    hover_index: Signal<Option<usize>>,
+    drag_extent: Signal<[f32; 2]>,
+    author_opacity: f32,
+    author_z: i32,
+    motion: &mut MotionStyle,
+) -> LayoutStatus {
+    let list = list_sig.peek();
+    let index = index_sig.peek();
+    let is_active = active.peek().as_deref() == Some(id);
+    let overlay_on = overlay_is_registered(scope) && overlay_open.peek();
+    let mut want_opacity = author_opacity;
+    let mut want_translate = [0.0_f32, 0.0];
+    let mut want_z = author_z;
+    let mut follow_pointer = false;
+    if is_active {
+        if overlay_on {
+            let hide = overlay_hides_source(scope);
+            let from_l = from_list.peek();
+            let hover_l = hover_list.peek();
+            let cross = from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+            want_opacity = if hide { 0.0 } else { 0.4 };
+            if hide {
+                // Invisible origin slot; siblings close / open the hole.
+            } else if cross {
+                if let (Some(fl), Some(fi), Some(hl)) =
+                    (from_l.as_deref(), from_index.peek(), hover_l.as_deref())
+                {
+                    want_translate =
+                        live_cross_list_source_translate(fl, fi, hl, hover_index.peek(), axis);
+                }
+                want_z = author_z.max(1);
+            } else if also_droppable {
+                want_translate = live_sortable_translate(
+                    also_droppable,
+                    axis,
+                    list.as_deref(),
+                    index,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                );
+                want_z = author_z.max(1);
+            }
+        } else if let Some(t) = active_source_translate() {
+            want_translate = t;
+            follow_pointer = true;
+        }
+    } else if also_droppable {
+        want_translate = live_sortable_translate(
+            also_droppable,
+            axis,
+            list.as_deref(),
+            index,
+            from_list,
+            from_index,
+            hover_list,
+            hover_index,
+            drag_extent,
+        );
+    }
+    let session_live = active.peek().is_some();
+    let mut changed = LayoutStatus::Clean;
+    if let Some(i) = index {
+        let s = i.to_string();
+        if el.attrs.get(ATTR_DRAG_INDEX).map(String::as_str) != Some(s.as_str()) {
+            el.set_attr(ATTR_DRAG_INDEX, s);
+        }
+    }
+    if let Some(ref list) = list {
+        if el.attrs.get(ATTR_DRAG_LIST).map(String::as_str) != Some(list.as_str()) {
+            el.set_attr(ATTR_DRAG_LIST, list);
+        }
+    }
+    if (el.style.opacity - want_opacity).abs() > 0.001 {
+        el.style.opacity = want_opacity.clamp(0.0, 1.0);
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    if el.style.z_index != want_z {
+        el.style.z_index = want_z;
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    let shift_changed = apply_item_shift_motion(
+        el,
+        want_translate,
+        want_opacity,
+        follow_pointer,
+        session_live,
+        motion,
+    );
+    motion_sync_status(
+        el,
+        changed != LayoutStatus::Clean || shift_changed,
+        follow_pointer,
+    )
+}
+
+/// Paint-only droppable chrome: `rui_drag_over` (solid-dnd `isActiveDroppable`)
+/// and a stacking bump so a dimmed source translated into another column
+/// paints above the target container. Colors stay with the caller.
+fn apply_live_droppable_chrome(
+    el: &mut Element,
+    id: &str,
+    list: &str,
+    active_droppable: Signal<Option<String>>,
+    from_list: Signal<Option<String>>,
+    hover_list: Signal<Option<String>>,
+    author_z: i32,
+) -> LayoutStatus {
+    let from = from_list.peek();
+    let hover = hover_list.peek();
+    let over = active_droppable.peek().as_deref() == Some(id) || hover.as_deref() == Some(list);
+    let is_origin = from.as_deref() == Some(list);
+    let cross = is_origin && hover.is_some() && hover != from;
+    let mut changed = LayoutStatus::Clean;
+    let want_over = if over { Some("1") } else { None };
+    let have_over = el.attrs.get(ATTR_DRAG_OVER).map(String::as_str);
+    if have_over != want_over {
+        if let Some(v) = want_over {
+            el.set_attr(ATTR_DRAG_OVER, v);
+        } else {
+            el.attrs.remove(ATTR_DRAG_OVER);
+        }
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    let want_z = if cross { author_z.max(2) } else { author_z };
+    if el.style.z_index != want_z {
+        el.style.z_index = want_z;
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    changed
 }
 
 fn mark_scope(el: &mut Element, scope: &str) {
@@ -436,7 +674,6 @@ fn assemble_draggable(
     let capture = format!("{scope}__drag:{id}");
     let active = ctx.active_draggable;
     let overlay_open = ctx.overlay_open;
-    let pos = ctx.overlay_pos;
     let from_list_sig = ctx.from_list;
     let from_index_sig = ctx.from_index;
     let hover_list_sig = ctx.hover_list;
@@ -498,58 +735,37 @@ fn assemble_draggable(
         if el.focus_id.is_none() {
             el = el.focus_id(capture.as_str());
         }
-        let is_active = active.get().as_deref() == Some(id_for_mark.as_str());
-        // Subscribe even when inactive so overlay close rebuilds from a fresh body
-        // (default opacity 1). Do not write opacity 1 as a restore — that papers over
-        // a missed rebuild.
-        let overlay_on = overlay_is_registered(&scope_for_mark) && overlay_open.get();
-        if is_active {
-            let _ = pos.get();
-            if overlay_on {
-                let dim = if overlay_hides_source(&scope_for_mark) {
-                    0.0
-                } else {
-                    0.4
-                };
-                el = el.opacity(dim);
-            } else if let Some(t) = active_source_translate() {
-                el = el.translate(t[0], t[1]);
-            }
-        } else {
-            if also_droppable {
-                let _ = hover_index_sig.get();
-                let _ = hover_list_sig.get();
-                let _ = from_index_sig.get();
-                let _ = from_list_sig.get();
-                let extent = drag_extent_sig.peek();
-                let item_e = if axis == Axis::X {
-                    extent[0]
-                } else {
-                    extent[1]
-                };
-                let t = sortable_preview(
-                    from_list_sig.peek().as_deref(),
-                    from_index_sig.peek(),
-                    hover_list_sig.peek().as_deref(),
-                    hover_index_sig.peek(),
-                    list.as_deref(),
-                    index,
-                    item_e.max(1.0),
-                    axis,
-                );
-                if t != [0.0, 0.0] {
-                    el = el.translate(t[0], t[1]);
-                } else {
-                    el = el.translate(0.0, 0.0);
-                }
-            }
-        }
+        let author_opacity = el.style.opacity;
+        let author_z = el.style.z_index;
+        let preview_id = id_for_mark.clone();
+        let preview_scope = scope_for_mark.clone();
+        let motion = Rc::new(RefCell::new(MotionStyle::new()));
+        el = el.reactive_sync(move |el, _lt: &mut LayoutTree| {
+            apply_live_drag_chrome(
+                el,
+                &preview_scope,
+                &preview_id,
+                also_droppable,
+                axis,
+                list_sig,
+                index_sig,
+                active,
+                overlay_open,
+                from_list_sig,
+                from_index_sig,
+                hover_list_sig,
+                hover_index_sig,
+                drag_extent_sig,
+                author_opacity,
+                author_z,
+                &mut motion.borrow_mut(),
+            )
+        });
         if !handle_only && !disabled {
             let scope = scope_for_mark.clone();
             let drag_id = id_for_mark.clone();
             let item_type = item_type.clone();
             let group = group.clone();
-            let list = list.clone();
             let capture = capture.clone();
             el = el.on_pointer_down(move |e| {
                 if e.phase == EventPhase::Capture || dom_button(e.button) != 0 {
@@ -563,8 +779,8 @@ fn assemble_draggable(
                     pointer: [e.x, e.y],
                     grab_offset,
                     start_bounds,
-                    from_list: list.clone(),
-                    from_index: index,
+                    from_list: list_sig.peek(),
+                    from_index: index_sig.peek(),
                     item_type: item_type.clone(),
                     group: group.clone(),
                     capture_id: capture.clone(),
@@ -637,6 +853,10 @@ fn assemble_droppable(
     let id_mark = id.clone();
     let scope_mark = scope.clone();
 
+    let active_droppable = ctx.active_droppable;
+    let from_list = ctx.from_list;
+    let hover_list = ctx.hover_list;
+
     // Height `auto` (not `100%`): a 100% shell in a wrap HStack next to an
     // auto-width chip wraps onto a row whose containing-block height is still
     // indefinite, so the zone collapses to a sliver (Gallery: 源卡片的容器丢失).
@@ -655,6 +875,26 @@ fn assemble_droppable(
         if disabled {
             el.set_attr(ATTR_DRAG_DISABLED, "1");
         }
+        let author_z = el.style.z_index;
+        let prev = el.reactive_sync.take();
+        let id_chrome = id_mark.clone();
+        let list_chrome = list.clone();
+        el = el.reactive_sync(move |el, lt| {
+            let mut st = prev
+                .as_ref()
+                .map(|p| p.run(el, lt))
+                .unwrap_or(LayoutStatus::Clean);
+            st = st.merge(apply_live_droppable_chrome(
+                el,
+                &id_chrome,
+                &list_chrome,
+                active_droppable,
+                from_list,
+                hover_list,
+                author_z,
+            ));
+            st
+        });
         el
     })
 }
@@ -785,5 +1025,71 @@ mod tests {
             );
             assert_eq!(slot.peek(), Some(0));
         });
+    }
+
+    #[test]
+    fn sortable_shift_flip_animates_mid_then_snaps_on_session_end() {
+        use crate::style::{
+            set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+            set_prefers_reduced_motion, TimingFunction, TransitionEntry, TransitionProperty,
+        };
+        use crate::utils::motion::{ensure_motion_transitions, snap_motion_baseline};
+        set_prefers_reduced_motion(Some(false));
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut el = Element::new();
+        el.style.translate = [0.0, 0.0];
+        ensure_motion_transitions(
+            &mut el.style,
+            &[TransitionEntry {
+                property: TransitionProperty::Transform,
+                duration_ms: SORTABLE_FLIP_MS,
+                delay_ms: 0.0,
+                timing: TimingFunction::Ease,
+            }],
+        );
+        snap_motion_baseline(&mut el);
+        el.style.translate = [0.0, 40.0];
+        assert!(motion_is_animating(&el.style, &el.transition_snapshot));
+        let _ = el.tick_css_transitions(0.0);
+        set_css_transition_timeline_ms(f64::from(SORTABLE_FLIP_MS) * 0.5);
+        el.style.translate = [0.0, 40.0];
+        let _ = el.tick_css_transitions(0.0);
+        assert!(
+            el.style.translate[1] > 8.0 && el.style.translate[1] < 36.0,
+            "direct motion helpers mid, got {}",
+            el.style.translate[1]
+        );
+        let mut motion = MotionStyle::new();
+        apply_item_shift_motion(&mut el, [0.0, 24.0], 1.0, false, true, &mut motion);
+        assert!(
+            !el.style.transition.is_empty(),
+            "live session must attach FLIP transition"
+        );
+        assert_eq!(el.style.translate[1], 24.0);
+        assert!(apply_item_shift_motion(
+            &mut el,
+            [0.0, 0.0],
+            1.0,
+            false,
+            false,
+            &mut motion
+        ));
+        assert_eq!(el.style.translate, [0.0, 0.0]);
+        assert!(!motion_is_animating(&el.style, &el.transition_snapshot));
+        set_css_transition_virtual_timeline(false);
+        set_prefers_reduced_motion(None);
+    }
+
+    #[test]
+    fn pointer_follow_skips_flip_transition() {
+        let mut el = Element::new();
+        let mut motion = MotionStyle::new();
+        apply_item_shift_motion(&mut el, [12.0, 8.0], 1.0, true, true, &mut motion);
+        assert_eq!(el.style.translate, [12.0, 8.0]);
+        assert!(el.style.transition.is_empty());
+        apply_item_shift_motion(&mut el, [20.0, 14.0], 1.0, true, true, &mut motion);
+        assert_eq!(el.style.translate, [20.0, 14.0]);
+        assert!(!motion_is_animating(&el.style, &el.transition_snapshot));
     }
 }

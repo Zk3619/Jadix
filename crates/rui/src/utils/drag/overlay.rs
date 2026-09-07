@@ -10,19 +10,19 @@
 
 use std::rc::Rc;
 
-use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
+use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::isolate_reads;
 use crate::core::tree::Element;
-use crate::layout::{DimKind, dim_kind};
-use crate::utils::popup::{ATTR_FLOATING, mount_anchored_overlay};
+use crate::layout::{dim_kind, DimKind};
+use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{clone_source_preview, require_drag};
 use super::session::{mark_overlay_registered, with_scope};
 use super::{
     ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE, ATTR_DRAG_GROUP,
-    ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY,
-    ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST, ATTR_DRAG_OVER,
+    ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 /// Pin the ghost at viewport `origin` (item top-left, already grab-offset).
@@ -89,7 +89,7 @@ impl DragOverlayBuilder {
     }
 
     /// Hide the source island completely while the overlay is open (only the ghost).
-    /// Default is a dimmed source (`opacity: 0.4`).
+    /// Default is a dimmed source (`opacity: 0.4`) that rides to the insert hole.
     pub fn hide_source(mut self, yes: bool) -> Self {
         self.hide_source = yes;
         self
@@ -108,7 +108,7 @@ fn strip_source_session_attrs(el: &mut Element) {
         ATTR_DRAG_INDEX,
         ATTR_DRAG_GROUP,
         ATTR_DRAG_DISABLED,
-        "rui_drag_over",
+        ATTR_DRAG_OVER,
     ] {
         el.attrs.remove(key);
     }
@@ -213,7 +213,7 @@ pub fn drag_overlay_from_rsx(body: impl Fn() -> Element + 'static) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::reactivity::{Signal, create_render_effect, create_root};
+    use crate::core::reactivity::{create_render_effect, create_root, Signal};
     use crate::utils::popup::{ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -353,7 +353,7 @@ mod tests {
         use crate::core::reactivity::{create_effect, create_root, isolate_reads};
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            BeginDrag, begin, drag_overlay, drag_scope, draggable, overlay_is_registered, tick,
+            begin, drag_overlay, drag_scope, draggable, overlay_is_registered, tick, BeginDrag,
         };
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -629,7 +629,7 @@ mod tests {
         use crate::core::reactivity::Signal;
         use crate::primitives::hstack;
         use crate::utils::drag::{
-            BeginDrag, begin, drag_overlay, drag_scope, draggable, droppable, end, tick,
+            begin, drag_overlay, drag_scope, draggable, droppable, end, tick, BeginDrag,
         };
 
         let parked = Signal::new(false);
@@ -704,7 +704,17 @@ mod tests {
         assert!(end(&hits));
         crate::app::reactive::drain_deferred_view_remounts();
         {
-            let tree = live.borrow();
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
             let zone = find_droppable(&tree, "inbox").expect("inbox after redrop");
             let mut texts = Vec::new();
             collect_texts(zone, &mut texts);
@@ -724,7 +734,7 @@ mod tests {
     }
 
     fn activate_chip(sid: &str, pointer: [f32; 2], grab: [f32; 2], bounds: [f32; 4]) {
-        use crate::utils::drag::{BeginDrag, begin, tick};
+        use crate::utils::drag::{begin, tick, BeginDrag};
         begin(BeginDrag {
             scope_id: sid.into(),
             draggable_id: "chip".into(),
@@ -788,6 +798,54 @@ mod tests {
             assert!(
                 texts.iter().all(|t| t != "handled"),
                 "ghost leaked placeholder text: {texts:?}"
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn ghost_default_clone_is_undimmed_author_body() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{drag_overlay, drag_scope, draggable};
+
+        let (_o, live) = mount_scope_tree(|| {
+            drag_scope("ov-undimmed").threshold(0.0).child(|| {
+                let chip = draggable("chip")
+                    .child(|| Element::new().text("本体文案").w(80.0).h(32.0).opacity(1.0));
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            assert!(
+                (ghost.style.opacity - 1.0).abs() < 0.01,
+                "default overlay must clone the undimmed author body; got {}",
+                ghost.style.opacity
+            );
+            let source = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                (source.style.opacity - 0.4).abs() < 0.05,
+                "in-list source is what the kit dims; opacity={}",
+                source.style.opacity
             );
         }
         let _ = crate::utils::drag::end(&[]);
@@ -1213,5 +1271,758 @@ mod tests {
             red_paint_at(&painted, [64.0, 48.0], [50.0, 20.0]),
             "plain inner ghost not in paint at overlay_pos"
         );
+    }
+
+    fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+        if el.template_id.as_deref() == Some(tid) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_tid(c, tid))
+    }
+
+    /// Fast sortable drag used to remount every item island on `hover_index` /
+    /// `overlay_pos` (h=auto placeholders collapsed → list height jitter).
+    #[test]
+    fn sortable_preview_does_not_remount_or_jitter_height() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_scope, draggable, end, tick, Axis, BeginDrag, DragHit,
+        };
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let runs = Rc::new(Cell::new(0));
+        let (_o, live) = mount_scope_tree({
+            let runs = runs.clone();
+            move || {
+                let runs = runs.clone();
+                drag_scope("ov-sort-h")
+                    .axis(Axis::Y)
+                    .threshold(0.0)
+                    .child(move || {
+                        let mk = |id: &'static str, idx: usize| {
+                            let runs = runs.clone();
+                            draggable(id)
+                                .also_droppable(true)
+                                .item_type("planet")
+                                .list("planets")
+                                .index(idx)
+                                .child(move || {
+                                    runs.set(runs.get() + 1);
+                                    Element::new().text(id).w(80.0).h(32.0)
+                                })
+                        };
+                        let mut list = Element::from(vstack().gap(8.0).children([
+                            mk("mercury", 0),
+                            mk("venus", 1),
+                            mk("earth", 2),
+                        ]));
+                        list.template_id = Some("ov-sort-h-list".into());
+                        list
+                    })
+            }
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+        let h0 = find_tid(&live.borrow(), "ov-sort-h-list")
+            .expect("list")
+            .layout_bounds[3];
+        assert!(
+            h0 > 80.0,
+            "precondition: three slotted rows must lay out; h={h0}"
+        );
+        let n0 = runs.get();
+        assert!(n0 >= 3, "three author bodies should mount; runs={n0}");
+
+        begin(BeginDrag {
+            scope_id: "ov-sort-h".into(),
+            draggable_id: "mercury".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [0.0, 0.0, 80.0, 32.0],
+            from_list: Some("planets".into()),
+            from_index: Some(0),
+            item_type: "planet".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        let hit = |id: &str, y: f32, index: usize| DragHit {
+            id: id.into(),
+            scope_id: "ov-sort-h".into(),
+            is_draggable: true,
+            is_droppable: true,
+            rect: crate::utils::drag::Rect::from_bounds([0.0, y, 80.0, 32.0]),
+            item_type: "planet".into(),
+            accept: String::new(),
+            list_id: Some("planets".into()),
+            index: Some(index),
+            group: String::new(),
+            disabled: false,
+        };
+        let hits = [
+            hit("mercury", 0.0, 0),
+            hit("venus", 40.0, 1),
+            hit("earth", 80.0, 2),
+        ];
+        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        assert!(
+            tick(40.0, 88.0, &hits, [800.0, 600.0]),
+            "pointer past last midpoint must keep the session active"
+        );
+        drain_deferred_view_remounts();
+        assert_eq!(
+            runs.get(),
+            n0,
+            "hover / overlay_pos must not remount author bodies; before={n0} after={}",
+            runs.get()
+        );
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let h1 = find_tid(&tree, "ov-sort-h-list")
+                .expect("list after hover")
+                .layout_bounds[3];
+            assert!(
+                (h1 - h0).abs() < 1.0,
+                "sortable preview must not change list layout height; before={h0} after={h1}"
+            );
+            let venus = find_draggable(&tree, "venus").expect("venus");
+            assert!(
+                venus.style.translate[1].abs() > 1.0,
+                "siblings must still shift via reactive_sync; translate={:?}",
+                venus.style.translate
+            );
+        }
+
+        let _ = end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Dimmed source must FLIP to the insert hole. Leaving it at the origin
+    /// composites the translucent body over the sibling that slid into the slot.
+    #[test]
+    fn dimmed_source_rides_to_insert_hole_without_overlapping_neighbour() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, end, tick, Axis, BeginDrag, DragHit,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-sort-src")
+                .axis(Axis::Y)
+                .threshold(0.0)
+                .child(move || {
+                    // Register overlay so chrome dims the source. Do not parent
+                    // the ghost island: portal + sync_reactive overflowed the stack.
+                    let _ = Element::from(drag_overlay());
+                    let mk = |id: &'static str, idx: usize| {
+                        draggable(id)
+                            .also_droppable(true)
+                            .item_type("planet")
+                            .list("planets")
+                            .index(idx)
+                            .child(move || Element::new().text(id).w(80.0).h(32.0))
+                    };
+                    Element::from(vstack().gap(8.0).children([
+                        mk("mercury", 0),
+                        mk("venus", 1),
+                        mk("earth", 2),
+                    ]))
+                })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        begin(BeginDrag {
+            scope_id: "ov-sort-src".into(),
+            draggable_id: "mercury".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [0.0, 0.0, 80.0, 32.0],
+            from_list: Some("planets".into()),
+            from_index: Some(0),
+            item_type: "planet".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        let hit = |id: &str, y: f32, index: usize| DragHit {
+            id: id.into(),
+            scope_id: "ov-sort-src".into(),
+            is_draggable: true,
+            is_droppable: true,
+            rect: crate::utils::drag::Rect::from_bounds([0.0, y, 80.0, 32.0]),
+            item_type: "planet".into(),
+            accept: String::new(),
+            list_id: Some("planets".into()),
+            index: Some(index),
+            group: String::new(),
+            disabled: false,
+        };
+        let hits = [
+            hit("mercury", 0.0, 0),
+            hit("venus", 40.0, 1),
+            hit("earth", 80.0, 2),
+        ];
+        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            let mercury = find_draggable(&tree, "mercury").expect("mercury at grab");
+            let venus = find_draggable(&tree, "venus").expect("venus at grab");
+            assert!(
+                mercury.style.translate[1].abs() < 1.0,
+                "grab at source centre must not swap with the next row; translate={:?}",
+                mercury.style.translate
+            );
+            assert!(
+                venus.style.translate[1].abs() < 1.0,
+                "neighbour must not slide under the dimmed body at grab; translate={:?}",
+                venus.style.translate
+            );
+        }
+        assert!(tick(40.0, 88.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let mercury = find_draggable(&tree, "mercury").expect("mercury");
+            let venus = find_draggable(&tree, "venus").expect("venus");
+            assert!(
+                (mercury.style.opacity - 0.4).abs() < 0.05,
+                "source stays visible and dimmed; opacity={}",
+                mercury.style.opacity
+            );
+            assert!(
+                mercury.style.translate[0].abs() < 0.5,
+                "axis=y source must not follow pointer X; translate={:?}",
+                mercury.style.translate
+            );
+            assert!(
+                mercury.style.translate[1] > 1.0,
+                "dimmed source must ride to the insert hole; translate={:?}",
+                mercury.style.translate
+            );
+            assert!(
+                venus.style.translate[1] < -1.0,
+                "neighbour must vacate the hole; translate={:?}",
+                venus.style.translate
+            );
+            let src_y = mercury.layout_bounds[1] + mercury.style.translate[1];
+            let next_y = venus.layout_bounds[1] + venus.style.translate[1];
+            let src_h = mercury.layout_bounds[3].max(1.0);
+            assert!(
+                (src_y - next_y).abs() >= src_h - 1.0,
+                "dimmed source must not overlap the neighbour; src_y={src_y} next_y={next_y} h={src_h}"
+            );
+        }
+
+        let _ = end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Without hide_source, the dimmed source must translate onto the target
+    /// list hole (not opacity 0 in the origin slot).
+    #[test]
+    fn dimmed_source_cross_list_appears_in_target_hole() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, droppable, end, tick, BeginDrag, DragHit,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-cross-src").threshold(0.0).child(move || {
+                let _ = Element::from(drag_overlay());
+                let mk = |id: &'static str, list: &'static str, idx: usize| {
+                    draggable(id)
+                        .also_droppable(true)
+                        .item_type("task")
+                        .group("board")
+                        .list(list)
+                        .index(idx)
+                        .child(move || Element::new().text(id).w(80.0).h(32.0))
+                };
+                let left = droppable("todo")
+                    .list("todo")
+                    .group("board")
+                    .accept("task")
+                    .child(move || Element::from(vstack().w(80.0).child(mk("src", "todo", 0))));
+                let right = droppable("doing")
+                    .list("doing")
+                    .group("board")
+                    .accept("task")
+                    .child(move || Element::from(vstack().w(80.0).child(mk("dst", "doing", 0))));
+                Element::from(hstack().gap(40.0).children([left, right]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        begin(BeginDrag {
+            scope_id: "ov-cross-src".into(),
+            draggable_id: "src".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [0.0, 0.0, 80.0, 32.0],
+            from_list: Some("todo".into()),
+            from_index: Some(0),
+            item_type: "task".into(),
+            group: "board".into(),
+            capture_id: "cap".into(),
+        });
+        let hit = |id: &str, list: &str, x: f32, y: f32, index: Option<usize>| DragHit {
+            id: id.into(),
+            scope_id: "ov-cross-src".into(),
+            is_draggable: index.is_some(),
+            is_droppable: true,
+            rect: crate::utils::drag::Rect::from_bounds([x, y, 80.0, 32.0]),
+            item_type: "task".into(),
+            accept: "task".into(),
+            list_id: Some(list.into()),
+            index,
+            group: "board".into(),
+            disabled: false,
+        };
+        let hits = [
+            hit("src", "todo", 0.0, 0.0, Some(0)),
+            hit("todo", "todo", 0.0, 0.0, None),
+            hit("dst", "doing", 120.0, 0.0, Some(0)),
+            hit("doing", "doing", 120.0, 0.0, None),
+        ];
+        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        assert!(tick(140.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let src = find_draggable(&tree, "src").expect("src");
+            assert!(
+                (src.style.opacity - 0.4).abs() < 0.05,
+                "cross-list without hide_source must keep a dimmed body; opacity={}",
+                src.style.opacity
+            );
+            assert!(
+                src.style.translate[0] > 50.0,
+                "dimmed source must translate into the target column; translate={:?}",
+                src.style.translate
+            );
+        }
+
+        let _ = end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery `kanban_column`: paint `reactive_sync` must see `hover_list` /
+    /// `from_list` after Todo→Doing. `use_drag()` walks `current_owner`; the
+    /// frame prepass does not restore the provider owner — capture `DragCtx`
+    /// at column build (same as `apply_live_droppable_chrome`).
+    #[test]
+    fn kanban_column_highlight_todo_to_doing() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::hstack;
+        use crate::style::parse_color;
+        use crate::utils::drag::{
+            begin, drag_scope, droppable, end, tick, use_drag, BeginDrag, DragHit, ATTR_DRAG_OVER,
+        };
+
+        fn column(list: &'static str) -> Element {
+            let ctx = use_drag();
+            let mut el = Element::new().w(80.0).min_h(128.0);
+            el.style.bg_color = parse_color("muted");
+            el.style.border_color = parse_color("border");
+            el.reactive_sync(move |el, _| {
+                let over = ctx.as_ref().and_then(|c| c.hover_list.peek()).as_deref() == Some(list);
+                let origin = ctx.as_ref().and_then(|c| c.from_list.peek()).as_deref() == Some(list);
+                el.style.bg_color = parse_color(if over { "accent" } else { "muted" });
+                el.style.border_color = parse_color(if over {
+                    "primary"
+                } else if origin {
+                    "foreground"
+                } else {
+                    "border"
+                });
+                LayoutStatus::StyleChanged
+            })
+        }
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("gal-drag-board").threshold(0.0).child(move || {
+                let left = droppable("todo")
+                    .list("todo")
+                    .group("board")
+                    .accept("task")
+                    .child(|| column("todo"));
+                let right = droppable("doing")
+                    .list("doing")
+                    .group("board")
+                    .accept("task")
+                    .child(|| column("doing"));
+                Element::from(hstack().gap(8.0).children([left, right]))
+            })
+        });
+
+        begin(BeginDrag {
+            scope_id: "gal-drag-board".into(),
+            draggable_id: "task-a".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [0.0, 0.0, 80.0, 32.0],
+            from_list: Some("todo".into()),
+            from_index: Some(0),
+            item_type: "task".into(),
+            group: "board".into(),
+            capture_id: "cap".into(),
+        });
+        let hit = |id: &str, list: &str, x: f32, index: Option<usize>| DragHit {
+            id: id.into(),
+            scope_id: "gal-drag-board".into(),
+            is_draggable: index.is_some(),
+            is_droppable: true,
+            rect: crate::utils::drag::Rect::from_bounds([x, 0.0, 80.0, 128.0]),
+            item_type: "task".into(),
+            accept: "task".into(),
+            list_id: Some(list.into()),
+            index,
+            group: "board".into(),
+            disabled: false,
+        };
+        let hits = [
+            hit("task-a", "todo", 0.0, Some(0)),
+            hit("todo", "todo", 0.0, None),
+            hit("doing", "doing", 88.0, None),
+        ];
+        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        assert!(tick(128.0, 16.0, &hits, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            assert!(
+                crate::core::reactivity::current_owner().is_none(),
+                "paint prepass has no component owner — same as AppState::render"
+            );
+            let doing = find_droppable(&tree, "doing").expect("doing");
+            assert_eq!(
+                doing.attrs.get(ATTR_DRAG_OVER).map(String::as_str),
+                Some("1"),
+                "engine chrome must mark the hover column; collision is not the bug"
+            );
+            assert_eq!(
+                doing.style.bg_color,
+                parse_color("accent"),
+                "Doing column must highlight from hover_list at paint; got {:?}",
+                doing.style.bg_color
+            );
+            assert_eq!(doing.style.border_color, parse_color("primary"));
+            let todo = find_droppable(&tree, "todo").expect("todo");
+            assert_eq!(
+                todo.style.border_color,
+                parse_color("foreground"),
+                "Todo origin column must use from_list at paint"
+            );
+        }
+
+        let _ = end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery「Sortable 列表 · 半透明本体」: `SortableList` + `for_keyed` +
+    /// `DragOverlay` (no hide_source). Drag must not collapse the source row,
+    /// the dimmed body stays in-list, and commit follows the hovered slot —
+    /// not always `len` (tail insert).
+    #[test]
+    fn gallery_sortable_without_hide_source_keeps_dimmed_body() {
+        use crate::app::reactive::{
+            drain_deferred_view_remounts, for_keyed, reset_registered_anchors,
+        };
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::components::scroll_area::scroll_area;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_reorder_vec, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, use_drag, Axis, BeginDrag, CollisionAlg,
+        };
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let names = [
+            "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+        ];
+        let hover_sig = Rc::new(Cell::new(None::<Signal<Option<usize>>>));
+        let committed = Rc::new(Cell::new(None::<Option<usize>>));
+        let committed_end = Rc::clone(&committed);
+
+        let (_o, live) = mount_scope_tree({
+            let hover_sig = Rc::clone(&hover_sig);
+            move || {
+                drag_scope("gal-drag-sort")
+                    .collision(CollisionAlg::ClosestCenter)
+                    .axis(Axis::Y)
+                    .threshold(0.0)
+                    .on_drag_end({
+                        let committed_end = Rc::clone(&committed_end);
+                        move |ev| {
+                            committed_end.set(Some(ev.to_index));
+                        }
+                    })
+                    .child({
+                        let hover_sig = Rc::clone(&hover_sig);
+                        move || {
+                            let ctx = use_drag().expect("DragProvider");
+                            hover_sig.set(Some(ctx.hover_index));
+                            let list = sortable_list("planets").accept("planet").child(move || {
+                                let rows = for_keyed(
+                                    "gal-drag-sort-rows",
+                                    &names,
+                                    |s: &&str| (*s).to_string(),
+                                    |name: &&str| {
+                                        let id = (*name).to_string();
+                                        let i = names.iter().position(|n| n == name).unwrap_or(0);
+                                        sortable_item(id.clone())
+                                            .item_type("planet")
+                                            .list("planets")
+                                            .index(i)
+                                            .child({
+                                                let id = id.clone();
+                                                move || {
+                                                    Element::new().text(id.clone()).w(200.0).h(32.0)
+                                                }
+                                            })
+                                    },
+                                );
+                                Element::from(vstack().w("100%").gap(6.0).children(rows))
+                            });
+                            let overlay: Element = drag_overlay().into();
+                            let scroll: Element = scroll_area("gal-drag-sort-scroll")
+                                .h(176.0)
+                                .w("100%")
+                                .overflow_y("auto")
+                                .child(list)
+                                .into();
+                            Element::from(vstack().w(240.0).children([scroll, overlay]))
+                        }
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let item_hits: Vec<_> = hits0
+            .iter()
+            .filter(|h| h.index.is_some() && h.list_id.as_deref() == Some("planets"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            item_hits.len(),
+            8,
+            "eight SortableItems must stay in the hit list; hits={:?}",
+            hits0
+                .iter()
+                .map(|h| (h.id.clone(), h.index, h.rect.height))
+                .collect::<Vec<_>>()
+        );
+        for h in &item_hits {
+            assert!(
+                h.rect.height > 8.0 && h.rect.height < 80.0,
+                "row slot must be a chip, not the list shell; {} h={}",
+                h.id,
+                h.rect.height
+            );
+        }
+
+        let src = item_hits
+            .iter()
+            .find(|h| h.id == "Mercury")
+            .expect("Mercury");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "gal-drag-sort",
+            "Mercury",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "gal-drag-sort".into(),
+            draggable_id: "Mercury".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("planets".into()),
+            from_index: Some(0),
+            item_type: "planet".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            let mercury = find_draggable(&tree, "Mercury").expect("Mercury must stay in the list");
+            assert!(
+                mercury.layout_bounds[3] > 8.0,
+                "source row must not collapse to 0; bounds={:?}",
+                mercury.layout_bounds
+            );
+            assert!(
+                (mercury.style.opacity - 0.4).abs() < 0.05,
+                "in-list source is dimmed, not hide_source; opacity={}",
+                mercury.style.opacity
+            );
+        }
+
+        let at_lift = hover_sig.get().expect("hover signal").peek();
+        assert_eq!(
+            at_lift,
+            Some(0),
+            "lift on row 0 must keep hover=from so the dimmed body stays; got {at_lift:?}"
+        );
+
+        let earth = item_hits.iter().find(|h| h.id == "Earth").expect("Earth");
+        let earth_p = [earth.rect.x + 20.0, earth.rect.y + earth.rect.height * 0.5];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(earth_p[0], earth_p[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            let mercury = find_draggable(&tree, "Mercury").expect("Mercury after move");
+            assert!(
+                (mercury.style.opacity - 0.4).abs() < 0.05,
+                "dimmed body must remain while hovering another row; opacity={}",
+                mercury.style.opacity
+            );
+            assert!(
+                mercury.style.translate[1] > 1.0,
+                "dimmed source must ride to the insert hole; translate={:?}",
+                mercury.style.translate
+            );
+        }
+        let at_earth = hover_sig.get().expect("hover signal").peek();
+        assert_eq!(
+            at_earth,
+            Some(2),
+            "hovering Earth must open slot 2, not append at len; got {at_earth:?}"
+        );
+
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            committed.get(),
+            Some(Some(2)),
+            "commit must use the hovered slot, not the tail; got {:?}",
+            committed.get()
+        );
+        let mut order: Vec<&str> = names.to_vec();
+        apply_reorder_vec(&mut order, 0, 2);
+        assert_eq!(order[2], "Mercury");
+
+        clear_test_reconcile_root();
+        reset_registered_anchors();
     }
 }

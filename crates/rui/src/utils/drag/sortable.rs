@@ -2,7 +2,8 @@
 //!
 //! The kit does **not** mutate the author's `Vec` on drop — fire `on_drag_end`
 //! and apply [`apply_reorder_vec`] / [`apply_transfer`] (same contract as
-//! solid-dnd). Visual shift while dragging is [`sortable_shift`].
+//! solid-dnd). Visual shift while dragging is [`sortable_shift`], eased with
+//! [`SORTABLE_FLIP_MS`] (SortableJS `animation`).
 
 use crate::core::tree::Element;
 use crate::utils::drag_reorder::apply_reorder_vec;
@@ -15,21 +16,34 @@ pub use crate::utils::drag_reorder::{
     drag_commit_signal_key, drag_hover_signal_key, drag_insert_index_after_remove,
 };
 
-/// FLIP-lite translate for siblings while an item is dragged inside one list.
+/// SortableJS `animation` default. Live gap / source-placeholder FLIP.
+/// Session end **snaps** leftover translate so commit layout is not inverted.
+pub const SORTABLE_FLIP_MS: f32 = 150.0;
+
+/// FLIP-lite translate for siblings **and** the dimmed source placeholder.
 ///
 /// `from` / `hover` are indices in the **pre-remove** list. The dragged index
-/// itself returns `[0, 0]` (the overlay / source-follow owns its motion).
+/// rides to the opened hole so a semi-transparent body does not sit in the
+/// original slot and composite over the neighbour that shifted in.
+/// `max_index` clamps an append hover (`len`) onto the last real slot.
 pub fn sortable_shift(
     from: usize,
     hover: usize,
     index: usize,
     item_extent: f32,
     axis: Axis,
+    max_index: Option<usize>,
 ) -> [f32; 2] {
-    if from == hover || index == from {
+    if from == hover {
         return [0.0, 0.0];
     }
-    let delta = if from < hover {
+    let dest = match max_index {
+        Some(m) => hover.min(m),
+        None => hover,
+    };
+    let delta = if index == from {
+        (dest as i32 - from as i32) as f32 * item_extent
+    } else if from < hover {
         if index > from && index <= hover {
             -item_extent
         } else {
@@ -59,6 +73,7 @@ pub fn sortable_preview(
     my_index: Option<usize>,
     item_extent: f32,
     axis: Axis,
+    max_index: Option<usize>,
 ) -> [f32; 2] {
     let (Some(my_list), Some(my_i)) = (my_list, my_index) else {
         return [0.0, 0.0];
@@ -71,7 +86,7 @@ pub fn sortable_preview(
             return [0.0, 0.0];
         };
         if from_list == Some(my_list) {
-            return sortable_shift(from, hover, my_i, item_extent, axis);
+            return sortable_shift(from, hover, my_i, item_extent, axis, max_index);
         }
         return [0.0, 0.0];
     }
@@ -232,11 +247,32 @@ mod tests {
 
     #[test]
     fn shift_moves_intervening_items() {
-        // Drag 0 toward 2: index 1 and 2 slide up.
-        assert_eq!(sortable_shift(0, 2, 1, 10.0, Axis::Y), [0.0, -10.0]);
-        assert_eq!(sortable_shift(0, 2, 2, 10.0, Axis::Y), [0.0, -10.0]);
-        assert_eq!(sortable_shift(0, 2, 0, 10.0, Axis::Y), [0.0, 0.0]);
-        assert_eq!(sortable_shift(2, 0, 1, 10.0, Axis::Y), [0.0, 10.0]);
+        // Drag 0 toward 2: index 1 and 2 slide up; source rides into the hole.
+        assert_eq!(sortable_shift(0, 2, 1, 10.0, Axis::Y, None), [0.0, -10.0]);
+        assert_eq!(sortable_shift(0, 2, 2, 10.0, Axis::Y, None), [0.0, -10.0]);
+        assert_eq!(sortable_shift(0, 2, 0, 10.0, Axis::Y, None), [0.0, 20.0]);
+        assert_eq!(sortable_shift(2, 0, 1, 10.0, Axis::Y, None), [0.0, 10.0]);
+        assert_eq!(sortable_shift(2, 0, 2, 10.0, Axis::Y, None), [0.0, -20.0]);
+    }
+
+    #[test]
+    fn source_rides_to_hole_without_overlapping_neighbour() {
+        let extent = 10.0;
+        let src = sortable_shift(0, 1, 0, extent, Axis::Y, None);
+        let next = sortable_shift(0, 1, 1, extent, Axis::Y, None);
+        assert_eq!(src, [0.0, 10.0]);
+        assert_eq!(next, [0.0, -10.0]);
+        let src_visual = 0.0 + src[1];
+        let next_visual = extent + next[1];
+        assert!(
+            (src_visual - next_visual).abs() >= extent - 0.01,
+            "dimmed source must vacate the origin slot; src={src_visual} next={next_visual}"
+        );
+    }
+
+    #[test]
+    fn append_hover_clamps_source_to_last_slot() {
+        assert_eq!(sortable_shift(0, 4, 0, 10.0, Axis::Y, Some(3)), [0.0, 30.0]);
     }
 
     #[test]
@@ -250,7 +286,8 @@ mod tests {
                 Some("a"),
                 Some(1),
                 10.0,
-                Axis::Y
+                Axis::Y,
+                None
             ),
             [0.0, -10.0]
         );
@@ -263,7 +300,8 @@ mod tests {
                 Some("b"),
                 Some(1),
                 10.0,
-                Axis::Y
+                Axis::Y,
+                None
             ),
             [0.0, 10.0]
         );
@@ -276,7 +314,8 @@ mod tests {
                 Some("b"),
                 Some(0),
                 10.0,
-                Axis::Y
+                Axis::Y,
+                None
             ),
             [0.0, 0.0]
         );

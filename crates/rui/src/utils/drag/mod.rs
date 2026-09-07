@@ -39,7 +39,7 @@ pub use session::{
 };
 pub use sortable::{
     apply_event, apply_transfer, sortable_item, sortable_list, sortable_preview, sortable_shift,
-    SortableItemBuilder, SortableListBuilder,
+    SortableItemBuilder, SortableListBuilder, SORTABLE_FLIP_MS,
 };
 
 /// Re-export list-reorder helpers so callers can import one module.
@@ -60,3 +60,5 @@ pub const ATTR_DRAG_DISABLED: &str = "rui_drag_disabled";
 pub const ATTR_DRAG_HANDLE: &str = "rui_drag_handle";
 pub const ATTR_DRAG_OVERLAY: &str = "rui_drag_overlay";
 pub const ATTR_DRAG_IGNORE: &str = "rui_drag_ignore";
+/// Collision target (solid-dnd `isActiveDroppable`). Paint-only; not CSS `:hover`.
+pub const ATTR_DRAG_OVER: &str = "rui_drag_over";
