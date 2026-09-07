@@ -14,7 +14,9 @@ use crate::components::internal::modal_motion::{
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::core::tree::{Element, LayoutTree};
 use crate::layout::layout_tree::hoist_portal_subtrees;
-use crate::renderer::font_loader::{apply_default_families, create_font_system, ensure_coverage_for_text};
+use crate::renderer::font_loader::{
+    apply_default_families, create_font_system, ensure_coverage_for_text,
+};
 
 fn has_tid(el: &Element, id: &str) -> bool {
     if el.template_id.as_deref() == Some(id) {
@@ -101,9 +103,7 @@ fn dialog_first_vs_second_open_cpu_after_cjk_warm() {
     layout_once(&live, &mut layout);
     let second = t1.elapsed();
 
-    eprintln!(
-        "dialog CPU after CJK warm: first={first:?} second={second:?} cjk={cjk:?}"
-    );
+    eprintln!("dialog CPU after CJK warm: first={first:?} second={second:?} cjk={cjk:?}");
 
     clear_test_reconcile_root();
     drop(live);

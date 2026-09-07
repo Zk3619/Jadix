@@ -478,16 +478,9 @@ fn portal_hoist_does_not_remasure_unchanged_page_text() {
         .template_id("page")
         .children(labels);
 
-    let island = Element::new()
-        .w(0.0)
-        .h(0.0)
-        .template_id("dialog-island");
+    let island = Element::new().w(0.0).h(0.0).template_id("dialog-island");
 
-    let mut root = Element::new()
-        .w(800.0)
-        .h(600.0)
-        .child(page)
-        .child(island);
+    let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
     let cold = tree.text_measure_calls.get();
