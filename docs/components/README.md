@@ -11,3 +11,4 @@
 | [custom_components_suggestions.md](custom_components_suggestions.md) | 下沉建议 |
 | [headless.md](headless.md) | Headless 模式 |
 | [overlay_shells.md](overlay_shells.md) | 浮层编排壳 |
+| [drag.md](drag.md) | 拖放套件（WP-DRAG.1–2 · 超越 Sortable） |

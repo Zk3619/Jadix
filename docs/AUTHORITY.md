@@ -49,7 +49,7 @@ docs/                                ★ 根目录 = 权威 + changelog
 ├─ components/                       数据表 + 组件手册（随代码改，不另开计划）
 │   component_inventory.md           分桶 + id 策略 + planned
 │   component_variants.md            variant/size/受控命名（WP-3.8）
-│   custom_components · headless · overlay_shells · COMPONENT_LAYERING
+│   custom_components · headless · overlay_shells · drag · COMPONENT_LAYERING
 │
 ├─ engine/                           布局 / 文本 / 颜色 / 动效 / damage / 栈预算 / 平台层 / 媒体槽
 │   box_model · layout_subtree · stack_and_element_model · platform · color · font* · text_align
@@ -767,6 +767,16 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **WP-PRIM.2** | MotionStyle（`utils/motion`；Toast/Carousel CSS sync 首迁） | ☑ |
 | **WP-PRIM.3** | KeyedOverlay（`utils/keyed_overlay`；Toast 宿主/卡首迁） | ☑ |
 | **WP-PRIM.4** | LayoutGroup / slot_list（`utils/layout_group`；Toast rank→位移首迁） | ☑ |
+
+### 5.6d Wave Drag — 拖放套件（**不挡 Beta**）
+
+> 对齐 solid-dnd / SortableJS / interact.js；替身浮层走 [overlay_shells.md](components/overlay_shells.md) Point + Pinned。手册 [`drag.md`](components/drag.md)。
+
+| ID | 主题 | 状态 |
+|----|------|------|
+| **WP-DRAG.1** | `utils/drag` 无头套件 + RSX + Gallery | ☑ 2026-09-07 |
+| **WP-DRAG.2** | 实时让位 + 边缘自动滚 + Esc 取消 + 方向键插入 | ☑ 2026-09-07 |
+| **WP-DRAG.3** | FLIP 时长 / clone-pull / 嵌套列表加深 | ☐ |
 
 ---
 

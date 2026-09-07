@@ -10,7 +10,7 @@
 | 层级 | 路径 | 职责 | 禁止 |
 |------|------|------|------|
 | 布局 / 交互原语 | `crates/rui/src/primitives/` | `box`/`hstack`/`vstack`/`gstack`、`interactive`、`overlay`、`text`/`icon`、`path`、`Portal` | 不写配色、圆角、阴影等视觉常量 |
-| 行为工具 | `crates/rui/src/utils/` | **`anchored_overlay`**、**`viewport_modal`**、**`popup`**、**`presence`**、**`motion`**、**`keyed_overlay`**、**`layout_group`**、`roving`、`focus_trap`、`keyboard`、`text_field`、**`toggle_state`**、**`controlled`**（String/f32/open）、**`activate_registry`**、**`list_nav`**、**`pointer_drag`**、**`table_sort`** / **`tree_model`** / **`element_pack`** | 不绑定某一组件的外观变体 |
+| 行为工具 | `crates/rui/src/utils/` | **`anchored_overlay`**、**`viewport_modal`**、**`drag`**、**`popup`**、**`presence`**、**`motion`**、**`keyed_overlay`**、**`layout_group`**、`roving`、`focus_trap`、`keyboard`、`text_field`、**`toggle_state`**、**`controlled`**（String/f32/open）、**`activate_registry`**、**`list_nav`**、**`pointer_drag`**、**`table_sort`** / **`tree_model`** / **`element_pack`** | 不绑定某一组件的外观变体 |
 | 设计令牌 | `crates/rui/src/tokens/` + `style/theme` + `style/color_space` | 语义色、间距、圆角等可主题化数值 | 不包含业务逻辑 |
 | 样式组件 | `crates/rui/src/components/` | 组合原语 + 令牌 + utils，形成 ShadCN 风格外观 | 不把复杂状态机永久只藏在样式层 |
 
@@ -27,6 +27,7 @@
 | KeyedOverlay | [`utils/keyed_overlay`](../../crates/rui/src/utils/keyed_overlay.rs) | **WP-PRIM.3**；portal + 同 key 调和（shadow/transform mid） |
 | LayoutGroup / slot_list | [`utils/layout_group`](../../crates/rui/src/utils/layout_group.rs) | **WP-PRIM.4**；rank → offset/scale 目标 |
 | **AnchoredOverlay / ViewportModal** | [`utils/anchored_overlay`](../../crates/rui/src/utils/anchored_overlay.rs) **WP-OVL.2 ☑**；[`utils/viewport_modal`](../../crates/rui/src/utils/viewport_modal.rs) **WP-OVL.1 ☑** | 浮层编排壳；收敛 `popup` + `portal_overlay` + `internal/*_motion` |
+| **Drag** | [`utils/drag`](../../crates/rui/src/utils/drag) **WP-DRAG.1–2 ☑** | 超越 Sortable：自动滚 / 让位 / Esc·方向键；Point 替身；手册 [drag.md](drag.md) |
 | Toast 产品策略 | `components/toast/{timer,queue,swipe}` | 单组件拆分（**非**框架原语；已从 internal 折回） |
 | Carousel 产品策略 | `components/carousel/{track,snap,loop_anim,autoplay}` | 同上 |
 

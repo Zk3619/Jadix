@@ -267,7 +267,7 @@ Dialog / Sheet / CommandDialog 迁移后应只剩：**语义 Context、触发器
 | [`presence`](../crates/rui/src/utils/presence.rs) | 壳内建；退场时 `open=false` 仍 `mounted` 直到动画结束 |
 | [`motion`](../crates/rui/src/utils/motion.rs) | 壳写目标；mid 由 `transition_snapshot` 推进 |
 | [`keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs) | 多实例列表浮层（Toast）与 anchored 壳正交；可组合 `item_template_id` |
-| [`pointer_drag`](../crates/rui/src/utils/pointer_drag.rs) | Point 模式拖拽时更新坐标；可扩展 `DragKind::FloatingPanel`（产品层或壳内 hook） |
+| [`pointer_drag`](../crates/rui/src/utils/pointer_drag.rs) | Point 模式拖拽时更新坐标；可扩展 `DragKind::FloatingPanel` / `DragKind::Scope`（[`utils/drag`](../../crates/rui/src/utils/drag)） |
 
 ---
 
@@ -740,16 +740,17 @@ drag_handle("palette", pos, title_bar)
 |------|------|------------|
 | 列表重排 | [`utils/drag_reorder`](../../crates/rui/src/utils/drag_reorder.rs) + app 指针路由 | 与浮层壳正交 |
 | 指针会话 | [`utils/pointer_drag`](../../crates/rui/src/utils/pointer_drag.rs)（Slider/Toast/Carousel/`FloatingPanel`） | Point 浮层拖拽走 `DragKind::FloatingPanel` + `drag_handle` |
-| **拖拽替身浮层**（sortable 的 drag ghost） | **未做** | solid-dnd 典型需求：拖起时 `anchored_overlay` **Point** 跟指针，或 `OverlayMode::Pinned` + `translate`；需碰撞检测与 list 索引 |
-| 跨容器拖放 / 改父级 | **未做** | 超出 overlay_shells；归 solid-dnd WP |
+| **拖拽替身浮层**（sortable 的 drag ghost） | **WP-DRAG.1 ☑** [`utils/drag`](../../crates/rui/src/utils/drag) + [`drag.md`](drag.md) | Pinned portal + **Unanchored** viewport inset（`overlay_pos` → `fixed` left/top；不用 Point/`compute_cursor_menu_placement`，以免钳到底边）；碰撞 `mostIntersecting` / `closestCenter` / `closestCorners` / `pointerWithin` |
+| 跨容器拖放 / 改父级 | **WP-DRAG.1 ☑** `group` + `apply_transfer` | 见 [`drag.md`](drag.md) |
 | 浮层入退场 | `floating_motion` / `modal_motion` 已有；产品化加深见 bugs | 壳统一 `motion` 参数 |
 
 **推荐演进**（文档化，非承诺排期）：
 
 1. **WP-OVL.3 ☑**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
-2. **WP-DND.1**（建议）：sortable ghost 与碰撞检测仍独立；`DragKind::FloatingPanel` / `drag_handle` 已随 OVL.3 可用。  
-3. **WP-DND.2**：sortable ghost — `drag_reorder` 提交前用 Point 浮层显示替身，落点碰撞检测。  
-4. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Point `anchored_overlay` + Pinned z**。
+2. **WP-DRAG.1 ☑**：`utils/drag` 无头套件（solid-dnd 原语 + 超越 Sortable 的自动滚/让位 + interact 修饰 + Point 替身）。  
+3. **WP-DRAG.2 ☑**：实时兄弟让位、边缘自动滚（按住仍滚）、Esc 取消、方向键改插入点。  
+4. **WP-DRAG.3**（可选）：FLIP 时长 / clone-pull / 嵌套列表。  
+5. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Pinned portal + Unanchored viewport inset**（已由 `DragOverlay` 落地）。
 
 ### 9.4 点定位 + 拖拽检查清单
 
@@ -758,7 +759,7 @@ drag_handle("palette", pos, title_bar)
 - [x] 拖拽更新 `pos` 后 `mark_floating_at_point` 同步（`drag_handle`）  
 - [x] `portal_sync` + `mount_anchored_overlay`；非模态不加全屏 `overlay`  
 - [x] `pointer_drag` 释放时 `clear()`  
-- [ ] solid-dnd 级 sortable ghost / 改父级：**另开 WP**，不阻塞 WP-OVL
+- [x] solid-dnd 级 sortable ghost / 改父级：**WP-DRAG.1 ☑** [`drag.md`](drag.md)
 
 ---
 
@@ -770,9 +771,10 @@ drag_handle("palette", pos, title_bar)
 | **WP-OVL.2** ☑ | 新增 `utils/anchored_overlay.rs` + RSX 标签（`AnchoredOverlay*`） | 三种 `Placement` 库测绿；`mount_anchored_overlay_is_zero_anchor` 仍绿。Popover 薄包装归 **WP-OVL.4** |
 | **WP-OVL.3** ☑ | Gallery：Point 浮层 + 标题栏拖拽；**RSX 与 Builder 双示例** | `AnchoredOverlayShowcase`；见 [§9](#9-点定位与拖拽solid-dnd-关联) |
 | **WP-OVL.4** | 存量 Dialog/Popover 薄包装迁移；文档链入 [§8.5](#85-双书写面rsx--builder) | 新 PR 禁止手抄 portal 配方 |
-| **WP-DND.***（建议，非 OVL 阻塞） | `DragKind::FloatingPanel`、sortable drag ghost、碰撞检测 | 见 [bugs.md](../archive/bugs.md) solid-dnd；[§9.3](#93-与-bugsmdsolid-dnd愿望的关系) |
+| **WP-DRAG.1** ☑ | `utils/drag`：碰撞 + 替身浮层 + 跨容器 + RSX；见 [drag.md](drag.md) | Gallery `DragShowcase`；库测 collision/session/RSX |
+| **WP-DRAG.2** ☑ | 实时让位 + 自动滚 + Esc/方向键 | Gallery 行星列表（ScrollArea） |
 
-**不纳入 WP-OVL 首版**：prelude 导出、`Placement::Manual`、焦点陷阱产品化（仍归 C-WP-1.3）、完整 solid-dnd 栈。  
+**不纳入 WP-OVL 首版**：prelude 导出、`Placement::Manual`、焦点陷阱产品化（仍归 C-WP-1.3）。完整拖放栈见 **WP-DRAG.1 ☑** [`drag.md`](drag.md)。  
 **纳入 WP-OVL 首版（原「不纳入」已撤销）**：`AnchoredOverlay` / `ViewportModal` RSX 标签与 `*Opts` 双写（ADR-9）。
 
 ---

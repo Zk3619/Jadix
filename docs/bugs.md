@@ -17,7 +17,7 @@
 - 并考虑：增加 popup_window 能力，为桌面端实现可超出视口的独立菜单/弹窗/通知等能力
 - 平台能力特化
 - 缺的主要是 steps / jump-* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
-- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — 设计拆分见 [overlay_shells.md](../components/overlay_shells.md) §9
+- solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — **WP-DRAG.1 ☑** [`drag.md`](components/drag.md)
 - orientation="vertical"  自动检测屏幕方向 auto、始终水平、始终垂直
 - 浮层编排壳：**anchored_overlay**（Trigger / Point / Unanchored）与 **viewport_modal**（DialogFade / SheetSlide）均已落地 + Gallery。[overlay_shells.md](../components/overlay_shells.md)
 - 无任何动画、阴影、模糊等特殊效果的性能模式
@@ -27,5 +27,5 @@
 
 - sidebar 展开/收起时常发生卡顿、突变的问题，因为动画期间每帧都在因布局重算而全树重建
 - 程序启动时首屏白屏的问题
-- sheet/drawer 入场动画末段存在一帧瞬跳
 - caret 的 520ms WaitUntil 等类似的强制等待是否为兜底策略？这种强制等待兜底在工程项目中似乎不应存在
+- command dialog 在打开动画的末段会存在内部项向下平移的问题

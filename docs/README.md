@@ -34,7 +34,7 @@
 - [component_variants.md](components/component_variants.md) — variant / size / 受控命名
 - [COMPONENT_LAYERING.md](components/COMPONENT_LAYERING.md) — 体量 × gpui-component（非执行源）
 - [custom_components.md](components/custom_components.md) · [custom_components_suggestions.md](components/custom_components_suggestions.md)
-- [headless.md](components/headless.md) · [overlay_shells.md](components/overlay_shells.md)
+- [headless.md](components/headless.md) · [overlay_shells.md](components/overlay_shells.md) · [drag.md](components/drag.md)
 
 ### 引擎
 

@@ -64,7 +64,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](components/component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](components/component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`drag/`**（WP-DRAG.1 · 超越 Sortable；solid-dnd/interact；不进 prelude）、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、**拖放套件**、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`theme_override.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark、应用 patch | 业务状态机；完整 ICC/HDR（见 [`color_advanced.md`](engine/color_advanced.md)）；主题契约见 [`theme.md`](engine/theme.md) |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
@@ -549,7 +549,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |------|----------------------------|----------------------------|
 | **基础** | Button、Badge、AspectRatio、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image、Kbd、Skeleton、Empty、Marker、Message、MessageScroller、Alert、AlertDialog、Item、Attachment、List、Bubble、Avatar、Breadcrumb、ButtonGroup | 产品面 `verified`（Gallery 2026-09-05）；CV.1 核心仍为 Button/Label/Separator/Card |
 | **表单** | Input、InputAdornment、InputOTP、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker、Questionnaire；Form helpers；文件选择为 `utils/file_dialog` | 输入/选器 `verified`；**Form** = `experimental`（Context helpers，已降出 §5.2.1）；Questionnaire / FileDialog = `experimental` |
-| **浮层 / 反馈** | Dialog、Sheet、Drawer、Popover、Tooltip、HoverCard、DropdownMenu、ContextMenu、Toast、Command | Dialog/Toast/Tooltip 含 CV 测；其余产品面 `verified`（Gallery）；Command 搜索算法仍可加深 |
+| **浮层 / 反馈** | Dialog、Sheet、Drawer、Popover、Tooltip、HoverCard、DropdownMenu、ContextMenu、Toast、Command；**AnchoredOverlay / ViewportModal** 无头壳；**Drag**（`utils/drag` 实验） | Dialog/Toast/Tooltip 含 CV 测；其余产品面 `verified`（Gallery）；Command 搜索算法仍可加深；Drag = `experimental` |
 | **数据** | Table、VirtualList、VirtualMasonry、TreeView、Pagination、Chart、Carousel、Stepper、Timeline | Table/VirtualList/TreeView/Pagination/Carousel/Stepper/Timeline = Gallery `verified`；**Chart** / **VirtualMasonry** = `experimental`（不进 SemVer 0.1） |
 | **绘制** | Svg（`primitives/svg`）；Canvas（`primitives/canvas`）；Scene3d（feature）；B16 / B17 仍规划 | Svg/Canvas = `experimental`（WP-3.11/3.12 ☑）；Scene3d = `experimental`（WP-3.13 ☑，默认 feature 关）；B16/B17 未落地 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar、Pagination；Gallery 另演示 Router / Navigator / 次窗 | Tabs 含 CV 测；其余产品面 `verified` |
@@ -635,7 +635,7 @@ cargo check -p gallery
 
 ### 6.3 Gallery 契约
 
-- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · **绘制** · 导航 · 布局 · 文本 · 关于；Svg / Canvas / Scene3d 已在「绘制」（WP-3.11 / 3.12 / 3.13）；Chart 仍在「数据」。Scene3d 演示需 `--features scene3d`。  
+- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · **绘制** · 导航 · 布局 · 文本 · 关于；Svg / Canvas / Scene3d 已在「绘制」（WP-3.11 / 3.12 / 3.13）；Chart 仍在「数据」。Scene3d 演示需 `--features scene3d`。浮层分区含 **Drag**（`DragShowcase`）。  
 - **每公开稳定面组件至少一处可运行示例**。  
 - 变体矩阵优先展示在「基础 / 表单」（Button variants/sizes 已是标杆）。  
 - **复合组件**：Gallery 宜同时展示 **Tier 1 组合面**（`.child()` / 手写零件 `class`）与 **Tier 3 数据糖**（若有），见 **§3.3**。  
