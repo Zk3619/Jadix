@@ -954,9 +954,7 @@ mod tests {
             let live_e = Rc::clone(&live);
             crate::core::reactivity::create_effect(move || {
                 let el = dialog("dlg_first_paint").open(open).child(move || {
-                    dialog_content(DialogContentOpts::default(), || {
-                        Element::new().text("body")
-                    })
+                    dialog_content(DialogContentOpts::default(), || Element::new().text("body"))
                 });
                 *live_e.borrow_mut() = el;
             });

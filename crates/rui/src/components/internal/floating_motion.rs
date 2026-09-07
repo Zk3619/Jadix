@@ -213,6 +213,14 @@ pub(crate) struct FloatingPresenceHandle {
     cell: Rc<RefCell<FloatingPresenceCell>>,
 }
 
+impl FloatingPresenceHandle {
+    /// Enter seed / measure / exit — Command overlay must not focus the filter until this is false.
+    pub(crate) fn is_motion_busy(&self) -> bool {
+        let c = self.cell.borrow();
+        c.needs_enter || c.enter_active || c.measuring || c.gate.phase() == PresencePhase::Exiting
+    }
+}
+
 thread_local! {
     static PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<FloatingPresenceCell>>>> =
         const { RefCell::new(Vec::new()) };

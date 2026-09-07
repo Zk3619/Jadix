@@ -202,6 +202,12 @@ impl ModalPresenceHandle {
         let c = self.cell.borrow();
         c.needs_enter || c.enter_active || phase == PresencePhase::Exiting
     }
+
+    /// [`motion_busy`] using the gate's current phase (paint-sync / focus).
+    pub(crate) fn is_motion_busy(&self) -> bool {
+        let c = self.cell.borrow();
+        c.needs_enter || c.enter_active || c.gate.phase() == PresencePhase::Exiting
+    }
 }
 
 thread_local! {
@@ -235,6 +241,14 @@ fn arm_modal_event_loop_wake() {
 #[cfg(test)]
 pub(crate) fn set_modal_css_needs_frame_for_test(v: bool) {
     MODAL_CSS_NEEDS_FRAME.with(|c| c.set(v));
+}
+
+/// Skip unflushed enter so tests can assert post-enter paint (focus, layout).
+#[cfg(test)]
+pub(crate) fn clear_pending_modal_enter(handle: &ModalPresenceHandle) {
+    let mut c = handle.cell.borrow_mut();
+    c.needs_enter = false;
+    c.enter_active = false;
 }
 
 pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
@@ -518,15 +532,17 @@ fn enter_visual_settled(
     target_translate: [f32; 2],
     slide_axis_px: f32,
 ) -> bool {
-    let overlay_ok = (overlay.style.opacity - 1.0).abs() < 0.02;
+    // Same class of cutoff as Dialog zoom: 2–4% remaining snapped the last
+    // ease-out tail onto the dock in one frame (Sheet/Drawer 入场末段瞬跳).
+    let overlay_ok = (overlay.style.opacity - 1.0).abs() < 0.005;
     let nested = 1.0_f32;
     let panel_ok = if motion == ModalSurfaceMotion::DialogFade {
-        (panel.style.scale[0] - nested).abs() < 0.02
+        (panel.style.scale[0] - nested).abs() < 0.002
     } else {
         let target_pct = extra_to_translate_pct(motion, target_translate, slide_axis_px);
-        let pct_ok = (panel.style.translate_pct[0] - target_pct[0]).abs() < 0.04
-            && (panel.style.translate_pct[1] - target_pct[1]).abs() < 0.04;
-        let px_ok = panel.style.translate[0].abs() < 2.0 && panel.style.translate[1].abs() < 2.0;
+        let pct_ok = (panel.style.translate_pct[0] - target_pct[0]).abs() < 0.002
+            && (panel.style.translate_pct[1] - target_pct[1]).abs() < 0.002;
+        let px_ok = panel.style.translate[0].abs() < 1.0 && panel.style.translate[1].abs() < 1.0;
         pct_ok && px_ok
     };
     overlay_ok && panel_ok
@@ -618,7 +634,10 @@ fn settle_modal_enter_if_ready(
     target_translate: [f32; 2],
     slide_axis_px: f32,
 ) -> bool {
-    let settled = enter_visual_settled(overlay, panel, motion, target_translate, slide_axis_px);
+    // Do not nail while `@keyframes` still own the pose — fill-mode already holds
+    // the 100% stop, so clearing mid-tail jumps the remainder in one present.
+    let settled = enter_visual_settled(overlay, panel, motion, target_translate, slide_axis_px)
+        && !modal_shell_enter_css_active(overlay, panel);
     if settled {
         let modal_id = presence
             .cell
@@ -2374,6 +2393,19 @@ mod tests {
                 [0.0, 0.0],
                 400.0,
             ));
+            // 4% of a 400px sheet is 16px. Nailing that remainder in one frame is the
+            // reported end-of-enter snap (Dialog already tightened zoom to 0.002).
+            panel.style.translate_pct = [0.0, 0.03];
+            assert!(
+                !enter_visual_settled(
+                    &overlay,
+                    &panel,
+                    ModalSurfaceMotion::SlideFromBottom,
+                    [0.0, 0.0],
+                    400.0,
+                ),
+                "3% remaining travel must not count as settled (that nail is the end-of-enter jump)"
+            );
         });
     }
 
@@ -2483,6 +2515,68 @@ mod tests {
             );
             assert!(handle.cell.borrow().enter_active);
         });
+    }
+
+    #[test]
+    fn slide_enter_does_not_snap_the_ease_out_tail() {
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        create_root(|| {
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            panel.layout_bounds = [0.0, 200.0, 400.0, 400.0];
+            let handle = use_modal_presence("slide-enter-tail");
+            sync_modal_presence(&handle, true);
+            assert!(apply_modal_shell_motion(
+                "slide-tail",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::SlideFromBottom,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                400.0,
+            ));
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+
+            let mut nail_from = None;
+            for _ in 0..40 {
+                let pct = {
+                    let p = find_template_id_mut(&mut root, "slide-tail__modal_panel").unwrap();
+                    p.style.translate_pct[1]
+                };
+                let had_enter = {
+                    let p = find_template_id_mut(&mut root, "slide-tail__modal_panel").unwrap();
+                    p.style
+                        .animations
+                        .iter()
+                        .any(|a| a.name.starts_with("rui-modal-slide-in-"))
+                };
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+                let _ = tick_hoisted_modal_css(&mut root);
+                let has_enter = {
+                    let p = find_template_id_mut(&mut root, "slide-tail__modal_panel").unwrap();
+                    p.style
+                        .animations
+                        .iter()
+                        .any(|a| a.name.starts_with("rui-modal-slide-in-"))
+                };
+                if had_enter && !has_enter {
+                    nail_from = Some(pct);
+                    break;
+                }
+            }
+            let from = nail_from.expect("enter keyframes must clear after the slide finishes");
+            assert!(
+                from.abs() < 0.005,
+                "nailing enter while {from} remaining (~{}px on a 400px panel) is the end-of-enter snap",
+                from.abs() * 400.0
+            );
+        });
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
     }
 
     #[test]
