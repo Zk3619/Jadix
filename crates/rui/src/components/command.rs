@@ -2807,6 +2807,107 @@ mod tests {
         clear_overlay_stack();
     }
 
+    /// Enter-settle must not move CommandDialog rows in layout or Coverage Y.
+    /// Remaining screen-space travel while fade is already visible is the
+    /// `__modal_zoom` layer scaling about the card center (lower rows move down).
+    #[test]
+    fn command_dialog_item_y_stable_across_enter_settle() {
+        use crate::components::internal::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css, use_modal_presence,
+        };
+        use crate::utils::text_field::input_focus_id;
+
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        clear_overlay_stack();
+        let modal_id = "cmd-dlg-enter-y";
+        let (_owner, mut host) =
+            create_root(|| layout_command_dialog_host(modal_id, gallery_command_dialog_body()));
+        assert!(hoist_portal_subtrees(&mut host) >= 2);
+
+        let item_ys = |host: &Element| {
+            (
+                item_bounds_by_value(host, "Show toast").expect("Show toast")[1],
+                item_bounds_by_value(host, "Profile").expect("Profile")[1],
+            )
+        };
+
+        let mut last_comp_ys = None;
+        let mut last_blit_profile_y = None;
+        let mut last_comp_live_also = false;
+        let mut settle_ys = None;
+
+        for frame in 0..24 {
+            let _ = flush_modal_shell_motion_subtree(&mut host);
+            let _ = tick_hoisted_modal_css(&mut host);
+            let busy = use_modal_presence(modal_id).is_motion_busy();
+            let _ = crate::renderer::take_capture_jobs();
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);
+            let caps = crate::renderer::take_capture_jobs();
+            let cap = caps.iter().find(|c| c.key.starts_with("rui_zoom_cap:"));
+            let ys = item_ys(&host);
+            if let Some(cap) = cap {
+                last_comp_ys = Some(ys);
+                last_comp_live_also = result.text_nodes.iter().any(|t| t.text == "Profile");
+                if let (Some(ty), Some(blit)) = (
+                    cap.text_nodes
+                        .iter()
+                        .find(|t| t.text == "Profile")
+                        .map(|t| t.y),
+                    result
+                        .textured_draws
+                        .iter()
+                        .find(|d| d.texture_key.starts_with("rui_zoom_cap:")),
+                ) {
+                    let b = cap.bounds;
+                    last_blit_profile_y = Some(blit.rect[1] + (ty - b[1]) * (blit.rect[3] / b[3]));
+                }
+            }
+            if !busy {
+                settle_ys = Some(ys);
+                let live_y = result
+                    .text_nodes
+                    .iter()
+                    .find(|t| t.text == "Profile")
+                    .map(|t| t.y);
+                let last_c = last_comp_ys.expect("enter must capture __modal_zoom");
+                assert!(
+                    !last_comp_live_also,
+                    "1:1 blit must not also emit live Coverage (row pop)"
+                );
+                assert!(
+                    (last_c.0 - ys.0).abs() < 0.5 && (last_c.1 - ys.1).abs() < 0.5,
+                    "item layout y jumped compositor→settle: {last_c:?} -> {ys:?}"
+                );
+                if let (Some(blit_y), Some(live_y)) = (last_blit_profile_y, live_y) {
+                    assert!(
+                        (blit_y - live_y).abs() < 1.0,
+                        "Profile blit-mapped y {blit_y} != Coverage {live_y}"
+                    );
+                }
+                break;
+            }
+            assert!(frame < 23, "enter must settle within 24 frames");
+        }
+
+        let settle = settle_ys.expect("enter must settle");
+        let mut tree = LayoutTree::new();
+        let mut impact = crate::core::tree::LayoutStatus::Clean;
+        sync_command_item_paint_subtree(&mut host, &mut tree, &mut impact);
+        let _ = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);
+        let focused = item_ys(&host);
+        assert!(
+            (settle.0 - focused.0).abs() < 0.5 && (settle.1 - focused.1).abs() < 0.5,
+            "item layout y jumped settle→filter-focus: {settle:?} -> {focused:?}"
+        );
+        assert_eq!(
+            use_signal("__rui_button_focus_id", String::new).peek(),
+            input_focus_id(&format!("{modal_id}__filter")),
+            "filter focuses only after enter motion is idle"
+        );
+        clear_overlay_stack();
+    }
+
     #[test]
     fn command_dialog_list_max_scroll_reveals_last_item() {
         use crate::components::base::SlotChrome;
