@@ -749,7 +749,7 @@ drag_handle("palette", pos, title_bar)
 1. **WP-OVL.3 ☑**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
 2. **WP-DRAG.1 ☑**：`utils/drag` 无头套件（solid-dnd 原语 + 超越 Sortable 的自动滚/让位 + interact 修饰 + Point 替身）。  
 3. **WP-DRAG.2 ☑**：实时兄弟让位、边缘自动滚（按住仍滚）、Esc 取消、方向键改插入点。  
-4. **WP-DRAG.3**（可选）：FLIP 时长 / clone-pull / 嵌套列表。  
+4. **WP-DRAG.3**（可选）：FLIP 时长 ☑ / clone-pull / 嵌套列表。  
 5. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Pinned portal + Unanchored viewport inset**（已由 `DragOverlay` 落地）。
 
 ### 9.4 点定位 + 拖拽检查清单

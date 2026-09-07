@@ -55,7 +55,7 @@ ui! {
         <Droppable id="todo" list="todo" group="board" accept="card">
             { column() }
         </Droppable>
-        <DragOverlay class="opacity-90 shadow-lg" />
+        <DragOverlay class="shadow-lg" />
     </DragProvider>
 }
 ```
@@ -66,11 +66,11 @@ Tags: `DragProvider`, `Draggable`, `Droppable`, `DragOverlay`, `DragHandle`, `Dr
 
 1. `pointerdown` on a draggable (or `DragHandle`) → [`begin`](../../crates/rui/src/utils/drag/session.rs) (`Pending`).
 2. Move past `threshold` **and** `delay_ms` → `Active`, `on_drag_start`, overlay opens.
-3. Each move: axis / snap / restrict → overlay `pos` → collision (empty lists inflated by `empty_insert`) → `can_drop` veto → `on_drag_over` when the droppable changes. Siblings in the same list **shift**.
+3. Each move: axis / snap / restrict → overlay `pos` → collision (empty lists inflated by `empty_insert`) → `can_drop` veto → `on_drag_over` when the droppable changes. Siblings in the same list **shift** (CSS `transition: transform` [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) = 150ms ease; pointer-follow and drop/cancel **snap** so commit layout is not inverted).
 4. Pointer near a `scroll:` viewport edge → auto-scroll (also pumped while the pointer is held still).
 5. `pointerup` → `on_drag_end`. **Esc** → [`cancel`](../../crates/rui/src/utils/drag/session.rs) (no commit). **↑↓←→** → [`nudge_insert`](../../crates/rui/src/utils/drag/session.rs).
 
-Without `<DragOverlay>` the source item **translates** with the pointer. With an overlay the source is dimmed (`opacity: 0.4`) and the ghost follows as a Pinned portal whose `fixed` left/top is `overlay_pos` (item box, grab-offset). `<DragOverlay hide_source={true}>` / `.hide_source(true)` hides the source completely (the layout slot stays, only the ghost is visible). Default ghost **re-runs the active item's author body** (same text and chrome as the source). Styles on `<DragOverlay>` / `.style(...)` overlay that clone. A custom overlay **child** replaces the body entirely (Gallery「自定义子树」). The kit does **not** auto-move items: `on_drag_end` must park / `apply_reorder_vec` / `apply_transfer`. Follow-source clones pin `drag_extent` **only** when the author size is a percentage (`w=100%`), so it does not resolve against the portal CB; auto-sized clones and custom children keep author size. Grab / `overlay_pos` use pointer-space **layout slots** (scroll-adjusted, same space as the pointer) — not pre-scroll `layout_bounds`, otherwise a `ScrollArea` host pins the ghost below the fold. Collision and sortable insert-index **omit CSS `translate`**, so live sibling shift does not move the hit slots. The ghost is **viewport-pinned on purpose** (solid-dnd / dnd-kit): clipping it to the source parent would hide the overlay as soon as you drag into another container. Limit *motion* with `axis` / `restrict=viewport`, not overlay clip. `<DragHandle>` is **headless** — wrap any chrome (icon button, label, custom `Box`); `handle={true}` on the item starts the drag only from that child. Nested controls that must not start a drag: [`drag_ignore`](../../crates/rui/src/utils/drag/builder.rs). **Visual chrome** (fill, border, radius, `cursor`, `align-items` / `self`) lives on the caller — Gallery [`drag.rs`](../../examples/gallery/src/pages/drag.rs), not in `utils/drag`.
+Without `<DragOverlay>` the source item **translates** with the pointer. With an overlay the **in-list source** is dimmed (`opacity: 0.4`) and **rides the same FLIP translate as siblings** to the insert hole — leaving it at the origin would composite the translucent body over the neighbour that slid in. Cross-list hover (without `hide_source`) translates the dimmed source onto the **target** hole using hit-slot origins, and raises the origin container `z-index` so it paints above the target column. The ghost follows as a Pinned portal whose `fixed` left/top is `overlay_pos` (item box, grab-offset). `<DragOverlay hide_source={true}>` / `.hide_source(true)` hides the source completely (the layout slot stays, only the ghost is visible). Default ghost **re-runs the active item's author body before chrome** — an undimmed clone, not the live `opacity: 0.4` island. Styles on `<DragOverlay>` / `.style(...)` decorate that clone (Gallery Sortable uses `class="shadow-lg"` only). Do not put `opacity` on the overlay unless you want a translucent ghost; the kit already dims the in-list source. A custom overlay **child** replaces the body entirely (Gallery「自定义子树」). The kit does **not** auto-move items: `on_drag_end` must park / `apply_reorder_vec` / `apply_transfer`. Live sibling shift is **paint-only** (`reactive_sync` + CSS `translate` FLIP); the item island does not remount on `hover_index` / pointer move, or `h=auto` placeholders collapse and the list height jitters. Shift distance is the **slot pitch** (item box + author gap), not the dragged box alone. Follow-source clones pin `drag_extent` **only** when the author size is a percentage (`w=100%`), so it does not resolve against the portal CB; auto-sized clones and custom children keep author size. Grab / `overlay_pos` use pointer-space **layout slots** (scroll-adjusted, same space as the pointer) — not pre-scroll `layout_bounds`, otherwise a `ScrollArea` host pins the ghost below the fold. Collision and sortable insert-index use pointer-space **layout slots** (scroll-adjusted, no CSS `translate`). Insert index is the slot whose **bottom** contains the overlay centre — a midpoint test reports `from+1` when grabbing a row's centre, siblings slide into the origin, and the dimmed body composites over them. The ghost is **viewport-pinned on purpose** (solid-dnd / dnd-kit): clipping it to the source parent would hide the overlay as soon as you drag into another container. Limit *motion* with `axis` / `restrict=viewport`, not overlay clip. `<DragHandle>` is **headless** — wrap any chrome (icon button, label, custom `Box`); `handle={true}` on the item starts the drag only from that child. Nested controls that must not start a drag: [`drag_ignore`](../../crates/rui/src/utils/drag/builder.rs). **Visual chrome** (fill, border, radius, `cursor`, `align-items` / `self`) lives on the caller — Gallery [`drag.rs`](../../examples/gallery/src/pages/drag.rs), not in `utils/drag`.
 
 ## 4. Collision and modifiers
 
@@ -83,9 +83,11 @@ Without `<DragOverlay>` the source item **translates** with the pointer. With an
 
 Modifiers: `axis` (`xy` / `x` / `y`), `restrict` (`none` / `viewport`), `threshold`, `delay_ms`, `empty_insert`, `autoscroll`, `snap` / `can_drop` (Builder). `accept` matches `item_type` (comma-separated; Gallery「条件投放」is `容器1`←`组件2`, `容器2`←`组件1`); `group` must match when both are set.
 
+Container highlight is **not** CSS `:hover`. [solid-dnd](https://github.com/thisbeyond/solid-dnd) exposes `createDroppable().isActiveDroppable` from `state.active.droppableId` (collision result) and leaves colors to the author. This kit mirrors that: `use_drag().active_droppable` / `hover_list` / `from_list`, plus paint-only `rui_drag_over` on the droppable. Gallery park zones and Kanban columns restyle in `reactive_sync` from those signals.
+
 ## 5. Sortable helpers
 
-- [`sortable_shift`](../../crates/rui/src/utils/drag/sortable.rs) — applied live to siblings while dragging.
+- [`sortable_shift`](../../crates/rui/src/utils/drag/sortable.rs) — applied live to siblings **and** the dimmed source placeholder (append hover clamps onto the last real slot). Distance changes ease over [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs); `end` / `cancel` snap so leftover translate cannot invert the rebuilt layout.
 - [`apply_reorder_vec`](../../crates/rui/src/utils/drag_reorder.rs) — same list, on drop.
 - [`apply_transfer`](../../crates/rui/src/utils/drag/sortable.rs) — cross list.
 - `<SortableItem>` = draggable + droppable (`also_droppable`).
@@ -99,7 +101,7 @@ Modifiers: `axis` (`xy` / `x` / `y`), `restrict` (`none` / `viewport`), `thresho
 | Handle / delay / filter | yes | handle + `delay_ms` + `drag_ignore` |
 | Auto-scroll | rAF | mousemove **and** wait-loop pump |
 | Ghost | CSS class | Pinned `DragOverlay` (viewport inset, not cursor-menu clamp) |
-| Live gap | CSS animation | sibling `translate` (FLIP duration = WP-DRAG.3) |
+| Live gap | CSS animation | sibling `translate` + FLIP [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) (150ms ease; snap on drop) |
 | Keyboard | weak | Esc cancel + arrow insert |
 | Collision | geometry guess | four named algorithms |
 | Clone / nested / multi-drag | plugins | **WP-DRAG.3** |

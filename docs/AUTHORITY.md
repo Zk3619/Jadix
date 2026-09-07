@@ -776,7 +776,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 |----|------|------|
 | **WP-DRAG.1** | `utils/drag` 无头套件 + RSX + Gallery | ☑ 2026-09-07 |
 | **WP-DRAG.2** | 实时让位 + 边缘自动滚 + Esc 取消 + 方向键插入 | ☑ 2026-09-07 |
-| **WP-DRAG.3** | FLIP 时长 / clone-pull / 嵌套列表加深 | ☐ |
+| **WP-DRAG.3** | FLIP 时长 ☑ / clone-pull / 嵌套列表加深 | ☐ |
 
 ---
 
