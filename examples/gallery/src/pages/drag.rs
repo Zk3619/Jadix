@@ -3,15 +3,23 @@
 use crate::imports::*;
 use crate::shared::*;
 use rui::utils::drag::{
-    Axis, CollisionAlg, DragEvent, Restrict, apply_reorder_vec, apply_transfer, drag_overlay,
+    Axis, CollisionAlg, DragCtx, DragEvent, Restrict, apply_reorder_vec, apply_transfer,
     drag_scope, use_drag,
 };
 
-fn zone_over_peek(id: &str) -> bool {
-    use_drag()
-        .and_then(|c| c.active_droppable.peek())
-        .as_deref()
-        == Some(id)
+/// `reactive_sync` runs in the frame prepass with no provider owner.
+/// `use_drag()` / `use_context` walk `current_owner` and miss `DragCtx` —
+/// capture the signals at column/zone build (same as droppable chrome).
+fn zone_over_peek(ctx: Option<&DragCtx>, id: &str) -> bool {
+    ctx.and_then(|c| c.active_droppable.peek()).as_deref() == Some(id)
+}
+
+fn zone_list_hover_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
+    ctx.and_then(|c| c.hover_list.peek()).as_deref() == Some(list)
+}
+
+fn zone_list_from_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
+    ctx.and_then(|c| c.from_list.peek()).as_deref() == Some(list)
 }
 
 fn park_on_drop(parked: Signal<bool>, drop_id: &'static str) -> impl FnMut(&DragEvent) {
@@ -86,10 +94,57 @@ fn drop_park_zone(
             } }
         </Box>
     };
+    let ctx = use_drag();
     zone.reactive_sync(move |el, _| {
-        let over = zone_over_peek(drop_id);
+        let over = zone_over_peek(ctx.as_ref(), drop_id);
         let bg = parse_color(if over { "accent" } else { "muted" });
         let border = parse_color(if over { "primary" } else { "border" });
+        let mut changed = LayoutStatus::Clean;
+        if el.style.bg_color != bg {
+            el.style.bg_color = bg;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.border_color != border {
+            el.style.border_color = border;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        changed
+    })
+}
+
+/// solid-dnd `isActiveDroppable` analog: collision `hover_list`, not CSS `:hover`.
+fn kanban_column(list: &'static str, title: &str, body: Element) -> Element {
+    let title = title.to_string();
+    let ctx = use_drag();
+    let el = ui! {
+        <VStack
+            grow="1"
+            min_h="8rem"
+            p="0.5rem"
+            gap="0.375rem"
+            rounded="0.5rem"
+            bg="muted"
+            w="50%"
+            border_style="solid"
+            border_width="1px"
+            border_color="border"
+            overflow="visible"
+        >
+            <Label font_weight="600" text_size="0.75rem">{ title }</Label>
+            { body }
+        </VStack>
+    };
+    el.reactive_sync(move |el, _| {
+        let over = zone_list_hover_peek(ctx.as_ref(), list);
+        let origin = zone_list_from_peek(ctx.as_ref(), list);
+        let bg = parse_color(if over { "accent" } else { "muted" });
+        let border = parse_color(if over {
+            "primary"
+        } else if origin {
+            "foreground"
+        } else {
+            "border"
+        });
         let mut changed = LayoutStatus::Clean;
         if el.style.bg_color != bg {
             el.style.bg_color = bg;
@@ -171,7 +226,7 @@ fn list_chip(label: &str) -> Element {
             border_width="1px"
             border_color="border"
             cursor="grab"
-            bg="transparent"
+            bg="card"
         >
             <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
             <Label text_size="0.875rem" grow="1" color="foreground">{ label.to_string() }</Label>
@@ -273,6 +328,14 @@ pub(crate) fn DragShowcase() -> Element {
         .map(String::from)
         .collect::<Vec<_>>()
     });
+    let sort_hide = use_signal("gal_drag_sort_hide", || {
+        [
+            "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>()
+    });
     let todo = use_signal("gal_drag_todo", || {
         ["Draft RFC", "Review PR"]
             .into_iter()
@@ -316,7 +379,7 @@ pub(crate) fn DragShowcase() -> Element {
                                     }
                                 }) }
                             </Droppable>
-                            { Element::from(drag_overlay().style(|el| el.opacity(0.92))) }
+                            <DragOverlay />
                         </HStack>
                     }
                 }),
@@ -332,7 +395,7 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"Droppable · RSX + 拖拽浮层"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "空 DragOverlay 跟随本体。松手落在右侧后卡片进入容器；拖到空白处放回。"
+                    "空 DragOverlay 是尚未半透明化的本体克隆；列表里的源项由套件降透明。松手落在右侧后卡片进入容器；拖到空白处放回。"
                 </Label>
                 <DragProvider
                     id="gal-drag-basic"
@@ -529,9 +592,37 @@ pub(crate) fn DragShowcase() -> Element {
                 { builder_drop }
 
                 <Separator />
-                <Label font_weight="600" text_size="0.875rem">"Sortable 列表"</Label>
+                <Label font_weight="600" text_size="0.875rem">"Sortable 列表 · hide_source"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "同列重排 + 拖起时兄弟让位；靠近列表边缘会自动滚。Esc 取消，↑↓ 改插入点。松手 apply_reorder_vec。"
+                    "同列重排 + 兄弟让位；靠近列表边缘会自动滚。Esc 取消，↑↓ 改插入点。源槽 hide_source 留空，浮层是尚未半透明化的本体克隆。松手 apply_reorder_vec。"
+                </Label>
+                <DragProvider
+                    id="gal-drag-sort-hide"
+                    collision="closest-center"
+                    axis="y"
+                    onDragEnd={move |ev: &DragEvent| {
+                        if ev.from_list.as_deref() != Some("planets-hide") {
+                            return;
+                        }
+                        let Some(from) = ev.from_index else { return; };
+                        let mut v = sort_hide.peek();
+                        let to = ev.to_index.unwrap_or(from);
+                        apply_reorder_vec(&mut v, from, to);
+                        sort_hide.set(v);
+                    }}
+                >
+                    <ScrollArea id="gal-drag-sort-hide-scroll" h="11rem" w="100%" overflow_y="auto">
+                        <SortableList id="planets-hide" accept="planet">
+                            { keyed_sortable_chips("gal-drag-sort-hide-rows", sort_hide, "planet", "", "planets-hide", "") }
+                        </SortableList>
+                    </ScrollArea>
+                    <DragOverlay hide_source={true} class="shadow-lg" />
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"Sortable 列表 · 半透明本体"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "同列重排 + 拖起时兄弟让位；靠近列表边缘会自动滚。Esc 取消，↑↓ 改插入点。本体留在列表里降透明（与上方 Droppable 相同），插入点变化时跟到对应槽位。浮层是尚未半透明化的本体克隆，不要再给 DragOverlay 设 opacity。松手 apply_reorder_vec。"
                 </Label>
                 <DragProvider
                     id="gal-drag-sort"
@@ -553,13 +644,13 @@ pub(crate) fn DragShowcase() -> Element {
                             { keyed_sortable_chips("gal-drag-sort-rows", sort_items, "planet", "", "planets", "") }
                         </SortableList>
                     </ScrollArea>
-                    <DragOverlay hide_source={true} />
+                    <DragOverlay class="shadow-lg" />
                 </DragProvider>
 
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"跨容器（Sortable group）"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "两列共享 group=board；松手 apply_transfer。空列也可作为 Droppable 接收。"
+                    "两列共享 group=board。同列半透本体跟插入空洞；跨列时本体平移到目标槽（不要 hide_source）。容器高亮走碰撞 hover_list / from_list（solid-dnd isActiveDroppable），不是 CSS :hover。松手 apply_transfer。"
                 </Label>
                 <DragProvider
                     id="gal-drag-board"
@@ -568,35 +659,21 @@ pub(crate) fn DragShowcase() -> Element {
                 >
                     <HStack gap="0.75rem" w="100%" items="stretch">
                         <Droppable id="todo" list="todo" group="board" accept="task">
-                            <VStack
-                                grow="1"
-                                min_h="8rem"
-                                p="0.5rem"
-                                gap="0.375rem"
-                                rounded="0.5rem"
-                                bg="muted"
-                                w="50%"
-                            >
-                                <Label font_weight="600" text_size="0.75rem">"Todo"</Label>
-                                { keyed_sortable_chips("gal-drag-todo-rows", todo, "task", "board", "todo", "todo") }
-                            </VStack>
+                            { kanban_column(
+                                "todo",
+                                "Todo",
+                                keyed_sortable_chips("gal-drag-todo-rows", todo, "task", "board", "todo", "todo"),
+                            ) }
                         </Droppable>
                         <Droppable id="doing" list="doing" group="board" accept="task">
-                            <VStack
-                                grow="1"
-                                min_h="8rem"
-                                p="0.5rem"
-                                gap="0.375rem"
-                                rounded="0.5rem"
-                                bg="muted"
-                                w="50%"
-                            >
-                                <Label font_weight="600" text_size="0.75rem">"Doing"</Label>
-                                { keyed_sortable_chips("gal-drag-doing-rows", doing, "task", "board", "doing", "doing") }
-                            </VStack>
+                            { kanban_column(
+                                "doing",
+                                "Doing",
+                                keyed_sortable_chips("gal-drag-doing-rows", doing, "task", "board", "doing", "doing"),
+                            ) }
                         </Droppable>
                     </HStack>
-                    <DragOverlay class="opacity-90 shadow-lg" />
+                    <DragOverlay class="shadow-lg" />
                 </DragProvider>
             </VStack>
         </MyCard>
