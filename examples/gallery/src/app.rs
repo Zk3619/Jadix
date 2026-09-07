@@ -181,6 +181,7 @@ pub(crate) fn GallerySectionOverlays() -> Element {
                     <ViewportModalShowcase />
                     <LocalOverlayShowcase />
                     <AnchoredOverlayShowcase />
+                    <DragShowcase />
                     <OverlayFeedbackShowcase />
                     <PrimitivesShowcase />
                 </VStack>

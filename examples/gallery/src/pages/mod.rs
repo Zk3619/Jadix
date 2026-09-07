@@ -1,5 +1,6 @@
 pub(crate) mod basics;
 pub(crate) mod data;
+pub(crate) mod drag;
 pub(crate) mod draw;
 pub(crate) mod events;
 pub(crate) mod forms;
@@ -11,6 +12,7 @@ pub(crate) mod text;
 
 pub(crate) use basics::*;
 pub(crate) use data::*;
+pub(crate) use drag::*;
 pub(crate) use draw::*;
 pub(crate) use events::*;
 pub(crate) use forms::*;

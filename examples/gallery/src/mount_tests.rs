@@ -1312,7 +1312,10 @@ fn overlays_local_scrim_yellow_is_in_capture_prefix() {
                             if rects_intersect(yrect, irect) {
                                 dump.push_str(&format!(
                                     "    band{bi} inst{ii} pos={:?} size={:?} a={:.3} blur={}\n",
-                                    inst.rect_pos, inst.rect_size, inst.color[3], inst.backdrop_blur
+                                    inst.rect_pos,
+                                    inst.rect_size,
+                                    inst.color[3],
+                                    inst.backdrop_blur
                                 ));
                             }
                         }
