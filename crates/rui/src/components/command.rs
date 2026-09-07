@@ -86,6 +86,9 @@ use crate::components::internal::floating_motion::{
 use crate::components::internal::floating_motion::{
     clear_pending_floating_enter, sync_floating_presence,
 };
+use crate::components::internal::modal_motion::{
+    mounted_signal, sync_modal_presence, use_modal_presence,
+};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -310,33 +313,40 @@ fn command_paint(
         "No results found.".to_string()
     });
     let query_sig = use_signal(input_value_signal_key(&filter_id).as_str(), String::new);
-    let painted = with_child_owner(move || {
-        provide_context(
-            command_context(),
-            CommandCtx {
-                id: id.clone(),
-                open,
-                active,
-                visible,
-                empty_msg,
-                placeholder,
-                filter_id: filter_id.clone(),
-                surface,
-            },
-        );
-        let _ = query_sig.get();
-        visible.set(Vec::new());
-        reset_activates(&id);
-        if active.peek() != 0 && visible.peek().is_empty() {
-            active.set_silent(0);
+    let open_now = open.peek();
+    let painted = with_child_owner({
+        let id = id.clone();
+        let filter_id = filter_id.clone();
+        move || {
+            provide_context(
+                command_context(),
+                CommandCtx {
+                    id: id.clone(),
+                    open,
+                    active,
+                    visible,
+                    empty_msg,
+                    placeholder,
+                    filter_id: filter_id.clone(),
+                    surface,
+                },
+            );
+            let _ = query_sig.get();
+            visible.set(Vec::new());
+            reset_activates(&id);
+            // Do not reset `active` here. `visible` was just cleared, so the old
+            // `if active != 0 && visible.is_empty()` always fired and forced index 0
+            // on every rebuild — including Dialog/Overlay close, while exit animation
+            // still shows the list (first-item accent flash).
+            // CommandList clamps `active` after items are collected.
+            // Palette filter focus is applied in `sync_command_item_paint_subtree`
+            // after enter motion is idle — not here, which runs at mount (first
+            // enter frame) and would show the caret during zoom/fade.
+            command_root_shell(surface, take_packed(body()))
         }
-        if is_palette(surface) && open.peek() {
-            use_signal("__rui_button_focus_id", String::new).set(input_focus_id(&filter_id));
-        }
-        command_root_shell(surface, take_packed(body()))
     });
     // DialogContent sets `min_h:0` + `flex_grow:1` on the returned root. Keep intrinsic height on the inner shell so it is not crushed to 0.
-    if surface == CommandSurface::Dialog {
+    let mut painted = if surface == CommandSurface::Dialog {
         vstack()
             .w("100%")
             .min_h(0.0)
@@ -345,6 +355,68 @@ fn command_paint(
             .into()
     } else {
         painted
+    };
+    stamp_command_palette_attrs(&mut painted, &id, surface, open_now, &filter_id);
+    painted
+}
+
+fn stamp_command_palette_attrs(
+    el: &mut Element,
+    id: &str,
+    surface: CommandSurface,
+    open: bool,
+    filter_id: &str,
+) {
+    if !is_palette(surface) {
+        return;
+    }
+    el.set_attr("rui_command_palette", "1");
+    el.set_attr("rui_command_id", id);
+    el.set_attr(
+        "rui_command_surface",
+        match surface {
+            CommandSurface::Dialog => "dialog",
+            CommandSurface::Overlay => "overlay",
+            CommandSurface::Inline => "inline",
+        },
+    );
+    el.set_attr("rui_command_filter", filter_id);
+    el.set_attr("rui_command_open", if open { "1" } else { "0" });
+}
+
+fn command_palette_motion_busy(id: &str, surface: &str) -> bool {
+    match surface {
+        "dialog" => use_modal_presence(id).is_motion_busy(),
+        "overlay" => use_floating_presence(id, FloatingMotionKind::Fade).is_motion_busy(),
+        _ => false,
+    }
+}
+
+fn sync_command_palette_focus(el: &Element) {
+    if el.attrs.get("rui_command_palette").map(String::as_str) != Some("1") {
+        return;
+    }
+    if el.attrs.get("rui_command_open").map(String::as_str) != Some("1") {
+        return;
+    }
+    let Some(id) = el.attrs.get("rui_command_id") else {
+        return;
+    };
+    let Some(filter_id) = el.attrs.get("rui_command_filter") else {
+        return;
+    };
+    let surface = el
+        .attrs
+        .get("rui_command_surface")
+        .map(String::as_str)
+        .unwrap_or("inline");
+    if command_palette_motion_busy(id, surface) {
+        return;
+    }
+    let want = input_focus_id(filter_id);
+    let focus = use_signal("__rui_button_focus_id", String::new);
+    if focus.peek() != want {
+        focus.set(want);
     }
 }
 
@@ -398,12 +470,18 @@ pub fn command_dialog_scope(
     let placeholder = command_placeholder(placeholder);
     let body: Rc<dyn Fn() -> Element> = Rc::new(body);
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__open").as_str(), || false));
+    let presence = use_modal_presence(&id);
     let reset_view = format!("{id}__cmd_reset");
     reactive_anchor(reset_view.clone(), {
         let reset_id = id.clone();
         let open = open;
+        let presence = presence.clone();
         move || {
-            if !open.get() {
+            // Match CommandOverlay: keep highlight stable during exit animation.
+            // Resetting `active` to 0 while the dialog is still mounted forces the
+            // first item accent via `sync_command_item_paint_subtree` (visible flicker).
+            let _ = sync_modal_presence(&presence, open.get());
+            if !mounted_signal(&presence).get() {
                 reset_command_session(&reset_id);
             }
             Element::new()
@@ -970,6 +1048,13 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
 pub fn CommandList(children: Option<Element>) -> Element {
     let ctx = require_command("CommandList");
     let kids = children.map(take_packed).unwrap_or_default();
+    // CommandEmpty is a registrar (copy for the no-results UI). It must not occupy
+    // a flex slot in the list — a 0×0 stub still participates in column layout
+    // once text/min-size resolve, which shoves groups below it downward.
+    let kids: Vec<Element> = kids
+        .into_iter()
+        .filter(|k| k.attrs.get("rui_command_empty_stub").map(String::as_str) != Some("1"))
+        .collect();
     let mut col = vstack()
         .w("100%")
         .gap("0")
@@ -1008,12 +1093,10 @@ pub fn CommandList(children: Option<Element>) -> Element {
     } else if ctx.surface == CommandSurface::Dialog {
         // Dialog hug panel is `max_h: 85dvh`. Input is flex_shrink 0; this list is
         // the only body: leftover height, capped at 18.75rem, never taller than the card.
-        sa = sa
-            .h("auto")
-            .min_h(0.0)
-            .flex_grow(1.0)
-            .flex_shrink(1.0)
-            .hover_mode("area");
+        // Hover mode stays the ScrollArea default (`scrollbar`): item hover must not
+        // latch overlay-bar visibility (`area` never auto-hides while the pointer is
+        // on a CommandItem, which fills the list).
+        sa = sa.h("auto").min_h(0.0).flex_grow(1.0).flex_shrink(1.0);
     } else {
         sa = sa.h("auto").flex_shrink(0.0);
     }
@@ -1052,7 +1135,10 @@ pub fn CommandEmpty(children: Option<Element>) -> Element {
     if ctx.empty_msg.peek() != msg {
         ctx.empty_msg.set(msg);
     }
-    Element::new().w(0.0).h(0.0)
+    let mut stub = Element::new().w(0.0).h(0.0);
+    stub.set_attr("data-slot", "command-empty");
+    stub.set_attr("rui_command_empty_stub", "1");
+    stub
 }
 
 /// `CommandGroup`: `p-1` + heading (`text-xs text-muted-foreground`); hidden when filtering leaves no items.
@@ -1279,6 +1365,7 @@ pub(crate) fn sync_command_item_paint_subtree(
     impact: &mut LayoutStatus,
 ) {
     crate::core::tree::walk_elements_mut(el, |el| {
+        sync_command_palette_focus(el);
         if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
             let disabled = el.attrs.get("rui_command_disabled").map(String::as_str) == Some("1");
             let ix = el
@@ -2111,6 +2198,52 @@ mod tests {
         });
     }
 
+    #[test]
+    fn command_dialog_session_reset_waits_for_unmount() {
+        use crate::components::internal::modal_motion::{
+            mounted_signal, sync_modal_presence, use_modal_presence,
+        };
+        use crate::utils::presence::PresencePhase;
+
+        let _owner = create_root(|| {
+            let id = "cmd-reset-wait";
+            let filter_id = format!("{id}__filter");
+            let open = use_signal(format!("{id}__open").as_str(), || true);
+            let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize);
+            use_signal(input_value_signal_key(&filter_id).as_str(), String::new)
+                .set("query".into());
+            active.set(2);
+            let presence = use_modal_presence(id);
+
+            sync_modal_presence(&presence, true);
+            assert!(mounted_signal(&presence).get());
+
+            open.set(false);
+            assert_eq!(
+                sync_modal_presence(&presence, false),
+                PresencePhase::Exiting
+            );
+            assert!(
+                mounted_signal(&presence).get(),
+                "dialog must stay mounted during exit animation"
+            );
+            assert_eq!(active.get(), 2, "active must not reset while still mounted");
+            assert_eq!(
+                use_signal(input_value_signal_key(&filter_id).as_str(), String::new).get(),
+                "query",
+                "filter must not clear while still mounted"
+            );
+
+            mounted_signal(&presence).set(false);
+            reset_command_session(id);
+            assert_eq!(active.get(), 0);
+            assert_eq!(
+                use_signal(input_value_signal_key(&filter_id).as_str(), String::new).get(),
+                ""
+            );
+        });
+    }
+
     fn walk_cmd<'a>(el: &'a Element, f: &mut impl FnMut(&'a Element)) {
         f(el);
         for c in &el.children {
@@ -2126,6 +2259,201 @@ mod tests {
             }
         });
         found.expect("command-item")
+    }
+
+    fn three_item_command_body() -> Rc<dyn Fn() -> Element> {
+        Rc::new(|| {
+            let mk = |value: &str, label: &str| {
+                CommandItem(CommandItemProps {
+                    value: Some(value.into()),
+                    disabled: None,
+                    checked: None,
+                    on_click: None,
+                    children: Some(Element::new().text(label)),
+                    base: None,
+                })
+            };
+            let mut list_kids = Element::new();
+            list_kids.set_attr("rui_fragment", "1");
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                CommandInput(CommandInputProps {
+                    placeholder: None,
+                    children: None,
+                    base: None,
+                }),
+                CommandList(CommandListProps {
+                    children: Some(list_kids.children(vec![
+                        mk("a", "Alpha"),
+                        mk("b", "Beta"),
+                        mk("c", "Gamma"),
+                    ])),
+                    base: None,
+                }),
+            ])
+        })
+    }
+
+    fn collect_cmd_items(root: &Element) -> Vec<&Element> {
+        let mut out = Vec::new();
+        walk_cmd(root, &mut |el| {
+            if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+                out.push(el);
+            }
+        });
+        out
+    }
+
+    #[test]
+    fn command_paint_rebuild_does_not_force_first_item_active() {
+        let body = three_item_command_body();
+        let (_owner, root) = create_root({
+            let body = body.clone();
+            move || {
+                let open = Signal::new(true);
+                let id = "cmd-keep-ix";
+                let _ = command_paint(
+                    id.into(),
+                    open,
+                    "q".into(),
+                    CommandSurface::Dialog,
+                    body.clone(),
+                );
+                use_signal(format!("{id}__cmd_active").as_str(), || 0usize).set_silent(2);
+                command_paint(id.into(), open, "q".into(), CommandSurface::Dialog, body)
+            }
+        });
+        assert_eq!(
+            use_signal("cmd-keep-ix__cmd_active", || 0usize).peek(),
+            2,
+            "close/rebuild must keep the hovered index; resetting to 0 paints the first row accent"
+        );
+        let items = collect_cmd_items(&root);
+        assert_eq!(items.len(), 3);
+        let accent = parse_color("accent");
+        assert_ne!(
+            items[0].style.bg_color, accent,
+            "first item must not take hover accent after rebuild"
+        );
+        assert_eq!(
+            items[2].style.bg_color, accent,
+            "active index 2 must keep accent through rebuild"
+        );
+    }
+
+    #[test]
+    fn command_dialog_list_scrollbar_hover_is_not_area() {
+        use crate::core::scroll_viewport::scroll_hover_mode_signal_key;
+        let (_owner, _) = create_root(|| {
+            let _ = command_paint(
+                "cmd-hover-mode".into(),
+                Signal::new(true),
+                "q".into(),
+                CommandSurface::Dialog,
+                three_item_command_body(),
+            );
+            let mode = use_signal(&scroll_hover_mode_signal_key("cmd-hover-mode:list"), || {
+                "missing".to_string()
+            })
+            .peek();
+            assert_eq!(
+                mode, "scrollbar",
+                "CommandDialog list must not use hover_mode=area (item hover would latch the bar)"
+            );
+        });
+    }
+
+    #[test]
+    fn command_dialog_does_not_focus_filter_during_enter() {
+        use crate::components::internal::modal_motion::{
+            clear_pending_modal_enter, sync_modal_presence, use_modal_presence,
+        };
+        let (_owner, _) = create_root(|| {
+            let id = "cmd-focus-enter";
+            let open = Signal::new(true);
+            let presence = use_modal_presence(id);
+            sync_modal_presence(&presence, true);
+            assert!(
+                presence.is_motion_busy(),
+                "opening a dialog must arm enter motion"
+            );
+            use_signal("__rui_button_focus_id", String::new).set(String::new());
+            let mut root = command_paint(
+                id.into(),
+                open,
+                "q".into(),
+                CommandSurface::Dialog,
+                three_item_command_body(),
+            );
+            let want = input_focus_id(&format!("{id}__filter"));
+            assert_ne!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "command_paint must not focus the filter on the enter frame"
+            );
+            let mut tree = LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
+            assert_ne!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "paint sync must not focus the filter while enter is busy"
+            );
+            clear_pending_modal_enter(&presence);
+            sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
+            assert_eq!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "filter focuses only after enter motion is idle"
+            );
+        });
+    }
+
+    #[test]
+    fn command_overlay_does_not_focus_filter_during_enter() {
+        use crate::components::internal::floating_motion::{
+            clear_pending_floating_enter, sync_floating_presence, use_floating_presence,
+        };
+        let (_owner, _) = create_root(|| {
+            let id = "cmd-focus-overlay";
+            let open = Signal::new(true);
+            let presence = use_floating_presence(id, FloatingMotionKind::Fade);
+            sync_floating_presence(&presence, true);
+            assert!(
+                presence.is_motion_busy(),
+                "opening an overlay must arm enter motion"
+            );
+            use_signal("__rui_button_focus_id", String::new).set(String::new());
+            let mut root = command_paint(
+                id.into(),
+                open,
+                "q".into(),
+                CommandSurface::Overlay,
+                three_item_command_body(),
+            );
+            let want = input_focus_id(&format!("{id}__filter"));
+            assert_ne!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "command_paint must not focus the overlay filter on the enter frame"
+            );
+            let mut tree = LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
+            assert_ne!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "paint sync must not focus the overlay filter while enter is busy"
+            );
+            clear_pending_floating_enter(&presence);
+            sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
+            assert_eq!(
+                use_signal("__rui_button_focus_id", String::new).peek(),
+                want,
+                "overlay filter focuses only after enter motion is idle"
+            );
+        });
     }
 
     #[test]
@@ -2266,6 +2594,217 @@ mod tests {
                 }),
             ])
         })
+    }
+
+    /// Gallery CommandDialog body: CommandEmpty registrar + shortcut pills on Settings/File.
+    fn gallery_command_dialog_body() -> Rc<dyn Fn() -> Element> {
+        Rc::new(|| {
+            let mk_item = |value: &str, label: &str| {
+                CommandItem(CommandItemProps {
+                    value: Some(value.into()),
+                    disabled: None,
+                    checked: None,
+                    on_click: None,
+                    children: Some(Element::new().text(label)),
+                    base: None,
+                })
+            };
+            let mk_shortcut_item = |value: &str, label: &str, keys: &str| {
+                let mut kids = Element::new();
+                kids.set_attr("rui_fragment", "1");
+                CommandItem(CommandItemProps {
+                    value: Some(value.into()),
+                    disabled: None,
+                    checked: None,
+                    on_click: None,
+                    children: Some(kids.children(vec![
+                        Element::new().text(label),
+                        CommandShortcut(CommandShortcutProps {
+                            children: Some(Element::new().text(keys)),
+                            base: None,
+                        }),
+                    ])),
+                    base: None,
+                })
+            };
+            let group = |heading: &str, items: Vec<Element>| {
+                let mut grp_kids = Element::new();
+                grp_kids.set_attr("rui_fragment", "1");
+                CommandGroup(CommandGroupProps {
+                    heading: Some(heading.into()),
+                    children: Some(grp_kids.children(items)),
+                    base: None,
+                })
+            };
+            let mut list_kids = Element::new();
+            list_kids.set_attr("rui_fragment", "1");
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                CommandInput(CommandInputProps {
+                    placeholder: None,
+                    children: None,
+                    base: None,
+                }),
+                CommandList(CommandListProps {
+                    children: Some(list_kids.children(vec![
+                        CommandEmpty(CommandEmptyProps {
+                            children: Some(Element::new().text("No results found.")),
+                            base: None,
+                        }),
+                        group(
+                            "Suggestions",
+                            vec![
+                                mk_item("toast", "Show toast"),
+                                mk_item("calendar", "Calendar"),
+                                mk_item("emoji", "Search Emoji"),
+                                mk_item("calc", "Calculator"),
+                            ],
+                        ),
+                        CommandSeparator(CommandSeparatorProps {
+                            children: None,
+                            base: None,
+                        }),
+                        group(
+                            "Settings",
+                            vec![
+                                mk_shortcut_item("profile", "Profile", "⌘P"),
+                                mk_shortcut_item("billing", "Billing", "⌘B"),
+                                mk_shortcut_item("settings", "Settings", "⌘S"),
+                            ],
+                        ),
+                        CommandSeparator(CommandSeparatorProps {
+                            children: None,
+                            base: None,
+                        }),
+                        group(
+                            "File",
+                            vec![
+                                mk_shortcut_item("new-file", "New File", "⌘N"),
+                                mk_shortcut_item("open", "Open...", "⌘O"),
+                                mk_shortcut_item("save", "Save", "⌘S"),
+                            ],
+                        ),
+                    ])),
+                    base: None,
+                }),
+            ])
+        })
+    }
+
+    fn layout_command_dialog_host(modal_id: &str, body: Rc<dyn Fn() -> Element>) -> Element {
+        use crate::components::base::SlotChrome;
+        use crate::components::dialog::dialog_shell_frame;
+        use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
+        use crate::components::internal::modal_shell::{
+            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        };
+        use crate::utils::presence::PresencePhase;
+
+        let open = Signal::new(true);
+        let handle = use_modal_presence(modal_id);
+        sync_modal_presence(&handle, true);
+        let zs = modal_sync(modal_id, open).expect("modal_sync");
+        let overlay_opts = ShellOverlayOpts {
+            color: default_modal_overlay_color(None, Some(0.5)),
+            close_on_click: true,
+            backdrop_blur: 0.0,
+        };
+        let inner = command_paint(
+            modal_id.into(),
+            open,
+            "search".into(),
+            CommandSurface::Dialog,
+            body,
+        );
+        let shell = dialog_shell_frame(
+            modal_id,
+            open,
+            &zs,
+            inner,
+            &overlay_opts,
+            None,
+            true,
+            &handle,
+            PresencePhase::Present,
+            None,
+            None,
+            None,
+            None,
+            SlotChrome::default(),
+        );
+        Element::new().w("100%").h("100%").child(shell)
+    }
+
+    fn item_bounds_by_value(root: &Element, value: &str) -> Option<[f32; 4]> {
+        let mut found = None;
+        walk_cmd(root, &mut |el| {
+            if el.attrs.get("data-slot").map(String::as_str) != Some("command-item") {
+                return;
+            }
+            // CommandItem doesn't stamp `value` on the node; match by first text leaf.
+            if crate::core::tree::first_text_leaf(el) == value {
+                found = Some(el.layout_bounds);
+            }
+        });
+        found
+    }
+
+    #[test]
+    fn command_dialog_gallery_settings_items_stable_across_layouts() {
+        clear_overlay_stack();
+        let modal_id = "cmd-dlg-settings-jump";
+        let (_owner, mut host) =
+            create_root(|| layout_command_dialog_host(modal_id, gallery_command_dialog_body()));
+        assert!(hoist_portal_subtrees(&mut host) >= 2);
+
+        let mut empty_stub_h = None;
+        walk_cmd(&host, &mut |el| {
+            if el.attrs.get("rui_command_empty_stub").map(String::as_str) == Some("1") {
+                empty_stub_h = Some(el.layout_bounds[3]);
+            }
+        });
+        assert!(
+            empty_stub_h.is_none(),
+            "CommandEmpty registrar must not stay in the list layout (would push groups down)"
+        );
+
+        let layout_once = |host: &mut Element| {
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(host, 800.0, 600.0, [-1.0, -1.0]);
+            (
+                item_bounds_by_value(host, "Profile").expect("Profile"),
+                item_bounds_by_value(host, "Billing").expect("Billing"),
+                item_bounds_by_value(host, "Settings").expect("Settings item"),
+                item_bounds_by_value(host, "New File").expect("New File"),
+            )
+        };
+
+        let first = layout_once(&mut host);
+        let second = layout_once(&mut host);
+        for (name, a, b) in [
+            ("Profile", first.0, second.0),
+            ("Billing", first.1, second.1),
+            ("Settings", first.2, second.2),
+            ("New File", first.3, second.3),
+        ] {
+            assert!(
+                (a[1] - b[1]).abs() < 0.5,
+                "{name} y jumped across layouts: {a:?} -> {b:?}"
+            );
+        }
+        let profile_gap = first.1[1] - (first.0[1] + first.0[3]);
+        let billing_to_settings = first.2[1] - (first.1[1] + first.1[3]);
+        assert!(
+            (profile_gap - billing_to_settings).abs() < 1.0,
+            "Settings-group rows must share the same inter-item gap; got profile→billing={profile_gap} billing→settings={billing_to_settings}"
+        );
+        let settings_to_file = first.3[1] - (first.2[1] + first.2[3]);
+        assert!(
+            settings_to_file > 0.0,
+            "File group must sit below Settings, gap={settings_to_file}"
+        );
+        clear_overlay_stack();
     }
 
     #[test]

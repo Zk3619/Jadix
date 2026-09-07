@@ -3,6 +3,7 @@ pub mod anchored_overlay;
 pub mod block_on;
 pub mod clipboard;
 pub mod controlled;
+pub mod drag;
 pub mod drag_reorder;
 pub mod element_pack;
 pub mod file_dialog;

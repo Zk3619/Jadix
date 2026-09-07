@@ -45,9 +45,10 @@ pub fn drag_insert_index_after_remove(from: usize, hover: usize) -> usize {
     }
 }
 
-/// 按 [`drag_insert_index_after_remove`] 将 `from` 移到 `hover` 行位置（`hover` 为按下前的列表下标）。
+/// 按 [`drag_insert_index_after_remove`] 将 `from` 移到 `hover` 行位置（`hover` 为按下前的列表下标；
+/// `hover == items.len()` 表示插到末尾）。
 pub fn apply_reorder_vec<T>(items: &mut Vec<T>, from: usize, hover: usize) {
-    if from >= items.len() || hover >= items.len() {
+    if from >= items.len() || hover > items.len() {
         return;
     }
     if from == hover {
@@ -91,6 +92,13 @@ mod tests {
         let mut v = vec![0, 1, 2, 3];
         apply_reorder_vec(&mut v, 3, 0);
         assert_eq!(v, vec![3, 0, 1, 2]);
+    }
+
+    #[test]
+    fn apply_reorder_head_to_end() {
+        let mut v = vec![0, 1, 2];
+        apply_reorder_vec(&mut v, 0, 3);
+        assert_eq!(v, vec![1, 2, 0]);
     }
 
     #[test]

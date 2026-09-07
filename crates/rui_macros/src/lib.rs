@@ -918,6 +918,14 @@ fn expand_node(
                 || name_str == "AnchoredOverlayContent"
                 || name_str == "ViewportModal"
                 || name_str == "ViewportModalContent"
+                || name_str == "DragProvider"
+                || name_str == "Draggable"
+                || name_str == "Droppable"
+                || name_str == "DragOverlay"
+                || name_str == "DragHandle"
+                || name_str == "DragIgnore"
+                || name_str == "SortableList"
+                || name_str == "SortableItem"
                 || name_str == "HoverCard"
                 || name_str == "HoverCardContent"
                 || name_str == "Progress"
@@ -2055,6 +2063,110 @@ fn expand_node(
                     };
                     return quote! {
                         rui::utils::anchored_overlay::anchored_overlay_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "DragProvider" {
+                    let id_expr = get_attr("id");
+                    let collision = get_attr("collision")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "most-intersecting".to_string() });
+                    let axis = get_attr("axis")
+                        .or_else(|| get_attr("direction"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "xy".to_string() });
+                    let threshold = get_attr("threshold")
+                        .map(|e| quote_unitless_f32(e))
+                        .unwrap_or_else(|| quote! { 4.0f32 });
+                    let restrict = get_attr("restrict")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let delay_ms = get_attr("delay_ms")
+                        .or_else(|| get_attr("delayMs"))
+                        .map(|e| quote_unitless_f32(e))
+                        .unwrap_or_else(|| quote! { 0.0f32 });
+                    let empty_insert = get_attr("empty_insert")
+                        .or_else(|| get_attr("emptyInsert"))
+                        .map(|e| quote_unitless_f32(e))
+                        .unwrap_or_else(|| quote! { 8.0f32 });
+                    let autoscroll = get_attr("autoscroll")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let on_end = get_attr("on_drag_end").or_else(|| get_attr("onDragEnd"));
+                    let on_start = get_attr("on_drag_start").or_else(|| get_attr("onDragStart"));
+                    let on_over = get_attr("on_drag_over").or_else(|| get_attr("onDragOver"));
+                    let on_move = get_attr("on_drag_move").or_else(|| get_attr("onDragMove"));
+                    let can_drop = get_attr("can_drop").or_else(|| get_attr("canDrop"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:DragProvider#{}", file!(), line!(), #idx) }
+                    };
+                    let on_end_ts = if let Some(h) = on_end {
+                        quote! { __b = __b.on_drag_end(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_start_ts = if let Some(h) = on_start {
+                        quote! { __b = __b.on_drag_start(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_over_ts = if let Some(h) = on_over {
+                        quote! { __b = __b.on_drag_over(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_move_ts = if let Some(h) = on_move {
+                        quote! { __b = __b.on_drag_move(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let can_drop_ts = if let Some(h) = can_drop {
+                        quote! { __b = __b.can_drop(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    return quote! {
+                        {
+                            let mut __b = rui::utils::drag::drag_scope(#id_ts);
+                            __b = __b.collision(rui::utils::drag::CollisionAlg::parse(&(#collision)));
+                            __b = __b.axis(rui::utils::drag::Axis::parse(&(#axis)));
+                            __b = __b.threshold(#threshold);
+                            __b = __b.restrict(rui::utils::drag::Restrict::parse(&(#restrict)));
+                            __b = __b.delay_ms(#delay_ms);
+                            __b = __b.empty_insert(#empty_insert);
+                            __b = __b.autoscroll(#autoscroll);
+                            #on_start_ts
+                            #on_over_ts
+                            #on_move_ts
+                            #on_end_ts
+                            #can_drop_ts
+                            __b.child(|| #child_el)
+                        }
                     };
                 }
 
@@ -4344,6 +4456,300 @@ fn expand_node(
                             },
                             move || #child_el,
                         )
+                    };
+                }
+
+                if name_str == "Draggable" || name_str == "SortableItem" {
+                    let id_expr = get_attr("id");
+                    let item_type = get_attr("item_type")
+                        .or_else(|| get_attr("itemType"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let group = get_attr("group")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let list = get_attr("list")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let index = get_attr("index")
+                        .map(|e| quote! { Some((#e) as usize) })
+                        .unwrap_or_else(|| quote! { None });
+                    let accept = get_attr("accept")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let disabled = get_attr("disabled")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let handle_only = get_attr("handle")
+                        .or_else(|| get_attr("handle_only"))
+                        .or_else(|| get_attr("handleOnly"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:{}#{}", file!(), line!(), #name_str, #idx) }
+                    };
+                    let also = if name_str == "SortableItem" {
+                        quote! { true }
+                    } else {
+                        quote! { false }
+                    };
+                    return quote! {
+                        rui::utils::drag::draggable_from_rsx(
+                            rui::utils::drag::DraggableRsxOpts {
+                                id: #id_ts,
+                                item_type: #item_type,
+                                group: #group,
+                                list: #list,
+                                index: #index,
+                                disabled: #disabled,
+                                handle_only: #handle_only,
+                                also_droppable: #also,
+                                accept: #accept,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "Droppable" || name_str == "SortableList" {
+                    let id_expr = get_attr("id");
+                    let accept = get_attr("accept")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let group = get_attr("group")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { String::new() });
+                    let list = get_attr("list")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| {
+                            if name_str == "SortableList" {
+                                if let Some(id) = get_attr("id") {
+                                    quote! { Some((#id).to_string()) }
+                                } else {
+                                    quote! { None }
+                                }
+                            } else {
+                                quote! { None }
+                            }
+                        });
+                    let disabled = get_attr("disabled")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:{}#{}", file!(), line!(), #name_str, #idx) }
+                    };
+                    return quote! {
+                        rui::utils::drag::droppable_from_rsx(
+                            rui::utils::drag::DroppableRsxOpts {
+                                id: #id_ts,
+                                accept: #accept,
+                                group: #group,
+                                list: #list,
+                                disabled: #disabled,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "DragOverlay" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_ts = if expanded_children.is_empty() {
+                        quote! {}
+                    } else {
+                        quote! {
+                            .child(move || {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            })
+                        }
+                    };
+                    let mut style_stmts = Vec::new();
+                    if let Some(class) = get_attr("class")
+                        .or_else(|| get_attr("className"))
+                        .or_else(|| get_attr("tw"))
+                        .or_else(|| get_attr("uno"))
+                    {
+                        style_stmts.push(quote_apply_class_list(class));
+                    }
+                    if let Some(op) = get_attr("opacity") {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.opacity(rui::core::tree::IntoF32::into_f32(#op));
+                        });
+                    }
+                    if let Some(bg) = get_attr("bg") {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.bg(rui::core::tree::parse_color(#bg));
+                        });
+                    }
+                    if let Some(rounded) = get_attr("rounded")
+                        .or_else(|| get_attr("radius"))
+                        .or_else(|| get_attr("border_radius"))
+                        .or_else(|| get_attr("borderRadius"))
+                    {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.rounded(rui::core::tree::IntoF32::into_f32(#rounded));
+                        });
+                    }
+                    if let Some(shadow) = get_attr("box_shadow").or_else(|| get_attr("boxShadow")) {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.box_shadow(#shadow);
+                        });
+                    }
+                    if let Some(p) = get_attr("p") {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.p(#p);
+                        });
+                    }
+                    if let Some(w) = get_attr("w").or_else(|| get_attr("width")) {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.w(#w);
+                        });
+                    }
+                    if let Some(h) = get_attr("h").or_else(|| get_attr("height")) {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.h(#h);
+                        });
+                    }
+                    let style_ts = if style_stmts.is_empty() {
+                        quote! {}
+                    } else {
+                        quote! {
+                            .style(move |__rui_el| {
+                                let mut __rui_el = __rui_el;
+                                #(#style_stmts)*
+                                __rui_el
+                            })
+                        }
+                    };
+                    let hide_source_ts = if let Some(v) =
+                        get_attr("hide_source").or_else(|| get_attr("hideSource"))
+                    {
+                        quote! { .hide_source(#v) }
+                    } else {
+                        quote! {}
+                    };
+                    return quote! {
+                        rui::core::tree::Element::from(
+                            rui::utils::drag::drag_overlay()
+                                #child_ts
+                                #style_ts
+                                #hide_source_ts
+                        )
+                    };
+                }
+
+                if name_str == "DragHandle" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::utils::drag::drag_handle_from_rsx(|| #child_el)
+                    };
+                }
+
+                if name_str == "DragIgnore" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::utils::drag::drag_ignore_from_rsx(|| #child_el)
                     };
                 }
 
@@ -8658,6 +9064,97 @@ mod rsx_lowering_tests {
         let s = expand(r#"<Box drag_reorder_handle={list_id} drag_reorder_index={i}></Box>"#);
         assert!(s.contains("drag_reorder_handle"), "{s}");
         assert!(s.contains("as usize"), "{s}");
+    }
+
+    #[test]
+    fn drag_drop_provider_emits_drag_scope() {
+        let s = expand(
+            r#"<DragProvider id="kanban" collision="closest-center" onDragEnd={on_end}><Draggable id="a">"x"</Draggable></DragProvider>"#,
+        );
+        assert!(s.contains("drag_scope"), "{s}");
+        assert!(s.contains("CollisionAlg"), "{s}");
+        assert!(s.contains("on_drag_end"), "{s}");
+        assert!(s.contains("draggable_from_rsx"), "{s}");
+    }
+
+    #[test]
+    fn droppable_and_overlay_emit_builders() {
+        let s = expand(
+            r#"<DragProvider id="p"><Droppable id="z" accept="card"><Label>"z"</Label></Droppable><DragOverlay><Label>"g"</Label></DragOverlay></DragProvider>"#,
+        );
+        assert!(s.contains("droppable_from_rsx"), "{s}");
+        assert!(s.contains("drag_overlay"), "{s}");
+        assert!(s.contains("child"), "{s}");
+    }
+
+    #[test]
+    fn empty_drag_overlay_emits_style_without_child_body() {
+        let s = expand(
+            r#"<DragProvider id="p"><DragOverlay opacity={0.9} class="shadow-lg"></DragOverlay></DragProvider>"#,
+        );
+        assert!(s.contains("drag_overlay"), "{s}");
+        assert!(s.contains("style"), "{s}");
+        assert!(s.contains("opacity"), "{s}");
+        assert!(s.contains("with_class_list"), "{s}");
+        assert!(
+            !s.contains("drag_overlay_from_rsx"),
+            "empty overlay must not inject a dummy child: {s}"
+        );
+    }
+
+    #[test]
+    fn drag_overlay_hide_source_emits_builder_call() {
+        let s = expand(
+            r#"<DragProvider id="p"><DragOverlay hide_source={true}></DragOverlay></DragProvider>"#,
+        );
+        assert!(s.contains("hide_source"), "{s}");
+        assert!(s.contains("true"), "{s}");
+    }
+
+    #[test]
+    fn sortable_item_sets_also_droppable() {
+        let s = expand(
+            r#"<SortableItem id="row" index={i} list="todo"><Label>"r"</Label></SortableItem>"#,
+        );
+        assert!(s.contains("also_droppable"), "{s}");
+        assert!(s.contains("true"), "{s}");
+        assert!(s.contains("draggable_from_rsx"), "{s}");
+    }
+
+    #[test]
+    fn drag_handle_emits_builder() {
+        let s = expand(
+            r#"<Draggable id="a" handle={true}><DragHandle><Label>"grip"</Label></DragHandle></Draggable>"#,
+        );
+        assert!(s.contains("handle_only"), "{s}");
+        assert!(s.contains("drag_handle_from_rsx"), "{s}");
+    }
+
+    #[test]
+    fn drag_ignore_emits_builder() {
+        let s = expand(
+            r#"<Draggable id="a"><DragIgnore><Button>"x"</Button></DragIgnore></Draggable>"#,
+        );
+        assert!(s.contains("drag_ignore_from_rsx"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_delay_and_autoscroll() {
+        let s = expand(
+            r#"<DragProvider id="p" delay_ms={200} empty_insert={12} autoscroll={false} canDrop={ok} onDragMove={mv}></DragProvider>"#,
+        );
+        assert!(s.contains("delay_ms"), "{s}");
+        assert!(s.contains("empty_insert"), "{s}");
+        assert!(s.contains("autoscroll"), "{s}");
+        assert!(s.contains("can_drop"), "{s}");
+        assert!(s.contains("on_drag_move"), "{s}");
+    }
+
+    #[test]
+    fn sortable_list_defaults_list_to_id() {
+        let s = expand(r#"<SortableList id="todo"><Label>"x"</Label></SortableList>"#);
+        assert!(s.contains("droppable_from_rsx"), "{s}");
+        assert!(s.contains("todo"), "{s}");
     }
 
     #[test]

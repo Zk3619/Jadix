@@ -14,6 +14,8 @@ pub enum DragKind {
     Resizable,
     /// Point-mode [`crate::utils::anchored_overlay`] title-bar drag.
     FloatingPanel,
+    /// Headless drag kit ([`crate::utils::drag`]) — payload / sortable session.
+    Scope,
 }
 
 #[derive(Clone, Debug)]
