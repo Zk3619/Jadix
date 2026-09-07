@@ -199,19 +199,22 @@ fn test_reconcile_subtree(
         let root = c.borrow().as_ref()?.clone();
         let mut root = root.borrow_mut();
         let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
-        if let Some(slot) = find_template_id_mut(&mut root, &want) {
-            let needs_portal_hoist = element_contains_rui_portal(&new_fragment);
+        let mut new_fragment = new_fragment;
+        let Some(needs_portal_hoist) = find_template_id_mut(&mut root, &want).map(|slot| {
+            // Match AppState::reconcile_subtree: identity-reconcile then assign.
+            // Wholesale `*slot = fresh` hid slot↔portal pairing (equal child len).
+            let _ = crate::app::test_support::reconcile_elements(&mut new_fragment, slot);
+            let needs = element_contains_rui_portal(&new_fragment);
             *slot = new_fragment;
-            // Match AppState: nested SubContent portals must leave overflow parents
-            // in the same reconcile turn (gallery Share submenu).
-            if needs_portal_hoist {
-                let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
-            }
-            Some(crate::core::tree::LayoutStatus::StructureChanged)
-        } else {
+            needs
+        }) else {
             // Match AppState: miss must not look like a successful apply.
-            None
+            return None;
+        };
+        if needs_portal_hoist {
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
         }
+        Some(crate::core::tree::LayoutStatus::StructureChanged)
     })
 }
 

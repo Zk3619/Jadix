@@ -30,10 +30,7 @@ fn collect_scroll_rests(
 /// 500ms) must not win over a Dialog that just opened: on Windows `request_redraw`
 /// is often coalesced, so the loop would sleep until that timer — a first-open
 /// empty wait, while later opens already have a live WM_PAINT pump.
-pub(crate) fn idle_control_flow(
-    next_wake: Option<Instant>,
-    force_immediate: bool,
-) -> ControlFlow {
+pub(crate) fn idle_control_flow(next_wake: Option<Instant>, force_immediate: bool) -> ControlFlow {
     if force_immediate {
         ControlFlow::Poll
     } else if let Some(deadline) = next_wake {
@@ -536,6 +533,21 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Drag kit: keep edge auto-scroll alive while the pointer is held still.
+        if crate::utils::drag::is_active() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                let size = state.window.inner_size();
+                let scale = state.window.scale_factor() as f32;
+                let vp = [
+                    size.width as f32 / scale.max(1.0),
+                    size.height as f32 / scale.max(1.0),
+                ];
+                if crate::utils::drag::pump_autoscroll(&state.root_element, vp) {
+                    state.window.request_redraw();
+                }
+            }
+        }
+
         // HoverCard openDelay / closeDelay（Solid 式 UI 线程定时器）。
         if crate::components::hover_card::tick_hover_card() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -557,8 +569,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // `WaitUntil` (~500ms) cannot be the next wake.
         let force_immediate =
             crate::components::internal::modal_motion::take_modal_force_immediate_wake();
-        if force_immediate
-            || crate::components::internal::modal_motion::any_modal_css_needs_frame()
+        if force_immediate || crate::components::internal::modal_motion::any_modal_css_needs_frame()
         {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();

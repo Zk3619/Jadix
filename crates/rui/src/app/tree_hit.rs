@@ -385,7 +385,7 @@ pub(super) fn visual_xy(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
 /// Pointer / `:hover` must use the scaled box. Unscaled layout hit + `hover:scale-*`
 /// leaves a ring where enter/leave oscillates and CSS tweens never settle.
 #[inline]
-pub(super) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+pub(crate) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
     let sx = if el.style.scale[0].is_finite() && el.style.scale[0] > 0.0 {
@@ -404,6 +404,22 @@ pub(super) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     let sw = b[2] * sx;
     let sh = b[3] * sy;
     [vx + (b[2] - sw) * 0.5, vy + (b[3] - sh) * 0.5, sw, sh]
+}
+
+/// Pointer-space **layout slot**: scroll + sticky, no CSS `translate` / `scale`.
+///
+/// Drag collision and sortable insert-index must use this. Preview shift writes
+/// `translate` on siblings; if hits follow the moving paint boxes, `hover_index`
+/// chases them and live reordering collapses.
+#[inline]
+pub(crate) fn collision_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    let b = el.layout_bounds;
+    [
+        b[0] - scroll_acc[0] + el.sticky_visual_offset[0],
+        b[1] - scroll_acc[1] + el.sticky_visual_offset[1],
+        b[2],
+        b[3],
+    ]
 }
 
 /// Visual border box for hit-testing / inspector pick.

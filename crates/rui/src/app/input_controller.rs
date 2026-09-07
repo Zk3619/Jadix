@@ -302,6 +302,38 @@ impl super::App {
 
                 if allow_primary_tree
                     && event.state == ElementState::Pressed
+                    && crate::utils::drag::is_active()
+                {
+                    match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            let _ = crate::utils::drag::cancel();
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                            return true;
+                        }
+                        Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowRight) => {
+                            if crate::utils::drag::nudge_insert(1) {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
+                                return true;
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowLeft) => {
+                            if crate::utils::drag::nudge_insert(-1) {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if allow_primary_tree
+                    && event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
                 {
                     let closed = crate::app::portal_overlay::try_close_top()

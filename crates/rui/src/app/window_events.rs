@@ -1158,6 +1158,20 @@ impl super::App {
         if drawer_dragging {
             state.mark_full_redraw();
         }
+        let (drag_hits, drag_viewport) = if crate::utils::drag::is_dragging() {
+            let hits = crate::utils::drag::collect_hits(&state.root_element);
+            let size = state.window.inner_size();
+            let scale = state.window.scale_factor() as f32;
+            (
+                hits,
+                [
+                    size.width as f32 / scale.max(1.0),
+                    size.height as f32 / scale.max(1.0),
+                ],
+            )
+        } else {
+            (Vec::new(), [0.0_f32, 0.0])
+        };
 
         drop(state_borrow);
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
@@ -1201,12 +1215,22 @@ impl super::App {
         let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
         let floating_panel_dragging =
             crate::utils::anchored_overlay::tick_floating_panel_drag(x, y);
+        let drag_dragging = crate::utils::drag::tick(x, y, &drag_hits, drag_viewport);
+        let drag_scrolled = if crate::utils::drag::is_active() {
+            (*self.state.borrow()).as_ref().is_some_and(|st| {
+                crate::utils::drag::pump_autoscroll(&st.root_element, drag_viewport)
+            })
+        } else {
+            false
+        };
         if slider_dragging
             || toast_dragging
             || color_dragging
             || carousel_dragging
             || resizable_dragging
             || floating_panel_dragging
+            || drag_dragging
+            || drag_scrolled
             || drawer_dragging
             || crate::components::internal::modal_motion::tick_modal_presence()
             || crate::components::internal::floating_motion::tick_floating_presence()
@@ -1319,6 +1343,7 @@ impl super::App {
             && !crate::components::color_picker::is_color_dragging()
             && !crate::components::resizable::is_resizable_dragging()
             && !crate::utils::anchored_overlay::is_floating_panel_dragging()
+            && !crate::utils::drag::is_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -1401,7 +1426,9 @@ impl super::App {
                 &mut self.custom_cursors,
                 Some(crate::core::tree::CursorKind::NwseResize.into()),
             );
-        } else if self.drag_reorder.is_some() && self.left_button_down {
+        } else if (self.drag_reorder.is_some() && self.left_button_down)
+            || crate::utils::drag::is_active()
+        {
             super::tree_hit::apply_cursor(
                 &window,
                 Some(event_loop),
@@ -1852,6 +1879,7 @@ impl super::App {
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
+            crate::utils::drag::refresh_hit_cache(&state.root_element);
             drop(state_borrow);
             let focus_visible =
                 crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -2005,6 +2033,11 @@ impl super::App {
                 }
             }
         } else {
+            let drag_hits = if crate::utils::drag::is_dragging() {
+                crate::utils::drag::collect_hits(&state.root_element)
+            } else {
+                Vec::new()
+            };
             drop(state_borrow);
             self.left_button_down = false;
             self.scrollbar_drag = None;
@@ -2016,6 +2049,11 @@ impl super::App {
             crate::components::resizable::clear_resizable_drag_if_any();
             crate::components::drawer::clear_drawer_drag_if_any();
             crate::utils::anchored_overlay::clear_floating_panel_drag();
+            if crate::utils::drag::end(&drag_hits) {
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
+                }
+            }
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -3767,7 +3805,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         || (ui_anim_active && self.force_redraw_count > 0)
                         || self.force_redraw_count > 0;
                     if !anim_pump {
-                        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
+                        event_loop
+                            .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
                     }
                 } else if !self
                     .secondaries
