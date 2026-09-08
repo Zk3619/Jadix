@@ -3,8 +3,8 @@
 use crate::imports::*;
 use crate::shared::*;
 use rui::utils::drag::{
-    apply_reorder_vec, apply_transfer, drag_scope, last_hit_rect, last_pointer, use_drag, Axis,
-    CollisionAlg, DragCtx, DragEvent, Restrict,
+    apply_reorder_vec, apply_transfer, drag_scope, last_hit_rect, last_pointer, sortable_item,
+    sortable_list, use_drag, Axis, CollisionAlg, DragCtx, DragEvent, Restrict,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -349,7 +349,7 @@ fn list_chip(label: &str) -> Element {
 }
 
 /// Overlay rotate from pointer vs arena: NW −45°, NE 45°, SW −135°, SE 135°.
-/// Center stays 0°. Appearance only — not a kit transformer.
+/// Center stays 0°. Appearance only — CSS rotate on the overlay, not a kit modifier.
 fn corner_card_angle(pointer: [f32; 2], bounds: [f32; 4]) -> f32 {
     let w = bounds[2].max(1.0);
     let h = bounds[3].max(1.0);
@@ -403,6 +403,7 @@ fn keyed_sortable_chips(
                     group={group}
                     list={list}
                     index={i}
+                    stack="auto"
                     source_opacity={source_opacity}
                 >
                     { list_chip(&name) }
@@ -507,6 +508,178 @@ fn apply_kanban(left: Signal<Vec<String>>, right: Signal<Vec<String>>, ev: &Drag
     }
 }
 
+fn apply_nested_lists(
+    folders: Signal<Vec<String>>,
+    inbox: Signal<Vec<String>>,
+    later: Signal<Vec<String>>,
+    ev: &DragEvent,
+) {
+    let Some(from_list) = ev.from_list.as_deref() else {
+        return;
+    };
+    let Some(to_list) = ev.to_list.as_deref() else {
+        return;
+    };
+    if from_list == "tree-root" && to_list == "tree-root" {
+        let Some(from_index) = ev.from_index else {
+            return;
+        };
+        let mut v = folders.peek();
+        apply_reorder_vec(&mut v, from_index, ev.to_index.unwrap_or(from_index));
+        folders.set(v);
+        return;
+    }
+    apply_kanban_named(inbox, later, "tree-inbox", "tree-later", ev);
+}
+
+fn apply_kanban_named(
+    left: Signal<Vec<String>>,
+    right: Signal<Vec<String>>,
+    left_id: &str,
+    right_id: &str,
+    ev: &DragEvent,
+) {
+    let Some(from_list) = ev.from_list.as_deref() else {
+        return;
+    };
+    let Some(from_index) = ev.from_index else {
+        return;
+    };
+    let Some(to_list) = ev.to_list.as_deref() else {
+        return;
+    };
+    if from_list != left_id && from_list != right_id {
+        return;
+    }
+    if to_list != left_id && to_list != right_id {
+        return;
+    }
+    if from_list == to_list {
+        let mut v = if from_list == left_id {
+            left.peek()
+        } else {
+            right.peek()
+        };
+        apply_reorder_vec(&mut v, from_index, ev.to_index.unwrap_or(from_index));
+        if from_list == left_id {
+            left.set(v);
+        } else {
+            right.set(v);
+        }
+        return;
+    }
+    let mut src = if from_list == left_id {
+        left.peek()
+    } else {
+        right.peek()
+    };
+    let mut dst = if to_list == left_id {
+        left.peek()
+    } else {
+        right.peek()
+    };
+    let to_index = ev.to_index.unwrap_or(dst.len());
+    apply_transfer(&mut src, &mut dst, from_index, to_index);
+    if from_list == left_id {
+        left.set(src);
+        right.set(dst);
+    } else {
+        right.set(src);
+        left.set(dst);
+    }
+}
+
+fn nest_list_for(folder: &str) -> &'static str {
+    if folder == "Inbox" {
+        "tree-inbox"
+    } else {
+        "tree-later"
+    }
+}
+
+fn nest_rows_id(folder: &str) -> &'static str {
+    if folder == "Inbox" {
+        "gal-drag-nest-inbox-rows"
+    } else {
+        "gal-drag-nest-later-rows"
+    }
+}
+
+fn nested_folder_card(title: &str, list: &'static str, body: Element) -> Element {
+    let title = title.to_string();
+    let ctx = use_drag();
+    let header = ui! {
+        <HStack gap="0.5rem" items="center" w="100%">
+            { handle_grip() }
+            <Label font_weight="600" text_size="0.75rem" grow="1">{ title }</Label>
+        </HStack>
+    };
+    let el: Element = vstack()
+        .w("100%")
+        .gap("0.375rem")
+        .p("0.5rem")
+        .rounded("0.5rem")
+        .bg(parse_color("muted"))
+        .border_style("solid")
+        .border_width("1px")
+        .border_color(parse_color("border"))
+        .child(header)
+        .child(body)
+        .into();
+    el.reactive_sync(move |el, _| {
+        let over = zone_list_hover_peek(ctx.as_ref(), list);
+        let bg = parse_color(if over { "accent" } else { "muted" });
+        let border = parse_color(if over { "primary" } else { "border" });
+        let mut changed = LayoutStatus::Clean;
+        if el.style.bg_color != bg {
+            el.style.bg_color = bg;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.border_color != border {
+            el.style.border_color = border;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        changed
+    })
+}
+
+fn nest_folder_tree(
+    folders: Signal<Vec<String>>,
+    inbox: Signal<Vec<String>>,
+    later: Signal<Vec<String>>,
+) -> Element {
+    let items = folders.get();
+    let rows = rui::for_keyed!(
+        "gal-drag-nest-folders",
+        items.as_slice(),
+        |s: &String| s.clone(),
+        |name: &String| {
+            let name = name.clone();
+            let i = items.iter().position(|x| x == &name).unwrap_or(0);
+            let list = nest_list_for(&name);
+            let rows_id = nest_rows_id(&name);
+            let files = if name == "Inbox" { inbox } else { later };
+            let title = name.clone();
+            sortable_item(format!("folder:{name}"))
+                .item_type("folder")
+                .list("tree-root")
+                .index(i)
+                .handle_only(true)
+                .source_opacity(0.4)
+                .child(move || {
+                    let inner = sortable_list(list)
+                        .accept("file")
+                        .group("nest")
+                        .child(move || {
+                            keyed_sortable_chips(rows_id, files, "file", "nest", list, list, 0.4)
+                        });
+                    nested_folder_card(&title, list, inner)
+                })
+        }
+    );
+    Element::from(vstack().w("100%").gap("0.5rem").children(rows))
+}
+
 #[component]
 pub(crate) fn DragShowcase() -> Element {
     let sort_items = use_signal("gal_drag_sort", || {
@@ -544,6 +717,13 @@ pub(crate) fn DragShowcase() -> Element {
             .collect::<Vec<_>>()
     });
     let doing = use_signal("gal_drag_doing", || vec!["Write tests".to_string()]);
+    let nest_folders = use_signal("gal_drag_nest_folders", || {
+        vec!["Inbox".to_string(), "Later".to_string()]
+    });
+    let nest_inbox = use_signal("gal_drag_nest_inbox", || {
+        vec!["Alpha".to_string(), "Beta".to_string()]
+    });
+    let nest_later = use_signal("gal_drag_nest_later", || vec!["Gamma".to_string()]);
 
     let inbox = use_signal("gal_drag_inbox", || false);
     let handle_inbox = use_signal("gal_drag_handle_inbox", || false);
@@ -1038,6 +1218,24 @@ pub(crate) fn DragShowcase() -> Element {
                             ) }
                         </Droppable>
                     </HStack>
+                    <DragOverlay class="shadow-lg" />
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"嵌套列表"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "文件夹是外层 SortableItem（手柄拖动重排）；内部 SortableList 接文件。指针落在内层空槽时 hover 走内层，不会被外层文件夹行抢走。文件 group=nest 在文件夹之间 apply_transfer；文件夹 list=tree-root。"
+                </Label>
+                <DragProvider
+                    id="gal-drag-nest"
+                    collision="most-intersecting"
+                    onDragEnd={move |ev: &DragEvent| {
+                        apply_nested_lists(nest_folders, nest_inbox, nest_later, ev);
+                    }}
+                >
+                    <SortableList id="tree-root" accept="folder">
+                        { nest_folder_tree(nest_folders, nest_inbox, nest_later) }
+                    </SortableList>
                     <DragOverlay class="shadow-lg" />
                 </DragProvider>
             </VStack>
