@@ -26,8 +26,10 @@ pub mod popup;
 pub mod presence;
 pub mod roving;
 pub mod table_sort;
+pub mod text_edit_history;
 pub mod text_field;
 pub mod text_node;
+pub mod text_sel_move;
 pub mod text_texture;
 pub mod text_vector_spike;
 pub mod toggle_state;
@@ -94,12 +96,12 @@ pub use text_field::{
     bind_controlled_value, caret_line_and_local, commit_value, commit_value_sig,
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y,
     ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit, input_focus_id,
-    input_scroll_x_signal_key, input_value_signal_key, pull_controlled_into_store, text_edit_rest,
-    textarea_default_height, textarea_focus_id, textarea_height_signal_key,
-    textarea_resize_focus_id, textarea_scroll_rest, textarea_wrap_mode_signal_key,
-    textarea_wrap_width_signal_key, unbind_controlled_value, TextareaCaretScrollInsets,
-    TextareaWrapMode, WrapMode, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
-    TEXTAREA_RESIZE_FOCUS_PREFIX,
+    input_scroll_x_signal_key, input_value_signal_key, pull_controlled_into_store,
+    select_all_in_text_edit, text_edit_rest, textarea_default_height, textarea_focus_id,
+    textarea_height_signal_key, textarea_resize_focus_id, textarea_scroll_rest,
+    textarea_wrap_mode_signal_key, textarea_wrap_width_signal_key, unbind_controlled_value,
+    TextareaCaretScrollInsets, TextareaWrapMode, WrapMode, INPUT_FOCUS_PREFIX,
+    TEXTAREA_FOCUS_PREFIX, TEXTAREA_RESIZE_FOCUS_PREFIX,
 };
 pub use text_node::{
     apply_label_defaults, build_icon_text_node, build_lucide_icon_text_node,

@@ -1,6 +1,6 @@
 //! Shared Input / Textarea display vs layout-measure string derivation.
 
-use crate::components::input::{map_byte_index_to_masked, mask_password};
+use crate::components::input::{map_byte_index_to_masked, map_byte_range_to_masked, mask_password};
 
 /// Per-frame (or build-time) store signals for a text field.
 pub(crate) struct TextEditStringsInput<'a> {
@@ -12,7 +12,8 @@ pub(crate) struct TextEditStringsInput<'a> {
     pub show_placeholder: bool,
     pub mask: bool,
     pub is_focused: bool,
-    /// Caret from selection end or caret signal when not composing.
+    /// Caret from the caret signal when not composing (not selection-end).
+    /// Tab select-all parks caret at 0 so overflow viewports stay on the line head.
     pub caret_override: Option<usize>,
 }
 
@@ -25,6 +26,8 @@ pub(crate) struct TextEditStrings {
     pub layout_measure_text: String,
     pub caret_in_real: usize,
     pub caret_byte: usize,
+    /// Display-text byte range of the live IME preedit (for the spaced underline).
+    pub preedit_underline: Option<(usize, usize)>,
 }
 
 pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> TextEditStrings {
@@ -88,12 +91,29 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         caret_in_real
     };
 
+    let preedit_underline = if input.show_placeholder || input.preedit.is_empty() {
+        None
+    } else {
+        let mut a = input
+            .ime_anchor
+            .unwrap_or(input.committed.len())
+            .min(input.committed.len());
+        a = input.committed.floor_char_boundary(a);
+        let end = a + input.preedit.len();
+        Some(if input.mask {
+            map_byte_range_to_masked(&real_display, a, end, &display_text)
+        } else {
+            (a, end)
+        })
+    };
+
     TextEditStrings {
         real_display,
         display_text,
         layout_measure_text,
         caret_in_real,
         caret_byte,
+        preedit_underline,
     }
 }
 
@@ -144,5 +164,6 @@ mod tests {
         assert_eq!(s.real_display, "你好hao");
         assert_eq!(s.layout_measure_text, "你好");
         assert_eq!(s.caret_in_real, 6 + "ha".len());
+        assert_eq!(s.preedit_underline, Some((6, 6 + "hao".len())));
     }
 }

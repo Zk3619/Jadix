@@ -60,7 +60,9 @@ pub use graph::{
 };
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
 pub use prepare_text::prepare_text_frame;
-pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
+pub(crate) use prepare_text::{
+    caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible, restart_caret_blink,
+};
 pub use present_retain::PresentRetainPipeline;
 pub use resources::{ResourceKind, TextureMeta, TexturePool};
 pub use text::RuiTextRenderer;

@@ -116,22 +116,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let mask = input_type.is_password() && !reveal && !show_placeholder;
 
     let caret_override = if is_focused && !show_placeholder && preedit.is_empty() {
-        let len = if show_placeholder {
-            placeholder.len()
-        } else {
-            committed.len()
-        };
-        text_sel_sig
-            .peek()
-            .and_then(|(a, b)| {
-                if a.min(b) < a.max(b) {
-                    Some(a.max(b))
-                } else {
-                    None
-                }
-            })
-            .or_else(|| caret_sig.peek())
-            .map(|ix| ix.min(len))
+        let len = committed.len();
+        caret_sig.peek().map(|ix| ix.min(len))
     } else {
         None
     };
@@ -152,6 +138,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let caret_byte = strings.caret_byte;
     let real_display = strings.real_display;
     let caret_in_real = strings.caret_in_real;
+    let preedit_underline = strings.preedit_underline;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -341,6 +328,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             selection: sel_draw,
             selection_bg,
             overwrite_highlight,
+            preedit_underline,
+            drop_caret: false,
         });
     }
 
@@ -512,6 +501,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 if disabled_clear {
                     return;
                 }
+                crate::utils::text_edit_history::will_user_edit_field(
+                    &id_clear,
+                    crate::utils::text_edit_history::EditKind::Replace,
+                );
                 crate::utils::text_field::commit_value(&id_clear, String::new());
                 use_signal(&input_preedit_signal_key(&id_clear), String::new).set(String::new());
                 use_signal(&input_preedit_sel_signal_key(&id_clear), || {
@@ -524,6 +517,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 })
                 .set(None);
                 use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>).set(None);
+                crate::utils::text_edit_history::note_field_after_edit(&id_clear);
                 // Drop system candidate / composition — clearing value alone leaves TIP UI up.
                 crate::app::ime_support::cancel_os_ime_composition();
                 use_signal(focus_key_clear, String::new).set(fid_clear.clone());

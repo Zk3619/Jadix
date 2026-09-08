@@ -354,6 +354,23 @@ pub struct InputCaretDraw {
     pub selection_bg: [u8; 4],
     /// Overwrite-mode highlight `[start, end)`.
     pub overwrite_highlight: Option<(usize, usize)>,
+    /// IME preedit `[start, end)` in display UTF-8 bytes; spaced underline under composing glyphs.
+    pub preedit_underline: Option<(usize, usize)>,
+    /// Draw the I-beam even when a selection highlight is present (selection-move drop caret).
+    pub drop_caret: bool,
+}
+
+impl Default for InputCaretDraw {
+    fn default() -> Self {
+        Self {
+            caret_byte_index: 0,
+            selection: None,
+            selection_bg: [0; 4],
+            overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
+        }
+    }
 }
 
 /// Per-run text style shared by Element and TextLayoutInfo.

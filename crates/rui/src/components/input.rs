@@ -24,7 +24,7 @@
 //!
 //! ## 可选尾饰
 //! - `clearable`：有内容时显示叉号，点击清空（缺省 `false`）。
-//! - Editing shortcut keys (Ctrl/Cmd): Select all A, copy C, paste V, cut X; Shift + arrow keys to expand the selection.
+//! - Editing shortcut keys (Ctrl/Cmd): Select all A, copy C, paste V, cut X, undo Z, redo Y or Shift+Z; Shift + arrow keys to expand the selection. Tab into the field selects all.
 //! - `password_toggle`: `type=password` only; toggle mask/plaintext (default `false`).
 //! - `number_steppers`：仅 `type=number`；右侧上下增减触发器（solid-ui `NumberField` 风格）；`step` 默认 `1`；可长按连发（缺省 `false`）。
 //!
@@ -357,6 +357,13 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     let current = raw.trim().parse::<f64>().unwrap_or(0.0);
     let next = current + delta;
     let text = format_number_step_result(next, delta.abs());
+    if text == raw {
+        return;
+    }
+    crate::utils::text_edit_history::will_user_edit_field(
+        field_id,
+        crate::utils::text_edit_history::EditKind::Step,
+    );
     commit_value(field_id, text.clone());
     use_signal(&input_preedit_signal_key(field_id), String::new).set(String::new());
     use_signal(&input_preedit_sel_signal_key(field_id), || {
@@ -369,6 +376,7 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     .set(None);
     use_signal(&input_ime_anchor_signal_key(field_id), || None::<usize>).set(None);
     use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(text.len()));
+    crate::utils::text_edit_history::note_field_after_edit(field_id);
 }
 
 fn begin_number_step_hold(field_id: String, delta: f64) {

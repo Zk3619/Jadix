@@ -103,6 +103,8 @@ fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
         selection: Some(range),
         selection_bg: selection_bg_color(),
         overwrite_highlight: None,
+        preedit_underline: None,
+        drop_caret: false,
     });
     if el.text_style.input_caret != want {
         el.text_style.input_caret = want;
@@ -568,6 +570,8 @@ mod tests {
             selection: Some((0, 5)),
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
         let mut root = Element::new().child(text);
         let mut impact = LayoutStatus::Clean;

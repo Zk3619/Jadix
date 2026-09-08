@@ -350,15 +350,82 @@ impl super::App {
                         use_signal("__rui_button_focus_id", String::new).set(focus_id);
                         let ck = crate::components::input::input_caret_signal_key(&rest);
                         let sk = crate::components::input::input_selection_signal_key(&rest);
-                        if let Some((lo, hi)) = line_sel {
+                        let pk = crate::components::input::input_preedit_signal_key(&rest);
+                        let ty_key = crate::components::input::input_type_signal_key(&rest);
+                        let pre_empty = use_signal(&pk, String::new).peek().is_empty();
+                        let existing = use_signal(&sk, || None::<(usize, usize)>).get();
+                        let password = crate::components::input::InputType::parse(
+                            &use_signal(&ty_key, || {
+                                crate::components::input::InputType::Text
+                                    .as_str()
+                                    .to_string()
+                            })
+                            .peek(),
+                        )
+                        .is_password();
+                        let sel_range = existing.and_then(|(a, b)| {
+                            let lo = a.min(b);
+                            let hi = a.max(b);
+                            (lo < hi).then_some((lo, hi))
+                        });
+                        let can_move = line_sel.is_none()
+                            && pre_empty
+                            && !password
+                            && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
+                        if can_move {
+                            let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                            let vk = crate::components::input::input_value_signal_key(&rest);
+                            let committed = use_signal(&vk, String::new).peek();
+                            let chunk = committed.get(lo..hi).unwrap_or("").to_string();
+                            let (size, weight, color, lh) = {
+                                let secs = self.secondaries.borrow();
+                                secs.get(&id)
+                                    .and_then(|sec| {
+                                        super::tree_hit::find_input_text_leaf_for_rest(
+                                            &sec.root_element,
+                                            None,
+                                            &rest,
+                                        )
+                                    })
+                                    .map(|(_, _, style, _)| {
+                                        let lh = style.line_height_px.unwrap_or_else(|| {
+                                            style.size_resolved()
+                                                * style.line_height_scale.unwrap_or(
+                                                    crate::utils::text_field::text_edit_default_leading_scale(),
+                                                )
+                                        });
+                                        (
+                                            style.size_resolved(),
+                                            style.weight_resolved(),
+                                            style.color_resolved(),
+                                            lh,
+                                        )
+                                    })
+                                    .unwrap_or((14.0, 400, [15, 23, 42, 255], 21.0))
+                            };
+                            crate::utils::text_sel_move::begin_potential(
+                                rest.clone(),
+                                (lo, hi),
+                                chunk,
+                                caret_ix,
+                                (x, y),
+                                size,
+                                weight,
+                                color,
+                                lh,
+                            );
+                            self.input_drag_anchor = caret_ix;
+                        } else if let Some((lo, hi)) = line_sel {
                             use_signal(&ck, || None::<usize>).set(Some(hi));
                             use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
                             self.input_drag_anchor = lo;
+                            crate::renderer::restart_caret_blink();
                         } else {
                             use_signal(&ck, || None::<usize>).set(Some(caret_ix));
                             use_signal(&sk, || None::<(usize, usize)>)
                                 .set(Some((caret_ix, caret_ix)));
                             self.input_drag_anchor = caret_ix;
+                            crate::renderer::restart_caret_blink();
                         }
                         self.input_drag_rest = Some(rest);
                         crate::utils::text_field::set_text_drag_select_active(true);
@@ -371,6 +438,7 @@ impl super::App {
                         self.label_drag_anchor = caret_ix;
                         self.input_drag_rest = None;
                         crate::utils::text_field::set_text_drag_select_active(false);
+                        crate::utils::text_sel_move::cancel();
                         self.left_button_down = true;
                     } else if let Some(fid) = path.iter().rev().find_map(|e| e.focus_id.clone()) {
                         use_signal("__rui_button_focus_id", String::new).set(fid);
@@ -489,14 +557,7 @@ impl super::App {
                     }
                     crate::utils::popup::arm_underlay_close();
                     if let Some(rest) = self.input_drag_rest.take() {
-                        crate::utils::text_field::set_text_drag_select_active(false);
-                        let sk = crate::components::input::input_selection_signal_key(&rest);
-                        let sel = use_signal(&sk, || None::<(usize, usize)>).get();
-                        if let Some((a, b)) = sel {
-                            if a == b {
-                                use_signal(&sk, || None::<(usize, usize)>).set(None);
-                            }
-                        }
+                        super::window_events::apply_input_drag_release(&rest);
                     }
                     if let Some(key) = self.label_drag_key.take() {
                         let sk = crate::components::label::label_selection_signal_key(&key);

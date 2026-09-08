@@ -1350,9 +1350,7 @@ impl IntoOpacity for &str {
                 .map(|v| (v / 100.0).clamp(0.0, 1.0))
                 .unwrap_or(0.0);
         }
-        t.parse::<f32>()
-            .map(opacity_from_unitless)
-            .unwrap_or(0.0)
+        t.parse::<f32>().map(opacity_from_unitless).unwrap_or(0.0)
     }
 }
 

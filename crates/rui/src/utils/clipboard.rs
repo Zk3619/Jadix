@@ -1,6 +1,6 @@
 use clipboard_rs::{Clipboard, ClipboardContext};
 use winit::event::KeyEvent;
-use winit::keyboard::{Key, KeyCode, ModifiersState, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 /// Windows/Linux 用 Ctrl，macOS 用 Cmd（Super）。
 pub fn shortcut_modifiers(m: &ModifiersState) -> bool {
@@ -30,6 +30,8 @@ pub fn edit_shortcut_letter(event: &KeyEvent) -> Option<char> {
         PhysicalKey::Code(KeyCode::KeyC) => Some('c'),
         PhysicalKey::Code(KeyCode::KeyV) => Some('v'),
         PhysicalKey::Code(KeyCode::KeyX) => Some('x'),
+        PhysicalKey::Code(KeyCode::KeyY) => Some('y'),
+        PhysicalKey::Code(KeyCode::KeyZ) => Some('z'),
         _ => None,
     }
 }
@@ -89,4 +91,29 @@ pub fn get_lines() -> Option<Vec<String>> {
             .map(|s| s.to_string())
             .collect(),
     )
+}
+
+/// Ctrl/Cmd+Z, or the OS `Undo` key.
+pub fn is_undo_shortcut(event: &KeyEvent, modifiers: &ModifiersState) -> bool {
+    if matches!(event.logical_key, Key::Named(NamedKey::Undo)) {
+        return true;
+    }
+    shortcut_modifiers(modifiers)
+        && !modifiers.shift_key()
+        && edit_shortcut_letter(event) == Some('z')
+}
+
+/// Ctrl/Cmd+Y, Ctrl/Cmd+Shift+Z, or the OS `Redo` key.
+pub fn is_redo_shortcut(event: &KeyEvent, modifiers: &ModifiersState) -> bool {
+    if matches!(event.logical_key, Key::Named(NamedKey::Redo)) {
+        return true;
+    }
+    if !shortcut_modifiers(modifiers) {
+        return false;
+    }
+    match edit_shortcut_letter(event) {
+        Some('y') => !modifiers.shift_key(),
+        Some('z') => modifiers.shift_key(),
+        _ => false,
+    }
 }

@@ -504,7 +504,14 @@ pub(super) fn apply_cursor(
     cache: &mut crate::style::CustomCursorCache,
     value: Option<CursorValue>,
 ) {
-    crate::style::cursor_image::apply_cursor(window, event_loop, cache, value);
+    crate::style::cursor_image::apply_cursor(
+        window,
+        event_loop,
+        cache,
+        crate::utils::text_sel_move::active_cursor()
+            .map(CursorValue::from)
+            .or(value),
+    );
 }
 
 /// Hit-test cursor unless a pointer session owns the OS icon.

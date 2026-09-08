@@ -22,12 +22,44 @@ pub(super) fn tick_input_drag_select_at(
 ) -> bool {
     let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, y, dt);
     let vscroll = super::tree_hit::nudge_textarea_vscroll_for_drag(root, rest, y, dt);
+    let scrolled = matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
+        || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
 
+    if crate::utils::text_sel_move::blocks_select_drag() {
+        let vk = crate::components::input::input_value_signal_key(rest);
+        let committed_len = crate::core::reactivity::use_signal(&vk, String::new)
+            .peek()
+            .len();
+        let drop = hit_input_caret_at(root, font_system, scale, x, y, rest);
+        let moved = crate::utils::text_sel_move::tick_pointer((x, y), drop, committed_len);
+        return scrolled || moved;
+    }
+
+    let Some(caret_ix) = hit_input_caret_at(root, font_system, scale, x, y, rest) else {
+        return scrolled;
+    };
+    let lo = anchor.min(caret_ix);
+    let hi = anchor.max(caret_ix);
+    let sk = crate::components::input::input_selection_signal_key(rest);
+    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set_silent(Some((lo, hi)));
+    let ck = crate::components::input::input_caret_signal_key(rest);
+    crate::core::reactivity::use_signal(&ck, || None::<usize>).set_silent(Some(caret_ix));
+
+    scrolled
+}
+
+fn hit_input_caret_at(
+    root: &mut crate::core::tree::Element,
+    font_system: &mut glyphon::FontSystem,
+    scale: f32,
+    x: f32,
+    y: f32,
+    rest: &str,
+) -> Option<usize> {
     let Some((bounds, display_el, style, leaf_scroll)) =
         super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
     else {
-        return matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
-            || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
+        return None;
     };
     let vk = crate::components::input::input_value_signal_key(rest);
     let pk = crate::components::input::input_preedit_signal_key(rest);
@@ -36,9 +68,6 @@ pub(super) fn tick_input_drag_select_at(
     let ui_scale = scale.max(1.0);
     let (mx, my, hit_bounds, hit_style) =
         super::tree_hit::input_drag_select_hit_space(root, rest, x, y, bounds, &style, leaf_scroll);
-    // Same mapping as pointer-down. Raw `hit_test_input_text_index` clamps Y onto the
-    // last ink line, so a press in empty chrome (caret → doc end) plus this tick
-    // became a selection from that line to the end.
     let ix = if !style.overflow.allows_caret_scroll() {
         crate::renderer::hit_test_textarea_click_caret_index(
             font_system,
@@ -62,20 +91,53 @@ pub(super) fn tick_input_drag_select_at(
             ui_scale,
         )
     };
-    let caret_ix = if committed.is_empty() && pre.is_empty() {
+    Some(if committed.is_empty() && pre.is_empty() {
         0
     } else {
         crate::components::input::caret_index_from_display_hit(rest, ix)
-    };
-    let lo = anchor.min(caret_ix);
-    let hi = anchor.max(caret_ix);
-    let sk = crate::components::input::input_selection_signal_key(rest);
-    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set_silent(Some((lo, hi)));
-    let ck = crate::components::input::input_caret_signal_key(rest);
-    crate::core::reactivity::use_signal(&ck, || None::<usize>).set_silent(Some(caret_ix));
+    })
+}
 
-    matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
-        || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled)
+pub(super) fn apply_input_drag_release(rest: &str) {
+    use crate::utils::text_sel_move::ReleaseAction;
+    crate::utils::text_field::set_text_drag_select_active(false);
+    match crate::utils::text_sel_move::on_release() {
+        ReleaseAction::None => {
+            let sk = crate::components::input::input_selection_signal_key(rest);
+            let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
+            if let Some((a, b)) = sel {
+                if a == b {
+                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+                }
+            }
+        }
+        ReleaseAction::Click { caret, .. } => {
+            let ck = crate::components::input::input_caret_signal_key(rest);
+            let sk = crate::components::input::input_selection_signal_key(rest);
+            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
+            crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+            crate::renderer::restart_caret_blink();
+        }
+        ReleaseAction::Move { sel, drop, .. } => {
+            let vk = crate::components::input::input_value_signal_key(rest);
+            let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
+            let s = val_sig.get();
+            if let Some((next, caret)) = crate::utils::text_sel_move::apply_move(&s, sel, drop) {
+                crate::utils::text_edit_history::will_user_edit_field(
+                    rest,
+                    crate::utils::text_edit_history::EditKind::Replace,
+                );
+                crate::utils::text_field::commit_value_sig(rest, val_sig, next);
+                let ck = crate::components::input::input_caret_signal_key(rest);
+                let sk = crate::components::input::input_selection_signal_key(rest);
+                crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
+                crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+                crate::utils::text_edit_history::note_field_after_edit(rest);
+                crate::renderer::restart_caret_blink();
+            }
+        }
+        ReleaseAction::KeepSelection => {}
+    }
 }
 
 impl super::App {
@@ -93,6 +155,7 @@ impl super::App {
         self.textarea_resize_drag = None;
         self.input_drag_rest = None;
         crate::utils::text_field::set_text_drag_select_active(false);
+        crate::utils::text_sel_move::cancel();
         self.label_drag_key = None;
         self.drag_reorder = None;
         self.left_button_down = false;
@@ -1791,6 +1854,7 @@ impl super::App {
                         self.content_scroll_drag = None;
                         self.input_drag_rest = None;
                         crate::utils::text_field::set_text_drag_select_active(false);
+                        crate::utils::text_sel_move::cancel();
                         self.label_drag_key = None;
                         let focus_visible =
                             crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -1913,16 +1977,84 @@ impl super::App {
                     .set(focus_id);
                 let ck = crate::components::input::input_caret_signal_key(&rest);
                 let sk = crate::components::input::input_selection_signal_key(&rest);
-                if let Some((lo, hi)) = line_sel {
+                let pk = crate::components::input::input_preedit_signal_key(&rest);
+                let ty_key = crate::components::input::input_type_signal_key(&rest);
+                let pre_empty = crate::core::reactivity::use_signal(&pk, String::new)
+                    .peek()
+                    .is_empty();
+                let existing =
+                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
+                let password = crate::components::input::InputType::parse(
+                    &crate::core::reactivity::use_signal(&ty_key, || {
+                        crate::components::input::InputType::Text
+                            .as_str()
+                            .to_string()
+                    })
+                    .peek(),
+                )
+                .is_password();
+                let sel_range = existing.and_then(|(a, b)| {
+                    let lo = a.min(b);
+                    let hi = a.max(b);
+                    (lo < hi).then_some((lo, hi))
+                });
+                let can_move = line_sel.is_none()
+                    && pre_empty
+                    && !password
+                    && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
+                if can_move {
+                    let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                    let vk = crate::components::input::input_value_signal_key(&rest);
+                    let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
+                    let chunk = committed.get(lo..hi).unwrap_or("").to_string();
+                    let (size, weight, color, lh) = (*self.state.borrow())
+                        .as_ref()
+                        .and_then(|st| {
+                            super::tree_hit::find_input_text_leaf_for_rest(
+                                &st.root_element,
+                                None,
+                                &rest,
+                            )
+                        })
+                        .map(|(_, _, style, _)| {
+                            let lh = style.line_height_px.unwrap_or_else(|| {
+                                style.size_resolved()
+                                    * style.line_height_scale.unwrap_or(
+                                        crate::utils::text_field::text_edit_default_leading_scale(),
+                                    )
+                            });
+                            (
+                                style.size_resolved(),
+                                style.weight_resolved(),
+                                style.color_resolved(),
+                                lh,
+                            )
+                        })
+                        .unwrap_or((14.0, 400, [15, 23, 42, 255], 21.0));
+                    crate::utils::text_sel_move::begin_potential(
+                        rest.clone(),
+                        (lo, hi),
+                        chunk,
+                        caret_ix,
+                        (x, y),
+                        size,
+                        weight,
+                        color,
+                        lh,
+                    );
+                    self.input_drag_anchor = caret_ix;
+                } else if let Some((lo, hi)) = line_sel {
                     crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
                     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
                         .set(Some((lo, hi)));
                     self.input_drag_anchor = lo;
+                    crate::renderer::restart_caret_blink();
                 } else {
                     crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret_ix));
                     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
                         .set(Some((caret_ix, caret_ix)));
                     self.input_drag_anchor = caret_ix;
+                    crate::renderer::restart_caret_blink();
                 }
                 self.input_drag_rest = Some(rest.clone());
                 crate::utils::text_field::set_text_drag_select_active(true);
@@ -1954,6 +2086,7 @@ impl super::App {
                 self.label_drag_anchor = caret_ix;
                 self.input_drag_rest = None;
                 crate::utils::text_field::set_text_drag_select_active(false);
+                crate::utils::text_sel_move::cancel();
                 self.content_scroll_drag = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
@@ -2069,15 +2202,7 @@ impl super::App {
                 }
             }
             if let Some(rest) = self.input_drag_rest.take() {
-                crate::utils::text_field::set_text_drag_select_active(false);
-                let sk = crate::components::input::input_selection_signal_key(&rest);
-                let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
-                if let Some((a, b)) = sel {
-                    if a == b {
-                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                            .set(None);
-                    }
-                }
+                apply_input_drag_release(&rest);
                 // Always repaint after an input drag so collapsed ranges clear and
                 // non-empty selections get a final highlight frame.
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {

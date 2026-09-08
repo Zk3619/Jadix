@@ -3106,6 +3106,38 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
+        if let Some(g) = crate::utils::text_sel_move::ghost_paint() {
+            let n_lines = g.text.lines().count().max(1) as f32;
+            let lh = g.line_height.max(g.size);
+            let prepared = crate::text::prepare(&g.text, g.size, g.weight, lh);
+            let w = crate::text::intrinsic_width(&prepared).max(8.0);
+            let h = lh * n_lines;
+            let mut style = TextStyle::default();
+            style.size = Some(g.size);
+            style.weight = Some(g.weight);
+            style.color = Some(g.color);
+            style.line_height_px = Some(lh);
+            scratch.text_nodes.push(TextLayoutInfo {
+                text: g.text,
+                shape_suffix: None,
+                spans: None,
+                template_id: Some("__rui_text_sel_move_ghost".into()),
+                x: g.x,
+                y: g.y,
+                width: w,
+                height: h,
+                clip_bounds: None,
+                style,
+                prepared: Some(prepared),
+                glyph_fx: None,
+                shimmer: None,
+                paint_scale: 1.0,
+                paint_transform: crate::style::transform::MAT2D_IDENTITY,
+                paint_origin: [g.x + w * 0.5, g.y + h * 0.5],
+                glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
+            });
+        }
+
         scratch.tex_keys.clear();
         scratch
             .tex_keys
@@ -6437,10 +6469,89 @@ fn push_input_chrome_instances(
                 );
             }
         }
+    }
+
+    if let Some((sa, sb)) = caret.preedit_underline {
+        let mut s = sa.min(sb).min(text.len());
+        let mut e = sa.max(sb).min(text.len());
+        s = text.floor_char_boundary(s);
+        e = text.floor_char_boundary(e);
+        if s < e {
+            let c = style.color_resolved();
+            let color = [
+                c[0] as f32 / 255.0,
+                c[1] as f32 / 255.0,
+                c[2] as f32 / 255.0,
+                (c[3] as f32 / 255.0) * opacity,
+            ];
+            // Gap under glyphs so the underline is not flush with ink (IME composing).
+            const PREEDIT_UL_GAP: f32 = 3.0;
+            const PREEDIT_UL_H: f32 = 1.25;
+            let (start_line, start_local) = line_and_local(s);
+            let (end_line, end_local) = line_and_local(e);
+            for line_i in start_line..=end_line.min(line_count.saturating_sub(1)) {
+                let (_line_start, line_body) = line_body_at(line_i);
+                let from = if line_i == start_line { start_local } else { 0 };
+                let to = if line_i == end_line {
+                    end_local.min(line_body.len())
+                } else {
+                    line_body.len()
+                };
+                if from >= to {
+                    continue;
+                }
+                let prefix_w = prefix_width_logical(
+                    line_body,
+                    from,
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let end_w = prefix_width_logical(
+                    line_body,
+                    to,
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let line_w = prefix_width_logical(
+                    line_body,
+                    line_body.len(),
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let align_dx = style.align_inline_offset(line_w, box_w);
+                let ul_w = if pan {
+                    (end_w - prefix_w).max(0.0)
+                } else {
+                    (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
+                };
+                if ul_w > 0.0 {
+                    let ul_y = line_origin_y(line_i) + style.size_resolved() + PREEDIT_UL_GAP;
+                    push_chrome_rect(
+                        selection_out,
+                        clip,
+                        if pan {
+                            x + align_dx + prefix_w
+                        } else {
+                            x + align_dx + prefix_w.min(box_w)
+                        },
+                        ul_y,
+                        ul_w,
+                        PREEDIT_UL_H,
+                        color,
+                    );
+                }
+            }
+        }
+    }
+
+    if range_opt.is_some() && !caret.drop_caret {
         return;
     }
 
-    if !crate::renderer::caret_blink_visible() {
+    if !caret.drop_caret && !crate::renderer::caret_blink_visible() {
         return;
     }
     let mut ix = caret.caret_byte_index.min(text.len());
@@ -6574,6 +6685,8 @@ mod prepared_text_attach_tests {
             selection: Some((0, text.len())),
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let mut selection = Vec::new();
@@ -6598,6 +6711,57 @@ mod prepared_text_attach_tests {
                 r.rect_size[0]
             );
         }
+    }
+
+    #[test]
+    fn preedit_underline_sits_below_glyphs_and_caret_still_drawn() {
+        let text = "你好hao";
+        let lh = 21.0_f32;
+        let y = 20.0_f32;
+        let mut style = TextStyle::default();
+        style.size = Some(14.0);
+        style.weight = Some(400);
+        style.line_height_px = Some(lh);
+        style.color = Some([0, 0, 0, 255]);
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: None,
+            selection_bg: [0; 4],
+            overwrite_highlight: None,
+            preedit_underline: Some((6, 9)),
+            drop_caret: false,
+        });
+        let mut underline = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut underline,
+            &mut chrome,
+            text,
+            &style,
+            10.0,
+            y,
+            280.0,
+            lh,
+            None,
+            1.0,
+        );
+        assert_eq!(underline.len(), 1, "one underline band for the preedit run");
+        let ul = &underline[0];
+        assert!(
+            ul.rect_pos[1] >= y + 14.0 + 2.5,
+            "underline must sit below glyphs with a gap (y={}, size=14, got {})",
+            y,
+            ul.rect_pos[1]
+        );
+        assert!(
+            ul.rect_size[1] < 2.5,
+            "preedit underline is a hairline, got h={}",
+            ul.rect_size[1]
+        );
+        assert!(
+            !chrome.is_empty(),
+            "caret hairline must still draw while composing"
+        );
     }
 
     #[test]
@@ -6635,6 +6799,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let tall_h = lh * ranges.len() as f32 + 8.0;
@@ -6728,6 +6894,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let mut chrome = Vec::new();
@@ -6780,6 +6948,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let mut chrome = Vec::new();
@@ -6839,6 +7009,8 @@ mod prepared_text_attach_tests {
             selection: Some((0, 8)),
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let mut selection = Vec::new();
@@ -6870,6 +7042,8 @@ mod prepared_text_attach_tests {
             selection: Some((4, 8)),
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
         selection.clear();
         push_input_chrome_instances(
@@ -6916,6 +7090,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let origin = 10.0 - scroll_x;
@@ -6977,6 +7153,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
         let origin = 10.0_f32;
         let want_dx = style.align_inline_offset(line_w, box_w);
@@ -7132,6 +7310,8 @@ mod prepared_text_attach_tests {
             selection: None,
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
 
         let mut chrome = Vec::new();
@@ -7635,10 +7815,7 @@ mod portal_hoist_tests {
             .w(400.0)
             .h(200.0)
             .relative()
-            .child(shell(
-                1,
-                pill("drag-low", 16.0, 20.0, [0.1, 0.2, 0.9, 1.0]),
-            ))
+            .child(shell(1, pill("drag-low", 16.0, 20.0, [0.1, 0.2, 0.9, 1.0])))
             .child(shell(
                 2,
                 pill("drag-high", 88.0, 52.0, [0.9, 0.1, 0.1, 1.0]),

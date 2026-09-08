@@ -8,7 +8,8 @@
 
 1. **preedit 稳定上屏**：中日韩组字预览正确；Commit 不丢字、不插错位；有选区时组字开始先删选区。  
 2. **`set_ime_cursor_area` 随 ScrollArea / HiDPI 缩放更新**：候选窗贴近 caret，不卡在字段左上角或滚动前位置。  
-3. **可观测**：`RUI_IME_DIAG=1` 日志 + `rui::app::take_last_ime_*` 断言接口。
+3. **可观测**：`RUI_IME_DIAG=1` 日志 + `rui::app::take_last_ime_*` 断言接口。  
+4. **组字 UX**：正在输入的 preedit 画下划线（与字形留约 3px 间距）；用方向键 / 点击移动光标时先显示实线竖线，稍停后再闪烁。
 
 ## 代码锚点
 
@@ -20,6 +21,8 @@
 | Win 组字定位 | [`platform/os/windows/ime.rs`](../../crates/rui/src/platform/os/windows/ime.rs)：`IMR`/Imm 锚组字起点；**仅滚动帧**候选 HWND ΔY。策略（锚点 Y clamp、preedit 折入去 `'`、Disabled 排空）在 [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs) |
 | 滚动跟随几何 | 优先本帧 `text_nodes` 视觉坐标（`painted`）；焦点盒 − `scroll_acc` 为回退；`scroll:` 视口始终计入 offset |
 | Input / Textarea 信号 | [`input.rs`](../../crates/rui/src/components/input.rs)、[`textarea.rs`](../../crates/rui/src/components/textarea.rs) |
+| Preedit 下划线 | [`text_edit/strings.rs`](../../crates/rui/src/components/internal/text_edit/strings.rs) 给出 display 字节范围；[`layout_tree.rs`](../../crates/rui/src/layout/layout_tree.rs) `push_input_chrome_instances` 绘制 |
+| 光标停顿后闪烁 | [`prepare_text.rs`](../../crates/rui/src/renderer/prepare_text.rs) `restart_caret_blink` |
 
 `input:` 与 `textarea:` 共用同一套 value / preedit / caret / ime_anchor 信号键族。
 
@@ -102,8 +105,8 @@ assert!(!text.is_empty());
 ## 通过标准（WP-1.1 Done）
 
 - [x] 库测 `ime_support` 绿  
-- [x] 手工：Win 上 smoke **#3** 通过（2026-08-09，Kingdom / Win 10.0.26200；中文）  
-- [x] 手工：Win 上 smoke **#4** 通过（2026-08-10；候选跟随 + 滚出视口贴边不失焦）  
+- [x] 手工：Win 上 smoke **#3** 通过（2026-08-09，Kingdom / Win 10.0.26200；中文；**P2 迁入后重签 2026-09-08**）  
+- [x] 手工：Win 上 smoke **#4** 通过（2026-08-10；候选跟随 + 滚出视口贴边不失焦；**P2 迁入后重签 2026-09-08**）  
 - [ ] （可选）日文或韩文任测一组字路径  
 
 签署栏见 [desktop_smoke.md](desktop_smoke.md)。

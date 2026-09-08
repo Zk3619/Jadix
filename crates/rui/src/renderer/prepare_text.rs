@@ -637,30 +637,85 @@ fn preshape_budget() -> usize {
     })
 }
 
+const CARET_BLINK_PHASE_MS: u128 = 520;
+/// After a caret move, keep the I-beam solid this long before the on/off cycle starts.
+const CARET_BLINK_SOLID_MS: u128 = 400;
+
+struct CaretBlinkState {
+    origin: Instant,
+    gen: u128,
+}
+
+static CARET_BLINK: Mutex<Option<CaretBlinkState>> = Mutex::new(None);
+
+fn caret_blink_state() -> MutexGuard<'static, Option<CaretBlinkState>> {
+    CARET_BLINK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn caret_blink_origin() -> Instant {
+    let mut g = caret_blink_state();
+    g.get_or_insert_with(|| CaretBlinkState {
+        origin: Instant::now(),
+        gen: 0,
+    })
+    .origin
+}
+
+/// Reset the caret to a solid I-beam, then blink after [`CARET_BLINK_SOLID_MS`].
+pub(crate) fn restart_caret_blink() {
+    let mut g = caret_blink_state();
+    let gen = g.as_ref().map(|s| s.gen.wrapping_add(1)).unwrap_or(1);
+    *g = Some(CaretBlinkState {
+        origin: Instant::now(),
+        gen,
+    });
+}
+
+/// Whether the I-beam should paint for a given elapsed-since-restart (ms).
+/// Solid pause first; then odd phases are hidden so blinking starts with an off beat.
+pub(crate) fn caret_blink_visible_at_elapsed(elapsed_ms: u128) -> bool {
+    if elapsed_ms < CARET_BLINK_SOLID_MS {
+        return true;
+    }
+    let blink = (elapsed_ms - CARET_BLINK_SOLID_MS) / CARET_BLINK_PHASE_MS;
+    !blink.is_multiple_of(2)
+}
+
+pub(crate) fn caret_blink_next_remain_ms(elapsed_ms: u128) -> u64 {
+    if elapsed_ms < CARET_BLINK_SOLID_MS {
+        return (CARET_BLINK_SOLID_MS - elapsed_ms).max(1) as u64;
+    }
+    let into = (elapsed_ms - CARET_BLINK_SOLID_MS) % CARET_BLINK_PHASE_MS;
+    (CARET_BLINK_PHASE_MS - into).max(1) as u64
+}
+
 pub(crate) fn caret_blink_visible() -> bool {
     // Unit tests call push_input_chrome_instances in a tight loop; wall-clock blink
     // phase stays OFF for all iterations and flakes caret geometry tests.
     if cfg!(test) {
         return true;
     }
-    caret_blink_phase().is_multiple_of(2)
+    caret_blink_visible_at_elapsed(caret_blink_origin().elapsed().as_millis())
 }
 
 pub(crate) fn caret_blink_phase() -> u128 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    start.elapsed().as_millis() / 520
+    let (elapsed, gen) = {
+        let origin = caret_blink_origin();
+        let gen = caret_blink_state().as_ref().map(|s| s.gen).unwrap_or(0);
+        (origin.elapsed().as_millis(), gen)
+    };
+    if elapsed < CARET_BLINK_SOLID_MS {
+        gen.saturating_mul(2)
+    } else {
+        let blink = (elapsed - CARET_BLINK_SOLID_MS) / CARET_BLINK_PHASE_MS;
+        gen.saturating_mul(2) + 2 + blink
+    }
 }
 
 /// Instant when the caret blink phase will flip next (for `ControlFlow::WaitUntil`).
 pub(crate) fn caret_blink_next_toggle_at() -> Instant {
-    static START: OnceLock<Instant> = OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    let elapsed_ms = start.elapsed().as_millis();
-    const PHASE_MS: u128 = 520;
-    let into = elapsed_ms % PHASE_MS;
-    let remain = (PHASE_MS - into).max(1);
-    Instant::now() + Duration::from_millis(remain as u64)
+    let elapsed_ms = caret_blink_origin().elapsed().as_millis();
+    Instant::now() + Duration::from_millis(caret_blink_next_remain_ms(elapsed_ms))
 }
 
 #[allow(dead_code)]
@@ -4574,6 +4629,20 @@ mod input_shaping_stability_tests {
         let first = (0..14).filter(|&x| out.rgba[x * 4 + 3] > 0).count();
         assert_eq!(last, 0, "full-bleed source must gain bottom pad");
         assert_eq!(first, 0, "full-bleed source must gain top pad");
+    }
+
+    #[test]
+    fn caret_blink_solid_then_off_then_on() {
+        assert!(super::caret_blink_visible_at_elapsed(0));
+        assert!(super::caret_blink_visible_at_elapsed(399));
+        assert!(
+            !super::caret_blink_visible_at_elapsed(400),
+            "first blink beat after the solid pause is hidden"
+        );
+        assert!(!super::caret_blink_visible_at_elapsed(400 + 519));
+        assert!(super::caret_blink_visible_at_elapsed(400 + 520));
+        assert_eq!(super::caret_blink_next_remain_ms(0), 400);
+        assert_eq!(super::caret_blink_next_remain_ms(400), 520);
     }
 
     #[test]

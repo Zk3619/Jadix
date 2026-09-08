@@ -138,22 +138,8 @@ fn sync_one_text_edit_paint(
     let mask = input_ty.is_password() && !reveal && !show_placeholder;
 
     let caret_override = if is_focused && !show_placeholder && preedit.is_empty() {
-        let len = if show_placeholder {
-            placeholder.len()
-        } else {
-            committed.len()
-        };
-        text_sel_sig
-            .peek()
-            .and_then(|(a, b)| {
-                if a.min(b) < a.max(b) {
-                    Some(a.max(b))
-                } else {
-                    None
-                }
-            })
-            .or_else(|| caret_sig.peek())
-            .map(|ix| ix.min(len))
+        let len = committed.len();
+        caret_sig.peek().map(|ix| ix.min(len))
     } else {
         None
     };
@@ -171,9 +157,10 @@ fn sync_one_text_edit_paint(
     });
     let display_text = strings.display_text;
     let layout_measure_text = strings.layout_measure_text;
-    let caret_byte = strings.caret_byte;
+    let mut caret_byte = strings.caret_byte;
     let real_display = strings.real_display;
     let caret_in_real = strings.caret_in_real;
+    let preedit_underline = strings.preedit_underline;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -406,11 +393,32 @@ fn sync_one_text_edit_paint(
                 } else {
                     None
                 };
+            let mut drop_caret = false;
+            if let Some(ix) = crate::utils::text_sel_move::moving_drop_caret(&desc.base_id) {
+                caret_byte = if mask {
+                    map_byte_index_to_masked(&real_display, ix, &display_text)
+                } else {
+                    display_text.floor_char_boundary(ix.min(display_text.len()))
+                };
+                drop_caret = true;
+            }
+            if !drop_caret
+                && text_el
+                    .text_style
+                    .input_caret
+                    .as_ref()
+                    .map(|c| c.caret_byte_index)
+                    != Some(caret_byte)
+            {
+                crate::renderer::restart_caret_blink();
+            }
             Some(InputCaretDraw {
                 caret_byte_index: caret_byte,
                 selection: sel_draw,
                 selection_bg,
                 overwrite_highlight,
+                preedit_underline,
+                drop_caret,
             })
         } else {
             None

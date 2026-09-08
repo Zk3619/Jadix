@@ -237,8 +237,13 @@ pub(crate) fn finish_composition_preserve_text(focus_id: &str) {
         anchor = anchor.min(v.len());
         anchor = v.floor_char_boundary(anchor);
         let (new, new_caret) = apply_ime_commit(&v, anchor, &insert);
+        crate::utils::text_edit_history::will_user_edit_field(
+            rest,
+            crate::utils::text_edit_history::EditKind::Replace,
+        );
         crate::utils::text_field::commit_value_sig(rest, val_sig, new);
         crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
+        crate::utils::text_edit_history::note_field_after_edit(rest);
         record_ime_commit(rest, &insert);
     }
     clear_text_edit_compose_state(focus_id);
@@ -593,6 +598,8 @@ mod tests {
             selection: None,
             selection_bg: [0; 4],
             overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
         });
         let nodes = vec![
             TextLayoutInfo {

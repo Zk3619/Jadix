@@ -669,6 +669,40 @@ pub fn pull_controlled_into_store(
     Some(ev)
 }
 
+/// Tab / Ctrl+A: select the committed value. Caret sits at 0 so overflow fields keep
+/// showing the line head (Win / Chrome). Returns `false` when `focus_id` is not a text edit.
+pub fn select_all_in_text_edit(focus_id: &str) -> bool {
+    let Some(rest) = text_edit_rest(focus_id) else {
+        return false;
+    };
+    let s = use_signal(&input_value_signal_key(rest), String::new).peek();
+    let sk = input_selection_signal_key(rest);
+    let ck = input_caret_signal_key(rest);
+    if let Some(range) = crate::utils::keyboard::select_all_range(&s) {
+        use_signal(&sk, || None::<(usize, usize)>).set(Some(range));
+        use_signal(&ck, || None::<usize>).set(Some(0));
+    } else {
+        use_signal(&sk, || None::<(usize, usize)>).set(None);
+        use_signal(&ck, || None::<usize>).set(Some(0));
+    }
+    if focus_id.starts_with(TEXTAREA_FOCUS_PREFIX) {
+        let vr = textarea_scroll_rest(rest);
+        use_signal(
+            &crate::core::scroll_viewport::scroll_offset_x_signal_key(&vr),
+            || 0.0_f32,
+        )
+        .set(0.0);
+        use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key(&vr),
+            || 0.0_f32,
+        )
+        .set(0.0);
+    } else {
+        use_signal(&input_scroll_x_signal_key(rest), || 0.0_f32).set(0.0);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,6 +743,30 @@ mod tests {
                 "hello"
             );
             assert!(pull_controlled_into_store("tf_pull", "hello", true).is_none());
+        });
+    }
+
+    #[test]
+    fn select_all_in_text_edit_covers_value_and_parks_caret_at_start() {
+        let (_owner, ()) = create_root(|| {
+            let id = "sel_all_tab";
+            use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+            use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(5));
+            use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).set(40.0);
+            assert!(select_all_in_text_edit(&input_focus_id(id)));
+            assert_eq!(
+                use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>).peek(),
+                Some((0, 5))
+            );
+            assert_eq!(
+                use_signal(&input_caret_signal_key(id), || None::<usize>).peek(),
+                Some(0)
+            );
+            assert_eq!(
+                use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).peek(),
+                0.0
+            );
+            assert!(!select_all_in_text_edit("button:x"));
         });
     }
 

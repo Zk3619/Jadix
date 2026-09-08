@@ -6,15 +6,16 @@ use crate::components::input::{
     filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
 };
 use crate::utils::clipboard::{
-    edit_shortcut_letter, get_text as clipboard_get_text, sanitize_pasted_line,
-    set_text as clipboard_set_text, shortcut_modifiers as clipboard_shortcut_modifiers,
+    edit_shortcut_letter, get_text as clipboard_get_text, is_redo_shortcut, is_undo_shortcut,
+    sanitize_pasted_line, set_text as clipboard_set_text,
+    shortcut_modifiers as clipboard_shortcut_modifiers,
 };
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{
     caret_line_end, caret_line_home, caret_move_left_multiline, caret_move_page_vertical,
     caret_move_right_multiline, caret_move_vertical, caret_move_vertical_visual_pref,
     caret_visual_line_end, caret_visual_line_home, delete_char_forward, extend_selection,
-    normalized_selection, select_all_range,
+    normalized_selection,
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
@@ -31,9 +32,33 @@ fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
     filter_insert_for_type(input_type_for(rest), existing, text)
 }
 
+fn commit_user_edit(
+    rest: &str,
+    val_sig: crate::core::reactivity::Signal<String>,
+    caret_sig: crate::core::reactivity::Signal<Option<usize>>,
+    text_sel_sig: crate::core::reactivity::Signal<Option<(usize, usize)>>,
+    new_value: String,
+    new_caret: usize,
+    kind: crate::utils::text_edit_history::EditKind,
+) {
+    crate::utils::text_edit_history::will_user_edit_field(rest, kind);
+    crate::utils::text_field::commit_value_sig(rest, val_sig, new_value);
+    text_sel_sig.set(None);
+    caret_sig.set(Some(new_caret));
+    crate::utils::text_edit_history::note_field_after_edit(rest);
+}
+
+fn is_tab_key(key: &Key) -> bool {
+    matches!(key, Key::Named(NamedKey::Tab))
+        || matches!(key, Key::Character(s) if s.as_str() == "\t")
+}
+
 /// Platforms such as Windows come with `event.text` (Esc → U+001B) for Named keys such as Esc / F keys.
 /// Only the Named key of Space / Enter allows character insertion (space, Textarea newline).
 pub(crate) fn named_key_blocks_text_insert(key: &Key) -> bool {
+    if is_tab_key(key) {
+        return true;
+    }
     match key {
         Key::Named(NamedKey::Space | NamedKey::Enter) => false,
         Key::Named(_) => true,
@@ -120,9 +145,14 @@ impl super::App {
                         let (new_val, anchor) =
                             prepare_compose_anchor(&committed, caret_sig.get(), text_sel.get());
                         if new_val != committed {
+                            crate::utils::text_edit_history::will_user_edit_field(
+                                rest,
+                                crate::utils::text_edit_history::EditKind::Replace,
+                            );
                             crate::utils::text_field::commit_value_sig(rest, val_sig, new_val);
                             text_sel.set(None);
                             caret_sig.set(Some(anchor));
+                            crate::utils::text_edit_history::note_field_after_edit(rest);
                         }
                         ime_anchor_sig.set(Some(anchor));
                     }
@@ -165,17 +195,23 @@ impl super::App {
                     anchor = anchor.min(v.len());
                     anchor = v.floor_char_boundary(anchor);
                     let filtered = filter_typed_insert(rest, &v[..anchor], &s);
+                    let ck = crate::components::input::input_caret_signal_key(rest);
+                    let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     let new_caret = if filtered.is_empty() && !s.is_empty() {
                         // All filtered by type: still clear preedit, do not change value.
                         anchor
                     } else {
+                        crate::utils::text_edit_history::will_user_edit_field(
+                            rest,
+                            crate::utils::text_edit_history::EditKind::Replace,
+                        );
                         let (new, new_caret) = apply_ime_commit(&v, anchor, &filtered);
                         crate::utils::text_field::commit_value_sig(rest, val_sig, new);
+                        caret_sig.set(Some(new_caret));
+                        crate::utils::text_edit_history::note_field_after_edit(rest);
                         new_caret
                     };
                     Self::clear_ime_compose_state(rest);
-                    let ck = crate::components::input::input_caret_signal_key(rest);
-                    let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     caret_sig.set(Some(new_caret));
                     ime_support::record_ime_commit(rest, &filtered);
                 }
@@ -241,7 +277,7 @@ impl super::App {
             }
         }
         if event.state == ElementState::Pressed {
-            if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
+            if is_tab_key(&event.logical_key) && !event.repeat {
                 if !allow_primary_tree {
                     return false;
                 }
@@ -283,7 +319,10 @@ impl super::App {
                     };
                     let next_id = ids[next_idx].clone();
                     focus_visible.set(true);
-                    focused.set(next_id);
+                    focused.set(next_id.clone());
+                    if crate::utils::text_field::select_all_in_text_edit(&next_id) {
+                        crate::renderer::restart_caret_blink();
+                    }
                     // Focus chrome is paint-synced (peek), not rebuild-driven. Without a redraw,
                     // snapped focus rings never repaint after Tab (springs used to keep frames alive).
                     if let Some(st) = (*self.state.borrow_mut()).as_mut() {
@@ -291,7 +330,7 @@ impl super::App {
                     }
                     return true;
                 }
-            } else if !matches!(event.logical_key, Key::Named(NamedKey::Tab)) {
+            } else if !is_tab_key(&event.logical_key) {
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                 let ime_active = crate::core::reactivity::use_signal(
@@ -479,21 +518,46 @@ impl super::App {
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
                     let password_field = input_type_for(rest).is_password();
+                    if !composing
+                        && event.state == ElementState::Pressed
+                        && is_undo_shortcut(&event, &self.modifiers)
+                    {
+                        if crate::utils::text_edit_history::undo_field(rest) {
+                            crate::renderer::restart_caret_blink();
+                        }
+                        if allow_primary_tree {
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                        }
+                        return true;
+                    }
+                    if !composing
+                        && event.state == ElementState::Pressed
+                        && is_redo_shortcut(&event, &self.modifiers)
+                    {
+                        if crate::utils::text_edit_history::redo_field(rest) {
+                            crate::renderer::restart_caret_blink();
+                        }
+                        if allow_primary_tree {
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                        }
+                        return true;
+                    }
                     if clipboard_shortcut_modifiers(&self.modifiers) {
                         if let Some(k) = edit_shortcut_letter(&event) {
                             let mut handled = false;
                             if !composing {
                                 match k {
                                     'a' => {
-                                        // Select All
-                                        let s = val_sig.get();
-                                        if let Some(range) = select_all_range(&s) {
-                                            text_sel_sig.set(Some(range));
-                                            caret_sig.set(Some(range.1));
-                                        } else {
-                                            text_sel_sig.set(None);
-                                            caret_sig.set(Some(0));
-                                        }
+                                        crate::utils::text_field::select_all_in_text_edit(
+                                            &crate::utils::text_field::focus_id_for_text_edit(
+                                                rest, multiline,
+                                            ),
+                                        );
+                                        crate::renderer::restart_caret_blink();
                                         handled = true;
                                     }
                                     'c' => {
@@ -531,11 +595,16 @@ impl super::App {
                                                 let text = filter_typed_insert(rest, &s, &text);
                                                 if !text.is_empty() {
                                                     s.insert_str(insert_at, &text);
-                                                    crate::utils::text_field::commit_value_sig(
-                                                        rest, val_sig, s,
+                                                    let caret = insert_at + text.len();
+                                                    commit_user_edit(
+                                                        rest,
+                                                        val_sig,
+                                                        caret_sig,
+                                                        text_sel_sig,
+                                                        s,
+                                                        caret,
+                                                        crate::utils::text_edit_history::EditKind::Replace,
                                                     );
-                                                    text_sel_sig.set(None);
-                                                    caret_sig.set(Some(insert_at + text.len()));
                                                 }
                                             }
                                         }
@@ -551,11 +620,15 @@ impl super::App {
                                                 clipboard_set_text(&s[lo..hi]);
                                             }
                                             s.replace_range(lo..hi, "");
-                                            crate::utils::text_field::commit_value_sig(
-                                                rest, val_sig, s,
+                                            commit_user_edit(
+                                                rest,
+                                                val_sig,
+                                                caret_sig,
+                                                text_sel_sig,
+                                                s,
+                                                lo,
+                                                crate::utils::text_edit_history::EditKind::Replace,
                                             );
-                                            text_sel_sig.set(None);
-                                            caret_sig.set(Some(lo));
                                         }
                                         handled = true;
                                     }
@@ -900,20 +973,29 @@ impl super::App {
                                     let hi = a.max(b);
                                     if lo < hi && hi <= s.len() {
                                         s.replace_range(lo..hi, "");
-                                        crate::utils::text_field::commit_value_sig(
-                                            rest, val_sig, s,
+                                        commit_user_edit(
+                                            rest,
+                                            val_sig,
+                                            caret_sig,
+                                            text_sel_sig,
+                                            s,
+                                            lo,
+                                            crate::utils::text_edit_history::EditKind::Replace,
                                         );
-                                        text_sel_sig.set(None);
-                                        caret_sig.set(Some(lo));
                                     }
                                 } else {
                                     let mut c = caret_sig.get().unwrap_or(s.len()).min(s.len());
                                     c = s.floor_char_boundary(c);
                                     if delete_char_forward(&mut s, c) {
-                                        crate::utils::text_field::commit_value_sig(
-                                            rest, val_sig, s,
+                                        commit_user_edit(
+                                            rest,
+                                            val_sig,
+                                            caret_sig,
+                                            text_sel_sig,
+                                            s,
+                                            c,
+                                            crate::utils::text_edit_history::EditKind::Delete,
                                         );
-                                        caret_sig.set(Some(c));
                                     }
                                 }
                                 nav_handled = true;
@@ -928,6 +1010,7 @@ impl super::App {
                             _ => {}
                         }
                         if nav_handled {
+                            crate::renderer::restart_caret_blink();
                             if allow_primary_tree {
                                 if multiline {
                                     if let Some(scroll_key) = boundary_scroll_key.as_ref() {
@@ -1023,19 +1106,27 @@ impl super::App {
                                 let hi = a.max(b);
                                 if lo < hi && hi <= s.len() {
                                     s.replace_range(lo..hi, "");
-                                    crate::utils::text_field::commit_value_sig(
+                                    commit_user_edit(
                                         rest,
                                         val_sig,
-                                        s.clone(),
+                                        caret_sig,
+                                        text_sel_sig,
+                                        s,
+                                        lo,
+                                        crate::utils::text_edit_history::EditKind::Replace,
                                     );
-                                    text_sel_sig.set(None);
-                                    caret_sig.set(Some(lo));
                                 } else if lo == hi && lo <= s.len() && lo > 0 {
                                     let prev = s.floor_char_boundary(lo - 1);
                                     s.replace_range(prev..lo, "");
-                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
-                                    text_sel_sig.set(None);
-                                    caret_sig.set(Some(prev));
+                                    commit_user_edit(
+                                        rest,
+                                        val_sig,
+                                        caret_sig,
+                                        text_sel_sig,
+                                        s,
+                                        prev,
+                                        crate::utils::text_edit_history::EditKind::Delete,
+                                    );
                                 }
                             } else {
                                 let caret = caret_sig.get().unwrap_or(s.len());
@@ -1043,8 +1134,15 @@ impl super::App {
                                 if caret > 0 {
                                     let prev = s.floor_char_boundary(caret - 1);
                                     s.replace_range(prev..caret, "");
-                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
-                                    caret_sig.set(Some(prev));
+                                    commit_user_edit(
+                                        rest,
+                                        val_sig,
+                                        caret_sig,
+                                        text_sel_sig,
+                                        s,
+                                        prev,
+                                        crate::utils::text_edit_history::EditKind::Delete,
+                                    );
                                 }
                             }
                         }
@@ -1095,9 +1193,15 @@ impl super::App {
                                 };
                                 if !text.is_empty() {
                                     s.insert_str(insert_at, &text);
-                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
-                                    text_sel_sig.set(None);
-                                    caret_sig.set(Some(insert_at + text.len()));
+                                    commit_user_edit(
+                                        rest,
+                                        val_sig,
+                                        caret_sig,
+                                        text_sel_sig,
+                                        s,
+                                        insert_at + text.len(),
+                                        crate::utils::text_edit_history::EditKind::Replace,
+                                    );
                                 }
                             } else {
                                 let mut insert_at = caret_sig.get().unwrap_or(s.len());
@@ -1124,16 +1228,26 @@ impl super::App {
                                         let first = s[insert_at..].chars().next().unwrap();
                                         let olen = first.len_utf8();
                                         s.replace_range(insert_at..insert_at + olen, &text);
-                                        crate::utils::text_field::commit_value_sig(
-                                            rest, val_sig, s,
+                                        commit_user_edit(
+                                            rest,
+                                            val_sig,
+                                            caret_sig,
+                                            text_sel_sig,
+                                            s,
+                                            insert_at + text.len(),
+                                            crate::utils::text_edit_history::EditKind::Replace,
                                         );
-                                        caret_sig.set(Some(insert_at + text.len()));
                                     } else {
                                         s.insert_str(insert_at, &text);
-                                        crate::utils::text_field::commit_value_sig(
-                                            rest, val_sig, s,
+                                        commit_user_edit(
+                                            rest,
+                                            val_sig,
+                                            caret_sig,
+                                            text_sel_sig,
+                                            s,
+                                            insert_at + text.len(),
+                                            crate::utils::text_edit_history::EditKind::Insert,
                                         );
-                                        caret_sig.set(Some(insert_at + text.len()));
                                     }
                                 }
                             }
@@ -1162,6 +1276,10 @@ mod tests {
         assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::Escape)));
         assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::F1)));
         assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::Tab)));
+        assert!(named_key_blocks_text_insert(&Key::Character("\t".into())));
+        assert!(is_tab_key(&Key::Named(NamedKey::Tab)));
+        assert!(is_tab_key(&Key::Character("\t".into())));
+        assert!(!is_tab_key(&Key::Character("a".into())));
         assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Space)));
         assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Enter)));
         assert!(!named_key_blocks_text_insert(&Key::Character("a".into())));
