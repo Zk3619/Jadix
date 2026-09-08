@@ -1,7 +1,7 @@
 //! Collision detectors from solid-dnd (`closestCenter` / `closestCorners` /
 //! `mostIntersecting`) plus dnd-kit `pointerWithin` for nested droppables.
 
-use super::geometry::{distance, Rect};
+use super::geometry::{Rect, distance};
 
 /// Which algorithm picks the active droppable each move.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,12 +47,36 @@ pub fn detect(
     if droppables.is_empty() {
         return None;
     }
-    match alg {
+    let picked = match alg {
         CollisionAlg::MostIntersecting => most_intersecting(dragged, droppables, active_id),
         CollisionAlg::ClosestCenter => closest_center(dragged, droppables, active_id),
         CollisionAlg::ClosestCorners => closest_corners(dragged, droppables, active_id),
         CollisionAlg::PointerWithin => pointer_within(pointer, droppables, active_id),
-    }
+    };
+    refine_innermost_nested(pointer, droppables, picked)
+}
+
+/// When the winner fully contains a smaller candidate that also contains the
+/// pointer, prefer the inner droppable (nested lists / folders).
+fn refine_innermost_nested(
+    pointer: [f32; 2],
+    droppables: &[Candidate],
+    picked: Option<String>,
+) -> Option<String> {
+    let id = picked?;
+    let winner = droppables.iter().find(|d| d.id == id)?;
+    let inner = droppables
+        .iter()
+        .filter(|d| {
+            d.id != id && winner.rect.contains_rect(d.rect) && d.rect.contains_point(pointer)
+        })
+        .min_by(|a, b| {
+            a.rect
+                .area()
+                .partial_cmp(&b.rect.area())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    Some(inner.map(|d| d.id.clone()).unwrap_or(id))
 }
 
 fn keep_active_on_tie(best_id: &str, candidate_id: &str, active_id: Option<&str>) -> bool {
@@ -242,6 +266,27 @@ mod tests {
             )
             .as_deref(),
             Some("b")
+        );
+    }
+
+    #[test]
+    fn most_intersecting_prefers_nested_inner_when_pointer_inside() {
+        let dragged = Rect::from_bounds([10.0, 10.0, 80.0, 80.0]);
+        let hits = vec![
+            c("outer", [0.0, 0.0, 200.0, 200.0]),
+            c("inner", [20.0, 20.0, 40.0, 40.0]),
+        ];
+        assert_eq!(
+            detect(
+                CollisionAlg::MostIntersecting,
+                [30.0, 30.0],
+                dragged,
+                &hits,
+                None
+            )
+            .as_deref(),
+            Some("inner"),
+            "large ghost overlap with the parent must not beat a nested droppable under the pointer"
         );
     }
 }

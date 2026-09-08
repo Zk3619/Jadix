@@ -6,18 +6,18 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use crate::app::pointer_events::{dom_button, EventPhase};
+use crate::app::pointer_events::{EventPhase, dom_button};
 use crate::app::reactive::reactive_view_sized;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
 };
 use crate::core::tree::{Element, IntoOpacity, LayoutStatus};
 use crate::layout::LayoutTree;
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::motion::{
-    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
-    MotionEpsilon, MotionStyle, MotionTransform,
+    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, clear_motion,
+    motion_is_animating, motion_sync_status, prepare_motion_sync,
 };
 use crate::utils::resolve_instance_id;
 
@@ -25,11 +25,11 @@ use super::autoscroll::{AutoScroll, ScrollLock};
 use super::collision::CollisionAlg;
 use super::geometry::{Axis, DragStack, Restrict, SnapGrid};
 use super::session::{
-    active_source_translate, begin, bump_auto_stack, list_max_index, list_slot_stride,
-    live_cross_list_source_translate, live_same_list_source_translate, overlay_is_registered,
-    overlay_source_opacity, start_geometry, BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
+    BeginDrag, DragHandler, DragPredicate, ScopeRuntime, active_source_translate, begin,
+    bump_auto_stack, list_max_index, list_slot_stride, live_cross_list_source_translate,
+    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity, start_geometry,
 };
-use super::sortable::{sortable_preview, SORTABLE_FLIP_MS};
+use super::sortable::{SORTABLE_FLIP_MS, sortable_preview};
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST,
@@ -146,21 +146,21 @@ fn live_slot<T: Clone + PartialEq + 'static>(key: &str, value: T) -> Signal<T> {
     sig
 }
 
-	/// `for_keyed` stamps `template_id` on the element the mapper returns. If that
-	/// node is the `reactive_view` placeholder, reconcile misses and the item
-	/// collapses to 0×0 (empty sortable list). Keep the island id on a child.
-	///
-	/// `data-stacking-context` belongs on **this** shell, not only DragProvider.
-	/// Gallery wraps items in a relative arena; the provider then has one child,
-	/// so its stacking-context opens a single band. Nested `z-index` inside an
-	/// already-open page_stack (ScrollArea overlay bar) does not split further —
-	/// both pills share `rects → text` and lower glyphs paint on the upper fill.
-	fn keyed_item_shell(island: Element) -> Element {
-	    let mut el =
-	        Element::from(vstack().min_w(0.0).flex_shrink(0.0).child(island)).overflow("visible");
-	    el.set_attr("data-stacking-context", "1");
-	    el
-	}
+/// `for_keyed` stamps `template_id` on the element the mapper returns. If that
+/// node is the `reactive_view` placeholder, reconcile misses and the item
+/// collapses to 0×0 (empty sortable list). Keep the island id on a child.
+///
+/// `data-stacking-context` belongs on **this** shell, not only DragProvider.
+/// Gallery wraps items in a relative arena; the provider then has one child,
+/// so its stacking-context opens a single band. Nested `z-index` inside an
+/// already-open page_stack (ScrollArea overlay bar) does not split further —
+/// both pills share `rects → text` and lower glyphs paint on the upper fill.
+fn keyed_item_shell(island: Element) -> Element {
+    let mut el =
+        Element::from(vstack().min_w(0.0).flex_shrink(0.0).child(island)).overflow("visible");
+    el.set_attr("data-stacking-context", "1");
+    el
+}
 
 /// z-index must live on the author-parented shell (direct child of the
 /// stacking-context DragProvider root). Nested pill `z-index` is not a
@@ -503,6 +503,7 @@ pub struct DragScopeBuilder {
     on_end: Option<DragHandler>,
     /// Sibling / source-hole FLIP. Default `true` (`SORTABLE_FLIP_MS`). `false` snaps.
     animation: bool,
+    modifiers: Vec<super::modifier::DragModifier>,
 }
 
 pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
@@ -522,6 +523,7 @@ pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
         on_over: None,
         on_end: None,
         animation: true,
+        modifiers: Vec::new(),
     }
 }
 
@@ -571,6 +573,26 @@ impl DragScopeBuilder {
     /// `true` (default) uses [`SORTABLE_FLIP_MS`]; `false` jumps instantly.
     pub fn animation(mut self, yes: bool) -> Self {
         self.animation = yes;
+        self
+    }
+    /// Extra press-delta stage (solid-dnd `addTransformer` / dnd-kit `Modifier`).
+    /// Does not write CSS `transform`. Built-ins occupy orders 10 (axis), 20
+    /// (snap), 25 (pin-locked-axis), 30 (restrict); author stages typically
+    /// use order 40.
+    pub fn modifier(
+        mut self,
+        id: impl Into<String>,
+        order: i32,
+        f: impl Fn(
+            super::modifier::DragDelta,
+            &super::modifier::DragModifierCtx,
+        ) -> super::modifier::DragDelta
+        + 'static,
+    ) -> Self {
+        let id = id.into();
+        self.modifiers.retain(|t| t.id != id);
+        self.modifiers
+            .push(super::modifier::DragModifier::new(id, order, f));
         self
     }
     /// Return `false` to reject a droppable this frame (Sortable `onMove`).
@@ -633,6 +655,7 @@ impl DragScopeBuilder {
                 hover_index,
                 drag_extent,
                 stack_seq: 0,
+                modifiers: self.modifiers,
             },
         );
         let ctx = DragCtx {
@@ -1252,8 +1275,8 @@ mod tests {
     #[test]
     fn sortable_shift_flip_animates_mid_then_snaps_on_session_end() {
         use crate::style::{
-            set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
-            set_prefers_reduced_motion, TimingFunction, TransitionEntry, TransitionProperty,
+            TimingFunction, TransitionEntry, TransitionProperty, set_css_transition_timeline_ms,
+            set_css_transition_virtual_timeline, set_prefers_reduced_motion,
         };
         use crate::utils::motion::{ensure_motion_transitions, snap_motion_baseline};
         set_prefers_reduced_motion(Some(false));

@@ -215,6 +215,15 @@ impl Rect {
         p[0] >= self.left() && p[0] <= self.right() && p[1] >= self.top() && p[1] <= self.bottom()
     }
 
+    /// True when `inner` sits strictly inside this rect (nested droppable).
+    pub fn contains_rect(self, inner: Self) -> bool {
+        inner.left() >= self.left() - 1e-4
+            && inner.right() <= self.right() + 1e-4
+            && inner.top() >= self.top() - 1e-4
+            && inner.bottom() <= self.bottom() + 1e-4
+            && inner.area() + 1e-4 < self.area()
+    }
+
     pub fn area(self) -> f32 {
         (self.width * self.height).max(0.0)
     }
@@ -232,11 +241,7 @@ impl Rect {
         }
         let inter = w * h;
         let union = self.area() + other.area() - inter;
-        if union <= 1e-6 {
-            0.0
-        } else {
-            inter / union
-        }
+        if union <= 1e-6 { 0.0 } else { inter / union }
     }
 
     pub fn is_usable(self) -> bool {
@@ -320,5 +325,16 @@ mod tests {
     fn clamp_keeps_ghost_inside() {
         let p = clamp_origin_to_box([90.0, 90.0], [20.0, 20.0], [0.0, 0.0, 100.0, 100.0]);
         assert_eq!(p, [80.0, 80.0]);
+    }
+
+    #[test]
+    fn contains_rect_is_strict_nesting() {
+        let outer = Rect::from_bounds([0.0, 0.0, 100.0, 100.0]);
+        let inner = Rect::from_bounds([10.0, 10.0, 20.0, 20.0]);
+        assert!(outer.contains_rect(inner));
+        assert!(!inner.contains_rect(outer));
+        assert!(!outer.contains_rect(outer));
+        let overlap = Rect::from_bounds([80.0, 80.0, 40.0, 40.0]);
+        assert!(!outer.contains_rect(overlap));
     }
 }

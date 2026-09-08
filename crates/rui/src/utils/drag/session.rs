@@ -8,12 +8,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use crate::core::reactivity::{batch, Signal};
+use crate::core::reactivity::{Signal, batch};
 use crate::core::tree::Element;
 
 use super::autoscroll::AutoScroll;
-use super::collision::{detect, Candidate, CollisionAlg};
-use super::geometry::{clamp_origin_to_box, Axis, Rect, Restrict, SnapGrid};
+use super::collision::{Candidate, CollisionAlg, detect};
+use super::geometry::{Axis, Rect, Restrict, SnapGrid};
+use super::modifier::{
+    DragDelta, DragModifier, DragModifierCtx, apply_modifiers, builtin_modifiers,
+};
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_INDEX, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE,
@@ -147,11 +150,18 @@ pub(super) struct ScopeRuntime {
     pub drag_extent: Signal<[f32; 2]>,
     /// Last assigned [`super::geometry::DragStack::Auto`] rank in this scope.
     pub stack_seq: i32,
+    /// Author modifiers (solid-dnd `addTransformer` / dnd-kit `Modifier`).
+    /// Built-ins are assembled each tick, not stored here.
+    pub modifiers: Vec<DragModifier>,
 }
 
 thread_local! {
     static SESSION: RefCell<Option<DragSession>> = const { RefCell::new(None) };
     static SCOPES: RefCell<HashMap<String, ScopeRuntime>> = RefCell::new(HashMap::new());
+    /// Runtime [`add_modifier`] stages, keyed by scope id. Survives
+    /// [`register_scope`] rebuilds (builder `modifiers` are replaced).
+    static EXTRA_MODIFIERS: RefCell<HashMap<String, Vec<DragModifier>>> =
+        RefCell::new(HashMap::new());
     /// Last laid-out item boxes, keyed by `scope\0id`. Handle drags read this so
     /// the ghost tracks the **item**, not the handle's smaller hit box.
     static ITEM_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
@@ -223,6 +233,46 @@ pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
 
 pub(super) fn with_scope<R>(id: &str, f: impl FnOnce(&mut ScopeRuntime) -> R) -> Option<R> {
     SCOPES.with(|m| m.borrow_mut().get_mut(id).map(f))
+}
+
+/// Register an author modifier on a live scope (solid-dnd `addTransformer`).
+/// Replaces an existing stage with the same `id`. Survives provider rebuilds.
+pub fn add_modifier(scope_id: &str, modifier: DragModifier) -> bool {
+    let exists = SCOPES.with(|m| m.borrow().contains_key(scope_id));
+    if !exists {
+        return false;
+    }
+    EXTRA_MODIFIERS.with(|m| {
+        let mut map = m.borrow_mut();
+        let list = map.entry(scope_id.to_string()).or_default();
+        list.retain(|t| t.id != modifier.id);
+        list.push(modifier);
+    });
+    true
+}
+
+/// Remove an author modifier by id (runtime extra, then builder list).
+pub fn remove_modifier(scope_id: &str, id: &str) -> bool {
+    let from_extra = EXTRA_MODIFIERS.with(|m| {
+        let mut map = m.borrow_mut();
+        let Some(list) = map.get_mut(scope_id) else {
+            return false;
+        };
+        let before = list.len();
+        list.retain(|t| t.id != id);
+        let changed = list.len() != before;
+        if list.is_empty() {
+            map.remove(scope_id);
+        }
+        changed
+    });
+    let from_builder = with_scope(scope_id, |rt| {
+        let before = rt.modifiers.len();
+        rt.modifiers.retain(|t| t.id != id);
+        rt.modifiers.len() != before
+    })
+    .unwrap_or(false);
+    from_extra || from_builder
 }
 
 pub(super) fn mark_overlay_registered(scope_id: &str) {
@@ -383,53 +433,42 @@ fn live_source_slot(sess: &DragSession, hits: &[DragHit]) -> Option<Rect> {
         .filter(|r| r.is_usable())
 }
 
-/// Locked axis follows the current layout slot (scroll-adjusted), not the
-/// press-time `start_bounds`. `axis="y"` + a parent `ScrollArea` pan would
-/// otherwise freeze overlay X while the list moves (Gallery Saturn offset).
-fn pin_locked_axis_to_live_slot(sess: &DragSession, hits: &[DragHit], origin: &mut [f32; 2]) {
-    if sess.axis == Axis::Xy {
-        return;
-    }
-    let Some(slot) = live_source_slot(sess, hits) else {
-        return;
-    };
-    match sess.axis {
-        Axis::Y => origin[0] = slot.x,
-        Axis::X => origin[1] = slot.y,
-        Axis::Xy => {}
-    }
-}
-
 fn ghost_origin(
     sess: &DragSession,
     pointer: [f32; 2],
     viewport: [f32; 2],
     hits: &[DragHit],
 ) -> [f32; 2] {
-    let (dx, dy) = sess.axis.apply(
-        pointer[0] - sess.start_pointer[0],
-        pointer[1] - sess.start_pointer[1],
-    );
-    // Keep the original grab point under the cursor (interact.js).
-    let mut origin = [
-        sess.start_pointer[0] + dx - sess.grab_offset[0],
-        sess.start_pointer[1] + dy - sess.grab_offset[1],
-    ];
-    if let Some(snap) = sess.snap {
-        origin = snap.apply(origin[0], origin[1]);
-    }
-    pin_locked_axis_to_live_slot(sess, hits, &mut origin);
-    match sess.restrict {
-        Restrict::None => origin,
-        Restrict::Viewport => clamp_origin_to_box(
-            origin,
-            [sess.start_bounds[2], sess.start_bounds[3]],
-            [0.0, 0.0, viewport[0].max(1.0), viewport[1].max(1.0)],
-        ),
-        Restrict::Rect(r) => {
-            clamp_origin_to_box(origin, [sess.start_bounds[2], sess.start_bounds[3]], r)
+    let ctx = DragModifierCtx {
+        pointer,
+        start_pointer: sess.start_pointer,
+        grab_offset: sess.grab_offset,
+        start_bounds: sess.start_bounds,
+        viewport,
+        axis: sess.axis,
+        snap: sess.snap,
+        restrict: sess.restrict,
+        live_slot: live_source_slot(sess, hits),
+    };
+    let mut pipeline = builtin_modifiers();
+    SCOPES.with(|m| {
+        if let Some(rt) = m.borrow().get(&sess.scope_id) {
+            pipeline.extend(rt.modifiers.iter().cloned());
         }
-    }
+    });
+    EXTRA_MODIFIERS.with(|m| {
+        if let Some(extra) = m.borrow().get(&sess.scope_id) {
+            for t in extra {
+                pipeline.retain(|x| x.id != t.id);
+                pipeline.push(t.clone());
+            }
+        }
+    });
+    let delta = DragDelta {
+        x: pointer[0] - sess.start_pointer[0],
+        y: pointer[1] - sess.start_pointer[1],
+    };
+    ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx))
 }
 
 /// Gallery stacks two Sortable lists that reuse planet names. Collision
@@ -499,44 +538,26 @@ fn list_has_indexed_candidate(hits: &[DragHit], sess: &DragSession, list: &str) 
         .any(|h| h.accepts(sess) && h.index.is_some() && h.list_id.as_deref() == Some(list))
 }
 
-/// `list_id` of the indexed sortable **row slot** under the pointer.
-///
-/// Gallery Kanban: the column `Droppable` shell can be shorter than its
-/// `SortableItem` rows (reactive island / `h=auto`), so the pointer sits on a
-/// row but outside the container hit — falling back to collision `drop_hit`
-/// then let the overlay ghost pick the neighbour column (`hover_list=doing`) and
-/// the dimmed body cross-translates toward it.
-fn pointer_indexed_list_at(
-    hits: &[DragHit],
-    sess: &DragSession,
-    pointer: [f32; 2],
-) -> Option<String> {
-    hits.iter()
-        .filter(|h| {
-            h.scope_id == sess.scope_id
-                && h.index.is_some()
-                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
-                && h.rect.is_usable()
-                && h.rect.contains_point(pointer)
-        })
-        .min_by(|a, b| {
-            a.rect
-                .area()
-                .partial_cmp(&b.rect.area())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .and_then(|h| h.list_id.clone())
-}
-
 /// Sortable hover target list: pointer layout only — never collision `drop_hit`
 /// (the transformed ghost must not choose the column).
+///
+/// Nested lists: pick the **innermost** accepting hit (row or shell) that
+/// contains the pointer so a parent `SortableItem` wrapping a child list does
+/// not steal hover from empty nested padding.
 fn resolve_sortable_hover_list(
     hits: &[DragHit],
     sess: &DragSession,
     pointer: [f32; 2],
 ) -> Option<String> {
-    if let Some(list) = pointer_indexed_list_at(hits, sess, pointer) {
-        return Some(list);
+    // Folder-in-folder: the dragged row's box contains its nested list. Stay
+    // on `from_list` while the pointer is still in that island.
+    if source_layout_contains(sess, hits, pointer) {
+        return sess.from_list.clone();
+    }
+    if let Some(list) = innermost_list_at(hits, sess, pointer) {
+        if !pointer_past_list_indexed_content(hits, &list, pointer, sess.axis) {
+            return Some(list);
+        }
     }
     let mut shells: Vec<&DragHit> = hits
         .iter()
@@ -572,6 +593,24 @@ fn resolve_sortable_hover_list(
         }
     }
     pointer_column_list_by_band(hits, sess, pointer).or_else(|| sess.from_list.clone())
+}
+
+/// Smallest accepting droppable (indexed row or list shell) under the pointer.
+fn innermost_list_at(hits: &[DragHit], sess: &DragSession, pointer: [f32; 2]) -> Option<String> {
+    hits.iter()
+        .filter(|h| {
+            h.accepts(sess)
+                && h.rect.is_usable()
+                && h.rect.contains_point(pointer)
+                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
+        })
+        .min_by(|a, b| {
+            a.rect
+                .area()
+                .partial_cmp(&b.rect.area())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|h| h.list_id.clone())
 }
 
 /// Column `Droppable` whose horizontal band contains the pointer (Kanban).
@@ -858,11 +897,7 @@ fn pin_hover_below_opened_hole(
         Axis::X => hole_pt[0],
         Axis::Y | Axis::Xy => hole_pt[1],
     };
-    if p < hole + pitch {
-        prev
-    } else {
-        computed
-    }
+    if p < hole + pitch { prev } else { computed }
 }
 
 fn source_layout_contains(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
@@ -1035,7 +1070,13 @@ pub fn nudge_insert(delta: i32) -> bool {
     let Some(sess) = SESSION.with(|s| s.borrow().clone()) else {
         return false;
     };
-    let Some(list) = sess.from_list.clone() else {
+    let list = SCOPES.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .and_then(|s| s.hover_list.peek())
+            .or_else(|| sess.from_list.clone())
+    });
+    let Some(list) = list else {
         return false;
     };
     let hits = LAST_HITS.with(|h| h.borrow().clone());
@@ -1541,6 +1582,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -1611,6 +1653,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -1687,6 +1730,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -1716,7 +1760,7 @@ mod tests {
     fn pump_autoscroll_resyncs_axis_y_after_parent_scroll() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            scroll_offset_x_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key,
         };
 
         let (_o, _) = create_root(|| {
@@ -1761,6 +1805,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             let mut chip = Element::new();
@@ -1862,6 +1907,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -1929,6 +1975,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2005,6 +2052,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2336,7 +2384,7 @@ mod tests {
     fn collect_hits_rect_is_visual_inside_scrolled_viewport() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_y_signal_key,
         };
 
         let (_o, (layout_y, hit_y, grab_y, start_y)) = create_root(|| {
@@ -2471,6 +2519,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2582,6 +2631,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2694,6 +2744,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2810,6 +2861,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2915,6 +2967,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3059,6 +3112,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3382,6 +3436,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3484,6 +3539,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3570,6 +3626,7 @@ mod tests {
                     hover_index,
                     drag_extent,
                     stack_seq: 0,
+                    modifiers: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3634,6 +3691,286 @@ mod tests {
             hover_index,
             Some(1),
             "insert index must stay on the lifted row"
+        );
+    }
+
+    #[test]
+    fn nested_list_shell_beats_parent_folder_row() {
+        let (_o, hover) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 20.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 8.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "file".into(),
+                pointer: [10.0, 310.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [0.0, 300.0, 40.0, 20.0],
+                from_list: Some("inbox".into()),
+                from_index: Some(0),
+                item_type: "file".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut folder = hit("folder-later", [0.0, 0.0, 200.0, 200.0], true);
+            folder.list_id = Some("root".into());
+            folder.index = Some(1);
+            folder.is_draggable = true;
+            let mut nested = hit("later-shell", [10.0, 40.0, 180.0, 140.0], true);
+            nested.list_id = Some("later".into());
+            nested.index = None;
+            let mut src = hit("file", [0.0, 300.0, 40.0, 20.0], true);
+            src.list_id = Some("inbox".into());
+            src.index = Some(0);
+            src.is_draggable = true;
+            let hits = vec![folder, nested, src];
+            assert!(tick(20.0, 80.0, &hits, [400.0, 400.0]));
+            let list = hover_list.peek();
+            let _ = end(&hits);
+            list
+        });
+        assert_eq!(
+            hover.as_deref(),
+            Some("later"),
+            "empty nested list padding must win over the wrapping folder row"
+        );
+    }
+
+    #[test]
+    fn author_modifier_shifts_overlay_origin() {
+        use crate::utils::drag::modifier::{DragDelta, DragModifier, MODIFIER_ORDER_AUTHOR};
+        let (_o, pos) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([20.0_f32, 20.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: vec![DragModifier::new("nudge", MODIFIER_ORDER_AUTHOR, |t, _| {
+                        DragDelta {
+                            x: t.x + 8.0,
+                            y: t.y,
+                        }
+                    })],
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [10.0, 10.0, 20.0, 20.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits = vec![hit("a", [10.0, 10.0, 20.0, 20.0], false)];
+            assert!(tick(10.0, 30.0, &hits, [400.0, 300.0]));
+            let pos = overlay_pos.peek();
+            let _ = end(&hits);
+            pos
+        });
+        assert!(
+            (pos[0] - 18.0).abs() < 0.5 && (pos[1] - 30.0).abs() < 0.5,
+            "author modifier must shift origin after sensor delta, got {pos:?}"
+        );
+    }
+
+    #[test]
+    fn add_modifier_survives_register_scope() {
+        use crate::utils::drag::modifier::{DragDelta, DragModifier, MODIFIER_ORDER_AUTHOR};
+        use crate::utils::drag::session::{add_modifier, remove_modifier};
+        let (_o, (kept, after_remove)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([20.0_f32, 20.0]);
+            let mk = |overlay_open,
+                      overlay_pos,
+                      active_draggable,
+                      active_droppable,
+                      from_list,
+                      from_index,
+                      hover_list,
+                      hover_index,
+                      drag_extent| ScopeRuntime {
+                collision: CollisionAlg::PointerWithin,
+                axis: Axis::Xy,
+                threshold: 0.0,
+                restrict: Restrict::None,
+                snap: None,
+                overlay_registered: false,
+                source_opacity: 1.0,
+                autoscroll: AutoScroll {
+                    enabled: false,
+                    ..Default::default()
+                },
+                empty_insert: 0.0,
+                delay_ms: 0.0,
+                can_drop: None,
+                on_start: None,
+                on_move: None,
+                on_over: None,
+                on_end: None,
+                overlay_open,
+                overlay_pos,
+                active_draggable,
+                active_droppable,
+                from_list,
+                from_index,
+                hover_list,
+                hover_index,
+                drag_extent,
+                stack_seq: 0,
+                modifiers: Vec::new(),
+            };
+            register_scope(
+                "s-mod-rt".into(),
+                mk(
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            assert!(add_modifier(
+                "s-mod-rt",
+                DragModifier::new("nudge", MODIFIER_ORDER_AUTHOR, |t, _| DragDelta {
+                    x: t.x + 8.0,
+                    y: t.y,
+                }),
+            ));
+            // Provider rebuild replaces builder modifiers; runtime extra must stay.
+            register_scope(
+                "s-mod-rt".into(),
+                mk(
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s-mod-rt".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [10.0, 10.0, 20.0, 20.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut src = hit("a", [10.0, 10.0, 20.0, 20.0], false);
+            src.scope_id = "s-mod-rt".into();
+            let hits = vec![src];
+            assert!(tick(10.0, 30.0, &hits, [400.0, 300.0]));
+            let kept = overlay_pos.peek();
+            assert!(remove_modifier("s-mod-rt", "nudge"));
+            assert!(tick(10.0, 30.0, &hits, [400.0, 300.0]));
+            let after_remove = overlay_pos.peek();
+            let _ = end(&hits);
+            (kept, after_remove)
+        });
+        assert!(
+            (kept[0] - 18.0).abs() < 0.5 && (kept[1] - 30.0).abs() < 0.5,
+            "runtime modifier must survive register_scope, got {kept:?}"
+        );
+        assert!(
+            (after_remove[0] - 10.0).abs() < 0.5 && (after_remove[1] - 30.0).abs() < 0.5,
+            "remove_modifier must drop the extra stage, got {after_remove:?}"
         );
     }
 }

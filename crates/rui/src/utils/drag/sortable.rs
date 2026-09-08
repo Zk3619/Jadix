@@ -9,7 +9,7 @@
 use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
-use super::builder::{draggable, droppable, DroppableBuilder};
+use super::builder::{DroppableBuilder, draggable, droppable};
 use super::geometry::{Axis, DragStack};
 use super::session::DragEvent;
 

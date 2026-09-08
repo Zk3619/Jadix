@@ -10,12 +10,12 @@
 
 use std::rc::Rc;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::isolate_reads;
 use crate::core::tree::{Element, IntoOpacity};
-use crate::layout::{dim_kind, DimKind};
-use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
+use crate::layout::{DimKind, dim_kind};
+use crate::utils::popup::{ATTR_FLOATING, mount_anchored_overlay};
 
 use super::builder::{clone_source_preview, require_drag};
 use super::session::{mark_overlay_registered, with_scope};
@@ -220,7 +220,7 @@ pub fn drag_overlay_from_rsx(body: impl Fn() -> Element + 'static) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::reactivity::{create_render_effect, create_root, Signal};
+    use crate::core::reactivity::{Signal, create_render_effect, create_root};
     use crate::utils::popup::{ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -375,7 +375,7 @@ mod tests {
         use crate::core::reactivity::{create_effect, create_root, isolate_reads};
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, overlay_is_registered, tick, BeginDrag,
+            BeginDrag, begin, drag_overlay, drag_scope, draggable, overlay_is_registered, tick,
         };
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -670,7 +670,7 @@ mod tests {
         use crate::core::reactivity::Signal;
         use crate::primitives::hstack;
         use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, droppable, end, tick, BeginDrag,
+            BeginDrag, begin, drag_overlay, drag_scope, draggable, droppable, end, tick,
         };
 
         let parked = Signal::new(false);
@@ -775,7 +775,7 @@ mod tests {
     }
 
     fn activate_chip(sid: &str, pointer: [f32; 2], grab: [f32; 2], bounds: [f32; 4]) {
-        use crate::utils::drag::{begin, tick, BeginDrag};
+        use crate::utils::drag::{BeginDrag, begin, tick};
         begin(BeginDrag {
             scope_id: sid.into(),
             draggable_id: "chip".into(),
@@ -1330,7 +1330,7 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            begin, drag_scope, draggable, end, tick, Axis, BeginDrag, DragHit,
+            Axis, BeginDrag, DragHit, begin, drag_scope, draggable, end, tick,
         };
         use std::cell::Cell;
         use std::rc::Rc;
@@ -1466,7 +1466,7 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, end, tick, Axis, BeginDrag, DragHit,
+            Axis, BeginDrag, DragHit, begin, drag_overlay, drag_scope, draggable, end, tick,
         };
 
         let (_o, live) = mount_scope_tree(move || {
@@ -1608,7 +1608,7 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::{hstack, vstack};
         use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, droppable, end, tick, BeginDrag, DragHit,
+            BeginDrag, DragHit, begin, drag_overlay, drag_scope, draggable, droppable, end, tick,
         };
 
         let (_o, live) = mount_scope_tree(move || {
@@ -1720,7 +1720,7 @@ mod tests {
         use crate::primitives::hstack;
         use crate::style::parse_color;
         use crate::utils::drag::{
-            begin, drag_scope, droppable, end, tick, use_drag, BeginDrag, DragHit, ATTR_DRAG_OVER,
+            ATTR_DRAG_OVER, BeginDrag, DragHit, begin, drag_scope, droppable, end, tick, use_drag,
         };
 
         fn column(list: &'static str) -> Element {
@@ -1847,8 +1847,8 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::{hstack, vstack};
         use crate::utils::drag::{
-            begin, collect_hits, drag_overlay, drag_scope, droppable, end, insert_index_along_axis,
-            sortable_item, start_geometry, tick, Axis, BeginDrag, CollisionAlg,
+            Axis, BeginDrag, CollisionAlg, begin, collect_hits, drag_overlay, drag_scope,
+            droppable, end, insert_index_along_axis, sortable_item, start_geometry, tick,
         };
 
         const NAMES: [&str; 2] = ["Draft RFC", "Review PR"];
@@ -2031,8 +2031,8 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            apply_reorder_vec, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
-            sortable_list, start_geometry, tick, use_drag, Axis, BeginDrag, CollisionAlg,
+            Axis, BeginDrag, CollisionAlg, apply_reorder_vec, begin, collect_hits, drag_overlay,
+            drag_scope, end, sortable_item, sortable_list, start_geometry, tick, use_drag,
         };
         use std::cell::Cell;
         use std::rc::Rc;
@@ -2258,8 +2258,8 @@ mod tests {
         use crate::core::reactivity::Signal;
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            begin, collect_hits, drag_overlay, drag_scope, end, sortable_item, sortable_list,
-            start_geometry, tick, use_drag, Axis, BeginDrag, CollisionAlg,
+            Axis, BeginDrag, CollisionAlg, begin, collect_hits, drag_overlay, drag_scope, end,
+            sortable_item, sortable_list, start_geometry, tick, use_drag,
         };
         use std::cell::Cell;
         use std::rc::Rc;
@@ -2398,8 +2398,8 @@ mod tests {
         use crate::core::tree::LayoutStatus;
         use crate::primitives::vstack;
         use crate::utils::drag::{
-            begin, collect_hits, drag_overlay, drag_scope, end, sortable_item, sortable_list,
-            start_geometry, tick, use_drag, Axis, BeginDrag, CollisionAlg,
+            Axis, BeginDrag, CollisionAlg, begin, collect_hits, drag_overlay, drag_scope, end,
+            sortable_item, sortable_list, start_geometry, tick, use_drag,
         };
         use std::cell::Cell;
         use std::rc::Rc;
@@ -2641,7 +2641,7 @@ mod tests {
     }
 
     fn activate_named(sid: &str, id: &str, pointer: [f32; 2], bounds: [f32; 4]) {
-        use crate::utils::drag::{begin, tick, BeginDrag};
+        use crate::utils::drag::{BeginDrag, begin, tick};
         begin(BeginDrag {
             scope_id: sid.into(),
             draggable_id: id.into(),
@@ -2715,7 +2715,7 @@ mod tests {
     fn auto_stack_raises_on_drag_and_keeps_after_end() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
-        use crate::utils::drag::{end, DragStack};
+        use crate::utils::drag::{DragStack, end};
 
         let (_o, live) = two_free_draggables("stack-auto", DragStack::Auto, DragStack::Auto, 0, 0);
         {
@@ -2765,7 +2765,7 @@ mod tests {
     fn keep_stack_preserves_author_z_while_dragging() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
-        use crate::utils::drag::{end, DragStack};
+        use crate::utils::drag::{DragStack, end};
 
         let (_o, live) = two_free_draggables("stack-keep", DragStack::Keep, DragStack::Keep, 1, 4);
         let sid = find_scope_id(&live.borrow()).expect("scope");
@@ -2789,9 +2789,10 @@ mod tests {
     fn keep_stack_same_author_z_stays_equal() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
-        use crate::utils::drag::{end, DragStack};
+        use crate::utils::drag::{DragStack, end};
 
-        let (_o, live) = two_free_draggables("stack-keep-eq", DragStack::Keep, DragStack::Keep, 2, 2);
+        let (_o, live) =
+            two_free_draggables("stack-keep-eq", DragStack::Keep, DragStack::Keep, 2, 2);
         let sid = find_scope_id(&live.borrow()).expect("scope");
         activate_named(&sid, "b", [20.0, 16.0], [8.0, 8.0, 80.0, 32.0]);
         {
@@ -2813,19 +2814,19 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{drag_scope, draggable, end, DragStack};
+        use crate::utils::drag::{DragStack, drag_scope, draggable, end};
 
         let (_o, live) = mount_scope_tree(|| {
             drag_scope("stack-bands").threshold(0.0).child(|| {
-                let top = draggable("top").stack(DragStack::Top).child(|| {
-                    Element::new().text("top").w(80.0).h(32.0).z_index(0)
-                });
-                let auto = draggable("auto").stack(DragStack::Auto).child(|| {
-                    Element::new().text("auto").w(80.0).h(32.0).z_index(0)
-                });
-                let bottom = draggable("bottom").stack(DragStack::Bottom).child(|| {
-                    Element::new().text("bottom").w(80.0).h(32.0).z_index(0)
-                });
+                let top = draggable("top")
+                    .stack(DragStack::Top)
+                    .child(|| Element::new().text("top").w(80.0).h(32.0).z_index(0));
+                let auto = draggable("auto")
+                    .stack(DragStack::Auto)
+                    .child(|| Element::new().text("auto").w(80.0).h(32.0).z_index(0));
+                let bottom = draggable("bottom")
+                    .stack(DragStack::Bottom)
+                    .child(|| Element::new().text("bottom").w(80.0).h(32.0).z_index(0));
                 Element::from(vstack().children([top, auto, bottom]))
             })
         });
@@ -2920,11 +2921,7 @@ mod tests {
                         .top(52.0)
                         .child(Element::new().text("B"))
                 });
-                Element::new()
-                    .w(400.0)
-                    .h(200.0)
-                    .relative()
-                    .children([a, b])
+                Element::new().w(400.0).h(200.0).relative().children([a, b])
             });
             let bar = Element::new()
                 .w(8.0)
@@ -2945,12 +2942,18 @@ mod tests {
             let shell_a = find_item_shell(&tree, "a").expect("shell a");
             let shell_b = find_item_shell(&tree, "b").expect("shell b");
             assert_eq!(
-                shell_a.attrs.get("data-stacking-context").map(String::as_str),
+                shell_a
+                    .attrs
+                    .get("data-stacking-context")
+                    .map(String::as_str),
                 Some("1"),
                 "item shell must opt into nested page_stack splits"
             );
             assert_eq!(
-                shell_b.attrs.get("data-stacking-context").map(String::as_str),
+                shell_b
+                    .attrs
+                    .get("data-stacking-context")
+                    .map(String::as_str),
                 Some("1")
             );
         }

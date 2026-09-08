@@ -4756,8 +4756,8 @@ fn expand_node(
                             })
                         }
                     };
-                    let source_opacity_ts = if let Some(v) = get_attr("source_opacity")
-                        .or_else(|| get_attr("sourceOpacity"))
+                    let source_opacity_ts = if let Some(v) =
+                        get_attr("source_opacity").or_else(|| get_attr("sourceOpacity"))
                     {
                         quote! { .source_opacity(#v) }
                     } else {
