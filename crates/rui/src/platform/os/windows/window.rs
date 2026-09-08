@@ -47,7 +47,7 @@ pub(crate) fn apply_created_window(
 ) {
     use winit::platform::windows::WindowExtWindows;
 
-    let Some(hwnd) = win32_hwnd(window) else {
+    let Some(hwnd) = hwnd(window) else {
         return;
     };
     if options.windows_extends_dwm_frame() {
@@ -65,7 +65,7 @@ pub(crate) fn apply_created_window(
     }
 }
 
-fn win32_hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
+pub(crate) fn hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let handle = window.window_handle().ok()?;

@@ -77,6 +77,89 @@ pub(crate) fn system_scroll_lines() -> f32 {
     }
 }
 
+pub(crate) fn apply_ime_cursor_area(
+    window: &Window,
+    area_x: f32,
+    area_y: f32,
+    area_w: f32,
+    area_h: f32,
+    ui_scale: f32,
+    scroll_acc: [f32; 2],
+    composing: bool,
+) {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::apply_ime_cursor_area(
+            window, area_x, area_y, area_w, area_h, ui_scale, scroll_acc, composing,
+        );
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::apply_ime_cursor_area(
+            window, area_x, area_y, area_w, area_h, ui_scale, scroll_acc, composing,
+        );
+    }
+}
+
+pub(crate) fn sync_ime_focus_owner(
+    window: &Window,
+    focus_id: Option<&str>,
+    on_leave_field: impl FnOnce(&str),
+) {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::sync_focus_owner(window, focus_id, on_leave_field);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::sync_focus_owner(window, focus_id, on_leave_field);
+    }
+}
+
+pub(crate) fn ime_release_ui(window: &Window, cancel_comp: bool) {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::release_ui_control(window, cancel_comp);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::release_ui_control(window, cancel_comp);
+    }
+}
+
+pub(crate) fn ime_cancel_composition() {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::cancel_active_composition();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::cancel_active_composition();
+    }
+}
+
+pub(crate) fn ime_end_composition_ui() {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::end_composition_ui();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::end_composition_ui();
+    }
+}
+
+pub(crate) fn ime_disallow(window: &Window) {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        os::current::ime_disallow(window);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::ime_disallow(window);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
