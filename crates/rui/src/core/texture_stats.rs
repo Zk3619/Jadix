@@ -101,17 +101,10 @@ pub fn emit_texture_stats(
         return;
     }
     let stats = TextureCacheStats::collect(pool, shadow_textures, page, overlay, overlay_bands);
-    #[cfg(windows)]
-    {
-        log::info!(
-            target: "rui::texture_stats",
-            "private={:.1} MiB {}",
-            process_private_mb(),
-            stats.format_line()
-        );
-    }
-    #[cfg(not(windows))]
-    {
-        log::info!(target: "rui::texture_stats", "{}", stats.format_line());
-    }
+    log::info!(
+        target: "rui::texture_stats",
+        "private={:.1} MiB {}",
+        process_private_mb(),
+        stats.format_line()
+    );
 }

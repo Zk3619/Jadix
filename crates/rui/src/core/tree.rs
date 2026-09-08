@@ -7,7 +7,7 @@ use crate::core::reactivity::Signal;
 pub use crate::layout::dimension::{
     dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, lp_kind, lp_length_px, lpa_kind,
     lpa_length_px, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim, IntoCssRectPair,
-    IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, PercentAxis, UnitCtx,
+    IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, IntoOpacity, PercentAxis, UnitCtx,
     CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
@@ -2875,8 +2875,8 @@ impl Element {
         self.style.shadow_inset = inset;
         self
     }
-    pub fn opacity(mut self, o: f32) -> Self {
-        self.style.opacity = o.clamp(0.0, 1.0);
+    pub fn opacity(mut self, o: impl IntoOpacity) -> Self {
+        self.style.opacity = o.into_opacity();
         self
     }
     pub fn translate(mut self, x: f32, y: f32) -> Self {

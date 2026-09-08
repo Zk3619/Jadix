@@ -1,10 +1,10 @@
 //! OS-specific hooks.
 //!
 //! Cross-platform window *options* stay on [`crate::app::WindowOptions`].
-//! Win32 DWM glass and process metrics live under [`windows`].
-//! macOS / Linux currently only apply winit `set_blur`.
+//! Implementations: `desktop` defaults, `os` overrides (Windows DWM / PE stack,
+//! macOS Mach RSS, Linux `/proc`). Public path `crate::platform::*` is stable.
 //!
-//! Architecture audit and target layout: `docs/engine/platform.md`.
+//! Architecture: `docs/engine/platform.md`.
 //!
 //! The framework does not emit PE `/STACK` or require a large main-thread stack.
 //! Deep UI trees are walked with heap work queues instead of unbounded recursion.
@@ -13,33 +13,30 @@ use winit::window::{Window, WindowAttributes};
 
 use crate::app::WindowOptions;
 
+mod common;
+mod desktop;
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+mod os;
+
+pub use common::UI_STACK_RESERVE;
+
+/// Windows PE `/STACK` helpers for downstream binaries (`cfg(target_os = "windows")`).
 #[cfg(target_os = "windows")]
-pub mod windows;
-
-#[cfg(target_os = "macos")]
-pub mod macos;
-
-#[cfg(target_os = "linux")]
-pub mod linux;
-
-/// Optional stack when an app **explicitly** spawns a worker that builds a huge
-/// UI tree (e.g. gallery's all-sections test). Not applied to the process main
-/// thread; not a PE `/STACK` reserve.
-pub const UI_STACK_RESERVE: usize = 8 * 1024 * 1024;
+pub use os::windows;
 
 pub(crate) fn decorate_window_attributes(
     attrs: WindowAttributes,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) -> WindowAttributes {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
-        windows::decorate_window_attributes(attrs, options, composition_swapchain)
+        os::current::decorate_window_attributes(attrs, options, composition_swapchain)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        let _ = (options, composition_swapchain);
-        attrs
+        desktop::decorate_window_attributes(attrs, options, composition_swapchain)
     }
 }
 
@@ -48,39 +45,58 @@ pub(crate) fn apply_created_window(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
-    #[cfg(target_os = "windows")]
-    windows::apply_created_window(window, options, composition_swapchain);
-    #[cfg(target_os = "macos")]
-    macos::apply_created_window(window, options, composition_swapchain);
-    #[cfg(target_os = "linux")]
-    linux::apply_created_window(window, options, composition_swapchain);
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
-        let _ = composition_swapchain;
-        if options.blur {
-            window.set_blur(true);
-        }
+        os::current::apply_created_window(window, options, composition_swapchain);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        desktop::apply_created_window(window, options, composition_swapchain);
     }
 }
 
 pub(crate) fn process_private_mb() -> f64 {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
-        windows::process_private_mb()
+        os::current::process_private_mb()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        0.0
+        desktop::process_private_mb()
     }
 }
 
 pub(crate) fn system_scroll_lines() -> f32 {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
-        windows::system_scroll_lines()
+        os::current::system_scroll_lines()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        3.0
+        desktop::system_scroll_lines()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn process_private_mb_nonzero_on_supported_desktop() {
+        let mb = super::process_private_mb();
+        if cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )) {
+            assert!(
+                mb > 0.0,
+                "expected a real process metric on Win/macOS/Linux, got {mb}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_scroll_lines_positive() {
+        let n = super::system_scroll_lines();
+        assert!(n > 0.0, "scroll lines must be positive, got {n}");
     }
 }

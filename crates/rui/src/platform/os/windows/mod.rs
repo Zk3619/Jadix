@@ -1,4 +1,4 @@
-//! Windows-specific window chrome and process metrics.
+//! Windows-specific window chrome, process metrics, and PE `/STACK` opt-in.
 
 mod process;
 mod scroll;

@@ -118,6 +118,9 @@ resvg = { version = "0.45.1", optional = true }
 # default-features off: skip Linux libxdo. gtk still required on Linux if this feature is on.
 tray-icon = { version = "0.21", optional = true, default-features = false }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

@@ -2,7 +2,7 @@
 //!
 //! Creation-time options live on [`WindowOptions`] (primary [`super::run_with`], secondary
 //! [`open_secondary_window_with`](super::multi_window::open_secondary_window_with)).
-//! Win32 DWM / PE stack live in `crate::platform::windows`. Runtime helpers
+//! Win32 DWM / PE stack live in `crate::platform::windows` (`platform/os/windows`). Runtime helpers
 //! ([`start_window_drag`], [`close_window`], …) act on the **active** window
 //! (the one whose UI tree is dispatching the event).
 

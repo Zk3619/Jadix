@@ -55,17 +55,10 @@ pub fn emit_registry_stats() {
         return;
     }
     let stats = RegistryStats::collect();
-    #[cfg(windows)]
-    {
-        log::info!(
-            target: "rui::registry_stats",
-            "private={:.1} MiB {}",
-            process_private_mb(),
-            stats.format_line()
-        );
-    }
-    #[cfg(not(windows))]
-    {
-        log::info!(target: "rui::registry_stats", "{}", stats.format_line());
-    }
+    log::info!(
+        target: "rui::registry_stats",
+        "private={:.1} MiB {}",
+        process_private_mb(),
+        stats.format_line()
+    );
 }

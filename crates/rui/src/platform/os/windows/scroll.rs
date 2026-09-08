@@ -18,5 +18,5 @@ pub(crate) fn system_scroll_lines() -> f32 {
             return lines as f32;
         }
     }
-    3.0
+    crate::platform::desktop::system_scroll_lines()
 }

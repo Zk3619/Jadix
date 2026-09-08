@@ -324,6 +324,8 @@ fn try_load_system_font(db: &mut Database, file_name: &str, state: &mut LazyFont
             }
         }
     }
+    // Linux + *BSD (+ other Unix except macOS). Not `target_os = "linux"` only —
+    // `/usr/share/fonts` is shared. P3 will move this to `platform/os/*/font_paths`.
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         for dir in [

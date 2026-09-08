@@ -16,7 +16,7 @@ pub mod app;
 pub mod components;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
 pub mod logging;
-/// OS hooks: Windows DWM / optional stack helpers, macOS-linux blur.
+/// OS hooks: desktop defaults + OS overrides (Windows DWM / PE stack, Unix metrics).
 /// 架构与重构方向见 `docs/engine/platform.md`。
 pub mod platform;
 /// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。

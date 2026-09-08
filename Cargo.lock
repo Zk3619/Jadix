@@ -3768,6 +3768,7 @@ dependencies = [
  "env_logger",
  "glyphon",
  "image",
+ "libc",
  "log",
  "resvg",
  "rfd",

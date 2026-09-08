@@ -513,7 +513,7 @@ $env:PROBE_FRAMES = "300"      # 默认 300 帧后自动退出
 
 ### 9.1 诊断 API
 
-源码：`crates/rui/src/core/tree_stats.rs` + `LayoutTree::stats()`（`layout_tree.rs`）。Windows 上 `private=` 来自 [`platform::process_private_mb`](../../crates/rui/src/platform/mod.rs)；非 Windows 当前为 stub（见 [`platform.md`](../engine/platform.md)）。
+源码：`crates/rui/src/core/tree_stats.rs` + `LayoutTree::stats()`（`layout_tree.rs`）。`private=` 来自 [`platform::process_private_mb`](../../crates/rui/src/platform/mod.rs)（Windows Private Bytes / Linux `smaps_rollup` / macOS RSS；见 [`platform.md`](../engine/platform.md)）。
 
 ```powershell
 $env:RUI_TREE_STATS = "1"
