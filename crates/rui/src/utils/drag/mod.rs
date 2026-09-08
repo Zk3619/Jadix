@@ -69,3 +69,6 @@ pub const ATTR_DRAG_OVERLAY: &str = "rui_drag_overlay";
 pub const ATTR_DRAG_IGNORE: &str = "rui_drag_ignore";
 /// Collision target (solid-dnd `isActiveDroppable`). Paint-only; not CSS `:hover`.
 pub const ATTR_DRAG_OVER: &str = "rui_drag_over";
+/// Kit wrapper around a draggable island. [`Restrict::Parent`] skips this node
+/// so the clamp lands on the author's container, not a hug-content shell.
+pub const ATTR_DRAG_ITEM_SHELL: &str = "rui_drag_item_shell";

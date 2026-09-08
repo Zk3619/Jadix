@@ -19,8 +19,8 @@ use super::modifier::{
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
-    ATTR_DRAG_GROUP, ATTR_DRAG_INDEX, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE,
-    ATTR_DRAG_TYPE,
+    ATTR_DRAG_GROUP, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY,
+    ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 pub type DragHandler = Rc<RefCell<dyn FnMut(&DragEvent)>>;
@@ -165,6 +165,12 @@ thread_local! {
     /// Last laid-out item boxes, keyed by `scope\0id`. Handle drags read this so
     /// the ghost tracks the **item**, not the handle's smaller hit box.
     static ITEM_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
+    /// Per-item [`Restrict`] override (`Draggable.restrict`). Missing → scope.
+    static ITEM_RESTRICT: RefCell<HashMap<String, Restrict>> = RefCell::new(HashMap::new());
+    /// Pointer-space boxes for `template_id` / attr `id` (restrict-to-element).
+    static NAMED_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
+    /// Author-parent box of each draggable (`restrict="parent"`).
+    static PARENT_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
     static LAST_HITS: RefCell<Vec<DragHit>> = const { RefCell::new(Vec::new()) };
     static LAST_SCROLL_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
@@ -199,6 +205,81 @@ pub fn last_hit_rect(scope: &str, id: &str) -> Option<[f32; 4]> {
             .map(|hit| hit.rect.to_bounds())
     });
     from_tick.or_else(|| last_draggable_bounds(scope, id))
+}
+
+pub(crate) fn remember_item_restrict(scope: &str, id: &str, restrict: Option<Restrict>) {
+    ITEM_RESTRICT.with(|m| {
+        let key = item_bounds_key(scope, id);
+        match restrict {
+            Some(r) => {
+                m.borrow_mut().insert(key, r);
+            }
+            None => {
+                m.borrow_mut().remove(&key);
+            }
+        }
+    });
+}
+
+fn item_restrict_override(scope: &str, id: &str) -> Option<Restrict> {
+    ITEM_RESTRICT.with(|m| m.borrow().get(&item_bounds_key(scope, id)).cloned())
+}
+
+fn remember_named_bounds(id: &str, bounds: [f32; 4]) {
+    if id.is_empty() || bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+        return;
+    }
+    NAMED_BOUNDS.with(|m| {
+        m.borrow_mut().insert(id.to_string(), bounds);
+    });
+}
+
+fn last_named_bounds(id: &str) -> Option<[f32; 4]> {
+    NAMED_BOUNDS.with(|m| m.borrow().get(id).copied())
+}
+
+fn remember_parent_bounds(scope: &str, id: &str, bounds: [f32; 4]) {
+    if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+        return;
+    }
+    PARENT_BOUNDS.with(|m| {
+        m.borrow_mut()
+            .insert(item_bounds_key(scope, id), bounds);
+    });
+}
+
+fn last_parent_bounds(scope: &str, id: &str) -> Option<[f32; 4]> {
+    PARENT_BOUNDS.with(|m| m.borrow().get(&item_bounds_key(scope, id)).copied())
+}
+
+/// Live clamp box for [`Restrict::Element`]: same-scope hit, then any hit, then
+/// `template_id` / attr `id` from the last collect walk.
+fn lookup_restrict_element(scope: &str, id: &str, hits: &[DragHit]) -> Option<[f32; 4]> {
+    hits.iter()
+        .find(|h| h.id == id && h.scope_id == scope && h.rect.is_usable())
+        .or_else(|| hits.iter().find(|h| h.id == id && h.rect.is_usable()))
+        .map(|h| h.rect.to_bounds())
+        .or_else(|| last_named_bounds(id))
+        .or_else(|| last_hit_rect(scope, id))
+}
+
+fn resolve_live_restrict(
+    restrict: &Restrict,
+    scope: &str,
+    draggable_id: &str,
+    hits: &[DragHit],
+) -> Restrict {
+    match restrict {
+        Restrict::Element(id) => lookup_restrict_element(scope, id, hits)
+            .map(Restrict::Rect)
+            .unwrap_or(Restrict::None),
+        Restrict::Parent => last_parent_bounds(scope, draggable_id)
+            .map(Restrict::Rect)
+            .unwrap_or(Restrict::None),
+        Restrict::Viewport => Restrict::Viewport,
+        Restrict::Rect(r) => Restrict::Rect(*r),
+        Restrict::None => Restrict::None,
+    }
 }
 
 /// Walk the laid-out tree so handle `pointerdown` can resolve the item rect.
@@ -383,12 +464,14 @@ pub fn begin(opts: BeginDrag) {
         opts.pointer[1],
     );
     crate::app::set_pointer_capture(opts.capture_id.clone());
-    let (axis, threshold, restrict, snap, delay_ms) = SCOPES.with(|m| {
+    let (axis, threshold, scope_restrict, snap, delay_ms) = SCOPES.with(|m| {
         m.borrow()
             .get(&opts.scope_id)
-            .map(|s| (s.axis, s.threshold, s.restrict, s.snap, s.delay_ms))
+            .map(|s| (s.axis, s.threshold, s.restrict.clone(), s.snap, s.delay_ms))
             .unwrap_or((Axis::Xy, 4.0, Restrict::None, None, 0.0))
     });
+    let restrict =
+        item_restrict_override(&opts.scope_id, &opts.draggable_id).unwrap_or(scope_restrict);
     SESSION.with(|s| {
         *s.borrow_mut() = Some(DragSession {
             capture_id: opts.capture_id,
@@ -447,7 +530,12 @@ fn ghost_origin(
         viewport,
         axis: sess.axis,
         snap: sess.snap,
-        restrict: sess.restrict,
+        restrict: resolve_live_restrict(
+            &sess.restrict,
+            &sess.scope_id,
+            &sess.draggable_id,
+            hits,
+        ),
         live_slot: live_source_slot(sess, hits),
     };
     let mut pipeline = builtin_modifiers();
@@ -684,8 +772,12 @@ fn list_indexed_content_end(hits: &[DragHit], list_id: &str, axis: Axis) -> Opti
     Some(axis_origin(last.rect, axis) + pitch)
 }
 
-/// Dragging the last row of an N-item list: `hover = N` is "append after self" — a
-/// phantom slot (Gallery Kanban: 2 todo items + 1 doing ≠ 3rd todo row).
+/// Same-list insert holes are the N layout slots (`0..=max`). `hover = max+1`
+/// is Sortable "append after last", but the source is still in the tree — there
+/// is no extra row. Siblings with `index <= hover` already vacated the last
+/// slot; `insert_hole_origin` then paints the dimmed body one pitch past it
+/// (Gallery 单列: 拖到最后再向下一个项高 → 末槽空白). Cross-list keeps `len`
+/// so the target can open a real tail slot.
 fn clamp_tail_append_hover(
     sess: &DragSession,
     list_id: &str,
@@ -697,11 +789,7 @@ fn clamp_tail_append_hover(
     }
     let from = sess.from_index.unwrap_or(hover);
     let max = list_max_index_in_hits(hits, list_id).unwrap_or(from);
-    if from == max && hover == max + 1 {
-        from
-    } else {
-        hover
-    }
+    hover.min(max)
 }
 
 /// Advance the session. `hits` must be collected from the current layout tree.
@@ -1189,8 +1277,10 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
 /// Do not use raw `layout_bounds` (pre-scroll) or `visual_hit_box` (includes
 /// sortable preview translate).
 pub fn collect_hits(root: &Element) -> Vec<DragHit> {
+    NAMED_BOUNDS.with(|m| m.borrow_mut().clear());
+    PARENT_BOUNDS.with(|m| m.borrow_mut().clear());
     let mut out = Vec::new();
-    collect_hits_inner(root, [0.0, 0.0], &mut out);
+    collect_hits_inner(root, [0.0, 0.0], None, &mut out);
     cap_stretched_indexed_rects(&mut out);
     out
 }
@@ -1240,7 +1330,12 @@ fn cap_stretched_indexed_rects(hits: &mut Vec<DragHit>) {
     }
 }
 
-fn collect_hits_inner(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<DragHit>) {
+fn collect_hits_inner(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    ancestor: Option<RestrictAncestor>,
+    out: &mut Vec<DragHit>,
+) {
     if el.attrs.contains_key(ATTR_DRAG_OVERLAY) {
         return;
     }
@@ -1254,13 +1349,40 @@ fn collect_hits_inner(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<DragHit>
     } else {
         scroll_acc
     };
+    let slot = crate::app::tree_hit::collision_hit_box(el, scroll_acc);
+    let item_shell = el.attrs.contains_key(ATTR_DRAG_ITEM_SHELL);
+    let child_anc = RestrictAncestor {
+        slot,
+        item_shell,
+        outer: if item_shell {
+            author_parent_slot(ancestor)
+        } else {
+            Some(slot)
+        },
+    };
     let drag_id = el.attrs.get(ATTR_DRAG_DRAGGABLE).cloned();
     let drop_id = el.attrs.get(ATTR_DRAG_DROPPABLE).cloned();
+    let named = el.template_id.as_deref().filter(|s| !s.is_empty());
+    let attr_id = el
+        .attrs
+        .get("id")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty());
+    if let Some(n) = named {
+        remember_named_bounds(n, slot);
+    }
+    if let Some(n) = attr_id {
+        remember_named_bounds(n, slot);
+    }
     if drag_id.is_some() || drop_id.is_some() {
         let id = drag_id.clone().or(drop_id.clone()).unwrap_or_default();
         let scope_id = el.attrs.get(ATTR_DRAG_SCOPE).cloned().unwrap_or_default();
-        let slot = crate::app::tree_hit::collision_hit_box(el, scroll_acc);
         remember_draggable_bounds(&scope_id, &id, slot);
+        if drag_id.is_some() {
+            if let Some(parent) = author_parent_slot(ancestor) {
+                remember_parent_bounds(&scope_id, &id, parent);
+            }
+        }
         let disabled = el
             .attrs
             .get(ATTR_DRAG_DISABLED)
@@ -1281,7 +1403,24 @@ fn collect_hits_inner(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<DragHit>
     }
     let next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
     for c in &el.children {
-        collect_hits_inner(c, next_acc, out);
+        collect_hits_inner(c, next_acc, Some(child_anc), out);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RestrictAncestor {
+    slot: [f32; 4],
+    /// Kit [`ATTR_DRAG_ITEM_SHELL`] — skip so `restrict=parent` is the author box.
+    item_shell: bool,
+    outer: Option<[f32; 4]>,
+}
+
+fn author_parent_slot(anc: Option<RestrictAncestor>) -> Option<[f32; 4]> {
+    let a = anc?;
+    if a.item_shell {
+        a.outer
+    } else {
+        Some(a.slot)
     }
 }
 
@@ -2095,6 +2234,32 @@ mod tests {
         assert_eq!(hits[0].id, "z");
     }
 
+    /// `restrict="parent"` must skip the kit hug-content shell and bind the
+    /// author container — no id required on that parent.
+    #[test]
+    fn collect_hits_records_author_parent_skipping_item_shell() {
+        let mut island = Element::new();
+        island.layout_bounds = [8.0, 8.0, 40.0, 24.0];
+        island.set_attr(ATTR_DRAG_DRAGGABLE, "card");
+        island.set_attr(ATTR_DRAG_SCOPE, "s");
+        let mut shell = Element::new();
+        shell.layout_bounds = [8.0, 8.0, 40.0, 24.0];
+        shell.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
+        shell = shell.child(island);
+        let mut parent = Element::new();
+        parent.layout_bounds = [0.0, 0.0, 200.0, 120.0];
+        parent = parent.child(shell);
+        let hits = collect_hits(&parent);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "card");
+        assert_eq!(
+            last_parent_bounds("s", "card"),
+            Some([0.0, 0.0, 200.0, 120.0]),
+            "must skip hug shell; got {:?}",
+            last_parent_bounds("s", "card")
+        );
+    }
+
     #[test]
     fn insert_index_uses_item_slots_not_container() {
         let mut a = hit("a", [0.0, 0.0, 40.0, 20.0], true);
@@ -2328,6 +2493,185 @@ mod tests {
             [200.0, 32.0],
             "append hole is last origin + fallback extent"
         );
+    }
+
+    /// `restrict="corners-arena"`: ghost stays inside the named droppable, not
+    /// the window — Gallery 四角旋转 must not leave the dashed box.
+    #[test]
+    fn tick_restrict_element_clamps_ghost_to_named_box() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::Element("arena".into()),
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut card = hit("card", [80.0, 40.0, 40.0, 24.0], false);
+            card.scope_id = "s".into();
+            card.is_draggable = true;
+            let mut arena = hit("arena", [0.0, 0.0, 200.0, 120.0], true);
+            arena.scope_id = "s".into();
+            let hits = vec![card, arena];
+            assert!(tick(500.0, 500.0, &hits, [800.0, 600.0]));
+            let pos = overlay_pos.peek();
+            assert!(
+                (pos[0] - 160.0).abs() < 0.5 && (pos[1] - 96.0).abs() < 0.5,
+                "ghost must clamp to arena (200-40, 120-24), not the 800x600 viewport; got {pos:?}"
+            );
+            let _ = end(&hits);
+            remember_item_restrict("s", "card", Some(Restrict::Viewport));
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(900.0, 900.0, &hits, [800.0, 600.0]));
+            let pos = overlay_pos.peek();
+            remember_item_restrict("s", "card", None);
+            let _ = end(&hits);
+            assert!(
+                (pos[0] - 760.0).abs() < 0.5 && (pos[1] - 576.0).abs() < 0.5,
+                "item restrict=viewport overrides the arena and uses the window; got {pos:?}"
+            );
+        });
+    }
+
+    /// `restrict="parent"`: ghost stays inside the author box recorded by
+    /// [`collect_hits`], not the window and not a named id.
+    #[test]
+    fn tick_restrict_parent_clamps_ghost_to_author_box() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::Parent,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            let mut island = Element::new();
+            island.layout_bounds = [80.0, 40.0, 40.0, 24.0];
+            island.set_attr(ATTR_DRAG_DRAGGABLE, "card");
+            island.set_attr(ATTR_DRAG_SCOPE, "s");
+            let mut shell = Element::new();
+            shell.layout_bounds = [80.0, 40.0, 40.0, 24.0];
+            shell.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
+            shell = shell.child(island);
+            let mut parent = Element::new();
+            parent.layout_bounds = [0.0, 0.0, 200.0, 120.0];
+            parent = parent.child(shell);
+            let hits = collect_hits(&parent);
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(500.0, 500.0, &hits, [800.0, 600.0]));
+            let pos = overlay_pos.peek();
+            let _ = end(&hits);
+            assert!(
+                (pos[0] - 160.0).abs() < 0.5 && (pos[1] - 96.0).abs() < 0.5,
+                "ghost must clamp to author parent (200-40, 120-24), not the window or hug shell; got {pos:?}"
+            );
+        });
     }
 
     #[test]
@@ -3255,8 +3599,80 @@ mod tests {
         sess0.draggable_id = "todo:Draft RFC".into();
         assert_eq!(
             clamp_tail_append_hover(&sess0, "todo", &hits, 2),
-            2,
-            "first row may still open tail append"
+            1,
+            "same-list has no slot past last; first row must not open phantom append"
+        );
+    }
+
+    /// Same-list reorder occupies the N layout slots. `insert_index_along_axis`
+    /// reports `max+1` once the pointer is a pitch past the last row; that
+    /// phantom index makes siblings vacate the last slot while the dimmed body
+    /// is painted one pitch below it (user: 拖到最后再向下一个项高 → 末槽空白).
+    #[test]
+    fn same_list_past_last_row_keeps_body_in_last_slot() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit(
+                    [
+                        "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus",
+                        "Neptune",
+                    ][i],
+                    [0.0, i as f32 * 40.0, 80.0, 32.0],
+                    true,
+                );
+                h.list_id = Some("planets".into());
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        let sess = DragSession {
+            scope_id: "gal-drag-sort".into(),
+            draggable_id: "Mercury".into(),
+            phase: DragPhase::Active,
+            start_pointer: [40.0, 16.0],
+            last_pointer: [40.0, 16.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 0.0, 80.0, 32.0],
+            from_list: Some("planets".into()),
+            from_index: Some(0),
+            item_type: "planet".into(),
+            group: String::new(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        };
+        assert_eq!(
+            insert_index_along_axis(&hits, "planets", [40.0, 340.0], Axis::Y),
+            Some(8),
+            "raw midpoint past last+pitch is Sortable append (len)"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 300.0], None),
+            Some(7),
+            "pointer in the last slot opens the last real hole"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 340.0], Some(7)),
+            Some(7),
+            "one pitch past the last row must keep hover on the last slot, not max+1"
+        );
+        let hover =
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 340.0], Some(7)).unwrap();
+        let src =
+            source_translate_to_insert_hole(&hits, "planets", 0, "planets", Some(hover), Axis::Y);
+        assert_eq!(
+            src,
+            [0.0, 280.0],
+            "dimmed body must sit on Neptune's layout slot, not one pitch below the list"
+        );
+        assert_eq!(
+            source_translate_to_insert_hole(&hits, "planets", 0, "planets", Some(8), Axis::Y),
+            [0.0, 320.0],
+            "unclamped hover=len is the blank-slot translate (last origin + pitch)"
         );
     }
 

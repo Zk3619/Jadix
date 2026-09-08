@@ -21,8 +21,8 @@ use super::builder::{clone_source_preview, require_drag};
 use super::session::{mark_overlay_registered, with_scope};
 use super::{
     ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE, ATTR_DRAG_GROUP,
-    ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST, ATTR_DRAG_OVER,
-    ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
+    ATTR_DRAG_OVER, ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 /// Pin the ghost at viewport `origin` (item top-left, already grab-offset).
@@ -112,6 +112,7 @@ fn strip_source_session_attrs(el: &mut Element) {
         ATTR_DRAG_GROUP,
         ATTR_DRAG_DISABLED,
         ATTR_DRAG_OVER,
+        ATTR_DRAG_ITEM_SHELL,
     ] {
         el.attrs.remove(key);
     }

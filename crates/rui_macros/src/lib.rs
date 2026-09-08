@@ -4545,6 +4545,11 @@ fn expand_node(
                     let stack = get_attr("stack")
                         .map(|e| quote! { rui::utils::drag::DragStack::from(#e) })
                         .unwrap_or_else(|| quote! { rui::utils::drag::DragStack::Auto });
+                    let restrict = get_attr("restrict")
+                        .map(|e| {
+                            quote! { Some(rui::utils::drag::Restrict::parse(&(#e).to_string())) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -4593,6 +4598,7 @@ fn expand_node(
                                 opacity: #opacity,
                                 source_opacity: #source_opacity,
                                 stack: #stack,
+                                restrict: #restrict,
                             },
                             move || #child_el,
                         )
@@ -9229,6 +9235,26 @@ mod rsx_lowering_tests {
         let s = expand(r#"<Draggable id="a" stack="keep"><Label>"x"</Label></Draggable>"#);
         assert!(s.contains("DragStack"), "{s}");
         assert!(s.contains("keep"), "{s}");
+    }
+
+    #[test]
+    fn draggable_restrict_emits_element_id() {
+        let s = expand(
+            r#"<Draggable id="a" restrict="corners-arena"><Label>"x"</Label></Draggable>"#,
+        );
+        assert!(
+            s.contains("Restrict") && s.contains("parse") && s.contains("corners-arena"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn draggable_restrict_emits_parent() {
+        let s = expand(r#"<Draggable id="a" restrict="parent"><Label>"x"</Label></Draggable>"#);
+        assert!(
+            s.contains("Restrict") && s.contains("parse") && s.contains("parent"),
+            "{s}"
+        );
     }
 
     #[test]

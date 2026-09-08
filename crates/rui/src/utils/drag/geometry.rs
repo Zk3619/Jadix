@@ -99,22 +99,68 @@ impl From<String> for DragStack {
 }
 
 /// Where the transformed ghost may travel (interact.js `restrict`).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+///
+/// Parse: empty / `none` → [`Self::None`]; `viewport` / `window` →
+/// [`Self::Viewport`]; `parent` → [`Self::Parent`]; any other token is a live
+/// element id ([`Self::Element`]).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Restrict {
     #[default]
     None,
     /// Clamp the ghost origin into the window `[0,0,vw,vh]`.
     Viewport,
+    /// Clamp to the draggable's author parent (skips the kit item shell).
+    /// interact.js `restriction: 'parent'` — no id required on the container.
+    Parent,
     /// Explicit viewport-space box `[x, y, w, h]`.
     Rect([f32; 4]),
+    /// Clamp to the named node's pointer-space layout box (Droppable id,
+    /// `template_id`, or `id`). Resolved each tick so nested scroll stays live.
+    Element(String),
 }
 
 impl Restrict {
     pub fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "viewport" | "parent" => Self::Viewport,
-            _ => Self::None,
+        let s = s.trim();
+        if s.is_empty() {
+            return Self::None;
         }
+        let lower = s.to_ascii_lowercase();
+        match lower.as_str() {
+            "none" | "off" | "false" => Self::None,
+            "viewport" | "window" => Self::Viewport,
+            "parent" => Self::Parent,
+            _ => {
+                let id = s.strip_prefix('#').unwrap_or(s);
+                if id.is_empty() {
+                    Self::None
+                } else {
+                    Self::Element(id.to_string())
+                }
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::None => "none",
+            Self::Viewport => "viewport",
+            Self::Parent => "parent",
+            Self::Rect(_) => "rect",
+            Self::Element(id) => id.as_str(),
+        }
+    }
+}
+
+impl From<&str> for Restrict {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for Restrict {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
     }
 }
 
@@ -325,6 +371,25 @@ mod tests {
     fn clamp_keeps_ghost_inside() {
         let p = clamp_origin_to_box([90.0, 90.0], [20.0, 20.0], [0.0, 0.0, 100.0, 100.0]);
         assert_eq!(p, [80.0, 80.0]);
+    }
+
+    #[test]
+    fn restrict_parse_viewport_none_and_element_id() {
+        assert_eq!(Restrict::parse(""), Restrict::None);
+        assert_eq!(Restrict::parse("none"), Restrict::None);
+        assert_eq!(Restrict::parse("viewport"), Restrict::Viewport);
+        assert_eq!(Restrict::parse("window"), Restrict::Viewport);
+        assert_eq!(Restrict::parse("parent"), Restrict::Parent);
+        assert_eq!(Restrict::Parent.as_str(), "parent");
+        assert_eq!(
+            Restrict::parse("corners-arena"),
+            Restrict::Element("corners-arena".into())
+        );
+        assert_eq!(
+            Restrict::parse("#dock"),
+            Restrict::Element("dock".into()),
+            "leading # is optional CSS-id sugar"
+        );
     }
 
     #[test]

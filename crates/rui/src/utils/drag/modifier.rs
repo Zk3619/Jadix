@@ -136,14 +136,16 @@ pub fn builtin_modifiers() -> Vec<DragModifier> {
         DragModifier::new("restrict", MODIFIER_ORDER_RESTRICT, |t, ctx| {
             let origin = ctx.origin_of(t);
             let size = ctx.item_size();
-            let clamped = match ctx.restrict {
+            let clamped = match &ctx.restrict {
                 Restrict::None => return t,
                 Restrict::Viewport => clamp_origin_to_box(
                     origin,
                     size,
                     [0.0, 0.0, ctx.viewport[0].max(1.0), ctx.viewport[1].max(1.0)],
                 ),
-                Restrict::Rect(r) => clamp_origin_to_box(origin, size, r),
+                Restrict::Rect(r) => clamp_origin_to_box(origin, size, *r),
+                // `ghost_origin` resolves Parent / Element → Rect before this stage.
+                Restrict::Parent | Restrict::Element(_) => return t,
             };
             ctx.from_origin(clamped)
         }),

@@ -27,13 +27,14 @@ use super::geometry::{Axis, DragStack, Restrict, SnapGrid};
 use super::session::{
     BeginDrag, DragHandler, DragPredicate, ScopeRuntime, active_source_translate, begin,
     bump_auto_stack, list_max_index, list_slot_stride, live_cross_list_source_translate,
-    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity, start_geometry,
+    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity,
+    remember_item_restrict, start_geometry,
 };
 use super::sortable::{SORTABLE_FLIP_MS, sortable_preview};
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
-    ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_LIST,
-    ATTR_DRAG_OVER, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL,
+    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 #[derive(Clone)]
@@ -159,6 +160,7 @@ fn keyed_item_shell(island: Element) -> Element {
     let mut el =
         Element::from(vstack().min_w(0.0).flex_shrink(0.0).child(island)).overflow("visible");
     el.set_attr("data-stacking-context", "1");
+    el.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
     el
 }
 
@@ -540,8 +542,12 @@ impl DragScopeBuilder {
         self.threshold = px.max(0.0);
         self
     }
-    pub fn restrict(mut self, restrict: Restrict) -> Self {
-        self.restrict = restrict;
+    /// Ghost travel box for every drag in this scope. `none` (default) does not
+    /// clamp; `viewport` uses the window; `parent` uses the item's author
+    /// container; any other token is a live element id. A
+    /// [`DraggableBuilder::restrict`] on the item overrides this.
+    pub fn restrict(mut self, restrict: impl Into<Restrict>) -> Self {
+        self.restrict = restrict.into();
         self
     }
     pub fn snap(mut self, snap: SnapGrid) -> Self {
@@ -763,6 +769,8 @@ pub struct DraggableBuilder {
     source_opacity: Option<f32>,
     /// Overlap stacking vs siblings. Default [`DragStack::Auto`].
     stack: DragStack,
+    /// Item-level ghost clamp. `None` inherits the provider [`Restrict`].
+    restrict: Option<Restrict>,
 }
 
 pub fn draggable(id: impl Into<String>) -> DraggableBuilder {
@@ -779,6 +787,7 @@ pub fn draggable(id: impl Into<String>) -> DraggableBuilder {
         opacity: None,
         source_opacity: None,
         stack: DragStack::Auto,
+        restrict: None,
     }
 }
 
@@ -836,6 +845,16 @@ impl DraggableBuilder {
         self
     }
 
+    /// Ghost travel box for **this** item. Omitted inherits the provider.
+    /// `viewport` / `window` = the window; `parent` = the author parent (no id
+    /// needed); any other token is a live element id (Droppable / `id` /
+    /// `template_id`). Cross-parent drops use `viewport` or omit; Gallery
+    /// 四角旋转 can use `parent` or the arena id.
+    pub fn restrict(mut self, restrict: impl Into<Restrict>) -> Self {
+        self.restrict = Some(restrict.into());
+        self
+    }
+
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let ctx = require_drag("Draggable");
         let item_ctx = DragItemCtx {
@@ -858,6 +877,7 @@ fn assemble_draggable(
 ) -> Element {
     let scope = ctx.id.clone();
     let id = cfg.id.clone();
+    remember_item_restrict(&scope, &id, cfg.restrict.clone());
     let tid = format!("{scope}__draggable:{id}");
     let capture = format!("{scope}__drag:{id}");
     let active = ctx.active_draggable;
@@ -1203,6 +1223,9 @@ pub fn draggable_from_rsx(opts: DraggableRsxOpts, body: impl Fn() -> Element + '
     if let Some(source_opacity) = opts.source_opacity {
         b = b.source_opacity(source_opacity);
     }
+    if let Some(restrict) = opts.restrict {
+        b = b.restrict(restrict);
+    }
     b.stack(opts.stack).child(body)
 }
 
@@ -1219,6 +1242,7 @@ pub struct DraggableRsxOpts {
     pub opacity: Option<f32>,
     pub source_opacity: Option<f32>,
     pub stack: DragStack,
+    pub restrict: Option<Restrict>,
 }
 
 pub fn droppable_from_rsx(opts: DroppableRsxOpts, body: impl Fn() -> Element + 'static) -> Element {

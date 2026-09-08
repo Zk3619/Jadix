@@ -10,7 +10,7 @@ use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
 use super::builder::{DroppableBuilder, draggable, droppable};
-use super::geometry::{Axis, DragStack};
+use super::geometry::{Axis, DragStack, Restrict};
 use super::session::DragEvent;
 
 pub use crate::utils::drag_reorder::{
@@ -206,6 +206,7 @@ pub struct SortableItemBuilder {
     rest_opacity: Option<f32>,
     source_opacity: Option<f32>,
     stack: DragStack,
+    restrict: Option<Restrict>,
 }
 
 pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
@@ -220,6 +221,7 @@ pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
         rest_opacity: None,
         source_opacity: None,
         stack: DragStack::Auto,
+        restrict: None,
     }
 }
 
@@ -263,6 +265,11 @@ impl SortableItemBuilder {
         self.stack = stack.into();
         self
     }
+    /// Same as [`crate::utils::drag::DraggableBuilder::restrict`].
+    pub fn restrict(mut self, restrict: impl Into<Restrict>) -> Self {
+        self.restrict = Some(restrict.into());
+        self
+    }
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let list = if self.list.is_empty() {
             self.id.clone()
@@ -278,6 +285,9 @@ impl SortableItemBuilder {
             .handle_only(self.handle_only)
             .also_droppable(true)
             .stack(self.stack);
+        if let Some(r) = self.restrict {
+            b = b.restrict(r);
+        }
         if let Some(o) = self.rest_opacity {
             b = b.opacity(o);
         }
