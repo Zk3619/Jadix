@@ -136,7 +136,7 @@ DragDropProvider                       drag_scope / <DragProvider>
 | type / accept / group | 靠 `data` + 自定义 detector | 一等 `item_type` / `accept` / `group` | **超** |
 | 激活 delay / 距离 | 硬编码 250 ms **或** 10 px | 可配；**且**（默认 4 px / 0 ms） | **超**（可配）/ **差**（语义是 AND） |
 | 轴锁 | 示例：transformer `{ x: 0 }` | `axis` / `Axis` | **超**（一等） |
-| 视口 / 矩形钳位 | 无内置 | `restrict` Viewport / Rect | **超** |
+| 视口 / 矩形 / **parent** / **元素 id** 钳位 | 无内置 | `restrict` Viewport / Rect / Parent（无需父级 id）/ Element(id)，项可覆盖 Provider | **超** |
 | 网格吸附 | 无内置 | `SnapGrid` | **超** |
 | 空容器插入阈值 | 无 | `empty_insert` | **超** |
 | `can_drop` 否决 | 无（自定义 detector） | 有 | **超** |

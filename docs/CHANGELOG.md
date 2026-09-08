@@ -3,6 +3,8 @@
 > **地位**：SemVer / 实验面草稿（WP-2.5 任务③）。正式发布前以 [`AUTHORITY.md`](AUTHORITY.md) WP-4.1 为准重写。  
 > **日期**：2026-08-13
 
+- **2026-09-09 drag restrict=parent**：[`Restrict::Parent`](../crates/rui/src/utils/drag/geometry.rs)（`restrict="parent"`）钳作者父级，无需给容器分配 id；跳过 hug-content 的 kit item shell。`viewport` / 组件 id 仍可用。
+- **2026-09-09 drag restrict-to-element**：[`Restrict`](../crates/rui/src/utils/drag/geometry.rs) 接受组件 id（每 tick 解析 Droppable / `template_id` / `id` 的指针空间盒）。[`Draggable`](../crates/rui/src/utils/drag/builder.rs) / `SortableItem` 的 `restrict` 覆盖 Provider；缺省继承（Provider 默认 `none`）。`viewport` 钳窗口（跨父级投放仍可）；`parent` 钳作者父级；Gallery「四角旋转」`restrict="corners-arena"`。
 - **2026-09-09 drag P0**：[`modifier`](../crates/rui/src/utils/drag/modifier.rs) 管道（axis/snap/pin/restrict + `.modifier` / `add_modifier`，Provider 重建后仍在）。公开名避开 CSS `transform`（solid-dnd 叫 `Transformer`；值是 [`DragDelta`](../crates/rui/src/utils/drag/modifier.rs)）。嵌套列表 innermost 碰撞与 `hover_list`（Gallery「嵌套列表」）。clone-pull 仍在 WP-DRAG.3。对照 [`SOLID_DND_COMPARISON.md`](comparison/SOLID_DND_COMPARISON.md) §8。
 - **2026-09-07 音视频槽 MVP**：[`engine/media.md`](engine/media.md) 分层落地 WP-M.1/M.2/M.3/M.6。同键 `write_texture`；[`queue_media_frame`](../crates/rui/src/media/stream.rs)（RGBA 默认；`image-stream` 时 NV12/I420/P010 → BT.709）；Gallery「绘制」合成色条（1×1 canvas 时钟已修）。无 FFmpeg、无播放器 crate。
 - **2026-09-06 对照**：[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §9 补 RUI × EUI × GPUI / gpui-component **视觉 / 2.5D / 动画**三角；[`GPUI_ECOSYSTEM_COMPARISON.md`](comparison/GPUI_ECOSYSTEM_COMPARISON.md) §6.5；动效手册附录 §21。不改冻结面、不新开 WP。
