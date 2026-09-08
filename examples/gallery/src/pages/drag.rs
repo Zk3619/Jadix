@@ -813,7 +813,7 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 四角旋转"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "容器内一张卡片。拖到四角时浮层转到指定角：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按指针在容器内的位置插值）。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
+                    "容器内一张卡片。restrict 填容器 id（corners-arena）或 parent（无需给父级分配 id，钳作者容器并跳过 kit shell）。本例用 arena id，浮层钳在整块虚线框内而不是整个视口：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按指针在容器内的位置插值）。缺省/viewport 仍可拖出父级做跨容器投放。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
                 </Label>
                 <DragProvider id="gal-drag-corners" collision="pointer-within">
                     <Droppable id="corners-arena">
@@ -834,7 +834,7 @@ pub(crate) fn DragShowcase() -> Element {
                                 { corner_hint("45°") }
                             </HStack>
                             <Box w="100%" grow="1" items="center" justify="center">
-                                <Draggable id="corner-card" item_type="chip" source_opacity={0}>
+                                <Draggable id="corner-card" item_type="chip" source_opacity={0} restrict="corners-arena">
                                     { card_chip("拖到四角") }
                                 </Draggable>
                             </Box>
