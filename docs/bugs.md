@@ -23,9 +23,9 @@
 - tailwindcss 全量语法支持
 - 并考虑：增加 popup_window 能力，为桌面端实现可超出视口的独立菜单/弹窗/通知等能力
 - 平台能力特化
-- 缺的主要是 steps / jump-* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
+- 缺的主要是 steps / jump-\* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
 - solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等 — **WP-DRAG.1 ☑** [`drag.md`](components/drag.md)
-- orientation="vertical"  自动检测屏幕方向 auto、始终水平、始终垂直
+- orientation="vertical" 自动检测屏幕方向 auto、始终水平、始终垂直
 - 浮层编排壳：**anchored_overlay**（Trigger / Point / Unanchored）与 **viewport_modal**（DialogFade / SheetSlide）均已落地 + Gallery。[overlay_shells.md](../components/overlay_shells.md)
 - 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
@@ -35,3 +35,6 @@
 - sidebar 展开/收起时常发生卡顿、突变的问题，因为动画期间每帧都在因布局重算而全树重建
 - 程序启动时首屏白屏的问题
 - 程序启动后点击最大化后，内容没有正确放大而是维持原大小，在额外的空间仅填补底色的问题
+- tab键切换焦点是否应当支持长按快速切换？
+- 部分组件的tab焦点存在异常、
+- 拖拽列表的项拖拽到最后并再向下拖拽一个项高时，本体从列表最后的槽位消失不见导致槽位变成空白

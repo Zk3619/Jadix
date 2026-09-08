@@ -240,7 +240,7 @@ Gallery → 浮层 → Secondary window（或导航 Router → Open secondary）
 ### 8.4 签署
 
 - [x] `cargo test -p rui --lib ime_support` 绿（P2 代码迁入后，2026-09-08）
-- [ ] Win 真窗口 #3 / #4（与 [`desktop_smoke.md`](../ops/desktop_smoke.md) 同机签署；迁入后需**重新**走一遍视觉，不沿用 2026-08 旧签字代替）
+- [x] Win 真窗口 #3 / #4（与 [`desktop_smoke.md`](../ops/desktop_smoke.md) 同机签署；P2 迁入后重签 **2026-09-08**，不沿用 2026-08 旧签字代替）
 - [ ] （可选）次窗 IME；日文或韩文一组字路径
 
 失败时附：`RUI_IME_DIAG` 片段、OS/IME 名称、是否 `RUI_FORCE_SOFTWARE`，标签 `smoke` / `ime`。

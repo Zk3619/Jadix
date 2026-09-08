@@ -3,7 +3,7 @@
 > **地位**：SemVer / 实验面草稿（WP-2.5 任务③）。正式发布前以 [`AUTHORITY.md`](AUTHORITY.md) WP-4.1 为准重写。  
 > **日期**：2026-08-13
 
-- **2026-09-08 sortable FLIP**：拖拽排序让位改为 CSS `transition: transform`（[`SORTABLE_FLIP_MS`](../crates/rui/src/utils/drag/sortable.rs) 150ms ease）。跟手路径与 drop/cancel 仍 snap，避免提交后 leftover 把新布局画反。模块改名为 [`utils/drag`](../crates/rui/src/utils/drag)（不再用 `dnd`）。solid-dnd 原语 + 超越 Sortable 的实时让位 / 边缘自动滚 / Esc 取消 / 方向键插入；interact 轴锁/钳位。RSX `<DragProvider>`。手册 [`drag.md`](components/drag.md)；Gallery `DragShowcase`。
+- **2026-09-09 drag P0**：[`modifier`](../crates/rui/src/utils/drag/modifier.rs) 管道（axis/snap/pin/restrict + `.modifier` / `add_modifier`，Provider 重建后仍在）。公开名避开 CSS `transform`（solid-dnd 叫 `Transformer`；值是 [`DragDelta`](../crates/rui/src/utils/drag/modifier.rs)）。嵌套列表 innermost 碰撞与 `hover_list`（Gallery「嵌套列表」）。clone-pull 仍在 WP-DRAG.3。对照 [`SOLID_DND_COMPARISON.md`](comparison/SOLID_DND_COMPARISON.md) §8。
 - **2026-09-07 音视频槽 MVP**：[`engine/media.md`](engine/media.md) 分层落地 WP-M.1/M.2/M.3/M.6。同键 `write_texture`；[`queue_media_frame`](../crates/rui/src/media/stream.rs)（RGBA 默认；`image-stream` 时 NV12/I420/P010 → BT.709）；Gallery「绘制」合成色条（1×1 canvas 时钟已修）。无 FFmpeg、无播放器 crate。
 - **2026-09-06 对照**：[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §9 补 RUI × EUI × GPUI / gpui-component **视觉 / 2.5D / 动画**三角；[`GPUI_ECOSYSTEM_COMPARISON.md`](comparison/GPUI_ECOSYSTEM_COMPARISON.md) §6.5；动效手册附录 §21。不改冻结面、不新开 WP。
 - **2026-09-06 平台层文档**：新增 [`platform.md`](engine/platform.md)——`crate::platform` 现状（OS 级 `cfg`、Windows 特化 vs macOS/Linux stub）、散落 OS 逻辑清单与 desktop/mobile/embedded 目标结构；更新 AUTHORITY / ENGINEERING / multi_window / ime / stack 等引用。
@@ -24,7 +24,7 @@
 | `queue_media_frame` / `MediaFrame` / `PixelLayout` / `TextureColorSpace` | `media/stream.rs` | **B18 / WP-M.2–M.3**：动态纹理槽；`image-stream` 开 YUV；不解码、不播放；HDR 后置 |
 | `is_remote_src` / `set_remote_asset_fetcher` / `fetch_remote_bytes` / `RemoteAssetFetcher` | `media/remote.rs` | **remote-asset**：远程 `src` 入口；HTTP 由应用注入；默认关 |
 | `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
-| `drag_scope` / `draggable` / `droppable` / `drag_overlay` / `sortable_*`；RSX `<DragProvider>` 等 | `utils/drag/` | **WP-DRAG.1–2 ☑**：超越 Sortable（自动滚/让位/键盘）；Point 替身；不进 SemVer |
+| `drag_scope` / `draggable` / `droppable` / `drag_overlay` / `sortable_*` / `DragModifier`；RSX `<DragProvider>` 等 | `utils/drag/` | **WP-DRAG.1–2 ☑** + P0 modifier / nested lists；clone-pull 仍 DRAG.3；不进 SemVer |
 
 - **2026-09-05 三层动画模型**：引擎 `Timing` + spring 积分；声明式 `transition: … spring()`；编程式 `Animation` 句柄（`run` / `seek` / `set_rate` / `on_finish`）。丢掉 DocumentTimeline、Promise、编程面 composite。手册 [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分 §11.5。
 - **2026-09-05 gallery wgpu 管线**：`inst_id` 从 VertexOutput loc 15 打进 loc 14 `extra_and_id`，避开 `max_inter_stage_shader_variables`（0..=14）。

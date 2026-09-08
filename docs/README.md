@@ -25,7 +25,7 @@
 | [ops/](ops/desktop_smoke.md) | 冒烟、IME、键盘、发布、托盘、多窗口、DevTools、热重载 |
 | [comparison/](comparison/gap_analysis.md) | 对照审计（非执行源）；含 [EUI 视觉专章](comparison/EUI_NEO_VISUAL.md)（§9 GPUI 三角） |
 | [archive/](archive/README.md) | 冻结计划、愿景稿、早期随笔 |
-| [plans/](plans/global-stylesheet-loader.md) | 进行中的专题计划（含 [media-av.md](plans/media-av.md) 音视频 WP-M） |
+| [plans/](plans/global-stylesheet-loader.md) | 进行中的专题计划（含 [media-av.md](plans/media-av.md) 音视频 WP-M、[text_undo_redo.md](plans/text_undo_redo.md) 文本撤销 / `text-undo` feature） |
 | [site/](site/README.md) | 文档站 stub（WP-4.4） |
 
 ### 组件

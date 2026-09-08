@@ -1,8 +1,8 @@
 # Drag (`utils/drag`)
 
-> **Status**: **WP-DRAG.1 ☑** + **WP-DRAG.2 ☑** headless kit + RSX + Gallery. Experimental — not in `prelude`, not SemVer 0.1.  
+> **Status**: **WP-DRAG.1 ☑** + **WP-DRAG.2 ☑** + P0 modifier pipeline / nested lists. Experimental — not in `prelude`, not SemVer 0.1.  
 > **Parent**: [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §2.1, [overlay_shells.md](overlay_shells.md) §9, [headless.md](headless.md).  
-> **References**: `Reference/solid-dnd-main`, `Reference/Sortable-master`, `Reference/interact.js-main`.  
+> **References**: `Reference/solid-dnd-main`, `Reference/Sortable-master`, `Reference/interact.js-main`。对照专章：[SOLID_DND_COMPARISON.md](../comparison/SOLID_DND_COMPARISON.md)。  
 > **North star**: **surpass SortableJS** (~40k★) — not clone it. Sortable is a DOM list plugin; this kit is a deep module: collision, overlay, auto-scroll, keyboard, and dual-write sit behind a small surface. Product chrome stays in the caller.
 
 ```
@@ -38,12 +38,15 @@ Not a ShadCN product component. Ghost uses `portal_sync(Pinned)` + author `fixed
 Builder is the source of truth. RSX expands to the same functions. **Not in prelude.**
 
 ```rust
-use rui::utils::drag::{drag_scope, draggable, droppable, drag_overlay, CollisionAlg, ScrollLock};
+use rui::utils::drag::{
+    drag_scope, draggable, droppable, drag_overlay, CollisionAlg, ScrollLock, MODIFIER_ORDER_AUTHOR,
+};
 
 drag_scope("kanban")
     .collision(CollisionAlg::MostIntersecting)
     .scroll_lock(ScrollLock::Auto) // default; or "all" / "x" / "y" / "none"
     .animation(true) // default; false snaps sibling FLIP
+    .modifier("nudge", MODIFIER_ORDER_AUTHOR, |t, _| t)
     .on_drag_end(|ev| { /* apply_reorder_vec / apply_transfer */ })
     .child(|| { /* Draggable + Droppable + DragOverlay */ })
 ```
@@ -68,7 +71,7 @@ Tags: `DragProvider`, `Draggable`, `Droppable`, `DragOverlay`, `DragHandle`, `Dr
 
 1. `pointerdown` on a draggable (or `DragHandle`) → [`begin`](../../crates/rui/src/utils/drag/session.rs) (`Pending`).
 2. Move past `threshold` **and** `delay_ms` → `Active`, `on_drag_start`, overlay opens.
-3. Each move: axis / snap / restrict → overlay `pos` → collision (empty lists inflated by `empty_insert`) → `can_drop` veto → `on_drag_over` when the droppable changes. Siblings in the same list **shift** (CSS `transition: transform` [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) = 150ms ease when `animation` is on, the default; `animation={false}` / `.animation(false)` snaps; pointer-follow and drop/cancel **snap** so commit layout is not inverted).
+3. Each move: modifier pipeline (axis / snap / pin-locked-axis / restrict / author `.modifier`) → overlay `pos` → collision (empty lists inflated by `empty_insert`) → `can_drop` veto → `on_drag_over` when the droppable changes. Siblings in the same list **shift** (CSS `transition: transform` [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) = 150ms ease when `animation` is on, the default; `animation={false}` / `.animation(false)` snaps; pointer-follow and drop/cancel **snap** so commit layout is not inverted).
 4. Pointer near a `scroll:` viewport edge → auto-scroll (also pumped while the pointer is held still).
 5. `pointerup` → `on_drag_end`. **Esc** → [`cancel`](../../crates/rui/src/utils/drag/session.rs) (no commit). **↑↓←→** → [`nudge_insert`](../../crates/rui/src/utils/drag/session.rs).
 
@@ -95,6 +98,10 @@ With an overlay, siblings FLIP a hole at the insert index. `opacity` is the **ro
 | `pointer-within` | Smallest droppable containing the pointer |
 
 Modifiers: `axis` (`xy` / `x` / `y` — locked motion axis tracks the current layout slot so nested scroll does not desync the ghost). **`scroll_lock`** freezes **edge auto-scroll** for **every** drag in that provider (not only axis-locked ones), independently of `axis`. `autoscroll={false}` turns the whole pump off; `scroll-lock-all` still lets `pump_autoscroll` re-tick the overlay after a parent `scroll_behavior=smooth` chase. `restrict` (`none` / `viewport`), `threshold`, `delay_ms`, `empty_insert`, `autoscroll`, `animation` (`true` default / `false` snaps sibling FLIP), `snap` / `can_drop` (Builder). Item `stack` (`auto` / `top` / `bottom` / `keep`). `accept` matches `item_type` (comma-separated; Gallery「条件投放」is `容器1`←`组件2`, `容器2`←`组件1`); `group` must match when both are set. Overlay `rotate` / `.style(|el| el.rotate(…))` is author chrome (Gallery「四角旋转」peeks pointer vs the arena).
+
+Ghost origin is a **modifier pipeline** (dnd-kit / interact.js `Modifier`; solid-dnd called this `Transformer` — RUI avoids that name so it does not collide with CSS `transform`). Built-ins `axis` (10) → `snap` (20) → `pin-locked-axis` (25) → `restrict` (30). Author stages: `.modifier("id", order, |t, ctx| …)` / [`add_modifier`](../../crates/rui/src/utils/drag/session.rs) (live; survives provider rebuild). Default author order is 40 ([`MODIFIER_ORDER_AUTHOR`](../../crates/rui/src/utils/drag/modifier.rs)). `t` is a [`DragDelta`](../../crates/rui/src/utils/drag/modifier.rs) (press-delta, not a CSS matrix); `ctx.origin_of(t)` is the ghost top-left. Overlay `rotate` / FLIP `translate` stay CSS `transform` and do not go through this pipeline.
+
+Nested lists: collision refines to the **innermost** droppable that contains the pointer when the winner wraps a smaller candidate. Sortable `hover_list` uses the same innermost hit (row or list shell), so empty nested padding is not stolen by the wrapping folder row. While the pointer is still in the lifted source island, hover stays on `from_list` (do not drop a folder into its own child list).
 
 | RSX | Builder | Auto-scroll |
 |-----|---------|-------------|
@@ -127,7 +134,7 @@ Container highlight is **not** CSS `:hover`, and the kit does **not** paint colo
 | Live gap | CSS animation | sibling `translate` + FLIP [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) (150ms ease; `animation={false}` snaps; drop always snaps) |
 | Keyboard | weak | Esc cancel + arrow insert |
 | Collision | geometry guess | four named algorithms |
-| Clone / nested / multi-drag | plugins | **WP-DRAG.3** |
+| Clone / nested / multi-drag | plugins | nested lists ☑ (P0) / clone-pull **WP-DRAG.3** |
 
 ## 7. Checklist
 
@@ -138,4 +145,5 @@ Container highlight is **not** CSS `:hover`, and the kit does **not** paint colo
 - [x] Handle-only start; grab/collision use the **item** box; default overlay clones the source (custom child keeps its own size)
 - [x] Live sibling shift + edge auto-scroll + Esc / arrows
 - [x] RSX + Builder + Gallery (`DragShowcase` in 浮层 / 反馈)
-- [x] Library tests: geometry / collision / session / auto-scroll / RSX dual-write
+- [x] Nested lists: innermost collision + hover_list (folder wrap); Gallery 嵌套列表
+- [x] Modifier pipeline (axis/snap/pin/restrict + author `.modifier`; not CSS `transform`)
