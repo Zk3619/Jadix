@@ -2160,6 +2160,8 @@ fn shadow_layers_close(a: &[BoxShadow], b: &[BoxShadow]) -> bool {
 
 /// 把当前 style 值记为已 settle 的 transition 基线（`from=to=current`，inactive）。
 /// 用于 Carousel 无缝瞬移等：清 snapshot 后若直接写入新目标，首帧 seed 会 `from=to=新目标` 而跳过动画。
+///
+/// `style.transition` 必须已经挂上：为空时无法选择要建档的属性，只会清空 snapshot。
 pub fn snap_element_transitions_to_current(
     style: &super::Style,
     snapshot: &mut TransitionSnapshot,
@@ -2896,6 +2898,70 @@ mod css_transition_dt_tests {
             style.translate[0]
         );
         set_css_transition_virtual_timeline(false);
+    }
+
+    /// bugs.md: `transition: translate` after snap baseline should still tween,
+    /// same as the verified `transform` path above.
+    #[test]
+    fn snap_baseline_then_new_target_still_animates_with_translate() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.translate = [-100.0, 0.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        snap_element_transitions_to_current(&style, &mut snap);
+        assert!(
+            snap.has_any_tweens(),
+            "snap must seed a Translate tween (from=to=current, inactive)"
+        );
+        style.translate = [-300.0, 0.0];
+        assert!(
+            css_transition_needs_frame(&style, &snap),
+            "new translate target after snap must request a frame"
+        );
+        assert!(
+            tick_element_transitions(&mut style, &mut snap, 0.0),
+            "tick must start an active Translate tween"
+        );
+        set_css_transition_timeline_ms(50.0);
+        style.translate = [-300.0, 0.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate[0] + 200.0).abs() < 1.0,
+            "should animate from -100 toward -300, mid≈-200, got {}",
+            style.translate[0]
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn snap_while_transition_empty_does_not_seed() {
+        let mut style = crate::style::Style::default();
+        style.translate = [0.0, -100.0];
+        let mut snap = TransitionSnapshot::default();
+        snap_element_transitions_to_current(&style, &mut snap);
+        assert!(
+            !snap.has_any_tweens(),
+            "snap cannot choose properties when transition is empty"
+        );
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        style.translate = [0.0, 40.0];
+        assert!(
+            !tick_element_transitions(&mut style, &mut snap, 0.0),
+            "first tick after empty-snap seeds from=to=new target and skips the tween"
+        );
+        assert_eq!(style.translate[1], 40.0);
     }
 }
 

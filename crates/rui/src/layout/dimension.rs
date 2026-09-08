@@ -841,6 +841,20 @@ mod tests {
     }
 
     #[test]
+    fn into_opacity_fraction_and_percent() {
+        assert!((0.4f32.into_opacity() - 0.4).abs() < 1e-6);
+        assert!((1i32.into_opacity() - 1.0).abs() < 1e-6);
+        assert!((0i32.into_opacity() - 0.0).abs() < 1e-6);
+        assert!((40i32.into_opacity() - 0.4).abs() < 1e-6);
+        assert!((100u8.into_opacity() - 1.0).abs() < 1e-6);
+        assert!(("40%".into_opacity() - 0.4).abs() < 1e-6);
+        assert!(("100%".into_opacity() - 1.0).abs() < 1e-6);
+        assert!(("0.4".into_opacity() - 0.4).abs() < 1e-6);
+        assert!(("1".into_opacity() - 1.0).abs() < 1e-6);
+        assert!((parse_opacity("50%") - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
     fn into_f32_side_offset_parity_4_eq_4px_not_unitless_1() {
         // Radix `sideOffset={4}` = 4px；≠ 无单位 `"1"`（1rem=16px）。
         assert!((IntoF32::into_f32(4) - IntoF32::into_f32("4px")).abs() < 1e-6);
@@ -1289,3 +1303,78 @@ macro_rules! impl_into_f32_raw_int {
     )+};
 }
 impl_into_f32_raw_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+
+/// CSS `opacity`: a unitless **0–1** number, or a **percentage** (`"40%"` / `40` → `0.4`).
+///
+/// - `0`, `0.4`, `1` / `"0.4"` stay in `0..=1`
+/// - `"40%"` / `"100%"` divide by 100
+/// - integers **greater than 1** (and `<= 100`) are percentages so `opacity={40}` ≡ `40%`
+pub fn parse_opacity(value: impl IntoOpacity) -> f32 {
+    value.into_opacity()
+}
+
+pub trait IntoOpacity {
+    fn into_opacity(self) -> f32;
+}
+
+fn opacity_from_unitless(v: f32) -> f32 {
+    if !v.is_finite() {
+        return 0.0;
+    }
+    if v > 1.0 {
+        (v / 100.0).clamp(0.0, 1.0)
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
+impl IntoOpacity for f32 {
+    fn into_opacity(self) -> f32 {
+        opacity_from_unitless(self)
+    }
+}
+
+impl IntoOpacity for f64 {
+    fn into_opacity(self) -> f32 {
+        opacity_from_unitless(self as f32)
+    }
+}
+
+impl IntoOpacity for &str {
+    fn into_opacity(self) -> f32 {
+        let t = self.trim();
+        if let Some(raw) = t.strip_suffix('%') {
+            return raw
+                .trim()
+                .parse::<f32>()
+                .map(|v| (v / 100.0).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+        }
+        t.parse::<f32>()
+            .map(opacity_from_unitless)
+            .unwrap_or(0.0)
+    }
+}
+
+impl IntoOpacity for String {
+    fn into_opacity(self) -> f32 {
+        self.as_str().into_opacity()
+    }
+}
+
+impl IntoOpacity for &String {
+    fn into_opacity(self) -> f32 {
+        self.as_str().into_opacity()
+    }
+}
+
+macro_rules! impl_into_opacity_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl IntoOpacity for $t {
+            fn into_opacity(self) -> f32 {
+                opacity_from_unitless(self as f32)
+            }
+        }
+    )+};
+}
+impl_into_opacity_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
