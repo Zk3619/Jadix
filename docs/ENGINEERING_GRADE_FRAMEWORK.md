@@ -333,7 +333,7 @@ flowchart LR
 | ADR-7 | 热重载基于 `template_id`，不承诺逻辑热替换；`template_id` ≠ 全局 a11y/焦点主键（见 [`element_identity.md`](element_identity.md)） | 接受 |
 | ADR-8 | 工程级以原生+发布为准，不以 Solid API 百分百对齐为准 | 接受 |
 | ADR-9 | **双书写面**：`ui!` 标签与 Builder 纯 Rust 一等公民、互嵌兼容；禁止只保留其一 | 接受 |
-| ADR-10 | **栈预算**：框架不 emit PE `/STACK`；Windows ~1 MiB 为测基线；`Element` 堆句柄 + TLS `ElementInner` slab + RUI 走树堆 DFS；`with_ui_build_stack` = GPUI `stacksafe` 同构（64 KiB 红区）；**不 fork taffy**（内部递归 + 128 帽为接受差距）；应用 opt-in 见 `platform/windows/stack.rs` | 接受；[`stack_and_element_model.md`](engine/stack_and_element_model.md) **已冻结** |
+| ADR-10 | **栈预算**：框架不 emit PE `/STACK`；Windows ~1 MiB 为测基线；`Element` 堆句柄 + TLS `ElementInner` slab + RUI 走树堆 DFS；`with_ui_build_stack` = GPUI `stacksafe` 同构（64 KiB 红区）；**不 fork taffy**（内部递归 + 128 帽为接受差距）；应用 opt-in 见 `platform/os/windows/stack.rs` | 接受；[`stack_and_element_model.md`](engine/stack_and_element_model.md) **已冻结** |
 
 ---
 

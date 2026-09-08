@@ -2,7 +2,7 @@
 
 > **文档地位**：OS 线程栈预算、`Element` 堆句柄与对标框架差异的**领域规范**（「是什么 / 该学什么」）。**已冻结**（2026-09-05）。  
 > **执行源**：巩固期排期仍以 [`AUTHORITY.md`](../AUTHORITY.md) 为准；本文**不**单独开 WP 编号。  
-> **事实来源**：`crates/rui/src/core/tree.rs`、`layout/layout_tree.rs`、`core/reactivity.rs::with_ui_build_stack`、`platform/windows/stack.rs`、`crate_tests/layout/stack_budget.rs`、`examples/gallery/src/mount_tests.rs`；OS 平台层全貌见 [`platform.md`](platform.md)；对标目录 `Reference/`（GPUI、Floem、egui、Slint、Xilem、Iced 等）。  
+> **事实来源**：`crates/rui/src/core/tree.rs`、`layout/layout_tree.rs`、`core/reactivity.rs::with_ui_build_stack`、`platform/os/windows/stack.rs`、`crate_tests/layout/stack_budget.rs`、`examples/gallery/src/mount_tests.rs`；OS 平台层全貌见 [`platform.md`](platform.md)；对标目录 `Reference/`（GPUI、Floem、egui、Slint、Xilem、Iced 等）。  
 > **审计日期**：2026-09-05（句柄 / 堆 DFS / stacksafe 同构 / TLS 节点 slab / 组件壳走树）。  
 > **禁区**：禁止用 PE `/STACK`、无条件 `stacker::grow` 或 **fork taffy** 绕过栈预算。策略变更须修订 ADR-10，不得默默回潮。
 
@@ -22,7 +22,7 @@ RUI 的 gallery 在 Windows **默认 ~1 MiB** 主线程栈上曾溢出，**主�
 |------|------|------|
 | **PE `/STACK`** | Windows GUI 主线程默认保留 **~1 MiB**（`0x100000`） | 行业基线；RUI **不**在框架或 gallery 里 emit 链接参数 |
 | **`with_ui_build_stack`** | 剩余栈 **< 64 KiB** 时 `stacker::maybe_grow` 再借 **1 MiB** 段（可叠） | GPUI `#[stacksafe]` 同构：`run_effect` 用户体、`component_root`、Taffy `compute_layout` 入口、每条 UI 任务、file-drop 回调。**仅** HMR 全量 `app_builder` 仍在事件处理里显式包（不走 `run_effect`）。**不**包 click/key/touch/redraw 整段 |
-| **`platform/windows/stack.rs`** | 提供 `EXE_STACK_RESERVE` / `msvc_link_arg()` 供**下游二进制**在自有 `build.rs` 里 opt-in | 测过最坏路径后的最后手段，**不是**框架默认 |
+| **`platform/os/windows/stack.rs`** | 提供 `EXE_STACK_RESERVE` / `msvc_link_arg()` 供**下游二进制**在自有 `build.rs` 里 opt-in | 测过最坏路径后的最后手段，**不是**框架默认 |
 | **`stack_budget` 测试** | 在 **1 MiB** 线程上断言 calculator 形树 layout 总用量 **< 768 KiB**；`collect_frame` **< 12 KiB**；`size_of::<Element>()` = 指针 | 红/绿循环；防止 collect 回退到 ~21 KiB/帧，防止 `Element` 重新变肥 |
 
 ```text
@@ -162,7 +162,7 @@ pub struct Element {
 | **第 1 档** | 子节点指针化 / TLS `ElementInner` slab / `ui!` lowering 构造即堆分配 | **☑** 每节点 `Box<ElementInner>` + 卸载回收 |
 | **第 2 档** | collect 全迭代、深度帽、小栈帧、`stack_budget` | **☑** RUI 走树；Taffy + 128 帽为接受差距 |
 | **第 3 档** | `with_ui_build_stack`（64 KiB 红区 / 1 MiB 段） | **☑** 用户闭包 + Taffy 入口 |
-| **第 4 档** | 应用 `build.rs` + `platform/windows/stack.rs` | **opt-in**；Slint 仅工具链 |
+| **第 4 档** | 应用 `build.rs` + `platform/os/windows/stack.rs` | **opt-in**；Slint 仅工具链 |
 
 遍历侧**超过** GPUI：collect / 命中 / overlay 查找已是堆 DFS。换栈粒度与 GPUI **对齐**（不足才换栈）。Taffy 内部递归两边都未解决。
 

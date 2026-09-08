@@ -180,7 +180,7 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 |------|------|
 | `MotionTransform` / `MotionStyle` | 跨帧记住**目标**姿态 |
 | `ensure_motion_transitions` | 幂等写入 `TransitionEntry` |
-| `prepare_motion_sync` + `MotionBootstrap` | EnsureAfterSnap / SnapAfterEnsure 首帧 seed |
+| `prepare_motion_sync` + `MotionBootstrap` | EnsureAfterSnap / SnapAfterEnsure 首帧 seed（都是 **ensure → snap**；`transition` 为空时 snap 不建档） |
 | `clear_motion` / `snap_motion_baseline` | 拖拽清场、退场 seed |
 | `motion_is_animating` / `motion_sync_status` | 按卡要帧 + frame damage |
 | 与 transition 引擎无关的 **通用容差** | `MotionEpsilon` |
