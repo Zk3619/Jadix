@@ -7561,6 +7561,129 @@ mod portal_hoist_tests {
     }
 
     #[test]
+    fn nested_wrapper_z_index_with_stacking_context_keeps_glyphs_in_band() {
+        // Drag free-move: relative arena (stacking context) → vstack shell (z) →
+        // absolute pill + text. Without bands, both glyphs paint after both shells.
+        let pill = |label: &str, x: f32| {
+            Element::new()
+                .bg([0.2, 0.4, 0.9, 1.0])
+                .w(120.0)
+                .h(40.0)
+                .absolute()
+                .left(x)
+                .top(20.0)
+                .child(Element::new().text(label))
+        };
+        let shell = |z: i32, pill: Element| Element::new().z_index(z).child(pill);
+        let mut arena = Element::new()
+            .w(400.0)
+            .h(120.0)
+            .relative()
+            .child(shell(1, pill("drag-low", 10.0)))
+            .child(shell(2, pill("drag-high", 50.0)));
+        arena.set_attr("data-stacking-context", "1");
+        let mut root = Element::new().w(400.0).h(200.0).child(arena);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.page_stack_bands.len() >= 2,
+            "expected page_stack_bands for overlapping drag shells, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        let ranges = result.overlay_split.page_stack_band_ranges();
+        let last = ranges.last().expect("band");
+        assert!(
+            result.text_nodes[last.text.0..last.text.1]
+                .iter()
+                .any(|t| t.text == "drag-high"),
+            "front shell glyphs must ride with its rect band"
+        );
+        let earlier_has_high = ranges[..ranges.len() - 1].iter().any(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "drag-high")
+        });
+        assert!(
+            !earlier_has_high,
+            "front glyphs must not sit in an earlier band (text bleed)"
+        );
+    }
+
+    #[test]
+    fn gallery_wrapped_drag_shells_inside_outer_page_stack_occlude_glyphs() {
+        // Gallery Arbitrary-move: ScrollArea scrollbar (z=1000) already owns
+        // page_stack_depth. DragProvider is a stacking-context whose only child
+        // is a relative arena; item z-index lives on nested shells. Without a
+        // stacking-context on each shell, both pills share one band and the
+        // lower glyph paints after the upper fill.
+        let pill = |label: &str, x: f32, y: f32, color: [f32; 4]| {
+            Element::new()
+                .bg(color)
+                .w(176.0)
+                .h(92.0)
+                .absolute()
+                .left(x)
+                .top(y)
+                .child(Element::new().text(label))
+        };
+        let shell = |z: i32, pill: Element| {
+            let mut s = Element::new().z_index(z).child(pill);
+            s.set_attr("data-stacking-context", "1");
+            s
+        };
+        let arena = Element::new()
+            .w(400.0)
+            .h(200.0)
+            .relative()
+            .child(shell(
+                1,
+                pill("drag-low", 16.0, 20.0, [0.1, 0.2, 0.9, 1.0]),
+            ))
+            .child(shell(
+                2,
+                pill("drag-high", 88.0, 52.0, [0.9, 0.1, 0.1, 1.0]),
+            ));
+        let mut provider = Element::new().child(arena);
+        provider.set_attr("data-stacking-context", "1");
+        let bar = Element::new()
+            .w(8.0)
+            .h(80.0)
+            .absolute()
+            .right(0.0)
+            .z_index(1000)
+            .bg([0.0, 0.0, 0.0, 0.4]);
+        let mut page = Element::new()
+            .w(400.0)
+            .h(240.0)
+            .relative()
+            .child(provider)
+            .child(bar);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut page, 400.0, 240.0, [0.0, 0.0]);
+        let ranges = result.overlay_split.page_stack_band_ranges();
+        let low_band = ranges.iter().position(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "drag-low")
+        });
+        let high_band = ranges.iter().rposition(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "drag-high")
+        });
+        assert!(
+            high_band.is_some_and(|h| low_band.is_some_and(|l| h > l)),
+            "upper pill glyphs must paint in a later band than lower glyphs (high={high_band:?} low={low_band:?} bands={})",
+            ranges.len()
+        );
+        let same_band = low_band.zip(high_band).is_some_and(|(l, h)| l == h);
+        assert!(
+            !same_band,
+            "sharing a band paints both fills then both glyphs (text bleed)"
+        );
+    }
+
+    #[test]
     fn nested_overlay_z_index_does_not_append_page_stack_bands() {
         // Gallery: outer ScrollArea overlay bar (z=1000) already owns page_stack_bands.
         // A nested scroller with its own overlay bar must not push more splits — that
