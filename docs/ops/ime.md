@@ -2,7 +2,7 @@
 
 对应实现计划 [ENGINEERING_IMPLEMENTATION_PLAN.md](../archive/ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-1.1**。
 
-> **平台层说明**：Win32 IME 大块代码仍在 [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs)，尚未迁入 [`platform/`](../../crates/rui/src/platform/)。`platform` 职责边界与重构方向见 [`platform.md`](../engine/platform.md)。
+> **平台层说明**：Win32 Imm / IMR / 候选 HWND 在 [`platform/os/windows/ime.rs`](../../crates/rui/src/platform/os/windows/ime.rs)；几何、preedit 折入、诊断仍在 [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs)。P2 迁入后的视觉步骤与通过标准见 [`platform.md` §8](../engine/platform.md)。`platform` 职责边界见同文。
 
 ## 目标
 
@@ -17,7 +17,7 @@
 | Preedit / Commit / Disabled | [`input_controller.rs`](../../crates/rui/src/app/input_controller.rs) |
 | 光标区几何 + diag | [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs) |
 | 每帧刷新 cursor area | [`window_events.rs`](../../crates/rui/src/app/window_events.rs)（redraw 后） |
-| Win 组字定位 | [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs)：`IMR`/Imm 锚组字起点；**仅滚动帧**候选 HWND ΔY；锚点 Y clamp 到视口（滚出窗外贴顶/底，**不失焦**）；程序内/OS 失焦：preedit 折入 value 但去掉音节分隔 `'`；结束组字用 Disabled 排空 OS 回声（非定时器）；不建系统 caret |
+| Win 组字定位 | [`platform/os/windows/ime.rs`](../../crates/rui/src/platform/os/windows/ime.rs)：`IMR`/Imm 锚组字起点；**仅滚动帧**候选 HWND ΔY。策略（锚点 Y clamp、preedit 折入去 `'`、Disabled 排空）在 [`ime_support.rs`](../../crates/rui/src/app/ime_support.rs) |
 | 滚动跟随几何 | 优先本帧 `text_nodes` 视觉坐标（`painted`）；焦点盒 − `scroll_acc` 为回退；`scroll:` 视口始终计入 offset |
 | Input / Textarea 信号 | [`input.rs`](../../crates/rui/src/components/input.rs)、[`textarea.rs`](../../crates/rui/src/components/textarea.rs) |
 
@@ -37,6 +37,8 @@ cargo test -p rui --lib ime_support
 - snapshot / commit 记录 API
 
 ## 手工验收（desktop_smoke #3–#4）
+
+P2 把 Win32 驱动迁到 `platform/` 后，**须重新走一遍视觉**（步骤与通过标准亦见 [`platform.md` §8](../engine/platform.md)）。不可只用 2026-08 旧签字代替。
 
 在 **Windows** 开发机（也可 macOS/Linux 对照）执行：
 

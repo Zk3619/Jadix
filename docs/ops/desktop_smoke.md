@@ -2,7 +2,7 @@
 
 三平台（Windows / macOS / Linux）手工或半自动冒烟。CI 仍以 `RUI_FORCE_SOFTWARE=1` 离屏为主；本表覆盖**真窗口**路径。
 
-**WP-1.1（IME）细则与自动化命令**：[ime.md](ime.md)。**OS 平台层**（窗口 chrome / 滚动 / 内存 stub 等）：[`platform.md`](../engine/platform.md)。
+**WP-1.1（IME）细则与自动化命令**：[ime.md](ime.md)。**OS 平台层**（窗口 chrome / 滚动 / 内存 / IME 驱动）与 P2 视觉验收：[platform.md](../engine/platform.md) §8。
 
 ## 前置
 
