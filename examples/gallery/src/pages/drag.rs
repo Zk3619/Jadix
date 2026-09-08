@@ -3,8 +3,8 @@
 use crate::imports::*;
 use crate::shared::*;
 use rui::utils::drag::{
-    Axis, CollisionAlg, DragCtx, DragEvent, Restrict, apply_reorder_vec, apply_transfer,
-    drag_scope, use_drag,
+    apply_reorder_vec, apply_transfer, drag_scope, last_hit_rect, last_pointer, use_drag, Axis,
+    CollisionAlg, DragCtx, DragEvent, Restrict,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -16,10 +16,6 @@ fn zone_over_peek(ctx: Option<&DragCtx>, id: &str) -> bool {
 
 fn zone_list_hover_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
     ctx.and_then(|c| c.hover_list.peek()).as_deref() == Some(list)
-}
-
-fn zone_list_from_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
-    ctx.and_then(|c| c.from_list.peek()).as_deref() == Some(list)
 }
 
 fn park_on_drop(parked: Signal<bool>, drop_id: &'static str) -> impl FnMut(&DragEvent) {
@@ -136,15 +132,8 @@ fn kanban_column(list: &'static str, title: &str, body: Element) -> Element {
     };
     el.reactive_sync(move |el, _| {
         let over = zone_list_hover_peek(ctx.as_ref(), list);
-        let origin = zone_list_from_peek(ctx.as_ref(), list);
         let bg = parse_color(if over { "accent" } else { "muted" });
-        let border = parse_color(if over {
-            "primary"
-        } else if origin {
-            "foreground"
-        } else {
-            "border"
-        });
+        let border = parse_color(if over { "primary" } else { "border" });
         let mut changed = LayoutStatus::Clean;
         if el.style.bg_color != bg {
             el.style.bg_color = bg;
@@ -214,6 +203,131 @@ fn token_chip() -> Element {
     }
 }
 
+fn persist_free_pair(
+    a: Signal<[f32; 2]>,
+    b: Signal<[f32; 2]>,
+    id_a: &'static str,
+    id_b: &'static str,
+) -> impl FnMut(&DragEvent) {
+    move |ev: &DragEvent| {
+        if ev.draggable_id == id_a {
+            let p = a.peek();
+            a.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+        } else if ev.draggable_id == id_b {
+            let p = b.peek();
+            b.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+        }
+    }
+}
+
+/// Overlapping free-move tiles: light opaque fill + one huge unique glyph.
+/// Overlap zone must show only the front letter; both letters = glyph bleed.
+fn free_move_tile(
+    glyph: &'static str,
+    caption: &str,
+    pos: Signal<[f32; 2]>,
+    z: i32,
+    tone: &'static str,
+) -> Element {
+    let p = pos.get();
+    let glyph = glyph.to_string();
+    let caption = caption.to_string();
+    if tone == "accent" {
+        ui! {
+            <Box
+                absolute={true}
+                left={p[0]}
+                top={p[1]}
+                z_index={z}
+                w="11rem"
+                h="5.75rem"
+                min_w="11rem"
+                min_h="5.75rem"
+                rounded="0.75rem"
+                bg="card"
+                border_style="solid"
+                border_width="3px"
+                border_color="destructive"
+                cursor="grab"
+                items="center"
+                justify="center"
+                overflow="hidden"
+            >
+                <VStack items="center" justify="center" gap="0.125rem" pointer_events="none">
+                    <Label color="destructive" text_size="2.75rem" font_weight="800" leading="none">
+                        { glyph }
+                    </Label>
+                    <Label color="muted-foreground" text_size="0.6875rem" font_weight="600">
+                        { caption }
+                    </Label>
+                </VStack>
+            </Box>
+        }
+    } else if tone == "secondary" {
+        ui! {
+            <Box
+                absolute={true}
+                left={p[0]}
+                top={p[1]}
+                z_index={z}
+                w="11rem"
+                h="5.75rem"
+                min_w="11rem"
+                min_h="5.75rem"
+                rounded="0.75rem"
+                bg="muted"
+                border_style="solid"
+                border_width="3px"
+                border_color="secondary-foreground"
+                cursor="grab"
+                items="center"
+                justify="center"
+                overflow="hidden"
+            >
+                <VStack items="center" justify="center" gap="0.125rem" pointer_events="none">
+                    <Label color="foreground" text_size="2.75rem" font_weight="800" leading="none">
+                        { glyph }
+                    </Label>
+                    <Label color="muted-foreground" text_size="0.6875rem" font_weight="600">
+                        { caption }
+                    </Label>
+                </VStack>
+            </Box>
+        }
+    } else {
+        ui! {
+            <Box
+                absolute={true}
+                left={p[0]}
+                top={p[1]}
+                z_index={z}
+                w="11rem"
+                h="5.75rem"
+                min_w="11rem"
+                min_h="5.75rem"
+                rounded="0.75rem"
+                bg="card"
+                border_style="solid"
+                border_width="3px"
+                border_color="primary"
+                cursor="grab"
+                items="center"
+                justify="center"
+                overflow="hidden"
+            >
+                <VStack items="center" justify="center" gap="0.125rem" pointer_events="none">
+                    <Label color="primary" text_size="2.75rem" font_weight="800" leading="none">
+                        { glyph }
+                    </Label>
+                    <Label color="muted-foreground" text_size="0.6875rem" font_weight="600">
+                        { caption }
+                    </Label>
+                </VStack>
+            </Box>
+        }
+    }
+}
+
 fn list_chip(label: &str) -> Element {
     ui! {
         <HStack
@@ -234,6 +348,31 @@ fn list_chip(label: &str) -> Element {
     }
 }
 
+/// Overlay rotate from pointer vs arena: NW −45°, NE 45°, SW −135°, SE 135°.
+/// Center stays 0°. Appearance only — not a kit transformer.
+fn corner_card_angle(pointer: [f32; 2], bounds: [f32; 4]) -> f32 {
+    let w = bounds[2].max(1.0);
+    let h = bounds[3].max(1.0);
+    let u = ((pointer[0] - bounds[0]) / w).clamp(0.0, 1.0);
+    let v = ((pointer[1] - bounds[1]) / h).clamp(0.0, 1.0);
+    let top = -45.0 + 90.0 * u;
+    let bot = -135.0 + 270.0 * u;
+    top + (bot - top) * v
+}
+
+fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
+    last_pointer()
+        .zip(last_hit_rect(scope, arena))
+        .map(|(p, r)| corner_card_angle(p, r))
+        .unwrap_or(0.0)
+}
+
+fn corner_hint(text: &str) -> Element {
+    ui! {
+        <Label text_size="0.6875rem" color="muted-foreground">{ text.to_string() }</Label>
+    }
+}
+
 /// Keyed sortable rows. Called from a Droppable `Fn` so the Signal is re-read.
 fn keyed_sortable_chips(
     rows_id: &'static str,
@@ -242,6 +381,7 @@ fn keyed_sortable_chips(
     group: &'static str,
     list: &'static str,
     id_prefix: &'static str,
+    source_opacity: f32,
 ) -> Element {
     let items = items.get();
     let rows = rui::for_keyed!(
@@ -263,6 +403,7 @@ fn keyed_sortable_chips(
                     group={group}
                     list={list}
                     index={i}
+                    source_opacity={source_opacity}
                 >
                     { list_chip(&name) }
                 </SortableItem>
@@ -270,6 +411,54 @@ fn keyed_sortable_chips(
         }
     );
     Element::from(vstack().w("100%").gap("0.375rem").children(rows))
+}
+
+fn reorder_same_list(items: Signal<Vec<String>>, list: &'static str) -> impl FnMut(&DragEvent) {
+    move |ev: &DragEvent| {
+        if ev.from_list.as_deref() != Some(list) {
+            return;
+        }
+        let Some(from) = ev.from_index else {
+            return;
+        };
+        let mut v = items.peek();
+        let to = ev.to_index.unwrap_or(from);
+        apply_reorder_vec(&mut v, from, to);
+        items.set(v);
+    }
+}
+
+/// Side-by-side Sortable column for the FLIP vs snap comparison.
+fn sortable_anim_column(
+    title: &str,
+    provider_id: &'static str,
+    list: &'static str,
+    rows_id: &'static str,
+    scroll_id: &'static str,
+    items: Signal<Vec<String>>,
+    animation: bool,
+) -> Element {
+    let title = title.to_string();
+    let on_end = reorder_same_list(items, list);
+    ui! {
+        <VStack grow="1" min_w="0" gap="0.375rem">
+            <Label text_size="0.75rem" font_weight="600">{ title }</Label>
+            <DragProvider
+                id={provider_id}
+                collision="closest-center"
+                axis="y"
+                animation={animation}
+                onDragEnd={on_end}
+            >
+                <ScrollArea id={scroll_id} h="11rem" w="100%" overflow_y="auto">
+                    <SortableList id={list} accept="planet">
+                        { keyed_sortable_chips(rows_id, items, "planet", "", list, "", 0.4) }
+                    </SortableList>
+                </ScrollArea>
+                <DragOverlay class="shadow-lg" />
+            </DragProvider>
+        </VStack>
+    }
 }
 
 fn apply_kanban(left: Signal<Vec<String>>, right: Signal<Vec<String>>, ev: &DragEvent) {
@@ -336,6 +525,18 @@ pub(crate) fn DragShowcase() -> Element {
         .map(String::from)
         .collect::<Vec<_>>()
     });
+    let sort_flip = use_signal("gal_drag_sort_flip", || {
+        ["Mercury", "Venus", "Earth", "Mars", "Jupiter"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    });
+    let sort_snap = use_signal("gal_drag_sort_snap", || {
+        ["Mercury", "Venus", "Earth", "Mars", "Jupiter"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    });
     let todo = use_signal("gal_drag_todo", || {
         ["Draft RFC", "Review PR"]
             .into_iter()
@@ -350,6 +551,12 @@ pub(crate) fn DragShowcase() -> Element {
     let ghost_only = use_signal("gal_drag_ghost_only", || false);
     let alpha_park = use_signal("gal_drag_alpha_park", || false);
     let beta_park = use_signal("gal_drag_beta_park", || false);
+    let arb_auto_1 = use_signal("gal_drag_arb_auto_1c", || [16.0_f32, 20.0]);
+    let arb_auto_2 = use_signal("gal_drag_arb_auto_2c", || [88.0_f32, 52.0]);
+    let arb_pin_1 = use_signal("gal_drag_arb_pin_1c", || [16.0_f32, 16.0]);
+    let arb_pin_2 = use_signal("gal_drag_arb_pin_2c", || [88.0_f32, 48.0]);
+    let arb_keep_1 = use_signal("gal_drag_arb_keep_1c", || [16.0_f32, 16.0]);
+    let arb_keep_2 = use_signal("gal_drag_arb_keep_2c", || [88.0_f32, 48.0]);
 
     let builder_drop = {
         let parked = use_signal("gal_drag_parked", || false);
@@ -424,9 +631,49 @@ pub(crate) fn DragShowcase() -> Element {
                     <DragOverlay />
                 </DragProvider>
 
+                <Label font_weight="600" text_size="0.875rem">"DragOverlay · 四角旋转"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "容器内一张卡片。拖到四角时浮层转到指定角：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按指针在容器内的位置插值）。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
+                </Label>
+                <DragProvider id="gal-drag-corners" collision="pointer-within">
+                    <Droppable id="corners-arena">
+                        <VStack
+                            w="100%"
+                            min_h="16rem"
+                            p="0.5rem"
+                            gap="0.25rem"
+                            rounded="0.75rem"
+                            bg="muted"
+                            border_style="dashed"
+                            border_width="1px"
+                            border_color="border"
+                            justify="between"
+                        >
+                            <HStack w="100%" justify="between">
+                                { corner_hint("−45°") }
+                                { corner_hint("45°") }
+                            </HStack>
+                            <Box w="100%" grow="1" items="center" justify="center">
+                                <Draggable id="corner-card" item_type="chip" source_opacity={0}>
+                                    { card_chip("拖到四角") }
+                                </Draggable>
+                            </Box>
+                            <HStack w="100%" justify="between">
+                                { corner_hint("−135°") }
+                                { corner_hint("135°") }
+                            </HStack>
+                        </VStack>
+                    </Droppable>
+                    <DragOverlay
+                        class="shadow-lg"
+                        source_opacity={0}
+                        rotate={corner_overlay_angle("gal-drag-corners", "corners-arena")}
+                    />
+                </DragProvider>
+
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 自定义子树"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "子节点整段替换克隆：拖起时只看到「自定义替身」（hide_source），松手后源卡片进入容器。"
+                    "子节点整段替换克隆：拖起时源卡片 source_opacity 0，只看到「自定义替身」。松手后源卡片进入容器。"
                 </Label>
                 <DragProvider
                     id="gal-drag-custom-ov"
@@ -435,7 +682,7 @@ pub(crate) fn DragShowcase() -> Element {
                 >
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
                         <Show when={!custom_inbox.get()}>
-                            <Draggable id="custom-src" item_type="chip">
+                            <Draggable id="custom-src" item_type="chip" source_opacity={0}>
                                 { card_chip("源卡片") }
                             </Draggable>
                         </Show>
@@ -445,14 +692,14 @@ pub(crate) fn DragShowcase() -> Element {
                         <Droppable id="custom-inbox" accept="chip">
                             { drop_park_zone("custom-inbox", custom_inbox, || {
                                 ui! {
-                                    <Draggable id="custom-src:inbox" item_type="chip">
+                                    <Draggable id="custom-src:inbox" item_type="chip" source_opacity={0}>
                                         { card_chip("源卡片") }
                                     </Draggable>
                                 }
                             }) }
                         </Droppable>
                     </HStack>
-                    <DragOverlay hide_source={true}>
+                    <DragOverlay>
                         <HStack
                             p="0.5rem 0.75rem"
                             gap="0.5rem"
@@ -468,7 +715,7 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 无本体仅浮层"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "hide_source：拖起后源位留空，只看到跟随指针的浮层。松手进右侧；拖到空白处放回。"
+                    "源项 source_opacity 0：拖起后源位留空，只看到跟随指针的浮层。松手进右侧；拖到空白处放回。"
                 </Label>
                 <DragProvider
                     id="gal-drag-hide-src"
@@ -477,7 +724,7 @@ pub(crate) fn DragShowcase() -> Element {
                 >
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
                         <Show when={!ghost_only.get()}>
-                            <Draggable id="ghost-chip" item_type="chip">
+                            <Draggable id="ghost-chip" item_type="chip" source_opacity={0}>
                                 { card_chip("拖我 · 本体消失") }
                             </Draggable>
                         </Show>
@@ -487,14 +734,14 @@ pub(crate) fn DragShowcase() -> Element {
                         <Droppable id="ghost-inbox" accept="chip">
                             { drop_park_zone("ghost-inbox", ghost_only, || {
                                 ui! {
-                                    <Draggable id="ghost-chip:inbox" item_type="chip">
+                                    <Draggable id="ghost-chip:inbox" item_type="chip" source_opacity={0}>
                                         { card_chip("拖我 · 本体消失") }
                                     </Draggable>
                                 }
                             }) }
                         </Droppable>
                     </HStack>
-                    <DragOverlay hide_source={true} />
+                    <DragOverlay />
                 </DragProvider>
 
                 <Label font_weight="600" text_size="0.875rem">"Droppable · 条件 accept"</Label>
@@ -509,7 +756,7 @@ pub(crate) fn DragShowcase() -> Element {
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
                         <VStack gap="0.375rem">
                             <Show when={!alpha_park.get()}>
-                                <Draggable id="alpha" item_type="alpha">
+                                <Draggable id="alpha" item_type="alpha" source_opacity={0}>
                                     { card_chip("组件1") }
                                 </Draggable>
                             </Show>
@@ -517,7 +764,7 @@ pub(crate) fn DragShowcase() -> Element {
                                 { vacated_slot("已放入容器2") }
                             </Show>
                             <Show when={!beta_park.get()}>
-                                <Draggable id="beta" item_type="beta">
+                                <Draggable id="beta" item_type="beta" source_opacity={0}>
                                     { card_chip("组件2") }
                                 </Draggable>
                             </Show>
@@ -530,7 +777,7 @@ pub(crate) fn DragShowcase() -> Element {
                             <Droppable id="accept-c1" accept="beta">
                                 { drop_park_zone("accept-c1", beta_park, || {
                                     ui! {
-                                        <Draggable id="beta:c1" item_type="beta">
+                                        <Draggable id="beta:c1" item_type="beta" source_opacity={0}>
                                             { card_chip("组件2") }
                                         </Draggable>
                                     }
@@ -542,7 +789,7 @@ pub(crate) fn DragShowcase() -> Element {
                             <Droppable id="accept-c2" accept="alpha">
                                 { drop_park_zone("accept-c2", alpha_park, || {
                                     ui! {
-                                        <Draggable id="alpha:c2" item_type="alpha">
+                                        <Draggable id="alpha:c2" item_type="alpha" source_opacity={0}>
                                             { card_chip("组件1") }
                                         </Draggable>
                                     }
@@ -550,7 +797,7 @@ pub(crate) fn DragShowcase() -> Element {
                             </Droppable>
                         </VStack>
                     </HStack>
-                    <DragOverlay hide_source={true} />
+                    <DragOverlay />
                 </DragProvider>
 
                 <Label font_weight="600" text_size="0.875rem">"DragHandle · 自定义手柄"</Label>
@@ -592,14 +839,106 @@ pub(crate) fn DragShowcase() -> Element {
                 { builder_drop }
 
                 <Separator />
-                <Label font_weight="600" text_size="0.875rem">"Sortable 列表 · hide_source"</Label>
+                <Label font_weight="600" text_size="0.875rem">"Arbitrary drag move · 叠放层级"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "同列重排 + 兄弟让位；靠近列表边缘会自动滚。Esc 取消，↑↓ 改插入点。源槽 hide_source 留空，浮层是尚未半透明化的本体克隆。松手 apply_reorder_vec。"
+                    "两块矩形故意叠住约一半。重叠区只应看到上层那一个大字母（蓝 A / 红 B）；若两个字母叠在一起，就是文字穿层。无 DragOverlay 时本体跟手，松手把 delta 写回 left/top。stack=auto 拖起置顶并保持；top / bottom 始终置顶或置底；keep 拖拽不改 z-index。"
+                </Label>
+                <Label text_size="0.75rem" color="muted-foreground">"stack=auto · 拖起置顶（初始同级，后拖的在上）"</Label>
+                <DragProvider
+                    id="gal-drag-arb-auto"
+                    collision="pointer-within"
+                    onDragEnd={persist_free_pair(arb_auto_1, arb_auto_2, "arb-auto-1", "arb-auto-2")}
+                >
+                    <Box
+                        w="100%"
+                        min_h="16rem"
+                        relative={true}
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="arb-auto-1" stack="auto">
+                            { free_move_tile("A", "auto · 后拖置顶", arb_auto_1, 0, "primary") }
+                        </Draggable>
+                        <Draggable id="arb-auto-2" stack="auto">
+                            { free_move_tile("B", "auto · 后拖置顶", arb_auto_2, 0, "accent") }
+                        </Draggable>
+                    </Box>
+                </DragProvider>
+                <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                    <VStack gap="0.375rem" grow="1" min_w="16rem">
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            "stack=top / bottom · 始终置顶与置底（重叠区只见 T）"
+                        </Label>
+                        <DragProvider
+                            id="gal-drag-arb-pin"
+                            collision="pointer-within"
+                            onDragEnd={persist_free_pair(arb_pin_1, arb_pin_2, "arb-pin-top", "arb-pin-bottom")}
+                        >
+                            <Box
+                                w="100%"
+                                min_h="14rem"
+                                relative={true}
+                                overflow="hidden"
+                                rounded="0.75rem"
+                                bg="background"
+                                border_style="dashed"
+                                border_width="1px"
+                                border_color="border"
+                            >
+                                <Draggable id="arb-pin-top" stack="top">
+                                    { free_move_tile("T", "始终置顶", arb_pin_1, 0, "primary") }
+                                </Draggable>
+                                <Draggable id="arb-pin-bottom" stack="bottom">
+                                    { free_move_tile("B", "始终置底", arb_pin_2, 0, "secondary") }
+                                </Draggable>
+                            </Box>
+                        </DragProvider>
+                    </VStack>
+                    <VStack gap="0.375rem" grow="1" min_w="16rem">
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            "stack=keep · 拖拽不改层级（重叠区只见 2）"
+                        </Label>
+                        <DragProvider
+                            id="gal-drag-arb-keep"
+                            collision="pointer-within"
+                            onDragEnd={persist_free_pair(arb_keep_1, arb_keep_2, "arb-keep-hi", "arb-keep-lo")}
+                        >
+                            <Box
+                                w="100%"
+                                min_h="14rem"
+                                relative={true}
+                                overflow="hidden"
+                                rounded="0.75rem"
+                                bg="background"
+                                border_style="dashed"
+                                border_width="1px"
+                                border_color="border"
+                            >
+                                <Draggable id="arb-keep-hi" stack="keep">
+                                    { free_move_tile("2", "keep · z=2", arb_keep_1, 2, "primary") }
+                                </Draggable>
+                                <Draggable id="arb-keep-lo" stack="keep">
+                                    { free_move_tile("1", "keep · z=1", arb_keep_2, 1, "accent") }
+                                </Draggable>
+                            </Box>
+                        </DragProvider>
+                    </VStack>
+                </HStack>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"Sortable 列表 · source_opacity 0"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "同列重排 + 兄弟让位；靠近列表边缘会自动滚。scroll-lock-auto（默认）按 axis 推断；也可 scroll-lock-all / scroll-lock-x / scroll-lock-y / scroll-lock-none。Esc 取消，↑↓ 改插入点。若页面仍滚动，浮层钉在当前列。本体 source_opacity 0 时源槽留空。松手 apply_reorder_vec。"
                 </Label>
                 <DragProvider
                     id="gal-drag-sort-hide"
                     collision="closest-center"
                     axis="y"
+                    scroll-lock-auto
                     onDragEnd={move |ev: &DragEvent| {
                         if ev.from_list.as_deref() != Some("planets-hide") {
                             return;
@@ -613,16 +952,16 @@ pub(crate) fn DragShowcase() -> Element {
                 >
                     <ScrollArea id="gal-drag-sort-hide-scroll" h="11rem" w="100%" overflow_y="auto">
                         <SortableList id="planets-hide" accept="planet">
-                            { keyed_sortable_chips("gal-drag-sort-hide-rows", sort_hide, "planet", "", "planets-hide", "") }
+                            { keyed_sortable_chips("gal-drag-sort-hide-rows", sort_hide, "planet", "", "planets-hide", "", 0.0) }
                         </SortableList>
                     </ScrollArea>
-                    <DragOverlay hide_source={true} class="shadow-lg" />
+                    <DragOverlay class="shadow-lg" />
                 </DragProvider>
 
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"Sortable 列表 · 半透明本体"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "同列重排 + 拖起时兄弟让位；靠近列表边缘会自动滚。Esc 取消，↑↓ 改插入点。本体留在列表里降透明（与上方 Droppable 相同），插入点变化时跟到对应槽位。浮层是尚未半透明化的本体克隆，不要再给 DragOverlay 设 opacity。松手 apply_reorder_vec。"
+                    "与上方同一套让位 / 插入索引；差别是 SortableItem source_opacity 0.4，空洞里留下半透明本体（0 时空洞是空的）。opacity 是组件默认透明度；拖起本体用 source_opacity。浮层半透明走 DragOverlay.style。滚动锁定默认 scroll-lock-auto。松手 apply_reorder_vec。"
                 </Label>
                 <DragProvider
                     id="gal-drag-sort"
@@ -641,16 +980,42 @@ pub(crate) fn DragShowcase() -> Element {
                 >
                     <ScrollArea id="gal-drag-sort-scroll" h="11rem" w="100%" overflow_y="auto">
                         <SortableList id="planets" accept="planet">
-                            { keyed_sortable_chips("gal-drag-sort-rows", sort_items, "planet", "", "planets", "") }
+                            { keyed_sortable_chips("gal-drag-sort-rows", sort_items, "planet", "", "planets", "", 0.4) }
                         </SortableList>
                     </ScrollArea>
                     <DragOverlay class="shadow-lg" />
                 </DragProvider>
 
                 <Separator />
+                <Label font_weight="600" text_size="0.875rem">"Sortable · 让位平移动画"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "DragProvider animation 控制兄弟让位 / 半透本体就位的 translate FLIP。左侧默认开（150ms ease）；右侧关闭后即时跳位。Builder 为 .animation(false)。松手都 apply_reorder_vec。"
+                </Label>
+                <HStack gap="0.75rem" w="100%" items="start">
+                    { sortable_anim_column(
+                        "animation 开（默认）",
+                        "gal-drag-sort-flip",
+                        "planets-flip",
+                        "gal-drag-sort-flip-rows",
+                        "gal-drag-sort-flip-scroll",
+                        sort_flip,
+                        true,
+                    ) }
+                    { sortable_anim_column(
+                        "animation 关",
+                        "gal-drag-sort-snap",
+                        "planets-snap",
+                        "gal-drag-sort-snap-rows",
+                        "gal-drag-sort-snap-scroll",
+                        sort_snap,
+                        false,
+                    ) }
+                </HStack>
+
+                <Separator />
                 <Label font_weight="600" text_size="0.875rem">"跨容器（Sortable group）"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "两列共享 group=board。同列半透本体跟插入空洞；跨列时本体平移到目标槽（不要 hide_source）。容器高亮走碰撞 hover_list / from_list（solid-dnd isActiveDroppable），不是 CSS :hover。松手 apply_transfer。"
+                    "两列共享 group=board。同列半透本体留在原槽；跨列时本体平移到目标槽。容器高亮只打当前投放目标（hover_list / rui_drag_over），源列保持静息样式。颜色由调用方 reactive_sync 自定，不是 CSS :hover。松手 apply_transfer。"
                 </Label>
                 <DragProvider
                     id="gal-drag-board"
@@ -662,14 +1027,14 @@ pub(crate) fn DragShowcase() -> Element {
                             { kanban_column(
                                 "todo",
                                 "Todo",
-                                keyed_sortable_chips("gal-drag-todo-rows", todo, "task", "board", "todo", "todo"),
+                                keyed_sortable_chips("gal-drag-todo-rows", todo, "task", "board", "todo", "todo", 0.4),
                             ) }
                         </Droppable>
                         <Droppable id="doing" list="doing" group="board" accept="task">
                             { kanban_column(
                                 "doing",
                                 "Doing",
-                                keyed_sortable_chips("gal-drag-doing-rows", doing, "task", "board", "doing", "doing"),
+                                keyed_sortable_chips("gal-drag-doing-rows", doing, "task", "board", "doing", "doing", 0.4),
                             ) }
                         </Droppable>
                     </HStack>
