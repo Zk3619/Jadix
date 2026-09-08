@@ -68,7 +68,7 @@ impl DragHit {
             return false;
         }
         // Another DragProvider's droppables must not steal hover. Skipping when
-        // `hit.scope_id` is empty let Gallery's hide_source list (same item
+        // `hit.scope_id` is empty let Gallery's opacity-0 list (same item
         // names, stacked above) count as a cross-list target: the origin closed,
         // the dimmed body translated away, and the list visually collapsed.
         if self.scope_id != dragged.scope_id {
@@ -125,8 +125,9 @@ pub(super) struct ScopeRuntime {
     pub restrict: Restrict,
     pub snap: Option<SnapGrid>,
     pub overlay_registered: bool,
-    /// When true, the source island is fully hidden (`opacity: 0`) while the overlay is open.
-    pub hide_source: bool,
+    /// In-list source opacity while a `DragOverlay` is open. `0` leaves the
+    /// insert hole empty; default overlay uses [`OVERLAY_SOURCE_OPACITY`].
+    pub source_opacity: f32,
     pub autoscroll: AutoScroll,
     pub empty_insert: f32,
     pub delay_ms: f32,
@@ -144,6 +145,8 @@ pub(super) struct ScopeRuntime {
     pub hover_list: Signal<Option<String>>,
     pub hover_index: Signal<Option<usize>>,
     pub drag_extent: Signal<[f32; 2]>,
+    /// Last assigned [`super::geometry::DragStack::Auto`] rank in this scope.
+    pub stack_seq: i32,
 }
 
 thread_local! {
@@ -174,6 +177,20 @@ pub fn last_draggable_bounds(scope: &str, id: &str) -> Option<[f32; 4]> {
     ITEM_BOUNDS.with(|m| m.borrow().get(&item_bounds_key(scope, id)).copied())
 }
 
+/// Pointer-space slot from the last [`tick`] hit list (`(scope, id)`).
+///
+/// Droppables are included (Gallery corner-rotate reads the arena). Falls back
+/// to [`last_draggable_bounds`] when `tick` has not stored hits yet.
+pub fn last_hit_rect(scope: &str, id: &str) -> Option<[f32; 4]> {
+    let from_tick = LAST_HITS.with(|h| {
+        h.borrow()
+            .iter()
+            .find(|hit| hit.scope_id == scope && hit.id == id)
+            .map(|hit| hit.rect.to_bounds())
+    });
+    from_tick.or_else(|| last_draggable_bounds(scope, id))
+}
+
 /// Walk the laid-out tree so handle `pointerdown` can resolve the item rect.
 pub fn refresh_hit_cache(root: &Element) {
     let _ = collect_hits(root);
@@ -197,6 +214,8 @@ pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
         let mut rt = rt;
         if let Some(old) = map.get(&id) {
             rt.overlay_registered = rt.overlay_registered || old.overlay_registered;
+            rt.source_opacity = old.source_opacity;
+            rt.stack_seq = old.stack_seq;
         }
         map.insert(id, rt);
     });
@@ -210,6 +229,15 @@ pub(super) fn mark_overlay_registered(scope_id: &str) {
     with_scope(scope_id, |rt| rt.overlay_registered = true);
 }
 
+/// Next [`super::geometry::DragStack::Auto`] rank for `scope_id` (1, 2, …).
+pub(super) fn bump_auto_stack(scope_id: &str) -> i32 {
+    with_scope(scope_id, |rt| {
+        rt.stack_seq = rt.stack_seq.saturating_add(1);
+        rt.stack_seq
+    })
+    .unwrap_or(1)
+}
+
 pub fn overlay_is_registered(scope_id: &str) -> bool {
     SCOPES.with(|m| {
         m.borrow()
@@ -218,8 +246,21 @@ pub fn overlay_is_registered(scope_id: &str) -> bool {
     })
 }
 
+/// Default source-island opacity while `<DragOverlay>` is open and the item
+/// does not set its own `opacity`.
+pub const OVERLAY_SOURCE_OPACITY: f32 = 0.4;
+
+pub fn overlay_source_opacity(scope_id: &str) -> f32 {
+    SCOPES.with(|m| {
+        m.borrow()
+            .get(scope_id)
+            .map(|s| s.source_opacity)
+            .unwrap_or(1.0)
+    })
+}
+
 pub fn overlay_hides_source(scope_id: &str) -> bool {
-    SCOPES.with(|m| m.borrow().get(scope_id).is_some_and(|s| s.hide_source))
+    overlay_source_opacity(scope_id) <= 0.001
 }
 
 pub fn is_dragging() -> bool {
@@ -335,7 +376,36 @@ pub struct BeginDrag {
     pub capture_id: String,
 }
 
-fn ghost_origin(sess: &DragSession, pointer: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
+fn live_source_slot(sess: &DragSession, hits: &[DragHit]) -> Option<Rect> {
+    hits.iter()
+        .find(|h| h.is_draggable && h.id == sess.draggable_id && h.scope_id == sess.scope_id)
+        .map(|h| h.rect)
+        .filter(|r| r.is_usable())
+}
+
+/// Locked axis follows the current layout slot (scroll-adjusted), not the
+/// press-time `start_bounds`. `axis="y"` + a parent `ScrollArea` pan would
+/// otherwise freeze overlay X while the list moves (Gallery Saturn offset).
+fn pin_locked_axis_to_live_slot(sess: &DragSession, hits: &[DragHit], origin: &mut [f32; 2]) {
+    if sess.axis == Axis::Xy {
+        return;
+    }
+    let Some(slot) = live_source_slot(sess, hits) else {
+        return;
+    };
+    match sess.axis {
+        Axis::Y => origin[0] = slot.x,
+        Axis::X => origin[1] = slot.y,
+        Axis::Xy => {}
+    }
+}
+
+fn ghost_origin(
+    sess: &DragSession,
+    pointer: [f32; 2],
+    viewport: [f32; 2],
+    hits: &[DragHit],
+) -> [f32; 2] {
     let (dx, dy) = sess.axis.apply(
         pointer[0] - sess.start_pointer[0],
         pointer[1] - sess.start_pointer[1],
@@ -348,6 +418,7 @@ fn ghost_origin(sess: &DragSession, pointer: [f32; 2], viewport: [f32; 2]) -> [f
     if let Some(snap) = sess.snap {
         origin = snap.apply(origin[0], origin[1]);
     }
+    pin_locked_axis_to_live_slot(sess, hits, &mut origin);
     match sess.restrict {
         Restrict::None => origin,
         Restrict::Viewport => clamp_origin_to_box(
@@ -359,6 +430,15 @@ fn ghost_origin(sess: &DragSession, pointer: [f32; 2], viewport: [f32; 2]) -> [f
             clamp_origin_to_box(origin, [sess.start_bounds[2], sess.start_bounds[3]], r)
         }
     }
+}
+
+/// Gallery stacks two Sortable lists that reuse planet names. Collision
+/// `detect` ids are unique *within the session*, but a bare `find(id)` on the
+/// full hit list binds hover to the first tree (opacity 0) — dimmed source
+/// then looks cross-list and insert-index walks the wrong column (本体丢失 /
+/// 松手进队尾).
+fn hit_in_scope<'a>(hits: &'a [DragHit], id: &str, scope: &str) -> Option<&'a DragHit> {
+    hits.iter().find(|h| h.id == id && h.scope_id == scope)
 }
 
 /// Collision / insert box: the **item slot** at the ghost origin.
@@ -419,10 +499,179 @@ fn list_has_indexed_candidate(hits: &[DragHit], sess: &DragSession, list: &str) 
         .any(|h| h.accepts(sess) && h.index.is_some() && h.list_id.as_deref() == Some(list))
 }
 
+/// `list_id` of the indexed sortable **row slot** under the pointer.
+///
+/// Gallery Kanban: the column `Droppable` shell can be shorter than its
+/// `SortableItem` rows (reactive island / `h=auto`), so the pointer sits on a
+/// row but outside the container hit — falling back to collision `drop_hit`
+/// then let the overlay ghost pick the neighbour column (`hover_list=doing`) and
+/// the dimmed body cross-translates toward it.
+fn pointer_indexed_list_at(
+    hits: &[DragHit],
+    sess: &DragSession,
+    pointer: [f32; 2],
+) -> Option<String> {
+    hits.iter()
+        .filter(|h| {
+            h.scope_id == sess.scope_id
+                && h.index.is_some()
+                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
+                && h.rect.is_usable()
+                && h.rect.contains_point(pointer)
+        })
+        .min_by(|a, b| {
+            a.rect
+                .area()
+                .partial_cmp(&b.rect.area())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|h| h.list_id.clone())
+}
+
+/// Sortable hover target list: pointer layout only — never collision `drop_hit`
+/// (the transformed ghost must not choose the column).
+fn resolve_sortable_hover_list(
+    hits: &[DragHit],
+    sess: &DragSession,
+    pointer: [f32; 2],
+) -> Option<String> {
+    if let Some(list) = pointer_indexed_list_at(hits, sess, pointer) {
+        return Some(list);
+    }
+    let mut shells: Vec<&DragHit> = hits
+        .iter()
+        .filter(|h| {
+            h.accepts(sess)
+                && h.index.is_none()
+                && h.rect.is_usable()
+                && h.rect.contains_point(pointer)
+                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
+        })
+        .collect();
+    shells.sort_by(|a, b| {
+        a.rect
+            .area()
+            .partial_cmp(&b.rect.area())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for shell in shells {
+        let list = shell.list_id.as_deref().unwrap();
+        if !pointer_past_list_indexed_content(hits, list, pointer, sess.axis) {
+            return Some(list.to_string());
+        }
+    }
+    // Below indexed rows but still inside a column band (Kanban `min_h` padding):
+    // switch to the column under the pointer, not the padded shell of the origin list.
+    if let Some(from) = sess.from_list.as_deref() {
+        if pointer_past_list_indexed_content(hits, from, pointer, sess.axis) {
+            if let Some(other) = pointer_column_list_by_band(hits, sess, pointer) {
+                if other != from {
+                    return Some(other);
+                }
+            }
+        }
+    }
+    pointer_column_list_by_band(hits, sess, pointer).or_else(|| sess.from_list.clone())
+}
+
+/// Column `Droppable` whose horizontal band contains the pointer (Kanban).
+fn pointer_column_list_by_band(
+    hits: &[DragHit],
+    sess: &DragSession,
+    pointer: [f32; 2],
+) -> Option<String> {
+    if !matches!(sess.axis, Axis::Y | Axis::Xy) {
+        return None;
+    }
+    hits.iter()
+        .filter(|h| {
+            h.accepts(sess)
+                && h.index.is_none()
+                && h.rect.is_usable()
+                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
+        })
+        .filter(|h| pointer[0] >= h.rect.x && pointer[0] < h.rect.x + h.rect.width)
+        .min_by(|a, b| {
+            a.rect
+                .area()
+                .partial_cmp(&b.rect.area())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|h| h.list_id.clone())
+}
+
+fn list_max_index_in_hits(hits: &[DragHit], list_id: &str) -> Option<usize> {
+    hits.iter()
+        .filter(|h| h.list_id.as_deref() == Some(list_id))
+        .filter_map(|h| h.index)
+        .max()
+}
+
+/// True when the probe is past the last indexed row slot (column padding below chips).
+fn pointer_past_list_indexed_content(
+    hits: &[DragHit],
+    list_id: &str,
+    pointer: [f32; 2],
+    axis: Axis,
+) -> bool {
+    let Some(end) = list_indexed_content_end(hits, list_id, axis) else {
+        return false;
+    };
+    let p = match axis {
+        Axis::X => pointer[0],
+        Axis::Y | Axis::Xy => pointer[1],
+    };
+    p >= end
+}
+
+fn list_indexed_content_end(hits: &[DragHit], list_id: &str, axis: Axis) -> Option<f32> {
+    let mut items: Vec<&DragHit> = hits
+        .iter()
+        .filter(|h| {
+            h.list_id.as_deref() == Some(list_id) && h.index.is_some() && h.rect.is_usable()
+        })
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    items.sort_by_key(|h| h.index.unwrap_or(0));
+    let last = items[items.len() - 1];
+    let fallback = match axis {
+        Axis::X => last.rect.width,
+        Axis::Y | Axis::Xy => last.rect.height,
+    }
+    .max(1.0);
+    let pitch = slot_stride_along_axis(hits, list_id, axis, fallback);
+    Some(axis_origin(last.rect, axis) + pitch)
+}
+
+/// Dragging the last row of an N-item list: `hover = N` is "append after self" — a
+/// phantom slot (Gallery Kanban: 2 todo items + 1 doing ≠ 3rd todo row).
+fn clamp_tail_append_hover(
+    sess: &DragSession,
+    list_id: &str,
+    hits: &[DragHit],
+    hover: usize,
+) -> usize {
+    if sess.from_list.as_deref() != Some(list_id) {
+        return hover;
+    }
+    let from = sess.from_index.unwrap_or(hover);
+    let max = list_max_index_in_hits(hits, list_id).unwrap_or(from);
+    if from == max && hover == max + 1 {
+        from
+    } else {
+        hover
+    }
+}
+
 /// Advance the session. `hits` must be collected from the current layout tree.
 /// Returns `true` when the UI should redraw.
 pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     crate::utils::pointer_drag::tick(x, y);
+    let mut hits = hits.to_vec();
+    cap_stretched_indexed_rects(&mut hits);
+    let hits = &hits;
     let Some(mut sess) = SESSION.with(|s| s.borrow().clone()) else {
         return false;
     };
@@ -440,7 +689,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             return false;
         }
         sess.phase = DragPhase::Active;
-        activate_scope(&sess);
+        activate_scope(&sess, hits);
         fire(
             &sess.scope_id,
             HandlerKind::Start,
@@ -448,7 +697,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
         );
     }
 
-    let origin = ghost_origin(&sess, [x, y], viewport);
+    let origin = ghost_origin(&sess, [x, y], viewport, hits);
     let dragged = moving_item_rect(&sess, hits, origin);
 
     let (collision, empty_insert, can_drop) = SCOPES.with(|m| {
@@ -496,7 +745,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     );
     let mut drop_hit = next_id
         .as_ref()
-        .and_then(|id| hits.iter().find(|h| h.id == *id));
+        .and_then(|id| hit_in_scope(hits, id, &sess.scope_id));
     if let (Some(pred), Some(hit)) = (can_drop.as_ref(), drop_hit) {
         let probe = event_from(&sess, Some(hit), hit.list_id.clone(), hit.index);
         if !pred(&probe) {
@@ -515,15 +764,16 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             if rt.active_droppable.peek() != next_id {
                 rt.active_droppable.set(next_id.clone());
             }
-            let hover_list = drop_hit
-                .and_then(|h| h.list_id.clone())
-                .filter(|s| !s.is_empty());
+            let hover_list = resolve_sortable_hover_list(hits, &sess, [x, y]);
             // Probe with the pointer, not `dragged.center()`. A stretched
             // island box puts the center past the last row (Gallery: 松手永远进队尾).
+            let prev_hover = rt.hover_index.peek();
             let hover_index = hover_list
                 .as_deref()
-                .and_then(|list| insert_index_along_axis(hits, list, [x, y], sess.axis))
-                .or_else(|| drop_hit.and_then(|h| h.index));
+                .and_then(|list| {
+                    resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
+                })
+                .or(sess.from_index);
             if rt.hover_list.peek() != hover_list {
                 rt.hover_list.set(hover_list.clone());
             }
@@ -549,14 +799,124 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     true
 }
 
-fn activate_scope(sess: &DragSession) {
+/// Sortable insert index: midpoint row split, then pin below the opened hole.
+fn resolve_sortable_hover_index(
+    hits: &[DragHit],
+    sess: &DragSession,
+    list_id: &str,
+    pointer: [f32; 2],
+    prev_hover: Option<usize>,
+) -> Option<usize> {
+    // Pre-normalize layout bounds (remembered at collect). While the pointer is
+    // still on the lifted chip, keep hover=from — slot math alone can read
+    // append when pitch < chip height (Gallery Kanban dimmed body pushed down).
+    if source_layout_contains(sess, hits, pointer) {
+        return sess.from_index;
+    }
+    let hover = insert_index_along_axis(hits, list_id, pointer, sess.axis)?;
+    let hover = clamp_tail_append_hover(sess, list_id, hits, hover);
+    Some(pin_hover_below_opened_hole(
+        hits, list_id, sess, pointer, prev_hover, hover,
+    ))
+}
+
+/// While the pointer is still within one pitch below the preview hole, do not
+/// bump `hover` — siblings already opened that slot; advancing early leaves a
+/// blank row and the dimmed body chases the overlay (Gallery Mars → Jupiter).
+fn pin_hover_below_opened_hole(
+    hits: &[DragHit],
+    list_id: &str,
+    sess: &DragSession,
+    pointer: [f32; 2],
+    prev_hover: Option<usize>,
+    computed: usize,
+) -> usize {
+    let prev = match prev_hover {
+        Some(h) if h != sess.from_index.unwrap_or(h) => h,
+        _ => return computed,
+    };
+    if sess.from_list.as_deref() != Some(list_id) || computed <= prev {
+        return computed;
+    }
+    let from = sess.from_index.unwrap_or(prev);
+    if from >= prev {
+        return computed;
+    }
+    let fallback = match sess.axis {
+        Axis::X => sess.start_bounds[2].max(1.0),
+        Axis::Y | Axis::Xy => sess.start_bounds[3].max(1.0),
+    };
+    let pitch = slot_stride_along_axis(hits, list_id, sess.axis, fallback);
+    let Some(hole_pt) = insert_hole_origin(hits, list_id, Some(prev), sess.axis, pitch) else {
+        return computed;
+    };
+    let p = match sess.axis {
+        Axis::X => pointer[0],
+        Axis::Y | Axis::Xy => pointer[1],
+    };
+    let hole = match sess.axis {
+        Axis::X => hole_pt[0],
+        Axis::Y | Axis::Xy => hole_pt[1],
+    };
+    if p < hole + pitch {
+        prev
+    } else {
+        computed
+    }
+}
+
+fn source_layout_contains(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
+    let b = last_draggable_bounds(&sess.scope_id, &sess.draggable_id).unwrap_or(sess.start_bounds);
+    let mut rect = Rect::from_bounds(b);
+    if let Some(list) = sess.from_list.as_deref() {
+        let layout_extent = match sess.axis {
+            Axis::X => rect.width,
+            Axis::Y | Axis::Xy => rect.height,
+        }
+        .max(1.0);
+        let stride = slot_stride_along_axis(hits, list, sess.axis, layout_extent);
+        let extent = if layout_extent > stride * 1.5 {
+            stride
+        } else {
+            layout_extent
+        };
+        match sess.axis {
+            Axis::X => rect.width = extent,
+            Axis::Y | Axis::Xy => rect.height = extent,
+        }
+    }
+    rect.contains_point(pointer)
+}
+
+/// Cap stretched `also_droppable` island bounds to one row pitch for FLIP shift.
+fn capped_drag_extent(sess: &DragSession, hits: &[DragHit]) -> [f32; 2] {
+    let mut w = sess.start_bounds[2].max(1.0);
+    let mut h = sess.start_bounds[3].max(1.0);
+    if let Some(list) = sess.from_list.as_deref() {
+        let stride = slot_stride_along_axis(
+            hits,
+            list,
+            sess.axis,
+            match sess.axis {
+                Axis::X => w,
+                Axis::Y | Axis::Xy => h,
+            },
+        );
+        match sess.axis {
+            Axis::X => w = w.min(stride).max(1.0),
+            Axis::Y | Axis::Xy => h = h.min(stride).max(1.0),
+        }
+    }
+    [w, h]
+}
+
+fn activate_scope(sess: &DragSession, hits: &[DragHit]) {
     SCOPES.with(|m| {
         if let Some(rt) = m.borrow().get(&sess.scope_id) {
             rt.active_draggable.set(Some(sess.draggable_id.clone()));
             rt.from_list.set(sess.from_list.clone());
             rt.from_index.set(sess.from_index);
-            rt.drag_extent
-                .set([sess.start_bounds[2], sess.start_bounds[3]]);
+            rt.drag_extent.set(capped_drag_extent(sess, hits));
             let origin = [sess.start_bounds[0], sess.start_bounds[1]];
             rt.overlay_pos.set(origin);
             if rt.overlay_registered {
@@ -618,7 +978,7 @@ pub fn end(hits: &[DragHit]) -> bool {
         });
         let drop_hit = drop_id
             .as_ref()
-            .and_then(|id| hits.iter().find(|h| h.id == *id));
+            .and_then(|id| hit_in_scope(hits, id, &sess.scope_id));
         let (to_list, to_index) = SCOPES.with(|m| {
             m.borrow()
                 .get(&sess.scope_id)
@@ -709,9 +1069,24 @@ pub fn nudge_insert(delta: i32) -> bool {
     true
 }
 
+fn locked_axis_drift(sess: &DragSession, hits: &[DragHit], overlay_pos: [f32; 2]) -> bool {
+    let Some(slot) = live_source_slot(sess, hits) else {
+        return false;
+    };
+    match sess.axis {
+        Axis::Y => (slot.x - overlay_pos[0]).abs() > 0.5,
+        Axis::X => (slot.y - overlay_pos[1]).abs() > 0.5,
+        Axis::Xy => false,
+    }
+}
+
 /// Continue edge auto-scroll while the pointer is held still (vsync / wait).
+///
+/// After a nudge (or a parent `scroll_behavior=smooth` chase) the ghost must
+/// be ticked against live hits: `window_events` collects hits *before*
+/// autoscroll, and vsync pumps scroll with no mousemove. `axis="y"` would
+/// otherwise freeze overlay X while Gallery `scroll-overlays` pans.
 pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
-    let _ = viewport;
     if !is_active() {
         LAST_SCROLL_AT.with(|t| *t.borrow_mut() = None);
         return false;
@@ -719,29 +1094,52 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
     let Some(pointer) = last_pointer() else {
         return false;
     };
-    let cfg = SESSION.with(|s| {
+    let (cfg, axis, overlay_pos) = SESSION.with(|s| {
         let sess = s.borrow();
-        sess.as_ref()
-            .and_then(|d| SCOPES.with(|m| m.borrow().get(&d.scope_id).map(|r| r.autoscroll)))
+        let Some(d) = sess.as_ref() else {
+            return (AutoScroll::default(), Axis::Xy, [0.0, 0.0]);
+        };
+        let (cfg, overlay_pos) = SCOPES.with(|m| {
+            m.borrow()
+                .get(&d.scope_id)
+                .map(|r| (r.autoscroll, r.overlay_pos.peek()))
+                .unwrap_or((
+                    AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    [0.0, 0.0],
+                ))
+        });
+        (cfg, d.axis, overlay_pos)
     });
-    let Some(cfg) = cfg else {
-        return false;
-    };
-    if !cfg.enabled {
-        return false;
+    let mut moved = false;
+    if cfg.enabled {
+        let dt = LAST_SCROLL_AT.with(|slot| {
+            let now = Instant::now();
+            let dt = slot
+                .borrow()
+                .map(|prev| now.saturating_duration_since(prev).as_secs_f32())
+                .unwrap_or(1.0 / 60.0);
+            *slot.borrow_mut() = Some(now);
+            dt
+        });
+        let mut views = Vec::new();
+        super::autoscroll::collect_scroll_hits(root, &mut views);
+        moved = super::autoscroll::apply(pointer, &views, cfg, dt, axis);
     }
-    let dt = LAST_SCROLL_AT.with(|slot| {
-        let now = Instant::now();
-        let dt = slot
-            .borrow()
-            .map(|prev| now.saturating_duration_since(prev).as_secs_f32())
-            .unwrap_or(1.0 / 60.0);
-        *slot.borrow_mut() = Some(now);
-        dt
+    let hits = collect_hits(root);
+    let drift = SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|sess| locked_axis_drift(sess, &hits, overlay_pos))
+            .unwrap_or(false)
     });
-    let mut views = Vec::new();
-    super::autoscroll::collect_scroll_hits(root, &mut views);
-    super::autoscroll::apply(pointer, &views, cfg, dt)
+    if moved || drift {
+        tick(pointer[0], pointer[1], &hits, viewport);
+        return true;
+    }
+    false
 }
 
 /// Walk the laid-out tree and collect drag targets (skip the drag ghost).
@@ -752,7 +1150,53 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
 pub fn collect_hits(root: &Element) -> Vec<DragHit> {
     let mut out = Vec::new();
     collect_hits_inner(root, [0.0, 0.0], &mut out);
+    cap_stretched_indexed_rects(&mut out);
     out
+}
+
+/// `also_droppable` + `w=100%` islands report layout bounds taller than the
+/// row pitch. Hits must be **slot** rects (origin + pitch), not paint extent.
+fn cap_stretched_indexed_rects(hits: &mut Vec<DragHit>) {
+    use std::collections::HashSet;
+    let lists: HashSet<String> = hits
+        .iter()
+        .filter(|h| h.index.is_some())
+        .filter_map(|h| h.list_id.clone())
+        .collect();
+    for list in lists {
+        let mut idxs: Vec<usize> = hits
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.list_id.as_deref() == Some(list.as_str()) && h.index.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        if idxs.len() < 2 {
+            continue;
+        }
+        idxs.sort_by_key(|i| hits[*i].index.unwrap_or(0));
+        for w in 0..idxs.len() - 1 {
+            let i0 = idxs[w];
+            let i1 = idxs[w + 1];
+            let stride_y = (hits[i1].rect.y - hits[i0].rect.y).abs();
+            if stride_y >= MIN_SLOT_PITCH {
+                hits[i0].rect.height = stride_y;
+            }
+            let stride_x = (hits[i1].rect.x - hits[i0].rect.x).abs();
+            if stride_x >= MIN_SLOT_PITCH {
+                hits[i0].rect.width = stride_x;
+            }
+        }
+        let last = idxs[idxs.len() - 1];
+        let prev = idxs[idxs.len() - 2];
+        let stride_y = (hits[last].rect.y - hits[prev].rect.y).abs();
+        if stride_y >= MIN_SLOT_PITCH {
+            hits[last].rect.height = stride_y;
+        }
+        let stride_x = (hits[last].rect.x - hits[prev].rect.x).abs();
+        if stride_x >= MIN_SLOT_PITCH {
+            hits[last].rect.width = stride_x;
+        }
+    }
 }
 
 fn collect_hits_inner(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<DragHit>) {
@@ -775,9 +1219,7 @@ fn collect_hits_inner(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<DragHit>
         let id = drag_id.clone().or(drop_id.clone()).unwrap_or_default();
         let scope_id = el.attrs.get(ATTR_DRAG_SCOPE).cloned().unwrap_or_default();
         let slot = crate::app::tree_hit::collision_hit_box(el, scroll_acc);
-        if drag_id.is_some() {
-            remember_draggable_bounds(&scope_id, &id, slot);
-        }
+        remember_draggable_bounds(&scope_id, &id, slot);
         let disabled = el
             .attrs
             .get(ATTR_DRAG_DISABLED)
@@ -807,13 +1249,14 @@ pub fn resolve_insert_index(hit: Option<&DragHit>, fallback_len: usize) -> Optio
     hit.map(|h| h.index.unwrap_or(fallback_len))
 }
 
-/// Sortable insert index: which **layout slot** contains the probe along `axis`.
+/// Origin deltas below this are layout jitter, not a sortable row pitch.
+const MIN_SLOT_PITCH: f32 = 8.0;
+
+/// Sortable insert index along `axis` (SortableJS midpoint semantics).
 ///
-/// Slot end is origin + **pitch** (item size plus author gap), not the paint
-/// box height. A `w=100%` also_droppable row can report height = the whole
-/// list; using that as `end` swallows every probe into index 0, or a page-tall
-/// moving-box center past the last sibling appends. Collapsed (`!is_usable`)
-/// rows are skipped so 0-height hits do not fall through to `len`.
+/// Upper half of row `i` → insert before `i`; lower half → insert after `i`.
+/// Each row occupies `[origin(i), origin(i+1))`; the tail row ends at
+/// `origin(last) + pitch`.
 pub fn insert_index_along_axis(
     hits: &[DragHit],
     list_id: &str,
@@ -839,17 +1282,49 @@ pub fn insert_index_along_axis(
         Axis::Y | Axis::Xy => items[0].rect.height,
     }
     .max(1.0);
-    let stride = slot_stride_along_axis(hits, list_id, axis, fallback);
-    for h in &items {
-        let start = match axis {
-            Axis::X => h.rect.x,
-            Axis::Y | Axis::Xy => h.rect.y,
-        };
-        if p < start + stride {
-            return h.index;
+    let tail_pitch = slot_stride_along_axis(hits, list_id, axis, fallback);
+    let first = axis_origin(items[0].rect, axis);
+    let last = axis_origin(items[items.len() - 1].rect, axis);
+    if items.len() > 1 {
+        let avg = (last - first).abs() / (items.len() - 1) as f32;
+        if avg < MIN_SLOT_PITCH {
+            return None;
         }
     }
-    items.iter().filter_map(|h| h.index).max().map(|i| i + 1)
+    if p < first {
+        return items[0].index;
+    }
+    for (i, h) in items.iter().enumerate() {
+        let start = axis_origin(h.rect, axis);
+        let end = if i + 1 < items.len() {
+            axis_origin(items[i + 1].rect, axis)
+        } else {
+            start + tail_pitch
+        };
+        if p < start {
+            continue;
+        }
+        let mid = (start + end) * 0.5;
+        if p <= mid {
+            return h.index;
+        }
+        if p < end {
+            return h.index.map(|idx| idx + 1);
+        }
+    }
+    // Past every [start, end). Append only when the probe is still adjacent to
+    // the column. Clustered / jittered slots used to fall through to max+1.
+    if p < last + tail_pitch * 2.0 {
+        return items.iter().filter_map(|h| h.index).max().map(|i| i + 1);
+    }
+    None
+}
+
+fn axis_origin(rect: Rect, axis: Axis) -> f32 {
+    match axis {
+        Axis::X => rect.x,
+        Axis::Y | Axis::Xy => rect.y,
+    }
 }
 
 /// Pitch between consecutive layout slots in `list_id` (item size **plus**
@@ -879,7 +1354,9 @@ pub(crate) fn slot_stride_along_axis(
             Axis::X => (w[1].rect.x - w[0].rect.x).abs(),
             Axis::Y | Axis::Xy => (w[1].rect.y - w[0].rect.y).abs(),
         };
-        if stride > 1.0 {
+        // 2px layout jitter is not a row pitch: walking it always falls off
+        // the last origin and appends (Gallery dimmed Sortable vs opacity 0).
+        if stride >= MIN_SLOT_PITCH {
             return stride;
         }
     }
@@ -979,6 +1456,26 @@ pub(crate) fn live_cross_list_source_translate(
     })
 }
 
+/// Same-list dimmed source: layout-measured hole, not `(hover-from)*pitch`.
+pub(crate) fn live_same_list_source_translate(
+    from_list: &str,
+    from_index: usize,
+    hover_list: &str,
+    hover_index: usize,
+    axis: Axis,
+) -> [f32; 2] {
+    LAST_HITS.with(|h| {
+        source_translate_to_insert_hole(
+            &h.borrow(),
+            from_list,
+            from_index,
+            hover_list,
+            Some(hover_index),
+            axis,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1022,7 +1519,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: false,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1043,6 +1540,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1071,6 +1569,247 @@ mod tests {
     }
 
     #[test]
+    fn axis_y_overlay_x_follows_scrolled_layout_slot() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [110.0, 50.0],
+                grab_offset: [10.0, 10.0],
+                start_bounds: [100.0, 40.0, 80.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut src = hit("a", [40.0, 40.0, 80.0, 24.0], false);
+            src.index = Some(0);
+            let hits = vec![src];
+            assert!(tick(200.0, 90.0, &hits, [400.0, 300.0]));
+            let pos = overlay_pos.peek();
+            assert!(
+                (pos[0] - 40.0).abs() < 0.5,
+                "axis=y must pin overlay X to the scrolled layout slot, not press-time start_bounds; got {:?}",
+                pos
+            );
+            assert!(
+                (pos[1] - 80.0).abs() < 0.5,
+                "axis=y free axis still follows the pointer (50+40-10); got {:?}",
+                pos
+            );
+            let _ = end(&hits);
+        });
+    }
+
+    #[test]
+    fn axis_xy_overlay_does_not_pin_to_scrolled_slot() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [110.0, 50.0],
+                grab_offset: [10.0, 10.0],
+                start_bounds: [100.0, 40.0, 80.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits = vec![hit("a", [40.0, 40.0, 80.0, 24.0], false)];
+            assert!(tick(200.0, 90.0, &hits, [400.0, 300.0]));
+            assert_eq!(
+                overlay_pos.peek(),
+                [190.0, 80.0],
+                "unlocked axis still follows pointer − grab, not the scrolled slot"
+            );
+            let _ = end(&hits);
+        });
+    }
+
+    #[test]
+    fn pump_autoscroll_resyncs_axis_y_after_parent_scroll() {
+        use crate::core::reactivity::use_signal;
+        use crate::core::scroll_viewport::{
+            scroll_offset_x_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+        };
+
+        let (_o, _) = create_root(|| {
+            use_signal(&scroll_offset_x_signal_key("drag-axis-scroll"), || 0.0_f32).set_silent(0.0);
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            let mut chip = Element::new();
+            chip.layout_bounds = [100.0, 40.0, 80.0, 24.0];
+            chip.set_attr(ATTR_DRAG_DRAGGABLE, "a");
+            chip.set_attr(ATTR_DRAG_SCOPE, "s");
+            let mut page = Element::new();
+            page.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}drag-axis-scroll"));
+            page.layout_bounds = [0.0, 0.0, 400.0, 300.0];
+            page = page.child(chip);
+
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [110.0, 50.0],
+                grab_offset: [10.0, 10.0],
+                start_bounds: [100.0, 40.0, 80.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits0 = collect_hits(&page);
+            assert!(tick(110.0, 80.0, &hits0, [400.0, 300.0]));
+            assert!(
+                (overlay_pos.peek()[0] - 100.0).abs() < 0.5,
+                "precondition: overlay X at unscrolled slot; {:?}",
+                overlay_pos.peek()
+            );
+
+            // Parent ScrollArea panned (autoscroll / smooth chase) with no mousemove.
+            use_signal(&scroll_offset_x_signal_key("drag-axis-scroll"), || 0.0_f32)
+                .set_silent(60.0);
+            assert!(
+                pump_autoscroll(&page, [400.0, 300.0]),
+                "held-still pump must resync overlay after parent scroll"
+            );
+            let pos = overlay_pos.peek();
+            assert!(
+                (pos[0] - 40.0).abs() < 1.0,
+                "axis=y overlay X must follow the scrolled slot (100-60); got {:?}",
+                pos
+            );
+            let _ = end(&collect_hits(&page));
+        });
+    }
+
+    #[test]
     fn end_clears_preview_before_on_end() {
         let (_o, _) = create_root(|| {
             let overlay_open = Signal::new(true);
@@ -1095,7 +1834,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: true,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1122,6 +1861,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1167,7 +1907,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: false,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1188,6 +1928,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1240,7 +1981,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: false,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1263,6 +2004,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1323,8 +2065,8 @@ mod tests {
         );
         assert_eq!(
             insert_index_along_axis(&hits, "list", [10.0, 38.0], Axis::Y),
-            Some(1),
-            "still inside the last slot (20..40) must not append"
+            Some(2),
+            "lower half of the last row inserts after it"
         );
         assert_eq!(
             insert_index_along_axis(&hits, "list", [10.0, 41.0], Axis::Y),
@@ -1343,9 +2085,14 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            insert_index_along_axis(&hits, "list", [10.0, 16.0], Axis::Y),
+            insert_index_along_axis(&hits, "list", [10.0, 8.0], Axis::Y),
             Some(0),
-            "source centre must stay on from, or the next row slides under the dimmed body"
+            "upper half of the lone row stays on index 0"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [10.0, 16.0], Axis::Y),
+            Some(1),
+            "lower half of the lone row appends"
         );
         assert_eq!(
             insert_index_along_axis(&hits, "list", [10.0, 21.0], Axis::Y),
@@ -1414,6 +2161,67 @@ mod tests {
         assert_eq!(
             insert_index_along_axis(&hits, "list", [40.0, 321.0], Axis::Y),
             Some(8)
+        );
+    }
+
+    #[test]
+    fn insert_index_clustered_slots_do_not_append() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit(
+                    [
+                        "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus",
+                        "Neptune",
+                    ][i],
+                    [0.0, 0.0, 80.0, 32.0],
+                    true,
+                );
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            None,
+            "clustered slots cannot infer pitch; session keeps from_index"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 400.0], Axis::Y),
+            None,
+            "page-offset pointer vs local-Y slots must not report hover=len; got {:?}",
+            insert_index_along_axis(&hits, "list", [40.0, 400.0], Axis::Y)
+        );
+    }
+
+    /// Gallery dimmed Sortable: auto-height chips can report 2px origin jitter
+    /// while opacity 0 keeps a real ~40px pitch. Walking a 2px stride always
+    /// appends — even when the pointer is still on the first 32px row.
+    #[test]
+    fn insert_index_jitter_pitch_does_not_append() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit(
+                    [
+                        "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus",
+                        "Neptune",
+                    ][i],
+                    [0.0, i as f32 * 2.0, 80.0, 32.0],
+                    true,
+                );
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            None,
+            "jittered origins cannot infer pitch; session keeps from_index"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 50.0], Axis::Y),
+            None,
+            "jittered origins must not walk to len; got {:?}",
+            insert_index_along_axis(&hits, "list", [40.0, 50.0], Axis::Y)
         );
     }
 
@@ -1641,7 +2449,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: false,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1662,6 +2470,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1751,7 +2560,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: true,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1772,6 +2581,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1862,7 +2672,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: true,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1883,6 +2693,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -1946,9 +2757,15 @@ mod tests {
         );
     }
 
+    /// Gallery: pointer is in window space; SortableItem slots can all report
+    /// the island origin (local Y = 0). Walking those slots then always
+    /// appends (`hover=len`), the dimmed body is translated out of the
+    /// ScrollArea, and `on_drag_end` parks the row at the tail.
     #[test]
-    fn foreign_scope_hits_do_not_steal_sortable_hover() {
-        let (_o, (hover_list, hover_index)) = create_root(|| {
+    fn tick_clustered_local_slots_do_not_append_or_drop_body() {
+        let committed = std::rc::Rc::new(std::cell::Cell::new(None::<Option<usize>>));
+        let committed_end = committed.clone();
+        let (_o, (at_lift, at_move)) = create_root(|| {
             let overlay_open = Signal::new(false);
             let overlay_pos = Signal::new([0.0_f32, 0.0]);
             let active_draggable = Signal::new(None::<String>);
@@ -1967,7 +2784,116 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: true,
-                    hide_source: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: Some(std::rc::Rc::new(std::cell::RefCell::new(
+                        move |ev: &DragEvent| {
+                            committed_end.set(Some(ev.to_index));
+                        },
+                    ))),
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-sort".into(),
+                draggable_id: "Mercury".into(),
+                pointer: [40.0, 416.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 400.0, 80.0, 32.0],
+                from_list: Some("planets".into()),
+                from_index: Some(0),
+                item_type: "planet".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let names = [
+                "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+            ];
+            let mut hits: Vec<DragHit> = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    drop_hit(
+                        name,
+                        "gal-drag-sort",
+                        "planets",
+                        Some(i),
+                        [0.0, 0.0, 80.0, 32.0],
+                    )
+                })
+                .collect();
+            hits.push(drop_hit(
+                "planets",
+                "gal-drag-sort",
+                "planets",
+                None,
+                [0.0, 0.0, 80.0, 176.0],
+            ));
+            assert!(tick(40.0, 416.0, &hits, [800.0, 600.0]));
+            let at_lift = hover_index.peek();
+            assert!(tick(40.0, 480.0, &hits, [800.0, 600.0]));
+            let at_move = hover_index.peek();
+            assert!(end(&hits));
+            (at_lift, at_move)
+        });
+        assert_eq!(
+            at_lift,
+            Some(0),
+            "lift must keep hover=from, not len; got {at_lift:?}"
+        );
+        assert_eq!(
+            at_move,
+            Some(0),
+            "moving a page-offset pointer vs local slots must not append; got {at_move:?}"
+        );
+        assert_eq!(
+            committed.get(),
+            Some(Some(0)),
+            "commit must stay on from, not the tail; got {:?}",
+            committed.get()
+        );
+    }
+
+    #[test]
+    fn foreign_scope_hits_do_not_steal_sortable_hover() {
+        let (_o, (at_lift, at_earth)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "gal-drag-sort".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::ClosestCenter,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -1988,6 +2914,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -2007,18 +2934,25 @@ mod tests {
             // isolate scopes — that was Gallery 半透明本体 collapsing.
             let hits = vec![
                 drop_hit(
-                    "Neptune",
+                    "Mercury",
                     "gal-drag-sort-hide",
                     "planets-hide",
-                    Some(7),
-                    [0.0, 384.0, 80.0, 32.0],
+                    Some(0),
+                    [0.0, 0.0, 80.0, 32.0],
+                ),
+                drop_hit(
+                    "Earth",
+                    "gal-drag-sort-hide",
+                    "planets-hide",
+                    Some(2),
+                    [0.0, 80.0, 80.0, 32.0],
                 ),
                 drop_hit(
                     "planets-hide",
                     "gal-drag-sort-hide",
                     "planets-hide",
                     None,
-                    [0.0, 0.0, 80.0, 384.0],
+                    [0.0, 0.0, 80.0, 320.0],
                 ),
                 drop_hit(
                     "Mercury",
@@ -2035,6 +2969,13 @@ mod tests {
                     [0.0, 440.0, 80.0, 32.0],
                 ),
                 drop_hit(
+                    "Earth",
+                    "gal-drag-sort",
+                    "planets",
+                    Some(2),
+                    [0.0, 480.0, 80.0, 32.0],
+                ),
+                drop_hit(
                     "planets",
                     "gal-drag-sort",
                     "planets",
@@ -2043,19 +2984,35 @@ mod tests {
                 ),
             ];
             assert!(tick(40.0, 416.0, &hits, [800.0, 600.0]));
-            let out = (hover_list.peek(), hover_index.peek());
+            let at_lift = (hover_list.peek(), hover_index.peek());
+            assert!(tick(40.0, 496.0, &hits, [800.0, 600.0]));
+            let at_earth = (hover_list.peek(), hover_index.peek());
             let _ = end(&hits);
-            out
+            (at_lift, at_earth)
         });
         assert_eq!(
-            hover_list.as_deref(),
+            at_lift.0.as_deref(),
             Some("planets"),
-            "stacked hide_source list must not become hover_list; got {hover_list:?}"
+            "stacked opacity-0 list must not become hover_list; got {:?}",
+            at_lift.0
         );
         assert_eq!(
-            hover_index,
+            at_lift.1,
             Some(0),
-            "grab in the source slot must keep hover=from so the dimmed body stays; got {hover_index:?}"
+            "grab in the source slot must keep hover=from so the dimmed body stays; got {:?}",
+            at_lift.1
+        );
+        assert_eq!(
+            at_earth.0.as_deref(),
+            Some("planets"),
+            "duplicate planet ids must resolve drop_hit in the session scope; got {:?}",
+            at_earth.0
+        );
+        assert_eq!(
+            at_earth.1,
+            Some(2),
+            "pointer on dimmed Earth must not append via opacity-0 Earth; got {:?}",
+            at_earth.1
         );
     }
 
@@ -2080,7 +3037,7 @@ mod tests {
                     restrict: Restrict::None,
                     snap: None,
                     overlay_registered: false,
-                    hide_source: false,
+                    source_opacity: 1.0,
                     autoscroll: AutoScroll {
                         enabled: false,
                         ..Default::default()
@@ -2101,6 +3058,7 @@ mod tests {
                     hover_list,
                     hover_index,
                     drag_extent,
+                    stack_seq: 0,
                 },
             );
             begin(BeginDrag {
@@ -2134,6 +3092,548 @@ mod tests {
             hover_list.as_deref(),
             Some("planets"),
             "hit with empty scope_id must not join a named DragProvider; got {hover_list:?}"
+        );
+    }
+
+    /// Gallery Kanban: first also_droppable island can report the column height.
+    /// A uniform `start + stride` loop then swallows every probe into index 0.
+    #[test]
+    fn insert_index_stretched_first_row_does_not_swallow_column() {
+        let mut a = hit("a", [0.0, 0.0, 80.0, 88.0], true);
+        a.index = Some(0);
+        let mut b = hit("b", [0.0, 40.0, 80.0, 32.0], true);
+        b.index = Some(1);
+        let hits = vec![a, b];
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 56.0], Axis::Y),
+            Some(1),
+            "pointer on row 1 must not fall into row 0 when row 0 paint height is stretched"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 16.0], Axis::Y),
+            Some(0)
+        );
+    }
+
+    /// Tail row: pitch < chip height — pointer on the chip must stay on from_index.
+    #[test]
+    fn pointer_on_short_pitch_tail_row_stays_from_index() {
+        let mut a = hit("a", [0.0, 0.0, 80.0, 32.0], true);
+        a.index = Some(0);
+        a.scope_id = "gal-drag-board".into();
+        a.list_id = Some("list".into());
+        let mut b = hit("b", [0.0, 38.0, 80.0, 48.0], true);
+        b.index = Some(1);
+        b.scope_id = "gal-drag-board".into();
+        b.list_id = Some("list".into());
+        b.is_draggable = true;
+        let mut hits = vec![a, b];
+        cap_stretched_indexed_rects(&mut hits);
+        remember_draggable_bounds("gal-drag-board", "b", [0.0, 38.0, 80.0, 48.0]);
+        let sess = DragSession {
+            scope_id: "gal-drag-board".into(),
+            draggable_id: "b".into(),
+            phase: DragPhase::Active,
+            start_pointer: [40.0, 82.0],
+            last_pointer: [40.0, 82.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 38.0, 80.0, 48.0],
+            from_list: Some("list".into()),
+            from_index: Some(1),
+            item_type: String::new(),
+            group: String::new(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        };
+        assert_eq!(
+            insert_index_along_axis(&hits, "list", [40.0, 82.0], Axis::Y),
+            Some(2),
+            "slot math alone may append when pitch < chip height"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "list", [40.0, 82.0], None),
+            Some(1),
+            "pointer still on source layout bounds must keep from_index"
+        );
+    }
+
+    #[test]
+    fn tail_append_clamped_when_dragging_last_item() {
+        let sess = DragSession {
+            scope_id: "gal-drag-board".into(),
+            draggable_id: "todo:Review PR".into(),
+            phase: DragPhase::Active,
+            start_pointer: [40.0, 120.0],
+            last_pointer: [40.0, 120.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 80.0, 80.0, 32.0],
+            from_list: Some("todo".into()),
+            from_index: Some(1),
+            item_type: String::new(),
+            group: String::new(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        };
+        let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
+        draft.list_id = Some("todo".into());
+        draft.index = Some(0);
+        let mut review = hit("todo:Review PR", [0.0, 40.0, 80.0, 32.0], true);
+        review.list_id = Some("todo".into());
+        review.index = Some(1);
+        let hits = vec![draft, review];
+        assert_eq!(
+            clamp_tail_append_hover(&sess, "todo", &hits, 2),
+            1,
+            "2-item list: append after last row is phantom slot while dragging that row"
+        );
+        let mut sess0 = sess.clone();
+        sess0.from_index = Some(0);
+        sess0.draggable_id = "todo:Draft RFC".into();
+        assert_eq!(
+            clamp_tail_append_hover(&sess0, "todo", &hits, 2),
+            2,
+            "first row may still open tail append"
+        );
+    }
+
+    /// Gallery semi-transparent Sortable: Mars (index 3) dragged below Jupiter,
+    /// then nudged one row — hover must not advance and leave a blank slot.
+    #[test]
+    fn mars_below_jupiter_pins_hover_when_nudged_one_row() {
+        let hits: Vec<DragHit> = (0..8)
+            .map(|i| {
+                let mut h = hit(
+                    [
+                        "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus",
+                        "Neptune",
+                    ][i],
+                    [0.0, i as f32 * 40.0, 80.0, 320.0],
+                    true,
+                );
+                h.list_id = Some("planets".into());
+                h.index = Some(i);
+                h
+            })
+            .collect();
+        let mut hits = hits;
+        cap_stretched_indexed_rects(&mut hits);
+        let sess = DragSession {
+            scope_id: "gal-drag-sort".into(),
+            draggable_id: "Mars".into(),
+            phase: DragPhase::Active,
+            start_pointer: [40.0, 136.0],
+            last_pointer: [40.0, 136.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 120.0, 80.0, 32.0],
+            from_list: Some("planets".into()),
+            from_index: Some(3),
+            item_type: "planet".into(),
+            group: String::new(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        };
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 190.0], None),
+            Some(5),
+            "lower half of Jupiter row opens insert after Jupiter"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 230.0], Some(5)),
+            Some(5),
+            "one pitch below the opened hole must not bump hover"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 250.0], Some(5)),
+            Some(6),
+            "past hole+pitch band may advance"
+        );
+        let hole = insert_hole_origin(&hits, "planets", Some(5), Axis::Y, 40.0).unwrap();
+        let src = source_translate_to_insert_hole(&hits, "planets", 3, "planets", Some(5), Axis::Y);
+        assert_eq!(
+            src,
+            [hole[0] - 0.0, hole[1] - 120.0],
+            "dimmed body translate must match layout hole origin"
+        );
+    }
+
+    #[test]
+    fn kanban_past_todo_content_resolves_doing_column() {
+        let sess = DragSession {
+            scope_id: "gal-drag-board".into(),
+            draggable_id: "todo:Review PR".into(),
+            phase: DragPhase::Active,
+            start_pointer: [120.0, 120.0],
+            last_pointer: [120.0, 120.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 40.0, 80.0, 32.0],
+            from_list: Some("todo".into()),
+            from_index: Some(1),
+            item_type: "task".into(),
+            group: "board".into(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        };
+        let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
+        draft.scope_id = "gal-drag-board".into();
+        draft.list_id = Some("todo".into());
+        draft.index = Some(0);
+        draft.item_type = "task".into();
+        draft.group = "board".into();
+        let mut review = hit("todo:Review PR", [0.0, 40.0, 80.0, 32.0], true);
+        review.scope_id = "gal-drag-board".into();
+        review.list_id = Some("todo".into());
+        review.index = Some(1);
+        review.item_type = "task".into();
+        review.group = "board".into();
+        let mut todo_shell = hit("todo", [0.0, 0.0, 80.0, 200.0], true);
+        todo_shell.scope_id = "gal-drag-board".into();
+        todo_shell.list_id = Some("todo".into());
+        todo_shell.item_type = "task".into();
+        todo_shell.accept = "task".into();
+        todo_shell.group = "board".into();
+        todo_shell.item_type = "task".into();
+        todo_shell.accept = "task".into();
+        todo_shell.group = "board".into();
+        let mut doing_shell = hit("doing", [88.0, 0.0, 80.0, 200.0], true);
+        doing_shell.scope_id = "gal-drag-board".into();
+        doing_shell.list_id = Some("doing".into());
+        doing_shell.item_type = "task".into();
+        doing_shell.accept = "task".into();
+        doing_shell.group = "board".into();
+        let mut task = hit("todo:Write tests", [88.0, 0.0, 80.0, 32.0], true);
+        task.scope_id = "gal-drag-board".into();
+        task.list_id = Some("doing".into());
+        task.index = Some(0);
+        task.item_type = "task".into();
+        task.group = "board".into();
+        let hits = vec![draft, review, todo_shell, doing_shell, task];
+        let pointer = [120.0, 120.0];
+        assert!(
+            pointer_past_list_indexed_content(&hits, "todo", pointer, Axis::Y),
+            "pointer is below todo indexed rows"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, pointer).as_deref(),
+            Some("doing"),
+            "past todo padding + doing column band must target doing, not phantom todo slot"
+        );
+    }
+
+    #[test]
+    fn kanban_drag_last_item_below_rows_keeps_hover_index() {
+        let (_o, (hover_list, hover_index)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "gal-drag-board".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-board".into(),
+                draggable_id: "todo:Review PR".into(),
+                pointer: [40.0, 56.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 40.0, 80.0, 32.0],
+                from_list: Some("todo".into()),
+                from_index: Some(1),
+                item_type: "task".into(),
+                group: "board".into(),
+                capture_id: "cap".into(),
+            });
+            let mut draft = drop_hit(
+                "todo:Draft RFC",
+                "gal-drag-board",
+                "todo",
+                Some(0),
+                [0.0, 0.0, 80.0, 32.0],
+            );
+            let mut review = drop_hit(
+                "todo:Review PR",
+                "gal-drag-board",
+                "todo",
+                Some(1),
+                [0.0, 40.0, 80.0, 32.0],
+            );
+            review.is_draggable = true;
+            review.item_type = "task".into();
+            review.group = "board".into();
+            draft.is_draggable = true;
+            draft.item_type = "task".into();
+            draft.group = "board".into();
+            let mut todo_shell = drop_hit(
+                "todo",
+                "gal-drag-board",
+                "todo",
+                None,
+                [0.0, 0.0, 80.0, 200.0],
+            );
+            todo_shell.item_type = "task".into();
+            todo_shell.accept = "task".into();
+            todo_shell.group = "board".into();
+            let hits = vec![draft, review, todo_shell];
+            assert!(tick(40.0, 100.0, &hits, [800.0, 600.0]));
+            let list = hover_list.peek();
+            let idx = hover_index.peek();
+            let _ = end(&hits);
+            (list, idx)
+        });
+        assert_eq!(hover_list.as_deref(), Some("todo"));
+        assert_eq!(
+            hover_index,
+            Some(1),
+            "below rows in todo padding must not open phantom index 2"
+        );
+    }
+
+    #[test]
+    fn pointer_indexed_insert_beats_tail_append_on_stretched_column() {
+        let (_o, hover_index) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "gal-drag-board".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-board".into(),
+                draggable_id: "todo:Review PR".into(),
+                pointer: [40.0, 82.0],
+                grab_offset: [40.0, 42.0],
+                start_bounds: [0.0, 40.0, 80.0, 48.0],
+                from_list: Some("todo".into()),
+                from_index: Some(1),
+                item_type: "task".into(),
+                group: "board".into(),
+                capture_id: "cap".into(),
+            });
+            let mut draft = drop_hit(
+                "todo:Draft RFC",
+                "gal-drag-board",
+                "todo",
+                Some(0),
+                [0.0, 0.0, 80.0, 88.0],
+            );
+            let mut review = drop_hit(
+                "todo:Review PR",
+                "gal-drag-board",
+                "todo",
+                Some(1),
+                [0.0, 40.0, 80.0, 48.0],
+            );
+            review.is_draggable = true;
+            draft.is_draggable = true;
+            let hits = vec![draft, review];
+            assert!(tick(40.0, 82.0, &hits, [800.0, 600.0]));
+            let idx = hover_index.peek();
+            let _ = end(&hits);
+            idx
+        });
+        assert_eq!(
+            hover_index,
+            Some(1),
+            "lift on Review PR must stay from_index, not append"
+        );
+    }
+
+    #[test]
+    fn pointer_indexed_row_beats_ghost_column_collision() {
+        let (_o, (hover_list, hover_index)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "gal-drag-board".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: true,
+                    source_opacity: 0.4,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "gal-drag-board".into(),
+                draggable_id: "todo:Review PR".into(),
+                pointer: [40.0, 56.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 40.0, 80.0, 32.0],
+                from_list: Some("todo".into()),
+                from_index: Some(1),
+                item_type: "task".into(),
+                group: "board".into(),
+                capture_id: "cap".into(),
+            });
+            let mut draft = drop_hit(
+                "todo:Draft RFC",
+                "gal-drag-board",
+                "todo",
+                Some(0),
+                [0.0, 0.0, 80.0, 32.0],
+            );
+            let mut review = drop_hit(
+                "todo:Review PR",
+                "gal-drag-board",
+                "todo",
+                Some(1),
+                [0.0, 40.0, 80.0, 32.0],
+            );
+            review.is_draggable = true;
+            draft.is_draggable = true;
+            // Column shell shorter than rows (Kanban label-only container hit).
+            let hits = vec![
+                draft,
+                review,
+                drop_hit(
+                    "todo",
+                    "gal-drag-board",
+                    "todo",
+                    None,
+                    [0.0, 0.0, 80.0, 24.0],
+                ),
+                drop_hit(
+                    "doing",
+                    "gal-drag-board",
+                    "doing",
+                    None,
+                    [88.0, 0.0, 80.0, 88.0],
+                ),
+            ];
+            assert!(tick(40.0, 56.0, &hits, [800.0, 600.0]));
+            let list = hover_list.peek();
+            let idx = hover_index.peek();
+            let _ = end(&hits);
+            (list, idx)
+        });
+        assert_eq!(
+            hover_list.as_deref(),
+            Some("todo"),
+            "hover_list must follow the indexed row under the pointer, not ghost collision"
+        );
+        assert_eq!(
+            hover_index,
+            Some(1),
+            "insert index must stay on the lifted row"
         );
     }
 }

@@ -20,7 +20,7 @@ pub mod sortable;
 
 mod builder;
 
-pub use autoscroll::{edge_delta, AutoScroll, ScrollHit};
+pub use autoscroll::{edge_delta, AutoScroll, ScrollHit, ScrollLock};
 pub use builder::{
     drag_handle, drag_handle_from_rsx, drag_ignore, drag_ignore_from_rsx, drag_scope,
     drag_scope_from_rsx, draggable, draggable_from_rsx, droppable, droppable_from_rsx, use_drag,
@@ -28,18 +28,19 @@ pub use builder::{
     DraggableRsxOpts, DroppableBuilder, DroppableRsxOpts,
 };
 pub use collision::{detect, Candidate, CollisionAlg};
-pub use geometry::{clamp_origin_to_box, distance, Axis, Rect, Restrict, SnapGrid};
+pub use geometry::{clamp_origin_to_box, distance, Axis, DragStack, Rect, Restrict, SnapGrid};
 pub use overlay::{drag_overlay, drag_overlay_from_rsx, DragOverlayBuilder};
 pub use session::{
     active_draggable_id, active_scope_id, active_source_translate, begin, cancel, clear_if_any,
     collect_hits, end, insert_index_along_axis, is_active, is_dragging, last_draggable_bounds,
-    last_pointer, nudge_insert, overlay_hides_source, overlay_is_registered, pump_autoscroll,
-    refresh_hit_cache, resolve_insert_index, start_geometry, tick, BeginDrag, DragEvent,
-    DragHandler, DragHit, DragPhase, DragPredicate,
+    last_hit_rect, last_pointer, nudge_insert, overlay_hides_source, overlay_is_registered,
+    overlay_source_opacity, pump_autoscroll, refresh_hit_cache, resolve_insert_index,
+    start_geometry, tick, BeginDrag, DragEvent, DragHandler, DragHit, DragPhase, DragPredicate,
+    OVERLAY_SOURCE_OPACITY,
 };
 pub use sortable::{
     apply_event, apply_transfer, sortable_item, sortable_list, sortable_preview, sortable_shift,
-    SortableItemBuilder, SortableListBuilder, SORTABLE_FLIP_MS,
+    sortable_source_to_hole, SortableItemBuilder, SortableListBuilder, SORTABLE_FLIP_MS,
 };
 
 /// Re-export list-reorder helpers so callers can import one module.

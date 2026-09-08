@@ -27,6 +27,77 @@ impl Axis {
     }
 }
 
+/// Stacking among overlapping draggables in one container (solid-dnd arbitrary move).
+///
+/// Author `z-index` still distinguishes items that share a policy (same or different).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DragStack {
+    /// Raise this item above Auto / Keep siblings while dragging; keep the new
+    /// order after drop (and after Esc cancel, which also leaves it on top).
+    #[default]
+    Auto,
+    /// Always paint above Auto / Keep / Bottom, even at rest. Drag does not change it.
+    Top,
+    /// Always paint below Auto / Keep / Top, even at rest. Drag does not raise it.
+    Bottom,
+    /// Author `z-index` only; drag never writes stacking.
+    Keep,
+}
+
+impl DragStack {
+    /// Band for [`Self::Bottom`] so it stays under Auto ranks (`1…`).
+    pub const BOTTOM_BAND: i32 = -1_000_000;
+    /// Band for [`Self::Top`] so it stays above Auto ranks.
+    pub const TOP_BAND: i32 = 1_000_000;
+
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "top" | "always-top" | "always_top" | "always-on-top" => Self::Top,
+            "bottom" | "always-bottom" | "always_bottom" | "always-on-bottom" => Self::Bottom,
+            "keep" | "none" | "unchanged" => Self::Keep,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Keep => "keep",
+        }
+    }
+
+    /// Resting (or already-bumped Auto) z. Callers bump Auto rank before this
+    /// when the item is the active drag.
+    pub fn resolve(self, author_z: i32, auto_rank: i32) -> i32 {
+        match self {
+            Self::Keep => author_z,
+            Self::Top => Self::TOP_BAND.saturating_add(author_z),
+            Self::Bottom => Self::BOTTOM_BAND.saturating_add(author_z),
+            Self::Auto => {
+                if auto_rank != 0 {
+                    auto_rank
+                } else {
+                    author_z
+                }
+            }
+        }
+    }
+}
+
+impl From<&str> for DragStack {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for DragStack {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
 /// Where the transformed ghost may travel (interact.js `restrict`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Restrict {
@@ -198,6 +269,27 @@ mod tests {
         assert_eq!(Axis::X.apply(3.0, 4.0), (3.0, 0.0));
         assert_eq!(Axis::Y.apply(3.0, 4.0), (0.0, 4.0));
         assert_eq!(Axis::Xy.apply(3.0, 4.0), (3.0, 4.0));
+    }
+
+    #[test]
+    fn drag_stack_parse_and_resolve() {
+        assert_eq!(DragStack::parse("auto"), DragStack::Auto);
+        assert_eq!(DragStack::parse("always-top"), DragStack::Top);
+        assert_eq!(DragStack::parse("always_bottom"), DragStack::Bottom);
+        assert_eq!(DragStack::parse("none"), DragStack::Keep);
+        assert_eq!(DragStack::Keep.resolve(3, 9), 3);
+        assert_eq!(
+            DragStack::Top.resolve(2, 0),
+            DragStack::TOP_BAND.saturating_add(2)
+        );
+        assert_eq!(
+            DragStack::Bottom.resolve(1, 0),
+            DragStack::BOTTOM_BAND.saturating_add(1)
+        );
+        assert_eq!(DragStack::Auto.resolve(4, 0), 4);
+        assert_eq!(DragStack::Auto.resolve(4, 7), 7);
+        assert!(DragStack::Top.resolve(0, 0) > DragStack::Auto.resolve(0, 99));
+        assert!(DragStack::Bottom.resolve(0, 0) < DragStack::Auto.resolve(0, 1));
     }
 
     #[test]

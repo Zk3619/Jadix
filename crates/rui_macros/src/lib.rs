@@ -171,6 +171,18 @@ fn is_canvas_tag(name: &str) -> bool {
     matches!(name, "canvas" | "Canvas")
 }
 
+/// Valueless RSX flags: `<DragProvider scroll-lock-all>` ≡ `scroll_lock="all"`.
+fn is_scroll_lock_flag_attr(name: &str) -> bool {
+    matches!(
+        name,
+        "scroll_lock_all"
+            | "scroll_lock_x"
+            | "scroll_lock_y"
+            | "scroll_lock_none"
+            | "scroll_lock_auto"
+    )
+}
+
 fn is_boolish_attr(name: &str) -> bool {
     matches!(
         name,
@@ -324,27 +336,38 @@ impl Parse for RsxNode {
                     .map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?;
                 finish_kebab_attr_name(input, first)?
             };
-            input.parse::<Token![=]>().map_err(|e| {
-                syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name))
-            })?;
-
-            let attr_value: Expr = if input.peek(syn::token::Brace) {
-                let content;
-                braced!(content in input);
-                content.parse().map_err(|e| {
-                    syn::Error::new(
-                        e.span(),
-                        format!("Failed to parse braced attribute '{}': {}", attr_name, e),
-                    )
-                })?
-            } else {
-                let lit: syn::Lit = input
-                    .parse()
-                    .map_err(|e| syn::Error::new(e.span(), format!("Expected literal: {}", e)))?;
-                syn::Expr::Lit(syn::ExprLit {
+            let attr_value: Expr = if input.peek(Token![=]) {
+                input.parse::<Token![=]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name))
+                })?;
+                if input.peek(syn::token::Brace) {
+                    let content;
+                    braced!(content in input);
+                    content.parse().map_err(|e| {
+                        syn::Error::new(
+                            e.span(),
+                            format!("Failed to parse braced attribute '{}': {}", attr_name, e),
+                        )
+                    })?
+                } else {
+                    let lit: syn::Lit = input.parse().map_err(|e| {
+                        syn::Error::new(e.span(), format!("Expected literal: {}", e))
+                    })?;
+                    syn::Expr::Lit(syn::ExprLit {
+                        attrs: Vec::new(),
+                        lit,
+                    })
+                }
+            } else if is_scroll_lock_flag_attr(&attr_name.to_string()) {
+                Expr::Lit(syn::ExprLit {
                     attrs: Vec::new(),
-                    lit,
+                    lit: syn::Lit::Bool(syn::LitBool::new(true, attr_name.span())),
                 })
+            } else {
+                return Err(syn::Error::new(
+                    attr_name.span(),
+                    format!("Failed at = after attr {}", attr_name),
+                ));
             };
 
             attributes.push((attr_name, attr_value));
@@ -2092,6 +2115,27 @@ fn expand_node(
                     let autoscroll = get_attr("autoscroll")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
+                    let scroll_lock = get_attr("scroll_lock")
+                        .or_else(|| get_attr("scrollLock"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| {
+                            if get_attr("scroll_lock_all").is_some() {
+                                quote! { "all".to_string() }
+                            } else if get_attr("scroll_lock_x").is_some() {
+                                quote! { "x".to_string() }
+                            } else if get_attr("scroll_lock_y").is_some() {
+                                quote! { "y".to_string() }
+                            } else if get_attr("scroll_lock_none").is_some() {
+                                quote! { "none".to_string() }
+                            } else if get_attr("scroll_lock_auto").is_some() {
+                                quote! { "auto".to_string() }
+                            } else {
+                                quote! { "auto".to_string() }
+                            }
+                        });
+                    let animation = get_attr("animation")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
                     let on_end = get_attr("on_drag_end").or_else(|| get_attr("onDragEnd"));
                     let on_start = get_attr("on_drag_start").or_else(|| get_attr("onDragStart"));
                     let on_over = get_attr("on_drag_over").or_else(|| get_attr("onDragOver"));
@@ -2160,6 +2204,8 @@ fn expand_node(
                             __b = __b.delay_ms(#delay_ms);
                             __b = __b.empty_insert(#empty_insert);
                             __b = __b.autoscroll(#autoscroll);
+                            __b = __b.scroll_lock(rui::utils::drag::ScrollLock::parse(&(#scroll_lock)));
+                            __b = __b.animation(#animation);
                             #on_start_ts
                             #on_over_ts
                             #on_move_ts
@@ -4485,6 +4531,20 @@ fn expand_node(
                         .or_else(|| get_attr("handleOnly"))
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
+                    let opacity = get_attr("opacity")
+                        .map(|e| {
+                            quote! { Some(rui::core::tree::IntoOpacity::into_opacity(#e)) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let source_opacity = get_attr("source_opacity")
+                        .or_else(|| get_attr("sourceOpacity"))
+                        .map(|e| {
+                            quote! { Some(rui::core::tree::IntoOpacity::into_opacity(#e)) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
+                    let stack = get_attr("stack")
+                        .map(|e| quote! { rui::utils::drag::DragStack::from(#e) })
+                        .unwrap_or_else(|| quote! { rui::utils::drag::DragStack::Auto });
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -4530,6 +4590,9 @@ fn expand_node(
                                 handle_only: #handle_only,
                                 also_droppable: #also,
                                 accept: #accept,
+                                opacity: #opacity,
+                                source_opacity: #source_opacity,
+                                stack: #stack,
                             },
                             move || #child_el,
                         )
@@ -4560,6 +4623,11 @@ fn expand_node(
                     let disabled = get_attr("disabled")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
+                    let opacity = get_attr("opacity")
+                        .map(|e| {
+                            quote! { Some(rui::core::tree::IntoOpacity::into_opacity(#e)) }
+                        })
+                        .unwrap_or_else(|| quote! { None });
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -4596,6 +4664,7 @@ fn expand_node(
                                 group: #group,
                                 list: #list,
                                 disabled: #disabled,
+                                opacity: #opacity,
                             },
                             move || #child_el,
                         )
@@ -4634,7 +4703,12 @@ fn expand_node(
                     }
                     if let Some(op) = get_attr("opacity") {
                         style_stmts.push(quote! {
-                            __rui_el = __rui_el.opacity(rui::core::tree::IntoF32::into_f32(#op));
+                            __rui_el = __rui_el.opacity(#op);
+                        });
+                    }
+                    if let Some(rot) = get_attr("rotate") {
+                        style_stmts.push(quote! {
+                            __rui_el = __rui_el.rotate(#rot);
                         });
                     }
                     if let Some(bg) = get_attr("bg") {
@@ -4682,10 +4756,10 @@ fn expand_node(
                             })
                         }
                     };
-                    let hide_source_ts = if let Some(v) =
-                        get_attr("hide_source").or_else(|| get_attr("hideSource"))
+                    let source_opacity_ts = if let Some(v) = get_attr("source_opacity")
+                        .or_else(|| get_attr("sourceOpacity"))
                     {
-                        quote! { .hide_source(#v) }
+                        quote! { .source_opacity(#v) }
                     } else {
                         quote! {}
                     };
@@ -4694,7 +4768,7 @@ fn expand_node(
                             rui::utils::drag::drag_overlay()
                                 #child_ts
                                 #style_ts
-                                #hide_source_ts
+                                #source_opacity_ts
                         )
                     };
                 }
@@ -8095,6 +8169,9 @@ fn expand_node(
                             element = quote! { #element.min_h(#value) };
                         }
                     }
+                    "opacity" => {
+                        element = quote! { #element.opacity(#value) };
+                    }
                     "bg" => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;
@@ -9088,6 +9165,14 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn box_opacity_accepts_percent_and_fraction() {
+        let pct = expand(r#"<Box opacity="40%"></Box>"#);
+        assert!(pct.contains("opacity"), "{pct}");
+        let frac = expand(r#"<Box opacity={0.4}></Box>"#);
+        assert!(frac.contains("opacity"), "{frac}");
+    }
+
+    #[test]
     fn empty_drag_overlay_emits_style_without_child_body() {
         let s = expand(
             r#"<DragProvider id="p"><DragOverlay opacity={0.9} class="shadow-lg"></DragOverlay></DragProvider>"#,
@@ -9103,12 +9188,21 @@ mod rsx_lowering_tests {
     }
 
     #[test]
-    fn drag_overlay_hide_source_emits_builder_call() {
+    fn drag_overlay_source_opacity_emits_builder_call() {
         let s = expand(
-            r#"<DragProvider id="p"><DragOverlay hide_source={true}></DragOverlay></DragProvider>"#,
+            r#"<DragProvider id="p"><DragOverlay source_opacity={0}></DragOverlay></DragProvider>"#,
         );
-        assert!(s.contains("hide_source"), "{s}");
-        assert!(s.contains("true"), "{s}");
+        assert!(s.contains("source_opacity"), "{s}");
+        assert!(!s.contains("hide_source"), "{s}");
+    }
+
+    #[test]
+    fn drag_overlay_rotate_emits_style() {
+        let s = expand(
+            r#"<DragProvider id="p"><DragOverlay rotate={45.0}></DragOverlay></DragProvider>"#,
+        );
+        assert!(s.contains("rotate"), "{s}");
+        assert!(s.contains("style"), "{s}");
     }
 
     #[test]
@@ -9131,6 +9225,13 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn draggable_stack_emits_drag_stack() {
+        let s = expand(r#"<Draggable id="a" stack="keep"><Label>"x"</Label></Draggable>"#);
+        assert!(s.contains("DragStack"), "{s}");
+        assert!(s.contains("keep"), "{s}");
+    }
+
+    #[test]
     fn drag_ignore_emits_builder() {
         let s = expand(
             r#"<Draggable id="a"><DragIgnore><Button>"x"</Button></DragIgnore></Draggable>"#,
@@ -9148,6 +9249,32 @@ mod rsx_lowering_tests {
         assert!(s.contains("autoscroll"), "{s}");
         assert!(s.contains("can_drop"), "{s}");
         assert!(s.contains("on_drag_move"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_animation() {
+        let s = expand(r#"<DragProvider id="p" animation={false}></DragProvider>"#);
+        assert!(s.contains("animation"), "{s}");
+        assert!(s.contains("false"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_scroll_lock() {
+        let s = expand(r#"<DragProvider id="p" scroll_lock="all"></DragProvider>"#);
+        assert!(s.contains("scroll_lock"), "{s}");
+        assert!(s.contains("\"all\""), "{s}");
+        let kebab = expand(r#"<DragProvider id="p" scroll-lock="x"></DragProvider>"#);
+        assert!(kebab.contains("scroll_lock"), "{kebab}");
+        assert!(kebab.contains("\"x\""), "{kebab}");
+        let flag = expand(r#"<DragProvider id="p" scroll-lock-y></DragProvider>"#);
+        assert!(flag.contains("scroll_lock"), "{flag}");
+        assert!(flag.contains("\"y\""), "{flag}");
+        let all_flag = expand(r#"<DragProvider id="p" scroll-lock-all></DragProvider>"#);
+        assert!(all_flag.contains("\"all\""), "{all_flag}");
+        let none = expand(r#"<DragProvider id="p" scroll-lock-none></DragProvider>"#);
+        assert!(none.contains("\"none\""), "{none}");
+        let auto = expand(r#"<DragProvider id="p" scroll-lock-auto></DragProvider>"#);
+        assert!(auto.contains("\"auto\""), "{auto}");
     }
 
     #[test]

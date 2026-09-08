@@ -507,6 +507,41 @@ pub(super) fn apply_cursor(
     crate::style::cursor_image::apply_cursor(window, event_loop, cache, value);
 }
 
+/// Hit-test cursor unless a pointer session owns the OS icon.
+///
+/// Drag overlay uses `pointer-events: none`, so `pick_cursor` misses (Default) while
+/// the pointer is over empty chrome. Redraw used to apply that miss every frame,
+/// fighting `Grabbing` on mousemove — Windows shows that as 移动指针 ↔ 默认指针 flicker.
+pub(super) fn session_owned_cursor(
+    hit: Option<CursorValue>,
+    nwse_resize: bool,
+    grabbing: bool,
+) -> Option<CursorValue> {
+    if nwse_resize {
+        Some(CursorKind::NwseResize.into())
+    } else if grabbing {
+        Some(CursorKind::Grabbing.into())
+    } else {
+        hit
+    }
+}
+
+pub(super) fn apply_session_cursor(
+    window: &winit::window::Window,
+    event_loop: Option<&winit::event_loop::ActiveEventLoop>,
+    cache: &mut crate::style::CustomCursorCache,
+    hit: Option<CursorValue>,
+    nwse_resize: bool,
+    grabbing: bool,
+) {
+    apply_cursor(
+        window,
+        event_loop,
+        cache,
+        session_owned_cursor(hit, nwse_resize, grabbing),
+    );
+}
+
 pub(super) fn find_bounds_by_focus_id(
     el: &Element,
     focus_id: &str,
@@ -1664,6 +1699,35 @@ mod hover_occlusion_tests {
         assert!(
             pick_cursor(&root, 94.0, 50.0, [0.0, 0.0]).is_none(),
             "scrollbar Pointer cursor must not leak through claiming underlay"
+        );
+    }
+
+    #[test]
+    fn session_owned_cursor_locks_grabbing_over_hit_miss() {
+        use crate::core::tree::CursorKind;
+        let grab = Some(CursorKind::Grab.into());
+        assert_eq!(
+            session_owned_cursor(None, false, true).map(|c| c.kind),
+            Some(CursorKind::Grabbing),
+            "active drag must not fall back to Default when overlay pointer-events none misses"
+        );
+        assert_eq!(
+            session_owned_cursor(grab.clone(), false, true).map(|c| c.kind),
+            Some(CursorKind::Grabbing),
+            "grabbing session must not flicker back to item grab"
+        );
+        assert!(
+            session_owned_cursor(None, false, false).is_none(),
+            "idle miss still means Default at apply_cursor"
+        );
+        assert_eq!(
+            session_owned_cursor(grab, false, false).map(|c| c.kind),
+            Some(CursorKind::Grab)
+        );
+        assert_eq!(
+            session_owned_cursor(None, true, true).map(|c| c.kind),
+            Some(CursorKind::NwseResize),
+            "textarea resize wins over kit grabbing"
         );
     }
 

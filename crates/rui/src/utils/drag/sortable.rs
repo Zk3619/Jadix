@@ -3,29 +3,32 @@
 //! The kit does **not** mutate the author's `Vec` on drop — fire `on_drag_end`
 //! and apply [`apply_reorder_vec`] / [`apply_transfer`] (same contract as
 //! solid-dnd). Visual shift while dragging is [`sortable_shift`], eased with
-//! [`SORTABLE_FLIP_MS`] (SortableJS `animation`).
+//! [`SORTABLE_FLIP_MS`] when the provider `animation` is on (SortableJS
+//! `animation`; `false` snaps).
 
-use crate::core::tree::Element;
+use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
 use super::builder::{draggable, droppable, DroppableBuilder};
-use super::geometry::Axis;
+use super::geometry::{Axis, DragStack};
 use super::session::DragEvent;
 
 pub use crate::utils::drag_reorder::{
     drag_commit_signal_key, drag_hover_signal_key, drag_insert_index_after_remove,
 };
 
-/// SortableJS `animation` default. Live gap / source-placeholder FLIP.
-/// Session end **snaps** leftover translate so commit layout is not inverted.
+/// SortableJS `animation` default. Live gap / source-placeholder FLIP when the
+/// provider leaves `animation` on. Session end **snaps** leftover translate so
+/// commit layout is not inverted. `animation={false}` skips the tween entirely.
 pub const SORTABLE_FLIP_MS: f32 = 150.0;
 
-/// FLIP-lite translate for siblings **and** the dimmed source placeholder.
+/// FLIP-lite translate for siblings while an item is dragged.
 ///
 /// `from` / `hover` are indices in the **pre-remove** list. The dragged index
-/// rides to the opened hole so a semi-transparent body does not sit in the
-/// original slot and composite over the neighbour that shifted in.
-/// `max_index` clamps an append hover (`len`) onto the last real slot.
+/// stays in its **layout** slot; siblings close the origin and open the insert
+/// hole. Dimmed overlay then paints the source body onto that hole via
+/// [`sortable_source_to_hole`]; source `opacity` 0 leaves the hole empty.
+/// `max_index` is accepted for call-site stability.
 pub fn sortable_shift(
     from: usize,
     hover: usize,
@@ -34,16 +37,11 @@ pub fn sortable_shift(
     axis: Axis,
     max_index: Option<usize>,
 ) -> [f32; 2] {
-    if from == hover {
+    let _ = max_index;
+    if from == hover || index == from {
         return [0.0, 0.0];
     }
-    let dest = match max_index {
-        Some(m) => hover.min(m),
-        None => hover,
-    };
-    let delta = if index == from {
-        (dest as i32 - from as i32) as f32 * item_extent
-    } else if from < hover {
+    let delta = if from < hover {
         if index > from && index <= hover {
             -item_extent
         } else {
@@ -54,6 +52,27 @@ pub fn sortable_shift(
     } else {
         0.0
     };
+    match axis {
+        Axis::X => [delta, 0.0],
+        Axis::Y | Axis::Xy => [0.0, delta],
+    }
+}
+
+/// Paint-space translate that puts the dimmed source onto the opened insert hole.
+///
+/// Siblings already vacated that slot ([`sortable_shift`]). Source `opacity` 0
+/// skips this (hidden at origin). Append (`hover == len`) is one pitch past the
+/// last real index.
+pub fn sortable_source_to_hole(
+    from: usize,
+    hover: usize,
+    item_extent: f32,
+    axis: Axis,
+) -> [f32; 2] {
+    if from == hover {
+        return [0.0, 0.0];
+    }
+    let delta = (hover as i32 - from as i32) as f32 * item_extent;
     match axis {
         Axis::X => [delta, 0.0],
         Axis::Y | Axis::Xy => [0.0, delta],
@@ -184,6 +203,9 @@ pub struct SortableItemBuilder {
     group: String,
     disabled: bool,
     handle_only: bool,
+    rest_opacity: Option<f32>,
+    source_opacity: Option<f32>,
+    stack: DragStack,
 }
 
 pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
@@ -195,6 +217,9 @@ pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
         group: String::new(),
         disabled: false,
         handle_only: false,
+        rest_opacity: None,
+        source_opacity: None,
+        stack: DragStack::Auto,
     }
 }
 
@@ -223,13 +248,28 @@ impl SortableItemBuilder {
         self.handle_only = yes;
         self
     }
+    /// Resting opacity (same as [`crate::core::tree::Element::opacity`]).
+    pub fn opacity(mut self, o: impl IntoOpacity) -> Self {
+        self.rest_opacity = Some(o.into_opacity());
+        self
+    }
+    /// Drag-time source opacity while a `DragOverlay` is open. `0` leaves the hole empty.
+    pub fn source_opacity(mut self, o: impl IntoOpacity) -> Self {
+        self.source_opacity = Some(o.into_opacity());
+        self
+    }
+    /// Same as [`crate::utils::drag::DraggableBuilder::stack`].
+    pub fn stack(mut self, stack: impl Into<DragStack>) -> Self {
+        self.stack = stack.into();
+        self
+    }
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let list = if self.list.is_empty() {
             self.id.clone()
         } else {
             self.list
         };
-        draggable(self.id)
+        let mut b = draggable(self.id)
             .item_type(self.item_type)
             .group(self.group)
             .list(list)
@@ -237,7 +277,14 @@ impl SortableItemBuilder {
             .disabled(self.disabled)
             .handle_only(self.handle_only)
             .also_droppable(true)
-            .child(body)
+            .stack(self.stack);
+        if let Some(o) = self.rest_opacity {
+            b = b.opacity(o);
+        }
+        if let Some(o) = self.source_opacity {
+            b = b.source_opacity(o);
+        }
+        b.child(body)
     }
 }
 
@@ -247,32 +294,38 @@ mod tests {
 
     #[test]
     fn shift_moves_intervening_items() {
-        // Drag 0 toward 2: index 1 and 2 slide up; source rides into the hole.
+        // Drag 0 toward 2: index 1 and 2 slide up; source stays in its slot.
         assert_eq!(sortable_shift(0, 2, 1, 10.0, Axis::Y, None), [0.0, -10.0]);
         assert_eq!(sortable_shift(0, 2, 2, 10.0, Axis::Y, None), [0.0, -10.0]);
-        assert_eq!(sortable_shift(0, 2, 0, 10.0, Axis::Y, None), [0.0, 20.0]);
+        assert_eq!(sortable_shift(0, 2, 0, 10.0, Axis::Y, None), [0.0, 0.0]);
         assert_eq!(sortable_shift(2, 0, 1, 10.0, Axis::Y, None), [0.0, 10.0]);
-        assert_eq!(sortable_shift(2, 0, 2, 10.0, Axis::Y, None), [0.0, -20.0]);
+        assert_eq!(sortable_shift(2, 0, 2, 10.0, Axis::Y, None), [0.0, 0.0]);
     }
 
     #[test]
-    fn source_rides_to_hole_without_overlapping_neighbour() {
+    fn source_slot_does_not_ride_with_siblings() {
         let extent = 10.0;
         let src = sortable_shift(0, 1, 0, extent, Axis::Y, None);
         let next = sortable_shift(0, 1, 1, extent, Axis::Y, None);
-        assert_eq!(src, [0.0, 10.0]);
+        assert_eq!(src, [0.0, 0.0]);
         assert_eq!(next, [0.0, -10.0]);
-        let src_visual = 0.0 + src[1];
-        let next_visual = extent + next[1];
-        assert!(
-            (src_visual - next_visual).abs() >= extent - 0.01,
-            "dimmed source must vacate the origin slot; src={src_visual} next={next_visual}"
+    }
+
+    #[test]
+    fn dimmed_source_translate_lands_on_insert_hole() {
+        assert_eq!(sortable_source_to_hole(0, 2, 10.0, Axis::Y), [0.0, 20.0]);
+        assert_eq!(sortable_source_to_hole(2, 0, 10.0, Axis::Y), [0.0, -20.0]);
+        assert_eq!(sortable_source_to_hole(0, 0, 10.0, Axis::Y), [0.0, 0.0]);
+        assert_eq!(
+            sortable_source_to_hole(0, 4, 10.0, Axis::Y),
+            [0.0, 40.0],
+            "append hover=len is one pitch past last index 3"
         );
     }
 
     #[test]
-    fn append_hover_clamps_source_to_last_slot() {
-        assert_eq!(sortable_shift(0, 4, 0, 10.0, Axis::Y, Some(3)), [0.0, 30.0]);
+    fn append_hover_leaves_source_in_slot() {
+        assert_eq!(sortable_shift(0, 4, 0, 10.0, Axis::Y, Some(3)), [0.0, 0.0]);
     }
 
     #[test]

@@ -55,7 +55,8 @@ impl Default for MotionEpsilon {
 pub enum MotionBootstrap {
     /// reconcile/hoist 后：ensure → snap（退场 seed）。
     SnapAfterEnsure,
-    /// transition 为空：snap → ensure。
+    /// transition 为空：ensure → snap。`snap` 在 `transition` 为空时不建档，
+    /// 先 snap 再 ensure 会让随后写入的目标变成 `from=to=新值` 而跳过动画。
     EnsureAfterSnap,
     /// 仅刷新 transition 配置。
     EnsureOnly,
@@ -168,8 +169,8 @@ pub fn prepare_motion_sync(
             tracker.reset();
         }
         Some(MotionBootstrap::EnsureAfterSnap) => {
-            snap_motion_baseline(el);
             ensure_motion_transitions(&mut el.style, entries);
+            snap_motion_baseline(el);
         }
         Some(MotionBootstrap::EnsureOnly) | None => {
             ensure_motion_transitions(&mut el.style, entries);
@@ -251,5 +252,66 @@ mod tests {
             el.style.translate[0]
         );
         set_css_transition_virtual_timeline(false);
+    }
+
+    fn flip_entry(prop: TransitionProperty) -> TransitionEntry {
+        TransitionEntry {
+            property: prop,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        }
+    }
+
+    fn ensure_after_snap_mid(prop: TransitionProperty) -> f32 {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut el = Element::new();
+        el.style.translate = [0.0, 0.0];
+        let mut tracker = MotionStyle::new();
+        let entries = [flip_entry(prop)];
+        prepare_motion_sync(
+            &mut el,
+            &entries,
+            Some(MotionBootstrap::EnsureAfterSnap),
+            &mut tracker,
+            false,
+        );
+        let target = MotionTransform {
+            translate: [0.0, 40.0],
+            translate_pct: el.style.translate_pct,
+            opacity: 1.0,
+            scale: el.style.scale,
+        };
+        tracker.apply(&mut el.style, target, MotionEpsilon::default());
+        assert!(
+            motion_is_animating(&el.style, &el.transition_snapshot),
+            "{prop:?} EnsureAfterSnap must seed a baseline tween"
+        );
+        let _ = el.tick_css_transitions(0.0);
+        set_css_transition_timeline_ms(50.0);
+        el.style.translate = [0.0, 40.0];
+        let _ = el.tick_css_transitions(0.0);
+        let mid = el.style.translate[1];
+        set_css_transition_virtual_timeline(false);
+        mid
+    }
+
+    #[test]
+    fn ensure_after_snap_transform_tweens_from_old_translate() {
+        let mid = ensure_after_snap_mid(TransitionProperty::Transform);
+        assert!(
+            mid > 8.0 && mid < 36.0,
+            "Transform mid should be between 0 and 40, got {mid}"
+        );
+    }
+
+    #[test]
+    fn ensure_after_snap_translate_tweens_from_old_translate() {
+        let mid = ensure_after_snap_mid(TransitionProperty::Translate);
+        assert!(
+            mid > 8.0 && mid < 36.0,
+            "Translate mid should be between 0 and 40, got {mid}"
+        );
     }
 }

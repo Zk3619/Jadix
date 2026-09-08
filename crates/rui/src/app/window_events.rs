@@ -871,6 +871,24 @@ impl super::App {
         format!("__rui_scroll_hover_{rest}:{a}")
     }
 
+    /// Hover hit-test cursor, locked while resize / list-reorder / drag-kit owns the pointer.
+    fn apply_hover_cursor(
+        &mut self,
+        window: &winit::window::Window,
+        event_loop: Option<&ActiveEventLoop>,
+        hit: Option<crate::core::tree::CursorValue>,
+    ) {
+        super::tree_hit::apply_session_cursor(
+            window,
+            event_loop,
+            &mut self.custom_cursors,
+            hit,
+            self.textarea_resize_drag.is_some(),
+            (self.drag_reorder.is_some() && self.left_button_down)
+                || crate::utils::drag::is_dragging(),
+        );
+    }
+
     pub(super) fn update_mouse_buttons(&mut self, button: MouseButton, state: ElementState) {
         let bit = super::pointer_events::buttons_mask_bit(button);
         match state {
@@ -1146,11 +1164,16 @@ impl super::App {
 
         // Always apply: occluders (modal underlay) return None and must reset to Default,
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
-        super::tree_hit::apply_cursor(
+        // Drag overlay is pointer-events none — lock grabbing so redraw/move cannot flicker
+        // Default ↔ Grabbing (Windows 默认指针 ↔ 移动指针).
+        super::tree_hit::apply_session_cursor(
             &window,
             Some(event_loop),
             &mut self.custom_cursors,
             cursor_pick.clone(),
+            self.textarea_resize_drag.is_some(),
+            (self.drag_reorder.is_some() && self.left_button_down)
+                || crate::utils::drag::is_dragging(),
         );
 
         let drawer_dragging =
@@ -1419,30 +1442,7 @@ impl super::App {
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
         }
-        if self.textarea_resize_drag.is_some() {
-            super::tree_hit::apply_cursor(
-                &window,
-                Some(event_loop),
-                &mut self.custom_cursors,
-                Some(crate::core::tree::CursorKind::NwseResize.into()),
-            );
-        } else if (self.drag_reorder.is_some() && self.left_button_down)
-            || crate::utils::drag::is_active()
-        {
-            super::tree_hit::apply_cursor(
-                &window,
-                Some(event_loop),
-                &mut self.custom_cursors,
-                Some(crate::core::tree::CursorKind::Grabbing.into()),
-            );
-        } else {
-            super::tree_hit::apply_cursor(
-                &window,
-                Some(event_loop),
-                &mut self.custom_cursors,
-                cursor_pick,
-            );
-        }
+        self.apply_hover_cursor(&window, Some(event_loop), cursor_pick);
     }
 
     pub(super) fn handle_cursor_left(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
@@ -1492,7 +1492,7 @@ impl super::App {
         // Always wake a frame: utility-class `:hover` must clear when the pointer leaves
         // the window, even if no scroll-area hover latch was set.
         window.request_redraw();
-        super::tree_hit::apply_cursor(&window, Some(event_loop), &mut self.custom_cursors, None);
+        self.apply_hover_cursor(&window, Some(event_loop), None);
     }
 
     pub(super) fn handle_mouse_input(
@@ -3145,11 +3145,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Never reset the OS cursor from a primary redraw while the pointer lives on
                 // another window — that would wipe secondary I-beam / Pointer mid-hover.
                 if pointer_on_primary {
-                    super::tree_hit::apply_cursor(
+                    super::tree_hit::apply_session_cursor(
                         &window,
                         Some(event_loop),
                         &mut self.custom_cursors,
                         hover_cursor_pick.clone(),
+                        self.textarea_resize_drag.is_some(),
+                        (self.drag_reorder.is_some() && self.left_button_down)
+                            || crate::utils::drag::is_dragging(),
                     );
                 }
 
@@ -3662,11 +3665,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     window.request_redraw();
                 }
                 if pointer_on_primary {
-                    super::tree_hit::apply_cursor(
+                    super::tree_hit::apply_session_cursor(
                         &window,
                         Some(event_loop),
                         &mut self.custom_cursors,
                         hover_cursor_pick,
+                        self.textarea_resize_drag.is_some(),
+                        (self.drag_reorder.is_some() && self.left_button_down)
+                            || crate::utils::drag::is_dragging(),
                     );
                 }
 
