@@ -46,6 +46,8 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         wrap_mode: TextareaWrapMode::Word,
         plain_chrome: false,
         chrome: SlotChrome::default(),
+        #[cfg(feature = "text-undo")]
+        undo: crate::utils::text_edit_history::TextUndoConfig::textarea_default(),
     }
 }
 
@@ -61,6 +63,8 @@ pub struct TextareaBuilder {
     wrap_mode: TextareaWrapMode,
     plain_chrome: bool,
     chrome: SlotChrome,
+    #[cfg(feature = "text-undo")]
+    undo: crate::utils::text_edit_history::TextUndoConfig,
 }
 
 impl TextareaBuilder {
@@ -109,6 +113,30 @@ impl TextareaBuilder {
         self
     }
 
+    #[cfg(feature = "text-undo")]
+    pub fn undo_enabled(mut self, enabled: bool) -> Self {
+        self.undo.enabled = enabled;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn max_undo_entries(mut self, n: usize) -> Self {
+        self.undo.max_entries = n;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn max_undo_memory(mut self, bytes: usize) -> Self {
+        self.undo.max_bytes = bytes;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn typing_merge_timeout_ms(mut self, ms: u64) -> Self {
+        self.undo.typing_merge = std::time::Duration::from_millis(ms);
+        self
+    }
+
     /// 去边框/阴影/焦点环，供 [`crate::components::input_adornment`] 外壳使用。
     pub fn plain_chrome(mut self, v: bool) -> Self {
         self.plain_chrome = v;
@@ -130,6 +158,8 @@ impl From<TextareaBuilder> for Element {
             wrap_mode,
             plain_chrome,
             chrome,
+            #[cfg(feature = "text-undo")]
+            undo,
         } = b;
 
         let field_id = if id.is_empty() {
@@ -167,6 +197,17 @@ impl From<TextareaBuilder> for Element {
             resize_max_h,
             wrap_mode,
             plain_chrome,
+            drop_undo_on_unmount: true,
+            undo: {
+                #[cfg(feature = "text-undo")]
+                {
+                    undo
+                }
+                #[cfg(not(feature = "text-undo"))]
+                {
+                    crate::utils::text_edit_history::TextUndoConfig::textarea_default()
+                }
+            },
         }))
     }
 }
@@ -184,6 +225,10 @@ pub fn Textarea(
     resize_max_h: Option<f32>,
     wrap: Option<String>,
     value: Option<Signal<String>>,
+    undo_enabled: Option<bool>,
+    max_undo_entries: Option<u32>,
+    max_undo_memory: Option<u32>,
+    typing_merge_timeout_ms: Option<u32>,
     children: Option<Element>,
 ) -> Element {
     let _ = children;
@@ -206,6 +251,28 @@ pub fn Textarea(
     if let Some(sig) = value {
         b = b.value_signal(sig);
     }
+    #[cfg(feature = "text-undo")]
+    {
+        if let Some(v) = undo_enabled {
+            b = b.undo_enabled(v);
+        }
+        if let Some(n) = max_undo_entries {
+            b = b.max_undo_entries(n as usize);
+        }
+        if let Some(n) = max_undo_memory {
+            b = b.max_undo_memory(n as usize);
+        }
+        if let Some(ms) = typing_merge_timeout_ms {
+            b = b.typing_merge_timeout_ms(ms as u64);
+        }
+    }
+    #[cfg(not(feature = "text-undo"))]
+    let _ = (
+        undo_enabled,
+        max_undo_entries,
+        max_undo_memory,
+        typing_merge_timeout_ms,
+    );
     b.into()
 }
 

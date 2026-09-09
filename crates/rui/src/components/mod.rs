@@ -49,6 +49,7 @@
 //! - Collapsible: Composite `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent` (macro `collapsible_scope` / `collapsible_content`); Builder [`collapsible`].
 //! - Carousel: `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots (macro `carousel_scope`); Builder [`.slide`](carousel::CarouselBuilder::slide).
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
+//! - CodeEditor: experimental `<CodeEditor>` / [`code_editor`]（L3 `DocumentRegistry`；无 LSP）.
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令；
 //! - Pagination: Data paging navigation (ShadCN). The page stack host is [`crate::app::navigator::navigation_host`].
 //! - Stepper: numbered step indicator (RUI, not an official ShadCN primitive) — `<Stepper>` / `StepperItem` / Indicator / Title / Description (macro `stepper_scope`); Builder [`stepper`].
@@ -75,6 +76,7 @@ pub mod card;
 pub mod carousel;
 pub mod chart;
 pub mod checkbox;
+pub mod code_editor;
 pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
@@ -252,6 +254,7 @@ pub use chart::{
     RadialChartProps, SceneLayer, TooltipIndicator,
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
+pub use code_editor::{code_editor, CodeEditor, CodeEditorBuilder};
 pub use collapsible::{
     collapsible, collapsible_content, collapsible_content_slot, collapsible_scope,
     collapsible_trigger, use_collapsible, Collapsible, CollapsibleBuilder, CollapsibleContent,

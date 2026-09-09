@@ -31,6 +31,8 @@ jobs:
         run: cargo clippy -p rui --all-targets --no-deps --features remote-asset -- -D warnings
       - name: Clippy (image-stream)
         run: cargo clippy -p rui --all-targets --no-deps --features image-stream -- -D warnings
+      - name: Clippy (text-undo)
+        run: cargo clippy -p rui --all-targets --no-deps --features text-undo -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -58,6 +60,10 @@ jobs:
         run: cargo test -p rui --lib anim_freeze -- --nocapture
       - name: Color contract (freeze)
         run: cargo test -p rui --lib color_freeze -- --nocapture
+      - name: Text undo/redo contract (freeze)
+        run: cargo test -p rui --lib text_undo_freeze -- --nocapture
+      - name: Text undo/redo contract (freeze, text-undo)
+        run: cargo test -p rui --lib --features text-undo text_undo_freeze -- --nocapture
 
   offscreen:
     name: offscreen smoke (${{ matrix.os }})
@@ -98,7 +104,13 @@ jobs:
         run: cargo test -p rui --lib anim_freeze -- --nocapture
       - name: Color contract (freeze)
         run: cargo test -p rui --lib color_freeze -- --nocapture
+      - name: Text undo/redo contract (freeze)
+        run: cargo test -p rui --lib text_undo_freeze -- --nocapture
+      - name: Text undo/redo contract (freeze, text-undo)
+        run: cargo test -p rui --lib --features text-undo text_undo_freeze -- --nocapture
       - name: Remote-asset fetcher seam
         run: cargo test -p rui --lib --features remote-asset remote -- --nocapture
       - name: ImageStream YUV (WP-M.3)
         run: cargo test -p rui --lib --features image-stream yuv -- --nocapture
+      - name: Text undo/redo history (text-undo)
+        run: cargo test -p rui --lib --features text-undo text_edit_history document_registry -- --nocapture

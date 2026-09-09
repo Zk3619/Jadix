@@ -41,11 +41,15 @@ fn commit_user_edit(
     new_caret: usize,
     kind: crate::utils::text_edit_history::EditKind,
 ) {
+    #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::will_user_edit_field(rest, kind);
     crate::utils::text_field::commit_value_sig(rest, val_sig, new_value);
     text_sel_sig.set(None);
     caret_sig.set(Some(new_caret));
+    #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::note_field_after_edit(rest);
+    #[cfg(not(feature = "text-undo"))]
+    let _ = kind;
 }
 
 fn is_tab_key(key: &Key) -> bool {
@@ -145,6 +149,7 @@ impl super::App {
                         let (new_val, anchor) =
                             prepare_compose_anchor(&committed, caret_sig.get(), text_sel.get());
                         if new_val != committed {
+                            #[cfg(feature = "text-undo")]
                             crate::utils::text_edit_history::will_user_edit_field(
                                 rest,
                                 crate::utils::text_edit_history::EditKind::Replace,
@@ -152,6 +157,7 @@ impl super::App {
                             crate::utils::text_field::commit_value_sig(rest, val_sig, new_val);
                             text_sel.set(None);
                             caret_sig.set(Some(anchor));
+                            #[cfg(feature = "text-undo")]
                             crate::utils::text_edit_history::note_field_after_edit(rest);
                         }
                         ime_anchor_sig.set(Some(anchor));
@@ -201,6 +207,7 @@ impl super::App {
                         // All filtered by type: still clear preedit, do not change value.
                         anchor
                     } else {
+                        #[cfg(feature = "text-undo")]
                         crate::utils::text_edit_history::will_user_edit_field(
                             rest,
                             crate::utils::text_edit_history::EditKind::Replace,
@@ -208,6 +215,7 @@ impl super::App {
                         let (new, new_caret) = apply_ime_commit(&v, anchor, &filtered);
                         crate::utils::text_field::commit_value_sig(rest, val_sig, new);
                         caret_sig.set(Some(new_caret));
+                        #[cfg(feature = "text-undo")]
                         crate::utils::text_edit_history::note_field_after_edit(rest);
                         new_caret
                     };
@@ -522,6 +530,9 @@ impl super::App {
                         && event.state == ElementState::Pressed
                         && is_undo_shortcut(&event, &self.modifiers)
                     {
+                        // Always consume Ctrl/Cmd+Z so `z` is never inserted — even when
+                        // `text-undo` is off or the stack is empty (same as today with no past).
+                        #[cfg(feature = "text-undo")]
                         if crate::utils::text_edit_history::undo_field(rest) {
                             crate::renderer::restart_caret_blink();
                         }
@@ -536,6 +547,7 @@ impl super::App {
                         && event.state == ElementState::Pressed
                         && is_redo_shortcut(&event, &self.modifiers)
                     {
+                        #[cfg(feature = "text-undo")]
                         if crate::utils::text_edit_history::redo_field(rest) {
                             crate::renderer::restart_caret_blink();
                         }

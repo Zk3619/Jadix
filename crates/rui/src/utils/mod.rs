@@ -3,6 +3,7 @@ pub mod anchored_overlay;
 pub mod block_on;
 pub mod clipboard;
 pub mod controlled;
+pub mod document_registry;
 pub mod drag;
 pub mod drag_reorder;
 pub mod element_pack;
@@ -26,6 +27,7 @@ pub mod popup;
 pub mod presence;
 pub mod roving;
 pub mod table_sort;
+pub mod text_buffer;
 pub mod text_edit_history;
 pub mod text_field;
 pub mod text_node;
@@ -40,6 +42,9 @@ pub mod virtual_masonry;
 
 pub use block_on::block_on;
 pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
+pub use document_registry::{
+    default_document_registry, document_field_id, DocumentHandle, DocumentRegistry,
+};
 pub use element_pack::{
     children_none_if_vacuous, is_text_content_leaf, is_vacuous_element, take_fragment, take_packed,
 };
@@ -92,9 +97,11 @@ pub use popup::{
 };
 pub use presence::{exit_elapsed, exit_elapsed_at, ExitGate, PresencePhase};
 pub use roving::{roving_edge, roving_move};
+pub use text_buffer::{StringBuffer, TextBuffer};
+pub use text_edit_history::{edit_group, EditTransactionGuard, SetTextUndoPolicy, TextUndoConfig};
 pub use text_field::{
     bind_controlled_value, caret_line_and_local, commit_value, commit_value_sig,
-    ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y,
+    commit_value_with_policy, ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y,
     ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit, input_focus_id,
     input_scroll_x_signal_key, input_value_signal_key, pull_controlled_into_store,
     select_all_in_text_edit, text_edit_rest, textarea_default_height, textarea_focus_id,

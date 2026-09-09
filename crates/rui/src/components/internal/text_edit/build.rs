@@ -15,7 +15,9 @@ use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSyn
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
-use crate::utils::text_field::{bind_controlled_value, focus_id_for_text_edit};
+use crate::utils::text_field::{
+    attach_text_edit_field_lifecycle, bind_controlled_value, focus_id_for_text_edit,
+};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 pub(crate) struct TextEditBuildParams {
     pub field_id: String,
@@ -47,6 +49,10 @@ pub(crate) struct TextEditBuildParams {
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
     /// Command / InputAdornment 内嵌控件：无边框/阴影/焦点环（外壳提供 chrome）。
     pub plain_chrome: bool,
+    pub undo: crate::utils::text_edit_history::TextUndoConfig,
+    /// L1 Input/Textarea: drop undo on unmount. L3 CodeEditor: `false` (session lives in
+    /// [`crate::utils::document_registry::DocumentRegistry`] until `unregister`).
+    pub drop_undo_on_unmount: bool,
 }
 pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let TextEditBuildParams {
@@ -72,7 +78,18 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resize_max_h,
         wrap_mode,
         plain_chrome,
+        undo,
+        drop_undo_on_unmount,
     } = params;
+
+    if input_type.is_password() {
+        crate::utils::text_edit_history::install_field_config(
+            &field_id,
+            crate::utils::text_edit_history::TextUndoConfig::password_default(),
+        );
+    } else {
+        crate::utils::text_edit_history::install_field_config(&field_id, undo);
+    }
 
     if let Some(sig) = value {
         bind_controlled_value(&field_id, sig);
@@ -501,6 +518,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 if disabled_clear {
                     return;
                 }
+                #[cfg(feature = "text-undo")]
                 crate::utils::text_edit_history::will_user_edit_field(
                     &id_clear,
                     crate::utils::text_edit_history::EditKind::Replace,
@@ -517,6 +535,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 })
                 .set(None);
                 use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>).set(None);
+                #[cfg(feature = "text-undo")]
                 crate::utils::text_edit_history::note_field_after_edit(&id_clear);
                 // Drop system candidate / composition — clearing value alone leaves TIP UI up.
                 crate::app::ime_support::cancel_os_ime_composition();
@@ -626,7 +645,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             }
         })
         .into();
-    out.template_id = Some(field_id);
+    out.template_id = Some(field_id.clone());
     out.input_paint_sync = Some(sync);
     out.attrs
         .insert("accesskit_role".to_string(), "textinput".to_string());
@@ -639,5 +658,5 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             out.set_attr("data-invalid", "true");
         }
     }
-    out
+    attach_text_edit_field_lifecycle(out, &field_id, drop_undo_on_unmount)
 }

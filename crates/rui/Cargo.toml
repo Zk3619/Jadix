@@ -82,6 +82,13 @@ devtools = []
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
 remote-asset = []
+# Input/Textarea undo+redo history. Off by default (lean crate). Gallery enables it.
+# See docs/plans/text_undo_redo.md. Workspace feature unification: do not enable
+# from calculator / gpu_probe; package-specific `cargo test -p rui --lib` stays off.
+text-undo = []
+# P3 measured String vs ropey (ignored test `text_buffer_mid_insert` + text_undo_redo.md §9.3).
+# Not enabled: L1/L2 stay on StringBuffer. Do not uncomment without new L3 numbers.
+# text-undo-rope = ["text-undo", "dep:ropey"]
 
 [dependencies]
 winit = { workspace = true }
@@ -136,6 +143,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+# Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
+ropey = "1.6"
 
 [[bench]]
 name = "layout_baseline"

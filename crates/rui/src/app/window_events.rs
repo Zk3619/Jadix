@@ -123,6 +123,7 @@ pub(super) fn apply_input_drag_release(rest: &str) {
             let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
             let s = val_sig.get();
             if let Some((next, caret)) = crate::utils::text_sel_move::apply_move(&s, sel, drop) {
+                #[cfg(feature = "text-undo")]
                 crate::utils::text_edit_history::will_user_edit_field(
                     rest,
                     crate::utils::text_edit_history::EditKind::Replace,
@@ -132,6 +133,7 @@ pub(super) fn apply_input_drag_release(rest: &str) {
                 let sk = crate::components::input::input_selection_signal_key(rest);
                 crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+                #[cfg(feature = "text-undo")]
                 crate::utils::text_edit_history::note_field_after_edit(rest);
                 crate::renderer::restart_caret_blink();
             }

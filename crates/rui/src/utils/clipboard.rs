@@ -106,3 +106,49 @@ pub fn is_redo_shortcut(event: &KeyEvent, modifiers: &ModifiersState) -> bool {
         _ => false,
     }
 }
+
+/// Letter chords that `input_controller` swallows instead of inserting `z`/`y`.
+/// Independent of the `text-undo` feature (empty stack and feature-off still consume).
+pub(crate) fn consumes_undo_redo_letter(letter: Option<char>, modifiers: &ModifiersState) -> bool {
+    if !shortcut_modifiers(modifiers) {
+        return false;
+    }
+    match letter {
+        Some('z') => true,
+        Some('y') => !modifiers.shift_key(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host_edit_mods() -> ModifiersState {
+        if cfg!(target_os = "macos") {
+            ModifiersState::SUPER
+        } else {
+            ModifiersState::CONTROL
+        }
+    }
+
+    #[test]
+    fn ctrl_or_cmd_z_y_are_consumed_not_typed() {
+        let mods = host_edit_mods();
+        assert!(consumes_undo_redo_letter(Some('z'), &mods));
+        assert!(consumes_undo_redo_letter(Some('y'), &mods));
+        assert!(consumes_undo_redo_letter(
+            Some('z'),
+            &(mods | ModifiersState::SHIFT)
+        ));
+        assert!(!consumes_undo_redo_letter(
+            Some('z'),
+            &ModifiersState::empty()
+        ));
+        assert!(!consumes_undo_redo_letter(Some('a'), &mods));
+        assert!(!consumes_undo_redo_letter(
+            Some('y'),
+            &(mods | ModifiersState::SHIFT)
+        ));
+    }
+}

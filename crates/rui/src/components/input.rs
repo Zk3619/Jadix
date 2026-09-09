@@ -360,6 +360,7 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     if text == raw {
         return;
     }
+    #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::will_user_edit_field(
         field_id,
         crate::utils::text_edit_history::EditKind::Step,
@@ -376,6 +377,7 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     .set(None);
     use_signal(&input_ime_anchor_signal_key(field_id), || None::<usize>).set(None);
     use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(text.len()));
+    #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::note_field_after_edit(field_id);
 }
 
@@ -543,6 +545,8 @@ pub struct InputBuilder {
     /// 内嵌于 InputAdornment / Command：无自身边框与焦点环。
     plain_chrome: bool,
     chrome: SlotChrome,
+    #[cfg(feature = "text-undo")]
+    undo: crate::utils::text_edit_history::TextUndoConfig,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -562,6 +566,10 @@ pub fn Input(
     value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
+    undo_enabled: Option<bool>,
+    max_undo_entries: Option<u32>,
+    max_undo_memory: Option<u32>,
+    typing_merge_timeout_ms: Option<u32>,
     mut on_click: crate::core::tree::Handler,
     mut on_key_down: crate::core::tree::KeyHandler,
     children: Option<Element>,
@@ -588,6 +596,28 @@ pub fn Input(
     if let Some(sig) = value {
         builder = builder.value_signal(sig);
     }
+    #[cfg(feature = "text-undo")]
+    {
+        if let Some(v) = undo_enabled {
+            builder = builder.undo_enabled(v);
+        }
+        if let Some(n) = max_undo_entries {
+            builder = builder.max_undo_entries(n as usize);
+        }
+        if let Some(n) = max_undo_memory {
+            builder = builder.max_undo_memory(n as usize);
+        }
+        if let Some(ms) = typing_merge_timeout_ms {
+            builder = builder.typing_merge_timeout_ms(ms as u64);
+        }
+    }
+    #[cfg(not(feature = "text-undo"))]
+    let _ = (
+        undo_enabled,
+        max_undo_entries,
+        max_undo_memory,
+        typing_merge_timeout_ms,
+    );
 
     if let Some(c) = children {
         builder = builder.child(c);
@@ -648,6 +678,8 @@ pub fn input(id: &str) -> InputBuilder {
         text_align: crate::style::TextAlign::Start,
         plain_chrome: false,
         chrome: SlotChrome::default(),
+        #[cfg(feature = "text-undo")]
+        undo: crate::utils::text_edit_history::TextUndoConfig::input_default(),
     }
 }
 
@@ -745,6 +777,30 @@ impl InputBuilder {
     /// Controlled value: see [`crate::utils::text_field::bind_controlled_value`].
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn undo_enabled(mut self, enabled: bool) -> Self {
+        self.undo.enabled = enabled;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn max_undo_entries(mut self, n: usize) -> Self {
+        self.undo.max_entries = n;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn max_undo_memory(mut self, bytes: usize) -> Self {
+        self.undo.max_bytes = bytes;
+        self
+    }
+
+    #[cfg(feature = "text-undo")]
+    pub fn typing_merge_timeout_ms(mut self, ms: u64) -> Self {
+        self.undo.typing_merge = std::time::Duration::from_millis(ms);
         self
     }
     /// CSS `text-align` (like `"center"` / `"start"` / `"justify"`).
@@ -973,6 +1029,17 @@ impl From<InputBuilder> for Element {
             resize_max_h: 0.0,
             wrap_mode: crate::utils::text_field::TextareaWrapMode::Word,
             plain_chrome: builder.plain_chrome,
+            drop_undo_on_unmount: true,
+            undo: {
+                #[cfg(feature = "text-undo")]
+                {
+                    builder.undo
+                }
+                #[cfg(not(feature = "text-undo"))]
+                {
+                    crate::utils::text_edit_history::TextUndoConfig::input_default()
+                }
+            },
         }))
     }
 }

@@ -9,6 +9,7 @@ rui = { path = "../../crates/rui", default-features = false, features = [
     "bundled-lucide",
     "lucide-animated",
     "svg",
+    "text-undo",
 ] }
 log = { workspace = true }
 

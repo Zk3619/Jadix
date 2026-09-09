@@ -579,6 +579,8 @@ pub(crate) fn input_number_dec_template_id(id: &str) -> String {
 }
 
 thread_local! {
+    /// Controlled pairing (field_id → external Signal). Same leak class as the old undo
+    /// `HISTORIES` map; `attach_text_edit_field_lifecycle` unbinds on Element unmount.
     static CONTROLLED_VALUES: RefCell<HashMap<String, Signal<String>>> =
         RefCell::new(HashMap::new());
     /// True while an input/textarea text drag-select is active. Paint must not run
@@ -619,6 +621,60 @@ pub fn unbind_controlled_value(field_id: &str) {
     });
 }
 
+/// Attach a stable unmount hook (reconcile copies it when the new tree omits one).
+///
+/// Frees the controlled-value TLS pair. Undo history is dropped when `drop_undo` is true
+/// (L1 Input/Textarea). L3 document sessions pass `false` and release via
+/// [`crate::utils::document_registry::DocumentRegistry::unregister`].
+/// The live flag is a named signal so rebuilds of the same `field_id` do not install a
+/// second hook that would fire on the old node's Drop.
+pub(crate) fn attach_text_edit_field_lifecycle(
+    el: crate::core::tree::Element,
+    field_id: &str,
+    drop_undo: bool,
+) -> crate::core::tree::Element {
+    let live_key = format!("__rui_input_lifecycle_hook_{field_id}");
+    let live = use_signal(&live_key, || false);
+    if live.peek() {
+        return el;
+    }
+    live.set(true);
+    let fid = field_id.to_string();
+    el.on_unmount(move || {
+        if drop_undo {
+            crate::utils::text_edit_history::reset(&fid);
+        }
+        unbind_controlled_value(&fid);
+        crate::core::reactivity::remove_named_signal(&live_key);
+    })
+}
+
+/// Drop value / caret / undo named slots for a field (L3 close-tab).
+pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
+    crate::utils::text_edit_history::reset(field_id);
+    unbind_controlled_value(field_id);
+    let keys = [
+        input_value_signal_key(field_id),
+        input_preedit_signal_key(field_id),
+        input_preedit_sel_signal_key(field_id),
+        input_caret_signal_key(field_id),
+        input_selection_signal_key(field_id),
+        input_overwrite_signal_key(field_id),
+        input_ime_anchor_signal_key(field_id),
+        input_type_signal_key(field_id),
+        input_password_reveal_signal_key(field_id),
+        input_scroll_x_signal_key(field_id),
+        input_caret_preferred_x_signal_key(field_id),
+        textarea_height_signal_key(field_id),
+        textarea_wrap_width_signal_key(field_id),
+        textarea_wrap_mode_signal_key(field_id),
+        format!("__rui_input_lifecycle_hook_{field_id}"),
+    ];
+    for key in keys {
+        crate::core::reactivity::remove_named_signal(&key);
+    }
+}
+
 fn mirror_store_to_controlled(field_id: &str, value: &str) {
     let Some(ext) = controlled_of(field_id) else {
         return;
@@ -631,21 +687,64 @@ fn mirror_store_to_controlled(field_id: &str, value: &str) {
 
 /// 写入值 store 并同步受控 Signal（供 `input_controller` / 程序化赋值）。
 pub fn commit_value(field_id: &str, value: String) {
+    commit_value_with_policy(
+        field_id,
+        value,
+        crate::utils::text_edit_history::SetTextUndoPolicy::NotUndoable,
+    );
+}
+
+/// Programmatic write with an explicit undo policy (P1).
+pub fn commit_value_with_policy(
+    field_id: &str,
+    value: String,
+    policy: crate::utils::text_edit_history::SetTextUndoPolicy,
+) {
     let store = use_signal(&input_value_signal_key(field_id), String::new);
-    if store.peek() != value {
-        store.set(value.clone());
-    } else {
-        // Value unchanged in store; still push to controlled if it lagged.
-    }
-    mirror_store_to_controlled(field_id, &value);
+    commit_value_sig_with_policy(field_id, store, value, policy);
 }
 
 /// 已持有 store [`Signal`] 时写入并同步受控端。
 pub fn commit_value_sig(field_id: &str, store: Signal<String>, value: String) {
-    if store.peek() != value {
-        store.set(value.clone());
+    commit_value_sig_with_policy(
+        field_id,
+        store,
+        value,
+        crate::utils::text_edit_history::SetTextUndoPolicy::NotUndoable,
+    );
+}
+
+fn commit_value_sig_with_policy(
+    field_id: &str,
+    store: Signal<String>,
+    value: String,
+    policy: crate::utils::text_edit_history::SetTextUndoPolicy,
+) {
+    #[cfg(feature = "text-undo")]
+    {
+        use crate::utils::text_edit_history::{self, SetTextUndoPolicy};
+        if matches!(policy, SetTextUndoPolicy::Undoable) {
+            text_edit_history::will_user_edit_field(field_id, text_edit_history::EditKind::Replace);
+        }
     }
-    mirror_store_to_controlled(field_id, &value);
+    crate::utils::text_edit_history::with_internal_sync(field_id, || {
+        if store.peek() != value {
+            store.set(value.clone());
+        }
+        mirror_store_to_controlled(field_id, &value);
+    });
+    #[cfg(feature = "text-undo")]
+    {
+        use crate::utils::text_edit_history::{self, SetTextUndoPolicy};
+        if matches!(policy, SetTextUndoPolicy::Undoable) {
+            text_edit_history::note_field_after_edit(field_id);
+        }
+        if matches!(policy, SetTextUndoPolicy::ClearHistory) {
+            text_edit_history::reset(field_id);
+        }
+    }
+    #[cfg(not(feature = "text-undo"))]
+    let _ = policy;
 }
 
 /// Paint 路径专用：失焦时把外部值 **silent** 拉进 store；焦点内不写外部（由 [`commit_value`] 负责）。
@@ -664,8 +763,10 @@ pub fn pull_controlled_into_store(
     if ev == store_value {
         return None;
     }
-    let store = use_signal(&input_value_signal_key(field_id), String::new);
-    store.set_silent(ev.clone());
+    crate::utils::text_edit_history::with_internal_sync(field_id, || {
+        let store = use_signal(&input_value_signal_key(field_id), String::new);
+        store.set_silent(ev.clone());
+    });
     Some(ev)
 }
 

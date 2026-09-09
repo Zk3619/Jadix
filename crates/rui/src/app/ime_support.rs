@@ -237,12 +237,14 @@ pub(crate) fn finish_composition_preserve_text(focus_id: &str) {
         anchor = anchor.min(v.len());
         anchor = v.floor_char_boundary(anchor);
         let (new, new_caret) = apply_ime_commit(&v, anchor, &insert);
+        #[cfg(feature = "text-undo")]
         crate::utils::text_edit_history::will_user_edit_field(
             rest,
             crate::utils::text_edit_history::EditKind::Replace,
         );
         crate::utils::text_field::commit_value_sig(rest, val_sig, new);
         crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
+        #[cfg(feature = "text-undo")]
         crate::utils::text_edit_history::note_field_after_edit(rest);
         record_ime_commit(rest, &insert);
     }

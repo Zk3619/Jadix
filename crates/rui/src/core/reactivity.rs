@@ -1350,6 +1350,13 @@ pub fn clear_effects() {
     });
 }
 
+/// `true` if a named slot is currently bound (does **not** create one).
+pub fn named_signal_exists(id_str: &str) -> bool {
+    RUNTIME
+        .try_with(|rt_rc| rt_rc.borrow().named_signals.borrow().contains_key(id_str))
+        .unwrap_or(false)
+}
+
 /// Remove a named signal binding and drop its value storage (e.g. Navigator Host 卸载).
 pub fn remove_named_signal(id_str: &str) {
     let _ = RUNTIME.try_with(|rt_rc| {
