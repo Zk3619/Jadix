@@ -74,6 +74,11 @@ fn keyed_reconcile_reorder_does_not_structure_change() {
 
     let status = reconcile_elements(&mut new_root, &mut old_root);
     assert_ne!(status, LayoutStatus::StructureChanged);
+    assert_eq!(
+        status,
+        LayoutStatus::LayoutChanged,
+        "same keys in a new order must dirty flex pack (fast layout never StructureChanged)"
+    );
 }
 
 #[test]
@@ -137,6 +142,7 @@ fn keyed_reconcile_three_item_reorder_is_not_structure_changed() {
 
     let status = reconcile_elements(&mut new_root, &mut old_root);
     assert_ne!(status, LayoutStatus::StructureChanged);
+    assert_eq!(status, LayoutStatus::LayoutChanged);
     assert_eq!(new_root.children[0].text.as_deref(), Some("c"));
     assert_eq!(new_root.children[2].text.as_deref(), Some("b"));
 }
@@ -280,6 +286,65 @@ fn for_reactive_list_does_not_subscribe_parent_effect() {
 
     drop(mounted.borrow_mut().take());
     dispose_effect(root);
+    reset_registered_anchors();
+}
+
+#[test]
+fn for_reactive_keyed_reorder_updates_live_child_order() {
+    use crate::app::reactive::drain_deferred_view_remounts;
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::{create_root, isolate_reads, Signal};
+
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+    let items = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (_owner, _) = create_root({
+        let live = Rc::clone(&live);
+        move || {
+            create_effect(move || {
+                *live.borrow_mut() = isolate_reads(|| {
+                    for_reactive("fk-reorder", move || {
+                        let cur = items.get();
+                        for_keyed(
+                            "fk-reorder:items",
+                            &cur,
+                            |s: &String| s.clone(),
+                            |s| {
+                                let mut e = Element::new();
+                                e.text = Some(s.clone());
+                                e
+                            },
+                        )
+                    })
+                });
+            });
+        }
+    });
+    drain_deferred_view_remounts();
+
+    let texts = |el: &Element| {
+        el.children
+            .iter()
+            .filter_map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        texts(&live.borrow()),
+        vec!["Alpha".to_string(), "Beta".to_string()],
+        "precondition: keyed mount order"
+    );
+
+    items.set(vec!["Beta".to_string(), "Alpha".to_string()]);
+    drain_deferred_view_remounts();
+    assert_eq!(
+        texts(&live.borrow()),
+        vec!["Beta".to_string(), "Alpha".to_string()],
+        "for_keyed rebuild must reorder live children, not keep Alpha/Beta"
+    );
+
+    clear_test_reconcile_root();
     reset_registered_anchors();
 }
 

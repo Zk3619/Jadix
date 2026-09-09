@@ -7,6 +7,7 @@ mod css_filter_overflow;
 mod dialog_first_open_cost;
 mod gallery_inset_overflow;
 mod headless_smoke;
+mod keyed_reorder;
 mod local_scrim_contrast;
 
 mod message_scroller_scroll;

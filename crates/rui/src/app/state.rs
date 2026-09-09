@@ -1484,7 +1484,7 @@ impl AppState {
         if new_all_keyed && old_all_keyed {
             status = Self::merge_layout_status(
                 status,
-                Self::reconcile_keyed_children(new_el, old_el, stack, old_keepalive),
+                Self::reconcile_keyed_children(new_el, old_el, stack, old_keepalive, dirty),
             );
         } else if new_el.children.len() == old_el.children.len() {
             let n = new_el.children.len();
@@ -1663,8 +1663,20 @@ impl AppState {
         old_el: &mut Element,
         stack: &mut Vec<(*mut Element, *mut Element)>,
         old_keepalive: &mut Vec<Box<Element>>,
+        dirty: &mut Vec<taffy::prelude::NodeId>,
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
+
+        let old_ids: Vec<String> = old_el
+            .children
+            .iter()
+            .filter_map(|c| c.template_id.clone())
+            .collect();
+        let new_ids: Vec<String> = new_el
+            .children
+            .iter()
+            .filter_map(|c| c.template_id.clone())
+            .collect();
 
         let mut status = LayoutStatus::Clean;
         let mut old_by_id: std::collections::HashMap<String, Element> =
@@ -1695,6 +1707,15 @@ impl AppState {
 
         if !old_by_id.is_empty() {
             status = LayoutStatus::StructureChanged;
+        } else if status == LayoutStatus::Clean && old_ids != new_ids {
+            // Same keys, new order: keep the Taffy nodes (not StructureChanged) but the
+            // flex pack must follow `element.children`. Clean would skip `set_children`
+            // on the fast layout path and paint the old rows (Gallery Inbox: 松手后
+            // Alpha/Beta 仍按旧 layout_bounds).
+            status = LayoutStatus::LayoutChanged;
+            if let Some(n) = new_el.layout_node {
+                dirty.push(n);
+            }
         }
         new_el.children = next_children;
         for i in (0..new_el.children.len()).rev() {

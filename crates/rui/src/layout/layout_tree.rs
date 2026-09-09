@@ -2735,6 +2735,34 @@ impl LayoutTree {
         }
     }
 
+    /// Keep Taffy child order in lockstep with `element.children`.
+    ///
+    /// Keyed list reorder reuses the same nodes (`LayoutChanged`, not
+    /// `StructureChanged`). [`Self::build_and_layout_fast_ex`] never rebuilds the
+    /// Taffy tree, so without this walk `compute_layout` packs the previous order.
+    pub(crate) fn sync_taffy_children_from_elements(&mut self, root: &Element) {
+        let mut stack = vec![root];
+        while let Some(el) = stack.pop() {
+            if let Some(nid) = el.layout_node {
+                if self.total_nodes.contains(&nid) {
+                    let child_nodes: Vec<NodeId> =
+                        el.children.iter().filter_map(|c| c.layout_node).collect();
+                    let kids_changed = self
+                        .taffy
+                        .children(nid)
+                        .ok()
+                        .map_or(true, |old| old.as_slice() != child_nodes.as_slice());
+                    if kids_changed {
+                        let _ = self.taffy.set_children(nid, &child_nodes);
+                    }
+                }
+            }
+            for c in el.children.iter().rev() {
+                stack.push(c);
+            }
+        }
+    }
+
     pub fn update_taffy_node_style(&mut self, element: &Element) {
         if let Some(node_id) = element.layout_node {
             let style = element.style.to_taffy_style_with_parent(
@@ -2964,6 +2992,14 @@ impl LayoutTree {
             self.update_taffy_node_style(root);
         }
         let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
+
+        // Full rebuild walks `build_taffy_node_mut` and `set_children` when the
+        // element child order changes. The fast path only `compute_layout`s the
+        // existing Taffy tree — keyed reorder is LayoutChanged, not
+        // StructureChanged, so without this sync flex items keep their old slots.
+        if !scroll_only {
+            self.sync_taffy_children_from_elements(root);
+        }
 
         let taffy_compute_ms = if !scroll_only {
             let (compute_node, available_space) = if let Some(sub) = subtree_root {
