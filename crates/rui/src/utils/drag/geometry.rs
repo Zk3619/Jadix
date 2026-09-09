@@ -287,7 +287,11 @@ impl Rect {
         }
         let inter = w * h;
         let union = self.area() + other.area() - inter;
-        if union <= 1e-6 { 0.0 } else { inter / union }
+        if union <= 1e-6 {
+            0.0
+        } else {
+            inter / union
+        }
     }
 
     pub fn is_usable(self) -> bool {

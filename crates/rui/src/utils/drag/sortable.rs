@@ -9,7 +9,7 @@
 use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
-use super::builder::{DroppableBuilder, draggable, droppable};
+use super::builder::{draggable, droppable, DroppableBuilder};
 use super::geometry::{Axis, DragStack, Restrict};
 use super::session::DragEvent;
 
@@ -201,6 +201,7 @@ pub struct SortableItemBuilder {
     index: usize,
     item_type: String,
     group: String,
+    accept: String,
     disabled: bool,
     handle_only: bool,
     rest_opacity: Option<f32>,
@@ -216,6 +217,7 @@ pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
         index: 0,
         item_type: String::new(),
         group: String::new(),
+        accept: String::new(),
         disabled: false,
         handle_only: false,
         rest_opacity: None,
@@ -240,6 +242,12 @@ impl SortableItemBuilder {
     }
     pub fn group(mut self, group: impl Into<String>) -> Self {
         self.group = group.into();
+        self
+    }
+    /// Drop filter for this row when it is also a droppable (`also_droppable`).
+    /// Empty + a non-empty [`Self::item_type`] defaults to same-type only.
+    pub fn accept(mut self, accept: impl Into<String>) -> Self {
+        self.accept = accept.into();
         self
     }
     pub fn disabled(mut self, yes: bool) -> Self {
@@ -279,6 +287,7 @@ impl SortableItemBuilder {
         let mut b = draggable(self.id)
             .item_type(self.item_type)
             .group(self.group)
+            .accept(self.accept)
             .list(list)
             .index(self.index)
             .disabled(self.disabled)

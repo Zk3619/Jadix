@@ -8,14 +8,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use crate::core::reactivity::{Signal, batch};
+use crate::core::reactivity::{batch, Signal};
 use crate::core::tree::Element;
 
 use super::autoscroll::AutoScroll;
-use super::collision::{Candidate, CollisionAlg, detect};
+use super::collision::{detect, Candidate, CollisionAlg};
 use super::geometry::{Axis, Rect, Restrict, SnapGrid};
 use super::modifier::{
-    DragDelta, DragModifier, DragModifierCtx, apply_modifiers, builtin_modifiers,
+    apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
@@ -90,6 +90,16 @@ impl DragHit {
             if !ok {
                 return false;
             }
+        } else if !self.item_type.is_empty()
+            && !dragged.item_type.is_empty()
+            && self.item_type != dragged.item_type
+        {
+            // Empty accept used to mean "anything". Nested SortableItem rows
+            // (file chips inside a folder card) then accepted a parent-folder
+            // drag, so hover_list jumped into the inner list and FLIP shoved
+            // files into the outer column. Same-type default matches the
+            // author's item_type without forcing every chip to set accept=.
+            return false;
         }
         if !self.group.is_empty() && !dragged.group.is_empty() && self.group != dragged.group {
             return false;
@@ -243,8 +253,7 @@ fn remember_parent_bounds(scope: &str, id: &str, bounds: [f32; 4]) {
         return;
     }
     PARENT_BOUNDS.with(|m| {
-        m.borrow_mut()
-            .insert(item_bounds_key(scope, id), bounds);
+        m.borrow_mut().insert(item_bounds_key(scope, id), bounds);
     });
 }
 
@@ -530,12 +539,7 @@ fn ghost_origin(
         viewport,
         axis: sess.axis,
         snap: sess.snap,
-        restrict: resolve_live_restrict(
-            &sess.restrict,
-            &sess.scope_id,
-            &sess.draggable_id,
-            hits,
-        ),
+        restrict: resolve_live_restrict(&sess.restrict, &sess.scope_id, &sess.draggable_id, hits),
         live_slot: live_source_slot(sess, hits),
     };
     let mut pipeline = builtin_modifiers();
@@ -590,15 +594,10 @@ fn moving_item_rect(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) -> R
     let mut width = src.rect.width.max(1.0);
     let mut height = src.rect.height.max(1.0);
     if let Some(list) = sess.from_list.as_deref() {
-        let stride = slot_stride_along_axis(
-            hits,
-            list,
-            sess.axis,
-            match sess.axis {
-                Axis::X => width,
-                Axis::Y | Axis::Xy => height,
-            },
-        );
+        let stride = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, match sess.axis {
+            Axis::X => width,
+            Axis::Y | Axis::Xy => height,
+        });
         match sess.axis {
             Axis::X => width = width.min(stride).max(1.0),
             Axis::Y | Axis::Xy => height = height.min(stride).max(1.0),
@@ -768,7 +767,7 @@ fn list_indexed_content_end(hits: &[DragHit], list_id: &str, axis: Axis) -> Opti
         Axis::Y | Axis::Xy => last.rect.height,
     }
     .max(1.0);
-    let pitch = slot_stride_along_axis(hits, list_id, axis, fallback);
+    let pitch = slot_extent_along_axis(hits, list_id, last.index, axis, fallback);
     Some(axis_origin(last.rect, axis) + pitch)
 }
 
@@ -973,7 +972,7 @@ fn pin_hover_below_opened_hole(
         Axis::X => sess.start_bounds[2].max(1.0),
         Axis::Y | Axis::Xy => sess.start_bounds[3].max(1.0),
     };
-    let pitch = slot_stride_along_axis(hits, list_id, sess.axis, fallback);
+    let pitch = slot_extent_along_axis(hits, list_id, sess.from_index, sess.axis, fallback);
     let Some(hole_pt) = insert_hole_origin(hits, list_id, Some(prev), sess.axis, pitch) else {
         return computed;
     };
@@ -985,7 +984,11 @@ fn pin_hover_below_opened_hole(
         Axis::X => hole_pt[0],
         Axis::Y | Axis::Xy => hole_pt[1],
     };
-    if p < hole + pitch { prev } else { computed }
+    if p < hole + pitch {
+        prev
+    } else {
+        computed
+    }
 }
 
 fn source_layout_contains(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
@@ -997,8 +1000,8 @@ fn source_layout_contains(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2
             Axis::Y | Axis::Xy => rect.height,
         }
         .max(1.0);
-        let stride = slot_stride_along_axis(hits, list, sess.axis, layout_extent);
-        let extent = if layout_extent > stride * 1.5 {
+        let stride = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, layout_extent);
+        let extent = if layout_extent > stride * STRETCH_RATIO {
             stride
         } else {
             layout_extent
@@ -1016,18 +1019,19 @@ fn capped_drag_extent(sess: &DragSession, hits: &[DragHit]) -> [f32; 2] {
     let mut w = sess.start_bounds[2].max(1.0);
     let mut h = sess.start_bounds[3].max(1.0);
     if let Some(list) = sess.from_list.as_deref() {
-        let stride = slot_stride_along_axis(
-            hits,
-            list,
-            sess.axis,
-            match sess.axis {
-                Axis::X => w,
-                Axis::Y | Axis::Xy => h,
-            },
-        );
+        let layout = match sess.axis {
+            Axis::X => w,
+            Axis::Y | Axis::Xy => h,
+        };
+        let slot = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, layout);
+        let v = if layout > slot * STRETCH_RATIO {
+            slot
+        } else {
+            layout
+        };
         match sess.axis {
-            Axis::X => w = w.min(stride).max(1.0),
-            Axis::Y | Axis::Xy => h = h.min(stride).max(1.0),
+            Axis::X => w = v.max(1.0),
+            Axis::Y | Axis::Xy => h = v.max(1.0),
         }
     }
     [w, h]
@@ -1305,29 +1309,29 @@ fn cap_stretched_indexed_rects(hits: &mut Vec<DragHit>) {
             continue;
         }
         idxs.sort_by_key(|i| hits[*i].index.unwrap_or(0));
-        for w in 0..idxs.len() - 1 {
-            let i0 = idxs[w];
-            let i1 = idxs[w + 1];
-            let stride_y = (hits[i1].rect.y - hits[i0].rect.y).abs();
-            if stride_y >= MIN_SLOT_PITCH {
-                hits[i0].rect.height = stride_y;
-            }
-            let stride_x = (hits[i1].rect.x - hits[i0].rect.x).abs();
-            if stride_x >= MIN_SLOT_PITCH {
-                hits[i0].rect.width = stride_x;
-            }
+    for w in 0..idxs.len() - 1 {
+        let i0 = idxs[w];
+        let i1 = idxs[w + 1];
+        let stride_y = (hits[i1].rect.y - hits[i0].rect.y).abs();
+        if stride_y >= MIN_SLOT_PITCH && hits[i0].rect.height > stride_y * STRETCH_RATIO {
+            hits[i0].rect.height = stride_y;
         }
-        let last = idxs[idxs.len() - 1];
-        let prev = idxs[idxs.len() - 2];
-        let stride_y = (hits[last].rect.y - hits[prev].rect.y).abs();
-        if stride_y >= MIN_SLOT_PITCH {
-            hits[last].rect.height = stride_y;
-        }
-        let stride_x = (hits[last].rect.x - hits[prev].rect.x).abs();
-        if stride_x >= MIN_SLOT_PITCH {
-            hits[last].rect.width = stride_x;
+        let stride_x = (hits[i1].rect.x - hits[i0].rect.x).abs();
+        if stride_x >= MIN_SLOT_PITCH && hits[i0].rect.width > stride_x * STRETCH_RATIO {
+            hits[i0].rect.width = stride_x;
         }
     }
+    let last = idxs[idxs.len() - 1];
+    let prev = idxs[idxs.len() - 2];
+    let stride_y = (hits[last].rect.y - hits[prev].rect.y).abs();
+    if stride_y >= MIN_SLOT_PITCH && hits[last].rect.height > stride_y * STRETCH_RATIO {
+        hits[last].rect.height = stride_y;
+    }
+    let stride_x = (hits[last].rect.x - hits[prev].rect.x).abs();
+    if stride_x >= MIN_SLOT_PITCH && hits[last].rect.width > stride_x * STRETCH_RATIO {
+        hits[last].rect.width = stride_x;
+    }
+}
 }
 
 fn collect_hits_inner(
@@ -1462,7 +1466,8 @@ pub fn insert_index_along_axis(
         Axis::Y | Axis::Xy => items[0].rect.height,
     }
     .max(1.0);
-    let tail_pitch = slot_stride_along_axis(hits, list_id, axis, fallback);
+    let last_idx = items[items.len() - 1].index;
+    let tail_pitch = slot_extent_along_axis(hits, list_id, last_idx, axis, fallback);
     let first = axis_origin(items[0].rect, axis);
     let last = axis_origin(items[items.len() - 1].rect, axis);
     if items.len() > 1 {
@@ -1543,6 +1548,253 @@ pub(crate) fn slot_stride_along_axis(
     fallback
 }
 
+/// Paint box vs packed neighbour distance. Above this, the island is stretched
+/// (`also_droppable` / column height), not a naturally taller row.
+const STRETCH_RATIO: f32 = 1.5;
+
+fn indexed_list_items<'a>(hits: &'a [DragHit], list_id: &str) -> Vec<&'a DragHit> {
+    let mut items: Vec<&DragHit> = hits
+        .iter()
+        .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
+        .collect();
+    items.sort_by_key(|h| h.index.unwrap_or(0));
+    items
+}
+
+fn axis_size(rect: Rect, axis: Axis) -> f32 {
+    match axis {
+        Axis::X => rect.width,
+        Axis::Y | Axis::Xy => rect.height,
+    }
+}
+
+fn inferred_list_gap(items: &[&DragHit], axis: Axis) -> f32 {
+    for w in items.windows(2) {
+        if w[1].index.unwrap_or(0) != w[0].index.unwrap_or(0) + 1 {
+            continue;
+        }
+        let stride = (axis_origin(w[1].rect, axis) - axis_origin(w[0].rect, axis)).abs();
+        if stride < MIN_SLOT_PITCH {
+            continue;
+        }
+        let size = axis_size(w[0].rect, axis);
+        if size > stride * STRETCH_RATIO {
+            continue;
+        }
+        return (stride - size).max(0.0);
+    }
+    0.0
+}
+
+/// Advance along `axis` when packing `items[orig_pos]` into a visual order.
+/// Followed rows keep the original slot (size + gap); the visual last row is
+/// paint size only. Stretched islands use the packed neighbour stride.
+fn pack_advance(
+    items: &[&DragHit],
+    orig_pos: usize,
+    visual_last: bool,
+    axis: Axis,
+    gap: f32,
+) -> f32 {
+    let size = axis_size(items[orig_pos].rect, axis).max(1.0);
+    let next_stride = items.get(orig_pos + 1).and_then(|n| {
+        let s = (axis_origin(n.rect, axis) - axis_origin(items[orig_pos].rect, axis)).abs();
+        (s >= MIN_SLOT_PITCH).then_some(s)
+    });
+    let prev_stride = orig_pos.checked_sub(1).and_then(|p| {
+        let s = (axis_origin(items[orig_pos].rect, axis) - axis_origin(items[p].rect, axis)).abs();
+        (s >= MIN_SLOT_PITCH).then_some(s)
+    });
+    let stretched = next_stride.is_some_and(|s| size > s * STRETCH_RATIO)
+        || prev_stride.is_some_and(|s| size > s * STRETCH_RATIO);
+    let paint = if stretched {
+        next_stride.or(prev_stride).unwrap_or(size)
+    } else {
+        size
+    };
+    if visual_last {
+        paint
+    } else {
+        next_stride.unwrap_or(paint + gap)
+    }
+}
+
+/// Slot of `index` in `list_id`: packed neighbour distance, or paint size for
+/// the last (unstretched) row. Stretched last rows copy the previous stride.
+pub(crate) fn slot_extent_along_axis(
+    hits: &[DragHit],
+    list_id: &str,
+    index: Option<usize>,
+    axis: Axis,
+    fallback: f32,
+) -> f32 {
+    let items = indexed_list_items(hits, list_id);
+    let Some(index) = index else {
+        return fallback.max(1.0);
+    };
+    let Some(pos) = items.iter().position(|h| h.index == Some(index)) else {
+        return fallback.max(1.0);
+    };
+    pack_advance(
+        &items,
+        pos,
+        false,
+        axis,
+        inferred_list_gap(&items, axis),
+    )
+}
+
+fn visual_index_order(items: &[&DragHit], from: usize, hover: usize) -> Vec<usize> {
+    let idxs: Vec<usize> = items.iter().filter_map(|h| h.index).collect();
+    if from == hover || idxs.is_empty() {
+        return idxs;
+    }
+    let remaining: Vec<usize> = idxs.iter().copied().filter(|&i| i != from).collect();
+    let insert_at = remaining
+        .iter()
+        .filter(|&&i| if from < hover { i <= hover } else { i < hover })
+        .count()
+        .min(remaining.len());
+    let mut order = remaining;
+    order.insert(insert_at, from);
+    order
+}
+
+/// Packed origins after lifting `from` and inserting at `hover` (same list).
+/// Total span equals the layout span (reorder does not grow the list).
+fn pack_same_list_origins(
+    hits: &[DragHit],
+    list_id: &str,
+    from: usize,
+    hover: usize,
+    axis: Axis,
+) -> HashMap<usize, [f32; 2]> {
+    let items = indexed_list_items(hits, list_id);
+    let mut map = HashMap::new();
+    if items.is_empty() {
+        return map;
+    }
+    let start = [items[0].rect.x, items[0].rect.y];
+    let gap = inferred_list_gap(&items, axis);
+    let order = visual_index_order(&items, from, hover);
+    let index_to_pos: HashMap<usize, usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(p, h)| h.index.map(|i| (i, p)))
+        .collect();
+    let mut cursor = match axis {
+        Axis::X => start[0],
+        Axis::Y | Axis::Xy => start[1],
+    };
+    for (vi, idx) in order.iter().enumerate() {
+        let origin = match axis {
+            Axis::X => [cursor, start[1]],
+            Axis::Y | Axis::Xy => [start[0], cursor],
+        };
+        map.insert(*idx, origin);
+        let Some(&orig_pos) = index_to_pos.get(idx) else {
+            continue;
+        };
+        cursor += pack_advance(&items, orig_pos, vi + 1 == order.len(), axis, gap);
+    }
+    map
+}
+
+fn pack_item_translate(
+    hits: &[DragHit],
+    my_list: Option<&str>,
+    my_index: Option<usize>,
+    from_list: Option<&str>,
+    from_index: Option<usize>,
+    hover_list: Option<&str>,
+    hover_index: Option<usize>,
+    axis: Axis,
+) -> [f32; 2] {
+    let (Some(my_list), Some(my_i), Some(hover_list)) = (my_list, my_index, hover_list) else {
+        return [0.0, 0.0];
+    };
+    if from_list == Some(hover_list) {
+        let (Some(from), Some(hover), true) = (from_index, hover_index, from_list == Some(my_list))
+        else {
+            return [0.0, 0.0];
+        };
+        let packed = pack_same_list_origins(hits, my_list, from, hover, axis);
+        let Some(new) = packed.get(&my_i) else {
+            return [0.0, 0.0];
+        };
+        let Some(layout) = indexed_list_items(hits, my_list)
+            .into_iter()
+            .find(|h| h.index == Some(my_i))
+        else {
+            return [0.0, 0.0];
+        };
+        return [new[0] - layout.rect.x, new[1] - layout.rect.y];
+    }
+    if from_list == Some(my_list) {
+        let Some(from) = from_index else {
+            return [0.0, 0.0];
+        };
+        if my_i <= from {
+            return [0.0, 0.0];
+        }
+        let fallback = indexed_list_items(hits, my_list)
+            .into_iter()
+            .find(|h| h.index == Some(from))
+            .map(|h| axis_size(h.rect, axis))
+            .unwrap_or(1.0);
+        let extent = slot_extent_along_axis(hits, my_list, Some(from), axis, fallback.max(1.0));
+        return match axis {
+            Axis::X => [-extent, 0.0],
+            Axis::Y | Axis::Xy => [0.0, -extent],
+        };
+    }
+    if hover_list != my_list {
+        return [0.0, 0.0];
+    }
+    let Some(hover) = hover_index else {
+        return [0.0, 0.0];
+    };
+    if my_i < hover {
+        return [0.0, 0.0];
+    }
+    let fallback = indexed_list_items(hits, my_list)
+        .into_iter()
+        .find(|h| h.index == Some(my_i))
+        .map(|h| axis_size(h.rect, axis))
+        .unwrap_or(1.0);
+    let extent = from_list
+        .map(|fl| slot_extent_along_axis(hits, fl, from_index, axis, fallback.max(1.0)))
+        .unwrap_or(fallback.max(1.0));
+    match axis {
+        Axis::X => [extent, 0.0],
+        Axis::Y | Axis::Xy => [0.0, extent],
+    }
+}
+
+pub(crate) fn live_pack_item_translate(
+    my_list: Option<&str>,
+    my_index: Option<usize>,
+    from_list: Option<&str>,
+    from_index: Option<usize>,
+    hover_list: Option<&str>,
+    hover_index: Option<usize>,
+    axis: Axis,
+) -> [f32; 2] {
+    LAST_HITS.with(|h| {
+        pack_item_translate(
+            &h.borrow(),
+            my_list,
+            my_index,
+            from_list,
+            from_index,
+            hover_list,
+            hover_index,
+            axis,
+        )
+    })
+}
+
+#[allow(dead_code)]
 pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32) -> f32 {
     let Some(list_id) = list_id else {
         return fallback;
@@ -1550,6 +1802,7 @@ pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32)
     LAST_HITS.with(|h| slot_stride_along_axis(&h.borrow(), list_id, axis, fallback))
 }
 
+#[allow(dead_code)]
 pub(crate) fn list_max_index(list_id: Option<&str>) -> Option<usize> {
     let list_id = list_id?;
     LAST_HITS.with(|h| {
@@ -1574,7 +1827,9 @@ pub(crate) fn insert_hole_origin(
         .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
         .collect();
     items.sort_by_key(|h| h.index.unwrap_or(0));
-    let stride = slot_stride_along_axis(hits, list_id, axis, fallback_extent.max(1.0));
+    let stride = items.last().map(|h| {
+        slot_extent_along_axis(hits, list_id, h.index, axis, fallback_extent.max(1.0))
+    }).unwrap_or(fallback_extent.max(1.0));
     if let Some(hover) = hover_index {
         if let Some(h) = items.iter().find(|h| h.index == Some(hover)) {
             return Some([h.rect.x, h.rect.y]);
@@ -1645,11 +1900,13 @@ pub(crate) fn live_same_list_source_translate(
     axis: Axis,
 ) -> [f32; 2] {
     LAST_HITS.with(|h| {
-        source_translate_to_insert_hole(
+        pack_item_translate(
             &h.borrow(),
-            from_list,
-            from_index,
-            hover_list,
+            Some(from_list),
+            Some(from_index),
+            Some(from_list),
+            Some(from_index),
+            Some(hover_list),
             Some(hover_index),
             axis,
         )
@@ -1899,7 +2156,7 @@ mod tests {
     fn pump_autoscroll_resyncs_axis_y_after_parent_scroll() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key,
+            scroll_offset_x_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
         };
 
         let (_o, _) = create_root(|| {
@@ -2473,6 +2730,95 @@ mod tests {
     }
 
     #[test]
+    fn cap_stretched_keeps_naturally_unequal_folder_heights() {
+        let mut inbox = hit("folder:Inbox", [0.0, 0.0, 200.0, 200.0], true);
+        inbox.index = Some(0);
+        inbox.list_id = Some("tree-root".into());
+        let mut later = hit("folder:Later", [0.0, 208.0, 200.0, 80.0], true);
+        later.index = Some(1);
+        later.list_id = Some("tree-root".into());
+        let mut hits = vec![inbox, later];
+        cap_stretched_indexed_rects(&mut hits);
+        assert!(
+            (hits[0].rect.height - 200.0).abs() < 0.5,
+            "tall folder must keep paint height, got {}",
+            hits[0].rect.height
+        );
+        assert!(
+            (hits[1].rect.height - 80.0).abs() < 0.5,
+            "short last folder must not inherit the previous stride, got {}",
+            hits[1].rect.height
+        );
+    }
+
+    #[test]
+    fn pack_variable_height_reorder_preserves_span() {
+        let mut inbox = hit("folder:Inbox", [0.0, 0.0, 200.0, 200.0], true);
+        inbox.index = Some(0);
+        inbox.list_id = Some("tree-root".into());
+        let mut later = hit("folder:Later", [0.0, 208.0, 200.0, 80.0], true);
+        later.index = Some(1);
+        later.list_id = Some("tree-root".into());
+        let hits = vec![inbox, later];
+        let later_up = pack_item_translate(
+            &hits,
+            Some("tree-root"),
+            Some(0),
+            Some("tree-root"),
+            Some(1),
+            Some("tree-root"),
+            Some(0),
+            Axis::Y,
+        );
+        assert!(
+            (later_up[1] - 88.0).abs() < 1.0,
+            "Inbox must shift by Later's slot (80+8 gap), not Inbox's 208 stride; got {}",
+            later_up[1]
+        );
+        let later_self = pack_item_translate(
+            &hits,
+            Some("tree-root"),
+            Some(1),
+            Some("tree-root"),
+            Some(1),
+            Some("tree-root"),
+            Some(0),
+            Axis::Y,
+        );
+        assert!(
+            (later_self[1] + 208.0).abs() < 1.0,
+            "Later moves from 208 to 0; got {}",
+            later_self[1]
+        );
+        let packed = pack_same_list_origins(&hits, "tree-root", 1, 0, Axis::Y);
+        let later_y = packed.get(&1).unwrap()[1];
+        let inbox_y = packed.get(&0).unwrap()[1];
+        assert!((later_y - 0.0).abs() < 0.5);
+        assert!(
+            (inbox_y - 88.0).abs() < 1.0,
+            "Inbox packed under Later+gap, got {inbox_y}"
+        );
+        let span = inbox_y + 200.0;
+        assert!(
+            (span - 288.0).abs() < 1.0,
+            "reorder must not grow the list; span={span}"
+        );
+    }
+
+    #[test]
+    fn slot_extent_uses_each_row() {
+        let mut a = hit("a", [0.0, 0.0, 40.0, 200.0], true);
+        a.index = Some(0);
+        let mut b = hit("b", [0.0, 208.0, 40.0, 80.0], true);
+        b.index = Some(1);
+        let hits = vec![a, b];
+        assert!(
+            (slot_extent_along_axis(&hits, "list", Some(0), Axis::Y, 80.0) - 208.0).abs() < 0.5
+        );
+        assert!((slot_extent_along_axis(&hits, "list", Some(1), Axis::Y, 80.0) - 88.0).abs() < 0.5);
+    }
+
+    #[test]
     fn cross_list_source_translate_lands_on_target_hole() {
         let mut src = hit("src", [0.0, 0.0, 80.0, 32.0], true);
         src.list_id = Some("a".into());
@@ -2728,7 +3074,7 @@ mod tests {
     fn collect_hits_rect_is_visual_inside_scrolled_viewport() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_y_signal_key,
+            scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
         };
 
         let (_o, (layout_y, hit_y, grab_y, start_y)) = create_root(|| {
@@ -4172,13 +4518,17 @@ mod tests {
             folder.list_id = Some("root".into());
             folder.index = Some(1);
             folder.is_draggable = true;
+            folder.item_type = "folder".into();
             let mut nested = hit("later-shell", [10.0, 40.0, 180.0, 140.0], true);
             nested.list_id = Some("later".into());
             nested.index = None;
+            nested.accept = "file".into();
+            nested.item_type = String::new();
             let mut src = hit("file", [0.0, 300.0, 40.0, 20.0], true);
             src.list_id = Some("inbox".into());
             src.index = Some(0);
             src.is_draggable = true;
+            src.item_type = "file".into();
             let hits = vec![folder, nested, src];
             assert!(tick(20.0, 80.0, &hits, [400.0, 400.0]));
             let list = hover_list.peek();
@@ -4189,6 +4539,104 @@ mod tests {
             hover.as_deref(),
             Some("later"),
             "empty nested list padding must win over the wrapping folder row"
+        );
+    }
+
+    #[test]
+    fn folder_drag_over_inner_files_stays_on_outer_list() {
+        let (_o, hover) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([200.0_f32, 80.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 8.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "folder:Later".into(),
+                pointer: [20.0, 220.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [0.0, 208.0, 200.0, 80.0],
+                from_list: Some("tree-root".into()),
+                from_index: Some(1),
+                item_type: "folder".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut root = hit("tree-root", [0.0, 0.0, 200.0, 400.0], true);
+            root.list_id = Some("tree-root".into());
+            root.index = None;
+            root.accept = "folder".into();
+            root.item_type = String::new();
+            let mut inbox = hit("folder:Inbox", [0.0, 0.0, 200.0, 200.0], true);
+            inbox.list_id = Some("tree-root".into());
+            inbox.index = Some(0);
+            inbox.is_draggable = true;
+            inbox.item_type = "folder".into();
+            let mut inbox_shell = hit("tree-inbox", [8.0, 40.0, 184.0, 150.0], true);
+            inbox_shell.list_id = Some("tree-inbox".into());
+            inbox_shell.index = None;
+            inbox_shell.accept = "file".into();
+            inbox_shell.item_type = String::new();
+            inbox_shell.group = "nest".into();
+            let mut alpha = hit("tree-inbox:Alpha", [8.0, 48.0, 184.0, 32.0], true);
+            alpha.list_id = Some("tree-inbox".into());
+            alpha.index = Some(0);
+            alpha.is_draggable = true;
+            alpha.item_type = "file".into();
+            alpha.group = "nest".into();
+            let mut later = hit("folder:Later", [0.0, 208.0, 200.0, 80.0], true);
+            later.list_id = Some("tree-root".into());
+            later.index = Some(1);
+            later.is_draggable = true;
+            later.item_type = "folder".into();
+            let hits = vec![root, inbox, inbox_shell, alpha, later];
+            assert!(tick(20.0, 60.0, &hits, [400.0, 400.0]));
+            let list = hover_list.peek();
+            let _ = end(&hits);
+            list
+        });
+        assert_eq!(
+            hover.as_deref(),
+            Some("tree-root"),
+            "folder drag over inner file rows must stay on the outer list, not tree-inbox"
         );
     }
 

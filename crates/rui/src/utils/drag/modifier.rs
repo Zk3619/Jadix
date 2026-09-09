@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use super::geometry::{Axis, Rect, Restrict, SnapGrid, clamp_origin_to_box};
+use super::geometry::{clamp_origin_to_box, Axis, Rect, Restrict, SnapGrid};
 
 /// [`builtin_modifiers`] axis lock (interact.js `lockAxis`).
 pub const MODIFIER_ORDER_AXIS: i32 = 10;

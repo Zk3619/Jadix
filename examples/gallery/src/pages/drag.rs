@@ -400,6 +400,7 @@ fn keyed_sortable_chips(
                 <SortableItem
                     id={id}
                     item_type={item_type}
+                    accept={item_type}
                     group={group}
                     list={list}
                     index={i}
@@ -411,7 +412,7 @@ fn keyed_sortable_chips(
             }
         }
     );
-    Element::from(vstack().w("100%").gap("0.375rem").children(rows))
+    Element::from(vstack().w("100%").min_h(0.0).h("auto").gap("0.375rem").children(rows))
 }
 
 fn reorder_same_list(items: Signal<Vec<String>>, list: &'static str) -> impl FnMut(&DragEvent) {
@@ -616,6 +617,8 @@ fn nested_folder_card(title: &str, list: &'static str, body: Element) -> Element
     };
     let el: Element = vstack()
         .w("100%")
+        .min_h(0.0)
+        .h("auto")
         .gap("0.375rem")
         .p("0.5rem")
         .rounded("0.5rem")
@@ -662,11 +665,15 @@ fn nest_folder_tree(
             let title = name.clone();
             sortable_item(format!("folder:{name}"))
                 .item_type("folder")
+                .accept("folder")
                 .list("tree-root")
                 .index(i)
                 .handle_only(true)
                 .source_opacity(0.4)
                 .child(move || {
+                    // Folder island must track the inner vec so the card hugs
+                    // remaining files after a cross-list transfer.
+                    let _ = files.get().len();
                     let inner = sortable_list(list)
                         .accept("file")
                         .group("nest")
@@ -677,7 +684,7 @@ fn nest_folder_tree(
                 })
         }
     );
-    Element::from(vstack().w("100%").gap("0.5rem").children(rows))
+    Element::from(vstack().w("100%").min_h(0.0).h("auto").gap("0.5rem").children(rows))
 }
 
 #[component]

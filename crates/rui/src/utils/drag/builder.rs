@@ -6,18 +6,18 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use crate::app::pointer_events::{EventPhase, dom_button};
+use crate::app::pointer_events::{dom_button, EventPhase};
 use crate::app::reactive::reactive_view_sized;
 use crate::core::reactivity::{
-    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{Element, IntoOpacity, LayoutStatus};
 use crate::layout::LayoutTree;
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::motion::{
-    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, clear_motion,
-    motion_is_animating, motion_sync_status, prepare_motion_sync,
+    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
+    MotionEpsilon, MotionStyle, MotionTransform,
 };
 use crate::utils::resolve_instance_id;
 
@@ -25,12 +25,12 @@ use super::autoscroll::{AutoScroll, ScrollLock};
 use super::collision::CollisionAlg;
 use super::geometry::{Axis, DragStack, Restrict, SnapGrid};
 use super::session::{
-    BeginDrag, DragHandler, DragPredicate, ScopeRuntime, active_source_translate, begin,
-    bump_auto_stack, list_max_index, list_slot_stride, live_cross_list_source_translate,
-    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity,
-    remember_item_restrict, start_geometry,
+    active_source_translate, begin, bump_auto_stack, live_pack_item_translate,
+    live_cross_list_source_translate, live_same_list_source_translate, overlay_is_registered,
+    overlay_source_opacity, remember_item_restrict, start_geometry, BeginDrag, DragHandler,
+    DragPredicate, ScopeRuntime,
 };
-use super::sortable::{SORTABLE_FLIP_MS, sortable_preview};
+use super::sortable::SORTABLE_FLIP_MS;
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL,
@@ -107,6 +107,33 @@ struct SourcePreview {
 thread_local! {
     static SOURCE_PREVIEWS: RefCell<HashMap<(String, String), SourcePreview>> =
         RefCell::new(HashMap::new());
+    /// Overlay follow-source clone re-runs the author body. Nested
+    /// `assemble_draggable` / `assemble_droppable` would otherwise reuse the
+    /// live `reactive_view` tid and steal (or empty) the on-list island —
+    /// Gallery nested folder ghosts collapsed to a header chip.
+    static CLONING_OVERLAY_GHOST: Cell<bool> = const { Cell::new(false) };
+}
+
+struct OverlayGhostCloneGuard(bool);
+
+impl OverlayGhostCloneGuard {
+    fn enter() -> Self {
+        CLONING_OVERLAY_GHOST.with(|c| {
+            let prev = c.get();
+            c.set(true);
+            Self(prev)
+        })
+    }
+}
+
+impl Drop for OverlayGhostCloneGuard {
+    fn drop(&mut self) {
+        CLONING_OVERLAY_GHOST.with(|c| c.set(self.0));
+    }
+}
+
+fn is_cloning_overlay_ghost() -> bool {
+    CLONING_OVERLAY_GHOST.with(|c| c.get())
 }
 
 fn register_source_preview(
@@ -131,6 +158,7 @@ pub(super) fn clone_source_preview(scope: &str, draggable_id: &str) -> Option<El
             .cloned()
     })?;
     Some(with_child_owner(|| {
+        let _ghost = OverlayGhostCloneGuard::enter();
         provide_context(item_context(), preview.item);
         wrap_fragment((preview.body)())
     }))
@@ -158,7 +186,7 @@ fn live_slot<T: Clone + PartialEq + 'static>(key: &str, value: T) -> Signal<T> {
 /// both pills share `rects → text` and lower glyphs paint on the upper fill.
 fn keyed_item_shell(island: Element) -> Element {
     let mut el =
-        Element::from(vstack().min_w(0.0).flex_shrink(0.0).child(island)).overflow("visible");
+        Element::from(vstack().min_w(0.0).min_h(0.0).flex_shrink(0.0).child(island)).overflow("visible");
     el.set_attr("data-stacking-context", "1");
     el.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
     el
@@ -205,28 +233,18 @@ fn live_sortable_translate(
     from_index: Signal<Option<usize>>,
     hover_list: Signal<Option<String>>,
     hover_index: Signal<Option<usize>>,
-    drag_extent: Signal<[f32; 2]>,
 ) -> [f32; 2] {
     if !also_droppable {
         return [0.0, 0.0];
     }
-    let extent = drag_extent.peek();
-    let fallback = if axis == Axis::X {
-        extent[0]
-    } else {
-        extent[1]
-    };
-    let item_e = list_slot_stride(list, axis, fallback.max(1.0));
-    sortable_preview(
+    live_pack_item_translate(
+        list,
+        index,
         from_list.peek().as_deref(),
         from_index.peek(),
         hover_list.peek().as_deref(),
         hover_index.peek(),
-        list,
-        index,
-        item_e,
         axis,
-        list_max_index(list),
     )
 }
 
@@ -398,7 +416,6 @@ fn apply_live_drag_chrome(
                 from_index,
                 hover_list,
                 hover_index,
-                drag_extent,
             );
         }
     }
@@ -454,6 +471,10 @@ fn apply_live_droppable_chrome(
     active_droppable: Signal<Option<String>>,
     from_list: Signal<Option<String>>,
     hover_list: Signal<Option<String>>,
+    drag_extent: Signal<[f32; 2]>,
+    axis: Axis,
+    author_pad: &Cell<Option<f32>>,
+    author_margin: &Cell<Option<f32>>,
     author_z: i32,
 ) -> LayoutStatus {
     let from = from_list.peek();
@@ -476,6 +497,66 @@ fn apply_live_droppable_chrome(
     if el.style.z_index != want_z {
         el.style.z_index = want_z;
         changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    let base_pad = match author_pad.get() {
+        Some(v) => v,
+        None => {
+            let edge = match axis {
+                Axis::X => el.style.padding.right,
+                Axis::Y | Axis::Xy => el.style.padding.bottom,
+            };
+            let v = crate::layout::lp_length_px(edge).unwrap_or(0.0);
+            author_pad.set(Some(v));
+            v
+        }
+    };
+    let extent = {
+        let e = drag_extent.peek();
+        match axis {
+            Axis::X => e[0],
+            Axis::Y | Axis::Xy => e[1],
+        }
+        .max(0.0)
+    };
+    let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover {
+        extent
+    } else {
+        0.0
+    };
+    let want_pad = base_pad + extra_pad;
+    let pad_edge = match axis {
+        Axis::X => &mut el.style.padding.right,
+        Axis::Y | Axis::Xy => &mut el.style.padding.bottom,
+    };
+    let have_pad = crate::layout::lp_length_px(*pad_edge).unwrap_or(0.0);
+    if (have_pad - want_pad).abs() > 0.5 {
+        *pad_edge = taffy::style::LengthPercentage::length(want_pad);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    // Source list: pull the vacated row out of the parent (folder card) flow.
+    // Target already grows via padding; without this the origin stays tall.
+    let base_margin = match author_margin.get() {
+        Some(v) => v,
+        None => {
+            let edge = match axis {
+                Axis::X => el.style.margin.right,
+                Axis::Y | Axis::Xy => el.style.margin.bottom,
+            };
+            let v = crate::layout::lpa_length_px(edge).unwrap_or(0.0);
+            author_margin.set(Some(v));
+            v
+        }
+    };
+    let extra_margin = if cross { -extent } else { 0.0 };
+    let want_margin = base_margin + extra_margin;
+    let margin_edge = match axis {
+        Axis::X => &mut el.style.margin.right,
+        Axis::Y | Axis::Xy => &mut el.style.margin.bottom,
+    };
+    let have_margin = crate::layout::lpa_length_px(*margin_edge).unwrap_or(0.0);
+    if (have_margin - want_margin).abs() > 0.5 {
+        *margin_edge = taffy::style::LengthPercentageAuto::length(want_margin);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
     }
     changed
 }
@@ -590,10 +671,10 @@ impl DragScopeBuilder {
         id: impl Into<String>,
         order: i32,
         f: impl Fn(
-            super::modifier::DragDelta,
-            &super::modifier::DragModifierCtx,
-        ) -> super::modifier::DragDelta
-        + 'static,
+                super::modifier::DragDelta,
+                &super::modifier::DragModifierCtx,
+            ) -> super::modifier::DragDelta
+            + 'static,
     ) -> Self {
         let id = id.into();
         self.modifiers.retain(|t| t.id != id);
@@ -877,6 +958,17 @@ fn assemble_draggable(
 ) -> Element {
     let scope = ctx.id.clone();
     let id = cfg.id.clone();
+    // Overlay clone must inline the author body. `reactive_view_sized` is
+    // idempotent on tid: a nested SortableItem inside the clone would steal
+    // (or empty) the live island, and a fresh tid only yields an unfilled
+    // placeholder under `isolate_reads`.
+    if is_cloning_overlay_ghost() {
+        let el = with_child_owner(|| {
+            provide_context(item_context(), item_ctx);
+            wrap_fragment(body())
+        });
+        return keyed_item_shell(el);
+    }
     remember_item_restrict(&scope, &id, cfg.restrict.clone());
     let tid = format!("{scope}__draggable:{id}");
     let capture = format!("{scope}__drag:{id}");
@@ -1093,6 +1185,9 @@ fn assemble_droppable(
 ) -> Element {
     let scope = ctx.id.clone();
     let id = cfg.id.clone();
+    if is_cloning_overlay_ghost() {
+        return wrap_fragment(body());
+    }
     let tid = format!("{scope}__droppable:{id}");
     let accept = cfg.accept;
     let group = cfg.group;
@@ -1105,6 +1200,8 @@ fn assemble_droppable(
     let active_droppable = ctx.active_droppable;
     let from_list = ctx.from_list;
     let hover_list = ctx.hover_list;
+    let drag_extent = ctx.drag_extent;
+    let axis = ctx.axis;
 
     // Height `auto` (not `100%`): a 100% shell in a wrap HStack next to an
     // auto-width chip wraps onto a row whose containing-block height is still
@@ -1131,6 +1228,8 @@ fn assemble_droppable(
         let prev = el.reactive_sync.take();
         let id_chrome = id_mark.clone();
         let list_chrome = list.clone();
+        let author_pad = Rc::new(Cell::new(None::<f32>));
+        let author_margin = Rc::new(Cell::new(None::<f32>));
         el = el.reactive_sync(move |el, lt| {
             let mut st = prev
                 .as_ref()
@@ -1143,6 +1242,10 @@ fn assemble_droppable(
                 active_droppable,
                 from_list,
                 hover_list,
+                drag_extent,
+                axis,
+                author_pad.as_ref(),
+                author_margin.as_ref(),
                 author_z,
             ));
             st
@@ -1160,6 +1263,9 @@ pub fn drag_handle(mut el: Element) -> Element {
         panic!("<DragHandle> / drag_handle() must be used within <Draggable> / <SortableItem>");
     });
     el.set_attr(ATTR_DRAG_HANDLE, "1");
+    if is_cloning_overlay_ghost() {
+        return el;
+    }
     if el.focus_id.is_none() {
         el = el.focus_id(format!("{}__drag_handle:{}", item.scope_id, item.id));
     }
@@ -1299,8 +1405,8 @@ mod tests {
     #[test]
     fn sortable_shift_flip_animates_mid_then_snaps_on_session_end() {
         use crate::style::{
-            TimingFunction, TransitionEntry, TransitionProperty, set_css_transition_timeline_ms,
-            set_css_transition_virtual_timeline, set_prefers_reduced_motion,
+            set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+            set_prefers_reduced_motion, TimingFunction, TransitionEntry, TransitionProperty,
         };
         use crate::utils::motion::{ensure_motion_transitions, snap_motion_baseline};
         set_prefers_reduced_motion(Some(false));

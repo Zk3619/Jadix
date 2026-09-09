@@ -1,7 +1,7 @@
 //! Collision detectors from solid-dnd (`closestCenter` / `closestCorners` /
 //! `mostIntersecting`) plus dnd-kit `pointerWithin` for nested droppables.
 
-use super::geometry::{Rect, distance};
+use super::geometry::{distance, Rect};
 
 /// Which algorithm picks the active droppable each move.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
