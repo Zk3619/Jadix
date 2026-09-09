@@ -1,4 +1,7 @@
 //! Vite-style HMR console lines: dim timestamp, colored tag, one line per event.
+//!
+//! OS console VT and local clock live in [`crate::platform`]; this module only
+//! formats the 12-hour stamp and honors `NO_COLOR` / `FORCE_COLOR`.
 
 use std::io::{self, IsTerminal, Write};
 
@@ -21,32 +24,6 @@ fn color_enabled() -> bool {
     io::stderr().is_terminal()
 }
 
-fn enable_vt() {
-    #[cfg(windows)]
-    {
-        use std::sync::Once;
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| unsafe {
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
-                fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
-                fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
-            }
-            const STD_OUTPUT_HANDLE: i32 = -11;
-            const STD_ERROR_HANDLE: i32 = -12;
-            const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
-            for handle in [STD_ERROR_HANDLE, STD_OUTPUT_HANDLE] {
-                let h = GetStdHandle(handle);
-                let mut mode = 0u32;
-                if GetConsoleMode(h, &mut mode) != 0 {
-                    let _ = SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-                }
-            }
-        });
-    }
-}
-
 fn format_12h(hour: u16, min: u16, sec: u16) -> String {
     let am = hour < 12;
     let h12 = match hour {
@@ -59,80 +36,9 @@ fn format_12h(hour: u16, min: u16, sec: u16) -> String {
 }
 
 fn local_timestamp() -> String {
-    local_timestamp_os().unwrap_or_else(utc_fallback)
-}
-
-#[cfg(windows)]
-fn local_timestamp_os() -> Option<String> {
-    #[repr(C)]
-    struct SystemTime {
-        w_year: u16,
-        w_month: u16,
-        w_day_of_week: u16,
-        w_day: u16,
-        w_hour: u16,
-        w_minute: u16,
-        w_second: u16,
-        w_milliseconds: u16,
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetLocalTime(lp_system_time: *mut SystemTime);
-    }
-    let mut st = SystemTime {
-        w_year: 0,
-        w_month: 0,
-        w_day_of_week: 0,
-        w_day: 0,
-        w_hour: 0,
-        w_minute: 0,
-        w_second: 0,
-        w_milliseconds: 0,
-    };
-    unsafe {
-        GetLocalTime(&mut st);
-    }
-    Some(format_12h(st.w_hour, st.w_minute, st.w_second))
-}
-
-#[cfg(unix)]
-fn local_timestamp_os() -> Option<String> {
-    #[repr(C)]
-    struct Tm {
-        tm_sec: i32,
-        tm_min: i32,
-        tm_hour: i32,
-        tm_mday: i32,
-        tm_mon: i32,
-        tm_year: i32,
-        tm_wday: i32,
-        tm_yday: i32,
-        tm_isdst: i32,
-        tm_gmtoff: i64,
-        tm_zone: *const std::ffi::c_char,
-    }
-    extern "C" {
-        fn time(tloc: *mut i64) -> i64;
-        fn localtime_r(timer: *const i64, buf: *mut Tm) -> *mut Tm;
-    }
-    unsafe {
-        let mut t: i64 = 0;
-        time(&mut t);
-        let mut tm: Tm = std::mem::zeroed();
-        if localtime_r(&t, &mut tm).is_null() {
-            return None;
-        }
-        Some(format_12h(
-            tm.tm_hour as u16,
-            tm.tm_min as u16,
-            tm.tm_sec as u16,
-        ))
-    }
-}
-
-#[cfg(not(any(windows, unix)))]
-fn local_timestamp_os() -> Option<String> {
-    None
+    crate::platform::local_hms()
+        .map(|(h, m, s)| format_12h(h, m, s))
+        .unwrap_or_else(utc_fallback)
 }
 
 fn utc_fallback() -> String {
@@ -146,7 +52,7 @@ fn utc_fallback() -> String {
 }
 
 fn emit(action_color: &str, action: &str, detail: &str) {
-    enable_vt();
+    crate::platform::enable_ansi_stderr();
     let time = local_timestamp();
     let mut err = io::stderr().lock();
     let _ = if color_enabled() {
@@ -180,4 +86,14 @@ pub(super) fn skip(detail: &str) {
 #[cfg(feature = "hot-reload")]
 pub(super) fn error(detail: &str) {
     emit(RED, "hmr error", detail);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn format_12h_midnight_and_afternoon() {
+        assert_eq!(super::format_12h(0, 5, 9), "12:05:09 AM");
+        assert_eq!(super::format_12h(13, 0, 0), "1:00:00 PM");
+        assert_eq!(super::format_12h(12, 0, 0), "12:00:00 PM");
+    }
 }

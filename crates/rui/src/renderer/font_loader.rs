@@ -304,44 +304,20 @@ fn try_load_font_file(db: &mut Database, file_name: &str, state: &mut LazyFontSt
 }
 
 fn try_load_system_font(db: &mut Database, file_name: &str, state: &mut LazyFontState) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let path = PathBuf::from(r"C:\Windows\Fonts").join(file_name);
-        if path.is_file() {
-            return try_load_font_path(db, &path, state);
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        for dir in [
-            "/System/Library/Fonts",
-            "/System/Library/Fonts/Supplemental",
-            "/Library/Fonts",
-        ] {
-            let path = PathBuf::from(dir).join(file_name);
-            if path.is_file() {
-                return try_load_font_path(db, &path, state);
-            }
-        }
-    }
-    // Linux + *BSD (+ other Unix except macOS). Not `target_os = "linux"` only —
-    // `/usr/share/fonts` is shared. P3 will move this to `platform/os/*/font_paths`.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        for dir in [
-            "/usr/share/fonts",
-            "/usr/local/share/fonts",
-            "/usr/share/fonts/truetype",
-            "/usr/share/fonts/opentype",
-        ] {
-            let path = PathBuf::from(dir).join(file_name);
-            if path.is_file() {
-                return try_load_font_path(db, &path, state);
-            }
-        }
-    }
-    let _ = (db, file_name, state);
-    false
+    let Some(path) = crate::platform::resolve_system_font(file_name) else {
+        return false;
+    };
+    try_load_font_path(db, &path, state)
+}
+
+fn try_load_first_system_font(
+    db: &mut Database,
+    files: &[&str],
+    state: &mut LazyFontState,
+) -> bool {
+    files
+        .iter()
+        .any(|name| try_load_system_font(db, name, state))
 }
 
 fn env_flag_enabled(name: &str) -> bool {
@@ -488,48 +464,19 @@ pub fn detect_script_needs(text: &str) -> ScriptNeeds {
 }
 
 fn load_lazy_hangul(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        // 맑은 고딕 — YaHei Hangul coverage is incomplete → tofu boxes without this.
-        let _ = try_load_system_font(db, "malgun.ttf", state)
-            || try_load_system_font(db, "malgunbd.ttf", state)
-            || try_load_system_font(db, "malgunsl.ttf", state)
-            || try_load_system_font(db, "gulim.ttc", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "AppleSDGothicNeo.ttc", state)
-            || try_load_system_font(db, "Supplemental/AppleGothic.ttf", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "opentype/noto/NotoSansCJK-Regular.ttc", state)
-            || try_load_system_font(db, "truetype/noto/NotoSansCJK-Regular.ttc", state)
-            || try_load_system_font(db, "truetype/nanum/NanumGothic.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Hangul),
+        state,
+    );
 }
 
 fn load_lazy_thai(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        // Leelawadee UI (Win10+) or Tahoma (has Thai).
-        let _ = try_load_system_font(db, "LeelawUI.ttf", state)
-            || try_load_system_font(db, "LeelaUIb.ttf", state)
-            || try_load_system_font(db, "tahoma.ttf", state)
-            || try_load_system_font(db, "tahomabd.ttf", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "Thonburi.ttc", state)
-            || try_load_system_font(db, "Supplemental/Thonburi.ttc", state)
-            || try_load_system_font(db, "Ayuthaya.ttf", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "truetype/noto/NotoSansThai-Regular.ttf", state)
-            || try_load_system_font(db, "noto/NotoSansThai-Regular.ttf", state)
-            || try_load_system_font(db, "truetype/tlwg/TlwgTypo.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Thai),
+        state,
+    );
 }
 
 fn load_lazy_cjk(db: &mut Database, state: &mut LazyFontState) {
@@ -550,28 +497,12 @@ fn load_lazy_cjk(db: &mut Database, state: &mut LazyFontState) {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        // One CJK family is enough (avoid msyhbd/msyhl unless later needed).
-        let _ = try_load_system_font(db, "msyh.ttc", state)
-            || try_load_system_font(db, "msyhbd.ttc", state)
-            || try_load_system_font(db, "simhei.ttf", state)
-            || try_load_system_font(db, "simsun.ttc", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "PingFang.ttc", state)
-            || try_load_system_font(db, "Hiragino Sans GB.ttc", state)
-            || try_load_system_font(db, "STHeiti Light.ttc", state)
-            || try_load_system_font(db, "AppleSDGothicNeo.ttc", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "opentype/noto/NotoSansCJK-Regular.ttc", state)
-            || try_load_system_font(db, "noto-cjk/NotoSansCJK-Regular.ttc", state)
-            || try_load_system_font(db, "truetype/noto/NotoSansCJK-Regular.ttc", state)
-            || try_load_system_font(db, "truetype/wqy/wqy-microhei.ttc", state);
-    }
+    // One CJK family is enough (Windows avoids extra msyhbd/msyhl unless later needed).
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Cjk),
+        state,
+    );
 
     if env_flag_enabled("RUI_LOAD_CJK_SERIF") || cfg!(feature = "fonts-cjk-serif") {
         #[cfg(feature = "bundled-cjk-serif")]
@@ -608,37 +539,19 @@ fn load_lazy_emoji(db: &mut Database, state: &mut LazyFontState) {
     if env_flag_disabled("RUI_LOAD_SYSTEM_EMOJI") {
         return;
     }
-    #[cfg(target_os = "windows")]
-    {
-        let _ = try_load_system_font(db, "seguiemj.ttf", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "Apple Color Emoji.ttc", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "truetype/noto/NotoColorEmoji.ttf", state)
-            || try_load_system_font(db, "noto/NotoColorEmoji.ttf", state)
-            || try_load_system_font(db, "google-noto/NotoColorEmoji.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Emoji),
+        state,
+    );
 }
 
 fn load_lazy_symbols(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = try_load_system_font(db, "seguisym.ttf", state)
-            || try_load_system_font(db, "seguili.ttf", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "Apple Symbols.ttf", state)
-            || try_load_system_font(db, "Supplemental/Arial Unicode.ttf", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "truetype/dejavu/DejaVuSans.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Symbols),
+        state,
+    );
 
     if env_flag_enabled("RUI_LOAD_SYMBOLS") || cfg!(feature = "bundled-symbols") {
         #[cfg(feature = "bundled-symbols")]
@@ -661,41 +574,19 @@ fn load_lazy_symbols(db: &mut Database, state: &mut LazyFontState) {
 }
 
 fn load_lazy_arabic(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        // Segoe UI already covers much Arabic; add Traditional Arabic / Arial if present.
-        let _ = try_load_system_font(db, "tradbdo.ttf", state)
-            || try_load_system_font(db, "trado.ttf", state)
-            || try_load_system_font(db, "arial.ttf", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "Supplemental/Arial.ttf", state)
-            || try_load_system_font(db, "GeezaPro.ttc", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "truetype/dejavu/DejaVuSans.ttf", state)
-            || try_load_system_font(db, "truetype/liberation/LiberationSans-Regular.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Arabic),
+        state,
+    );
 }
 
 fn load_lazy_devanagari(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = try_load_system_font(db, "Nirmala.ttc", state)
-            || try_load_system_font(db, "mangal.ttf", state);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = try_load_system_font(db, "Supplemental/Devanagari Sangam MN.ttc", state)
-            || try_load_system_font(db, "KohinoorDevanagari.ttc", state);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = try_load_system_font(db, "truetype/noto/NotoSansDevanagari-Regular.ttf", state)
-            || try_load_system_font(db, "noto/NotoSansDevanagari-Regular.ttf", state);
-    }
+    let _ = try_load_first_system_font(
+        db,
+        crate::platform::lazy_script_font_files(crate::platform::SystemFontScript::Devanagari),
+        state,
+    );
 }
 
 /// Open fonts required by `needs` that have not been attempted yet.
@@ -827,47 +718,8 @@ pub fn ensure_coverage_for_text(font_system: &mut FontSystem, text: &str) {
 
 /// Eager UI faces only — never msyh / seguimj / full system scan.
 fn load_eager_system_ui_fonts(db: &mut Database, state: &mut LazyFontState) {
-    #[cfg(target_os = "windows")]
-    {
-        // Minimal weight set for UI chrome (skip arial/cour — saves mapped pages).
-        // Regular / Semibold / Bold plus Light + Semilight so the weight axis is denser
-        // (still no Segoe UI Medium 500 — that uses VF interpolation or synthetic bold).
-        for name in [
-            "segoeui.ttf",
-            "segoeuil.ttf",
-            "segoeuisl.ttf",
-            "seguisb.ttf",
-            "segoeuib.ttf",
-            "seguibl.ttf",
-            "consola.ttf",
-            "cascadiacode.ttf",
-            "CascadiaCode.ttf",
-        ] {
-            try_load_system_font(db, name, state);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        for name in [
-            "SFNS.ttf",
-            "SFNSText.ttf",
-            "Helvetica.ttc",
-            "Supplemental/Arial.ttf",
-        ] {
-            try_load_system_font(db, name, state);
-        }
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        for name in [
-            "truetype/dejavu/DejaVuSans.ttf",
-            "truetype/dejavu/DejaVuSans-Bold.ttf",
-            "truetype/dejavu/DejaVuSansMono.ttf",
-        ] {
-            try_load_system_font(db, name, state);
-        }
+    for name in crate::platform::eager_ui_font_files() {
+        try_load_system_font(db, name, state);
     }
 }
 
@@ -997,6 +849,22 @@ mod tests {
         assert!(
             cjk_coverage_present(render_fs.db()),
             "render FontSystem missing CJK after ensure_coverage (global loaded_paths short-circuit regression)"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_eager_opens_times_new_roman_when_present() {
+        let path = std::path::PathBuf::from(r"C:\Windows\Fonts\times.ttf");
+        if !path.is_file() {
+            return;
+        }
+        let fs = create_font_system();
+        assert!(
+            fs.db()
+                .faces()
+                .any(|face| face.families.iter().any(|(f, _)| f == "Times New Roman")),
+            "times.ttf is on disk but Times New Roman is missing from fontdb"
         );
     }
 }

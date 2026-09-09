@@ -1,25 +1,19 @@
-//! GPU backend selection (ADR-3: Windows default GL for lower driver memory).
+//! Desktop-default GPU backend order (ADR-3: prefer GL on opaque for lower driver memory).
+//!
+//! macOS overrides to Metal-only. `RUI_GPU_BACKEND` is applied by the facade so an
+//! unsupported pick degrades instead of aborting.
 
-/// Backends to try, in order. `RUI_GPU_BACKEND` (`gl` / `dx12` / `vulkan` / `metal`)
-/// moves one to the front; the rest stay as fallbacks so an unsupported pick
-/// degrades instead of aborting.
-pub(crate) fn backend_candidates(compositor_alpha: bool) -> Vec<(wgpu::Backends, &'static str)> {
-    let mut order: Vec<(wgpu::Backends, &'static str)> = if cfg!(target_os = "macos") {
-        vec![(wgpu::Backends::METAL, "metal")]
-    } else if cfg!(windows) {
-        if compositor_alpha {
-            // GL still reports only Opaque. wgpu 30 DX12 maps PreMultiplied
-            // (fixed ~v26 #7117); Vulkan remains the most reliable compositor path.
-            compositor_backend_order()
-        } else {
-            opaque_backend_order()
-        }
-    } else if compositor_alpha {
+pub(crate) fn gpu_backend_order(compositor_alpha: bool) -> Vec<(wgpu::Backends, &'static str)> {
+    if compositor_alpha {
         compositor_backend_order()
     } else {
         opaque_backend_order()
-    };
+    }
+}
 
+pub(crate) fn with_requested_backend_front(
+    mut order: Vec<(wgpu::Backends, &'static str)>,
+) -> Vec<(wgpu::Backends, &'static str)> {
     if let Some(front) = parse_requested_backend() {
         let label = order
             .iter()
@@ -84,36 +78,27 @@ mod tests {
     }
 
     #[test]
-    fn windows_opaque_prefers_gl_first() {
-        if !cfg!(windows) {
+    fn opaque_prefers_gl_first() {
+        let order = gpu_backend_order(false);
+        if cfg!(target_os = "macos") {
             return;
         }
-        let order = backend_candidates(false);
         assert_eq!(order.first().map(|(_, n)| *n), Some("gl"));
     }
 
     #[test]
-    fn windows_compositor_skips_gl_when_no_vulkan_feature() {
-        if !cfg!(windows) {
+    fn compositor_skips_gl_when_no_vulkan_feature() {
+        let order = gpu_backend_order(true);
+        if cfg!(target_os = "macos") {
             return;
         }
-        let order = backend_candidates(true);
         let names = names(&order);
         if cfg!(feature = "backend-vulkan") {
             assert_eq!(names.first(), Some(&"vulkan"));
-        } else if cfg!(feature = "backend-dx12") {
+        } else if cfg!(all(windows, feature = "backend-dx12")) {
             assert_eq!(names.first(), Some(&"dx12"));
         } else {
             assert_eq!(names, vec!["gl"]);
         }
-    }
-
-    #[test]
-    fn macos_only_metal() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
-        let order = backend_candidates(false);
-        assert_eq!(names(&order), vec!["metal"]);
     }
 }

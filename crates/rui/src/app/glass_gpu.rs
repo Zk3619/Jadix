@@ -27,6 +27,8 @@ pub(super) fn compositor_alpha_available(modes: &[wgpu::CompositeAlphaMode]) -> 
     })
 }
 
+/// Glass path only: Vulkan (+ optional DX12). Not [`crate::platform::gpu_backend_candidates`]
+/// — that list includes GL, which cannot expose compositor premultiplied alpha.
 fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
     vec![
         (wgpu::Backends::VULKAN, "vulkan"),

@@ -3,14 +3,14 @@
 > **文档地位**：字体加载、族栈、字重匹配与配置的**策略契约**。诊断手册见 [font.md](font.md)。  
 > **冻结状态**：**已冻结**（2026-09-06；Gallery **7) 字体族 / 字重 / 行高覆盖（验收）** 走查通过）。纠错（行号、验收步骤、Gallery id）可改；策略变更（默认栈顺序、CSS 匹配、伪粗、懒加载边界）须改本文，禁止静默改行为。  
 > **实现锚点**：[`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs) · [`utils/font.rs`](../../crates/rui/src/utils/font.rs) · [`prepare_text.rs`](../../crates/rui/src/renderer/prepare_text.rs) · Gallery [`text.rs`](../../examples/gallery/src/pages/text.rs)（`FontOverrideShowcase`）。  
-> 从属文本轨道（巩固期 WP-2.1 / golden 确定性）。Dubai→Inter 根因与提案过程见 [archive/implementation_plan.md](../archive/implementation_plan.md)（**勿与** `ENGINEERING_IMPLEMENTATION_PLAN.md` 混淆）。各 OS 字体路径仍在 [`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs)（未迁入 [`platform/`](../../crates/rui/src/platform/)）；见 [`platform.md`](platform.md)。
+> 从属文本轨道（巩固期 WP-2.1 / golden 确定性）。Dubai→Inter 根因与提案过程见 [archive/implementation_plan.md](../archive/implementation_plan.md)（**勿与** `ENGINEERING_IMPLEMENTATION_PLAN.md` 混淆）。各 OS 字体路径在 [`platform/`](../../crates/rui/src/platform/) `font_paths.rs`（P3a ☑ 2026-09-09）；`font_loader` 只负责打开与懒加载。规范见 [`platform.md`](platform.md) §9。
 
 短计划：UI 默认西文用 **Inter**（或平台 UI 字体），CJK / emoji / 符号仍走懒加载回退。实现入口见 [`font_loader.rs`](../../crates/rui/src/renderer/font_loader.rs) 与 [`utils/font.rs`](../../crates/rui/src/utils/font.rs)。
 
 ## 原则
 
 1. **禁止**启动时 `FontSystem::new()` 全量 `load_system_fonts()`（Windows 上数百 MB RSS）。
-2. **启动只装**：UI sans（Inter 等**磁盘候选** + 平台 Segoe UI / SF 近亲若干字重面）+ Lucide。Inter 文件由**应用**随包提供（见下文「Inter 分发」），核心不 embed。
+2. **启动只装**：UI sans（Inter 等**磁盘候选** + 平台 Segoe UI / SF 近亲若干字重面）+ **一台衬线 Regular**（Times / Georgia / DejaVu Serif 等，供 `font-serif`）+ **一台等宽**（Consolas / DejaVu Sans Mono）+ Lucide。仍禁止全量 `load_system_fonts()`。Inter 文件由**应用**随包提供（见下文「Inter 分发」），核心不 embed。
 3. **按需打开**：CJK / Hangul / Thai / emoji / symbols / Arabic 等由 `ensure_coverage_for_text` 按码点打开。
 
 ## 全局配置入口

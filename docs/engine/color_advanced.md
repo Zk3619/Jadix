@@ -31,7 +31,7 @@
 | 交换链 | `surface_caps.formats` 优先 `is_srgb()`（8-bit `*Srgb`）。`SurfaceConfiguration.color_space = Auto`。offscreen / Scene3d 目标为 `Rgba8UnormSrgb`。 |
 | 片元 | `rounded_rect.wgsl` 把 **display sRGB 输入** `linearize` 后再写入 sRGB 附件，避免二次编码。 |
 | 位图 | Image / emoji / glyphon / path CPU 光栅均为 8-bit RGBA；**无 ICC / cICP**。未标记图按 sRGB 理解。 |
-| 平台 | `crate::platform` 无色域 / HDR 峰值探测（见 [`platform.md`](platform.md)）。 |
+| 平台 | `crate::platform` 无色域 / HDR 峰值探测。挂钩设计见本文 §4.3；**不是** [`platform.md`](platform.md) 的当前阶段（该文 P3 = 字体/剪贴板，P3c = GPU 序；色域属本文 P3-B，见其 §12）。 |
 
 **结论**：今日管线是 **display-referred sRGB LDR**。任何广色域/HDR 方案都必须把「工作空间」和「输出编码」拆开；不能继续在令牌构造时一次性 bake 死 sRGB。
 

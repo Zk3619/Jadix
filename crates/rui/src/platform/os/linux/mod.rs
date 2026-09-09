@@ -1,9 +1,12 @@
 //! Linux overrides. Chrome currently matches desktop (winit `set_blur`);
 //! process memory is `/proc` private RSS; wheel lines honor KDE when present.
-//! IME uses winit cursor area only (no Imm).
+//! IME uses winit cursor area only (no Imm). Font paths forward Unix desktop
+//! tables (same `/usr/share/fonts` as *BSD — see `docs/engine/platform.md` §9.3).
 
 pub(crate) use crate::platform::desktop::{
-    apply_created_window, apply_ime_cursor_area, cancel_active_composition,
-    decorate_window_attributes, end_composition_ui, ime_disallow, process_private_mb,
-    release_ui_control, sync_focus_owner, system_scroll_lines,
+    apply_created_window, apply_ime_cursor_area, cancel_active_composition, clipboard_get_text,
+    clipboard_set_text, decorate_window_attributes, eager_ui_font_files, edit_shortcut_modifiers,
+    enable_ansi_stderr, end_composition_ui, gpu_backend_order, ime_disallow,
+    lazy_script_font_files, local_hms, process_private_mb, release_ui_control, sync_focus_owner,
+    system_font_dirs, system_scroll_lines,
 };

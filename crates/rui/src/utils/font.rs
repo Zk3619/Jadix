@@ -247,8 +247,11 @@ const BUILT_IN_UI_SERIF_CANDIDATES: &[&str] = &[
     "Noto Serif CJK JP",
     "Noto Serif CJK TC",
     "Noto Serif",
+    "Liberation Serif",
+    "DejaVu Serif",
     "Times New Roman",
     "Georgia",
+    "Times",
 ];
 
 const BUILT_IN_UI_MONO_CANDIDATES: &[&str] = &[
@@ -889,6 +892,34 @@ mod resolve_family_cache_tests {
         assert_eq!(sans, "Segoe UI");
         std::env::remove_var("RUI_FONT_FAMILY");
         clear_resolve_family_cache();
+    }
+
+    #[test]
+    fn serif_stack_does_not_collapse_to_sans_when_serif_face_loaded() {
+        clear_resolve_family_cache();
+        let fs = create_font_system();
+        let db = fs.db();
+        let sans = resolved_default_sans_family(db);
+        let serif = resolved_default_serif_family(db);
+        let serif_loaded = db
+            .faces()
+            .any(|face| face.families.iter().any(|(f, _)| f == serif));
+        if !serif_loaded {
+            return;
+        }
+        assert_ne!(
+            sans, serif,
+            "generic serif must resolve to a different family than UI sans (got {sans})"
+        );
+        match resolve_family(db, "Times New Roman, Georgia, serif") {
+            Family::Name(name) => {
+                assert_ne!(name, sans, "Times/Georgia stack must not land on {sans}");
+            }
+            Family::Serif => {
+                assert_ne!(serif, sans);
+            }
+            other => panic!("expected named serif or Family::Serif, got {other:?}"),
+        }
     }
 
     #[test]

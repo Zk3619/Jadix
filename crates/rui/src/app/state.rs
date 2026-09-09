@@ -874,7 +874,7 @@ impl AppState {
         force_software: bool,
         compositor_alpha: bool,
     ) -> (wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter) {
-        let candidates = super::wgpu_backend::backend_candidates(compositor_alpha);
+        let candidates = crate::platform::gpu_backend_candidates(compositor_alpha);
         if !force_software {
             for (backends, name) in &candidates {
                 let instance = crate::renderer::wgpu_compat::instance(*backends);

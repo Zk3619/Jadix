@@ -80,7 +80,6 @@ pub(crate) mod scroll_support;
 mod secondary_input;
 mod secondary_window;
 mod state;
-mod wgpu_backend;
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,

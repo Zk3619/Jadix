@@ -448,7 +448,7 @@ render profile(last ~1024ms): fps≈2.0, pre=0.07ms, layout=0.07ms, draw=7.26ms
 
 | 检查项 | 现状 | 结论 |
 |--------|------|------|
-| Windows 普通窗口后端顺序 | `wgpu_backend.rs`：`GL → (dx12*) → (vulkan*)`；`*` 仅当 `rui/backend-dx12` / `backend-vulkan` feature 开启 | ✅ 已落实 |
+| Windows 普通窗口后端顺序 | `platform/desktop/gpu.rs`：`GL → (dx12*) → (vulkan*)`；`*` 仅当 `rui/backend-dx12` / `backend-vulkan` feature 开启 | ✅ 已落实 |
 | 工作区 wgpu features | 根 `Cargo.toml` 默认 `gles` + `metal`；**不含** `dx12` / `vulkan` | ✅ 避免多后端链接膨胀 |
 | `RUI_GPU_BACKEND` 覆盖 | 指定后端提到队首，其余仍作兜底；未编译的后端静默跳过 | ✅ |
 | `MemoryHints::MemoryUsage` | `state.rs` / `glass_gpu.rs` device 创建均使用 | ✅ |

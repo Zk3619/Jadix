@@ -2,7 +2,7 @@
 
 三平台（Windows / macOS / Linux）手工或半自动冒烟。CI 仍以 `RUI_FORCE_SOFTWARE=1` 离屏为主；本表覆盖**真窗口**路径。
 
-**WP-1.1（IME）细则与自动化命令**：[ime.md](ime.md)。**OS 平台层**（窗口 chrome / 滚动 / 内存 / IME 驱动）与 P2 视觉验收：[platform.md](../engine/platform.md) §8。
+**WP-1.1（IME）细则与自动化命令**：[ime.md](ime.md)。**OS 平台层**（窗口 chrome / 滚动 / 内存 / IME 驱动）与 P2 视觉验收：[platform.md](../engine/platform.md) §8。字体路径 / 剪贴板迁入（P3 ☑；Win 视觉 2026-09-09 签）见同文 §9。
 
 ## 前置
 
@@ -27,6 +27,8 @@
 **签署说明（2026-08-10）**：开发机 **Win**（Kingdom / Win 10.0.26200）#1–#9 已签；#3 为中文 IME（日/韩未测，可选）；macOS / Linux 列仍开放。
 
 **P2 重签（2026-09-08）**：Win32 IME 驱动迁入 `platform/os/windows/ime.rs` 后，同机重走 #3 / #4 视觉通过（中文 IME）。次窗 / 日韩仍可选。
+
+**P3 视觉（2026-09-09）**：Win Gallery F1–F3（字体族 / CJK 懒加载 / 启动内存）与 C1–C4、C6（剪贴板）签收，见 [platform.md](../engine/platform.md) §9.9。macOS C5 / Linux F2 仍可选。
 
 ## WP-1.1 验收标准（摘要）
 

@@ -4,11 +4,23 @@
 //! stay compiled for macOS/Linux and non-desktop triples.
 #![allow(dead_code)]
 
+mod clipboard;
+mod console;
+mod font_paths;
+mod gpu;
 mod ime;
 mod memory;
 mod scroll;
 mod window;
 
+pub(crate) use clipboard::{clipboard_get_text, clipboard_set_text, edit_shortcut_modifiers};
+#[cfg_attr(target_os = "windows", allow(unused_imports))]
+pub(crate) use console::{enable_ansi_stderr, local_hms};
+#[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(unused_imports))]
+pub(crate) use font_paths::{eager_ui_font_files, lazy_script_font_files, system_font_dirs};
+#[cfg_attr(target_os = "macos", allow(unused_imports))]
+pub(crate) use gpu::gpu_backend_order;
+pub(crate) use gpu::with_requested_backend_front;
 #[cfg(not(target_os = "windows"))]
 pub(crate) use ime::{
     apply_ime_cursor_area, cancel_active_composition, end_composition_ui, ime_disallow,

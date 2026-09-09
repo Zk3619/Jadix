@@ -1,17 +1,9 @@
-use clipboard_rs::{Clipboard, ClipboardContext};
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 /// Windows/Linux 用 Ctrl，macOS 用 Cmd（Super）。
 pub fn shortcut_modifiers(m: &ModifiersState) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        m.super_key()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        m.control_key()
-    }
+    crate::platform::edit_shortcut_modifiers(m)
 }
 
 /// Edit shortcut letter under Ctrl/Cmd: prefer `logical_key`, fall back to `physical_key`
@@ -42,14 +34,11 @@ pub fn sanitize_pasted_line(s: &str) -> String {
 }
 
 pub fn set_text(text: &str) {
-    if let Ok(ctx) = ClipboardContext::new() {
-        let _ = ctx.set_text(text.to_string());
-    }
+    crate::platform::clipboard_set_text(text);
 }
 
 pub fn get_text() -> Option<String> {
-    let ctx = ClipboardContext::new().ok()?;
-    ctx.get_text().ok()
+    crate::platform::clipboard_get_text()
 }
 
 /// MIME 类型常量（文本族）。原生 `clipboard-rs` 默认路径以纯文本为主；

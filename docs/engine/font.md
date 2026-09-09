@@ -29,6 +29,8 @@
 
 所以：**不是 ShadCN 的 token 没写进 RUI，而是「字重」在两条栈里的含义和补救手段不同**，CJK 上尤其明显。
 
+`font-serif` / `Times New Roman` 若和 `font-sans` **西文也完全一样**，通常不是 class 没生效，而是 **fontdb 里没有衬线面**：启动只 mmap 有限文件，不会按族名去问 DirectWrite。`font-serif` 会落到 cosmic `Family::Serif`，未 `set_serif_family` 时与 UI sans（Segoe）同面。汉字仍走懒加载雅黑，本来就不会随 Times 变衬线。
+
 ---
 
 ## 2. 笔画「缺斤少两」——更像裁切，而不是字体缺字
