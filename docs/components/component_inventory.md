@@ -97,6 +97,7 @@
 | ColorPicker | `color_picker` / `ColorPicker` | **verified** | 必填实例键 | Gallery 2026-09-05 |
 | Calendar | `calendar` / `Calendar` | **verified** | 必填实例键 | Gallery 2026-09-05；WP-3.3 |
 | Questionnaire | `questionnaire` / `Questionnaire*` | **experimental** | 必填实例键 | Gallery 可演示；DSL 未进 SemVer 0.1 |
+| CodeEditor | `code_editor` / `CodeEditor` | **experimental** | **必填 URI**（`DocumentRegistry`） | B19 P4；无 LSP；不进 SemVer 0.1；不进 prelude |
 | （能力）FileDialog | `utils::file_dialog` | **experimental** | n/a | **非** `components/` 导出；平台差异 |
 
 ### 1.3 浮层 / 反馈（Gallery `overlays`）
@@ -231,7 +232,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 **Form**：已降出组件稳定面 → `experimental`。**WP-3.9 ☑**。
 
-**仍 experimental（即使 Gallery 有演示）**：Form helpers · Chart grammar · VirtualMasonry · Scene3d · Questionnaire · FileDialog · 块级 markdown · Theme / utility。
+**仍 experimental（即使 Gallery 有演示）**：Form helpers · Chart grammar · VirtualMasonry · Scene3d · Questionnaire · CodeEditor · FileDialog · 块级 markdown · Theme / utility。
 
 **broken**：无。
 

@@ -3,7 +3,12 @@
 > **地位**：SemVer / 实验面草稿（WP-2.5 任务③）。正式发布前以 [`AUTHORITY.md`](AUTHORITY.md) WP-4.1 为准重写。  
 > **日期**：2026-08-13
 
-- **2026-09-09 nested list source shrink**：跨列表 hover 时目标 list 仍加 dragged extent padding，源 list 用对应负 margin 把空出行从父级（文件夹卡）流里抽掉；松手 `apply_transfer` 后源文件夹跟剩余项收矮。Gallery 文件夹 island 订阅内层 `files` 长度。
+- **2026-09-10 文本撤销已冻结**：[`text_undo_redo.md`](plans/text_undo_redo.md) L0+L1+L2（feature 门、Owner 历史、差量、RAII Guard、Marker 墙、`StringBuffer`、Registry 关页）。CI `text_undo_freeze`。不冻 rope / LSP / 多光标 / 打进 `default`。
+- **2026-09-10 text-undo P4**：`DocumentRegistry`（显式 register/unregister，save 不清栈）；experimental [`CodeEditor`](../crates/rui/src/components/code_editor.rs) 切页签不清历史。见 [`text_undo_redo.md`](plans/text_undo_redo.md) §12。
+- **2026-09-10 text-undo P3**：`TextBuffer` + `StringBuffer`；undo apply 走 `replace`。1/10/50MB 中点插入 bench 后 **不开** `text-undo-rope`（L1/L2 仍用 `String`）。见 [`text_undo_redo.md`](plans/text_undo_redo.md) §9.3。
+- **2026-09-10 text-undo P2**：历史改为 `TextChange` 差量（一组一步、合并加长单条）；`edit_group` RAII；超 16 MiB 单次替换记 Marker、不清更早步骤。见 [`text_undo_redo.md`](plans/text_undo_redo.md)。
+- **2026-09-10 text-undo P1**：撤销历史离开进程级 `HashMap`，改 named signal + unmount 释放；公开 `TextUndoConfig` / 双上限 / `SetTextUndoPolicy`；密码框不记账。其它 TLS Map 不随本 PR 迁走。见 [`text_undo_redo.md`](plans/text_undo_redo.md) §4.1。
+- **2026-09-10 text-undo P0**：Input/Textarea 撤销历史改为 opt-in Cargo feature `text-undo`（不进 `default`）。Gallery 打开；calculator 关闭。无 feature 时 Ctrl/Cmd+Z/Y 仍消费按键、不插入字母。见 [`text_undo_redo.md`](plans/text_undo_redo.md)。
 - **2026-09-09 nested list slot height**：变高 Sortable 槽位按各项 layout 尺寸打包（重排不撑高列表）；跨列表 hover 给目标 list 加上 dragged extent 的 padding。Gallery 嵌套卡片 `h=auto` / `min_h=0`。
 - **2026-09-09 nested list folder drag**：空 `accept` 且双方都有 `item_type` 时默认同型（外层文件夹拖过内层文件行不再抢走 `hover_list`）。Overlay 克隆嵌套 `SortableItem` 使用独立 island id，替身不再塌成只有标题的 chip。
 - **2026-09-09 platform P3d**：控制台 VT + 本地时钟迁入 `platform/`（Win `GetLocalTime` / Unix `localtime_r`）；[`hmr_log.rs`](../crates/rui/src/app/hmr_log.rs) 只保留 12h 格式与 `NO_COLOR`。见 [`platform.md`](engine/platform.md) §11。

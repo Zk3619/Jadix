@@ -434,7 +434,7 @@ cargo run -p gallery --release
 
 ### 9.8 明确不做：撤销与恢复
 
-`is_undo_shortcut` / `is_redo_shortcut` 已在 `utils/clipboard.rs`；`input_controller` 已调用 `text_edit_history::{undo,redo}_field`。那是**文本编辑能力**，不是 OS chrome。
+`is_undo_shortcut` / `is_redo_shortcut` 已在 `utils/clipboard.rs`；`input_controller` 在 `text-undo` feature 下调用 `text_edit_history::{undo,redo}_field`（无 feature 时仍消费 Z/Y）。那是**文本编辑能力**，不是 OS chrome。P0–P4 已落地（rope feature 按该计划 §9.3 **未开**），见 [`text_undo_redo.md`](../plans/text_undo_redo.md)。
 
 P3 **不得**夹带：
 
@@ -442,7 +442,7 @@ P3 **不得**夹带：
 - 改合并窗口、`is_internal_sync`、废弃 thread-local 历史 Map；
 - 把撤销栈塞进 `platform/`（它不是系统调用栈，也不是 Imm/DWM 一类 OS 驱动）。
 
-若 P3b 让 `shortcut_modifiers` 搬家，撤销**快捷键识别**可以跟着修饰键走；**历史结构与语义冻结到该计划落地时再动**。
+若 P3b 让 `shortcut_modifiers` 搬家，撤销**快捷键识别**可以跟着修饰键走；**历史结构与语义**见 [`text_undo_redo.md`](../plans/text_undo_redo.md)（P0–P4 已落地；`text-undo-rope` 未开）。
 
 ### 9.9 签署
 

@@ -148,7 +148,7 @@ $env:RUI_GPU_BACKEND = "vulkan"   # gl | dx12 | vulkan | metal
 
 ### 发版构建必须用 `-p`
 
-**这是个真实的打包陷阱。** Cargo 会在一次构建内统一整个工作区的 feature，`examples/gallery` 启用了 `rui/bundled-lucide`（内嵌 0.8 MB 图标字体），于是：
+**这是个真实的打包陷阱。** Cargo 会在一次构建内统一整个工作区的 feature，`examples/gallery` 启用了 `rui/bundled-lucide`（内嵌 0.8 MB 图标字体）和 `rui/text-undo`（输入框撤销历史），于是：
 
 ```bash
 cargo build --release --workspace     → calculator.exe 5.20 MB

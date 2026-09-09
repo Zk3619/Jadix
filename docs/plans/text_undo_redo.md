@@ -1,8 +1,12 @@
 # 文本撤销 / 恢复与大文档缓冲
 
-> **文档地位**：专题**设计稿**（非 [`AUTHORITY.md`](../AUTHORITY.md) 勾选源；**本稿不改代码**）。  
-> **日期**：2026-09-09（同日吸收落地审查：瞬时坐标、内部同步隔离、Owner 持有历史、RAII 事务、大替换 Marker）  
-> **关联**：[`text_edit_history.rs`](../../crates/rui/src/utils/text_edit_history.rs) · [`text_field.rs`](../../crates/rui/src/utils/text_field.rs) · [`input_controller.rs`](../../crates/rui/src/app/input_controller.rs) · [`ime.md`](../ops/ime.md) · [`runtime_extension_points.md`](../engine/runtime_extension_points.md)（`TextEditHost`）· [`keyboard_nav.md`](../ops/keyboard_nav.md) · [`size_and_memory.md`](../ops/size_and_memory.md)（lean default / feature 门） · **不是** [`platform.md`](../engine/platform.md) P3（该文 §9.8） · Freya F05 / gpui 编辑器对照见 [`FREYA_COMPARISON.md`](../comparison/FREYA_COMPARISON.md)、[`GPUI_ECOSYSTEM_COMPARISON.md`](../comparison/GPUI_ECOSYSTEM_COMPARISON.md)
+> **文档地位**：L0 协议 + L1/L2 Input/Textarea 撤销/恢复 + Registry 关页隔离的**事实手册**（AUTHORITY **B19**，**不挡 Beta**）。  
+> **冻结状态**：**已冻结**（2026-09-10；`text_undo_freeze` 默认 + `--features text-undo` 绿）。纠错（行号、测试名、实例表增行）可改；**策略变更须改本文并跑** `cargo test -p rui --lib text_undo_freeze` **与** `cargo test -p rui --lib --features text-undo text_undo_freeze`，禁止静默扩面。  
+> **冻结含义**：冻结的是 **编辑的撤销与恢复**（feature 门、Owner 历史、瞬时坐标差量、RAII 事务、Marker 墙、`StringBuffer`、关页互不影响），**不是** IDE / LSP / 多光标 / rope。  
+> **明确不做**（扩面须先改本文）：`text-undo` 打进 `default`；拆 `undo`/`redo` 两个 feature；启用 `text-undo-rope`；把 IDE 塞进 `Input`；历史进进程级 `HashMap` 或 `platform/`；协同 / 撤销树 / CRDT；公开 `UndoableTextEdit` trait。  
+> **日期**：2026-09-09 起稿；**P0–P4 落地 + 冻结**：2026-09-10。  
+> **实现锚点**：[`text_edit_history.rs`](../../crates/rui/src/utils/text_edit_history.rs) · [`text_buffer.rs`](../../crates/rui/src/utils/text_buffer.rs) · [`document_registry.rs`](../../crates/rui/src/utils/document_registry.rs) · [`text_field.rs`](../../crates/rui/src/utils/text_field.rs) · [`input_controller.rs`](../../crates/rui/src/app/input_controller.rs) · [`clipboard.rs`](../../crates/rui/src/utils/clipboard.rs)（Z/Y 消费）· [`crate_tests/text/text_undo_freeze.rs`](../../crates/rui/src/crate_tests/text/text_undo_freeze.rs)  
+> **关联**：[`code_editor.rs`](../../crates/rui/src/components/code_editor.rs)（实验面，协议可对照、不升 SemVer）· [`ime.md`](../ops/ime.md) · [`runtime_extension_points.md`](../engine/runtime_extension_points.md)（`TextEditHost`）· [`keyboard_nav.md`](../ops/keyboard_nav.md) · [`size_and_memory.md`](../ops/size_and_memory.md) · **不是** [`platform.md`](../engine/platform.md) P3 · Freya F05 / gpui 对照见 [`FREYA_COMPARISON.md`](../comparison/FREYA_COMPARISON.md)、[`GPUI_ECOSYSTEM_COMPARISON.md`](../comparison/GPUI_ECOSYSTEM_COMPARISON.md)
 
 ---
 
@@ -65,14 +69,14 @@ RUI 是 Solid 式按 Owner 重建 Element，**不要**把「组件结构体字�
 |---------|------|
 | **`text-undo`** | 编译进撤销+恢复整条能力：历史结构、快捷键处理、控件默认实现、公开配置。 |
 | （不设 `text-redo`） | 恢复不是独立 feature。拆开会让「能撤不能恢复」成为合法组合，体验残缺。 |
-| **`text-undo-rope`**（P3，可选） | 依赖 `text-undo`；换 rope/piece table 实现。默认 crate **不**强制 `ropey`。 |
+| **`text-undo-rope`**（P3 已测、**未启用**） | 依赖 `text-undo`；换 rope/piece table。§9.3 数字说明 L1/L2 不必换；默认 crate **不**强制 `ropey`。 |
 
 复制/剪切/粘贴/全选（A/C/V/X）**不属于**本 feature，始终在默认路径。
 
-### 1.2 建议 Cargo 形态（实现时再改 toml，本稿不落地）
+### 1.2 Cargo 形态
 
 ```toml
-# crates/rui/Cargo.toml — 示意，未合入
+# crates/rui/Cargo.toml
 [features]
 default = []
 text-undo = []
@@ -86,7 +90,17 @@ text-undo = []
 rui = { version = "0.1", features = ["text-undo"] }
 ```
 
-Gallery / 桌面示例在启用本能力后应打开该 feature（否则 Gallery 里 Ctrl+Z 无历史）。工作区 **feature 统一** 陷阱见 [`size_and_memory.md`](../ops/size_and_memory.md)：只有某个 example 打开时，会把历史代码链进同一次 workspace 构建的其它二进制——文档与 CI 需写明谁启用。
+**谁启用（P0）**
+
+| 包 | `text-undo` |
+|----|-------------|
+| [`examples/gallery`](../../examples/gallery/Cargo.toml) | **打开**（`rui` features 列表；`cargo run -p gallery` 即可 Ctrl+Z） |
+| [`examples/calculator`](../../examples/calculator/Cargo.toml) | 关闭 |
+| [`examples/gpu_probe`](../../examples/gpu_probe/Cargo.toml) | 关闭 |
+| `cargo test -p rui --lib` | 关闭（`feature_off` 测跑这里） |
+| `cargo test -p rui --lib --features text-undo` | 打开（历史测） |
+
+工作区 **feature 统一** 陷阱见 [`size_and_memory.md`](../ops/size_and_memory.md)：`cargo test --workspace` / `cargo build --workspace` 会把 Gallery 的 `text-undo` 链进同一次构建的其它二进制。发版测体积一律 `cargo build -p calculator`。CI 对 rui 另跑 `--features text-undo`，不依赖 workspace 统一。
 
 ### 1.3 feature 关闭时
 
@@ -113,11 +127,13 @@ Gallery / 桌面示例在启用本能力后应打开该 feature（否则 Gallery
 
 ### 1.5 与现状代码的关系
 
-当前 MVP（全文快照、100 步、已接 Z/Y）**尚未**套 feature，等于「永远编译进 lib」。迁到独立 feature 时：
+当前 MVP（全文快照、100 步、已接 Z/Y）**P0 已套** `text-undo` feature：
 
-1. 先 `cfg` 包住现有 `text_edit_history` + `input_controller` 记账（P0）。
-2. **P1 迁出 thread-local Map**，改 Owner 绑定；默认 crate / 计算器等 lean 示例 **不**开 feature；Gallery 开。
-3. 再演进差量、Guard 与 `TextBuffer`，仍只在该 feature 内。
+1. **☑ P0** `cfg` 包住现有 `text_edit_history` + 记账点；Gallery 打开、lean 示例关闭。
+2. **☑ P1** 迁出 thread-local 历史 Map，改 named-signal `UndoManager` + Element unmount；默认 crate / 计算器等 lean 示例 **不**开 feature；Gallery 开。
+3. **☑ P2** 差量、Guard 与 Marker，仍只在该 feature 内。
+4. **☑ P3** `TextBuffer` + `StringBuffer`；undo apply 走 `replace`。§9.3 bench 后 **不**开 `text-undo-rope`。
+5. **☑ P4** `DocumentRegistry` + experimental `CodeEditor`；关页 `unregister`；save 不清栈。
 
 ---
 
@@ -138,9 +154,9 @@ Gallery / 桌面示例在启用本能力后应打开该 feature（否则 Gallery
 
 **不是。现在就已经在堆上。**
 
-| | 现在（无 feature 门的 MVP） | 方案后（`text-undo`） |
+| | 现在（P0：`text-undo` 快照） | 方案后（P1+） |
 |--|---------------------------|------------------------|
-| 每步 | 整份 `String` 克隆（堆） | 差量（`String`/`Arc<str>`/`RopeSlice`，仍是堆；见 §7.1） |
+| 每步 | 整份 `String` 克隆（堆；feature 关则为 0） | 差量（`String`/`Arc<str>`/`RopeSlice`，仍是堆；见 §7.1） |
 | 容器 | `Vec` + `remove(0)`（堆） | `VecDeque` 从头丢（堆） |
 | 上限 | 只限 100 条 | 条数 + 字节（可配） |
 | 大文件本体 | `Signal<String>` 整串（堆） | L3 才换 rope（仍在堆，少复制） |
@@ -205,34 +221,58 @@ textarea("bio").typing_merge_timeout_ms(800)
 
 ---
 
-## 4. 现状基线（2026-09-09）
+## 4. 现状基线（2026-09-10，P2）
 
-已落地（表单级 MVP，**尚未**套 `text-undo` feature）：
+P0–P4 已落地（表单级 MVP + **`text-undo` feature 门** + Owner 等效 slot + 差量历史 + `TextBuffer`/`StringBuffer` + `DocumentRegistry`）：
 
 | 项 | 现状 |
 |----|------|
-| 存储 | 每 `field_id` 一份 `FieldHistory`（thread-local `HashMap`，**堆**） |
-| 记录 | **全文快照** `TextEditSnapshot { value, caret, selection }` |
-| 合并 | 连续 `Insert` / `Delete` / `Step` 在 800ms 内合成一步；`Replace`（粘贴/剪切/选区删/IME 上屏）不与打字合并 |
-| 上限 | `past` 最多 100 步；超出 `Vec::remove(0)`；**无字节上限、无公开配置** |
-| 快捷键 | Ctrl/Cmd+Z 撤；Ctrl/Cmd+Y 与 Ctrl/Cmd+Shift+Z 恢复；组字中不抢 IME |
+| Feature | `text-undo` **不进 default**；Gallery 打开；calculator / `cargo test -p rui --lib` 关闭 |
+| 存储（feature 开） | 每 `field_id` 一份 `UndoManager`，放在 named signal `__rui_input_undo_{id}`（`Rc<RefCell<…>>`，**堆**）。**不是**进程级 `HashMap`。卸载走 Element `on_unmount` → `remove_named_signal` |
+| 存储（feature 关） | 无历史状态；`will_user_edit_field` / `undo_field` 为空实现 |
+| 记录 | **`TextChange` 差量**（瞬时坐标；L1/L2 默认一组一步；连续打字/删除/步进加长这一条）。`current` 仍保留一份现文档快照供应用撤销 |
+| 合并 | 连续 `Insert` / `Delete` / `Step` 在时间窗内且光标相邻时合成一步（默认 800ms；`0` = 不靠时间拆组）；`Replace` / 粘贴不与打字合并；光标跳开后新组 |
+| 上限 | `VecDeque`；公开 `max_undo_entries` / `max_undo_memory`（`0` 字节 = 只用条数）；条数钳 1..=10_000；非 0 字节钳 ≥ 64 KiB。单条 `old+new` 超 16 MiB → **Marker**，不 `ClearHistory` |
+| 事务 | `edit_group(field_id, kind) -> EditTransactionGuard`；Drop / panic unwind 收口；组内多 change Undo 倒序、Redo 正序 |
+| 公开配置 | `TextUndoConfig` + Input/Textarea builder / RSX：`undo_enabled`、`max_undo_entries`、`max_undo_memory`、`typing_merge_timeout_ms`（无 feature 时方法 `cfg` 掉） |
+| 快捷键 | Ctrl/Cmd+Z 撤；Ctrl/Cmd+Y 与 Ctrl/Cmd+Shift+Z 恢复；组字中不抢 IME；**无 feature 时仍消费 Z/Y，不插入字母、不改 buffer** |
 | IME | preedit 不进栈；`Ime::Commit` / 失焦折入记 `Replace` |
-| 程序化 `commit_value` | **不**自动入栈；有 `reset(field_id)` 但 Combobox 等路径尚未普遍调用 |
-| 值本体 | Input/Textarea 仍是 `__rui_input_value_{id}` 的 `Signal<String>` |
+| 程序化写入 | `commit_value` 默认 `NotUndoable` + `is_internal_sync`（panic 也清标志）；`commit_value_with_policy` 支持 `Undoable` / `ClearHistory` |
+| 密码 | `type=password` **一律** `password_default()`（不记账）；P1 忽略「显式再打开」 |
+| 值本体 | Input/Textarea 仍是 `__rui_input_value_{id}` 的 `Signal<String>`；undo apply 经 `TextBuffer::replace`（`String` 实现） |
 | 绘制 | Textarea ≥64KB / ≥2048 视觉行才走高度估算虚拟化；缓冲本身仍是整串 |
 
-已知缺口（相对本稿目标）：
+已知缺口（相对本稿目标；**P0–P4 已勾**）：
 
-- **未**独立 feature；lean 二进制也链入历史路径。
-- 没有 **字节上限** / **公开配置**。
-- 没有 **差量**；每次 `value.clone()`。
-- 没有 **`applying_undo` / `is_internal_sync`**：靠「不要从 `commit_value` 记账」约定，撤销或受控回写容易污染历史或重入。
-- **密码框仍记栈**（本地明文）。
-- 历史在 **进程级 thread-local `HashMap`**，**不随 Owner/字段卸载淘汰**（动态 `field_id` 会漏）。
-- `redo` 推 `past` 时未再检查上限（被「最多撤 100 次」间接卡住）。
-- 无法把缓冲换成 rope；CodeEditor / 多文件不存在。
+- `text-undo-rope` **故意未开**（§9.3：L1/L2 中点插入仍可接受；rope 留给打开 10–50MB 时）。
+- CodeEditor **无** LSP / 多光标 / Minimap（实验面只是 Textarea chrome + 每 URI 一份会话）。
+- 仓内其它进程级 TLS Map（问卷、Carousel autoplay 等）**未**随本专题迁走，见 **§4.1**。
 
 对照：Freya 有 `freya-edit` + ropey + `code-editor`；gpui-component 把编辑器/LSP 放在庞大的 input 目录。RUI 表单控件更完整，**编辑器层几乎空白**——本稿补的是这条缺的协议，而不是把 VSCode 搬进 `rui` 默认 crate。
+
+### 4.1 全仓 `thread_local` / HashMap 审计（P1 结论：**只迁撤销**）
+
+仓内大量 `thread_local!`，多数不是「按 `field_id` 堆积、卸载不淘汰」的撤销债。**不要**在本 PR 把它们全部改成 named signal。分类：
+
+| 类型 | 例子 | 风险 | P1 |
+|------|------|------|----|
+| 进程级、无 cleanup 的 **id → 状态** | 旧 `HISTORIES`；`CONTROLLED_VALUES`（`text_field.rs`） | 动态列表泄漏 / id 复用串栈 | **历史已迁走**；受控对拍在同一 unmount hook 里 `unbind` |
+| 每帧 reset 的注册表 | `activate_registry`、menubar 本帧菜单表 | 低（每帧清空） | 否 |
+| 运行时内核 | `reactivity` Runtime、effect retry | 必要；不是控件会话 | 否 |
+| 带上限的缓存 | `text/measure` PREPARE/FIT、visual line | 可接受 | 否 |
+| 会话 Map（同类债、不同产品） | hover_card `TIMERS`（已有 `on_cleanup`）；questionnaire `Q_ITEMS`；carousel `AUTOPLAY_*` / `LOOP_ANIM` | 中：动态 id 可能残留 | **否**，记 follow-up，不塞进撤销 PR |
+| 单槽 `Option` | slider / resizable / 拖拽 session | 低 | 否 |
+
+**为何历史不能绑 `component_root` 的 `create_signal` / `on_cleanup`：**  
+`component_root` **每次调用新建 child owner**；父 effect 重跑会 `dispose_owner_children`。普通重绘就会把撤销栈清掉。  
+`use_signal` 文档写明：全局命名槽**故意**活过 rebuild（Input 的 value/caret 同理）。
+
+P1 采用的「等效 slot」：
+
+- 历史：`use_signal("__rui_input_undo_{id}", Rc<RefCell<UndoManager>>)`，与 `__rui_input_value_{id}` 同一身份模型。
+- **不要**再引入 `thread_local HashMap` 存历史。
+- Unmount：只在第一次给 Element 挂 hook（`__rui_input_lifecycle_hook_{id}` live flag）；reconcile 在 `new_el.on_unmount.is_none()` 时 **clone 旧 hook**。不能把 `UnmountHook` 存进 named signal（Rc 永远 >0，永不 fire）。
+- `Signal::update` 会 **clone 整个 T 做 PartialEq** → 必须 `Rc<RefCell<UndoManager>>`，只 `peek` Rc 再 `borrow_mut`，不要 `set` 整份栈。
 
 ---
 
@@ -371,7 +411,12 @@ pub enum UndoPayload<S> {
     /// L1/L2：通常 `changes.len() == 1`。
     Changes(Vec<TextChange<S>>),
     /// 超过硬顶：不保存两端全文，也不清空更早的历史。见 §9.2。
-    LargeReplaceMarker { old_hash: u64, new_hash: u64, byte_len: usize },
+    LargeReplaceMarker {
+        old_hash: u64,
+        new_hash: u64,
+        byte_len: usize,
+        retained: Option<RetainedSide>,
+    },
 }
 
 pub enum EditKind {
@@ -396,11 +441,11 @@ RUI 是 Solid 式重建，**不能**指望 `Input` 结构体字段跨帧活着�
 
 | 层 | 历史放哪 |
 |----|----------|
-| L1/L2 | **Owner 绑定状态**：与该字段同一 Owner 的 `Signal<UndoManager>`（或等效 slot）。Owner cleanup / 控件卸载时 Drop，历史释放。 |
+| L1/L2 | **等效 slot（P1 已落地）**：`use_signal("__rui_input_undo_{id}", Rc<RefCell<UndoManager>>)`，与 value/caret 同一身份模型。Element `on_unmount` 调 `remove_named_signal`。**不要**把 `on_cleanup` 挂在 `component_root` 上（每帧 child owner 会把栈清掉），见 §4.1。 |
 | 稳定 `id` 的页签切换 | 仅当产品要「切走再切回仍可撤」时，才把 manager 放进 L3 `DocumentRegistry`，显式 `unregister` 或 `Weak`。 |
 | 禁止 | 无 cleanup 的全局 `HISTORIES` Map |
 
-`field_id` 仍可作信号键前缀，但生命周期必须等于字段 Owner，而不是 UI 线程活多久 Map 就活多久。
+`field_id` 仍可作信号键前缀，但生命周期必须等于字段（挂载到卸载），而不是 UI 线程活多久 Map 就活多久。
 
 ### 7.5 程序化写入与内部同步隔离
 
@@ -455,6 +500,8 @@ impl Drop for EditTransactionGuard<'_> {
 
 P2 起公开 Guard；若保留 `begin`/`end`，只作 Guard 内部实现，**禁止**作为跨调用的公开 API。失焦时若仍有开着的 Guard，Drop 会收口。
 
+**P2 落地（2026-09-10）**：`edit_group(field_id, kind) -> EditTransactionGuard`；Drop / panic unwind 清 `open_txn`，下一次打字是新组。`with_internal_sync` / 撤销应用同样用 Drop 清标志。组内多 `TextChange` 已测 Undo 倒序、Redo 正序。
+
 用于：自动补全、格式化、IME 一次 Commit 多段、L3 多光标。L1 连续打字**不**开事务，只靠合并加长单条 `TextChange`。
 
 事务内多条 `TextChange` 仍遵守 §7.2：每条记瞬时坐标；Undo 倒序、Redo 正序。
@@ -496,17 +543,22 @@ P2 起公开 Guard；若保留 `begin`/`end`，只作 Guard 内部实现，**禁
 
 `ClearHistory` **只**用于换文档、reset 表单、密码失焦清空，**不是**大粘贴的降级手段。一次 20MB 替换若清掉前面 100 步，是 UX 灾难。
 
-用户对 Marker 按 Z 时的产品选择（实现期钉一种并测）：
+**冻结选择（2026-09-10，选项 1，无对话框）**：
 
-1. **跳过该步**：弹出或状态栏说明「此步修改量过大，已跳过」，继续撤更早的组；或
-2. **确认后跳过**（对话框）；或
-3. L3 rope 已能廉价保留差量时，本档降级可取消。
+| Marker | 一次 Z |
+|--------|--------|
+| 有 `RetainedSide::Old`（旧侧 ≤ 1 MiB） | **还原**短旧文；更早步骤仍在栈上，再 Z 可撤 |
+| 无 Old（两端都超过 `RETAIN_SIDE_MAX`） | **墙**：消费快捷键、文档不变、`undo` 返回 `None`。更早差量留在栈内，**不**套用到当前大文本（那些 `TextChange.range` 属于 Marker 之前的文档）。不弹确认框。 |
+
+有 `RetainedSide::New` 的 Marker 在 Redo 上对称：可还原则还原；否则 Redo 为墙。
+
+**否决**：同一调用内跳过墙并套用更早差量——会把瞬时坐标打到错误文档上。L3 rope 若能廉价保留旧文，本档降为「有 Old」，墙消失；须先改本文。
 
 Marker 不得假装能还原那一次大替换的文本（除非 L3 用结构共享真正记下了）。栈与文档的「一致性」靠「这一步不可逆还原」表达，而不是把更早历史删掉。
 
-L3 用 persistent rope 时，大替换的「旧文本」可由缓冲结构共享，不必复制 100MB 进 `old_text`；那是 `text-undo-rope` 的收益。P3 **先**对 `String::insert` vs `Rope::insert` 在 1MB / 10MB / 50MB 上做 bench，再用数据决定是否换缓冲。
+L3 用 persistent rope 时，大替换的「旧文本」可由缓冲结构共享，不必复制 100MB 进 `old_text`；那是 `text-undo-rope` 的收益。P3 已对 `String::insert` vs `Rope::insert` 在 1MB / 10MB / 50MB 上做 bench（§9.3），**不开**产品 feature。
 
-### 9.3 文档本体
+### 9.3 文档本体与 P3 bench（2026-09-10）
 
 L3 禁止：
 
@@ -514,7 +566,26 @@ L3 禁止：
 每键：document.clone() → Signal::set(整份)
 ```
 
-视口虚拟化只解决**绘制**，不解决 **O(n) 插入** 和 **O(n) 快照**。大文件必须先换 `TextBuffer`。
+视口虚拟化只解决**绘制**，不解决 **O(n) 插入** 和 **O(n) 快照**。大文件必须先换缓冲实现。P3 交付的是 **`TextBuffer` 协议 + `StringBuffer`**；活文档仍是 `Signal<String>`。
+
+**决策：L1/L2 继续 `StringBuffer`，`text-undo-rope` 保持注释、不进产品。** 1MB 中点插入约 0.12ms，远低于 16ms 帧预算；10–50MB 才进入 rope 有意义的区间，那是 L3，不要只因为 50MB 数字就把 `ropey` 打进表单路径。
+
+测量：2026-09-10 Windows，**release**，ASCII 中点插入，**clone 在计时外**，每档取中位 ns。未跑 `cargo bench -p rui`（会把整份 GUI 打成 release，曾把工作盘打满）。仓内同算法（debug 测试二进制数字会偏慢）：
+
+```text
+cargo test -p rui --lib --ignored text_buffer_mid_insert -- --nocapture
+```
+
+| 缓冲 | 载荷 | `String::insert_str` | `String::replace_range` | `Rope::insert` |
+|------|------|----------------------|-------------------------|----------------|
+| 1MB | 1B | 0.124 ms | 0.180 ms | 0.6 µs |
+| 1MB | 1KB | 0.134 ms | 0.122 ms | 0.9 µs |
+| 10MB | 1B | 1.37 ms | 1.31 ms | 0.6 µs |
+| 10MB | 1KB | 1.49 ms | 1.15 ms | 2.0 µs |
+| 50MB | 1B | 6.54 ms | 7.22 ms | 1.6 µs |
+| 50MB | 1KB | 6.45 ms | 6.97 ms | 2.2 µs |
+
+`StringBuffer::replace` 与 `String::replace_range` 同量级（都是 O(n) memmove）。复杂度：`String` 中点插入 **O(n)**；`Rope::insert` 近 **O(log n)**。L3 打开 10–50MB 再启用 `text-undo-rope`。
 
 ---
 
@@ -522,8 +593,8 @@ L3 禁止：
 
 `type=password`（即使开了 `text-undo`）：
 
-- **默认禁用撤销**（不写历史；Z/Y 仍消费按键，避免把 `z` 打进字段）。
-- 若产品坚持可撤：须显式 API，历史仅存活于焦点内，**失焦 / 提交 / 切换 reveal 为隐藏** 时 `clear_undo_history`。
+- **P1：一律禁用撤销**（`password_default()`；builder / RSX 的 `undo_enabled(true)` **不能**覆盖）。Z/Y 仍消费按键，避免把 `z` 打进字段。
+- 若后续产品坚持可撤：须另开显式 API，历史仅存活于焦点内，**失焦 / 提交 / 切换 reveal 为隐藏** 时 `clear_undo_history`。
 - 禁止把密码历史打进日志 / DevTools 文本转储。
 
 OTP 分格输入不走文档栈。
@@ -581,8 +652,8 @@ DocumentRegistry
 ### 12.3 编辑器能力的接入顺序
 
 1. 单缓冲差量撤销（L2 Textarea 已够用）。
-2. `TextBuffer` 换 rope/piece table（`text-undo-rope`），打开 10–50MB 文本可插删。
-3. `DocumentRegistry` + 多页签。
+2. `TextBuffer` 换 rope/piece table（`text-undo-rope`）：协议已在 P3；产品 feature 按 §9.3 **未开**。打开 10–50MB 文本可插删时再启用。
+3. `DocumentRegistry` + 多页签（P4 ☑：关页 `unregister`；切页签不清栈）。
 4. 多光标 = 一组多 `TextChange`（瞬时坐标 + Undo 倒序，或基准坐标 + **从后往前** apply；见 §7.2）。
 5. LSP `applyEdit` = `edit_group()` RAII Guard（禁止裸 begin/end 跨调用）。
 6. 协同 / 撤销树：明确不做，除非另开 ADR。
@@ -591,23 +662,26 @@ CodeEditor 组件（对照 Freya F05）应是 **另 crate 或 `components/code_e
 
 ---
 
-## 13. 分期（只设计，不排 AUTHORITY WP）
+## 13. 分期（AUTHORITY **B19**，不挡 Beta）
 
-实施时再在 AUTHORITY 挂号。建议顺序：
+实施时再在 AUTHORITY 挂号（P0 已记 Backlog **B19**，不挡 Beta）。建议顺序：
 
 | 阶段 | 内容 | 验收 |
 |------|------|------|
-| **P0** | 现快照路径套上 **`text-undo` feature**；Gallery 打开、lean 示例关闭；补测试：删除/粘贴/IME/撤销后新编辑清 redo；无 feature 时 Z 不插入字母 | `cargo test -p rui --lib` 默认绿；`--features text-undo` 历史测绿 |
-| **P1** | 公开 `TextUndoConfig`；`applying` + **`is_internal_sync`**；`SetTextUndoPolicy`；**字节上限**；密码默认关；`VecDeque`；**废弃 thread-local 历史 Map，改为 Owner 绑定 `UndoManager`** | 可配条数/内存；控件卸载后历史释放（动态列表不泄漏）；受控 Signal 回写不污染栈；密码无历史 |
-| **P2** | `TextChange` 差量（瞬时坐标、一组一步）；Textarea 默认走差量；**`EditTransactionGuard` RAII**（替代公开 begin/end）；超大替换 **Marker** 而非 `ClearHistory` | 长备注粘贴/全选删可撤；合并策略测全；事务 panic/提前 return 不悬挂；大替换后仍能撤更早的小步 |
-| **P3** | `TextBuffer` + String 实现；**先 bench** `String::insert` vs rope（1MB / 10MB / 50MB）再决定 `text-undo-rope` | 有数据再换缓冲；百万字符插入不掉帧到不可用 |
-| **P4** | `DocumentRegistry`（显式 register/unregister 或 Weak）；CodeEditor 实验面；多文件关页释放 | 多页签各自 Z/Y；关文件内存回落 |
+| **P0 ☑ 2026-09-10** | 现快照路径套上 **`text-undo` feature**；Gallery 打开、lean 示例关闭；补测试：删除/粘贴/IME/撤销后新编辑清 redo；无 feature 时 Z 不插入字母 | `cargo test -p rui --lib` 默认绿；`--features text-undo` 历史测绿 |
+| **P1 ☑ 2026-09-10** | 公开 `TextUndoConfig`；`applying` + **`is_internal_sync`**；`SetTextUndoPolicy`；**字节上限**；密码默认关；`VecDeque`；**废弃 thread-local 历史 Map**，改为 named-signal `UndoManager` + unmount 释放。其它 TLS Map **不**一并迁（§4.1） | 可配条数/内存；控件卸载后历史释放；受控 Signal 回写不污染栈；密码无历史 |
+| **P2 ☑ 2026-09-10** | `TextChange` 差量（瞬时坐标、一组一步）；Textarea/Input 均走差量；**`EditTransactionGuard` RAII**；超大替换 **Marker** 而非 `ClearHistory`；`is_internal_sync` / `applying` 也改 Drop 收口 | 长备注粘贴/全选删可撤；合并策略测全；事务 panic/提前 return 不悬挂；大替换后仍能撤更早的小步 |
+| **P3 ☑ 2026-09-10** | `TextBuffer` + `StringBuffer`；**bench** `String::insert` vs rope（1MB / 10MB / 50MB，§9.3）后 **不开** `text-undo-rope` | 有数据；L1/L2 中点插入可接受；rope 留给 L3 |
+| **P4 ☑ 2026-09-10** | `DocumentRegistry`（显式 register/unregister）；experimental `CodeEditor`；多文件关页释放。Save **不清**历史。切页签不走 Input 的 unmount `reset` | 多页签各自 Z/Y；关 B 不影响 A；save 后仍可撤；unregister 后 undo 槽消失 |
+| **冻结 ☑ 2026-09-10** | 就地冻结本文 L0+L1+L2；CI `text_undo_freeze`（默认 + `text-undo`）；§9.2 Marker 墙钉死 | `cargo test -p rui --lib text_undo_freeze`；`--features text-undo text_undo_freeze` |
 
-P0–P1 不挡现有 Beta 表单（默认二进制行为 = 今天**关掉**历史，与 lean 一致；要旧 MVP 手感则开 feature）。P3–P4 是编辑器产品，不挡 Input verified。
+P0–P1 不挡现有 Beta 表单（默认二进制行为 = 今天**关掉**历史，与 lean 一致；要旧 MVP 手感则开 feature）。P3 协议已进、rope 未进产品。P4 实验面不挡 Input verified。
 
 ---
 
-## 14. 建议 API（`cfg(feature = "text-undo")`）
+## 14. 已交付 API vs 非冻结建议（`cfg(feature = "text-undo")`）
+
+**冻结交付**（L1 走 field_id API，不要求 trait）：`TextUndoConfig` / `SetTextUndoPolicy` / `edit_group` → `EditTransactionGuard` / `undo_field` / `redo_field` / `can_undo` / `can_redo` / `install_field_config` / `DocumentRegistry`。
 
 ```rust
 pub struct TextUndoConfig {
@@ -617,43 +691,48 @@ pub struct TextUndoConfig {
     pub typing_merge: std::time::Duration,
     pub secure_disable: bool,
 }
+```
 
+**非冻结**（实现冻结不要求、静默加上须先改本文）：
+
+```rust
 pub trait UndoableTextEdit {
     fn can_undo(&self) -> bool;
     fn can_redo(&self) -> bool;
     fn undo(&mut self);
     fn redo(&mut self);
-    /// 公开事务入口。返回 Guard，Drop 时 commit/rollback。
     fn edit_group(&mut self, kind: EditKind) -> EditTransactionGuard<'_>;
     fn clear_undo_history(&mut self);
 }
 ```
 
-可插拔：`with_undo_manager(impl UndoManager)` / `with_buffer(impl TextBuffer)` 给 L3；L1 不暴露也能工作。
+可插拔 `with_undo_manager` / `with_buffer` 给 L3；L1 不暴露也能工作。
 
 ---
 
-## 15. 测试清单（实现阶段用）
+## 15. 冻结契约测
 
-**feature**：默认构建无历史符号（或模块 cfg 掉）；`--features text-undo` 下行为完整；无 feature 时 Ctrl+Z 不插入 `z`。
+命令：
 
-**配置**：改 `max_entries` / `max_bytes` 后淘汰最旧；非法 0 被钳位。
+```text
+cargo test -p rui --lib text_undo_freeze
+cargo test -p rui --lib --features text-undo text_undo_freeze
+```
 
-**操作**：插入、Backspace、Delete、选区替换、粘贴、剪切、全选删除、清除、步进、IME Commit、选区拖拽移动、程序化 `NotUndoable` / `Undoable` / `ClearHistory`。
+CI 已接入（`test` + `offscreen` job）。策略变更须同步改 `crate_tests/text/text_undo_freeze.rs`。
 
-**栈**：撤再恢复；恢复后再打字 redo 为空；连续打字一步撤；连续删一步撤；粘贴不与前后打字合并；光标跳开后新组。
+| 项 | 钉死 |
+|----|------|
+| feature 门 | 默认构建无历史；`--features text-undo` 才记账；**不进 `default`** |
+| 快捷键 | 无 feature 时 Ctrl/Cmd+Z/Y 仍消费、不插入字母 |
+| 密码 | `password_default()` 永不记账 |
+| 坐标 / 事务 | 组内 Undo 倒序；Guard Drop（含 panic unwind）后下一次打字是新组 |
+| Marker | 有 Old 则还原且更早小步可再撤；无 Old 则为墙 |
+| 缓冲 | L1/L2 = `TextBuffer::replace` + `StringBuffer` |
+| 会话 | 关 B 不影响 A |
+| 边界（模块测） | 空文档 Z；栈空仍消费快捷键；`ClearHistory` 不用于大粘贴 |
 
-**回环**：`applying` 期间受控 effect 不得 `will_user_edit`。用户输入 → `signal.set` → 重建后 **栈深度不变**（`is_internal_sync`）。
-
-**坐标 / 事务**：组内多 change 时 Undo 倒序、Redo 正序不越界；Guard Drop（含 panic unwind）后下一次打字是新组。
-
-**所有权**：卸载控件 / 动态列表移除行后，不得残留该 `field_id` 的历史（无全局 Map 条目）。
-
-**边界**：空文档 Z；栈空仍消费快捷键；密码无历史；超 `max_bytes` 丢最旧（`pop_front`）；超大替换记 Marker **且**更早小步仍可撤；`ClearHistory` 不用于大粘贴。
-
-**会话（P4）**：两文件交叉编辑，Z 只影响当前；关 B 不影响 A；save 后仍可撤。
-
-**性能（P3）**：换 rope **之前**先跑 1MB / 10MB / 50MB 的 `String::insert` vs `Rope::insert` bench，把数字写进实现笔记；大缓冲中间插入的复杂度在选定实现后钉住。
+更深操作矩阵（插入/Backspace/IME/合并）仍由 `text_edit_history` 模块测覆盖，不升 SemVer 扩面。
 
 ---
 
@@ -669,4 +748,22 @@ VSCode / Monaco / Cursor 不是「无限 `Vec<String>` 全文」。而是：
 + 内存与关闭页签回收
 ```
 
-RUI 先把能力收进 **`text-undo` feature**（堆上差量 + 可配双上限 + Owner 持有历史 + 可插拔缓冲）；大文件与多文件是 L3，不把 IDE 做进 `Input`，也不打进默认 crate。实现时以 **§0 落地必守** 为准：瞬时坐标、内部同步隔离、RAII 事务、大替换 Marker。
+RUI 冻结面把能力收进 **`text-undo` feature**（堆上差量 + 可配双上限 + Owner 持有历史 + `StringBuffer`）；大文件与多文件加深是 L3，不把 IDE 做进 `Input`，也不打进默认 crate。实现时以 **§0 落地必守** 为准：瞬时坐标、内部同步隔离、RAII 事务、大替换 Marker 墙。
+
+---
+
+## 17. 冻结面 vs 明确不做
+
+| 冻结 | 明确不做（先改本文） |
+|------|----------------------|
+| `text-undo` opt-in，不进 `default` | 打进 `default`；拆 undo/redo 两个 feature |
+| named-signal Owner 历史；Input unmount `reset` | 进程级 `HISTORIES` HashMap；把历史塞进 `platform/` |
+| `TextChange` 瞬时坐标；L1/L2 一组一步；Undo 倒序 | 「组开始基准坐标」正序套用 |
+| `is_internal_sync` + `applying` RAII | 仅靠 `applying_undo` |
+| `EditTransactionGuard` | 裸 `begin`/`end` |
+| `LargeReplaceMarker`；有 Old 还原；无 Old 为墙 | `ClearHistory` 大粘贴；无 Old 时把更早差量套到当前大文本 |
+| `TextBuffer` + `StringBuffer` | 启用 `text-undo-rope`；活文档改 rope |
+| `DocumentRegistry` 关页释放、save 不清栈 | 把 IDE / LSP / 多光标做进 `Input` |
+| experimental `CodeEditor` 不进 prelude | SemVer 承诺 CodeEditor |
+| L1 field_id API | 公开 `UndoableTextEdit` trait |
+| | 协同 / 撤销树 / CRDT |

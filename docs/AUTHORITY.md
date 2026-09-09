@@ -86,6 +86,7 @@ docs/                                ★ 根目录 = 权威 + changelog
 | `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) 第一部分（**已冻结**） | 在组件里重复实现 tick；把 presence 塞进 `keyframes`；把 `motion` 迁入 `style/` |
 | CSS 动画 / transition / `@keyframes` 冻结子集、Specified/Used 模型 | [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分（**已冻结**） | 静默扩面不改 §11.4 / §13；`KeyframeStop` 手工字段；冒充 DOM `animation*` 事件；不跑 `anim_freeze` |
 | `platform` OS 层该放哪、cfg 边界、mobile/embedded | [`platform.md`](engine/platform.md) | 在 `app/` 或 `renderer/` 静默新增 Win32 块而不更新该手册 |
+| 文本撤销 / `text-undo` feature、Owner 历史、rope | [`plans/text_undo_redo.md`](plans/text_undo_redo.md)（**B19**，**已冻结** L0+L1+L2，**不挡 Beta**） | 打进 `default`；拆 `undo`/`redo` 两个 feature；把 IDE 塞进 `Input`；历史进 `platform/`；不跑 `text_undo_freeze` |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
@@ -857,6 +858,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 | B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui) + EUI `workshop` / Shadertoy 叶契约（[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)）；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas / EUI compose；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits) + EUI tilt/2.5D 产品形状（同文）；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B18 | **音视频分层**：引擎只收动态纹理槽（ImageStream）；解码永不进 `rui`；ArtPlayer 式播放器后置 crate。**不挡** W3/Beta / 0.1 | [`engine/media.md`](engine/media.md) · 计划 [`plans/media-av.md`](plans/media-av.md)；对照 EUI ImageStream、Freya F02 |
+| B19 | **文本撤销/恢复**：**已冻结**（2026-09-10）L0 协议 + L1/L2 Input/Textarea + Registry 关页隔离。`text-undo` feature（不进 default）。P0–P4 ☑。§9.2 Marker：有 Old 还原、无 Old 为墙。CI `text_undo_freeze`。`text-undo-rope` **不开**。**不挡** W3/Beta | [`plans/text_undo_redo.md`](plans/text_undo_redo.md) |
 | B7 | 真窗口 CI | 工程 |
 | B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list（树级剪枝）+ draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；ADR 见 [`damage.md`](engine/damage.md)；[`size_and_memory.md`](ops/size_and_memory.md) §7 |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
@@ -890,6 +892,9 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --no-deps -- -D warnings
 cargo test -p rui --lib
+cargo test -p rui --lib --features text-undo
+cargo test -p rui --lib text_undo_freeze
+cargo test -p rui --lib --features text-undo text_undo_freeze
 cargo test -p rui --lib offscreen
 cargo check -p gallery
 ```
