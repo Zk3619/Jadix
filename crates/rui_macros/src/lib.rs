@@ -9239,9 +9239,8 @@ mod rsx_lowering_tests {
 
     #[test]
     fn draggable_restrict_emits_element_id() {
-        let s = expand(
-            r#"<Draggable id="a" restrict="corners-arena"><Label>"x"</Label></Draggable>"#,
-        );
+        let s =
+            expand(r#"<Draggable id="a" restrict="corners-arena"><Label>"x"</Label></Draggable>"#);
         assert!(
             s.contains("Restrict") && s.contains("parse") && s.contains("corners-arena"),
             "{s}"

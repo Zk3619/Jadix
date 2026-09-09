@@ -594,10 +594,16 @@ fn moving_item_rect(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) -> R
     let mut width = src.rect.width.max(1.0);
     let mut height = src.rect.height.max(1.0);
     if let Some(list) = sess.from_list.as_deref() {
-        let stride = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, match sess.axis {
-            Axis::X => width,
-            Axis::Y | Axis::Xy => height,
-        });
+        let stride = slot_extent_along_axis(
+            hits,
+            list,
+            sess.from_index,
+            sess.axis,
+            match sess.axis {
+                Axis::X => width,
+                Axis::Y | Axis::Xy => height,
+            },
+        );
         match sess.axis {
             Axis::X => width = width.min(stride).max(1.0),
             Axis::Y | Axis::Xy => height = height.min(stride).max(1.0),
@@ -631,55 +637,30 @@ fn list_has_indexed_candidate(hits: &[DragHit], sess: &DragSession, list: &str) 
 /// Nested lists: pick the **innermost** accepting hit (row or shell) that
 /// contains the pointer so a parent `SortableItem` wrapping a child list does
 /// not steal hover from empty nested padding.
+///
+/// Outside every accepting list (gap between folders, below the last card):
+/// solid-dnd `closestCenter` — nearest existing slot among all lists, not a
+/// phantom append hole and not the Kanban x-band of a vertical stack.
 fn resolve_sortable_hover_list(
     hits: &[DragHit],
     sess: &DragSession,
     pointer: [f32; 2],
+    prev_list: Option<&str>,
 ) -> Option<String> {
     // Folder-in-folder: the dragged row's box contains its nested list. Stay
     // on `from_list` while the pointer is still in that island.
     if source_layout_contains(sess, hits, pointer) {
         return sess.from_list.clone();
     }
+    if let Some(list) = innermost_accepting_shell_at(hits, sess, pointer) {
+        return Some(list);
+    }
     if let Some(list) = innermost_list_at(hits, sess, pointer) {
         if !pointer_past_list_indexed_content(hits, &list, pointer, sess.axis) {
             return Some(list);
         }
     }
-    let mut shells: Vec<&DragHit> = hits
-        .iter()
-        .filter(|h| {
-            h.accepts(sess)
-                && h.index.is_none()
-                && h.rect.is_usable()
-                && h.rect.contains_point(pointer)
-                && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
-        })
-        .collect();
-    shells.sort_by(|a, b| {
-        a.rect
-            .area()
-            .partial_cmp(&b.rect.area())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for shell in shells {
-        let list = shell.list_id.as_deref().unwrap();
-        if !pointer_past_list_indexed_content(hits, list, pointer, sess.axis) {
-            return Some(list.to_string());
-        }
-    }
-    // Below indexed rows but still inside a column band (Kanban `min_h` padding):
-    // switch to the column under the pointer, not the padded shell of the origin list.
-    if let Some(from) = sess.from_list.as_deref() {
-        if pointer_past_list_indexed_content(hits, from, pointer, sess.axis) {
-            if let Some(other) = pointer_column_list_by_band(hits, sess, pointer) {
-                if other != from {
-                    return Some(other);
-                }
-            }
-        }
-    }
-    pointer_column_list_by_band(hits, sess, pointer).or_else(|| sess.from_list.clone())
+    nearest_list_by_slot(hits, sess, pointer, prev_list).or_else(|| sess.from_list.clone())
 }
 
 /// Smallest accepting droppable (indexed row or list shell) under the pointer.
@@ -700,23 +681,22 @@ fn innermost_list_at(hits: &[DragHit], sess: &DragSession, pointer: [f32; 2]) ->
         .and_then(|h| h.list_id.clone())
 }
 
-/// Column `Droppable` whose horizontal band contains the pointer (Kanban).
-fn pointer_column_list_by_band(
+/// Innermost accepting **list shell** (`index=None`) under the pointer.
+/// Unlike [`innermost_list_at`], past-the-last-row still counts so Kanban
+/// `min_h` padding keeps the column, and nested folder gaps do not.
+fn innermost_accepting_shell_at(
     hits: &[DragHit],
     sess: &DragSession,
     pointer: [f32; 2],
 ) -> Option<String> {
-    if !matches!(sess.axis, Axis::Y | Axis::Xy) {
-        return None;
-    }
     hits.iter()
         .filter(|h| {
             h.accepts(sess)
                 && h.index.is_none()
                 && h.rect.is_usable()
+                && h.rect.contains_point(pointer)
                 && h.list_id.as_ref().is_some_and(|s| !s.is_empty())
         })
-        .filter(|h| pointer[0] >= h.rect.x && pointer[0] < h.rect.x + h.rect.width)
         .min_by(|a, b| {
             a.rect
                 .area()
@@ -724,6 +704,119 @@ fn pointer_column_list_by_band(
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .and_then(|h| h.list_id.clone())
+}
+
+fn list_shell_contains(hits: &[DragHit], list_id: &str, pointer: [f32; 2]) -> bool {
+    hits.iter().any(|h| {
+        h.list_id.as_deref() == Some(list_id)
+            && h.index.is_none()
+            && h.rect.is_usable()
+            && h.rect.contains_point(pointer)
+    })
+}
+
+/// Distance from `p` to the closest point on `rect` (0 when inside).
+fn point_rect_distance(p: [f32; 2], rect: Rect) -> f32 {
+    let dx = if p[0] < rect.left() {
+        rect.left() - p[0]
+    } else if p[0] > rect.right() {
+        p[0] - rect.right()
+    } else {
+        0.0
+    };
+    let dy = if p[1] < rect.top() {
+        rect.top() - p[1]
+    } else if p[1] > rect.bottom() {
+        p[1] - rect.bottom()
+    } else {
+        0.0
+    };
+    (dx * dx + dy * dy).sqrt()
+}
+
+const NEAREST_SLOT_STICKY_PX: f32 = 12.0;
+
+/// Closest existing insert slot among accepting lists (solid-dnd closestCenter
+/// when the pointer is not over any container). Empty shells count as index 0.
+/// Indexed rows include the lifted source so the vacated hole still competes.
+fn nearest_slot_in_list(
+    hits: &[DragHit],
+    sess: &DragSession,
+    list_id: &str,
+    pointer: [f32; 2],
+) -> Option<(usize, f32)> {
+    let mut best: Option<(usize, f32)> = None;
+    let mut saw_item = false;
+    for h in hits {
+        if h.list_id.as_deref() != Some(list_id) || !h.rect.is_usable() {
+            continue;
+        }
+        if let Some(idx) = h.index {
+            saw_item = true;
+            let d = point_rect_distance(pointer, h.rect);
+            match best {
+                Some((_, bd)) if d >= bd - 1e-4 => {}
+                _ => best = Some((idx, d)),
+            }
+        }
+    }
+    if saw_item {
+        return best;
+    }
+    hits.iter()
+        .filter(|h| {
+            h.accepts(sess)
+                && h.list_id.as_deref() == Some(list_id)
+                && h.index.is_none()
+                && h.rect.is_usable()
+        })
+        .map(|h| (0usize, point_rect_distance(pointer, h.rect)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+fn nearest_list_by_slot(
+    hits: &[DragHit],
+    sess: &DragSession,
+    pointer: [f32; 2],
+    prev_list: Option<&str>,
+) -> Option<String> {
+    let mut lists: Vec<String> = Vec::new();
+    for h in hits {
+        if !h.accepts(sess) {
+            continue;
+        }
+        let Some(list) = h.list_id.as_deref() else {
+            continue;
+        };
+        if list.is_empty() {
+            continue;
+        }
+        if !lists.iter().any(|l| l == list) {
+            lists.push(list.to_string());
+        }
+    }
+    let mut best: Option<(String, f32)> = None;
+    for list in &lists {
+        let Some((_, d)) = nearest_slot_in_list(hits, sess, list, pointer) else {
+            continue;
+        };
+        match &best {
+            Some((_, bd)) if d >= *bd - 1e-4 => {}
+            _ => best = Some((list.clone(), d)),
+        }
+    }
+    let (best_list, best_d) = best?;
+    if let Some(prev) = prev_list {
+        if prev == best_list.as_str() {
+            return Some(best_list);
+        }
+        if let Some((_, d_prev)) = nearest_slot_in_list(hits, sess, prev, pointer) {
+            if d_prev <= best_d + NEAREST_SLOT_STICKY_PX {
+                return Some(prev.to_string());
+            }
+        }
+    }
+    Some(best_list)
 }
 
 fn list_max_index_in_hits(hits: &[DragHit], list_id: &str) -> Option<usize> {
@@ -797,6 +890,8 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     crate::utils::pointer_drag::tick(x, y);
     let mut hits = hits.to_vec();
     cap_stretched_indexed_rects(&mut hits);
+    let from_list = SESSION.with(|s| s.borrow().as_ref().and_then(|sess| sess.from_list.clone()));
+    expand_collapsed_empty_list_shells(&mut hits, from_list.as_deref());
     let hits = &hits;
     let Some(mut sess) = SESSION.with(|s| s.borrow().clone()) else {
         return false;
@@ -890,7 +985,8 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             if rt.active_droppable.peek() != next_id {
                 rt.active_droppable.set(next_id.clone());
             }
-            let hover_list = resolve_sortable_hover_list(hits, &sess, [x, y]);
+            let prev_list = rt.hover_list.peek();
+            let hover_list = resolve_sortable_hover_list(hits, &sess, [x, y], prev_list.as_deref());
             // Probe with the pointer, not `dragged.center()`. A stretched
             // island box puts the center past the last row (Gallery: 松手永远进队尾).
             let prev_hover = rt.hover_index.peek();
@@ -939,11 +1035,91 @@ fn resolve_sortable_hover_index(
     if source_layout_contains(sess, hits, pointer) {
         return sess.from_index;
     }
-    let hover = insert_index_along_axis(hits, list_id, pointer, sess.axis)?;
-    let hover = clamp_tail_append_hover(sess, list_id, hits, hover);
-    Some(pin_hover_below_opened_hole(
-        hits, list_id, sess, pointer, prev_hover, hover,
-    ))
+    let in_shell = list_shell_contains(hits, list_id, pointer);
+    let slots_ok = list_slots_usable(hits, list_id, sess.axis);
+    // Insert slots are `0..=len` (before each row, and after the last). Picking
+    // the nearest *item index* maps "below Gamma" onto slot 0 and opens a hole
+    // under the folder title (Gallery: 移出 Later → 标题与 Gamma 空一行).
+    match insert_index_along_axis(hits, list_id, pointer, sess.axis) {
+        Some(hover) => {
+            let hover = clamp_tail_append_hover(sess, list_id, hits, hover);
+            Some(pin_hover_below_opened_hole(
+                hits, list_id, sess, pointer, prev_hover, hover,
+            ))
+        }
+        None if in_shell && slots_ok => {
+            match list_max_index_in_hits(hits, list_id) {
+                Some(max) => Some(clamp_tail_append_hover(sess, list_id, hits, max + 1)),
+                // Empty nested Inbox: no indexed rows, so `?` used to yield
+                // `None` and `tick` filled `from_index` (the origin list).
+                None => Some(0),
+            }
+        }
+        None if slots_ok => nearest_end_insert_slot(hits, sess, list_id, pointer),
+        None => hover_from_press_box(sess, pointer),
+    }
+}
+
+/// Clustered local slots (all origins equal) cannot split rows. Compare the
+/// page-space pointer to the press box: above the lifted chip opens the head
+/// slot so Inbox `Beta` → folder title commits `[Beta, Alpha]` instead of
+/// snapping back to `from_index`.
+fn hover_from_press_box(sess: &DragSession, pointer: [f32; 2]) -> Option<usize> {
+    let from = sess.from_index?;
+    let p = match sess.axis {
+        Axis::X => pointer[0],
+        Axis::Y | Axis::Xy => pointer[1],
+    };
+    let origin = match sess.axis {
+        Axis::X => sess.start_bounds[0],
+        Axis::Y | Axis::Xy => sess.start_bounds[1],
+    };
+    if p + 0.5 < origin {
+        Some(0)
+    } else {
+        Some(from)
+    }
+}
+
+fn list_slots_usable(hits: &[DragHit], list_id: &str, axis: Axis) -> bool {
+    let items = indexed_list_items(hits, list_id);
+    if items.len() <= 1 {
+        return true;
+    }
+    let first = axis_origin(items[0].rect, axis);
+    let last = axis_origin(items[items.len() - 1].rect, axis);
+    let avg = (last - first).abs() / (items.len() - 1) as f32;
+    avg >= MIN_SLOT_PITCH
+}
+
+/// When the pointer is past every `[origin, origin+2*pitch)` band, choose the
+/// closer of the head slot (`0`) and the tail slot (`len`).
+fn nearest_end_insert_slot(
+    hits: &[DragHit],
+    sess: &DragSession,
+    list_id: &str,
+    pointer: [f32; 2],
+) -> Option<usize> {
+    let items = indexed_list_items(hits, list_id);
+    if items.is_empty() {
+        return Some(0);
+    }
+    let p = match sess.axis {
+        Axis::X => pointer[0],
+        Axis::Y | Axis::Xy => pointer[1],
+    };
+    let first = axis_origin(items[0].rect, sess.axis);
+    let last_h = items[items.len() - 1];
+    let last = axis_origin(last_h.rect, sess.axis);
+    let fallback = axis_size(last_h.rect, sess.axis).max(1.0);
+    let pitch = slot_extent_along_axis(hits, list_id, last_h.index, sess.axis, fallback);
+    let tail = last + pitch;
+    if (p - tail).abs() < (p - first).abs() {
+        let max = list_max_index_in_hits(hits, list_id)?;
+        Some(clamp_tail_append_hover(sess, list_id, hits, max + 1))
+    } else {
+        items[0].index
+    }
 }
 
 /// While the pointer is still within one pitch below the preview hole, do not
@@ -991,27 +1167,62 @@ fn pin_hover_below_opened_hole(
     }
 }
 
+fn pointer_on_other_origin_row(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
+    let Some(list) = sess.from_list.as_deref() else {
+        return false;
+    };
+    hits.iter().any(|h| {
+        h.list_id.as_deref() == Some(list)
+            && h.index.is_some()
+            && h.index != sess.from_index
+            && h.id != sess.draggable_id
+            && h.rect.is_usable()
+            && h.rect.contains_point(pointer)
+    })
+}
+
 fn source_layout_contains(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
-    let b = last_draggable_bounds(&sess.scope_id, &sess.draggable_id).unwrap_or(sess.start_bounds);
-    let mut rect = Rect::from_bounds(b);
-    if let Some(list) = sess.from_list.as_deref() {
-        let layout_extent = match sess.axis {
-            Axis::X => rect.width,
-            Axis::Y | Axis::Xy => rect.height,
-        }
-        .max(1.0);
-        let stride = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, layout_extent);
-        let extent = if layout_extent > stride * STRETCH_RATIO {
-            stride
-        } else {
-            layout_extent
-        };
+    // The lifted island (or its `w=100%` paint box) can still cover Alpha
+    // while the pointer is already on that row. That is a hover on Alpha.
+    if pointer_on_other_origin_row(sess, hits, pointer) {
+        return false;
+    }
+    let slots_ok = sess
+        .from_list
+        .as_deref()
+        .is_some_and(|list| list_slots_usable(hits, list, sess.axis));
+    if !slots_ok {
+        // Clustered local slots (all y=0) vs page-space pointer: the press box
+        // is the only trustworthy grab island.
+        return Rect::from_bounds(sess.start_bounds).contains_point(pointer);
+    }
+    // Usable row pitch: the tick's capped hit slot, never `last_draggable_bounds`
+    // / raw `start_bounds` (those can be the `w=100%` paint box covering Alpha
+    // while dragging Beta).
+    let Some(hit) = hits.iter().find(|h| {
+        h.id == sess.draggable_id && (h.scope_id.is_empty() || h.scope_id == sess.scope_id)
+    }) else {
+        let mut rect = Rect::from_bounds(sess.start_bounds);
+        cap_rect_to_row_stride(&mut rect, sess, hits);
+        return rect.contains_point(pointer);
+    };
+    let mut rect = hit.rect;
+    cap_rect_to_row_stride(&mut rect, sess, hits);
+    rect.contains_point(pointer)
+}
+
+fn cap_rect_to_row_stride(rect: &mut Rect, sess: &DragSession, hits: &[DragHit]) {
+    let Some(list) = sess.from_list.as_deref() else {
+        return;
+    };
+    let layout_extent = axis_size(*rect, sess.axis).max(1.0);
+    let stride = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, layout_extent);
+    if layout_extent > stride * STRETCH_RATIO {
         match sess.axis {
-            Axis::X => rect.width = extent,
-            Axis::Y | Axis::Xy => rect.height = extent,
+            Axis::X => rect.width = stride,
+            Axis::Y | Axis::Xy => rect.height = stride,
         }
     }
-    rect.contains_point(pointer)
 }
 
 /// Cap stretched `also_droppable` island bounds to one row pitch for FLIP shift.
@@ -1309,29 +1520,84 @@ fn cap_stretched_indexed_rects(hits: &mut Vec<DragHit>) {
             continue;
         }
         idxs.sort_by_key(|i| hits[*i].index.unwrap_or(0));
-    for w in 0..idxs.len() - 1 {
-        let i0 = idxs[w];
-        let i1 = idxs[w + 1];
-        let stride_y = (hits[i1].rect.y - hits[i0].rect.y).abs();
-        if stride_y >= MIN_SLOT_PITCH && hits[i0].rect.height > stride_y * STRETCH_RATIO {
-            hits[i0].rect.height = stride_y;
+        for w in 0..idxs.len() - 1 {
+            let i0 = idxs[w];
+            let i1 = idxs[w + 1];
+            let stride_y = (hits[i1].rect.y - hits[i0].rect.y).abs();
+            if stride_y >= MIN_SLOT_PITCH && hits[i0].rect.height > stride_y * STRETCH_RATIO {
+                hits[i0].rect.height = stride_y;
+            }
+            let stride_x = (hits[i1].rect.x - hits[i0].rect.x).abs();
+            if stride_x >= MIN_SLOT_PITCH && hits[i0].rect.width > stride_x * STRETCH_RATIO {
+                hits[i0].rect.width = stride_x;
+            }
         }
-        let stride_x = (hits[i1].rect.x - hits[i0].rect.x).abs();
-        if stride_x >= MIN_SLOT_PITCH && hits[i0].rect.width > stride_x * STRETCH_RATIO {
-            hits[i0].rect.width = stride_x;
+        let last = idxs[idxs.len() - 1];
+        let prev = idxs[idxs.len() - 2];
+        let stride_y = (hits[last].rect.y - hits[prev].rect.y).abs();
+        if stride_y >= MIN_SLOT_PITCH && hits[last].rect.height > stride_y * STRETCH_RATIO {
+            hits[last].rect.height = stride_y;
         }
-    }
-    let last = idxs[idxs.len() - 1];
-    let prev = idxs[idxs.len() - 2];
-    let stride_y = (hits[last].rect.y - hits[prev].rect.y).abs();
-    if stride_y >= MIN_SLOT_PITCH && hits[last].rect.height > stride_y * STRETCH_RATIO {
-        hits[last].rect.height = stride_y;
-    }
-    let stride_x = (hits[last].rect.x - hits[prev].rect.x).abs();
-    if stride_x >= MIN_SLOT_PITCH && hits[last].rect.width > stride_x * STRETCH_RATIO {
-        hits[last].rect.width = stride_x;
+        let stride_x = (hits[last].rect.x - hits[prev].rect.x).abs();
+        if stride_x >= MIN_SLOT_PITCH && hits[last].rect.width > stride_x * STRETCH_RATIO {
+            hits[last].rect.width = stride_x;
+        }
     }
 }
+
+/// Nested folder: an empty inner list lays out at 0 height (`h=auto`, no
+/// children). Hover and collision then skip it (`Rect::is_usable`), so dropping
+/// a file onto the Inbox header cannot select `tree-inbox` or open chrome
+/// padding. Borrow the smallest enclosing *other* hit (the folder item) as the
+/// shell's drop zone until the list has its own box. Kanban empty columns
+/// already have `min_h` and stay untouched.
+///
+/// Do not expand the **origin** list. Vacating the last file collapses that
+/// shell to 0; borrowing the folder box would steal hover back from Later and
+/// undo the shrink (Gallery: Inbox 留下一块过大空洞).
+fn expand_collapsed_empty_list_shells(hits: &mut [DragHit], from_list: Option<&str>) {
+    let mut empty_shells: Vec<usize> = Vec::new();
+    'shells: for (i, h) in hits.iter().enumerate() {
+        if h.index.is_some() {
+            continue;
+        }
+        let Some(list) = h.list_id.as_deref() else {
+            continue;
+        };
+        if from_list == Some(list) {
+            continue;
+        }
+        if list.is_empty() || h.rect.is_usable() {
+            continue;
+        }
+        for other in hits.iter() {
+            if other.list_id.as_deref() == Some(list) && other.index.is_some() {
+                continue 'shells;
+            }
+        }
+        empty_shells.push(i);
+    }
+    for si in empty_shells {
+        let r = hits[si].rect;
+        let seed = [r.x + r.width * 0.5, r.y + r.height * 0.5];
+        if !seed[0].is_finite() || !seed[1].is_finite() {
+            continue;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for (i, h) in hits.iter().enumerate() {
+            if i == si || !h.rect.is_usable() || !h.rect.contains_point(seed) {
+                continue;
+            }
+            let a = h.rect.area();
+            match best {
+                Some((_, ba)) if a >= ba - 1e-4 => {}
+                _ => best = Some((i, a)),
+            }
+        }
+        if let Some((hi, _)) = best {
+            hits[si].rect = hits[hi].rect;
+        }
+    }
 }
 
 fn collect_hits_inner(
@@ -1635,13 +1901,7 @@ pub(crate) fn slot_extent_along_axis(
     let Some(pos) = items.iter().position(|h| h.index == Some(index)) else {
         return fallback.max(1.0);
     };
-    pack_advance(
-        &items,
-        pos,
-        false,
-        axis,
-        inferred_list_gap(&items, axis),
-    )
+    pack_advance(&items, pos, false, axis, inferred_list_gap(&items, axis))
 }
 
 fn visual_index_order(items: &[&DragHit], from: usize, hover: usize) -> Vec<usize> {
@@ -1794,12 +2054,25 @@ pub(crate) fn live_pack_item_translate(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32) -> f32 {
     let Some(list_id) = list_id else {
         return fallback;
     };
     LAST_HITS.with(|h| slot_stride_along_axis(&h.borrow(), list_id, axis, fallback))
+}
+
+/// One packed row for chrome padding / source vacate. Prefer neighbour stride
+/// (item + gap). A stretched `also_droppable` island can be taller than the
+/// row; using `.max(chip)` then pulls the origin folder by the whole card
+/// (Gallery: 移出 Beta 后 Inbox 收缩过大).
+pub(crate) fn list_row_extent(list_id: Option<&str>, axis: Axis, chip: f32) -> f32 {
+    let chip = chip.max(0.0);
+    let stride = list_slot_stride(list_id, axis, chip);
+    if stride >= MIN_SLOT_PITCH && (chip < 1.0 || stride <= chip * STRETCH_RATIO) {
+        stride
+    } else {
+        chip
+    }
 }
 
 #[allow(dead_code)]
@@ -1827,9 +2100,10 @@ pub(crate) fn insert_hole_origin(
         .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
         .collect();
     items.sort_by_key(|h| h.index.unwrap_or(0));
-    let stride = items.last().map(|h| {
-        slot_extent_along_axis(hits, list_id, h.index, axis, fallback_extent.max(1.0))
-    }).unwrap_or(fallback_extent.max(1.0));
+    let stride = items
+        .last()
+        .map(|h| slot_extent_along_axis(hits, list_id, h.index, axis, fallback_extent.max(1.0)))
+        .unwrap_or(fallback_extent.max(1.0));
     if let Some(hover) = hover_index {
         if let Some(h) = items.iter().find(|h| h.index == Some(hover)) {
             return Some([h.rect.x, h.rect.y]);
@@ -1870,6 +2144,22 @@ pub(crate) fn source_translate_to_insert_hole(
         return [0.0, 0.0];
     };
     [hole[0] - src.rect.x, hole[1] - src.rect.y]
+}
+
+/// True when `outer_id`'s last hit rect strictly contains `inner_id` (nested
+/// folder shell wrapping the active file). Raise that ancestor stacking
+/// context so a cross-list dimmed source can paint into the target hole.
+pub(crate) fn hit_hosts_id(outer_id: &str, inner_id: &str) -> bool {
+    LAST_HITS.with(|h| {
+        let hits = h.borrow();
+        let Some(outer) = hits.iter().find(|hit| hit.id == outer_id) else {
+            return false;
+        };
+        let Some(inner) = hits.iter().find(|hit| hit.id == inner_id) else {
+            return false;
+        };
+        outer.id != inner.id && outer.rect.contains_rect(inner.rect)
+    })
 }
 
 pub(crate) fn live_cross_list_source_translate(
@@ -4149,9 +4439,220 @@ mod tests {
             "pointer is below todo indexed rows"
         );
         assert_eq!(
-            resolve_sortable_hover_list(&hits, &sess, pointer).as_deref(),
+            resolve_sortable_hover_list(&hits, &sess, pointer, None).as_deref(),
             Some("doing"),
             "past todo padding + doing column band must target doing, not phantom todo slot"
+        );
+    }
+
+    fn nest_file_drag_session() -> DragSession {
+        DragSession {
+            scope_id: "s".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            phase: DragPhase::Active,
+            start_pointer: [110.0, 72.0],
+            last_pointer: [110.0, 72.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [8.0, 60.0, 204.0, 24.0],
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            axis: Axis::Y,
+            threshold: 0.0,
+            restrict: Restrict::None,
+            snap: None,
+            capture_id: String::new(),
+            delay_ms: 0.0,
+            pressed_at: Instant::now(),
+        }
+    }
+
+    /// Gallery nested folders: Inbox (Alpha, Beta) stacked above Later (Gamma).
+    fn nest_folder_file_hits() -> Vec<DragHit> {
+        let mut root = hit("tree-root", [0.0, 0.0, 220.0, 280.0], true);
+        root.list_id = Some("tree-root".into());
+        root.accept = "folder".into();
+        root.item_type = String::new();
+        let mut inbox_card = hit("folder:Inbox", [0.0, 0.0, 220.0, 88.0], true);
+        inbox_card.list_id = Some("tree-root".into());
+        inbox_card.index = Some(0);
+        inbox_card.item_type = "folder".into();
+        let mut inbox_shell = hit("tree-inbox", [8.0, 28.0, 204.0, 52.0], true);
+        inbox_shell.list_id = Some("tree-inbox".into());
+        inbox_shell.accept = "file".into();
+        inbox_shell.group = "nest".into();
+        inbox_shell.item_type = String::new();
+        let mut alpha = hit("tree-inbox:Alpha", [8.0, 32.0, 204.0, 24.0], true);
+        alpha.list_id = Some("tree-inbox".into());
+        alpha.index = Some(0);
+        alpha.item_type = "file".into();
+        alpha.group = "nest".into();
+        let mut beta = hit("tree-inbox:Beta", [8.0, 60.0, 204.0, 24.0], true);
+        beta.list_id = Some("tree-inbox".into());
+        beta.index = Some(1);
+        beta.item_type = "file".into();
+        beta.group = "nest".into();
+        beta.is_draggable = true;
+        let mut later_card = hit("folder:Later", [0.0, 108.0, 220.0, 60.0], true);
+        later_card.list_id = Some("tree-root".into());
+        later_card.index = Some(1);
+        later_card.item_type = "folder".into();
+        let mut later_shell = hit("tree-later", [8.0, 136.0, 204.0, 28.0], true);
+        later_shell.list_id = Some("tree-later".into());
+        later_shell.accept = "file".into();
+        later_shell.group = "nest".into();
+        later_shell.item_type = String::new();
+        let mut gamma = hit("tree-later:Gamma", [8.0, 140.0, 204.0, 24.0], true);
+        gamma.list_id = Some("tree-later".into());
+        gamma.index = Some(0);
+        gamma.item_type = "file".into();
+        gamma.group = "nest".into();
+        vec![
+            root,
+            inbox_card,
+            inbox_shell,
+            alpha,
+            beta,
+            later_card,
+            later_shell,
+            gamma,
+        ]
+    }
+
+    /// Pointer in the gap between stacked nested lists must not flip columns
+    /// every frame (that grows/shrinks both lists). Stick to the closer slot.
+    #[test]
+    fn nested_lists_gap_sticky_nearest_slot() {
+        let sess = nest_file_drag_session();
+        let hits = nest_folder_file_hits();
+        let gap = [110.0, 112.0];
+        assert!(
+            !list_shell_contains(&hits, "tree-inbox", gap)
+                && !list_shell_contains(&hits, "tree-later", gap),
+            "fixture pointer sits in the folder gap, not inside either inner shell"
+        );
+        let first = resolve_sortable_hover_list(&hits, &sess, gap, None);
+        assert!(
+            first.as_deref() == Some("tree-inbox") || first.as_deref() == Some("tree-later"),
+            "gap must pick a nested file list, not tree-root; got {first:?}"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, gap, first.as_deref()),
+            first,
+            "sticky nearest-slot must not oscillate while the pointer stays in the gap"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, gap, Some("tree-inbox")).as_deref(),
+            Some("tree-inbox"),
+            "12px sticky keeps Inbox when the pointer is between the two folders"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, gap, Some("tree-later")).as_deref(),
+            Some("tree-later"),
+            "12px sticky keeps Later when the pointer is between the two folders"
+        );
+    }
+
+    /// Dragging the last inbox file above the first: hover must be slot 0 even
+    /// when the uncapped `also_droppable` island still covers Alpha.
+    #[test]
+    fn nested_same_list_last_item_above_first_opens_head_slot() {
+        let sess = nest_file_drag_session();
+        let hits = nest_folder_file_hits();
+        remember_draggable_bounds("s", "tree-inbox:Beta", [8.0, 28.0, 204.0, 200.0]);
+        let above_alpha = [110.0, 40.0];
+        assert!(
+            hits.iter()
+                .any(|h| h.id == "tree-inbox:Alpha" && h.rect.contains_point(above_alpha)),
+            "fixture pointer sits on Alpha"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, above_alpha, None).as_deref(),
+            Some("tree-inbox")
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "tree-inbox", above_alpha, None),
+            Some(0),
+            "Beta dragged above Alpha must open slot 0, not stay from_index=1"
+        );
+    }
+
+    /// Clustered local slots (all y=0) vs page-space press box: pointer on the
+    /// folder title is above Beta's press origin, so hover is the head slot.
+    #[test]
+    fn nested_clustered_slots_last_item_above_press_opens_head() {
+        let mut sess = nest_file_drag_session();
+        sess.start_bounds = [8.0, 60.0, 204.0, 24.0];
+        let mut alpha = hit("tree-inbox:Alpha", [8.0, 0.0, 204.0, 24.0], true);
+        alpha.list_id = Some("tree-inbox".into());
+        alpha.index = Some(0);
+        alpha.item_type = "file".into();
+        alpha.group = "nest".into();
+        let mut beta = hit("tree-inbox:Beta", [8.0, 0.0, 204.0, 24.0], true);
+        beta.list_id = Some("tree-inbox".into());
+        beta.index = Some(1);
+        beta.item_type = "file".into();
+        beta.group = "nest".into();
+        beta.is_draggable = true;
+        let mut shell = hit("tree-inbox", [8.0, 0.0, 204.0, 24.0], true);
+        shell.list_id = Some("tree-inbox".into());
+        shell.accept = "file".into();
+        shell.group = "nest".into();
+        shell.item_type = String::new();
+        let hits = vec![shell, alpha, beta];
+        let title = [110.0, 12.0];
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "tree-inbox", title, None),
+            Some(0),
+            "pointer above Beta's press box must open slot 0 even when local slots share y=0"
+        );
+    }
+
+    /// Pointer below Later: nearest *insert* slot is after Gamma (`len`), not
+    /// Gamma's own index (which opens a hole under the Later title).
+    #[test]
+    fn nested_lists_outside_second_list_uses_last_real_slot() {
+        let sess = nest_file_drag_session();
+        let hits = nest_folder_file_hits();
+        let below = [110.0, 220.0];
+        assert!(
+            !list_shell_contains(&hits, "tree-later", below),
+            "pointer is outside Later's list shell"
+        );
+        assert_eq!(
+            resolve_sortable_hover_list(&hits, &sess, below, None).as_deref(),
+            Some("tree-later"),
+            "below both folders the nearest file list is Later"
+        );
+        assert_eq!(
+            insert_index_along_axis(&hits, "tree-later", below, Axis::Y),
+            None,
+            "raw midpoint is far past last+2*pitch"
+        );
+        assert_eq!(
+            resolve_sortable_hover_index(&hits, &sess, "tree-later", below, None),
+            Some(1),
+            "below Gamma the nearest insert slot is after Gamma, not slot 0"
+        );
+        let hover = resolve_sortable_hover_index(&hits, &sess, "tree-later", below, None).unwrap();
+        let src = source_translate_to_insert_hole(
+            &hits,
+            "tree-inbox",
+            1,
+            "tree-later",
+            Some(hover),
+            Axis::Y,
+        );
+        assert_eq!(
+            src,
+            [0.0, 104.0],
+            "dimmed body sits in the append hole (Gamma origin + pitch)"
+        );
+        assert_eq!(
+            source_translate_to_insert_hole(&hits, "tree-inbox", 1, "tree-later", Some(0), Axis::Y),
+            [0.0, 80.0],
+            "hover=0 is the title-gap hole (Gamma's layout origin)"
         );
     }
 
@@ -4539,6 +5040,220 @@ mod tests {
             hover.as_deref(),
             Some("later"),
             "empty nested list padding must win over the wrapping folder row"
+        );
+    }
+
+    #[test]
+    fn empty_nested_inbox_header_accepts_file_drop() {
+        let (_o, hover) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([160.0_f32, 32.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 8.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "tree-later:Beta".into(),
+                pointer: [20.0, 96.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [0.0, 80.0, 200.0, 32.0],
+                from_list: Some("tree-later".into()),
+                from_index: Some(0),
+                item_type: "file".into(),
+                group: "nest".into(),
+                capture_id: "cap".into(),
+            });
+            let mut folder = hit("folder:Inbox", [0.0, 0.0, 200.0, 48.0], true);
+            folder.list_id = Some("tree-root".into());
+            folder.index = Some(0);
+            folder.is_draggable = true;
+            folder.item_type = "folder".into();
+            folder.accept = "folder".into();
+            folder.group = "nest".into();
+            let mut inbox = hit("tree-inbox", [8.0, 40.0, 184.0, 0.0], true);
+            inbox.list_id = Some("tree-inbox".into());
+            inbox.index = None;
+            inbox.accept = "file".into();
+            inbox.item_type = String::new();
+            inbox.group = "nest".into();
+            let mut later_shell = hit("tree-later", [0.0, 80.0, 200.0, 40.0], true);
+            later_shell.list_id = Some("tree-later".into());
+            later_shell.index = None;
+            later_shell.accept = "file".into();
+            later_shell.group = "nest".into();
+            let mut src = hit("tree-later:Beta", [0.0, 80.0, 200.0, 32.0], true);
+            src.list_id = Some("tree-later".into());
+            src.index = Some(0);
+            src.is_draggable = true;
+            src.item_type = "file".into();
+            src.accept = "file".into();
+            src.group = "nest".into();
+            let hits = vec![folder, inbox, later_shell, src];
+            assert!(tick(20.0, 16.0, &hits, [400.0, 400.0]));
+            let list = hover_list.peek();
+            let index = hover_index.peek();
+            let _ = end(&hits);
+            (list, index)
+        });
+        assert_eq!(
+            hover.0.as_deref(),
+            Some("tree-inbox"),
+            "collapsed Inbox list must borrow the folder box so a file over the header selects it; hover_list={:?}",
+            hover.0
+        );
+        assert_eq!(
+            hover.1,
+            Some(0),
+            "empty Inbox insert index must be 0, not the origin list's from_index; hover_index={:?}",
+            hover.1
+        );
+    }
+
+    #[test]
+    fn origin_empty_shell_does_not_steal_hover_from_dest() {
+        let (_o, hover) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([160.0_f32, 32.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::MostIntersecting,
+                    axis: Axis::Y,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 8.0,
+                    delay_ms: 0.0,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "tree-inbox:Beta".into(),
+                pointer: [20.0, 40.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [8.0, 20.0, 184.0, 32.0],
+                from_list: Some("tree-inbox".into()),
+                from_index: Some(0),
+                item_type: "file".into(),
+                group: "nest".into(),
+                capture_id: "cap".into(),
+            });
+            let mut folder = hit("folder:Inbox", [0.0, 0.0, 200.0, 80.0], true);
+            folder.list_id = Some("tree-root".into());
+            folder.index = Some(0);
+            folder.item_type = "folder".into();
+            folder.accept = "folder".into();
+            folder.group = "nest".into();
+            let mut inbox = hit("tree-inbox", [8.0, 40.0, 184.0, 0.0], true);
+            inbox.list_id = Some("tree-inbox".into());
+            inbox.index = None;
+            inbox.accept = "file".into();
+            inbox.group = "nest".into();
+            let mut later = hit("tree-later", [0.0, 30.0, 200.0, 80.0], true);
+            later.list_id = Some("tree-later".into());
+            later.index = None;
+            later.accept = "file".into();
+            later.group = "nest".into();
+            let mut gamma = hit("tree-later:Gamma", [8.0, 38.0, 184.0, 32.0], true);
+            gamma.list_id = Some("tree-later".into());
+            gamma.index = Some(0);
+            gamma.item_type = "file".into();
+            gamma.accept = "file".into();
+            gamma.group = "nest".into();
+            let hits = vec![folder, inbox, later, gamma];
+            assert!(tick(20.0, 70.0, &hits, [400.0, 400.0]));
+            let list = hover_list.peek();
+            let _ = end(&hits);
+            list
+        });
+        assert_eq!(
+            hover.as_deref(),
+            Some("tree-later"),
+            "vacated origin Inbox must not borrow the folder box and steal Later; hover_list={:?}",
+            hover
+        );
+    }
+
+    #[test]
+    fn list_row_extent_uses_packed_stride_not_stretched_chip() {
+        let mut a = hit("a", [0.0, 0.0, 40.0, 24.0], true);
+        a.index = Some(0);
+        a.list_id = Some("list".into());
+        let mut b = hit("b", [0.0, 28.0, 40.0, 24.0], true);
+        b.index = Some(1);
+        b.list_id = Some("list".into());
+        LAST_HITS.with(|h| *h.borrow_mut() = vec![a, b]);
+        assert!(
+            (list_row_extent(Some("list"), Axis::Y, 200.0) - 28.0).abs() < 0.5,
+            "stretched island height must not become the vacate row; got {}",
+            list_row_extent(Some("list"), Axis::Y, 200.0)
         );
     }
 

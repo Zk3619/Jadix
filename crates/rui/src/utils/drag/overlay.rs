@@ -523,6 +523,29 @@ mod tests {
         el.children.iter().find_map(|c| find_draggable(c, id))
     }
 
+    fn find_item_shell<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+        if let Some(inner) = el.children.iter().find_map(|c| find_item_shell(c, id)) {
+            return Some(inner);
+        }
+        if el
+            .attrs
+            .get(crate::utils::drag::ATTR_DRAG_ITEM_SHELL)
+            .is_some()
+            && find_draggable(el, id).is_some()
+        {
+            return Some(el);
+        }
+        None
+    }
+
+    fn shell_block_collapsed(el: &Element) -> bool {
+        use crate::layout::{dim_kind, DimKind};
+        let max_h = dim_kind(el.style.max_size.height);
+        let size_h = dim_kind(el.style.size.height);
+        matches!(max_h, DimKind::Length(v) if v < 0.5)
+            || matches!(size_h, DimKind::Length(v) if v < 0.5)
+    }
+
     fn find_draggable_in_scope<'a>(el: &'a Element, scope: &str, id: &str) -> Option<&'a Element> {
         let id_ok = el
             .attrs
@@ -1887,17 +1910,20 @@ mod tests {
                     })
                     .child(move || {
                         let mk = |id: &'static str, files: Signal<Vec<String>>| {
-                            sortable_list(id).accept("file").group("nest").child(move || {
-                                let items = files.get();
-                                let rows: Vec<Element> = items
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, name)| chip(id, name.clone(), i))
-                                    .collect();
-                                Element::from(
-                                    vstack().w("100%").min_h(0.0).gap(6.0).children(rows),
-                                )
-                            })
+                            sortable_list(id)
+                                .accept("file")
+                                .group("nest")
+                                .child(move || {
+                                    let items = files.get();
+                                    let rows: Vec<Element> = items
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, name)| chip(id, name.clone(), i))
+                                        .collect();
+                                    Element::from(
+                                        vstack().w("100%").min_h(0.0).gap(6.0).children(rows),
+                                    )
+                                })
                         };
                         let overlay: Element = drag_overlay().into();
                         Element::from(vstack().w(200.0).min_h(0.0).gap(8.0).children([
@@ -1914,7 +1940,8 @@ mod tests {
             hoist_and_layout(&mut tree);
         }
 
-        let list_h = |tree: &Element, id: &str| find_droppable(tree, id).expect(id).layout_bounds[3];
+        let list_h =
+            |tree: &Element, id: &str| find_droppable(tree, id).expect(id).layout_bounds[3];
         let pad_b = |tree: &Element, id: &str| {
             crate::layout::lp_length_px(find_droppable(tree, id).expect(id).style.padding.bottom)
                 .unwrap_or(0.0)
@@ -1984,9 +2011,19 @@ mod tests {
             "target list must pad by dragged extent; pad={later_pad}"
         );
         assert!(
-            inbox_margin < -16.0,
-            "source list must pull the vacated row out of flow; margin={inbox_margin}"
+            inbox_margin >= -1.0,
+            "source must not eat trailing margin/padding; margin={inbox_margin}"
         );
+        {
+            let tree = live.borrow();
+            let shell = find_item_shell(&tree, "tree-inbox:Alpha").expect("Alpha shell");
+            assert!(
+                shell_block_collapsed(shell),
+                "source row must leave the origin pack by collapsing the shell, not a negative margin; size={:?} max={:?}",
+                shell.style.size.height,
+                shell.style.max_size.height
+            );
+        }
 
         let hits2 = collect_hits(&live.borrow());
         assert!(end(&hits2));
@@ -2009,6 +2046,1422 @@ mod tests {
             h1_inbox < h0_inbox - 16.0,
             "Inbox must shrink after Alpha leaves; before={h0_inbox} after={h1_inbox}"
         );
+
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery nested folders: inner files live inside outer `SortableItem`
+    /// cards. Cross-list hover must keep the dimmed source (not only the
+    /// overlay ghost) and shrink the origin folder card — sibling-list
+    /// padding/margin on the inner shell is not enough when the parent is a
+    /// folder row (`keyed_item_shell` stacking + flex auto height).
+    #[test]
+    fn nested_folder_inner_file_cross_list_keeps_dimmed_source_and_shrinks_folder() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::LayoutStatus;
+        use crate::layout::{dim_kind, DimKind};
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_transfer, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        let inbox = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+        let later = Signal::new(vec!["Gamma".to_string()]);
+
+        let (_o, live) = mount_scope_tree({
+            let inbox = inbox;
+            let later = later;
+            move || {
+                drag_scope("ov-nest-folder")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .on_drag_end({
+                        let inbox = inbox;
+                        let later = later;
+                        move |ev| {
+                            let Some(from) = ev.from_list.as_deref() else {
+                                return;
+                            };
+                            let Some(to) = ev.to_list.as_deref() else {
+                                return;
+                            };
+                            if from == to {
+                                return;
+                            }
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            let mut src = if from == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let mut dst = if to == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let to_index = ev.to_index.unwrap_or(dst.len());
+                            apply_transfer(&mut src, &mut dst, from_index, to_index);
+                            if from == "tree-inbox" {
+                                inbox.set(src);
+                                later.set(dst);
+                            } else {
+                                later.set(src);
+                                inbox.set(dst);
+                            }
+                        }
+                    })
+                    .child(move || {
+                        let inbox = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .children([
+                                                    chip("tree-inbox", "Alpha".into(), 0),
+                                                    chip("tree-inbox", "Beta".into(), 1),
+                                                ]),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Gamma".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(vstack().w(220.0).children([inbox, later, overlay]))
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let folder_h =
+            |tree: &Element, id: &str| find_draggable(tree, id).expect(id).layout_bounds[3];
+        let h0_inbox = folder_h(&live.borrow(), "folder:Inbox");
+        let h0_later = folder_h(&live.borrow(), "folder:Later");
+        assert!(
+            h0_inbox > h0_later + 20.0,
+            "precondition: Inbox folder taller than Later; inbox={h0_inbox} later={h0_later}"
+        );
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Alpha")
+            .expect("Alpha");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-folder",
+            "tree-inbox:Alpha",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-folder".into(),
+            draggable_id: "tree-inbox:Alpha".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(0),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let later_hit = hits0
+            .iter()
+            .find(|h| h.id == "tree-later")
+            .expect("later list");
+        let dest = [
+            later_hit.rect.x + 20.0,
+            later_hit.rect.y + later_hit.rect.height * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_chrome(&mut tree);
+        }
+
+        {
+            let tree = live.borrow();
+            let ghost = find_ghost(&tree).expect("overlay ghost");
+            let mut ghost_texts = Vec::new();
+            collect_texts(ghost, &mut ghost_texts);
+            assert!(
+                ghost_texts.iter().any(|t| t.contains("Alpha")),
+                "overlay ghost must keep Alpha while hover is outside the source list; got {ghost_texts:?}"
+            );
+
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("dimmed source");
+            assert!(
+                (alpha.style.opacity - 0.4).abs() < 0.05,
+                "in-list source must stay dimmed (0.4), not vanish; opacity={}",
+                alpha.style.opacity
+            );
+            assert!(
+                alpha.style.translate[1].abs() > 8.0,
+                "dimmed source must translate onto the Later hole; translate={:?}",
+                alpha.style.translate
+            );
+            assert!(
+                alpha.layout_bounds[3] > 8.0,
+                "dimmed source must keep a paint box; height={}",
+                alpha.layout_bounds[3]
+            );
+
+            let inbox_shell = find_item_shell(&tree, "folder:Inbox").expect("Inbox shell");
+            assert!(
+                inbox_shell.style.z_index >= 2,
+                "origin folder shell must stack above Later so the dimmed body can paint into the hole; z={}",
+                inbox_shell.style.z_index
+            );
+
+            let alpha_shell = find_item_shell(&tree, "tree-inbox:Alpha").expect("Alpha shell");
+            assert!(
+                shell_block_collapsed(alpha_shell),
+                "cross-list source row must leave the origin pack by collapsing the shell; size={:?} max={:?}",
+                alpha_shell.style.size.height,
+                alpha_shell.style.max_size.height
+            );
+
+            let inbox_list = find_droppable(&tree, "tree-inbox").expect("tree-inbox");
+            let inbox_margin =
+                crate::layout::lpa_length_px(inbox_list.style.margin.bottom).unwrap_or(0.0);
+            assert!(
+                inbox_margin >= -1.0,
+                "origin list must keep author margin (negative margin eats folder padding); margin={inbox_margin}"
+            );
+            assert!(
+                matches!(dim_kind(inbox_list.style.size.height), DimKind::Auto),
+                "origin nested list must stay height:auto; capping clips the last file"
+            );
+        }
+
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            inbox.peek(),
+            vec!["Beta".to_string()],
+            "drop on Later must leave Inbox, not append Alpha to the source tail"
+        );
+        assert!(
+            later.peek().iter().any(|s| s == "Alpha"),
+            "Alpha must land in Later; later={:?}",
+            later.peek()
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Last inner file (Beta) is the row a list-height cap would clip. Cross-list
+    /// hover must keep the dimmed body (same 0.4 as Alpha — not a per-item hide)
+    /// and vacate via the source shell's trailing margin.
+    #[test]
+    fn nested_folder_last_file_cross_list_keeps_dimmed_source() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::LayoutStatus;
+        use crate::layout::{dim_kind, DimKind};
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_transfer, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        let inbox = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+        let later = Signal::new(vec!["Gamma".to_string()]);
+
+        let (_o, live) = mount_scope_tree({
+            let inbox = inbox;
+            let later = later;
+            move || {
+                drag_scope("ov-nest-folder-beta")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .on_drag_end({
+                        let inbox = inbox;
+                        let later = later;
+                        move |ev| {
+                            let Some(from) = ev.from_list.as_deref() else {
+                                return;
+                            };
+                            let Some(to) = ev.to_list.as_deref() else {
+                                return;
+                            };
+                            if from == to {
+                                return;
+                            }
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            let mut src = if from == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let mut dst = if to == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let to_index = ev.to_index.unwrap_or(dst.len());
+                            apply_transfer(&mut src, &mut dst, from_index, to_index);
+                            if from == "tree-inbox" {
+                                inbox.set(src);
+                                later.set(dst);
+                            } else {
+                                later.set(src);
+                                inbox.set(dst);
+                            }
+                        }
+                    })
+                    .child(move || {
+                        let inbox = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .children([
+                                                    chip("tree-inbox", "Alpha".into(), 0),
+                                                    chip("tree-inbox", "Beta".into(), 1),
+                                                ]),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Gamma".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(vstack().w(220.0).children([inbox, later, overlay]))
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Beta")
+            .expect("Beta");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-folder-beta",
+            "tree-inbox:Beta",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-folder-beta".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let later_hit = hits0
+            .iter()
+            .find(|h| h.id == "tree-later")
+            .expect("later list");
+        let dest = [
+            later_hit.rect.x + 20.0,
+            later_hit.rect.y + later_hit.rect.height * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_chrome(&mut tree);
+        }
+
+        {
+            let tree = live.borrow();
+            let beta = find_draggable(&tree, "tree-inbox:Beta").expect("dimmed source");
+            assert!(
+                (beta.style.opacity - 0.4).abs() < 0.05,
+                "Beta uses the same source_opacity 0.4 as Alpha; opacity={}",
+                beta.style.opacity
+            );
+            assert!(
+                beta.style.translate[1].abs() > 8.0,
+                "last-item dimmed source must translate onto the Later hole; translate={:?}",
+                beta.style.translate
+            );
+            assert!(
+                beta.layout_bounds[3] > 8.0,
+                "last-item source must keep a paint box (height cap used to crush it to 0); height={}",
+                beta.layout_bounds[3]
+            );
+
+            let inbox_shell = find_item_shell(&tree, "folder:Inbox").expect("Inbox shell");
+            assert!(
+                inbox_shell.style.z_index >= 2,
+                "origin folder must stay stacked even when the last file's rect sticks out; z={}",
+                inbox_shell.style.z_index
+            );
+
+            let beta_shell = find_item_shell(&tree, "tree-inbox:Beta").expect("Beta shell");
+            assert!(
+                shell_block_collapsed(beta_shell),
+                "last file must leave the origin pack by collapsing the shell; size={:?} max={:?}",
+                beta_shell.style.size.height,
+                beta_shell.style.max_size.height
+            );
+
+            let inbox_list = find_droppable(&tree, "tree-inbox").expect("tree-inbox");
+            assert!(
+                matches!(dim_kind(inbox_list.style.size.height), DimKind::Auto),
+                "must not cap the inner list height (that clips Beta)"
+            );
+
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("Alpha");
+            let alpha_h = alpha.layout_bounds[3];
+            assert!(
+                alpha_h > 24.0,
+                "remaining Alpha must keep its chip height; height={alpha_h}"
+            );
+            let inbox_h = find_draggable(&tree, "folder:Inbox")
+                .expect("Inbox")
+                .layout_bounds[3];
+            // folder_card: p=8*2 + header 20 + gap 6 + remaining Alpha
+            let min_folder = 8.0 + 20.0 + 6.0 + alpha_h + 8.0;
+            assert!(
+                inbox_h + 1.0 >= min_folder,
+                "Inbox must wrap padding and remaining Alpha; inbox={inbox_h} need>={min_folder} alpha={alpha_h}"
+            );
+            let inbox_b = find_draggable(&tree, "folder:Inbox")
+                .expect("Inbox")
+                .layout_bounds;
+            let alpha_b = alpha.layout_bounds;
+            let alpha_bottom = alpha_b[1] + alpha_b[3];
+            let inbox_bottom = inbox_b[1] + inbox_b[3];
+            assert!(
+                alpha_b[1] + 1.0 >= inbox_b[1] && alpha_bottom <= inbox_bottom + 1.0,
+                "Alpha must sit inside the Inbox card; inbox={inbox_b:?} alpha={alpha_b:?}"
+            );
+        }
+
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            inbox.peek(),
+            vec!["Alpha".to_string()],
+            "drop on Later must leave Alpha in Inbox; inbox={:?}",
+            inbox.peek()
+        );
+        assert!(
+            later.peek().iter().any(|s| s == "Beta"),
+            "Beta must land in Later; later={:?}",
+            later.peek()
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery nested folders: after every file leaves Inbox the inner list is
+    /// 0-tall. Dragging a file onto the Inbox header must grow the list, show
+    /// the dimmed body, and commit the transfer.
+    #[test]
+    fn empty_nested_inbox_accepts_file_from_later() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::LayoutStatus;
+        use crate::layout::lp_length_px;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_transfer, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        let inbox = Signal::new(Vec::<String>::new());
+        let later = Signal::new(vec!["Beta".to_string()]);
+
+        let (_o, live) = mount_scope_tree({
+            let inbox = inbox;
+            let later = later;
+            move || {
+                drag_scope("ov-nest-empty-inbox")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .collision(crate::utils::drag::CollisionAlg::MostIntersecting)
+                    .on_drag_end({
+                        let inbox = inbox;
+                        let later = later;
+                        move |ev| {
+                            let Some(from) = ev.from_list.as_deref() else {
+                                return;
+                            };
+                            let Some(to) = ev.to_list.as_deref() else {
+                                return;
+                            };
+                            if from == to {
+                                return;
+                            }
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            let mut src = if from == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let mut dst = if to == "tree-inbox" {
+                                inbox.peek()
+                            } else {
+                                later.peek()
+                            };
+                            let to_index = ev.to_index.unwrap_or(dst.len());
+                            apply_transfer(&mut src, &mut dst, from_index, to_index);
+                            if from == "tree-inbox" {
+                                inbox.set(src);
+                                later.set(dst);
+                            } else {
+                                later.set(src);
+                                inbox.set(dst);
+                            }
+                        }
+                    })
+                    .child(move || {
+                        let inbox = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack().w("100%").min_h(0.0).h("auto").gap(6.0),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Beta".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(vstack().w(220.0).children([inbox, later, overlay]))
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-later:Beta")
+            .expect("Beta");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-empty-inbox",
+            "tree-later:Beta",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-empty-inbox".into(),
+            draggable_id: "tree-later:Beta".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-later".into()),
+            from_index: Some(0),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let inbox_folder = hits0
+            .iter()
+            .find(|h| h.id == "folder:Inbox")
+            .expect("Inbox folder");
+        let dest = [inbox_folder.rect.x + 20.0, inbox_folder.rect.y + 12.0];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_chrome(&mut tree);
+        }
+
+        {
+            let tree = live.borrow();
+            let inbox_list = find_droppable(&tree, "tree-inbox").expect("tree-inbox");
+            let pad = lp_length_px(inbox_list.style.padding.bottom).unwrap_or(0.0);
+            assert!(
+                pad > 16.0,
+                "empty Inbox must grow a row of padding for the incoming file; pad={pad}"
+            );
+            let beta = find_draggable(&tree, "tree-later:Beta").expect("dimmed source");
+            assert!(
+                (beta.style.opacity - 0.4).abs() < 0.05,
+                "Beta must keep source_opacity 0.4; opacity={}",
+                beta.style.opacity
+            );
+            assert!(
+                beta.style.translate[1].abs() > 8.0,
+                "dimmed Beta must translate onto the empty Inbox hole; translate={:?}",
+                beta.style.translate
+            );
+        }
+
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            inbox.peek(),
+            vec!["Beta".to_string()],
+            "drop on empty Inbox must insert Beta; inbox={:?}",
+            inbox.peek()
+        );
+        assert!(
+            later.peek().is_empty(),
+            "Later must be empty after the transfer; later={:?}",
+            later.peek()
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Same-list: drop the last chip on the first. Hover slot 0 must commit
+    /// `[Beta, Alpha]`, not stick at `from_index`.
+    #[test]
+    fn same_list_last_chip_drop_on_first_reorders() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_reorder_vec, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        let items = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+        let (_o, live) = mount_scope_tree({
+            let items = items;
+            move || {
+                drag_scope("ov-same-last-first")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .on_drag_end({
+                        let items = items;
+                        move |ev| {
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            if ev.from_list.as_deref() != Some("files") {
+                                return;
+                            }
+                            let mut v = items.peek();
+                            apply_reorder_vec(
+                                &mut v,
+                                from_index,
+                                ev.to_index.unwrap_or(from_index),
+                            );
+                            items.set(v);
+                        }
+                    })
+                    .child(move || {
+                        let list = sortable_list("files").accept("file").child({
+                            let items = items;
+                            move || {
+                                let rows: Vec<Element> = items
+                                    .get()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, name)| {
+                                        let label = name.clone();
+                                        sortable_item(format!("files:{label}"))
+                                            .item_type("file")
+                                            .accept("file")
+                                            .list("files")
+                                            .index(i)
+                                            .source_opacity(0.4)
+                                            .child(move || {
+                                                Element::new().text(label.clone()).w(160.0).h(32.0)
+                                            })
+                                    })
+                                    .collect();
+                                Element::from(vstack().w("100%").gap(6.0).children(rows))
+                            }
+                        });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(vstack().w(200.0).children([list, overlay]))
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let beta = hits0.iter().find(|h| h.id == "files:Beta").expect("Beta");
+        let alpha = hits0.iter().find(|h| h.id == "files:Alpha").expect("Alpha");
+        let grab = [
+            beta.rect.x + beta.rect.width * 0.5,
+            beta.rect.y + beta.rect.height * 0.5,
+        ];
+        let dest = [
+            alpha.rect.x + alpha.rect.width * 0.5,
+            alpha.rect.y + alpha.rect.height * 0.25,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-same-last-first",
+            "files:Beta",
+            grab,
+            [beta.rect.x, beta.rect.y, beta.rect.width, beta.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-same-last-first".into(),
+            draggable_id: "files:Beta".into(),
+            pointer: grab,
+            grab_offset,
+            start_bounds,
+            from_list: Some("files".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            items.peek(),
+            vec!["Beta".to_string(), "Alpha".to_string()],
+            "dropping Beta on Alpha's upper half must reorder, not stay [Alpha, Beta]; got {:?}",
+            items.peek()
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery nested Inbox: drag Beta onto Alpha's upper half. Preview already
+    /// stacks Beta above Alpha; drop must commit `[Beta, Alpha]`, not snap back.
+    #[test]
+    fn nested_folder_last_file_drop_on_first_reorders() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_reorder_vec, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        let inbox = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+        let later = Signal::new(vec!["Gamma".to_string()]);
+        let dropped = Signal::new(None::<(Option<String>, Option<usize>)>);
+
+        let (_o, live) = mount_scope_tree({
+            let inbox = inbox;
+            let later = later;
+            let dropped = dropped;
+            move || {
+                drag_scope("ov-nest-reorder")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .collision(crate::utils::drag::CollisionAlg::MostIntersecting)
+                    .on_drag_end({
+                        let inbox = inbox;
+                        let later = later;
+                        let dropped = dropped;
+                        move |ev| {
+                            dropped.set(Some((ev.to_list.clone(), ev.to_index)));
+                            let Some(from) = ev.from_list.as_deref() else {
+                                return;
+                            };
+                            let Some(to) = ev.to_list.as_deref() else {
+                                return;
+                            };
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            if from == to {
+                                let mut v = if from == "tree-inbox" {
+                                    inbox.peek()
+                                } else {
+                                    later.peek()
+                                };
+                                apply_reorder_vec(
+                                    &mut v,
+                                    from_index,
+                                    ev.to_index.unwrap_or(from_index),
+                                );
+                                if from == "tree-inbox" {
+                                    inbox.set(v);
+                                } else {
+                                    later.set(v);
+                                }
+                                return;
+                            }
+                        }
+                    })
+                    .child(move || {
+                        let overlay: Element = drag_overlay().into();
+                        let tree = sortable_list("tree-root").accept("folder").child(|| {
+                            let inbox_card = sortable_item("folder:Inbox")
+                                .item_type("folder")
+                                .accept("folder")
+                                .list("tree-root")
+                                .index(0)
+                                .source_opacity(0.4)
+                                .child(|| {
+                                    let inner = sortable_list("tree-inbox")
+                                        .accept("file")
+                                        .group("nest")
+                                        .child(|| {
+                                            Element::from(
+                                                vstack()
+                                                    .w("100%")
+                                                    .min_h(0.0)
+                                                    .h("auto")
+                                                    .gap(6.0)
+                                                    .children([
+                                                        chip("tree-inbox", "Alpha".into(), 0),
+                                                        chip("tree-inbox", "Beta".into(), 1),
+                                                    ]),
+                                            )
+                                        });
+                                    folder_card("Inbox", inner)
+                                });
+                            let later_card = sortable_item("folder:Later")
+                                .item_type("folder")
+                                .accept("folder")
+                                .list("tree-root")
+                                .index(1)
+                                .source_opacity(0.4)
+                                .child(|| {
+                                    let inner = sortable_list("tree-later")
+                                        .accept("file")
+                                        .group("nest")
+                                        .child(|| {
+                                            Element::from(
+                                                vstack()
+                                                    .w("100%")
+                                                    .min_h(0.0)
+                                                    .h("auto")
+                                                    .gap(6.0)
+                                                    .child(chip("tree-later", "Gamma".into(), 0)),
+                                            )
+                                        });
+                                    folder_card("Later", inner)
+                                });
+                            Element::from(vstack().w("100%").children([inbox_card, later_card]))
+                        });
+                        Element::from(vstack().w(220.0).children([tree, overlay]))
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let beta = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Beta")
+            .expect("Beta");
+        let alpha = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Alpha")
+            .expect("Alpha");
+        let folder = hits0
+            .iter()
+            .find(|h| h.id == "folder:Inbox")
+            .expect("Inbox folder");
+        let grab = [
+            beta.rect.x + beta.rect.width * 0.5,
+            beta.rect.y + beta.rect.height * 0.5,
+        ];
+        // Release on the folder title band (Gallery screenshot: Beta overlapping Inbox).
+        let dest = [
+            alpha.rect.x + alpha.rect.width * 0.5,
+            (folder.rect.y + alpha.rect.y) * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-reorder",
+            "tree-inbox:Beta",
+            grab,
+            [beta.rect.x, beta.rect.y, beta.rect.width, beta.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-reorder".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            pointer: grab,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+        {
+            let tree = live.borrow();
+            let src = find_draggable(&tree, "tree-inbox:Beta").expect("Beta source");
+            assert!(
+                src.style.translate[1] < -8.0,
+                "preview must lift Beta onto Alpha's slot; translate={:?}",
+                src.style.translate
+            );
+        }
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        assert_eq!(
+            dropped.peek(),
+            Some((Some("tree-inbox".into()), Some(0))),
+            "drop on Alpha's upper half must commit hover slot 0, not from_index; got {:?}",
+            dropped.peek()
+        );
+        assert_eq!(
+            inbox.peek(),
+            vec!["Beta".to_string(), "Alpha".to_string()],
+            "Inbox must keep Beta above Alpha after drop; got {:?}",
+            inbox.peek()
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    fn collect_list_draggable_ids(el: &Element, list: &str, out: &mut Vec<String>) {
+        if el.attrs.contains_key(ATTR_DRAG_OVERLAY) {
+            return;
+        }
+        if el
+            .attrs
+            .get(crate::utils::drag::ATTR_DRAG_LIST)
+            .map(String::as_str)
+            == Some(list)
+            && el
+                .attrs
+                .contains_key(crate::utils::drag::ATTR_DRAG_DRAGGABLE)
+            && el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_INDEX)
+        {
+            if let Some(id) = el.attrs.get(crate::utils::drag::ATTR_DRAG_DRAGGABLE) {
+                out.push(id.clone());
+            }
+            return;
+        }
+        for c in &el.children {
+            collect_list_draggable_ids(c, list, out);
+        }
+    }
+
+    /// Gallery `keyed_sortable_chips` + nested folder: after drop the live tree
+    /// (not only the Vec) must pack Beta above Alpha. Static `chip(..., idx)`
+    /// tests miss this — they never rebuild children.
+    #[test]
+    fn nested_folder_for_keyed_drop_reorders_dom_and_layout() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::LayoutTree;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            apply_reorder_vec, begin, collect_hits, drag_overlay, drag_scope, end, sortable_item,
+            sortable_list, start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        let inbox = Signal::new(vec!["Alpha".to_string(), "Beta".to_string()]);
+        let list_runs = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+
+        let (_o, live) =
+            mount_scope_tree({
+                let inbox = inbox;
+                let list_runs = list_runs.clone();
+                move || {
+                    drag_scope("ov-nest-fk")
+                        .threshold(0.0)
+                        .axis(Axis::Y)
+                        .collision(crate::utils::drag::CollisionAlg::MostIntersecting)
+                        .on_drag_end({
+                            let inbox = inbox;
+                            move |ev| {
+                                if ev.from_list.as_deref() != Some("tree-inbox") {
+                                    return;
+                                }
+                                if ev.to_list.as_deref() != Some("tree-inbox") {
+                                    return;
+                                }
+                                let Some(from_index) = ev.from_index else {
+                                    return;
+                                };
+                                let mut v = inbox.peek();
+                                apply_reorder_vec(
+                                    &mut v,
+                                    from_index,
+                                    ev.to_index.unwrap_or(from_index),
+                                );
+                                inbox.set(v);
+                            }
+                        })
+                        .child({
+                            let list_runs = list_runs.clone();
+                            move || {
+                                let overlay: Element = drag_overlay().into();
+                                let tree =
+                                    sortable_list("tree-root").accept("folder").child({
+                                        let inbox = inbox;
+                                        let list_runs = list_runs.clone();
+                                        move || {
+                                            sortable_item("folder:Inbox")
+                                                .item_type("folder")
+                                                .accept("folder")
+                                                .list("tree-root")
+                                                .index(0)
+                                                .source_opacity(0.4)
+                                                .child({
+                                                    let inbox = inbox;
+                                                    let list_runs = list_runs.clone();
+                                                    move || {
+                                                        let inner = sortable_list("tree-inbox")
+                                                .accept("file")
+                                                .group("nest")
+                                                .child({
+                                                    let inbox = inbox;
+                                                    let list_runs = list_runs.clone();
+                                                    move || {
+                                                        list_runs.set(list_runs.get() + 1);
+                                                        let items = inbox.get();
+                                                        let rows = crate::app::reactive::for_keyed(
+                                                            "ov-nest-fk-inbox-rows",
+                                                            items.as_slice(),
+                                                            |s: &String| s.clone(),
+                                                            |label: &String| {
+                                                                let name = label.clone();
+                                                                let i = items
+                                                                    .iter()
+                                                                    .position(|x| x == &name)
+                                                                    .unwrap_or(0);
+                                                                sortable_item(format!(
+                                                                    "tree-inbox:{name}"
+                                                                ))
+                                                                .item_type("file")
+                                                                .accept("file")
+                                                                .group("nest")
+                                                                .list("tree-inbox")
+                                                                .index(i)
+                                                                .source_opacity(0.4)
+                                                                .child(move || {
+                                                                    Element::new()
+                                                                        .text(name.clone())
+                                                                        .w(160.0)
+                                                                        .h(32.0)
+                                                                })
+                                                            },
+                                                        );
+                                                        Element::from(
+                                                            vstack()
+                                                                .w("100%")
+                                                                .min_h(0.0)
+                                                                .h("auto")
+                                                                .gap(6.0)
+                                                                .children(rows),
+                                                        )
+                                                    }
+                                                });
+                                                        folder_card("Inbox", inner)
+                                                    }
+                                                })
+                                        }
+                                    });
+                                Element::from(vstack().w(220.0).children([tree, overlay]))
+                            }
+                        })
+                }
+            });
+
+        let mut lt = LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+            let _ = lt.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let beta = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Beta")
+            .expect("Beta");
+        let alpha = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Alpha")
+            .expect("Alpha");
+        let grab = [
+            beta.rect.x + beta.rect.width * 0.5,
+            beta.rect.y + beta.rect.height * 0.5,
+        ];
+        let dest = [
+            alpha.rect.x + alpha.rect.width * 0.5,
+            alpha.rect.y + alpha.rect.height * 0.25,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-fk",
+            "tree-inbox:Beta",
+            grab,
+            [beta.rect.x, beta.rect.y, beta.rect.width, beta.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-fk".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            pointer: grab,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let hits2 = collect_hits(&live.borrow());
+        assert!(end(&hits2));
+        drain_deferred_view_remounts();
+
+        assert_eq!(
+            inbox.peek(),
+            vec!["Beta".to_string(), "Alpha".to_string()],
+            "signal must commit [Beta, Alpha]; got {:?}",
+            inbox.peek()
+        );
+        assert!(
+            list_runs.get() >= 2,
+            "droppable body must rebuild after inbox.set; runs={}",
+            list_runs.get()
+        );
+
+        let mut ids = Vec::new();
+        collect_list_draggable_ids(&live.borrow(), "tree-inbox", &mut ids);
+        assert_eq!(
+            ids,
+            vec![
+                "tree-inbox:Beta".to_string(),
+                "tree-inbox:Alpha".to_string()
+            ],
+            "for_keyed live tree must list Beta before Alpha; got {ids:?}"
+        );
+
+        {
+            let mut tree = live.borrow_mut();
+            lt.build_and_layout_fast_ex(&mut tree, 800.0, 600.0, [0.0, 0.0], false, false, None);
+            let beta = find_draggable(&tree, "tree-inbox:Beta").expect("Beta after drop");
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("Alpha after drop");
+            assert!(
+                beta.layout_bounds[1] < alpha.layout_bounds[1],
+                "fast layout must pack Beta above Alpha; Beta y={} Alpha y={}",
+                beta.layout_bounds[1],
+                alpha.layout_bounds[1]
+            );
+        }
 
         clear_test_reconcile_root();
         reset_registered_anchors();
@@ -3181,18 +4634,6 @@ mod tests {
         let _ = end(&[]);
         clear_test_reconcile_root();
         reset_registered_anchors();
-    }
-
-    fn find_item_shell<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
-        if el.children.iter().any(|c| {
-            c.attrs
-                .get(crate::utils::drag::ATTR_DRAG_DRAGGABLE)
-                .map(String::as_str)
-                == Some(id)
-        }) {
-            return Some(el);
-        }
-        el.children.iter().find_map(|c| find_item_shell(c, id))
     }
 
     /// Gallery wraps overlapping pills in a relative arena under DragProvider,

@@ -412,7 +412,14 @@ fn keyed_sortable_chips(
             }
         }
     );
-    Element::from(vstack().w("100%").min_h(0.0).h("auto").gap("0.375rem").children(rows))
+    Element::from(
+        vstack()
+            .w("100%")
+            .min_h(0.0)
+            .h("auto")
+            .gap("0.375rem")
+            .children(rows),
+    )
 }
 
 fn reorder_same_list(items: Signal<Vec<String>>, list: &'static str) -> impl FnMut(&DragEvent) {
@@ -671,9 +678,10 @@ fn nest_folder_tree(
                 .handle_only(true)
                 .source_opacity(0.4)
                 .child(move || {
-                    // Folder island must track the inner vec so the card hugs
-                    // remaining files after a cross-list transfer.
-                    let _ = files.get().len();
+                    // Do not `files.get()` here. This island's owner is the
+                    // SortableItem; a re-run disposes nested `SortableList`
+                    // reactive anchors (Solid child-owner). The inner list
+                    // already tracks the vec via `keyed_sortable_chips`.
                     let inner = sortable_list(list)
                         .accept("file")
                         .group("nest")
@@ -684,7 +692,14 @@ fn nest_folder_tree(
                 })
         }
     );
-    Element::from(vstack().w("100%").min_h(0.0).h("auto").gap("0.5rem").children(rows))
+    Element::from(
+        vstack()
+            .w("100%")
+            .min_h(0.0)
+            .h("auto")
+            .gap("0.5rem")
+            .children(rows),
+    )
 }
 
 #[component]

@@ -12,7 +12,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{Element, IntoOpacity, LayoutStatus};
-use crate::layout::LayoutTree;
+use crate::layout::{dim_kind, DimKind, LayoutTree};
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::motion::{
@@ -25,10 +25,10 @@ use super::autoscroll::{AutoScroll, ScrollLock};
 use super::collision::CollisionAlg;
 use super::geometry::{Axis, DragStack, Restrict, SnapGrid};
 use super::session::{
-    active_source_translate, begin, bump_auto_stack, live_pack_item_translate,
-    live_cross_list_source_translate, live_same_list_source_translate, overlay_is_registered,
-    overlay_source_opacity, remember_item_restrict, start_geometry, BeginDrag, DragHandler,
-    DragPredicate, ScopeRuntime,
+    active_source_translate, begin, bump_auto_stack, hit_hosts_id, list_row_extent,
+    live_cross_list_source_translate, live_pack_item_translate, live_same_list_source_translate,
+    overlay_is_registered, overlay_source_opacity, remember_item_restrict, start_geometry,
+    BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
 use super::sortable::SORTABLE_FLIP_MS;
 use super::{
@@ -185,11 +185,93 @@ fn live_slot<T: Clone + PartialEq + 'static>(key: &str, value: T) -> Signal<T> {
 /// already-open page_stack (ScrollArea overlay bar) does not split further —
 /// both pills share `rects → text` and lower glyphs paint on the upper fill.
 fn keyed_item_shell(island: Element) -> Element {
-    let mut el =
-        Element::from(vstack().min_w(0.0).min_h(0.0).flex_shrink(0.0).child(island)).overflow("visible");
+    let mut el = Element::from(
+        vstack()
+            .min_w(0.0)
+            .min_h(0.0)
+            .flex_shrink(0.0)
+            .child(island),
+    )
+    .overflow("visible");
     el.set_attr("data-stacking-context", "1");
     el.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
     el
+}
+
+fn subtree_has_draggable(el: &Element, id: &str) -> bool {
+    el.attrs.get(ATTR_DRAG_DRAGGABLE).map(String::as_str) == Some(id)
+        || el.children.iter().any(|c| subtree_has_draggable(c, id))
+}
+
+fn trail_margin_px(el: &Element, axis: Axis) -> f32 {
+    let edge = match axis {
+        Axis::X => el.style.margin.right,
+        Axis::Y | Axis::Xy => el.style.margin.bottom,
+    };
+    crate::layout::lpa_length_px(edge).unwrap_or(0.0)
+}
+
+fn set_trail_margin(el: &mut Element, axis: Axis, px: f32) {
+    let edge = match axis {
+        Axis::X => &mut el.style.margin.right,
+        Axis::Y | Axis::Xy => &mut el.style.margin.bottom,
+    };
+    *edge = taffy::style::LengthPercentageAuto::length(px);
+}
+
+type AuthorBlock = (
+    taffy::style::Dimension,
+    taffy::style::Dimension,
+    taffy::style::Dimension,
+);
+
+fn block_dims(el: &Element, axis: Axis) -> AuthorBlock {
+    match axis {
+        Axis::X => (
+            el.style.size.width,
+            el.style.min_size.width,
+            el.style.max_size.width,
+        ),
+        Axis::Y | Axis::Xy => (
+            el.style.size.height,
+            el.style.min_size.height,
+            el.style.max_size.height,
+        ),
+    }
+}
+
+fn set_block_dims(
+    el: &mut Element,
+    axis: Axis,
+    size: taffy::style::Dimension,
+    min: taffy::style::Dimension,
+    max: taffy::style::Dimension,
+) {
+    match axis {
+        Axis::X => {
+            el.style.size.width = size;
+            el.style.min_size.width = min;
+            el.style.max_size.width = max;
+        }
+        Axis::Y | Axis::Xy => {
+            el.style.size.height = size;
+            el.style.min_size.height = min;
+            el.style.max_size.height = max;
+        }
+    }
+}
+
+fn dims_eq(a: taffy::style::Dimension, b: taffy::style::Dimension) -> bool {
+    match (dim_kind(a), dim_kind(b)) {
+        (DimKind::Length(x), DimKind::Length(y)) => (x - y).abs() < 0.5,
+        (DimKind::Percent(x), DimKind::Percent(y)) => (x - y).abs() < 1e-4,
+        (DimKind::Auto, DimKind::Auto) => true,
+        _ => false,
+    }
+}
+
+fn dims_changed(a: AuthorBlock, b: AuthorBlock) -> bool {
+    !dims_eq(a.0, b.0) || !dims_eq(a.1, b.1) || !dims_eq(a.2, b.2)
 }
 
 /// z-index must live on the author-parented shell (direct child of the
@@ -205,6 +287,13 @@ fn apply_shell_stack_z(
     auto_rank: Signal<i32>,
     auto_bumped: &Cell<bool>,
     author_z: &Cell<i32>,
+    from_list: Signal<Option<String>>,
+    hover_list: Signal<Option<String>>,
+    drag_extent: Signal<[f32; 2]>,
+    axis: Axis,
+    list_sig: Signal<Option<String>>,
+    author_margin: &Cell<Option<f32>>,
+    author_block: &Cell<Option<AuthorBlock>>,
 ) -> LayoutStatus {
     let is_active = active.peek().as_deref() == Some(id);
     if stack == DragStack::Auto && is_active && !auto_bumped.get() {
@@ -215,12 +304,74 @@ fn apply_shell_stack_z(
     if stack == DragStack::Auto && is_active {
         want_z = want_z.max(1);
     }
+    let mut changed = LayoutStatus::Clean;
+    // Nested folder card: the dimmed file translates into another list, but
+    // paint is clipped to this shell's stacking context. Raise any ancestor
+    // whose *tree* still hosts the source (last-item rects stick out after
+    // the origin list shrinks, so hit-rect containment is not enough).
+    if !is_active {
+        if let Some(active_id) = active.peek().as_deref() {
+            if subtree_has_draggable(el, active_id) || hit_hosts_id(id, active_id) {
+                want_z = want_z.max(2);
+                el.style.overflow.x = taffy::style::Overflow::Visible;
+                el.style.overflow.y = taffy::style::Overflow::Visible;
+            }
+        }
+    }
     if el.style.z_index != want_z {
         el.style.z_index = want_z;
-        LayoutStatus::StyleChanged
-    } else {
-        LayoutStatus::Clean
+        changed = changed.merge(LayoutStatus::StyleChanged);
     }
+    // Cross-list: take this row out of the origin pack by collapsing the
+    // *shell* block size to 0. Negative trailing margin was a guessed pixel
+    // amount (stride / shell+8 / stretched island) and ate remaining siblings
+    // plus folder padding (Gallery: Inbox 无法包裹 Alpha). Overflow stays
+    // visible so the island (pinned to drag_extent) still paints into the hole.
+    let from_l = from_list.peek();
+    let hover_l = hover_list.peek();
+    let cross = is_active && from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+    let _ = (list_sig, drag_extent);
+    let base_margin = match author_margin.get() {
+        Some(v) => v,
+        None => {
+            let v = trail_margin_px(el, axis);
+            author_margin.set(Some(v));
+            v
+        }
+    };
+    let have_margin = trail_margin_px(el, axis);
+    if (have_margin - base_margin).abs() > 0.5 {
+        set_trail_margin(el, axis, base_margin);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    let author = if cross {
+        author_block.get().unwrap_or((
+            taffy::style::Dimension::auto(),
+            taffy::style::Dimension::auto(),
+            taffy::style::Dimension::auto(),
+        ))
+    } else {
+        match author_block.get() {
+            Some(v) => v,
+            None => {
+                let v = block_dims(el, axis);
+                author_block.set(Some(v));
+                v
+            }
+        }
+    };
+    let zero = taffy::style::Dimension::length(0.0);
+    let want_block = if cross { (zero, zero, zero) } else { author };
+    let have_block = block_dims(el, axis);
+    if dims_changed(have_block, want_block) {
+        set_block_dims(el, axis, want_block.0, want_block.1, want_block.2);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    if cross {
+        el.style.overflow.x = taffy::style::Overflow::Visible;
+        el.style.overflow.y = taffy::style::Overflow::Visible;
+    }
+    changed
 }
 
 /// Same-list FLIP translate for a sortable row (source placeholder or sibling).
@@ -354,6 +505,7 @@ fn apply_live_drag_chrome(
     auto_bumped: &Cell<bool>,
     animation: bool,
     motion: &mut MotionStyle,
+    author_island_block: &Cell<Option<(taffy::style::Dimension, taffy::style::Dimension)>>,
 ) -> LayoutStatus {
     let list = list_sig.peek();
     let index = index_sig.peek();
@@ -453,6 +605,60 @@ fn apply_live_drag_chrome(
         animation,
         motion,
     );
+    let from_l = from_list.peek();
+    let hover_l = hover_list.peek();
+    let cross = is_active && from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+    let author_sz = if cross {
+        author_island_block.get().unwrap_or((
+            taffy::style::Dimension::auto(),
+            taffy::style::Dimension::auto(),
+        ))
+    } else {
+        match author_island_block.get() {
+            Some(v) => v,
+            None => {
+                let v = match axis {
+                    Axis::X => (el.style.size.width, el.style.min_size.width),
+                    Axis::Y | Axis::Xy => (el.style.size.height, el.style.min_size.height),
+                };
+                author_island_block.set(Some(v));
+                v
+            }
+        }
+    };
+    let want_sz = if cross {
+        let e = drag_extent.peek();
+        let px = match axis {
+            Axis::X => e[0],
+            Axis::Y | Axis::Xy => e[1],
+        }
+        .max(1.0);
+        let d = taffy::style::Dimension::length(px);
+        (d, d)
+    } else {
+        author_sz
+    };
+    let have_sz = match axis {
+        Axis::X => (el.style.size.width, el.style.min_size.width),
+        Axis::Y | Axis::Xy => (el.style.size.height, el.style.min_size.height),
+    };
+    if !dims_eq(have_sz.0, want_sz.0) || !dims_eq(have_sz.1, want_sz.1) {
+        match axis {
+            Axis::X => {
+                el.style.size.width = want_sz.0;
+                el.style.min_size.width = want_sz.1;
+            }
+            Axis::Y | Axis::Xy => {
+                el.style.size.height = want_sz.0;
+                el.style.min_size.height = want_sz.1;
+            }
+        }
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    if cross {
+        el.style.overflow.x = taffy::style::Overflow::Visible;
+        el.style.overflow.y = taffy::style::Overflow::Visible;
+    }
     motion_sync_status(
         el,
         changed != LayoutStatus::Clean || shift_changed,
@@ -512,13 +718,18 @@ fn apply_live_droppable_chrome(
     };
     let extent = {
         let e = drag_extent.peek();
-        match axis {
+        let chip = match axis {
             Axis::X => e[0],
             Axis::Y | Axis::Xy => e[1],
         }
-        .max(0.0)
+        .max(0.0);
+        // One packed row (item + author gap). A stretched island taller than
+        // the row must not drive padding — that leaves a hole the size of the
+        // whole origin card (Gallery: 移出 Beta 后 Inbox 空洞过大).
+        list_row_extent(Some(list), axis, chip)
     };
-    let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover {
+    let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover
+    {
         extent
     } else {
         0.0
@@ -533,8 +744,9 @@ fn apply_live_droppable_chrome(
         *pad_edge = taffy::style::LengthPercentage::length(want_pad);
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
-    // Source list: pull the vacated row out of the parent (folder card) flow.
-    // Target already grows via padding; without this the origin stays tall.
+    // Keep the author's trailing margin on the *list*. Vacating a row is the
+    // source item's negative margin (see `apply_shell_stack_z`); a list-level
+    // height cap clips the last item (Gallery: Beta 本体消失).
     let base_margin = match author_margin.get() {
         Some(v) => v,
         None => {
@@ -547,16 +759,18 @@ fn apply_live_droppable_chrome(
             v
         }
     };
-    let extra_margin = if cross { -extent } else { 0.0 };
-    let want_margin = base_margin + extra_margin;
     let margin_edge = match axis {
         Axis::X => &mut el.style.margin.right,
         Axis::Y | Axis::Xy => &mut el.style.margin.bottom,
     };
     let have_margin = crate::layout::lpa_length_px(*margin_edge).unwrap_or(0.0);
-    if (have_margin - want_margin).abs() > 0.5 {
-        *margin_edge = taffy::style::LengthPercentageAuto::length(want_margin);
+    if (have_margin - base_margin).abs() > 0.5 {
+        *margin_edge = taffy::style::LengthPercentageAuto::length(base_margin);
         changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    if cross {
+        el.style.overflow.x = taffy::style::Overflow::Visible;
+        el.style.overflow.y = taffy::style::Overflow::Visible;
     }
     changed
 }
@@ -997,6 +1211,9 @@ fn assemble_draggable(
     let auto_rank = use_signal(format!("{tid}__zrank").as_str(), || 0i32);
     let auto_bumped = Rc::new(Cell::new(false));
     let author_z_cell = Rc::new(Cell::new(0i32));
+    let author_island_block = Rc::new(Cell::new(
+        None::<(taffy::style::Dimension, taffy::style::Dimension)>,
+    ));
     let auto_bumped_shell = Rc::clone(&auto_bumped);
     let author_z_shell = Rc::clone(&author_z_cell);
     let body: Rc<dyn Fn() -> Element> = Rc::new(body);
@@ -1054,6 +1271,7 @@ fn assemble_draggable(
         let preview_scope = scope_for_mark.clone();
         let motion = Rc::new(RefCell::new(MotionStyle::new()));
         let auto_bumped = Rc::clone(&auto_bumped);
+        let author_island_block = Rc::clone(&author_island_block);
         el = el.reactive_sync(move |el, _lt: &mut LayoutTree| {
             apply_live_drag_chrome(
                 el,
@@ -1078,6 +1296,7 @@ fn assemble_draggable(
                 auto_bumped.as_ref(),
                 animation,
                 &mut motion.borrow_mut(),
+                author_island_block.as_ref(),
             )
         });
         if !handle_only && !disabled {
@@ -1112,6 +1331,8 @@ fn assemble_draggable(
     let mut shell = keyed_item_shell(island);
     let shell_id = id.clone();
     let shell_scope = scope.clone();
+    let author_margin_shell = Rc::new(Cell::new(None::<f32>));
+    let author_block_shell = Rc::new(Cell::new(None::<AuthorBlock>));
     shell = shell.reactive_sync(move |el, _lt: &mut LayoutTree| {
         apply_shell_stack_z(
             el,
@@ -1122,6 +1343,13 @@ fn assemble_draggable(
             auto_rank,
             auto_bumped_shell.as_ref(),
             author_z_shell.as_ref(),
+            from_list_sig,
+            hover_list_sig,
+            drag_extent_sig,
+            axis,
+            list_sig,
+            author_margin_shell.as_ref(),
+            author_block_shell.as_ref(),
         )
     });
     shell
