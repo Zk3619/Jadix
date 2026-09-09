@@ -326,7 +326,7 @@ solid-dnd directive 可 `skipTransform`，让作者自己写 **CSS** transform�
 | 优先级 | 项 | 理由 | 与 WP-DRAG.3 |
 |--------|----|------|----------------|
 | **P0** | Transformer 管道（哪怕先内置 3 段、后允许注册） | 打开所有「随拖改位移」而不膨胀 session | **☑ 2026-09-09** `modifier.rs`（公开名 `DragModifier`，避开 CSS `transform`） |
-| **P0** | 嵌套列表加深 | 已在 DRAG.3；solid-dnd 也只靠 nested droppable + `closestCorners` | **☑ 2026-09-09** innermost refine + Gallery |
+| **P0** | 嵌套列表加深 | 已在 DRAG.3；solid-dnd 也只靠 nested droppable + `closestCorners` | **☑ 2026-09-09** innermost refine + Gallery；**09-09 晚** 同型 accept 默认 + Overlay 克隆不抢内层 island |
 | **P1** | `CollisionDetector` 函数 + 保留枚举 | README 级扩展点；`can_drop` 不够选 | 新 |
 | **P1** | clone-pull | DRAG.3；solid-dnd Overlay 本来就是「拉出的表示」 | 已列 |
 | **P1** | Overlay `Fn(&DragItemCtx)` + `align=center` | 补齐对方 Overlay 的两处细节 | 新 |

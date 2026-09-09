@@ -3,6 +3,12 @@
 > **地位**：SemVer / 实验面草稿（WP-2.5 任务③）。正式发布前以 [`AUTHORITY.md`](AUTHORITY.md) WP-4.1 为准重写。  
 > **日期**：2026-08-13
 
+- **2026-09-09 nested list source shrink**：跨列表 hover 时目标 list 仍加 dragged extent padding，源 list 用对应负 margin 把空出行从父级（文件夹卡）流里抽掉；松手 `apply_transfer` 后源文件夹跟剩余项收矮。Gallery 文件夹 island 订阅内层 `files` 长度。
+- **2026-09-09 nested list slot height**：变高 Sortable 槽位按各项 layout 尺寸打包（重排不撑高列表）；跨列表 hover 给目标 list 加上 dragged extent 的 padding。Gallery 嵌套卡片 `h=auto` / `min_h=0`。
+- **2026-09-09 nested list folder drag**：空 `accept` 且双方都有 `item_type` 时默认同型（外层文件夹拖过内层文件行不再抢走 `hover_list`）。Overlay 克隆嵌套 `SortableItem` 使用独立 island id，替身不再塌成只有标题的 chip。
+- **2026-09-09 platform P3d**：控制台 VT + 本地时钟迁入 `platform/`（Win `GetLocalTime` / Unix `localtime_r`）；[`hmr_log.rs`](../crates/rui/src/app/hmr_log.rs) 只保留 12h 格式与 `NO_COLOR`。见 [`platform.md`](engine/platform.md) §11。
+- **2026-09-09 platform P3 视觉**：Win Gallery F1–F3 / C1–C4、C6 签收（先于 P3c）。见 [`platform.md`](engine/platform.md) §9.9。
+- **2026-09-09 platform P3c**：主路径 GPU 后端排序迁入 [`platform/desktop/gpu.rs`](../crates/rui/src/platform/desktop/gpu.rs)（macOS Metal 在 `os/macos/gpu.rs`）；`app/wgpu_backend.rs` 删除。`glass_gpu` 候选表仍独立。见 [`platform.md`](engine/platform.md) §10。
 - **2026-09-09 drag restrict=parent**：[`Restrict::Parent`](../crates/rui/src/utils/drag/geometry.rs)（`restrict="parent"`）钳作者父级，无需给容器分配 id；跳过 hug-content 的 kit item shell。`viewport` / 组件 id 仍可用。
 - **2026-09-09 drag restrict-to-element**：[`Restrict`](../crates/rui/src/utils/drag/geometry.rs) 接受组件 id（每 tick 解析 Droppable / `template_id` / `id` 的指针空间盒）。[`Draggable`](../crates/rui/src/utils/drag/builder.rs) / `SortableItem` 的 `restrict` 覆盖 Provider；缺省继承（Provider 默认 `none`）。`viewport` 钳窗口（跨父级投放仍可）；`parent` 钳作者父级；Gallery「四角旋转」`restrict="corners-arena"`。
 - **2026-09-09 drag P0**：[`modifier`](../crates/rui/src/utils/drag/modifier.rs) 管道（axis/snap/pin/restrict + `.modifier` / `add_modifier`，Provider 重建后仍在）。公开名避开 CSS `transform`（solid-dnd 叫 `Transformer`；值是 [`DragDelta`](../crates/rui/src/utils/drag/modifier.rs)）。嵌套列表 innermost 碰撞与 `hover_list`（Gallery「嵌套列表」）。clone-pull 仍在 WP-DRAG.3。对照 [`SOLID_DND_COMPARISON.md`](comparison/SOLID_DND_COMPARISON.md) §8。

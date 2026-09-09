@@ -2,7 +2,7 @@
 
 > **文档地位**：专题**设计稿**（非 [`AUTHORITY.md`](../AUTHORITY.md) 勾选源；**本稿不改代码**）。  
 > **日期**：2026-09-09（同日吸收落地审查：瞬时坐标、内部同步隔离、Owner 持有历史、RAII 事务、大替换 Marker）  
-> **关联**：[`text_edit_history.rs`](../../crates/rui/src/utils/text_edit_history.rs) · [`text_field.rs`](../../crates/rui/src/utils/text_field.rs) · [`input_controller.rs`](../../crates/rui/src/app/input_controller.rs) · [`ime.md`](../ops/ime.md) · [`runtime_extension_points.md`](../engine/runtime_extension_points.md)（`TextEditHost`）· [`keyboard_nav.md`](../ops/keyboard_nav.md) · [`size_and_memory.md`](../ops/size_and_memory.md)（lean default / feature 门） · Freya F05 / gpui 编辑器对照见 [`FREYA_COMPARISON.md`](../comparison/FREYA_COMPARISON.md)、[`GPUI_ECOSYSTEM_COMPARISON.md`](../comparison/GPUI_ECOSYSTEM_COMPARISON.md)
+> **关联**：[`text_edit_history.rs`](../../crates/rui/src/utils/text_edit_history.rs) · [`text_field.rs`](../../crates/rui/src/utils/text_field.rs) · [`input_controller.rs`](../../crates/rui/src/app/input_controller.rs) · [`ime.md`](../ops/ime.md) · [`runtime_extension_points.md`](../engine/runtime_extension_points.md)（`TextEditHost`）· [`keyboard_nav.md`](../ops/keyboard_nav.md) · [`size_and_memory.md`](../ops/size_and_memory.md)（lean default / feature 门） · **不是** [`platform.md`](../engine/platform.md) P3（该文 §9.8） · Freya F05 / gpui 编辑器对照见 [`FREYA_COMPARISON.md`](../comparison/FREYA_COMPARISON.md)、[`GPUI_ECOSYSTEM_COMPARISON.md`](../comparison/GPUI_ECOSYSTEM_COMPARISON.md)
 
 ---
 
