@@ -14,7 +14,7 @@ pub(crate) use rui::core::reactivity::{batch, use_signal, Signal};
 pub(crate) use rui::core::tree::{Element, LayoutStatus};
 pub(crate) use rui::primitives::{
     boxed, canvas, circle, hstack, interactive, polyline, r#box, scene3d, svg, svg_path, vstack,
-    Canvas2D, CanvasSize, Portal, PortalProps,
+    Canvas2D, CanvasSize, Portal, PortalProps, Scene3dCamera,
 };
 pub(crate) use rui::style::{parse_color, parse_text_color, TextSpan};
 pub(crate) use rui::ui;

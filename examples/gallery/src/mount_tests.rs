@@ -1129,6 +1129,59 @@ fn find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
     gallery_find_tid(el, want)
 }
 
+fn gallery_find_attr(el: &rui::core::tree::Element, key: &str, value: &str) -> bool {
+    let mut stack = vec![el];
+    while let Some(el) = stack.pop() {
+        if el.attrs.get(key).map(String::as_str) == Some(value) {
+            return true;
+        }
+        stack.extend(el.children.iter().rev());
+    }
+    false
+}
+
+#[test]
+fn text_section_mounts_msdf_card() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, tree) = create_root(|| gallery_section_body("text"));
+        assert!(
+            find_tid(&tree, "gal-msdf-coverage"),
+            "text section must mount Coverage sample"
+        );
+        assert!(
+            find_tid(&tree, "gal-msdf-bake"),
+            "text section must mount Bake sample"
+        );
+        assert!(
+            find_tid(&tree, "gal-msdf-msdf"),
+            "text section must mount three-channel MSDF sample"
+        );
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn draw_section_mounts_billboard() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, tree) = create_root(|| gallery_section_body("draw"));
+        assert!(
+            find_tid(&tree, "gal-billboard-default"),
+            "draw section must mount default-pitch billboard"
+        );
+        assert!(
+            find_tid(&tree, "gal-billboard-pitch"),
+            "draw section must mount steep-pitch billboard"
+        );
+        assert!(
+            gallery_find_attr(&tree, "rui_scene3d_label", "永角"),
+            "steep billboard must carry CJK MSDF label"
+        );
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
 #[test]
 fn navigation_section_mounts_shell_router_view() {
     run_on_gallery_build_stack(|| {

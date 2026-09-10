@@ -201,6 +201,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
                     <DrawingCanvasShowcase />
                     <ImageStreamShowcase />
                     <DrawingScene3dShowcase />
+                    <DrawingBillboardShowcase />
                 </VStack>
             </ScrollArea>
         }
@@ -290,6 +291,7 @@ pub(crate) fn GallerySectionText() -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <FontOverrideShowcase />
                     <TextAlignShowcase />
+                    <MsdfMultichannelShowcase />
                     <WritingModeShowcase />
                     <TextCompatibilityShowcase />
                     <EmojiRealtimeRegressionShowcase />

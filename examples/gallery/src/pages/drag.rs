@@ -2,9 +2,18 @@
 
 use crate::imports::*;
 use crate::shared::*;
+use std::rc::Rc;
+
 use rui::utils::drag::{
-    apply_reorder_vec, apply_transfer, drag_scope, last_hit_rect, last_pointer, sortable_item,
-    sortable_list, use_drag, Axis, CollisionAlg, DragCtx, DragEvent, Restrict,
+    apply_event, apply_reorder_vec, apply_transfer, begin_draggable, detect, drag_overlay,
+    drag_scope, last_hit_rect, last_pointer, run_scope_sensors, set_debug_drag_hits,
+    sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx, DragEvent, DragItemCtx,
+    OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
+    SnapTargets,
+};
+use rui::utils::pointer_action::{
+    begin_resize, last_gesture, set_gesture_opts, BoxRect, Edges, GestureOpts, GestureState,
+    Invert, ResizeOpts,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -16,6 +25,221 @@ fn zone_over_peek(ctx: Option<&DragCtx>, id: &str) -> bool {
 
 fn zone_list_hover_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
     ctx.and_then(|c| c.hover_list.peek()).as_deref() == Some(list)
+}
+
+/// Subscribe `active_droppable` (not `overlay_pos`); peek `hits()` for the tick cache.
+fn hits_hud() -> Element {
+    let ctx = use_drag();
+    let over = ctx.as_ref().and_then(|c| c.active_droppable.get());
+    let dragging = ctx
+        .as_ref()
+        .and_then(|c| c.active_draggable.get())
+        .is_some();
+    let hits = ctx.as_ref().map(|c| c.hits()).unwrap_or_default();
+    let n_drag = hits.iter().filter(|h| h.is_draggable).count();
+    let n_drop = hits.iter().filter(|h| h.is_droppable).count();
+    let mode = if dragging {
+        "拖中·layout walk"
+    } else {
+        "空闲·registered"
+    };
+    let text = format!(
+        "use_drag().hits() · {mode} · drag={n_drag} drop={n_drop} over={}",
+        over.as_deref().unwrap_or("—")
+    );
+    ui! {
+        <Label text_size="0.75rem" color="muted-foreground">{ text }</Label>
+    }
+}
+
+fn data_payload_ghost(item: &DragItemCtx) -> Element {
+    let payload = item
+        .data_as::<i32>()
+        .map(|n| format!("data={n}"))
+        .unwrap_or_else(|| "—".to_string());
+    ui! {
+        <HStack
+            p="0.35rem 0.6rem"
+            gap="0.375rem"
+            items="center"
+            rounded="9999px"
+            bg="secondary"
+        >
+            <Label text_size="0.75rem" color="secondary-foreground">{ payload }</Label>
+        </HStack>
+    }
+}
+
+fn keyed_sortable_flags_chips(
+    rows_id: &'static str,
+    items: Signal<Vec<String>>,
+    list: &'static str,
+    item_type: &'static str,
+    source_opacity: f32,
+    middle_skip_shift: bool,
+    middle_skip_follow: bool,
+) -> Element {
+    let items_snap = items.get();
+    let rows = rui::for_keyed!(
+        rows_id,
+        items_snap.as_slice(),
+        |s: &String| s.clone(),
+        |label: &String| {
+            let name = label.clone();
+            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
+            let id = format!("{list}:{name}");
+            let skip_shift = middle_skip_shift && i == 1;
+            let skip_follow = middle_skip_follow && i == 1;
+            ui! {
+                <SortableItem
+                    id={id}
+                    item_type={item_type}
+                    accept={item_type}
+                    list={list}
+                    index={i}
+                    source_opacity={source_opacity}
+                    skip_shift={skip_shift}
+                    skip_follow={skip_follow}
+                >
+                    { compact_chip(&name) }
+                </SortableItem>
+            }
+        }
+    );
+    Element::from(
+        vstack()
+            .w("100%")
+            .gap("0.375rem")
+            .children(rows),
+    )
+}
+
+fn keyed_pull_clone_chips(items: Signal<Vec<String>>) -> Element {
+    let items_snap = items.get();
+    let rows = rui::for_keyed!(
+        "gal-drag-clone-rows",
+        items_snap.as_slice(),
+        |s: &String| s.clone(),
+        |label: &String| {
+            let name = label.clone();
+            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
+            let id = format!("clone:{name}");
+            ui! {
+                <SortableItem
+                    id={id}
+                    item_type="clone-tag"
+                    accept="clone-tag"
+                    list="clone-list"
+                    index={i}
+                    pull_clone={true}
+                    source_opacity={0.35}
+                >
+                    { compact_chip(&name) }
+                </SortableItem>
+            }
+        }
+    );
+    Element::from(
+        vstack()
+            .w("100%")
+            .gap("0.375rem")
+            .children(rows),
+    )
+}
+
+fn rsx_sortable_flags_column(
+    title: &str,
+    rows_id: &'static str,
+    list: &'static str,
+    items: Signal<Vec<String>>,
+    item_type: &'static str,
+    source_opacity: f32,
+    middle_skip_shift: bool,
+    middle_skip_follow: bool,
+) -> Element {
+    let title = title.to_string();
+    ui! {
+        <VStack grow="1" min_w="9rem" gap="0.375rem">
+            <Label text_size="0.75rem" font_weight="600">{ title }</Label>
+            <SortableList id={list} accept={item_type}>
+                { keyed_sortable_flags_chips(
+                    rows_id,
+                    items,
+                    list,
+                    item_type,
+                    source_opacity,
+                    middle_skip_shift,
+                    middle_skip_follow,
+                ) }
+            </SortableList>
+        </VStack>
+    }
+}
+
+fn rsx_pull_clone_board(
+    items: Signal<Vec<String>>,
+    on_end: impl FnMut(&DragEvent) + 'static,
+) -> Element {
+    let n = items.get().len();
+    let hint = format!("共 {n} 项 · `<SortableItem pull_clone={{true}}>` 松手 insert 副本");
+    ui! {
+        <DragProvider id="gal-drag-clone" collision="closest-center" onDragEnd={on_end}>
+            <VStack gap="0.375rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground">{ hint }</Label>
+                <SortableList id="clone-list" accept="clone-tag">
+                    { keyed_pull_clone_chips(items) }
+                </SortableList>
+                <DragOverlay class="shadow-lg" />
+            </VStack>
+        </DragProvider>
+    }
+}
+
+fn rsx_skip_flags_board(
+    shift_normal: Signal<Vec<String>>,
+    shift_pinned: Signal<Vec<String>>,
+    shift_follow: Signal<Vec<String>>,
+    on_end: impl FnMut(&DragEvent) + 'static,
+) -> Element {
+    ui! {
+        <DragProvider id="gal-drag-skip-shift" collision="closest-center" onDragEnd={on_end}>
+            <VStack gap="0.375rem" w="100%">
+                <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                    { rsx_sortable_flags_column(
+                        "默认 · 兄弟 FLIP",
+                        "gal-drag-shift-normal-rows",
+                        "shift-normal",
+                        shift_normal,
+                        "shift-demo",
+                        0.35,
+                        false,
+                        false,
+                    ) }
+                    { rsx_sortable_flags_column(
+                        "skip_shift · 中项",
+                        "gal-drag-shift-pinned-rows",
+                        "shift-pinned",
+                        shift_pinned,
+                        "shift-demo",
+                        0.35,
+                        true,
+                        false,
+                    ) }
+                    { rsx_sortable_flags_column(
+                        "skip_follow · 中项",
+                        "gal-drag-shift-follow-rows",
+                        "shift-follow",
+                        shift_follow,
+                        "shift-demo",
+                        0.35,
+                        false,
+                        true,
+                    ) }
+                </HStack>
+                <DragOverlay class="shadow-lg" />
+            </VStack>
+        </DragProvider>
+    }
 }
 
 fn park_on_drop(parked: Signal<bool>, drop_id: &'static str) -> impl FnMut(&DragEvent) {
@@ -166,6 +390,83 @@ fn card_chip(label: &str) -> Element {
     }
 }
 
+/// Horizontal Sortable chips must not stretch `w=100%` (that would wrap into a column).
+fn compact_chip(label: &str) -> Element {
+    ui! {
+        <HStack
+            p="0.375rem 0.65rem"
+            gap="0.375rem"
+            items="center"
+            rounded="0.5rem"
+            border_style="solid"
+            border_width="1px"
+            border_color="border"
+            cursor="grab"
+            bg="card"
+        >
+            <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
+            <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
+        </HStack>
+    }
+}
+
+/// Overlay `child_for`: typed ghost smaller than the source (`align=center` pins the midpoint).
+fn typed_overlay_ghost(item: &DragItemCtx) -> Element {
+    let (icon, caption) = match item.item_type.as_str() {
+        "file" => ("file-text", "文件"),
+        "folder" => ("folder", "文件夹"),
+        _ => ("grip-vertical", item.id.as_str()),
+    };
+    ui! {
+        <HStack
+            p="0.35rem 0.6rem"
+            gap="0.375rem"
+            items="center"
+            rounded="9999px"
+            bg="primary"
+        >
+            <Icon name={icon} size="12px" color="primary-foreground" pointer_events="none" />
+            <Label color="primary-foreground" text_size="0.75rem">{ caption.to_string() }</Label>
+        </HStack>
+    }
+}
+
+fn collision_hit_zone(drop_id: &'static str, title: &str, body: Element) -> Element {
+    let title = title.to_string();
+    let ctx = use_drag();
+    let el = ui! {
+        <VStack
+            w="100%"
+            h="100%"
+            p="0.5rem"
+            gap="0.375rem"
+            rounded="0.75rem"
+            bg="muted"
+            border_style="dashed"
+            border_width="1px"
+            border_color="border"
+        >
+            <Label text_size="0.75rem" font_weight="600">{ title }</Label>
+            { body }
+        </VStack>
+    };
+    el.reactive_sync(move |el, _| {
+        let over = zone_over_peek(ctx.as_ref(), drop_id);
+        let bg = parse_color(if over { "accent" } else { "muted" });
+        let border = parse_color(if over { "primary" } else { "border" });
+        let mut changed = LayoutStatus::Clean;
+        if el.style.bg_color != bg {
+            el.style.bg_color = bg;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.border_color != border {
+            el.style.border_color = border;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        changed
+    })
+}
+
 /// Headless `<DragHandle>` wrapping author chrome (not a built-in grip widget).
 fn handle_grip() -> Element {
     ui! {
@@ -195,6 +496,28 @@ fn handle_row() -> Element {
     }
 }
 
+fn ignore_row() -> Element {
+    ui! {
+        <HStack
+            p="0.5rem 0.65rem"
+            gap="0.5rem"
+            items="center"
+            rounded="0.5rem"
+            border_style="solid"
+            border_width="1px"
+            border_color="border"
+            cursor="grab"
+            bg="transparent"
+        >
+            <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
+            <Label text_size="0.875rem" grow="1" color="foreground">"拖卡片；点按钮不启动"</Label>
+            <DragIgnore>
+                <Button size="sm" variant="outline" pointer_events="auto">"忽略"</Button>
+            </DragIgnore>
+        </HStack>
+    }
+}
+
 fn token_chip() -> Element {
     ui! {
         <Box p="0.5rem 0.75rem" rounded="0.5rem" bg="primary" cursor="grab">
@@ -217,6 +540,123 @@ fn persist_free_pair(
             let p = b.peek();
             b.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
         }
+    }
+}
+
+fn persist_delta_pos(pos: Signal<[f32; 2]>) -> impl FnMut(&DragEvent) {
+    move |ev: &DragEvent| {
+        let p = pos.peek();
+        pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+    }
+}
+
+fn persist_snap_pos(pos: Signal<[f32; 2]>, grid: SnapGrid) -> impl FnMut(&DragEvent) {
+    move |ev: &DragEvent| {
+        let p = pos.peek();
+        let snapped = grid.apply(p[0] + ev.delta[0], p[1] + ev.delta[1]);
+        pos.set(snapped);
+    }
+}
+
+fn resize_handle(
+    rect: Signal<[f32; 4]>,
+    left: f32,
+    top: f32,
+    edges: Edges,
+) -> Element {
+    let cursor = edges.cursor().to_string();
+    let chrome: Element = ui! {
+        <Box
+            absolute={true}
+            left={left}
+            top={top}
+            w="12px"
+            h="12px"
+            rounded="2px"
+            bg="primary"
+            border_style="solid"
+            border_width="1px"
+            border_color="primary-foreground"
+            cursor={cursor}
+            z_index={2}
+        />
+    };
+    interactive(chrome).on_mousedown(move |e: &MouseEvent| {
+        let r = rect.peek();
+        begin_resize(
+            BoxRect::from_xywh(r[0], r[1], r[2], r[3]),
+            [e.x, e.y],
+            ResizeOpts::default()
+                .edges(edges)
+                .invert(Invert::Reposition)
+                .min_size(64.0, 48.0)
+                .autoscroll(true),
+            Some("gal_drag_resize_rect".into()),
+        );
+    }).into()
+}
+
+fn resize_board(rect: Signal<[f32; 4]>) -> Element {
+    let r = rect.get();
+    let [x, y, w, h] = r;
+    let hx = 6.0;
+    ui! {
+        <ScrollArea id="gal-drag-resize-scroll" h="14rem" w="100%" overflow_y="auto">
+            <Box relative={true} w="100%" min_h="28rem" rounded="0.75rem" bg="background" border_style="dashed" border_width="1px" border_color="border">
+                <Box
+                    absolute={true}
+                    left={x}
+                    top={y}
+                    w={w}
+                    h={h}
+                    rounded="0.5rem"
+                    bg="card"
+                    border_style="solid"
+                    border_width="2px"
+                    border_color="primary"
+                    items="center"
+                    justify="center"
+                >
+                    <VStack items="center" gap="0.125rem" pointer_events="none">
+                        <Label font_weight="700" text_size="0.875rem">"resize"</Label>
+                        <Label color="muted-foreground" text_size="0.6875rem">
+                            { format!("{:.0}×{:.0}", w, h) }
+                        </Label>
+                        <Label color="muted-foreground" text_size="0.625rem">"autoscroll · 拖到边缘滚"</Label>
+                    </VStack>
+                </Box>
+                { resize_handle(rect, x - hx, y - hx, Edges::top_left()) }
+                { resize_handle(rect, x + w * 0.5 - hx, y - hx, Edges::top()) }
+                { resize_handle(rect, x + w - hx, y - hx, Edges::top_right()) }
+                { resize_handle(rect, x - hx, y + h * 0.5 - hx, Edges::left()) }
+                { resize_handle(rect, x + w - hx, y + h * 0.5 - hx, Edges::right()) }
+                { resize_handle(rect, x - hx, y + h - hx, Edges::bottom_left()) }
+                { resize_handle(rect, x + w * 0.5 - hx, y + h - hx, Edges::bottom()) }
+                { resize_handle(rect, x + w - hx, y + h - hx, Edges::bottom_right()) }
+            </Box>
+        </ScrollArea>
+    }
+}
+
+fn gesture_dot(glyph: &'static str, pos: Signal<[f32; 2]>) -> Element {
+    let p = pos.get();
+    let glyph = glyph.to_string();
+    ui! {
+        <Box
+            absolute={true}
+            left={p[0]}
+            top={p[1]}
+            w="2.25rem"
+            h="2.25rem"
+            rounded="9999px"
+            bg="primary"
+            items="center"
+            justify="center"
+            cursor="grab"
+            z_index={2}
+        >
+            <Label color="primary-foreground" font_weight="700" pointer_events="none">{ glyph }</Label>
+        </Box>
     }
 }
 
@@ -420,6 +860,75 @@ fn keyed_sortable_chips(
             .gap("0.375rem")
             .children(rows),
     )
+}
+
+fn keyed_h_chips(
+    rows_id: &'static str,
+    items: Signal<Vec<String>>,
+    item_type: &'static str,
+    list: &'static str,
+    source_opacity: f32,
+) -> Element {
+    let items = items.get();
+    let rows = rui::for_keyed!(
+        rows_id,
+        items.as_slice(),
+        |s: &String| s.clone(),
+        |label: &String| {
+            let name = label.clone();
+            let i = items.iter().position(|x| x == &name).unwrap_or(0);
+            ui! {
+                <SortableItem
+                    id={name.clone()}
+                    item_type={item_type}
+                    accept={item_type}
+                    list={list}
+                    index={i}
+                    stack="auto"
+                    source_opacity={source_opacity}
+                >
+                    { compact_chip(&name) }
+                </SortableItem>
+            }
+        }
+    );
+    Element::from(
+        hstack()
+            .w("100%")
+            .min_h(0.0)
+            .gap("0.375rem")
+            .wrap("wrap")
+            .children(rows),
+    )
+}
+
+fn activation_column(
+    title: &str,
+    hint: &str,
+    provider_id: &'static str,
+    item_id: &'static str,
+    activation: &'static str,
+) -> Element {
+    let title = title.to_string();
+    let hint = hint.to_string();
+    ui! {
+        <VStack grow="1" min_w="14rem" gap="0.375rem">
+            <Label text_size="0.75rem" font_weight="600">{ title }</Label>
+            <Label text_size="0.75rem" color="muted-foreground">{ hint }</Label>
+            <DragProvider
+                id={provider_id}
+                collision="pointer-within"
+                delay_ms={400}
+                threshold={40}
+                activation={activation}
+            >
+                <Draggable id={item_id} item_type="chip" source_opacity={0}>
+                    { card_chip("按住或拖开") }
+                </Draggable>
+                <DragOverlay class="shadow-lg" />
+            </DragProvider>
+        </VStack>
+    }
 }
 
 fn reorder_same_list(items: Signal<Vec<String>>, list: &'static str) -> impl FnMut(&DragEvent) {
@@ -759,6 +1268,218 @@ pub(crate) fn DragShowcase() -> Element {
     let arb_pin_2 = use_signal("gal_drag_arb_pin_2c", || [88.0_f32, 48.0]);
     let arb_keep_1 = use_signal("gal_drag_arb_keep_1c", || [16.0_f32, 16.0]);
     let arb_keep_2 = use_signal("gal_drag_arb_keep_2c", || [88.0_f32, 48.0]);
+    let debug_on = use_signal("gal_drag_debug", || false);
+    let axis_col = use_signal("gal_drag_axis_col", || {
+        ["Alpha", "Beta", "Gamma"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    });
+    let axis_row = use_signal("gal_drag_axis_row", || {
+        ["Mon", "Tue", "Wed", "Thu"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    });
+    let snap_pos = use_signal("gal_drag_snap_pos", || [16.0_f32, 16.0]);
+    let snap_multi_pos = use_signal("gal_drag_snap_multi_pos", || [16.0_f32, 16.0]);
+    let snap_fn_pos = use_signal("gal_drag_snap_fn_pos", || [16.0_f32, 40.0]);
+    let dropzone_hud = use_signal("gal_drag_dropzone_hud", || "overlap=center · 未进入".to_string());
+    let snap_end_pos = use_signal("gal_drag_snap_end_pos", || [16.0_f32, 16.0]);
+    let start_lock_pos = use_signal("gal_drag_start_lock_pos", || [16.0_f32, 16.0]);
+    let fling_pos = use_signal("gal_drag_fling_pos", || [16.0_f32, 16.0]);
+    let resize_rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
+    let gesture_a = use_signal("gal_drag_gesture_a", || [48.0_f32, 72.0]);
+    let gesture_b = use_signal("gal_drag_gesture_b", || [200.0_f32, 72.0]);
+    set_gesture_opts(GestureOpts::default().autoscroll(true));
+    let veto_open = use_signal("gal_drag_veto_open", || {
+        vec!["Move me".to_string(), "Locked".to_string()]
+    });
+    let veto_empty = use_signal("gal_drag_veto_empty", Vec::<String>::new);
+    let clone_tags = use_signal("gal_drag_clone", || {
+        vec!["Rust".to_string(), "UI".to_string(), "Drag".to_string()]
+    });
+    let shift_normal = use_signal("gal_drag_shift_normal", || {
+        vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()]
+    });
+    let shift_pinned = use_signal("gal_drag_shift_pinned", || {
+        vec!["Alpha".to_string(), "Pin".to_string(), "Gamma".to_string()]
+    });
+    let shift_follow = use_signal("gal_drag_shift_follow", || {
+        vec!["Alpha".to_string(), "Follow".to_string(), "Gamma".to_string()]
+    });
+    let data_note = use_signal("gal_drag_data_note", || "拖起看幽灵上的 payload".to_string());
+    let sensor_target = use_signal("gal_drag_sensor_target", || None::<String>);
+
+    let clone_on_end = {
+        let clone_tags = clone_tags.clone();
+        move |ev: &DragEvent| {
+            let mut v = clone_tags.peek();
+            apply_event(&mut v, None, ev);
+            clone_tags.set(v);
+        }
+    };
+    let clone_board = rsx_pull_clone_board(clone_tags, clone_on_end);
+
+    let data_board = {
+        let data_note = data_note.clone();
+        Element::from(
+            drag_scope("gal-drag-data")
+                .on_drag_start({
+                    let data_note = data_note.clone();
+                    move |ev| {
+                        if let Some(n) = ev.data.as_ref().and_then(|d| d.downcast_ref::<i32>().copied()) {
+                            data_note.set(format!("drag_start · data={n}"));
+                        }
+                    }
+                })
+                .on_drag_end({
+                    let data_note = data_note.clone();
+                    move |ev| {
+                        if let Some(n) = ev.data.as_ref().and_then(|d| d.downcast_ref::<i32>().copied()) {
+                            data_note.set(format!(
+                                "drag_end · data={n} · id={}",
+                                ev.draggable_id
+                            ));
+                        }
+                    }
+                })
+                .child({
+                    let data_note = data_note.clone();
+                    move || {
+                        let note = data_note.get();
+                        ui! {
+                            <VStack gap="0.375rem" w="100%">
+                                <Label text_size="0.75rem" color="muted-foreground">{ note }</Label>
+                                <HStack gap="0.5rem" w="100%" wrap="wrap">
+                                    <Draggable
+                                        id="data-a"
+                                        item_type="payload"
+                                        data={Rc::new(42i32)}
+                                    >
+                                        { compact_chip("payload 42 · RSX data=") }
+                                    </Draggable>
+                                    <Draggable
+                                        id="data-b"
+                                        item_type="payload"
+                                        data={Rc::new(99i32)}
+                                    >
+                                        { compact_chip("payload 99") }
+                                    </Draggable>
+                                </HStack>
+                                { Element::from(
+                                    drag_overlay()
+                                        .align(OverlayAlign::Center)
+                                        .child_for(|item| data_payload_ghost(item)),
+                                ) }
+                            </VStack>
+                        }
+                    }
+                }),
+        )
+    };
+
+    let idle_hits_board = Element::from(
+        drag_scope("gal-drag-idle-hits")
+            .collision(CollisionAlg::PointerWithin)
+            .child(|| {
+                ui! {
+                    <VStack gap="0.375rem" w="100%">
+                        { hits_hud() }
+                        <HStack gap="0.5rem" w="100%" wrap="wrap">
+                            <Draggable id="idle-a" item_type="peek">
+                                { compact_chip("idle draggable A") }
+                            </Draggable>
+                            <Draggable id="idle-b" item_type="peek">
+                                { compact_chip("idle draggable B") }
+                            </Draggable>
+                            <Droppable id="idle-zone" accept="peek">
+                                { collision_hit_zone(
+                                    "idle-zone",
+                                    "idle droppable",
+                                    ui! {
+                                        <Label text_size="0.75rem" color="muted-foreground">
+                                            "未拖时 hits() 走 registered 表"
+                                        </Label>
+                                    },
+                                ) }
+                            </Droppable>
+                        </HStack>
+                    </VStack>
+                }
+            }),
+    );
+
+    let skip_on_end = move |ev: &DragEvent| {
+        match ev.from_list.as_deref() {
+            Some("shift-normal") => {
+                let Some(from) = ev.from_index else { return; };
+                let mut v = shift_normal.peek();
+                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+                shift_normal.set(v);
+            }
+            Some("shift-pinned") => {
+                let Some(from) = ev.from_index else { return; };
+                let mut v = shift_pinned.peek();
+                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+                shift_pinned.set(v);
+            }
+            Some("shift-follow") => {
+                let Some(from) = ev.from_index else { return; };
+                let mut v = shift_follow.peek();
+                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+                shift_follow.set(v);
+            }
+            _ => {}
+        }
+    };
+    let skip_shift_board =
+        rsx_skip_flags_board(shift_normal, shift_pinned, shift_follow, skip_on_end);
+
+    let sensor_board = {
+        let sensor_target = sensor_target.clone();
+        Element::from(
+            drag_scope("gal-drag-sensor")
+                .sensor("gallery-hotkey", {
+                    let sensor_target = sensor_target.clone();
+                    move |ctx| {
+                        let Some(id) = sensor_target.peek() else {
+                            return false;
+                        };
+                        sensor_target.set(None);
+                        begin_draggable(&ctx.scope_id, &id, &ctx.begin)
+                    }
+                })
+                .child({
+                    let sensor_target = sensor_target.clone();
+                    move || {
+                        ui! {
+                            <VStack gap="0.375rem" w="100%">
+                                <Label text_size="0.75rem" color="muted-foreground">
+                                    "`.sensor` + `run_scope_sensors`：按钮模拟键盘 activator，走与 pointerdown 相同的 `begin`。"
+                                </Label>
+                                <HStack gap="0.5rem" w="100%" items="center" wrap="wrap">
+                                    <Draggable id="sensor-chip" item_type="sensor">
+                                        { card_chip("可 pointer 或 sensor 启动") }
+                                    </Draggable>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        on_click={move || {
+                                            sensor_target.set(Some("sensor-chip".into()));
+                                            run_scope_sensors("gal-drag-sensor");
+                                        }}
+                                    >
+                                        "sensor 启动"
+                                    </Button>
+                                </HStack>
+                                { Element::from(drag_overlay()) }
+                            </VStack>
+                        }
+                    }
+                }),
+        )
+    };
 
     let builder_drop = {
         let parked = use_signal("gal_drag_parked", || false);
@@ -795,12 +1516,383 @@ pub(crate) fn DragShowcase() -> Element {
         )
     };
 
+    let collision_prefer = Element::from(
+        drag_scope("gal-drag-cfn")
+            .collision(CollisionAlg::MostIntersecting)
+            .collision_fn(|input| {
+                if input.droppables.iter().any(|c| c.id == "hit-prefer") {
+                    Some("hit-prefer".into())
+                } else {
+                    detect(
+                        CollisionAlg::MostIntersecting,
+                        input.pointer,
+                        input.dragged,
+                        input.droppables,
+                        input.active_id,
+                    )
+                }
+            })
+            .child(|| {
+                ui! {
+                    <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                        <Draggable id="cfn-probe" item_type="probe">
+                            { card_chip("探测块") }
+                        </Draggable>
+                        <Box relative={true} grow="1" min_w="18rem" min_h="8.5rem">
+                            <Box absolute={true} left="0" top="0" w="72%" h="8rem">
+                                <Droppable id="hit-outer" accept="probe">
+                                    { collision_hit_zone(
+                                        "hit-outer",
+                                        "更大 overlap · outer",
+                                        ui! {
+                                            <Box h="4.5rem">
+                                                <Label text_size="0.75rem" color="muted-foreground">
+                                                    "MostIntersecting 会选这块"
+                                                </Label>
+                                            </Box>
+                                        },
+                                    ) }
+                                </Droppable>
+                            </Box>
+                            <Box absolute={true} left="38%" top="1.5rem" w="58%" h="6rem">
+                                <Droppable id="hit-prefer" accept="probe">
+                                    { collision_hit_zone(
+                                        "hit-prefer",
+                                        "collision_fn · prefer",
+                                        ui! {
+                                            <Label text_size="0.75rem" color="muted-foreground">
+                                                "重叠区函数强制点名；两槽是兄妹，不是嵌套 innermost。"
+                                            </Label>
+                                        },
+                                    ) }
+                                </Droppable>
+                            </Box>
+                        </Box>
+                        <DragOverlay />
+                    </HStack>
+                }
+            }),
+    );
+
+    let snap_grid = SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]);
+    let snap_end_grid = SnapGrid::new(32.0, 32.0)
+        .offset([16.0, 16.0])
+        .range(18.0)
+        .end_only(true);
+    let snap_board = Element::from(
+        drag_scope("gal-drag-snap")
+            .axis(Axis::Xy)
+            .restrict(Restrict::Parent)
+            .snap(snap_grid)
+            .on_drag_end(persist_snap_pos(snap_pos, snap_grid))
+            .child(move || {
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="10rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="snap-tile" stack="auto">
+                            { free_move_tile("S", "snap 32px · restrict=parent", snap_pos, 0, "primary") }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
+    let snap_multi = SnapTargets::new([
+        SnapGrid::new(8.0, 8.0),
+        SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]),
+    ])
+    .range(14.0);
+    let snap_multi_board = Element::from(
+        drag_scope("gal-drag-snap-multi")
+            .axis(Axis::Xy)
+            .restrict(Restrict::Parent)
+            .snap_targets(snap_multi.clone())
+            .on_drag_end(move |ev: &DragEvent| {
+                let p = snap_multi_pos.peek();
+                let snapped = snap_multi.apply(p[0] + ev.delta[0], p[1] + ev.delta[1]);
+                snap_multi_pos.set(snapped);
+            })
+            .child(move || {
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="10rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="snap-multi-tile" stack="auto">
+                            { free_move_tile("M", "8px + 32px 双格 · 近者胜", snap_multi_pos, 0, "accent") }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
+    let snap_fn_line: SnapPointFn = Rc::new(|x, _y| Some([x, 72.0]));
+    let snap_fn_board = ui! {
+        <DragProvider
+            id="gal-drag-snap-fn"
+            axis="xy"
+            restrict="parent"
+            snap_fn={snap_fn_line}
+            onDragEnd={persist_delta_pos(snap_fn_pos)}
+        >
+            <Box
+                relative={true}
+                w="100%"
+                min_h="10rem"
+                overflow="hidden"
+                rounded="0.75rem"
+                bg="background"
+                border_style="dashed"
+                border_width="1px"
+                border_color="border"
+            >
+                <Box
+                    absolute={true}
+                    left="0"
+                    top="72px"
+                    w="100%"
+                    h="1px"
+                    bg="primary"
+                    pointer_events="none"
+                />
+                <Draggable id="snap-fn-tile" stack="auto">
+                    { free_move_tile("F", "snap_fn → y=72", snap_fn_pos, 0, "secondary") }
+                </Draggable>
+            </Box>
+        </DragProvider>
+    };
+
+    let dropzone_board = ui! {
+        <DragProvider id="gal-drag-dropzone">
+            <HStack gap="0.75rem" w="100%" items="start">
+                <Draggable id="dz-card" item_type="card" stack="auto">
+                    { card_chip("拖进虚线框") }
+                </Draggable>
+                <Droppable
+                    id="dz-target"
+                    accept="card"
+                    overlap="center"
+                    onDragEnter={move |_| dropzone_hud.set("dragenter · 中心在槽内".into())}
+                    onDragLeave={move |_| dropzone_hud.set("dragleave".into())}
+                    onDrop={move |_| dropzone_hud.set("drop!".into())}
+                >
+                    <Box
+                        min_h="8rem"
+                        w="12rem"
+                        rounded="0.75rem"
+                        border_style="dashed"
+                        border_width="2px"
+                        border_color="border"
+                        items="center"
+                        justify="center"
+                        p="0.75rem"
+                    >
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            { dropzone_hud.get() }
+                        </Label>
+                    </Box>
+                </Droppable>
+            </HStack>
+        </DragProvider>
+    };
+
+    let snap_end_board = Element::from(
+        drag_scope("gal-drag-snap-end")
+            .axis(Axis::Xy)
+            .restrict(Restrict::Parent)
+            .restrict_anchor(RestrictAnchor::CENTER)
+            .snap(snap_end_grid)
+            .on_drag_end(persist_snap_pos(snap_end_pos, snap_end_grid))
+            .child(move || {
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="10rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="snap-end-tile" stack="auto">
+                            { free_move_tile("E", "endOnly + range 18 · 中心钳位", snap_end_pos, 0, "secondary") }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
+    let start_lock_board = Element::from(
+        drag_scope("gal-drag-start-lock")
+            .axis(Axis::Start)
+            .start_axis(Axis::Xy)
+            .restrict(Restrict::Parent)
+            .on_drag_end(persist_delta_pos(start_lock_pos))
+            .child(move || {
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="10rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="start-lock-tile" stack="auto">
+                            { free_move_tile("L", "axis=start · 先滑再锁轴", start_lock_pos, 0, "accent") }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
+    let fling_board = Element::from(
+        drag_scope("gal-drag-fling")
+            .axis(Axis::Xy)
+            .restrict(Restrict::Parent)
+            .inertia(true)
+            .on_drag_end(persist_delta_pos(fling_pos))
+            .child(move || {
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="10rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        <Draggable id="fling-tile" stack="auto">
+                            { free_move_tile("F", "甩出去 · inertia", fling_pos, 0, "primary") }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
+    let ga_now = gesture_a.get();
+    let gb_now = gesture_b.get();
+    let gesture = GestureState::from_pair([[48.0, 72.0], [200.0, 72.0]], [ga_now, gb_now]);
+    let gesture_hud = format!(
+        "scale={:.2}  angle={:.0}°  ds={:+.2}  da={:+.0}°",
+        gesture.scale,
+        gesture.angle.to_degrees(),
+        gesture.ds,
+        gesture.da.to_degrees()
+    );
+    let touch_g = last_gesture();
+    let touch_hud = match touch_g {
+        Some(g) => format!(
+            "触屏 gesture  scale={:.2}  angle={:.0}°",
+            g.scale,
+            g.angle.to_degrees()
+        ),
+        None => "触屏双指会写 last_gesture()（桌面用两个圆点模拟）；set_gesture_opts(autoscroll) 开边缘滚".to_string(),
+    };
+    let preview_w = (72.0 * gesture.scale).clamp(24.0, 220.0);
+    let preview_h = (48.0 * gesture.scale).clamp(16.0, 160.0);
+    let preview_x = gesture.centroid[0] - preview_w * 0.5;
+    let preview_y = gesture.centroid[1] - preview_h * 0.5;
+    let gesture_board = Element::from(
+        drag_scope("gal-drag-gesture")
+            .restrict(Restrict::Parent)
+            .on_drag_end(move |ev: &DragEvent| {
+                let pos = if ev.draggable_id.contains("g-a") {
+                    gesture_a
+                } else {
+                    gesture_b
+                };
+                let p = pos.peek();
+                pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+            })
+            .child(move || {
+                let preview = Element::from(ui! {
+                    <Box
+                        absolute={true}
+                        left={preview_x}
+                        top={preview_y}
+                        w={preview_w}
+                        h={preview_h}
+                        rounded="0.5rem"
+                        bg="accent"
+                        pointer_events="none"
+                    />
+                })
+                .opacity(0.35);
+                ui! {
+                    <Box
+                        relative={true}
+                        w="100%"
+                        min_h="12rem"
+                        overflow="hidden"
+                        rounded="0.75rem"
+                        bg="background"
+                        border_style="dashed"
+                        border_width="1px"
+                        border_color="border"
+                    >
+                        { preview }
+                        <Draggable id="g-a" stack="auto">
+                            { gesture_dot("1", gesture_a) }
+                        </Draggable>
+                        <Draggable id="g-b" stack="auto">
+                            { gesture_dot("2", gesture_b) }
+                        </Draggable>
+                    </Box>
+                }
+            }),
+    );
+
     ui! {
         <MyCard title="Drag（utils::drag · WP-DRAG.1–2）">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "utils::drag：solid-dnd 原语 + 超越 Sortable 的自动滚、实时让位、Esc 取消、方向键改插入点。替身默认跟随本体并钉在视口（才能拖出父级进另一个容器）；DragOverlay 子树可整段替换。松手后由 onDragEnd 把源项挂进 Droppable。不进 prelude。"
+                    "utils::drag：solid-dnd 原语 + 超越 Sortable 的自动滚、实时让位、Esc 取消、方向键改插入点。替身默认跟随本体并钉在视口（才能拖出父级进另一个容器）；DragOverlay 子树可整段替换，或 Builder child_for 按 item_type 分支。松手后由 onDragEnd 把源项挂进 Droppable。不进 prelude。"
                 </Label>
+                <HStack gap="0.5rem" items="center" wrap="wrap">
+                    <Button
+                        size="sm"
+                        variant={if debug_on.get() { "default" } else { "outline" }}
+                        on_click={move || {
+                            let next = !debug_on.peek();
+                            set_debug_drag_hits(next);
+                            debug_on.set(next);
+                        }}
+                    >
+                        { if debug_on.get() {
+                            "关闭槽矩形 Debugger"
+                        } else {
+                            "显示槽矩形 Debugger"
+                        } }
+                    </Button>
+                    <Label text_size="0.75rem" color="muted-foreground">
+                        "进程级虚线槽：空闲蓝/灰，拖中源橙色、当前 droppable 品红加粗。对本页所有 DragProvider 生效。"
+                    </Label>
+                </HStack>
 
                 <Label font_weight="600" text_size="0.875rem">"Droppable · RSX + 拖拽浮层"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
@@ -1259,6 +2351,282 @@ pub(crate) fn DragShowcase() -> Element {
                         { nest_folder_tree(nest_folders, nest_inbox, nest_later) }
                     </SortableList>
                     <DragOverlay class="shadow-lg" />
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"DragOverlay · child_for + align=center"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "Builder child_for 按 item_type 画小幽灵（文件 / 文件夹），align=center 把幽灵中心钉在源卡片中心再跟手，不再贴抓点。RSX 函数 children 第一刀只走 Builder。"
+                </Label>
+                <DragProvider id="gal-drag-child-for" collision="pointer-within">
+                    <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                        <Draggable id="cf-file" item_type="file" source_opacity={0}>
+                            { card_chip("源 · 文件卡片") }
+                        </Draggable>
+                        <Draggable id="cf-folder" item_type="folder" source_opacity={0}>
+                            { card_chip("源 · 文件夹卡片") }
+                        </Draggable>
+                    </HStack>
+                    { Element::from(
+                        drag_overlay()
+                            .align(OverlayAlign::Center)
+                            .source_opacity(0.0)
+                            .child_for(|item| typed_overlay_ghost(item)),
+                    ) }
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"SortableList.direction · 同 Provider 双轴"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "Provider axis=xy 不锁幽灵；左列 SortableList direction=y、右行 direction=x。未写 direction 的列表仍继承 Provider。两列不同 list / item_type，只在各自内部 apply_reorder_vec。"
+                </Label>
+                <DragProvider
+                    id="gal-drag-axes"
+                    collision="closest-center"
+                    axis="xy"
+                    onDragEnd={move |ev: &DragEvent| {
+                        match ev.from_list.as_deref() {
+                            Some("axis-col") => {
+                                let Some(from) = ev.from_index else { return; };
+                                let mut v = axis_col.peek();
+                                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+                                axis_col.set(v);
+                            }
+                            Some("axis-row") => {
+                                let Some(from) = ev.from_index else { return; };
+                                let mut v = axis_row.peek();
+                                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+                                axis_row.set(v);
+                            }
+                            _ => {}
+                        }
+                    }}
+                >
+                    <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                        <VStack grow="1" min_w="12rem" gap="0.375rem">
+                            <Label text_size="0.75rem" font_weight="600">"direction=y"</Label>
+                            <SortableList id="axis-col" accept="col-tag" direction="y">
+                                { keyed_sortable_chips(
+                                    "gal-drag-axis-col-rows",
+                                    axis_col,
+                                    "col-tag",
+                                    "",
+                                    "axis-col",
+                                    "",
+                                    0.4,
+                                ) }
+                            </SortableList>
+                        </VStack>
+                        <VStack grow="1" min_w="16rem" gap="0.375rem">
+                            <Label text_size="0.75rem" font_weight="600">"direction=x"</Label>
+                            <SortableList id="axis-row" accept="row-tag" direction="x">
+                                { keyed_h_chips(
+                                    "gal-drag-axis-row-chips",
+                                    axis_row,
+                                    "row-tag",
+                                    "axis-row",
+                                    0.4,
+                                ) }
+                            </SortableList>
+                        </VStack>
+                    </HStack>
+                    <DragOverlay class="shadow-lg" />
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"Activation · Or 对 And"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "两边 delay_ms=400、threshold=40。And（默认）必须同时满足距离和延迟；Or 是距离或延迟（solid-dnd 指针 sensor）。按住不动约 0.4s，只有右侧会抬起幽灵。"
+                </Label>
+                <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                    { activation_column(
+                        "activation=and",
+                        "要挪够 40px 并且等到 400ms",
+                        "gal-drag-act-and",
+                        "act-and",
+                        "and",
+                    ) }
+                    { activation_column(
+                        "activation=or",
+                        "挪够 40px 或按住 400ms",
+                        "gal-drag-act-or",
+                        "act-or",
+                        "or",
+                    ) }
+                </HStack>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"collision_fn · 优先点名"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "两块兄妹槽部分重叠（不是嵌套 innermost）。Builder collision_fn 只要候选里有 hit-prefer 就点名它；把探测块拖进重叠区时应高亮右侧小槽，枚举 MostIntersecting 会选左侧更大 overlap。"
+                </Label>
+                { collision_prefer }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"use_drag().hits · can_drop · empty_insert"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "HUD 订 active_droppable 再 peek hits()（不订 overlay_pos）。Locked 被 can_drop 否决，拖到空列不会停入。空列 empty_insert=48 放大命中盒。松手 apply_transfer。"
+                </Label>
+                <DragProvider
+                    id="gal-drag-veto"
+                    collision="most-intersecting"
+                    empty_insert={48}
+                    canDrop={move |ev: &DragEvent| !ev.draggable_id.contains("Locked")}
+                    onDragEnd={move |ev: &DragEvent| {
+                        apply_kanban_named(veto_open, veto_empty, "veto-open", "veto-empty", ev);
+                    }}
+                >
+                    { hits_hud() }
+                    <HStack gap="0.75rem" w="100%" items="stretch">
+                        <Droppable id="veto-open" list="veto-open" group="veto" accept="veto">
+                            { kanban_column(
+                                "veto-open",
+                                "可拖 · Locked 否决",
+                                keyed_sortable_chips(
+                                    "gal-drag-veto-open-rows",
+                                    veto_open,
+                                    "veto",
+                                    "veto",
+                                    "veto-open",
+                                    "veto-open",
+                                    0.4,
+                                ),
+                            ) }
+                        </Droppable>
+                        <Droppable id="veto-empty" list="veto-empty" group="veto" accept="veto">
+                            { kanban_column(
+                                "veto-empty",
+                                "空列 · empty_insert=48",
+                                keyed_sortable_chips(
+                                    "gal-drag-veto-empty-rows",
+                                    veto_empty,
+                                    "veto",
+                                    "veto",
+                                    "veto-empty",
+                                    "veto-empty",
+                                    0.4,
+                                ),
+                            ) }
+                        </Droppable>
+                    </HStack>
+                    <DragOverlay class="shadow-lg" />
+                </DragProvider>
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"SnapGrid · restrict=parent"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "Builder .snap(32px) 在 modifier 管道里取整幽灵原点；松手把 left/top 写回网格。restrict=parent 钳虚线框，无需给容器分配 id。无 Overlay：本体跟手。"
+                </Label>
+                { snap_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"SnapTargets · 双网格近者胜"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "interact snap.targets：8px 细格 + 32px 粗格（offset 16）；range=14 内选最近格点。"
+                </Label>
+                { snap_multi_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"snap_fn · 水平磁吸线"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "RSX `<DragProvider snap_fn={…}>` 与 Builder `.snap_fn` 同管道；把幽灵 Y 吸到 y=72。"
+                </Label>
+                { snap_fn_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"dropzone · overlap=center + 生命周期"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "RSX `<Droppable overlap=\"center\" onDragEnter={…} onDrop={…}>` 与 Builder `droppable().overlap(Center)` 双写。"
+                </Label>
+                { dropzone_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"SnapGrid endOnly + range · RestrictAnchor::Center"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "拖中自由走；靠近格子 18px 内松手才吸（interact endOnly + range）。restrict_anchor=center 只钳中点，角可以探出虚线框。"
+                </Label>
+                { snap_end_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"lockAxis: start"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "第一次超过阈值的位移决定锁 X 还是 Y（interact lockAxis:start），之后跟 live layout slot。竖滑改列、横滑排序不必预声明 axis。"
+                </Label>
+                { start_lock_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"resize · 边/角（非拖放）"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "interact resize：八个把手、invert=reposition、min_size、`.autoscroll(true)` 边缘滚（可选）。不进 Sortable tick。ShadCN 分栏仍用 ResizablePanelGroup。"
+                </Label>
+                { resize_board(resize_rect) }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"gesture · 双指（桌面两点）"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">{ gesture_hud }</Label>
+                <Label text_size="0.75rem" color="muted-foreground">{ touch_hud }</Label>
+                { gesture_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"inertia · 甩出去"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "自由拖 .inertia(true)：松手按速度指数衰减（与滚动 fling 同形）。Sortable 列表仍立即提交，不跟 FLIP 抢帧。"
+                </Label>
+                { fling_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§11 · pull_clone · apply_event"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<SortableItem pull_clone={{true}}>` — 拖中不让位；松手 `apply_event` insert 副本。本段纯 RSX。"
+                </Label>
+                { clone_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§11 · data 袋 · DragItemCtx / DragEvent"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<Draggable data={Rc::new(T)}>` / `pull_clone` / `skip_shift` / `skip_follow` 已进 RSX；Overlay `child_for` 读 `item.data_as::<T>()`，`on_drag_*` 读 `ev.data`。`<DragProvider sensor={…} sensor_id=\"…\">` 与 `.sensor` / `add_sensor` 等价。"
+                </Label>
+                { data_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§11 · 空闲 hits · registered 表"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "assemble 时 register_drag_slot_meta；未拖时 `use_drag().hits()` 走 registered_hits_in_scope，不必持有 app 根。HUD 标 idle vs 拖中。"
+                </Label>
+                { idle_hits_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§11 · skip_shift · skip_follow"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<SortableItem skip_shift={{true}}>` / `skip_follow={{true}}>` — 中项 RSX 属性；三列对照默认 / skip_shift / skip_follow。"
+                </Label>
+                { skip_shift_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§11 · sensor 槽"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<DragProvider sensor={activator} sensor_id=\"kbd\">` / Builder `.sensor` / 运行时 `add_sensor`；`run_scope_sensors` 或 activator 内 `begin_draggable` + `ctx.begin`。Gallery 按钮走 sensor 路径。"
+                </Label>
+                { sensor_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"DragIgnore · disabled"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "DragIgnore 拦住内部 pointerdown（Sortable filter）。disabled 项不能启动。右侧是对照可拖卡片。"
+                </Label>
+                <DragProvider id="gal-drag-ignore" collision="pointer-within">
+                    <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                        <Draggable id="ignore-row" item_type="chip">
+                            { ignore_row() }
+                        </Draggable>
+                        <Draggable id="disabled-chip" item_type="chip" disabled={true}>
+                            { card_chip("disabled · 拖不动") }
+                        </Draggable>
+                        <Draggable id="plain-chip" item_type="chip">
+                            { card_chip("对照可拖") }
+                        </Draggable>
+                    </HStack>
+                    <DragOverlay />
                 </DragProvider>
             </VStack>
         </MyCard>

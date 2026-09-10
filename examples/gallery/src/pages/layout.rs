@@ -1481,9 +1481,9 @@ pub(crate) fn RotateTranslateShowcase() -> rui::core::tree::Element {
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Box w="5.5rem" h="3.5rem" bg="secondary" rounded="0.375rem" class="scale-[3] flex items-center justify-center">
-                            <Label text_size="0.7rem" font_weight="600">"SDF"</Label>
+                            <Label text_size="0.7rem" font_weight="600">"MSDF"</Label>
                         </Box>
-                        <Label text_size="0.6rem" color="muted-foreground">"scale-3 → Msdf"</Label>
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-3 → 三通道 MSDF"</Label>
                     </VStack>
                 </HStack>
 
