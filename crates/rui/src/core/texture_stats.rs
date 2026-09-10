@@ -4,6 +4,7 @@ use crate::core::tree_stats::process_private_mb;
 use crate::renderer::text::EmojiGlyphCache;
 use crate::renderer::RuiTextRenderer;
 use crate::renderer::TexturePool;
+use crate::utils::text_texture::text_xform_cpu_cache_stats;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TextRendererCacheStats {
@@ -46,6 +47,8 @@ pub struct TextureCacheStats {
     pub page: TextRendererCacheStats,
     pub overlay: TextRendererCacheStats,
     pub overlay_bands: usize,
+    pub text_xform_cpu: usize,
+    pub text_xform_cpu_bytes: usize,
 }
 
 impl TextureCacheStats {
@@ -56,6 +59,7 @@ impl TextureCacheStats {
         overlay: &RuiTextRenderer,
         overlay_bands: &[RuiTextRenderer],
     ) -> Self {
+        let xform = text_xform_cpu_cache_stats();
         Self {
             texture_pool: pool.len(),
             texture_pool_frame: pool.frame(),
@@ -65,17 +69,21 @@ impl TextureCacheStats {
             page: TextRendererCacheStats::from_renderer(page),
             overlay: TextRendererCacheStats::from_renderer(overlay),
             overlay_bands: overlay_bands.len(),
+            text_xform_cpu: xform.0,
+            text_xform_cpu_bytes: xform.1,
         }
     }
 
     pub fn format_line(&self) -> String {
         format!(
-            "pool={}/{} frame={} stale120={} shadow={} | page[{}] overlay[{}] obands={}",
+            "pool={}/{} frame={} stale120={} shadow={} xform_cpu={}/{} | page[{}] overlay[{}] obands={}",
             self.texture_pool,
             self.texture_pool_max,
             self.texture_pool_frame,
             self.texture_pool_stale_120f,
             self.shadow_textures,
+            self.text_xform_cpu,
+            self.text_xform_cpu_bytes,
             self.page.format_short(),
             self.overlay.format_short(),
             self.overlay_bands,

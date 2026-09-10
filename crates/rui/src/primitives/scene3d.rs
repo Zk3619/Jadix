@@ -211,7 +211,7 @@ pub struct Scene3dJob {
     pub bg: [f32; 4],
     pub light: Scene3dLight,
     pub material: Scene3dMaterial,
-    /// Optional `rui_text_msdf_v1:` / bake key for a floating label billboard.
+    /// Optional `rui_text_msdf_v2:` / bake key for a floating label billboard.
     pub text_tex_key: Option<String>,
 }
 

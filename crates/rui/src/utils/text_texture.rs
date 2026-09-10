@@ -4,7 +4,7 @@
 //! Bake coverage into a **linear** (`Rgba8Unorm`) texture — sRGB upload + bilinear
 //! rotation turns thin strokes into fog (see gallery 3b).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
@@ -14,46 +14,129 @@ struct Entry {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    last_used: u64,
 }
 
-static CACHE: Mutex<Option<HashMap<String, Entry>>> = Mutex::new(None);
+struct CpuCache {
+    map: HashMap<String, Entry>,
+    /// Keys `ensure_*` requested since the last [`flush_text_xform_textures`].
+    needed: HashSet<String>,
+    clock: u64,
+}
+
+impl CpuCache {
+    fn bytes(&self) -> usize {
+        self.map.values().map(|e| e.rgba.len()).sum()
+    }
+
+    fn mark_needed(&mut self, key: &str) {
+        self.clock = self.clock.saturating_add(1);
+        self.needed.insert(key.to_string());
+        if let Some(e) = self.map.get_mut(key) {
+            e.last_used = self.clock;
+        }
+    }
+
+    /// Drop cold entries. Never drop keys still requested this paint cycle.
+    fn evict_if_needed(&mut self) {
+        while self.map.len() > MAX_CACHE || self.bytes() > MAX_CACHE_BYTES {
+            let victim = self
+                .map
+                .iter()
+                .filter(|(k, _)| !self.needed.contains(*k))
+                .min_by_key(|(_, e)| e.last_used)
+                .map(|(k, _)| k.clone());
+            let Some(k) = victim else {
+                break;
+            };
+            self.map.remove(&k);
+        }
+    }
+}
+
+static CACHE: Mutex<Option<CpuCache>> = Mutex::new(None);
+/// Entry cap — sticky Gallery pages can mint many unique bakes; LRU drops the rest.
 const MAX_CACHE: usize = 128;
+/// Byte cap on CPU RGBA (3× bake of a 400×80 leaf ≈ 1.1 MiB). GPU still LRU via TexturePool.
+const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Key prefix — coverage bake; `upload_rgba8_linear_with_mips` (linear Unorm).
 /// v3: Twemoji color composite for emoji leaves (never font outline / MSDF).
 pub const TEXT_XFORM_TEX_PREFIX: &str = "rui_text_xform_v3:";
 
-/// Key prefix — single-channel SDF packed as R=G=B; same linear mip upload path.
+/// Key prefix — 3-channel MSDF (edge-pair coloring). Linear mip-less upload.
 /// Emoji-bearing strings must **not** use this path (color would collapse to wireframe).
-pub const TEXT_MSDF_TEX_PREFIX: &str = "rui_text_msdf_v1:";
+pub const TEXT_MSDF_TEX_PREFIX: &str = "rui_text_msdf_v2:";
 
 /// SDF spread in supersampled pixels (normalize: 128 = edge).
 const SDF_SPREAD_PX: f32 = 8.0;
 
-fn cache_get(key: &str) -> Option<(u32, u32, Vec<u8>)> {
+fn with_cache<R>(f: impl FnOnce(&mut CpuCache) -> R) -> Option<R> {
     let mut guard = CACHE.lock().ok()?;
-    let map = guard.get_or_insert_with(HashMap::new);
-    let e = map.get(key)?;
-    Some((e.width, e.height, e.rgba.clone()))
+    let cache = guard.get_or_insert_with(|| CpuCache {
+        map: HashMap::new(),
+        needed: HashSet::new(),
+        clock: 0,
+    });
+    Some(f(cache))
+}
+
+/// Touch + pin for this paint cycle. Does **not** clone RGBA (layout collect is hot).
+fn cache_touch(key: &str) -> bool {
+    with_cache(|c| {
+        let hit = c.map.contains_key(key);
+        if hit {
+            c.mark_needed(key);
+            c.evict_if_needed();
+        }
+        hit
+    })
+    .unwrap_or(false)
 }
 
 fn cache_put(key: String, width: u32, height: u32, rgba: Vec<u8>) {
-    if let Ok(mut guard) = CACHE.lock() {
-        let map = guard.get_or_insert_with(HashMap::new);
-        if map.len() >= MAX_CACHE {
-            if let Some(k) = map.keys().next().cloned() {
-                map.remove(&k);
-            }
-        }
-        map.insert(
+    let _ = with_cache(|c| {
+        c.mark_needed(&key);
+        c.map.insert(
             key,
             Entry {
                 width,
                 height,
                 rgba,
+                last_used: c.clock,
             },
         );
-    }
+        c.evict_if_needed();
+    });
+}
+
+/// CPU bake/MSDF cache occupancy `(entries, bytes)`.
+pub fn text_xform_cpu_cache_stats() -> (usize, usize) {
+    with_cache(|c| (c.map.len(), c.bytes())).unwrap_or((0, 0))
+}
+
+/// `rui_text_xform_*` / `rui_text_msdf_*` GPU keys (version-agnostic).
+pub fn is_text_xform_texture_key(key: &str) -> bool {
+    key.starts_with("rui_text_xform_") || key.starts_with("rui_text_msdf_")
+}
+
+#[cfg(test)]
+fn cache_peek(key: &str) -> Option<(u32, u32, Vec<u8>)> {
+    with_cache(|c| {
+        c.map
+            .get(key)
+            .map(|e| (e.width, e.height, e.rgba.clone()))
+    })
+    .flatten()
+}
+
+#[cfg(test)]
+fn cache_clear() {
+    let _ = with_cache(|c| {
+        c.map.clear();
+        c.needed.clear();
+        c.clock = 0;
+    });
 }
 
 /// Logical padding so swash ink (ascent / bearing) is not clipped at the bake edge.
@@ -88,9 +171,8 @@ pub fn text_xform_bake_box_ex(
 
 /// Rasterize `text` into an RGBA texture at `dpr` supersample. Returns `(texture_key, logical_w)`.
 ///
-/// When `as_sdf`, converts alpha coverage to a single-channel SDF (`R=G=B=sdf_u8`, `A=255`)
-/// and keys with [`TEXT_MSDF_TEX_PREFIX`]. Convention: **128 = edge, >128 inside, <128 outside**
-/// (matches FS `smoothstep(0.5±afwidth, sdf)` coverage).
+/// When `as_sdf`, converts alpha coverage to a **3-channel MSDF** (edge-pair coloring;
+/// `median(RGB)` in the FS). Convention: **128 = edge, >128 inside, <128 outside**.
 ///
 /// Callers should pass sizes from [`text_xform_bake_box`] so glyphs are not clipped.
 pub fn ensure_text_xform_texture(
@@ -194,8 +276,8 @@ pub fn ensure_text_xform_texture_with_shadow(
     } else {
         0u8.hash(&mut hasher);
     }
-    // Bump when bake / SDF / emoji / shadow / layout-inset shaping semantics change.
-    9u8.hash(&mut hasher);
+    // Bump when bake / MSDF / emoji / shadow / layout-inset shaping semantics change.
+    10u8.hash(&mut hasher);
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -203,10 +285,7 @@ pub fn ensure_text_xform_texture_with_shadow(
     };
     let key = format!("{prefix}{:016x}", hasher.finish());
 
-    if let Some((w, h, rgba)) = cache_get(&key) {
-        // Only re-queue when GPU may have evicted; caller flushes via
-        // [`flush_text_xform_textures`]. Avoid per-frame re-upload thrash.
-        let _ = (w, h, rgba);
+    if cache_touch(&key) {
         return Some((key, bake_w));
     }
 
@@ -311,7 +390,7 @@ pub fn ensure_text_xform_texture_spans(
     let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
     wants_emoji_color.hash(&mut hasher);
-    8u8.hash(&mut hasher); // rich-span + emoji bake schema
+    9u8.hash(&mut hasher); // rich-span + 3-channel MSDF schema
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -319,7 +398,7 @@ pub fn ensure_text_xform_texture_spans(
     };
     let key = format!("{prefix}{:016x}", hasher.finish());
 
-    if cache_get(&key).is_some() {
+    if cache_touch(&key) {
         return Some((key, bake_w));
     }
 
@@ -348,9 +427,12 @@ pub fn ensure_text_xform_texture_spans(
     Some((key, bake_w))
 }
 
-/// Chamfer distance transform → packed SDF RGBA.
+/// 3-channel MSDF from a coverage bitmap (Chlumsky-style edge *pairs*).
 ///
-/// **Convention:** `u8` 128 = edge, `>128` inside glyph, `<128` outside; spread ≈ [`SDF_SPREAD_PX`].
+/// Each silhouette edge is assigned two of {R,G,B} from its gradient angle (120° bins).
+/// `median(R,G,B)` then reconstructs the true edge: a straight edge has two correct
+/// channels and one far channel; a sharp corner drops the spurious long-way distance.
+/// Falls back to identical RGB (classic SDF) when no edges are found.
 fn alpha_coverage_to_sdf_rgba(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
@@ -359,7 +441,122 @@ fn alpha_coverage_to_sdf_rgba(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     for i in 0..n {
         inside[i] = rgba.get(i * 4 + 3).copied().unwrap_or(0) >= 128;
     }
-    // Seeds: outside pixels → dist for inside; inside pixels → dist for outside.
+
+    let mut seed_r = vec![false; n];
+    let mut seed_g = vec![false; n];
+    let mut seed_b = vec![false; n];
+    let mut any_edge = false;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if !is_coverage_edge(&inside, w, h, x, y) {
+                continue;
+            }
+            any_edge = true;
+            let (gx, gy) = sobel_mask(&inside, w, h, x, y);
+            match angle_pair_bin(gx, gy) {
+                Some(0) => {
+                    seed_r[i] = true;
+                    seed_g[i] = true;
+                }
+                Some(1) => {
+                    seed_g[i] = true;
+                    seed_b[i] = true;
+                }
+                Some(2) => {
+                    seed_b[i] = true;
+                    seed_r[i] = true;
+                }
+                _ => {
+                    seed_r[i] = true;
+                    seed_g[i] = true;
+                    seed_b[i] = true;
+                }
+            }
+        }
+    }
+
+    if !any_edge {
+        // Solid / empty — pack a conventional single-channel field.
+        return pack_signed_sdf_rgb(
+            &chamfer_signed(&inside, w, h),
+            &chamfer_signed(&inside, w, h),
+            &chamfer_signed(&inside, w, h),
+            n,
+        );
+    }
+
+    let dist_r = chamfer_dt(&seed_r, w, h);
+    let dist_g = chamfer_dt(&seed_g, w, h);
+    let dist_b = chamfer_dt(&seed_b, w, h);
+    let mut sd_r = vec![0.0f32; n];
+    let mut sd_g = vec![0.0f32; n];
+    let mut sd_b = vec![0.0f32; n];
+    for i in 0..n {
+        let sign = if inside[i] { 1.0 } else { -1.0 };
+        sd_r[i] = sign * dist_r[i];
+        sd_g[i] = sign * dist_g[i];
+        sd_b[i] = sign * dist_b[i];
+    }
+    pack_signed_sdf_rgb(&sd_r, &sd_g, &sd_b, n)
+}
+
+fn is_coverage_edge(inside: &[bool], w: usize, h: usize, x: usize, y: usize) -> bool {
+    let i = y * w + x;
+    let me = inside[i];
+    if x > 0 && inside[i - 1] != me {
+        return true;
+    }
+    if x + 1 < w && inside[i + 1] != me {
+        return true;
+    }
+    if y > 0 && inside[i - w] != me {
+        return true;
+    }
+    if y + 1 < h && inside[i + w] != me {
+        return true;
+    }
+    false
+}
+
+fn mask_at(inside: &[bool], w: usize, h: usize, x: i32, y: i32) -> f32 {
+    if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+        return 0.0;
+    }
+    if inside[y as usize * w + x as usize] {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn sobel_mask(inside: &[bool], w: usize, h: usize, x: usize, y: usize) -> (f32, f32) {
+    let x = x as i32;
+    let y = y as i32;
+    let gx = mask_at(inside, w, h, x + 1, y - 1) + 2.0 * mask_at(inside, w, h, x + 1, y)
+        + mask_at(inside, w, h, x + 1, y + 1)
+        - mask_at(inside, w, h, x - 1, y - 1)
+        - 2.0 * mask_at(inside, w, h, x - 1, y)
+        - mask_at(inside, w, h, x - 1, y + 1);
+    let gy = mask_at(inside, w, h, x - 1, y + 1) + 2.0 * mask_at(inside, w, h, x, y + 1)
+        + mask_at(inside, w, h, x + 1, y + 1)
+        - mask_at(inside, w, h, x - 1, y - 1)
+        - 2.0 * mask_at(inside, w, h, x, y - 1)
+        - mask_at(inside, w, h, x + 1, y - 1);
+    (gx, gy)
+}
+
+/// 120° bins → which **pair** of MSDF channels own this edge. `None` = degenerate gradient.
+fn angle_pair_bin(gx: f32, gy: f32) -> Option<u8> {
+    if gx * gx + gy * gy < 1e-8 {
+        return None;
+    }
+    let t = (gy.atan2(gx) + std::f32::consts::PI) / (2.0 * std::f32::consts::PI);
+    Some(((t * 3.0).floor() as i32).rem_euclid(3) as u8)
+}
+
+fn chamfer_signed(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
+    let n = w * h;
     let mut outside_seed = vec![false; n];
     let mut inside_seed = vec![false; n];
     for i in 0..n {
@@ -368,25 +565,33 @@ fn alpha_coverage_to_sdf_rgba(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     }
     let dist_to_out = chamfer_dt(&outside_seed, w, h);
     let dist_to_in = chamfer_dt(&inside_seed, w, h);
-
-    let mut out = vec![0u8; n * 4];
-    let inv = 1.0 / (2.0 * SDF_SPREAD_PX);
+    let mut sd = vec![0.0f32; n];
     for i in 0..n {
-        // Positive inside so FS smoothstep(0.5±af, sdf) yields coverage inside the glyph.
-        let sd = if inside[i] {
+        sd[i] = if inside[i] {
             dist_to_out[i]
         } else {
             -dist_to_in[i]
         };
-        let t = (0.5 + sd * inv).clamp(0.0, 1.0);
-        let u = (t * 255.0).round() as u8;
+    }
+    sd
+}
+
+fn pack_signed_sdf_rgb(r: &[f32], g: &[f32], b: &[f32], n: usize) -> Vec<u8> {
+    let mut out = vec![0u8; n * 4];
+    let inv = 1.0 / (2.0 * SDF_SPREAD_PX);
+    for i in 0..n {
         let o = i * 4;
-        out[o] = u;
-        out[o + 1] = u;
-        out[o + 2] = u;
+        out[o] = pack_sdf_u8(r[i], inv);
+        out[o + 1] = pack_sdf_u8(g[i], inv);
+        out[o + 2] = pack_sdf_u8(b[i], inv);
         out[o + 3] = 255;
     }
     out
+}
+
+fn pack_sdf_u8(sd: f32, inv: f32) -> u8 {
+    let t = (0.5 + sd * inv).clamp(0.0, 1.0);
+    (t * 255.0).round() as u8
 }
 
 /// 3-4 chamfer distance to nearest `true` seed (approx. Euclidean).
@@ -437,23 +642,25 @@ fn chamfer_dt(seeds: &[bool], w: usize, h: usize) -> Vec<f32> {
     d
 }
 
-/// Re-queue CPU-cached text-xform textures missing from the GPU pool.
+/// Re-queue CPU-cached Bake/MSDF textures that this paint cycle still needs
+/// and that the GPU pool no longer holds. Cold CPU entries are LRU-dropped here.
 pub fn flush_text_xform_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let Ok(guard) = CACHE.lock() else {
-        return false;
-    };
-    let Some(map) = guard.as_ref() else {
-        return false;
-    };
-    let mut any = false;
-    for (key, entry) in map.iter() {
-        if has_gpu(key) {
-            continue;
+    with_cache(|c| {
+        let needed = std::mem::take(&mut c.needed);
+        let mut any = false;
+        for key in needed {
+            if has_gpu(&key) {
+                continue;
+            }
+            if let Some(entry) = c.map.get(&key) {
+                queue_image_rgba8(&key, entry.width, entry.height, entry.rgba.clone());
+                any = true;
+            }
         }
-        queue_image_rgba8(key, entry.width, entry.height, entry.rgba.clone());
-        any = true;
-    }
-    any
+        c.evict_if_needed();
+        any
+    })
+    .unwrap_or(false)
 }
 
 /// Vertical glyph offset inside a Bake texture — mirrors Coverage `dy` in `prepare_text.rs`.
@@ -1248,16 +1455,57 @@ mod tests {
             }
         }
         let sdf = alpha_coverage_to_sdf_rgba(&rgba, w, h);
+        fn median3(r: u8, g: u8, b: u8) -> u8 {
+            let mut v = [r, g, b];
+            v.sort_unstable();
+            v[1]
+        }
         // Far outside corner should be below the edge (128).
         assert_eq!(sdf[3], 255); // A
-        assert!(sdf[0] < 128, "far outside expected <128, got {}", sdf[0]);
+        let outside = median3(sdf[0], sdf[1], sdf[2]);
+        assert!(
+            outside < 128,
+            "far outside median expected <128, got {outside}"
+        );
         // Center inside should be > 128.
         let c = ((4 * w + 4) * 4) as usize;
-        assert!(sdf[c] > 128, "inside expected >128, got {}", sdf[c]);
+        let inside = median3(sdf[c], sdf[c + 1], sdf[c + 2]);
+        assert!(inside > 128, "inside median expected >128, got {inside}");
         assert_eq!(sdf[c + 3], 255);
         // Prefix constants stable for upload routing.
         assert_eq!(TEXT_XFORM_TEX_PREFIX, "rui_text_xform_v3:");
-        assert_eq!(TEXT_MSDF_TEX_PREFIX, "rui_text_msdf_v1:");
+        assert_eq!(TEXT_MSDF_TEX_PREFIX, "rui_text_msdf_v2:");
+    }
+
+    #[test]
+    fn text_texture_msdf_channels_diverge_near_box_corner() {
+        let w = 32u32;
+        let h = 32u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 8..24 {
+            for x in 8..24 {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i + 3] = 255;
+            }
+        }
+        let sdf = alpha_coverage_to_sdf_rgba(&rgba, w, h);
+        let mut diverged = 0u32;
+        for px in sdf.chunks_exact(4) {
+            let max = px[0].max(px[1]).max(px[2]);
+            let min = px[0].min(px[1]).min(px[2]);
+            if (max as i32 - min as i32) > 6 {
+                diverged += 1;
+            }
+        }
+        assert!(
+            diverged > 8,
+            "true MSDF must split RGB near oriented edges, diverged={diverged}"
+        );
+        // Center median still inside.
+        let c = ((16 * w + 16) * 4) as usize;
+        let mut v = [sdf[c], sdf[c + 1], sdf[c + 2]];
+        v.sort_unstable();
+        assert!(v[1] > 128, "center median {}", v[1]);
     }
 
     #[test]
@@ -1289,7 +1537,7 @@ mod tests {
             key.starts_with(TEXT_XFORM_TEX_PREFIX),
             "emoji must not use MSDF prefix, got {key}"
         );
-        let Some((w, h, rgba)) = cache_get(&key) else {
+        let Some((w, h, rgba)) = cache_peek(&key) else {
             panic!("bake cache miss after ensure");
         };
         assert!(w > 0 && h > 0);
@@ -1506,5 +1754,82 @@ mod tests {
         }
         assert_eq!(top_ink, 0, "top pad row must not contain glyph ink");
         assert_eq!(bot_ink, 0, "bottom pad row must not contain glyph ink");
+    }
+
+    #[test]
+    fn text_xform_cpu_cache_lru_keeps_hot_drops_cold() {
+        cache_clear();
+        let _ = crate::app::pending_images::take_pending();
+        let px = vec![255u8, 0, 0, 255];
+        for i in 0..MAX_CACHE {
+            cache_put(format!("lru-k{i}"), 1, 1, px.clone());
+        }
+        // Pretend GPU holds everything; clear `needed` like a completed frame.
+        let _ = flush_text_xform_textures(|_| true);
+        assert!(cache_touch("lru-k0"));
+        cache_put("lru-knew".into(), 1, 1, px);
+        let _ = flush_text_xform_textures(|_| true);
+        assert!(
+            cache_peek("lru-k0").is_some(),
+            "hot key must survive LRU"
+        );
+        assert!(
+            cache_peek("lru-knew").is_some(),
+            "newest insert must remain"
+        );
+        assert!(
+            cache_peek("lru-k1").is_none(),
+            "oldest cold key should be evicted"
+        );
+        cache_clear();
+    }
+
+    #[test]
+    fn text_xform_flush_requeues_only_needed_missing_from_gpu() {
+        cache_clear();
+        let _ = crate::app::pending_images::take_pending();
+        let px = vec![0u8, 255, 0, 255];
+        cache_put("need-a".into(), 1, 1, px.clone());
+        cache_put("cold-b".into(), 1, 1, px);
+        let _ = crate::app::pending_images::take_pending();
+        let _ = flush_text_xform_textures(|_| true);
+        assert!(cache_touch("need-a"));
+        let any = flush_text_xform_textures(|_| false);
+        assert!(any, "needed key missing from GPU must re-queue");
+        let pending = crate::app::pending_images::take_pending();
+        let keys: Vec<&str> = pending.iter().map(|(k, _, _, _)| k.as_str()).collect();
+        assert!(keys.contains(&"need-a"), "got {keys:?}");
+        assert!(
+            !keys.contains(&"cold-b"),
+            "cold CPU entries must not refill GPU, got {keys:?}"
+        );
+        cache_clear();
+    }
+
+    #[test]
+    fn text_xform_cpu_cache_byte_budget_evicts() {
+        cache_clear();
+        let _ = crate::app::pending_images::take_pending();
+        // 4 MiB × 5 > 16 MiB cap.
+        let fat = vec![0u8; 1024 * 1024 * 4];
+        for i in 0..5 {
+            cache_put(format!("fat-{i}"), 1024, 1024, fat.clone());
+            let _ = flush_text_xform_textures(|_| true);
+        }
+        let (n, bytes) = text_xform_cpu_cache_stats();
+        assert!(
+            bytes <= MAX_CACHE_BYTES,
+            "byte budget exceeded: {bytes} bytes, n={n}"
+        );
+        assert!(n < 5, "expected eviction under byte cap, n={n}");
+        cache_clear();
+    }
+
+    #[test]
+    fn is_text_xform_texture_key_matches_prefixes() {
+        assert!(is_text_xform_texture_key(TEXT_XFORM_TEX_PREFIX));
+        assert!(is_text_xform_texture_key(TEXT_MSDF_TEX_PREFIX));
+        assert!(is_text_xform_texture_key("rui_text_xform_v3:deadbeef"));
+        assert!(!is_text_xform_texture_key("rui_path:x"));
     }
 }

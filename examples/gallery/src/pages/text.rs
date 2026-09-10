@@ -521,3 +521,37 @@ pub(crate) fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
         </MyCard>
     }
 }
+
+/// Coverage / Bake / 三通道 MSDF 对照（scale>2 走 Msdf；尖角看「永角」）。
+#[component]
+pub(crate) fn MsdfMultichannelShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="三通道 MSDF（Coverage / Bake / Msdf）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "GlyphRasterMode：轴对齐小字 = Coverage（glyphon）；sticky/旋转且缩放约 0.5–2 = Bake RGBA；scale 越出该带 = 三通道 MSDF（RGB 边对 + FS median）。A 通道现为 255，未做 MTSDF。Emoji 强制 Bake。"
+                </Label>
+                <HStack gap="2rem" wrap="wrap" items="end" justify="start" p="1.25rem" bg="muted" rounded="0.5rem" overflow="visible">
+                    <VStack gap="0.25rem" items="center">
+                        <Box w="6rem" h="3.5rem" bg="secondary" rounded="0.375rem" class="flex items-center justify-center">
+                            <Label id="gal-msdf-coverage" text_size="0.75rem" font_weight="600">"永角 Ag"</Label>
+                        </Box>
+                        <Label text_size="0.6rem" color="muted-foreground">"Coverage · 无变换"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Box w="6rem" h="3.5rem" bg="secondary" rounded="0.375rem" class="rotate-12 flex items-center justify-center">
+                            <Label id="gal-msdf-bake" text_size="0.75rem" font_weight="600">"永角 Ag"</Label>
+                        </Box>
+                        <Label text_size="0.6rem" color="muted-foreground">"Bake · rotate-12"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Box w="6rem" h="3.5rem" bg="secondary" rounded="0.375rem" class="scale-[3] flex items-center justify-center">
+                            <Label id="gal-msdf-msdf" text_size="0.75rem" font_weight="600">"永角 Ag"</Label>
+                        </Box>
+                        <Label text_size="0.6rem" color="muted-foreground">"Msdf · scale-3 尖角"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}

@@ -74,8 +74,9 @@ pub use text_hit::{
 pub use text_xform::{
     bake_source_scale, bake_text_texture_key_for_3d, element_wants_sticky_xform,
     mat2d_uniform_scale, mat4_from_mat2d, mat4_identity, mat4_mul, ndc_to_pixel,
-    project_point_mat4, resolve_glyph_raster, text_xform_mode, text_xform_offscreen,
-    GlyphRasterMode, TextXformMode, BAKE_OVERSAMPLE, BAKE_SCALE_MAX, BAKE_SCALE_MIN,
+    project_billboard_warp, project_point_mat4, project_point_mat4_clip, resolve_glyph_raster,
+    text_xform_mode, text_xform_offscreen, BillboardWarp, GlyphRasterMode, TextXformMode,
+    BAKE_OVERSAMPLE, BAKE_SCALE_MAX, BAKE_SCALE_MIN,
 };
 pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 
@@ -357,7 +358,9 @@ impl ScaledTexturedDraw {
             flags,
             clip_pos: self.clip_pos,
             clip_size: self.clip_size,
-            _pad: 0.0,
+            warp_c01: TexturedInstanceInput::WARP_C01_OFF,
+            warp_c23: TexturedInstanceInput::WARP_C23_OFF,
+            warp_w: TexturedInstanceInput::WARP_W_OFF,
         }
     }
 }

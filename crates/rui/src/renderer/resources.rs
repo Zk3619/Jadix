@@ -40,6 +40,8 @@ pub enum ResourceKind {
     Effect,
     /// CSS / API background gradients (`rui-grad:…`).
     Gradient,
+    /// Sticky Bake / MSDF text (`rui_text_xform_*` / `rui_text_msdf_*`).
+    TextXform,
     Other,
 }
 
@@ -62,6 +64,8 @@ impl ResourceKind {
             Self::Image
         } else if key.starts_with("rui-grad:") {
             Self::Gradient
+        } else if key.starts_with("rui_text_xform_") || key.starts_with("rui_text_msdf_") {
+            Self::TextXform
         } else {
             Self::Other
         }
@@ -69,7 +73,9 @@ impl ResourceKind {
 
     pub fn pass_kind(self) -> Option<PassKind> {
         match self {
-            Self::Path | Self::Canvas | Self::Image | Self::Gradient => Some(PassKind::Geometry2d),
+            Self::Path | Self::Canvas | Self::Image | Self::Gradient | Self::TextXform => {
+                Some(PassKind::Geometry2d)
+            }
             Self::Scene3d => Some(PassKind::Scene3d),
             Self::Capture => Some(PassKind::SubtreeCapture),
             Self::Effect => Some(PassKind::Effect),
@@ -319,6 +325,14 @@ mod tests {
         assert_eq!(
             ResourceKind::from_key("rui-grad:deadbeef"),
             ResourceKind::Gradient
+        );
+        assert_eq!(
+            ResourceKind::from_key("rui_text_xform_v3:abc"),
+            ResourceKind::TextXform
+        );
+        assert_eq!(
+            ResourceKind::from_key("rui_text_msdf_v2:abc"),
+            ResourceKind::TextXform
         );
     }
 }

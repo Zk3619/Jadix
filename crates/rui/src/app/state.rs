@@ -296,7 +296,9 @@ fn draw_shadow_tex_draws<'pass>(
             flags: 0.0,
             clip_pos,
             clip_size,
-            _pad: 0.0,
+            warp_c01: TexturedInstanceInput::WARP_C01_OFF,
+            warp_c23: TexturedInstanceInput::WARP_C23_OFF,
+            warp_w: TexturedInstanceInput::WARP_W_OFF,
         };
         let shadow_inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Shadow instance"),
@@ -2711,8 +2713,7 @@ impl AppState {
         for (id, rgba, w, h) in super::pending_images::take_pending() {
             // Bake/MSDF text: Linear filter without mip chain. Mips + minify washed out
             // supersample AA and blurred sticky 0° / rotate samples.
-            let is_text_xform = id.starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
-                || id.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX);
+            let is_text_xform = crate::utils::text_texture::is_text_xform_texture_key(&id);
             let format = if is_text_xform {
                 wgpu::TextureFormat::Rgba8Unorm
             } else {

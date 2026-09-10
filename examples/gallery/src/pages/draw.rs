@@ -386,9 +386,59 @@ pub(crate) fn DrawingScene3dShowcase() -> Element {
         <MyCard title="Scene3d · 透视立方（WP-3.13）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d。`.label(\"RUI 3D\")` → SDF bake（bake_text_texture_key_for_3d）经 mat4 投影成 billboard。"
+                    "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d。`.label` 走三通道 MSDF；透视翘曲见下方 Billboard 卡。"
                 </Label>
                 { cube }
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn billboard_leaf(tid: &str, text: &str, cam: Scene3dCamera, yaw: f32) -> Element {
+    let el: Element = scene3d()
+        .w(280.0)
+        .h(200.0)
+        .camera(cam)
+        .yaw_speed(yaw)
+        .label(text)
+        .into();
+    el.template_id(tid)
+}
+
+#[component]
+pub(crate) fn DrawingBillboardShowcase() -> Element {
+    let mild = billboard_leaf(
+        "gal-billboard-default",
+        "Ag MSDF",
+        Scene3dCamera::default(),
+        0.45,
+    );
+    let steep = billboard_leaf(
+        "gal-billboard-pitch",
+        "永角",
+        Scene3dCamera {
+            fov_deg: 52.0,
+            pitch: 0.92,
+            distance: 1.72,
+        },
+        0.35,
+    );
+    ui! {
+        <MyCard title="Billboard · 透视翘曲（三通道 MSDF）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "scene3d().label 把 MSDF 叶投成世界平面四角 + clip w（flags 4），不是屏幕 AABB。右卡加大俯仰，远边应收窄成梯形。仍是 RT 上的 2D 合成，不写 scene3d depth。需 --features scene3d。"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="start">
+                    <VStack gap="0.25rem">
+                        { mild }
+                        <Label text_size="0.6rem" color="muted-foreground">"默认 pitch · Ag MSDF"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        { steep }
+                        <Label text_size="0.6rem" color="muted-foreground">"pitch≈53° · 永角（梯形）"</Label>
+                    </VStack>
+                </HStack>
             </VStack>
         </MyCard>
     }

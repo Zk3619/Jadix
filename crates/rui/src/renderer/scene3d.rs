@@ -281,48 +281,35 @@ impl Scene3dGpu {
             pass.draw(0..self.vertex_count, 0..1);
         }
 
-        // Optional SDF text billboard: project world-space label plate through MVP → screen AABB,
-        // then composite with textured mat2 VS (flags=SDF). True non-affine warp is out of scope.
+        // SDF/MSDF text billboard: project the world plate through MVP → 4 corners + clip w
+        // (perspective-correct UV). Affine AABB would squash the trapezoid.
         if let Some(tex_key) = job.text_tex_key.as_ref() {
             if let Some(label_img) = images.get(tex_key) {
                 let hw = 0.55f32;
                 let hh = 0.14f32;
                 let y = 0.95f32;
-                let corners = [
+                let world = [
                     [-hw, y, 0.0],
                     [hw, y, 0.0],
                     [hw, y + hh * 2.0, 0.0],
                     [-hw, y + hh * 2.0, 0.0],
                 ];
-                let mut min_x = f32::MAX;
-                let mut min_y = f32::MAX;
-                let mut max_x = f32::MIN;
-                let mut max_y = f32::MIN;
-                let mut ok = true;
-                for c in corners {
-                    let Some(ndc) = crate::renderer::project_point_mat4(&mvp, c[0], c[1], c[2])
-                    else {
-                        ok = false;
-                        break;
-                    };
-                    let px = crate::renderer::ndc_to_pixel([ndc[0], ndc[1]], w as f32, h as f32);
-                    min_x = min_x.min(px[0]);
-                    min_y = min_y.min(px[1]);
-                    max_x = max_x.max(px[0]);
-                    max_y = max_y.max(px[1]);
-                }
-                if ok {
-                    let rw = (max_x - min_x).max(4.0);
-                    let rh = (max_y - min_y).max(4.0);
+                if let Some(warp) = crate::renderer::project_billboard_warp(
+                    &mvp,
+                    world,
+                    w as f32,
+                    h as f32,
+                ) {
+                    let (warp_c01, warp_c23, warp_w) = warp.warp_attrs();
                     let flags =
                         if tex_key.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX) {
-                            1.0
+                            4.0
                         } else {
-                            0.0
+                            3.0
                         };
                     let inst = TexturedInstanceInput {
-                        rect_pos: [min_x, min_y],
-                        rect_size: [rw, rh],
+                        rect_pos: [0.0, 0.0],
+                        rect_size: [1.0, 1.0],
                         tint: [0.98, 0.99, 1.0, 1.0],
                         uv_offset: [0.0, 0.0],
                         uv_scale: [1.0, 1.0],
@@ -330,7 +317,9 @@ impl Scene3dGpu {
                         flags,
                         clip_pos: [0.0, 0.0],
                         clip_size: [-1.0, -1.0],
-                        _pad: 0.0,
+                        warp_c01,
+                        warp_c23,
+                        warp_w,
                     };
                     textured.update_resolution(queue, w, h);
                     let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

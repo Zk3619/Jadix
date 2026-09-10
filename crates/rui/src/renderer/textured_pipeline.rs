@@ -14,15 +14,24 @@ pub struct TexturedInstanceInput {
     pub uv_scale: [f32; 2],
     /// 2D affine `[a, b, c, d, tx, ty]` about rect center (identity = no rotate).
     pub transform: [f32; 6],
-    /// `0.0` = RGBA, `1.0` = MSDF, `2.0` = sparse capture blit (empty texels discard).
+    /// `0` RGBA · `1` MSDF · `2` sparse blit · `3` RGBA perspective warp · `4` MSDF warp.
     pub flags: f32,
     /// Overflow clip in the same space as `rect_pos`. `clip_size[0] < 0` disables.
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
-    pub _pad: f32,
+    /// Perspective warp: texture TL/TR pixel xy (`flags` 3 or 4). Ignored for affine.
+    pub warp_c01: [f32; 4],
+    /// Perspective warp: texture BR/BL pixel xy.
+    pub warp_c23: [f32; 4],
+    /// Clip-space `w` at TL/TR/BR/BL (pre-divide) for perspective-correct UV.
+    pub warp_w: [f32; 4],
 }
 
 impl TexturedInstanceInput {
+    pub const WARP_C01_OFF: [f32; 4] = [0.0; 4];
+    pub const WARP_C23_OFF: [f32; 4] = [0.0; 4];
+    pub const WARP_W_OFF: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<TexturedInstanceInput>() as wgpu::BufferAddress,
@@ -82,6 +91,21 @@ impl TexturedInstanceInput {
                     offset: 84,
                     shader_location: 12,
                     format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 92,
+                    shader_location: 13,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 108,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 124,
+                    shader_location: 15,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }

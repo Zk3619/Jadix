@@ -372,7 +372,9 @@ impl EffectPassGpu {
                     } else {
                         d.clip_size
                     },
-                    _pad: 0.0,
+                    warp_c01: TexturedInstanceInput::WARP_C01_OFF,
+                    warp_c23: TexturedInstanceInput::WARP_C23_OFF,
+                    warp_w: TexturedInstanceInput::WARP_W_OFF,
                 }
             })
             .collect();

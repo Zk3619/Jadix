@@ -6,9 +6,10 @@
 //! - [`GlyphRasterMode::Msdf`]: distance-field bake for free scale / 3D (after Bake band).
 //!   **Not used** when the leaf contains emoji (color would collapse to a wireframe).
 //!
-//! Shader path for Msdf: `median(RGB)` + screen-space `pxRange` in `textured_rect.wgsl`
-//! (single-channel SDF packed as R=G=B today; true multi-channel MSDF later).
-//! 2D draw uses mat2 about rect center; 3D uses [`project_point_mat4`] then the same VS.
+//! Shader path for Msdf: `median(RGB)` + screen-space gradient AA in `textured_rect.wgsl`
+//! (true 3-channel MSDF from edge-pair coloring; R=G=B still decodes as a single SDF).
+//! 2D draw uses mat2 about rect center; 3D labels use [`project_billboard_warp`]
+//! (4 corners + clip `w`) so the textured VS can do perspective-correct UV.
 //!
 //! Vello-class GPU vector text is a later spike (`utils/text_vector_spike.rs` / `docs/drawing.md`).
 
@@ -33,9 +34,8 @@ pub const BAKE_SCALE_MAX: f32 = 2.0;
 
 /// Bake / SDF texture key usable as a scene3d / textured material source.
 ///
-/// 3D milestone: same supersampled (or SDF) atlas as 2D follow-anim; apply perspective
-/// via [`project_point_mat4`] on CPU (billboard corners → screen AABB), then the
-/// textured `mat2` VS. Does not modify glyphon `GlyphToRender` (Coverage stays atlas-quad).
+/// 3D milestone: same MSDF atlas as 2D free-scale; perspective via
+/// [`project_billboard_warp`] (not an AABB). Coverage glyphon is unchanged.
 pub fn bake_text_texture_key_for_3d(
     text: &str,
     font_size_px: f32,
@@ -95,6 +95,13 @@ pub fn mat4_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 
 /// Perspective divide: returns `(ndc_x, ndc_y, ndc_z)` or `None` if `w≈0`.
 pub fn project_point_mat4(mvp: &[f32; 16], x: f32, y: f32, z: f32) -> Option<[f32; 3]> {
+    let clip = project_point_mat4_clip(mvp, x, y, z)?;
+    let w = clip[3];
+    Some([clip[0] / w, clip[1] / w, clip[2] / w])
+}
+
+/// Clip-space `xyzw` **before** perspective divide.
+pub fn project_point_mat4_clip(mvp: &[f32; 16], x: f32, y: f32, z: f32) -> Option<[f32; 4]> {
     let px = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
     let py = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
     let pz = mvp[2] * x + mvp[6] * y + mvp[10] * z + mvp[14];
@@ -102,7 +109,7 @@ pub fn project_point_mat4(mvp: &[f32; 16], x: f32, y: f32, z: f32) -> Option<[f3
     if pw.abs() < 1e-8 {
         return None;
     }
-    Some([px / pw, py / pw, pz / pw])
+    Some([px, py, pz, pw])
 }
 
 /// NDC → pixel top-left origin (matches textured / glyphon Y-down).
@@ -111,6 +118,63 @@ pub fn ndc_to_pixel(ndc: [f32; 2], width: f32, height: f32) -> [f32; 2] {
         (ndc[0] * 0.5 + 0.5) * width,
         (1.0 - (ndc[1] * 0.5 + 0.5)) * height,
     ]
+}
+
+/// 3D label plate → 4 texture-space corners (TL/TR/BR/BL) + clip `w` for warp VS.
+#[derive(Clone, Copy, Debug)]
+pub struct BillboardWarp {
+    pub corners_px: [[f32; 2]; 4],
+    pub clip_w: [f32; 4],
+}
+
+impl BillboardWarp {
+    pub fn warp_attrs(&self) -> ([f32; 4], [f32; 4], [f32; 4]) {
+        let c = self.corners_px;
+        (
+            [c[0][0], c[0][1], c[1][0], c[1][1]],
+            [c[2][0], c[2][1], c[3][0], c[3][1]],
+            self.clip_w,
+        )
+    }
+
+    pub fn top_edge_len(&self) -> f32 {
+        let a = self.corners_px[0];
+        let b = self.corners_px[1];
+        (a[0] - b[0]).hypot(a[1] - b[1])
+    }
+
+    pub fn bottom_edge_len(&self) -> f32 {
+        let a = self.corners_px[3];
+        let b = self.corners_px[2];
+        (a[0] - b[0]).hypot(a[1] - b[1])
+    }
+}
+
+/// Project a Y-up world plate (`bl, br, tr, tl`) to Y-down texture corners.
+pub fn project_billboard_warp(
+    mvp: &[f32; 16],
+    world_bl_br_tr_tl: [[f32; 3]; 4],
+    viewport_w: f32,
+    viewport_h: f32,
+) -> Option<BillboardWarp> {
+    let mut clip = [[0.0f32; 4]; 4];
+    for (i, c) in world_bl_br_tr_tl.iter().enumerate() {
+        clip[i] = project_point_mat4_clip(mvp, c[0], c[1], c[2])?;
+    }
+    // Texture TL/TR/BR/BL = world TL/TR/BR/BL = indices 3, 2, 1, 0.
+    let order = [3usize, 2, 1, 0];
+    let mut corners_px = [[0.0f32; 2]; 4];
+    let mut clip_w = [0.0f32; 4];
+    for (out, &i) in order.iter().enumerate() {
+        let w = clip[i][3];
+        let ndc = [clip[i][0] / w, clip[i][1] / w];
+        corners_px[out] = ndc_to_pixel(ndc, viewport_w, viewport_h);
+        clip_w[out] = w;
+    }
+    Some(BillboardWarp {
+        corners_px,
+        clip_w,
+    })
 }
 
 /// Legacy enum — Pipeline = Coverage/glyphon; Offscreen = Bake path enabled in layout.
@@ -360,5 +424,52 @@ mod tests {
         let p = project_point_mat4(&m4, 1.0, 1.0, 0.0).expect("w");
         assert!((p[0] - 12.0).abs() < 1e-4);
         assert!((p[1] - 23.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn billboard_warp_perspective_tapers_far_edge() {
+        // clip.xy = xy, clip.w = z + 1 → farther (larger z) appears smaller.
+        let mut mvp = mat4_identity();
+        mvp[15] = 1.0;
+        mvp[11] = 1.0; // clip.w = z + 1 (column-major: m[3+8]=m[11] * z)
+        // Wait: clip.w = m[3]*x + m[7]*y + m[11]*z + m[15]
+        // identity has m[15]=1, m[11]=0. Set m[11]=1 → w = z + 1.
+        let world = [
+            [-1.0, -0.2, 0.4], // BL near
+            [1.0, -0.2, 0.4],  // BR near
+            [1.0, 0.2, 1.6],   // TR far
+            [-1.0, 0.2, 1.6],  // TL far
+        ];
+        let warp = project_billboard_warp(&mvp, world, 200.0, 100.0).expect("project");
+        let near = warp.bottom_edge_len();
+        let far = warp.top_edge_len();
+        assert!(
+            near > far * 1.15,
+            "near edge {near:.1} should exceed far edge {far:.1} under perspective"
+        );
+        // Not an AABB: top and bottom widths differ, and x of TL != x of BL.
+        assert!(
+            (warp.corners_px[0][0] - warp.corners_px[3][0]).abs() > 1.0,
+            "tilted plate must not stay a screen-aligned rectangle"
+        );
+    }
+
+    #[test]
+    fn billboard_warp_attrs_pack_tl_tr_br_bl() {
+        let mut mvp = mat4_identity();
+        mvp[15] = 1.0;
+        let world = [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [0.0, 2.0, 0.0],
+        ];
+        let warp = project_billboard_warp(&mvp, world, 100.0, 100.0).expect("project");
+        let (c01, c23, w) = warp.warp_attrs();
+        assert_eq!(c01[0], warp.corners_px[0][0]);
+        assert_eq!(c01[2], warp.corners_px[1][0]);
+        assert_eq!(c23[0], warp.corners_px[2][0]);
+        assert_eq!(c23[2], warp.corners_px[3][0]);
+        assert!(w.iter().all(|v| *v > 0.0));
     }
 }
