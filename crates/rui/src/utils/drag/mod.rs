@@ -13,9 +13,13 @@
 
 pub mod autoscroll;
 pub mod collision;
+pub mod debug;
+pub mod dropzone;
 pub mod geometry;
 pub mod modifier;
 pub mod overlay;
+pub mod registry;
+pub mod sensor;
 pub mod session;
 pub mod sortable;
 
@@ -28,25 +32,41 @@ pub use builder::{
     use_drag_item, DragCtx, DragItemCtx, DragScopeBuilder, DragScopeRsxOpts, DraggableBuilder,
     DraggableRsxOpts, DroppableBuilder, DroppableRsxOpts,
 };
-pub use collision::{detect, Candidate, CollisionAlg};
-pub use geometry::{clamp_origin_to_box, distance, Axis, DragStack, Rect, Restrict, SnapGrid};
+pub use collision::{detect, detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
+pub use dropzone::{
+    DropCheckerFn, DropOverlap, DropzoneConfig, DropzoneHandler, DropzoneHooks, set_dropzone_config,
+};
+pub use debug::{
+    debug_drag_hits_enabled, debug_frames_for_tree, debug_hit_frames, last_debug_frames,
+    set_debug_drag_hits, DragDebugEmphasis, DragDebugFrame, DragDebugRole, DragDebugStroke,
+};
+pub use geometry::{
+    clamp_origin_to_box, clamp_origin_to_box_anchor, distance, Activation, Axis, DragStack,
+    OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid, SnapPointFn, SnapTarget,
+    SnapTargets,
+};
+pub use crate::utils::pointer_action::InertiaOpts;
 pub use modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
     MODIFIER_ORDER_AUTHOR, MODIFIER_ORDER_AXIS, MODIFIER_ORDER_PIN_AXIS, MODIFIER_ORDER_RESTRICT,
     MODIFIER_ORDER_SNAP,
 };
 pub use overlay::{drag_overlay, drag_overlay_from_rsx, DragOverlayBuilder};
+pub use registry::{item_data, item_flags, registered_hits_in_scope, set_item_data, ItemFlags};
+pub use sensor::{add_sensor, begin_draggable, remove_sensor, run_scope_sensors, DragSensor, DragSensorCtx};
 pub use session::{
-    active_draggable_id, active_scope_id, active_source_translate, add_modifier, begin, cancel,
-    clear_if_any, collect_hits, end, insert_index_along_axis, is_active, is_dragging,
-    last_draggable_bounds, last_hit_rect, last_pointer, nudge_insert, overlay_hides_source,
-    overlay_is_registered, overlay_source_opacity, pump_autoscroll, refresh_hit_cache,
-    remove_modifier, resolve_insert_index, start_geometry, tick, BeginDrag, DragEvent, DragHandler,
-    DragHit, DragPhase, DragPredicate, OVERLAY_SOURCE_OPACITY,
+    active_draggable_id, active_droppable_id, active_scope_id, active_source_translate,
+    add_modifier, begin, cancel, clear_if_any, collect_hits, end, insert_index_along_axis,
+    is_active, is_coasting, is_dragging, last_draggable_bounds, last_hit_rect, last_hits, last_hits_in_scope,
+    last_pointer, nudge_insert, overlay_hides_source, overlay_is_registered,
+    overlay_source_opacity, pump_autoscroll, pump_inertia, refresh_hit_cache, remove_modifier,
+    resolve_insert_index, start_geometry, tick, BeginDrag, DragEvent, DragHandler, DragHit,
+    DragPhase, DragPredicate, OVERLAY_SOURCE_OPACITY,
 };
 pub use sortable::{
-    apply_event, apply_transfer, sortable_item, sortable_list, sortable_preview, sortable_shift,
-    sortable_source_to_hole, SortableItemBuilder, SortableListBuilder, SORTABLE_FLIP_MS,
+    apply_clone_event, apply_event, apply_transfer, sortable_item, sortable_list, sortable_preview,
+    sortable_shift, sortable_source_to_hole, SortableItemBuilder, SortableListBuilder,
+    SORTABLE_FLIP_MS,
 };
 
 /// Re-export list-reorder helpers so callers can import one module.
@@ -72,3 +92,11 @@ pub const ATTR_DRAG_OVER: &str = "rui_drag_over";
 /// Kit wrapper around a draggable island. [`Restrict::Parent`] skips this node
 /// so the clamp lands on the author's container, not a hug-content shell.
 pub const ATTR_DRAG_ITEM_SHELL: &str = "rui_drag_item_shell";
+/// Sortable list direction (`x` / `y`). Overrides the provider `axis` for insert / FLIP.
+pub const ATTR_DRAG_AXIS: &str = "rui_drag_axis";
+/// Skip sibling FLIP / sortable shift for this item (solid-dnd `skipTransform` → shift).
+pub const ATTR_DRAG_SKIP_SHIFT: &str = "rui_drag_skip_shift";
+/// Skip kit pointer-follow / hole translate; author owns motion.
+pub const ATTR_DRAG_SKIP_FOLLOW: &str = "rui_drag_skip_follow";
+/// SortableJS `pull: 'clone'` — drag a copy; source stays on drop insert.
+pub const ATTR_DRAG_PULL_CLONE: &str = "rui_drag_pull_clone";

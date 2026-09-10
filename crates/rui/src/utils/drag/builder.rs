@@ -1,6 +1,7 @@
 //! Dual-write builders: `drag_scope` / `draggable` / `droppable` / `drag_handle`.
 //! RSX tags expand to these functions (ADR-9). Not in `prelude`.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,19 +23,25 @@ use crate::utils::motion::{
 use crate::utils::resolve_instance_id;
 
 use super::autoscroll::{AutoScroll, ScrollLock};
-use super::collision::CollisionAlg;
-use super::geometry::{Axis, DragStack, Restrict, SnapGrid};
+use super::collision::{CollisionAlg, CollisionFn, CollisionInput};
+use super::dropzone::{DropCheckerFn, DropOverlap, DropzoneHandler};
+use super::geometry::{
+    Activation, Axis, DragStack, OverlayAlign, Restrict, RestrictAnchor, Snap, SnapGrid,
+    SnapPointFn, SnapTargets,
+};
 use super::session::{
-    active_source_translate, begin, bump_auto_stack, hit_hosts_id, list_row_extent,
+    active_source_translate, begin, bump_auto_stack, hit_hosts_id,
     live_cross_list_source_translate, live_pack_item_translate, live_same_list_source_translate,
-    overlay_is_registered, overlay_source_opacity, remember_item_restrict, start_geometry,
-    BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
+    overlay_is_registered, overlay_source_opacity, pack_insert_extent, peek_sort_axis,
+    remember_item_restrict, start_geometry, BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
 use super::sortable::SORTABLE_FLIP_MS;
+use crate::utils::pointer_action::InertiaOpts;
 use super::{
-    ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
+    ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL,
-    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW,
+    ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_TYPE,
 };
 
 #[derive(Clone)]
@@ -54,6 +61,21 @@ pub struct DragCtx {
     pub animation: bool,
 }
 
+impl DragCtx {
+    /// Tick-cached collision slots for this scope (solid-dnd context store analog).
+    ///
+    /// Peek-only — does **not** subscribe `overlay_pos`. Pair with
+    /// [`Self::active_droppable`] / [`Self::overlay_open`] so the island reruns
+    /// when the winner changes. While dragging uses tick cache; idle uses registered slots.
+    pub fn hits(&self) -> Vec<super::session::DragHit> {
+        if super::session::is_dragging() {
+            super::session::last_hits_in_scope(&self.id)
+        } else {
+            super::registry::registered_hits_in_scope(&self.id)
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DragItemCtx {
     pub id: String,
@@ -62,6 +84,17 @@ pub struct DragItemCtx {
     pub index: Option<usize>,
     pub item_type: String,
     pub group: String,
+}
+
+impl DragItemCtx {
+    /// Item [`super::registry::set_item_data`] bag (solid-dnd `data` record).
+    pub fn data(&self) -> Option<Rc<dyn Any>> {
+        super::registry::item_data(&self.scope_id, &self.id)
+    }
+
+    pub fn data_as<T: Any + Clone>(&self) -> Option<T> {
+        self.data()?.downcast_ref::<T>().cloned()
+    }
 }
 
 fn drag_context() -> Context<DragCtx> {
@@ -136,6 +169,41 @@ fn is_cloning_overlay_ghost() -> bool {
     CLONING_OVERLAY_GHOST.with(|c| c.get())
 }
 
+fn register_drag_slot_meta(
+    scope: &str,
+    id: &str,
+    is_draggable: bool,
+    is_droppable: bool,
+    item_type: &str,
+    accept: &str,
+    list_id: Option<&str>,
+    index: Option<usize>,
+    group: &str,
+    disabled: bool,
+    list_axis: Option<Axis>,
+    flags: super::registry::ItemFlags,
+) {
+    use super::geometry::Rect;
+    use super::session::DragHit;
+    super::registry::register_slot_meta(DragHit {
+        id: id.to_string(),
+        scope_id: scope.to_string(),
+        is_draggable,
+        is_droppable,
+        rect: Rect::default(),
+        item_type: item_type.to_string(),
+        accept: accept.to_string(),
+        list_id: list_id.map(String::from),
+        index,
+        group: group.to_string(),
+        disabled,
+        list_axis,
+        skip_shift: flags.skip_shift,
+        skip_follow: flags.skip_follow,
+        pull_clone: flags.pull_clone,
+    });
+}
+
 fn register_source_preview(
     scope: &str,
     id: &str,
@@ -148,6 +216,15 @@ fn register_source_preview(
             SourcePreview { body, item },
         );
     });
+}
+
+/// Item metadata captured with the author body (Overlay `child_for`).
+pub(super) fn source_preview_item(scope: &str, draggable_id: &str) -> Option<DragItemCtx> {
+    SOURCE_PREVIEWS.with(|m| {
+        m.borrow()
+            .get(&(scope.to_string(), draggable_id.to_string()))
+            .map(|p| p.item.clone())
+    })
 }
 
 /// Re-run the active item's author body (not the dimmed/translated island wrapper).
@@ -183,7 +260,11 @@ fn live_slot<T: Clone + PartialEq + 'static>(key: &str, value: T) -> Signal<T> {
 /// Gallery wraps items in a relative arena; the provider then has one child,
 /// so its stacking-context opens a single band. Nested `z-index` inside an
 /// already-open page_stack (ScrollArea overlay bar) does not split further —
-/// both pills share `rects → text` and lower glyphs paint on the upper fill.
+/// overlapping pills share `rects → text` and lower glyphs paint on the upper fill.
+///
+/// Idle in-flow sortable rows must **not** opt in: each `data-stacking-context`
+/// under a live `page_stack_depth` is another glyphon band. Scrolling those
+/// rows on/off the gallery page reshapes every label (slow render `text=150ms+`).
 fn keyed_item_shell(island: Element) -> Element {
     let mut el = Element::from(
         vstack()
@@ -193,9 +274,33 @@ fn keyed_item_shell(island: Element) -> Element {
             .child(island),
     )
     .overflow("visible");
-    el.set_attr("data-stacking-context", "1");
     el.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
     el
+}
+
+const ATTR_STACKING_CONTEXT: &str = "data-stacking-context";
+
+fn subtree_paints_own_band(el: &Element) -> bool {
+    if el.style.z_index != 0
+        || el.style.position == taffy::style::Position::Absolute
+        || el.style.position_fixed
+    {
+        return true;
+    }
+    el.children.iter().any(subtree_paints_own_band)
+}
+
+fn sync_stacking_context_attr(el: &mut Element, on: bool) -> bool {
+    let have = el.attrs.get(ATTR_STACKING_CONTEXT).map(|s| s.as_str()) == Some("1");
+    if have == on {
+        return false;
+    }
+    if on {
+        el.set_attr(ATTR_STACKING_CONTEXT, "1");
+    } else {
+        el.attrs.remove(ATTR_STACKING_CONTEXT);
+    }
+    true
 }
 
 fn subtree_has_draggable(el: &Element, id: &str) -> bool {
@@ -206,7 +311,7 @@ fn subtree_has_draggable(el: &Element, id: &str) -> bool {
 fn trail_margin_px(el: &Element, axis: Axis) -> f32 {
     let edge = match axis {
         Axis::X => el.style.margin.right,
-        Axis::Y | Axis::Xy => el.style.margin.bottom,
+        Axis::Y | Axis::Xy | Axis::Start => el.style.margin.bottom,
     };
     crate::layout::lpa_length_px(edge).unwrap_or(0.0)
 }
@@ -214,7 +319,7 @@ fn trail_margin_px(el: &Element, axis: Axis) -> f32 {
 fn set_trail_margin(el: &mut Element, axis: Axis, px: f32) {
     let edge = match axis {
         Axis::X => &mut el.style.margin.right,
-        Axis::Y | Axis::Xy => &mut el.style.margin.bottom,
+        Axis::Y | Axis::Xy | Axis::Start => &mut el.style.margin.bottom,
     };
     *edge = taffy::style::LengthPercentageAuto::length(px);
 }
@@ -232,7 +337,7 @@ fn block_dims(el: &Element, axis: Axis) -> AuthorBlock {
             el.style.min_size.width,
             el.style.max_size.width,
         ),
-        Axis::Y | Axis::Xy => (
+        Axis::Y | Axis::Xy | Axis::Start => (
             el.style.size.height,
             el.style.min_size.height,
             el.style.max_size.height,
@@ -253,7 +358,7 @@ fn set_block_dims(
             el.style.min_size.width = min;
             el.style.max_size.width = max;
         }
-        Axis::Y | Axis::Xy => {
+        Axis::Y | Axis::Xy | Axis::Start => {
             el.style.size.height = size;
             el.style.min_size.height = min;
             el.style.max_size.height = max;
@@ -294,6 +399,8 @@ fn apply_shell_stack_z(
     list_sig: Signal<Option<String>>,
     author_margin: &Cell<Option<f32>>,
     author_block: &Cell<Option<AuthorBlock>>,
+    author_pos: &Cell<Option<taffy::style::Position>>,
+    author_width: &Cell<Option<taffy::style::Dimension>>,
 ) -> LayoutStatus {
     let is_active = active.peek().as_deref() == Some(id);
     if stack == DragStack::Auto && is_active && !auto_bumped.get() {
@@ -322,11 +429,11 @@ fn apply_shell_stack_z(
         el.style.z_index = want_z;
         changed = changed.merge(LayoutStatus::StyleChanged);
     }
-    // Cross-list: take this row out of the origin pack by collapsing the
-    // *shell* block size to 0. Negative trailing margin was a guessed pixel
-    // amount (stride / shell+8 / stretched island) and ate remaining siblings
-    // plus folder padding (Gallery: Inbox 无法包裹 Alpha). Overflow stays
-    // visible so the island (pinned to drag_extent) still paints into the hole.
+    // Cross-list: take the shell out of the origin pack so Taffy flex `gap`
+    // is not reserved around a 0-height sibling. Absolute's containing block
+    // must be the origin *list* (`position: relative` there). A z-index
+    // folder ancestor as CB made `w=100%` fill the header row and flattened
+    // the destination card (Gallery: Beta 贴在 Inbox 标题上、Later 一行塌陷).
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
     let cross = is_active && from_l.is_some() && hover_l.is_some() && from_l != hover_l;
@@ -344,22 +451,43 @@ fn apply_shell_stack_z(
         set_trail_margin(el, axis, base_margin);
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
-    let author = if cross {
-        author_block.get().unwrap_or((
-            taffy::style::Dimension::auto(),
-            taffy::style::Dimension::auto(),
-            taffy::style::Dimension::auto(),
-        ))
+    if author_pos.get().is_none() {
+        author_pos.set(Some(el.style.position));
+    }
+    if author_width.get().is_none() {
+        author_width.set(Some(el.style.size.width));
+    }
+    let want_pos = if cross {
+        taffy::style::Position::Absolute
     } else {
-        match author_block.get() {
-            Some(v) => v,
-            None => {
-                let v = block_dims(el, axis);
-                author_block.set(Some(v));
-                v
-            }
-        }
+        author_pos.get().unwrap_or(taffy::style::Position::Relative)
     };
+    if el.style.position != want_pos {
+        el.style.position = want_pos;
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    let want_width = if cross {
+        taffy::style::Dimension::percent(1.0)
+    } else {
+        author_width
+            .get()
+            .unwrap_or(taffy::style::Dimension::auto())
+    };
+    if !dims_eq(el.style.size.width, want_width) {
+        el.style.size.width = want_width;
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    if author_block.get().is_none() {
+        // Snapshot before collapsing. The first chrome pass is often already
+        // cross (hover moved before sync); capturing afterwards would store 0
+        // and refuse to restore the row on the way back.
+        author_block.set(Some(block_dims(el, axis)));
+    }
+    let author = author_block.get().unwrap_or((
+        taffy::style::Dimension::auto(),
+        taffy::style::Dimension::auto(),
+        taffy::style::Dimension::auto(),
+    ));
     let zero = taffy::style::Dimension::length(0.0);
     let want_block = if cross { (zero, zero, zero) } else { author };
     let have_block = block_dims(el, axis);
@@ -370,6 +498,16 @@ fn apply_shell_stack_z(
     if cross {
         el.style.overflow.x = taffy::style::Overflow::Visible;
         el.style.overflow.y = taffy::style::Overflow::Visible;
+    }
+    // Overlapping free-move tiles (absolute / author z) still need a nested
+    // paint band. In-flow sortable rows must not — Gallery ScrollArea already
+    // owns `page_stack_depth`, and a band per row reshapes text on scroll.
+    let need_stack = want_z != 0
+        || el.style.position == taffy::style::Position::Absolute
+        || el.style.position_fixed
+        || el.children.iter().any(subtree_paints_own_band);
+    if sync_stacking_context_attr(el, need_stack) {
+        changed = changed.merge(LayoutStatus::StyleChanged);
     }
     changed
 }
@@ -395,7 +533,7 @@ fn live_sortable_translate(
         from_index.peek(),
         hover_list.peek().as_deref(),
         hover_index.peek(),
-        axis,
+        peek_sort_axis(list, axis),
     )
 }
 
@@ -426,7 +564,7 @@ fn live_source_hole_translate(
     if list != fl || list != hl || index != from {
         return [0.0, 0.0];
     }
-    live_same_list_source_translate(fl, from, hl, hover, axis)
+    live_same_list_source_translate(fl, from, hl, hover, peek_sort_axis(Some(list), axis))
 }
 
 fn sortable_flip_entry() -> TransitionEntry {
@@ -511,16 +649,27 @@ fn apply_live_drag_chrome(
     let index = index_sig.peek();
     let is_active = active.peek().as_deref() == Some(id);
     let overlay_on = overlay_is_registered(scope) && overlay_open.peek();
+    let from_l = from_list.peek();
+    let hover_l = hover_list.peek();
+    let lists_cross = from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+    let flags = super::registry::item_flags(scope, id);
+    let clone_drag = is_active && super::session::active_pull_clone();
     let mut want_opacity = author_opacity;
     let mut want_translate = [0.0_f32, 0.0];
     let mut follow_pointer = false;
     if is_active {
-        if overlay_on {
+        if flags.skip_follow {
+            want_opacity = author_opacity;
+            want_translate = [0.0, 0.0];
+            follow_pointer = false;
+        } else if clone_drag {
+            want_opacity = author_opacity;
+            want_translate = [0.0, 0.0];
+            follow_pointer = false;
+        } else if overlay_on {
             let src_op = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
             let hide = src_op <= 0.001;
-            let from_l = from_list.peek();
-            let hover_l = hover_list.peek();
-            let cross = from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+            let cross = lists_cross;
             // opacity 0: origin slot empty. Dimmed: body sits in the insert hole
             // siblings opened — origin is covered by 让位, so pinning the dimmed
             // chip there is invisible (Gallery screenshot).
@@ -531,8 +680,13 @@ fn apply_live_drag_chrome(
                 if let (Some(fl), Some(fi), Some(hl)) =
                     (from_l.as_deref(), from_index.peek(), hover_l.as_deref())
                 {
-                    want_translate =
-                        live_cross_list_source_translate(fl, fi, hl, hover_index.peek(), axis);
+                    want_translate = live_cross_list_source_translate(
+                        fl,
+                        fi,
+                        hl,
+                        hover_index.peek(),
+                        peek_sort_axis(Some(hl), axis),
+                    );
                 }
             } else {
                 want_translate = live_source_hole_translate(
@@ -559,16 +713,27 @@ fn apply_live_drag_chrome(
     } else {
         auto_bumped.set(false);
         if also_droppable {
-            want_translate = live_sortable_translate(
-                also_droppable,
-                axis,
-                list.as_deref(),
-                index,
-                from_list,
-                from_index,
-                hover_list,
-                hover_index,
-            );
+            if flags.skip_shift || super::session::active_pull_clone() {
+                want_translate = [0.0, 0.0];
+            } else {
+                want_translate = live_sortable_translate(
+                    also_droppable,
+                    axis,
+                    list.as_deref(),
+                    index,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                );
+            }
+            // Source shell left the pack (`position: absolute`). Remaining
+            // origin rows already occupy the hole. A leftover same-list
+            // `-pitch` FLIP would start at the folder's inner top and ease
+            // down (Gallery: Alpha→Later 后 Beta 从 Inbox 顶部下滑).
+            if lists_cross && list == from_l {
+                follow_pointer = true;
+            }
         }
     }
     let mut want_z = stack.resolve(author_z, auto_rank.peek());
@@ -619,7 +784,9 @@ fn apply_live_drag_chrome(
             None => {
                 let v = match axis {
                     Axis::X => (el.style.size.width, el.style.min_size.width),
-                    Axis::Y | Axis::Xy => (el.style.size.height, el.style.min_size.height),
+                    Axis::Y | Axis::Xy | Axis::Start => {
+                        (el.style.size.height, el.style.min_size.height)
+                    }
                 };
                 author_island_block.set(Some(v));
                 v
@@ -630,7 +797,7 @@ fn apply_live_drag_chrome(
         let e = drag_extent.peek();
         let px = match axis {
             Axis::X => e[0],
-            Axis::Y | Axis::Xy => e[1],
+            Axis::Y | Axis::Xy | Axis::Start => e[1],
         }
         .max(1.0);
         let d = taffy::style::Dimension::length(px);
@@ -640,7 +807,7 @@ fn apply_live_drag_chrome(
     };
     let have_sz = match axis {
         Axis::X => (el.style.size.width, el.style.min_size.width),
-        Axis::Y | Axis::Xy => (el.style.size.height, el.style.min_size.height),
+        Axis::Y | Axis::Xy | Axis::Start => (el.style.size.height, el.style.min_size.height),
     };
     if !dims_eq(have_sz.0, want_sz.0) || !dims_eq(have_sz.1, want_sz.1) {
         match axis {
@@ -648,7 +815,7 @@ fn apply_live_drag_chrome(
                 el.style.size.width = want_sz.0;
                 el.style.min_size.width = want_sz.1;
             }
-            Axis::Y | Axis::Xy => {
+            Axis::Y | Axis::Xy | Axis::Start => {
                 el.style.size.height = want_sz.0;
                 el.style.min_size.height = want_sz.1;
             }
@@ -681,8 +848,10 @@ fn apply_live_droppable_chrome(
     axis: Axis,
     author_pad: &Cell<Option<f32>>,
     author_margin: &Cell<Option<f32>>,
+    author_pos: &Cell<Option<taffy::style::Position>>,
     author_z: i32,
 ) -> LayoutStatus {
+    let axis = peek_sort_axis(Some(list), axis);
     let from = from_list.peek();
     let hover = hover_list.peek();
     let over = active_droppable.peek().as_deref() == Some(id) || hover.as_deref() == Some(list);
@@ -709,25 +878,26 @@ fn apply_live_droppable_chrome(
         None => {
             let edge = match axis {
                 Axis::X => el.style.padding.right,
-                Axis::Y | Axis::Xy => el.style.padding.bottom,
+                Axis::Y | Axis::Xy | Axis::Start => el.style.padding.bottom,
             };
             let v = crate::layout::lp_length_px(edge).unwrap_or(0.0);
             author_pad.set(Some(v));
             v
         }
     };
-    let extent = {
+    let chip = {
         let e = drag_extent.peek();
-        let chip = match axis {
+        match axis {
             Axis::X => e[0],
-            Axis::Y | Axis::Xy => e[1],
+            Axis::Y | Axis::Xy | Axis::Start => e[1],
         }
-        .max(0.0);
-        // One packed row (item + author gap). A stretched island taller than
-        // the row must not drive padding — that leaves a hole the size of the
-        // whole origin card (Gallery: 移出 Beta 后 Inbox 空洞过大).
-        list_row_extent(Some(list), axis, chip)
+        .max(0.0)
     };
+    // Occupied target: snapshotted packed row (item + author gap). A
+    // one-item Later has no neighbour stride, so live `list_row_extent`
+    // would drop the gap (Gallery: 移回 Inbox 撑开/收缩都偏小). Empty
+    // lists still open `chip` only — there is no gap until a second row.
+    let extent = pack_insert_extent(Some(list), axis, chip);
     let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover
     {
         extent
@@ -737,7 +907,7 @@ fn apply_live_droppable_chrome(
     let want_pad = base_pad + extra_pad;
     let pad_edge = match axis {
         Axis::X => &mut el.style.padding.right,
-        Axis::Y | Axis::Xy => &mut el.style.padding.bottom,
+        Axis::Y | Axis::Xy | Axis::Start => &mut el.style.padding.bottom,
     };
     let have_pad = crate::layout::lp_length_px(*pad_edge).unwrap_or(0.0);
     if (have_pad - want_pad).abs() > 0.5 {
@@ -745,14 +915,15 @@ fn apply_live_droppable_chrome(
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
     // Keep the author's trailing margin on the *list*. Vacating a row is the
-    // source item's negative margin (see `apply_shell_stack_z`); a list-level
-    // height cap clips the last item (Gallery: Beta 本体消失).
+    // source shell leaving the pack (`position: absolute` vs this list CB).
+    // A list-level height cap clips the last item; a guessed full-row
+    // negative margin ate remaining files / folder padding.
     let base_margin = match author_margin.get() {
         Some(v) => v,
         None => {
             let edge = match axis {
                 Axis::X => el.style.margin.right,
-                Axis::Y | Axis::Xy => el.style.margin.bottom,
+                Axis::Y | Axis::Xy | Axis::Start => el.style.margin.bottom,
             };
             let v = crate::layout::lpa_length_px(edge).unwrap_or(0.0);
             author_margin.set(Some(v));
@@ -761,11 +932,30 @@ fn apply_live_droppable_chrome(
     };
     let margin_edge = match axis {
         Axis::X => &mut el.style.margin.right,
-        Axis::Y | Axis::Xy => &mut el.style.margin.bottom,
+        Axis::Y | Axis::Xy | Axis::Start => &mut el.style.margin.bottom,
     };
     let have_margin = crate::layout::lpa_length_px(*margin_edge).unwrap_or(0.0);
     if (have_margin - base_margin).abs() > 0.5 {
         *margin_edge = taffy::style::LengthPercentageAuto::length(base_margin);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    // Origin list is the containing block for the vacated absolute shell so
+    // `w=100%` resolves against the file column, not a z-index folder card.
+    let base_pos = match author_pos.get() {
+        Some(v) => v,
+        None => {
+            let v = el.style.position;
+            author_pos.set(Some(v));
+            v
+        }
+    };
+    let want_pos = if cross {
+        taffy::style::Position::Relative
+    } else {
+        base_pos
+    };
+    if el.style.position != want_pos {
+        el.style.position = want_pos;
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
     if cross {
@@ -787,13 +977,18 @@ pub struct DragScopeBuilder {
     id: String,
     collision: CollisionAlg,
     axis: Axis,
+    start_axis: Axis,
     threshold: f32,
     restrict: Restrict,
-    snap: Option<SnapGrid>,
+    restrict_end_only: bool,
+    restrict_anchor: RestrictAnchor,
+    snap: Option<Snap>,
     delay_ms: f32,
     empty_insert: f32,
     autoscroll: AutoScroll,
     can_drop: Option<DragPredicate>,
+    collision_fn: Option<CollisionFn>,
+    activation: Activation,
     on_start: Option<DragHandler>,
     on_move: Option<DragHandler>,
     on_over: Option<DragHandler>,
@@ -801,6 +996,11 @@ pub struct DragScopeBuilder {
     /// Sibling / source-hole FLIP. Default `true` (`SORTABLE_FLIP_MS`). `false` snaps.
     animation: bool,
     modifiers: Vec<super::modifier::DragModifier>,
+    sensors: Vec<super::sensor::DragSensor>,
+    /// Paint collision slots (solid-dnd `DragDropDebugger`). Sticky process-wide flag.
+    debug_hits: bool,
+    /// interact inertia (free-move only; Sortable commits immediately).
+    inertia: InertiaOpts,
 }
 
 pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
@@ -808,19 +1008,27 @@ pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
         id: id.into(),
         collision: CollisionAlg::MostIntersecting,
         axis: Axis::Xy,
+        start_axis: Axis::Xy,
         threshold: 4.0,
         restrict: Restrict::None,
+        restrict_end_only: false,
+        restrict_anchor: RestrictAnchor::FULL,
         snap: None,
         delay_ms: 0.0,
         empty_insert: 8.0,
         autoscroll: AutoScroll::default(),
         can_drop: None,
+        collision_fn: None,
+        activation: Activation::And,
         on_start: None,
         on_move: None,
         on_over: None,
         on_end: None,
         animation: true,
         modifiers: Vec::new(),
+        sensors: Vec::new(),
+        debug_hits: false,
+        inertia: InertiaOpts::default(),
     }
 }
 
@@ -831,6 +1039,12 @@ impl DragScopeBuilder {
     }
     pub fn axis(mut self, axis: Axis) -> Self {
         self.axis = axis;
+        self
+    }
+    /// interact.js `startAxis`. `Xy` (default) accepts any first movement;
+    /// `X` / `Y` stay pending until the pointer's dominant axis matches.
+    pub fn start_axis(mut self, axis: Axis) -> Self {
+        self.start_axis = axis;
         self
     }
     pub fn threshold(mut self, px: f32) -> Self {
@@ -845,13 +1059,53 @@ impl DragScopeBuilder {
         self.restrict = restrict.into();
         self
     }
-    pub fn snap(mut self, snap: SnapGrid) -> Self {
-        self.snap = Some(snap);
+    /// Apply restrict only on drop (interact `endOnly`). Drag-time travel is free.
+    pub fn restrict_end_only(mut self, yes: bool) -> Self {
+        self.restrict_end_only = yes;
+        self
+    }
+    /// Which fraction of the ghost must stay in the restrict box (interact
+    /// `elementRect`). [`RestrictAnchor::CENTER`] only pins the midpoint.
+    pub fn restrict_anchor(mut self, anchor: RestrictAnchor) -> Self {
+        self.restrict_anchor = anchor;
+        self
+    }
+    pub fn snap(mut self, snap: impl Into<Snap>) -> Self {
+        self.snap = Some(snap.into());
+        self
+    }
+    /// interact.js `snap.targets` — multiple grids; closest in-range snap wins.
+    pub fn snap_targets(mut self, targets: SnapTargets) -> Self {
+        self.snap = Some(Snap::targets(targets));
+        self
+    }
+    /// interact.js `snap.targets` function entry — return a snap point or `None`.
+    pub fn snap_fn(mut self, f: SnapPointFn) -> Self {
+        let targets = match self.snap {
+            Some(Snap::Targets(t)) => t.with_fn(f),
+            Some(Snap::Grid(g)) => SnapTargets::new(vec![g]).with_fn(f),
+            None => SnapTargets::default().with_fn(f),
+        };
+        self.snap = Some(Snap::targets(targets));
         self
     }
     /// Hold delay in milliseconds before the drag activates (Sortable `delay`).
     pub fn delay_ms(mut self, ms: f32) -> Self {
         self.delay_ms = ms.max(0.0);
+        self
+    }
+    /// Distance **and** delay (default) vs distance **or** delay (solid-dnd pointer sensor).
+    pub fn activation(mut self, activation: Activation) -> Self {
+        self.activation = activation;
+        self
+    }
+    /// Author collision detector. When set, it wins over [`Self::collision`]; innermost
+    /// nested refine still runs unless the callback sets `skip_innermost`.
+    pub fn collision_fn(
+        mut self,
+        f: impl for<'a> Fn(&CollisionInput<'a>) -> Option<String> + 'static,
+    ) -> Self {
+        self.collision_fn = Some(Rc::new(f));
         self
     }
     /// Inflate empty-container hit boxes (Sortable `emptyInsertThreshold`).
@@ -861,6 +1115,21 @@ impl DragScopeBuilder {
     }
     pub fn autoscroll(mut self, enabled: bool) -> Self {
         self.autoscroll.enabled = enabled;
+        self
+    }
+    /// Full edge-scroll config (Sortable `scrollSensitivity` / `scrollSpeed` + lock).
+    pub fn autoscroll_opts(mut self, opts: AutoScroll) -> Self {
+        self.autoscroll = opts;
+        self
+    }
+    /// Edge band width in px (Sortable `scrollSensitivity`, default 40).
+    pub fn scroll_sensitivity(mut self, px: f32) -> Self {
+        self.autoscroll.sensitivity = px.max(0.0);
+        self
+    }
+    /// Scroll step per display frame (default ~14px @ 60Hz).
+    pub fn scroll_speed(mut self, px: f32) -> Self {
+        self.autoscroll.speed = px.max(0.0);
         self
     }
     /// Edge auto-scroll axis freeze for **all** drags in this scope.
@@ -874,6 +1143,22 @@ impl DragScopeBuilder {
     /// `true` (default) uses [`SORTABLE_FLIP_MS`]; `false` jumps instantly.
     pub fn animation(mut self, yes: bool) -> Self {
         self.animation = yes;
+        self
+    }
+    /// Draw layout-slot rectangles (dashed idle, bold active droppable).
+    /// Sets the process-wide [`super::set_debug_drag_hits`] flag when `true`.
+    pub fn debug_hits(mut self, yes: bool) -> Self {
+        self.debug_hits = yes;
+        self
+    }
+    /// interact.js inertia. Free-move tiles fling after pointerup; Sortable lists
+    /// still commit immediately so sibling FLIP is not fighting a coast.
+    pub fn inertia(mut self, yes: bool) -> Self {
+        self.inertia.enabled = yes;
+        self
+    }
+    pub fn inertia_opts(mut self, opts: InertiaOpts) -> Self {
+        self.inertia = opts;
         self
     }
     /// Extra press-delta stage (solid-dnd `addTransformer` / dnd-kit `Modifier`).
@@ -894,6 +1179,18 @@ impl DragScopeBuilder {
         self.modifiers.retain(|t| t.id != id);
         self.modifiers
             .push(super::modifier::DragModifier::new(id, order, f));
+        self
+    }
+    /// Custom sensor activator (solid-dnd `addSensor`). Pointer remains default.
+    pub fn sensor(
+        mut self,
+        id: impl Into<String>,
+        activator: impl Fn(&super::sensor::DragSensorCtx) -> bool + 'static,
+    ) -> Self {
+        let id = id.into();
+        self.sensors.retain(|s| s.id != id);
+        self.sensors
+            .push(super::sensor::DragSensor::new(id, activator));
         self
     }
     /// Return `false` to reject a droppable this frame (Sortable `onMove`).
@@ -918,6 +1215,9 @@ impl DragScopeBuilder {
         self
     }
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        if self.debug_hits {
+            super::set_debug_drag_hits(true);
+        }
         let id = resolve_instance_id(self.id, "drag");
         let overlay_open = use_signal(format!("{id}__drag_open").as_str(), || false);
         let overlay_pos = use_signal(format!("{id}__drag_pos").as_str(), || [0.0_f32, 0.0]);
@@ -933,14 +1233,20 @@ impl DragScopeBuilder {
             ScopeRuntime {
                 collision: self.collision,
                 axis: self.axis,
+                start_axis: self.start_axis,
                 threshold: self.threshold,
                 restrict: self.restrict,
+                restrict_end_only: self.restrict_end_only,
+                restrict_anchor: self.restrict_anchor,
                 snap: self.snap,
                 overlay_registered: false,
                 source_opacity: 1.0,
                 autoscroll: self.autoscroll,
                 empty_insert: self.empty_insert,
                 delay_ms: self.delay_ms,
+                activation: self.activation,
+                collision_fn: self.collision_fn,
+                overlay_align: OverlayAlign::Grab,
                 can_drop: self.can_drop,
                 on_start: self.on_start,
                 on_move: self.on_move,
@@ -957,8 +1263,10 @@ impl DragScopeBuilder {
                 drag_extent,
                 stack_seq: 0,
                 modifiers: self.modifiers,
+                sensors: self.sensors,
             },
         );
+        super::session::set_scope_inertia(&id, self.inertia);
         let ctx = DragCtx {
             id: id.clone(),
             overlay_open,
@@ -997,6 +1305,17 @@ pub fn drag_scope_from_rsx(opts: DragScopeRsxOpts, body: impl FnOnce() -> Elemen
         .animation(opts.animation);
     b.threshold = opts.threshold;
     b.restrict = opts.restrict;
+    b.restrict_end_only = opts.restrict_end_only;
+    b.restrict_anchor = opts.restrict_anchor;
+    if let Some(snap) = opts.snap {
+        b = b.snap(snap);
+    }
+    if let Some(targets) = opts.snap_targets {
+        b = b.snap_targets(targets);
+    }
+    if let Some(f) = opts.snap_fn {
+        b = b.snap_fn(f);
+    }
     if let Some(h) = opts.on_drag_end {
         b.on_end = Some(h);
     }
@@ -1015,6 +1334,11 @@ pub struct DragScopeRsxOpts {
     pub axis: Axis,
     pub threshold: f32,
     pub restrict: Restrict,
+    pub restrict_end_only: bool,
+    pub restrict_anchor: RestrictAnchor,
+    pub snap: Option<Snap>,
+    pub snap_targets: Option<SnapTargets>,
+    pub snap_fn: Option<SnapPointFn>,
     pub animation: bool,
     pub on_drag_start: Option<DragHandler>,
     pub on_drag_over: Option<DragHandler>,
@@ -1029,6 +1353,11 @@ impl Default for DragScopeRsxOpts {
             axis: Axis::default(),
             threshold: 4.0,
             restrict: Restrict::default(),
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
+            snap: None,
+            snap_targets: None,
+            snap_fn: None,
             animation: true,
             on_drag_start: None,
             on_drag_over: None,
@@ -1066,6 +1395,10 @@ pub struct DraggableBuilder {
     stack: DragStack,
     /// Item-level ghost clamp. `None` inherits the provider [`Restrict`].
     restrict: Option<Restrict>,
+    skip_shift: bool,
+    skip_follow: bool,
+    pull_clone: bool,
+    data: Option<Rc<dyn Any>>,
 }
 
 pub fn draggable(id: impl Into<String>) -> DraggableBuilder {
@@ -1083,6 +1416,10 @@ pub fn draggable(id: impl Into<String>) -> DraggableBuilder {
         source_opacity: None,
         stack: DragStack::Auto,
         restrict: None,
+        skip_shift: false,
+        skip_follow: false,
+        pull_clone: false,
+        data: None,
     }
 }
 
@@ -1150,6 +1487,31 @@ impl DraggableBuilder {
         self
     }
 
+    /// Skip sibling FLIP / sortable shift (solid-dnd `skipTransform` → shift).
+    pub fn skip_shift(mut self, yes: bool) -> Self {
+        self.skip_shift = yes;
+        self
+    }
+
+    /// Skip kit pointer-follow / hole translate; author owns motion.
+    pub fn skip_follow(mut self, yes: bool) -> Self {
+        self.skip_follow = yes;
+        self
+    }
+
+    /// SortableJS `pull: 'clone'` — source stays; drop inserts a copy.
+    pub fn pull_clone(mut self, yes: bool) -> Self {
+        self.pull_clone = yes;
+        self
+    }
+
+    /// Arbitrary payload (solid-dnd `data` bag). Readable from [`DragItemCtx`] /
+    /// [`super::session::DragEvent::data`].
+    pub fn data(mut self, payload: Rc<dyn Any>) -> Self {
+        self.data = Some(payload);
+        self
+    }
+
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let ctx = require_drag("Draggable");
         let item_ctx = DragItemCtx {
@@ -1184,6 +1546,16 @@ fn assemble_draggable(
         return keyed_item_shell(el);
     }
     remember_item_restrict(&scope, &id, cfg.restrict.clone());
+    let flags = super::registry::ItemFlags {
+        skip_shift: cfg.skip_shift,
+        skip_follow: cfg.skip_follow,
+        pull_clone: cfg.pull_clone,
+    };
+    super::registry::set_item_flags(&scope, &id, flags);
+    if let Some(data) = cfg.data.clone() {
+        super::registry::set_item_data(&scope, &id, data);
+    }
+    let item_flags = flags;
     let tid = format!("{scope}__draggable:{id}");
     let capture = format!("{scope}__drag:{id}");
     let active = ctx.active_draggable;
@@ -1225,6 +1597,20 @@ fn assemble_draggable(
         let mut item_ctx = item_ctx.clone();
         item_ctx.index = index;
         item_ctx.list = list.clone();
+        register_drag_slot_meta(
+            &scope_for_mark,
+            &id_for_mark,
+            true,
+            also_droppable,
+            &item_type,
+            &accept,
+            list.as_deref(),
+            index,
+            &group,
+            disabled,
+            None,
+            item_flags,
+        );
         register_source_preview(
             &scope_for_mark,
             &id_for_mark,
@@ -1257,6 +1643,15 @@ fn assemble_draggable(
         }
         if disabled {
             el.set_attr(ATTR_DRAG_DISABLED, "1");
+        }
+        if item_flags.skip_shift {
+            el.set_attr(ATTR_DRAG_SKIP_SHIFT, "1");
+        }
+        if item_flags.skip_follow {
+            el.set_attr(ATTR_DRAG_SKIP_FOLLOW, "1");
+        }
+        if item_flags.pull_clone {
+            el.set_attr(ATTR_DRAG_PULL_CLONE, "1");
         }
         if el.focus_id.is_none() {
             el = el.focus_id(capture.as_str());
@@ -1333,6 +1728,8 @@ fn assemble_draggable(
     let shell_scope = scope.clone();
     let author_margin_shell = Rc::new(Cell::new(None::<f32>));
     let author_block_shell = Rc::new(Cell::new(None::<AuthorBlock>));
+    let author_pos_shell = Rc::new(Cell::new(None::<taffy::style::Position>));
+    let author_width_shell = Rc::new(Cell::new(None::<taffy::style::Dimension>));
     shell = shell.reactive_sync(move |el, _lt: &mut LayoutTree| {
         apply_shell_stack_z(
             el,
@@ -1350,6 +1747,8 @@ fn assemble_draggable(
             list_sig,
             author_margin_shell.as_ref(),
             author_block_shell.as_ref(),
+            author_pos_shell.as_ref(),
+            author_width_shell.as_ref(),
         )
     });
     shell
@@ -1366,6 +1765,9 @@ pub struct DroppableBuilder {
     list: Option<String>,
     disabled: bool,
     opacity: Option<f32>,
+    /// Sortable insert / FLIP axis for this list. `None` inherits the provider.
+    direction: Option<Axis>,
+    dropzone: super::dropzone::DropzoneConfig,
 }
 
 pub fn droppable(id: impl Into<String>) -> DroppableBuilder {
@@ -1376,6 +1778,8 @@ pub fn droppable(id: impl Into<String>) -> DroppableBuilder {
         list: None,
         disabled: false,
         opacity: None,
+        direction: None,
+        dropzone: super::dropzone::DropzoneConfig::default(),
     }
 }
 
@@ -1400,6 +1804,76 @@ impl DroppableBuilder {
         self.opacity = Some(o.into_opacity());
         self
     }
+    /// List-level sortable axis. Overrides the provider for insert index / FLIP.
+    pub fn direction(mut self, direction: Axis) -> Self {
+        self.direction = Some(direction);
+        self
+    }
+    /// interact dropzone `overlap` (`pointer` / `center` / `0..1` ratio).
+    pub fn overlap(mut self, overlap: super::dropzone::DropOverlap) -> Self {
+        self.dropzone.overlap = overlap;
+        self
+    }
+    /// interact dropzone `checker` — veto when it returns `false`.
+    pub fn drop_checker(mut self, f: super::dropzone::DropCheckerFn) -> Self {
+        self.dropzone.checker = Some(f);
+        self
+    }
+    pub fn on_drop_activate(
+        mut self,
+        f: impl FnMut(&super::session::DragEvent) + 'static,
+    ) -> Self {
+        self.dropzone.hooks.on_activate = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    pub fn on_drop_deactivate(
+        mut self,
+        f: impl FnMut(&super::session::DragEvent) + 'static,
+    ) -> Self {
+        self.dropzone.hooks.on_deactivate = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    pub fn on_drag_enter(mut self, f: impl FnMut(&super::session::DragEvent) + 'static) -> Self {
+        self.dropzone.hooks.on_enter = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    pub fn on_drag_leave(mut self, f: impl FnMut(&super::session::DragEvent) + 'static) -> Self {
+        self.dropzone.hooks.on_leave = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    pub fn on_drop_move(mut self, f: impl FnMut(&super::session::DragEvent) + 'static) -> Self {
+        self.dropzone.hooks.on_move = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    pub fn on_drop(mut self, f: impl FnMut(&super::session::DragEvent) + 'static) -> Self {
+        self.dropzone.hooks.on_drop = Some(Rc::new(RefCell::new(f)));
+        self
+    }
+    /// RSX / pre-wrapped [`DropzoneHandler`] (same shape as [`DragHandler`]).
+    pub fn on_drop_activate_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_activate = Some(h);
+        self
+    }
+    pub fn on_drop_deactivate_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_deactivate = Some(h);
+        self
+    }
+    pub fn on_drag_enter_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_enter = Some(h);
+        self
+    }
+    pub fn on_drag_leave_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_leave = Some(h);
+        self
+    }
+    pub fn on_drop_move_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_move = Some(h);
+        self
+    }
+    pub fn on_drop_handler(mut self, h: super::dropzone::DropzoneHandler) -> Self {
+        self.dropzone.hooks.on_drop = Some(h);
+        self
+    }
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let ctx = require_drag("Droppable");
         assemble_droppable(ctx, self, body)
@@ -1413,6 +1887,7 @@ fn assemble_droppable(
 ) -> Element {
     let scope = ctx.id.clone();
     let id = cfg.id.clone();
+    super::dropzone::set_dropzone_config(&scope, &id, cfg.dropzone.clone());
     if is_cloning_overlay_ghost() {
         return wrap_fragment(body());
     }
@@ -1422,6 +1897,7 @@ fn assemble_droppable(
     let list = cfg.list.unwrap_or_else(|| id.clone());
     let disabled = cfg.disabled;
     let rest_opacity = cfg.opacity;
+    let direction = cfg.direction;
     let id_mark = id.clone();
     let scope_mark = scope.clone();
 
@@ -1452,12 +1928,36 @@ fn assemble_droppable(
         if disabled {
             el.set_attr(ATTR_DRAG_DISABLED, "1");
         }
+        if let Some(d) = direction {
+            el.set_attr(
+                ATTR_DRAG_AXIS,
+                match d.sort_axis() {
+                    Axis::X => "x",
+                    _ => "y",
+                },
+            );
+        }
+        register_drag_slot_meta(
+            &scope_mark,
+            &id_mark,
+            false,
+            true,
+            "",
+            &accept,
+            Some(list.as_str()),
+            None,
+            &group,
+            disabled,
+            direction.map(|d| d.sort_axis()),
+            super::registry::ItemFlags::default(),
+        );
         let author_z = el.style.z_index;
         let prev = el.reactive_sync.take();
         let id_chrome = id_mark.clone();
         let list_chrome = list.clone();
         let author_pad = Rc::new(Cell::new(None::<f32>));
         let author_margin = Rc::new(Cell::new(None::<f32>));
+        let author_pos = Rc::new(Cell::new(None::<taffy::style::Position>));
         el = el.reactive_sync(move |el, lt| {
             let mut st = prev
                 .as_ref()
@@ -1474,6 +1974,7 @@ fn assemble_droppable(
                 axis,
                 author_pad.as_ref(),
                 author_margin.as_ref(),
+                author_pos.as_ref(),
                 author_z,
             ));
             st
@@ -1560,6 +2061,18 @@ pub fn draggable_from_rsx(opts: DraggableRsxOpts, body: impl Fn() -> Element + '
     if let Some(restrict) = opts.restrict {
         b = b.restrict(restrict);
     }
+    if opts.skip_shift {
+        b = b.skip_shift(true);
+    }
+    if opts.skip_follow {
+        b = b.skip_follow(true);
+    }
+    if opts.pull_clone {
+        b = b.pull_clone(true);
+    }
+    if let Some(data) = opts.data {
+        b = b.data(data);
+    }
     b.stack(opts.stack).child(body)
 }
 
@@ -1577,6 +2090,10 @@ pub struct DraggableRsxOpts {
     pub source_opacity: Option<f32>,
     pub stack: DragStack,
     pub restrict: Option<Restrict>,
+    pub skip_shift: bool,
+    pub skip_follow: bool,
+    pub pull_clone: bool,
+    pub data: Option<Rc<dyn Any>>,
 }
 
 pub fn droppable_from_rsx(opts: DroppableRsxOpts, body: impl Fn() -> Element + 'static) -> Element {
@@ -1590,6 +2107,33 @@ pub fn droppable_from_rsx(opts: DroppableRsxOpts, body: impl Fn() -> Element + '
     if let Some(opacity) = opts.opacity {
         b = b.opacity(opacity);
     }
+    if let Some(direction) = opts.direction {
+        b = b.direction(direction);
+    }
+    if let Some(overlap) = opts.overlap {
+        b = b.overlap(overlap);
+    }
+    if let Some(checker) = opts.drop_checker {
+        b = b.drop_checker(checker);
+    }
+    if let Some(h) = opts.on_drop_activate {
+        b = b.on_drop_activate_handler(h);
+    }
+    if let Some(h) = opts.on_drop_deactivate {
+        b = b.on_drop_deactivate_handler(h);
+    }
+    if let Some(h) = opts.on_drag_enter {
+        b = b.on_drag_enter_handler(h);
+    }
+    if let Some(h) = opts.on_drag_leave {
+        b = b.on_drag_leave_handler(h);
+    }
+    if let Some(h) = opts.on_drop_move {
+        b = b.on_drop_move_handler(h);
+    }
+    if let Some(h) = opts.on_drop {
+        b = b.on_drop_handler(h);
+    }
     b.child(body)
 }
 
@@ -1600,6 +2144,15 @@ pub struct DroppableRsxOpts {
     pub list: Option<String>,
     pub disabled: bool,
     pub opacity: Option<f32>,
+    pub direction: Option<Axis>,
+    pub overlap: Option<DropOverlap>,
+    pub drop_checker: Option<DropCheckerFn>,
+    pub on_drop_activate: Option<DropzoneHandler>,
+    pub on_drop_deactivate: Option<DropzoneHandler>,
+    pub on_drag_enter: Option<DropzoneHandler>,
+    pub on_drag_leave: Option<DropzoneHandler>,
+    pub on_drop_move: Option<DropzoneHandler>,
+    pub on_drop: Option<DropzoneHandler>,
 }
 
 #[cfg(test)]

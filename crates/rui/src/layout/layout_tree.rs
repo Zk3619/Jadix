@@ -188,6 +188,11 @@ pub fn portal_hit_passthrough(el: &Element) -> bool {
 /// - Returns a non-zero “structure dirty” count when the portal tree changed (caller must
 ///   full-rebuild Taffy).
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
+    // Drag ghost `fixed` inset is paint chrome (`overlay_pos` is not an island
+    // dep). Apply before Taffy so a pointer tick does not remount the clone.
+    if crate::utils::drag::is_active() {
+        crate::utils::drag::overlay::sync_overlay_ghost_insets(root);
+    }
     let dirty = ensure_portal_layer(root);
 
     let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1731,9 +1736,14 @@ pub struct LayoutProfileMs {
 /// paint after every card rect and bleed through the top card.
 ///
 /// Bands are recorded when the parent opts in via `data-stacking-context=1`, **or** when any
-/// direct child has a non-zero `z-index`. Inside an already-marked portal overlay (Toast),
-/// the same z-stack appends to [`Self::bands`] instead — `page_stack_bands` end at the
-/// portal split and cannot cover overlay glyphs.
+/// direct child has a non-zero `z-index`. The **outermost** such parent splits every child
+/// (in-flow page + overlay scrollbar). A **nested** stacking-context (DragProvider under a
+/// Gallery ScrollArea) only opens a band for children that themselves stack — z-index,
+/// `data-stacking-context`, or absolute/fixed. Idle in-flow rows must share one band:
+/// one band per row reshapes every label while scrolling (`slow render text=150ms+`).
+/// Inside an already-marked portal overlay (Toast), the same z-stack appends to
+/// [`Self::bands`] instead — `page_stack_bands` end at the portal split and cannot cover
+/// overlay glyphs.
 #[derive(Clone, Debug, Default)]
 pub struct OverlayPaintSplit {
     pub instance_start: usize,
@@ -1773,6 +1783,18 @@ fn subtree_has_backdrop_blur(el: &Element) -> bool {
         return true;
     }
     el.children.iter().any(subtree_has_backdrop_blur)
+}
+
+/// Nested stacking-context children that form their own CSS stacking level.
+/// In-flow `z-index: auto` siblings share the parent's band (sortable rows).
+fn child_opens_page_stack_band(el: &Element) -> bool {
+    if el.style.z_index != 0
+        || el.style.position == taffy::style::Position::Absolute
+        || el.style.position_fixed
+    {
+        return true;
+    }
+    el.attrs.get("data-stacking-context").map(|s| s.as_str()) == Some("1")
 }
 
 /// Resolved `[start, end)` ranges for drawing one overlay band.
@@ -2452,6 +2474,8 @@ struct CollectWalk {
     pass_to_children: Option<String>,
     ancestor_scroll_viewport_rest: Option<String>,
     record_page_stack_bands: bool,
+    /// Nested stacking-context: only `child_opens_page_stack_band` children get a band.
+    stack_band_only_layered: bool,
     cap_children: bool,
     cap_inst0: usize,
     cap_tex0: usize,
@@ -3140,6 +3164,40 @@ impl LayoutTree {
             overlay_split.text_start = scratch.text_nodes.len();
             overlay_split.chrome_start = scratch.input_chrome_instances.len();
             overlay_split.paint_op_start = paint_rec.ops.len();
+        }
+
+        if crate::utils::drag::debug_drag_hits_enabled() {
+            let frames = crate::utils::drag::debug_frames_for_tree(root);
+            if !frames.is_empty() {
+                paint_rec.split_here();
+                let i0 = scratch.instances.len();
+                for frame in &frames {
+                    let stroke = frame.stroke();
+                    let style = if stroke.dashed { 3.0 } else { 1.0 };
+                    scratch.instances.push(InstanceInput {
+                        rect_pos: [frame.rect[0], frame.rect[1]],
+                        rect_size: [frame.rect[2], frame.rect[3]],
+                        color: stroke.fill,
+                        border_color: stroke.border,
+                        radii: [0.0; 4],
+                        border_width: stroke.width,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur: 0.0,
+                        shadow_spread: 0.0,
+                        shadow_inset: 0.0,
+                        transform: crate::style::MAT2D_IDENTITY,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        border_extra: InstanceInput::pack_border_extra(style, 0.0, 0.0),
+                        backdrop_blur: 0.0,
+                    });
+                }
+                paint_rec.push_rects(i0, scratch.instances.len() - i0);
+                while scratch.clip_polys.len() < scratch.instances.len() {
+                    scratch.clip_polys.push(crate::style::GpuClipPoly::NONE);
+                }
+            }
         }
 
         if let Some(g) = crate::utils::text_sel_move::ghost_paint() {
@@ -5243,6 +5301,11 @@ impl LayoutTree {
             && ((overlay_split.page_stack_depth == 0 && any_stacking)
                 || (overlay_split.page_stack_depth > 0 && stacking_attr)
                 || nested_backdrop_split);
+        // Outermost stack parent bands every child (page + overlay bar). Nested
+        // `data-stacking-context` (DragProvider under ScrollArea) must not turn
+        // each in-flow row into its own glyphon band.
+        let stack_band_only_layered =
+            record_page_stack_bands && overlay_split.page_stack_depth > 0;
         if record_page_stack_bands {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_add(1);
         }
@@ -5340,6 +5403,7 @@ impl LayoutTree {
             pass_to_children,
             ancestor_scroll_viewport_rest: ancestor_scroll_viewport_rest.map(str::to_string),
             record_page_stack_bands,
+            stack_band_only_layered,
             cap_children,
             cap_inst0,
             cap_tex0,
@@ -5395,6 +5459,8 @@ impl LayoutTree {
         paint_rec: &mut PaintRecorder,
     ) -> CollectChildJob {
         paint_rec.split_here();
+        let record_page_stack = walk.record_page_stack_bands
+            && (!walk.stack_band_only_layered || child_opens_page_stack_band(&element.children[i]));
         Self::collect_push_portal_band(
             overlay_split,
             instances,
@@ -5406,7 +5472,7 @@ impl LayoutTree {
             walk.opacity,
             walk.painted.is_body_portal_layer,
             walk.any_stacking,
-            walk.record_page_stack_bands,
+            record_page_stack,
         );
         let thumb_ov = if walk.painted.thumb_rect_for_child.is_some() {
             if element.children[i]
@@ -7938,6 +8004,46 @@ mod portal_hoist_tests {
         assert!(
             result.text_nodes.iter().any(|t| t.text == "inner-glyph"),
             "nested content glyphs must still collect"
+        );
+    }
+
+    #[test]
+    fn nested_stacking_context_does_not_band_each_in_flow_child() {
+        // DragProvider is a stacking-context whose body is often the sortable
+        // vstack itself. Under Gallery's ScrollArea (already page_stack_depth),
+        // banding every in-flow row reshapes labels on scroll.
+        const N: usize = 12;
+        let mut list = Element::new().w(200.0).relative();
+        list.set_attr("data-stacking-context", "1");
+        for i in 0..N {
+            list = list.child(Element::new().text(format!("row-{i}")).w(160.0).h(20.0));
+        }
+        let bar = Element::new()
+            .w(8.0)
+            .h(80.0)
+            .absolute()
+            .right(0.0)
+            .z_index(1000)
+            .bg([0.0, 0.0, 0.0, 0.4]);
+        let mut page = Element::new()
+            .w(240.0)
+            .h(280.0)
+            .relative()
+            .child(list)
+            .child(bar);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut page, 240.0, 280.0, [0.0, 0.0]);
+        let bands = result.overlay_split.page_stack_bands.len();
+        assert!(
+            bands <= 4,
+            "nested stacking-context must not open one band per in-flow row; bands={bands} rows={N}"
+        );
+        assert!(
+            (0..N).all(|i| result
+                .text_nodes
+                .iter()
+                .any(|t| t.text == format!("row-{i}"))),
+            "in-flow row glyphs must still collect"
         );
     }
 

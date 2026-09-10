@@ -1,5 +1,7 @@
 //! Layout rectangles and pointer-space helpers (solid-dnd `layout.ts`).
 
+use std::rc::Rc;
+
 /// Axis lock for a drag (interact.js `lockAxis` / Sortable `direction`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Axis {
@@ -7,6 +9,10 @@ pub enum Axis {
     Xy,
     X,
     Y,
+    /// First movement past the activation threshold picks X or Y, then locks
+    /// (interact.js `lockAxis: 'start'`). Sortable insert still uses
+    /// [`Self::sort_axis`] (`Y`) — motion lock is not list direction.
+    Start,
 }
 
 impl Axis {
@@ -14,7 +20,17 @@ impl Axis {
         match s.trim().to_ascii_lowercase().as_str() {
             "x" | "horizontal" => Self::X,
             "y" | "vertical" => Self::Y,
+            "start" | "lock-start" | "first" => Self::Start,
             _ => Self::Xy,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Xy => "xy",
+            Self::Start => "start",
         }
     }
 
@@ -22,7 +38,79 @@ impl Axis {
         match self {
             Self::X => (dx, 0.0),
             Self::Y => (0.0, dy),
-            Self::Xy => (dx, dy),
+            Self::Xy | Self::Start => (dx, dy),
+        }
+    }
+
+    /// Dominant axis of a displacement (ties break to `X`, like interact
+    /// `lockAxis: 'start'` taking `currentAxis[0]`).
+    pub fn resolve_start(dx: f32, dy: f32) -> Self {
+        if dx.abs() >= dy.abs() {
+            Self::X
+        } else {
+            Self::Y
+        }
+    }
+
+    /// interact.js `startAxis`: reject when movement has a **clear** dominant
+    /// axis that is not `self`. Equal `|dx|==|dy|` (`currentAxis === 'xy'`)
+    /// does not reject. `Xy` / `Start` accept any direction.
+    pub fn allows_start_move(self, dx: f32, dy: f32) -> bool {
+        match self {
+            Self::Xy | Self::Start => true,
+            Self::X | Self::Y => {
+                if (dx.abs() - dy.abs()).abs() < 1e-4 {
+                    true
+                } else {
+                    Self::resolve_start(dx, dy) == self
+                }
+            }
+        }
+    }
+
+    /// Sortable insert / FLIP axis. `Xy` and `Start` behave as `Y` (vertical lists).
+    pub fn sort_axis(self) -> Self {
+        match self {
+            Self::X => Self::X,
+            Self::Y | Self::Xy | Self::Start => Self::Y,
+        }
+    }
+}
+
+/// solid-dnd pointer sensor: delay **or** distance vs RUI default **and**.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Activation {
+    /// Distance **and** delay (current `tick`). Default.
+    #[default]
+    And,
+    /// Distance **or** delay (solid-dnd 250 ms / 10 px).
+    Or,
+}
+
+impl Activation {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "or" => Self::Or,
+            _ => Self::And,
+        }
+    }
+}
+
+/// Ghost origin vs the source box (solid-dnd overlay measure / center).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverlayAlign {
+    /// `origin = pointer - grab_offset` (item top-left follows the grab point).
+    #[default]
+    Grab,
+    /// Source-box center minus ghost half-size, then pointer delta.
+    Center,
+}
+
+impl OverlayAlign {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "center" => Self::Center,
+            _ => Self::Grab,
         }
     }
 }
@@ -165,14 +253,56 @@ impl From<String> for Restrict {
 }
 
 /// Optional snap-to-grid after axis lock (interact.js `snap`).
+///
+/// `range <= 0` always snaps (interact default `Infinity`). `end_only` skips
+/// the builtin during `tick` and applies once in [`super::session::end`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnapGrid {
     pub x: f32,
     pub y: f32,
     pub offset: [f32; 2],
+    /// Magnetic radius in pointer px. `0` = always snap.
+    pub range: f32,
+    /// Snap only when the session ends (interact `endOnly`).
+    pub end_only: bool,
+}
+
+impl Default for SnapGrid {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            offset: [0.0, 0.0],
+            range: 0.0,
+            end_only: false,
+        }
+    }
 }
 
 impl SnapGrid {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self {
+            x,
+            y,
+            ..Self::default()
+        }
+    }
+
+    pub fn offset(mut self, offset: [f32; 2]) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn range(mut self, range: f32) -> Self {
+        self.range = range.max(0.0);
+        self
+    }
+
+    pub fn end_only(mut self, yes: bool) -> Self {
+        self.end_only = yes;
+        self
+    }
+
     pub fn apply(self, x: f32, y: f32) -> [f32; 2] {
         let sx = if self.x.abs() < 1e-4 {
             x
@@ -184,7 +314,192 @@ impl SnapGrid {
         } else {
             ((y - self.offset[1]) / self.y).round() * self.y + self.offset[1]
         };
+        if self.range > 0.0 {
+            let dx = sx - x;
+            let dy = sy - y;
+            if (dx * dx + dy * dy).sqrt() > self.range {
+                return [x, y];
+            }
+        }
         [sx, sy]
+    }
+}
+
+/// interact.js `SnapFunction` — return a snap point or `None` to skip.
+pub type SnapPointFn = Rc<dyn Fn(f32, f32) -> Option<[f32; 2]>>;
+
+/// One entry in interact `snap.targets` (grid or function).
+#[derive(Clone)]
+pub enum SnapTarget {
+    Grid(SnapGrid),
+    Fn(SnapPointFn),
+}
+
+/// interact.js `snap.targets` — grids and/or functions; closest in-range snap wins.
+#[derive(Clone, Default)]
+pub struct SnapTargets {
+    pub targets: Vec<SnapTarget>,
+    /// Global magnetic radius when a grid's own `range` is `0` (`0` = always snap).
+    pub range: f32,
+    /// Skip builtin snap during `tick`; apply once in [`super::session::end`].
+    pub end_only: bool,
+}
+
+impl SnapTargets {
+    pub fn new(grids: impl Into<Vec<SnapGrid>>) -> Self {
+        Self {
+            targets: grids
+                .into()
+                .into_iter()
+                .map(SnapTarget::Grid)
+                .collect(),
+            range: 0.0,
+            end_only: false,
+        }
+    }
+
+    pub fn with_fn(mut self, f: SnapPointFn) -> Self {
+        self.targets.push(SnapTarget::Fn(f));
+        self
+    }
+
+    pub fn range(mut self, range: f32) -> Self {
+        self.range = range.max(0.0);
+        self
+    }
+
+    pub fn end_only(mut self, yes: bool) -> Self {
+        self.end_only = yes;
+        self
+    }
+
+    fn candidate_point(&self, target: &SnapTarget, x: f32, y: f32) -> Option<[f32; 2]> {
+        match target {
+            SnapTarget::Grid(grid) => {
+                let snapped = grid.apply(x, y);
+                if snapped == [x, y] && grid.range > 0.0 {
+                    None
+                } else {
+                    Some(snapped)
+                }
+            }
+            SnapTarget::Fn(f) => f(x, y),
+        }
+    }
+
+    fn target_range(&self, target: &SnapTarget) -> f32 {
+        match target {
+            SnapTarget::Grid(g) if g.range > 0.0 => g.range,
+            _ => self.range,
+        }
+    }
+
+    pub fn apply(&self, x: f32, y: f32) -> [f32; 2] {
+        if self.targets.is_empty() {
+            return [x, y];
+        }
+        let mut best_dist = f32::INFINITY;
+        let mut best = [x, y];
+        let mut found = false;
+        for target in &self.targets {
+            let Some(snapped) = self.candidate_point(target, x, y) else {
+                continue;
+            };
+            let dx = snapped[0] - x;
+            let dy = snapped[1] - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let range = self.target_range(target);
+            if range > 0.0 && dist > range {
+                continue;
+            }
+            found = true;
+            if dist < best_dist {
+                best_dist = dist;
+                best = snapped;
+            }
+        }
+        if found {
+            best
+        } else {
+            [x, y]
+        }
+    }
+}
+
+/// Single grid or interact-style multi-target snap.
+#[derive(Clone)]
+pub enum Snap {
+    Grid(SnapGrid),
+    Targets(SnapTargets),
+}
+
+impl Snap {
+    pub fn grid(grid: SnapGrid) -> Self {
+        Self::Grid(grid)
+    }
+
+    pub fn targets(targets: SnapTargets) -> Self {
+        Self::Targets(targets)
+    }
+
+    pub fn end_only(&self) -> bool {
+        match self {
+            Snap::Grid(g) => g.end_only,
+            Snap::Targets(t) => t.end_only,
+        }
+    }
+
+    pub fn apply(&self, x: f32, y: f32) -> [f32; 2] {
+        match self {
+            Snap::Grid(g) => g.apply(x, y),
+            Snap::Targets(t) => t.apply(x, y),
+        }
+    }
+}
+
+impl From<SnapGrid> for Snap {
+    fn from(grid: SnapGrid) -> Self {
+        Snap::Grid(grid)
+    }
+}
+
+/// Which part of the ghost must stay inside the restrict box (interact.js
+/// `elementRect`, 0–1 fractions of item size). Default is the full box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RestrictAnchor {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl RestrictAnchor {
+    /// Entire item inside the box (current clamp).
+    pub const FULL: Self = Self {
+        left: 0.0,
+        top: 0.0,
+        right: 1.0,
+        bottom: 1.0,
+    };
+    /// Only the center point must stay inside (interact `{0.5,0.5,0.5,0.5}`).
+    pub const CENTER: Self = Self {
+        left: 0.5,
+        top: 0.5,
+        right: 0.5,
+        bottom: 0.5,
+    };
+
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "center" | "centre" | "mid" => Self::CENTER,
+            _ => Self::FULL,
+        }
+    }
+}
+
+impl Default for RestrictAnchor {
+    fn default() -> Self {
+        Self::FULL
     }
 }
 
@@ -274,6 +589,26 @@ impl Rect {
         (self.width * self.height).max(0.0)
     }
 
+    /// interact dropzone `overlap` ratio: `intersection_area / self.area`.
+    pub fn overlap_fraction_in(self, zone: Self) -> f32 {
+        let left = self.left().max(zone.left());
+        let top = self.top().max(zone.top());
+        let right = self.right().min(zone.right());
+        let bottom = self.bottom().min(zone.bottom());
+        let w = right - left;
+        let h = bottom - top;
+        if w <= 0.0 || h <= 0.0 {
+            return 0.0;
+        }
+        let inter = w * h;
+        let area = self.area();
+        if area <= 1e-6 {
+            0.0
+        } else {
+            inter / area
+        }
+    }
+
     /// Jaccard intersection ratio used by solid-dnd `mostIntersecting`.
     pub fn intersection_ratio(self, other: Self) -> f32 {
         let left = self.left().max(other.left());
@@ -307,12 +642,28 @@ pub fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
 
 /// Clamp a ghost origin so `[origin, origin+size]` stays inside `box` (`[x,y,w,h]`).
 pub fn clamp_origin_to_box(origin: [f32; 2], size: [f32; 2], bbox: [f32; 4]) -> [f32; 2] {
-    let max_x = (bbox[0] + bbox[2] - size[0]).max(bbox[0]);
-    let max_y = (bbox[1] + bbox[3] - size[1]).max(bbox[1]);
-    [
-        origin[0].clamp(bbox[0], max_x),
-        origin[1].clamp(bbox[1], max_y),
-    ]
+    clamp_origin_to_box_anchor(origin, size, bbox, RestrictAnchor::FULL)
+}
+
+/// Like [`clamp_origin_to_box`], but only the [`RestrictAnchor`] fraction of the
+/// item must remain inside `bbox` (interact `elementRect`).
+pub fn clamp_origin_to_box_anchor(
+    origin: [f32; 2],
+    size: [f32; 2],
+    bbox: [f32; 4],
+    anchor: RestrictAnchor,
+) -> [f32; 2] {
+    let w = size[0].max(0.0);
+    let h = size[1].max(0.0);
+    let left = w * anchor.left.clamp(0.0, 1.0);
+    let top = h * anchor.top.clamp(0.0, 1.0);
+    let right = w * anchor.right.clamp(0.0, 1.0);
+    let bottom = h * anchor.bottom.clamp(0.0, 1.0);
+    let min_x = bbox[0] - left;
+    let max_x = (bbox[0] + bbox[2] - right).max(min_x);
+    let min_y = bbox[1] - top;
+    let max_y = (bbox[1] + bbox[3] - bottom).max(min_y);
+    [origin[0].clamp(min_x, max_x), origin[1].clamp(min_y, max_y)]
 }
 
 #[cfg(test)]
@@ -324,6 +675,15 @@ mod tests {
         assert_eq!(Axis::X.apply(3.0, 4.0), (3.0, 0.0));
         assert_eq!(Axis::Y.apply(3.0, 4.0), (0.0, 4.0));
         assert_eq!(Axis::Xy.apply(3.0, 4.0), (3.0, 4.0));
+        assert_eq!(Axis::Start.apply(3.0, 4.0), (3.0, 4.0));
+        assert_eq!(Axis::resolve_start(10.0, 3.0), Axis::X);
+        assert_eq!(Axis::resolve_start(3.0, 10.0), Axis::Y);
+        assert_eq!(Axis::resolve_start(5.0, 5.0), Axis::X);
+        assert!(Axis::X.allows_start_move(8.0, 1.0));
+        assert!(!Axis::X.allows_start_move(1.0, 8.0));
+        assert!(Axis::X.allows_start_move(5.0, 5.0));
+        assert_eq!(Axis::Start.sort_axis(), Axis::Y);
+        assert_eq!(Axis::parse("start"), Axis::Start);
     }
 
     #[test]
@@ -355,12 +715,51 @@ mod tests {
 
     #[test]
     fn snap_grid_rounds() {
-        let g = SnapGrid {
-            x: 10.0,
-            y: 10.0,
-            offset: [0.0, 0.0],
-        };
+        let g = SnapGrid::new(10.0, 10.0);
         assert_eq!(g.apply(14.0, 6.0), [10.0, 10.0]);
+    }
+
+    #[test]
+    fn snap_grid_range_skips_when_far() {
+        let g = SnapGrid::new(10.0, 10.0).range(2.0);
+        assert_eq!(g.apply(14.0, 10.0), [14.0, 10.0], "4px from 10 > range 2");
+        assert_eq!(g.apply(11.0, 10.0), [10.0, 10.0]);
+    }
+
+    #[test]
+    fn snap_targets_picks_closest_in_range_grid() {
+        let t = SnapTargets::new([
+            SnapGrid::new(8.0, 8.0),
+            SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]),
+        ])
+        .range(20.0);
+        assert_eq!(t.apply(10.0, 10.0), [8.0, 8.0]);
+        assert_eq!(t.apply(30.0, 30.0), [32.0, 32.0]);
+    }
+
+    #[test]
+    fn snap_targets_skips_when_all_out_of_range() {
+        let t = SnapTargets::new([SnapGrid::new(10.0, 10.0).range(2.0)]).range(2.0);
+        assert_eq!(t.apply(14.0, 10.0), [14.0, 10.0]);
+    }
+
+    #[test]
+    fn snap_fn_target_snaps_to_line() {
+        use std::rc::Rc;
+        let t = SnapTargets::default().with_fn(Rc::new(|x, _y| Some([x, 64.0])));
+        assert_eq!(t.apply(12.0, 70.0), [12.0, 64.0]);
+    }
+
+    #[test]
+    fn restrict_anchor_center_lets_origin_leave_box() {
+        let origin = clamp_origin_to_box_anchor(
+            [-10.0, -10.0],
+            [20.0, 20.0],
+            [0.0, 0.0, 100.0, 80.0],
+            RestrictAnchor::CENTER,
+        );
+        assert!((origin[0] + 10.0).abs() < 1e-3, "{origin:?}");
+        assert!((origin[1] + 10.0).abs() < 1e-3, "{origin:?}");
     }
 
     #[test]

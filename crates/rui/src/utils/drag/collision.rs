@@ -1,7 +1,26 @@
 //! Collision detectors from solid-dnd (`closestCenter` / `closestCorners` /
 //! `mostIntersecting`) plus dnd-kit `pointerWithin` for nested droppables.
 
+use std::rc::Rc;
+
 use super::geometry::{distance, Rect};
+
+/// Input for [`CollisionFn`] / [`detect_with`] (solid-dnd `CollisionDetector`).
+pub struct CollisionInput<'a> {
+    pub pointer: [f32; 2],
+    /// Ghost / source layout slot in pointer space.
+    pub dragged: Rect,
+    /// Already type/group filtered.
+    pub droppables: &'a [Candidate],
+    pub active_id: Option<&'a str>,
+    pub draggable_id: &'a str,
+    /// When true, skip [`refine_innermost_nested`] after the detector returns.
+    pub skip_innermost: bool,
+}
+
+/// Author collision detector (solid-dnd `CollisionDetector`). Prefer this over
+/// swapping [`CollisionAlg`] when the pick depends on payload / custom scoring.
+pub type CollisionFn = Rc<dyn for<'a> Fn(&CollisionInput<'a>) -> Option<String>>;
 
 /// Which algorithm picks the active droppable each move.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,21 +63,59 @@ pub fn detect(
     droppables: &[Candidate],
     active_id: Option<&str>,
 ) -> Option<String> {
-    if droppables.is_empty() {
+    detect_with(
+        alg,
+        None,
+        CollisionInput {
+            pointer,
+            dragged,
+            droppables,
+            active_id,
+            draggable_id: "",
+            skip_innermost: false,
+        },
+    )
+}
+
+/// [`detect`] plus an optional author [`CollisionFn`]. The function wins when
+/// set; [`CollisionAlg`] is the fallback. Innermost nested refine still runs
+/// unless [`CollisionInput::skip_innermost`].
+pub fn detect_with(
+    alg: CollisionAlg,
+    collision_fn: Option<&CollisionFn>,
+    input: CollisionInput<'_>,
+) -> Option<String> {
+    if input.droppables.is_empty() {
         return None;
     }
-    let picked = match alg {
-        CollisionAlg::MostIntersecting => most_intersecting(dragged, droppables, active_id),
-        CollisionAlg::ClosestCenter => closest_center(dragged, droppables, active_id),
-        CollisionAlg::ClosestCorners => closest_corners(dragged, droppables, active_id),
-        CollisionAlg::PointerWithin => pointer_within(pointer, droppables, active_id),
+    let picked = if let Some(f) = collision_fn {
+        f(&input)
+    } else {
+        match alg {
+            CollisionAlg::MostIntersecting => {
+                most_intersecting(input.dragged, input.droppables, input.active_id)
+            }
+            CollisionAlg::ClosestCenter => {
+                closest_center(input.dragged, input.droppables, input.active_id)
+            }
+            CollisionAlg::ClosestCorners => {
+                closest_corners(input.dragged, input.droppables, input.active_id)
+            }
+            CollisionAlg::PointerWithin => {
+                pointer_within(input.pointer, input.droppables, input.active_id)
+            }
+        }
     };
-    refine_innermost_nested(pointer, droppables, picked)
+    if input.skip_innermost {
+        picked
+    } else {
+        refine_innermost_nested(input.pointer, input.droppables, picked)
+    }
 }
 
 /// When the winner fully contains a smaller candidate that also contains the
 /// pointer, prefer the inner droppable (nested lists / folders).
-fn refine_innermost_nested(
+pub(crate) fn refine_innermost_nested(
     pointer: [f32; 2],
     droppables: &[Candidate],
     picked: Option<String>,
@@ -288,5 +345,64 @@ mod tests {
             Some("inner"),
             "large ghost overlap with the parent must not beat a nested droppable under the pointer"
         );
+    }
+
+    #[test]
+    fn collision_fn_overrides_enum_pick() {
+        let dragged = Rect::from_bounds([0.0, 0.0, 10.0, 10.0]);
+        let hits = vec![
+            c("near", [12.0, 0.0, 10.0, 10.0]),
+            c("far", [80.0, 80.0, 10.0, 10.0]),
+        ];
+        let f: CollisionFn = Rc::new(|input| Some(input.droppables[1].id.clone()));
+        let picked = detect_with(
+            CollisionAlg::ClosestCenter,
+            Some(&f),
+            CollisionInput {
+                pointer: [0.0, 0.0],
+                dragged,
+                droppables: &hits,
+                active_id: None,
+                draggable_id: "src",
+                skip_innermost: false,
+            },
+        );
+        assert_eq!(picked.as_deref(), Some("far"));
+    }
+
+    #[test]
+    fn collision_fn_still_refines_innermost() {
+        let dragged = Rect::from_bounds([10.0, 10.0, 80.0, 80.0]);
+        let hits = vec![
+            c("outer", [0.0, 0.0, 200.0, 200.0]),
+            c("inner", [20.0, 20.0, 40.0, 40.0]),
+        ];
+        let f: CollisionFn = Rc::new(|_| Some("outer".into()));
+        let picked = detect_with(
+            CollisionAlg::MostIntersecting,
+            Some(&f),
+            CollisionInput {
+                pointer: [30.0, 30.0],
+                dragged,
+                droppables: &hits,
+                active_id: None,
+                draggable_id: "src",
+                skip_innermost: false,
+            },
+        );
+        assert_eq!(picked.as_deref(), Some("inner"));
+        let skipped = detect_with(
+            CollisionAlg::MostIntersecting,
+            Some(&f),
+            CollisionInput {
+                pointer: [30.0, 30.0],
+                dragged,
+                droppables: &hits,
+                active_id: None,
+                draggable_id: "src",
+                skip_innermost: true,
+            },
+        );
+        assert_eq!(skipped.as_deref(), Some("outer"));
     }
 }

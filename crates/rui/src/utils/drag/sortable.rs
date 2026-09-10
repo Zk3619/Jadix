@@ -6,6 +6,9 @@
 //! [`SORTABLE_FLIP_MS`] when the provider `animation` is on (SortableJS
 //! `animation`; `false` snaps).
 
+use std::any::Any;
+use std::rc::Rc;
+
 use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
@@ -54,7 +57,7 @@ pub fn sortable_shift(
     };
     match axis {
         Axis::X => [delta, 0.0],
-        Axis::Y | Axis::Xy => [0.0, delta],
+        Axis::Y | Axis::Xy | Axis::Start => [0.0, delta],
     }
 }
 
@@ -75,14 +78,15 @@ pub fn sortable_source_to_hole(
     let delta = (hover as i32 - from as i32) as f32 * item_extent;
     match axis {
         Axis::X => [delta, 0.0],
-        Axis::Y | Axis::Xy => [0.0, delta],
+        Axis::Y | Axis::Xy | Axis::Start => [0.0, delta],
     }
 }
 
 /// Live gap for same-list reorder **and** cross-list transfer.
 ///
-/// Source list items after `from` close the hole; target list items at/after
-/// `hover` open a slot. Same-list defers to [`sortable_shift`].
+/// Same-list defers to [`sortable_shift`]. Cross-list: origin siblings stay
+/// put (the source shell has left the pack); target items at/after `hover`
+/// open a slot.
 pub fn sortable_preview(
     from_list: Option<&str>,
     from_index: Option<usize>,
@@ -110,11 +114,8 @@ pub fn sortable_preview(
         return [0.0, 0.0];
     }
     let delta = if from_list == Some(my_list) {
-        if my_i > from_index.unwrap_or(my_i) {
-            -item_extent
-        } else {
-            0.0
-        }
+        // Source leaves the pack on cross-list; origin siblings reflow in layout.
+        0.0
     } else if hover_list == my_list {
         match hover_index {
             Some(hover) if my_i >= hover => item_extent,
@@ -126,7 +127,7 @@ pub fn sortable_preview(
     };
     match axis {
         Axis::X => [delta, 0.0],
-        Axis::Y | Axis::Xy => [0.0, delta],
+        Axis::Y | Axis::Xy | Axis::Start => [0.0, delta],
     }
 }
 
@@ -142,7 +143,11 @@ pub fn apply_transfer<T>(from: &mut Vec<T>, to: &mut Vec<T>, from_index: usize, 
 }
 
 /// Apply a drop onto either the same list or a second list.
-pub fn apply_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
+pub fn apply_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
+    if ev.pull_clone {
+        apply_clone_event(from, to, ev);
+        return;
+    }
     let Some(from_index) = ev.from_index else {
         return;
     };
@@ -153,17 +158,39 @@ pub fn apply_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent
     }
 }
 
+/// SortableJS `pull: 'clone'` — insert a copy without removing the source.
+pub fn apply_clone_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
+    let Some(from_index) = ev.from_index else {
+        return;
+    };
+    let Some(item) = from.get(from_index).cloned() else {
+        return;
+    };
+    let to_index = ev.to_index.unwrap_or(from.len());
+    match to {
+        None => {
+            from.insert(to_index.min(from.len()), item);
+        }
+        Some(dest) if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() => {
+            from.insert(to_index.min(from.len()), item);
+        }
+        Some(dest) => {
+            dest.insert(to_index.min(dest.len()), item);
+        }
+    }
+}
+
 /// Container droppable wrapping a sortable list (SortableJS root).
 pub struct SortableListBuilder {
     inner: DroppableBuilder,
-    direction: Axis,
+    direction: Option<Axis>,
 }
 
 pub fn sortable_list(id: impl Into<String>) -> SortableListBuilder {
     let id = id.into();
     SortableListBuilder {
         inner: droppable(id.clone()).list(id),
-        direction: Axis::Y,
+        direction: None,
     }
 }
 
@@ -181,7 +208,7 @@ impl SortableListBuilder {
         self
     }
     pub fn direction(mut self, direction: Axis) -> Self {
-        self.direction = direction;
+        self.direction = Some(direction);
         self
     }
     pub fn disabled(mut self, yes: bool) -> Self {
@@ -189,8 +216,12 @@ impl SortableListBuilder {
         self
     }
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
-        let _ = self.direction;
-        self.inner.child(body)
+        let inner = if let Some(d) = self.direction {
+            self.inner.direction(d)
+        } else {
+            self.inner
+        };
+        inner.child(body)
     }
 }
 
@@ -208,6 +239,10 @@ pub struct SortableItemBuilder {
     source_opacity: Option<f32>,
     stack: DragStack,
     restrict: Option<Restrict>,
+    skip_shift: bool,
+    skip_follow: bool,
+    pull_clone: bool,
+    data: Option<Rc<dyn Any>>,
 }
 
 pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
@@ -224,6 +259,10 @@ pub fn sortable_item(id: impl Into<String>) -> SortableItemBuilder {
         source_opacity: None,
         stack: DragStack::Auto,
         restrict: None,
+        skip_shift: false,
+        skip_follow: false,
+        pull_clone: false,
+        data: None,
     }
 }
 
@@ -278,6 +317,22 @@ impl SortableItemBuilder {
         self.restrict = Some(restrict.into());
         self
     }
+    pub fn skip_shift(mut self, yes: bool) -> Self {
+        self.skip_shift = yes;
+        self
+    }
+    pub fn skip_follow(mut self, yes: bool) -> Self {
+        self.skip_follow = yes;
+        self
+    }
+    pub fn pull_clone(mut self, yes: bool) -> Self {
+        self.pull_clone = yes;
+        self
+    }
+    pub fn data(mut self, payload: Rc<dyn Any>) -> Self {
+        self.data = Some(payload);
+        self
+    }
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         let list = if self.list.is_empty() {
             self.id.clone()
@@ -293,7 +348,13 @@ impl SortableItemBuilder {
             .disabled(self.disabled)
             .handle_only(self.handle_only)
             .also_droppable(true)
-            .stack(self.stack);
+            .stack(self.stack)
+            .skip_shift(self.skip_shift)
+            .skip_follow(self.skip_follow)
+            .pull_clone(self.pull_clone);
+        if let Some(d) = self.data {
+            b = b.data(d);
+        }
         if let Some(r) = self.restrict {
             b = b.restrict(r);
         }
@@ -361,7 +422,8 @@ mod tests {
                 Axis::Y,
                 None
             ),
-            [0.0, -10.0]
+            [0.0, 0.0],
+            "cross-list origin sibling stays put; source already left the pack"
         );
         assert_eq!(
             sortable_preview(
@@ -400,5 +462,50 @@ mod tests {
         apply_transfer(&mut a, &mut b, 1, 0);
         assert_eq!(a, vec!["a", "c"]);
         assert_eq!(b, vec!["b", "x"]);
+    }
+
+    #[test]
+    fn clone_event_inserts_without_remove() {
+        use crate::utils::drag::{DragEvent, DragPhase};
+        let mut items = vec!["a", "b", "c"];
+        let ev = DragEvent {
+            scope_id: "s".into(),
+            draggable_id: "a".into(),
+            droppable_id: None,
+            from_list: Some("list".into()),
+            from_index: Some(0),
+            to_list: Some("list".into()),
+            to_index: Some(2),
+            pointer: [0.0, 0.0],
+            delta: [0.0, 0.0],
+            phase: DragPhase::Active,
+            pull_clone: true,
+            data: None,
+        };
+        apply_clone_event(&mut items, None, &ev);
+        assert_eq!(items, vec!["a", "b", "a", "c"]);
+        assert_eq!(items.len(), 4);
+    }
+
+    #[test]
+    fn apply_event_routes_clone() {
+        use crate::utils::drag::{DragEvent, DragPhase};
+        let mut items = vec![1, 2, 3];
+        let ev = DragEvent {
+            scope_id: "s".into(),
+            draggable_id: "1".into(),
+            droppable_id: None,
+            from_list: Some("l".into()),
+            from_index: Some(0),
+            to_list: Some("l".into()),
+            to_index: Some(1),
+            pointer: [0.0, 0.0],
+            delta: [0.0, 0.0],
+            phase: DragPhase::Active,
+            pull_clone: true,
+            data: None,
+        };
+        apply_event(&mut items, None, &ev);
+        assert_eq!(items, vec![1, 1, 2, 3]);
     }
 }

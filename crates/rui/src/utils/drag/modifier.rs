@@ -10,7 +10,9 @@
 
 use std::rc::Rc;
 
-use super::geometry::{clamp_origin_to_box, Axis, Rect, Restrict, SnapGrid};
+use super::geometry::{
+    clamp_origin_to_box_anchor, Axis, Rect, Restrict, RestrictAnchor, Snap, SnapGrid,
+};
 
 /// [`builtin_modifiers`] axis lock (interact.js `lockAxis`).
 pub const MODIFIER_ORDER_AXIS: i32 = 10;
@@ -39,10 +41,15 @@ pub struct DragModifierCtx {
     pub start_bounds: [f32; 4],
     pub viewport: [f32; 2],
     pub axis: Axis,
-    pub snap: Option<SnapGrid>,
+    pub snap: Option<Snap>,
     pub restrict: Restrict,
     /// Current source layout slot (scroll-adjusted). Used by pin-locked-axis.
     pub live_slot: Option<Rect>,
+    /// `true` only while [`super::session::end`] re-runs the pipeline for
+    /// `end_only` snap / restrict.
+    pub at_end: bool,
+    pub restrict_end_only: bool,
+    pub restrict_anchor: RestrictAnchor,
 }
 
 impl DragModifierCtx {
@@ -112,14 +119,17 @@ pub fn builtin_modifiers() -> Vec<DragModifier> {
             DragDelta { x, y }
         }),
         DragModifier::new("snap", MODIFIER_ORDER_SNAP, |t, ctx| {
-            let Some(snap) = ctx.snap else {
+            let Some(snap) = ctx.snap.as_ref() else {
                 return t;
             };
+            if snap.end_only() && !ctx.at_end {
+                return t;
+            }
             let o = ctx.origin_of(t);
             ctx.from_origin(snap.apply(o[0], o[1]))
         }),
         DragModifier::new("pin-locked-axis", MODIFIER_ORDER_PIN_AXIS, |t, ctx| {
-            if ctx.axis == Axis::Xy {
+            if matches!(ctx.axis, Axis::Xy | Axis::Start) {
                 return t;
             }
             let Some(slot) = ctx.live_slot else {
@@ -129,21 +139,27 @@ pub fn builtin_modifiers() -> Vec<DragModifier> {
             match ctx.axis {
                 Axis::Y => o[0] = slot.x,
                 Axis::X => o[1] = slot.y,
-                Axis::Xy => {}
+                Axis::Xy | Axis::Start => {}
             }
             ctx.from_origin(o)
         }),
         DragModifier::new("restrict", MODIFIER_ORDER_RESTRICT, |t, ctx| {
+            if ctx.restrict_end_only && !ctx.at_end {
+                return t;
+            }
             let origin = ctx.origin_of(t);
             let size = ctx.item_size();
             let clamped = match &ctx.restrict {
                 Restrict::None => return t,
-                Restrict::Viewport => clamp_origin_to_box(
+                Restrict::Viewport => clamp_origin_to_box_anchor(
                     origin,
                     size,
                     [0.0, 0.0, ctx.viewport[0].max(1.0), ctx.viewport[1].max(1.0)],
+                    ctx.restrict_anchor,
                 ),
-                Restrict::Rect(r) => clamp_origin_to_box(origin, size, *r),
+                Restrict::Rect(r) => {
+                    clamp_origin_to_box_anchor(origin, size, *r, ctx.restrict_anchor)
+                }
                 // `ghost_origin` resolves Parent / Element → Rect before this stage.
                 Restrict::Parent | Restrict::Element(_) => return t,
             };
@@ -167,6 +183,9 @@ mod tests {
             snap: None,
             restrict: Restrict::None,
             live_slot: None,
+            at_end: false,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
         }
     }
 
@@ -217,11 +236,7 @@ mod tests {
     #[test]
     fn snap_and_restrict_match_legacy_origin_math() {
         let mut ctx = ctx_xy();
-        ctx.snap = Some(SnapGrid {
-            x: 10.0,
-            y: 10.0,
-            offset: [0.0, 0.0],
-        });
+        ctx.snap = Some(Snap::grid(SnapGrid::new(10.0, 10.0)));
         ctx.restrict = Restrict::Viewport;
         ctx.start_bounds = [0.0, 0.0, 50.0, 50.0];
         ctx.viewport = [100.0, 80.0];
@@ -232,5 +247,34 @@ mod tests {
         assert!((origin[1] - 30.0).abs() < 1e-3, "{origin:?}");
         assert!(origin[0] + 50.0 <= 100.0 + 1e-3);
         assert!(origin[1] + 50.0 <= 80.0 + 1e-3);
+    }
+
+    #[test]
+    fn snap_end_only_skips_until_at_end() {
+        let mut ctx = ctx_xy();
+        ctx.snap = Some(Snap::grid(SnapGrid::new(10.0, 10.0).end_only(true)));
+        let t = apply_modifiers(DragDelta { x: 13.0, y: 0.0 }, &builtin_modifiers(), &ctx);
+        let o = ctx.origin_of(t);
+        assert!((o[0] - 23.0).abs() < 1e-3, "tick must not snap; {o:?}");
+        ctx.at_end = true;
+        let t = apply_modifiers(DragDelta { x: 13.0, y: 0.0 }, &builtin_modifiers(), &ctx);
+        let o = ctx.origin_of(t);
+        assert!((o[0] - 20.0).abs() < 1e-3, "end must snap; {o:?}");
+    }
+
+    #[test]
+    fn restrict_anchor_center_in_pipeline() {
+        let mut ctx = ctx_xy();
+        ctx.restrict = Restrict::Rect([0.0, 0.0, 100.0, 80.0]);
+        ctx.restrict_anchor = RestrictAnchor::CENTER;
+        ctx.start_bounds = [0.0, 0.0, 20.0, 20.0];
+        ctx.start_pointer = [10.0, 10.0];
+        ctx.grab_offset = [10.0, 10.0];
+        let t = apply_modifiers(DragDelta { x: -40.0, y: -40.0 }, &builtin_modifiers(), &ctx);
+        let o = ctx.origin_of(t);
+        assert!(
+            (o[0] + 10.0).abs() < 1e-3 && (o[1] + 10.0).abs() < 1e-3,
+            "center may sit on the box edge; origin {o:?}"
+        );
     }
 }

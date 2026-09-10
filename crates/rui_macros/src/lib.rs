@@ -219,6 +219,7 @@ fn is_boolish_attr(name: &str) -> bool {
             | "scroll_anchor"
             | "scrollAnchor"
             | "clickable"
+            | "inertia"
     )
 }
 
@@ -2098,6 +2099,18 @@ fn expand_node(
                         .or_else(|| get_attr("direction"))
                         .map(|e| quote! { (#e).to_string() })
                         .unwrap_or_else(|| quote! { "xy".to_string() });
+                    let start_axis = get_attr("start_axis")
+                        .or_else(|| get_attr("startAxis"))
+                        .map(|e| quote! { rui::utils::drag::Axis::parse(&(#e)) })
+                        .unwrap_or_else(|| quote! { rui::utils::drag::Axis::Xy });
+                    let restrict_end_only = get_attr("restrict_end_only")
+                        .or_else(|| get_attr("restrictEndOnly"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let restrict_anchor = get_attr("restrict_anchor")
+                        .or_else(|| get_attr("restrictAnchor"))
+                        .map(|e| quote! { rui::utils::drag::RestrictAnchor::parse(&(#e)) })
+                        .unwrap_or_else(|| quote! { rui::utils::drag::RestrictAnchor::FULL });
                     let threshold = get_attr("threshold")
                         .map(|e| quote_unitless_f32(e))
                         .unwrap_or_else(|| quote! { 4.0f32 });
@@ -2108,6 +2121,9 @@ fn expand_node(
                         .or_else(|| get_attr("delayMs"))
                         .map(|e| quote_unitless_f32(e))
                         .unwrap_or_else(|| quote! { 0.0f32 });
+                    let activation = get_attr("activation")
+                        .map(|e| quote! { rui::utils::drag::Activation::parse(&(#e)) })
+                        .unwrap_or_else(|| quote! { rui::utils::drag::Activation::And });
                     let empty_insert = get_attr("empty_insert")
                         .or_else(|| get_attr("emptyInsert"))
                         .map(|e| quote_unitless_f32(e))
@@ -2115,6 +2131,9 @@ fn expand_node(
                     let autoscroll = get_attr("autoscroll")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
+                    let scroll_sensitivity = get_attr("scroll_sensitivity")
+                        .or_else(|| get_attr("scrollSensitivity"));
+                    let scroll_speed = get_attr("scroll_speed").or_else(|| get_attr("scrollSpeed"));
                     let scroll_lock = get_attr("scroll_lock")
                         .or_else(|| get_attr("scrollLock"))
                         .map(|e| quote! { (#e).to_string() })
@@ -2136,11 +2155,28 @@ fn expand_node(
                     let animation = get_attr("animation")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
+                    let debug_hits = get_attr("debug_hits")
+                        .or_else(|| get_attr("debugHits"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let inertia = get_attr("inertia")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
                     let on_end = get_attr("on_drag_end").or_else(|| get_attr("onDragEnd"));
                     let on_start = get_attr("on_drag_start").or_else(|| get_attr("onDragStart"));
                     let on_over = get_attr("on_drag_over").or_else(|| get_attr("onDragOver"));
                     let on_move = get_attr("on_drag_move").or_else(|| get_attr("onDragMove"));
                     let can_drop = get_attr("can_drop").or_else(|| get_attr("canDrop"));
+                    let sensor_id = get_attr("sensor_id")
+                        .or_else(|| get_attr("sensorId"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "sensor".to_string() });
+                    let sensor_fn = get_attr("sensor");
+                    let sensor_ts = if let Some(f) = sensor_fn {
+                        quote! { __b = __b.sensor(#sensor_id, #f); }
+                    } else {
+                        quote! {}
+                    };
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -2194,23 +2230,63 @@ fn expand_node(
                     } else {
                         quote! {}
                     };
+                    let snap = get_attr("snap");
+                    let snap_targets = get_attr("snap_targets").or_else(|| get_attr("snapTargets"));
+                    let snap_fn = get_attr("snap_fn").or_else(|| get_attr("snapFn"));
+                    let snap_ts = if let Some(s) = snap {
+                        quote! { __b = __b.snap(#s); }
+                    } else {
+                        quote! {}
+                    };
+                    let snap_targets_ts = if let Some(t) = snap_targets {
+                        quote! { __b = __b.snap_targets(#t); }
+                    } else {
+                        quote! {}
+                    };
+                    let snap_fn_ts = if let Some(f) = snap_fn {
+                        quote! { __b = __b.snap_fn(#f); }
+                    } else {
+                        quote! {}
+                    };
+                    let scroll_sensitivity_ts = if let Some(v) = scroll_sensitivity {
+                        quote! { __b = __b.scroll_sensitivity(#v); }
+                    } else {
+                        quote! {}
+                    };
+                    let scroll_speed_ts = if let Some(v) = scroll_speed {
+                        quote! { __b = __b.scroll_speed(#v); }
+                    } else {
+                        quote! {}
+                    };
                     return quote! {
                         {
                             let mut __b = rui::utils::drag::drag_scope(#id_ts);
                             __b = __b.collision(rui::utils::drag::CollisionAlg::parse(&(#collision)));
                             __b = __b.axis(rui::utils::drag::Axis::parse(&(#axis)));
+                            __b = __b.start_axis(#start_axis);
                             __b = __b.threshold(#threshold);
                             __b = __b.restrict(rui::utils::drag::Restrict::parse(&(#restrict)));
+                            __b = __b.restrict_end_only(#restrict_end_only);
+                            __b = __b.restrict_anchor(#restrict_anchor);
                             __b = __b.delay_ms(#delay_ms);
+                            __b = __b.activation(#activation);
                             __b = __b.empty_insert(#empty_insert);
                             __b = __b.autoscroll(#autoscroll);
+                            #scroll_sensitivity_ts
+                            #scroll_speed_ts
                             __b = __b.scroll_lock(rui::utils::drag::ScrollLock::parse(&(#scroll_lock)));
                             __b = __b.animation(#animation);
+                            __b = __b.debug_hits(#debug_hits);
+                            __b = __b.inertia(#inertia);
+                            #snap_ts
+                            #snap_targets_ts
+                            #snap_fn_ts
                             #on_start_ts
                             #on_over_ts
                             #on_move_ts
                             #on_end_ts
                             #can_drop_ts
+                            #sensor_ts
                             __b.child(|| #child_el)
                         }
                     };
@@ -4550,6 +4626,21 @@ fn expand_node(
                             quote! { Some(rui::utils::drag::Restrict::parse(&(#e).to_string())) }
                         })
                         .unwrap_or_else(|| quote! { None });
+                    let skip_shift = get_attr("skip_shift")
+                        .or_else(|| get_attr("skipShift"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let skip_follow = get_attr("skip_follow")
+                        .or_else(|| get_attr("skipFollow"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let pull_clone = get_attr("pull_clone")
+                        .or_else(|| get_attr("pullClone"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let data = get_attr("data")
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -4599,6 +4690,10 @@ fn expand_node(
                                 source_opacity: #source_opacity,
                                 stack: #stack,
                                 restrict: #restrict,
+                                skip_shift: #skip_shift,
+                                skip_follow: #skip_follow,
+                                pull_clone: #pull_clone,
+                                data: #data,
                             },
                             move || #child_el,
                         )
@@ -4613,27 +4708,95 @@ fn expand_node(
                     let group = get_attr("group")
                         .map(|e| quote! { (#e).to_string() })
                         .unwrap_or_else(|| quote! { String::new() });
-                    let list = get_attr("list")
-                        .map(|e| quote! { Some((#e).to_string()) })
-                        .unwrap_or_else(|| {
-                            if name_str == "SortableList" {
-                                if let Some(id) = get_attr("id") {
-                                    quote! { Some((#id).to_string()) }
-                                } else {
-                                    quote! { None }
-                                }
-                            } else {
-                                quote! { None }
-                            }
-                        });
                     let disabled = get_attr("disabled")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
-                    let opacity = get_attr("opacity")
-                        .map(|e| {
-                            quote! { Some(rui::core::tree::IntoOpacity::into_opacity(#e)) }
-                        })
-                        .unwrap_or_else(|| quote! { None });
+                    let overlap_attr = get_attr("overlap");
+                    let overlap_ts = if let Some(e) = overlap_attr {
+                        quote! {
+                            __db = __db.overlap(
+                                rui::utils::drag::DropOverlap::parse(&(#e).to_string()),
+                            );
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    let drop_checker = get_attr("drop_checker").or_else(|| get_attr("dropChecker"));
+                    let on_drop_activate = get_attr("on_drop_activate")
+                        .or_else(|| get_attr("onDropActivate"));
+                    let on_drop_deactivate = get_attr("on_drop_deactivate")
+                        .or_else(|| get_attr("onDropDeactivate"));
+                    let on_drag_enter = get_attr("on_drag_enter")
+                        .or_else(|| get_attr("onDragEnter"));
+                    let on_drag_leave = get_attr("on_drag_leave")
+                        .or_else(|| get_attr("onDragLeave"));
+                    let on_drop_move = get_attr("on_drop_move").or_else(|| get_attr("onDropMove"));
+                    let on_drop = get_attr("on_drop").or_else(|| get_attr("onDrop"));
+                    let drop_checker_ts = if let Some(f) = drop_checker {
+                        quote! { __db = __db.drop_checker(std::rc::Rc::new(#f)); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drop_activate_ts = if let Some(h) = on_drop_activate {
+                        quote! { __db = __db.on_drop_activate(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drop_deactivate_ts = if let Some(h) = on_drop_deactivate {
+                        quote! { __db = __db.on_drop_deactivate(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drag_enter_ts = if let Some(h) = on_drag_enter {
+                        quote! { __db = __db.on_drag_enter(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drag_leave_ts = if let Some(h) = on_drag_leave {
+                        quote! { __db = __db.on_drag_leave(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drop_move_ts = if let Some(h) = on_drop_move {
+                        quote! { __db = __db.on_drop_move(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let on_drop_ts = if let Some(h) = on_drop {
+                        quote! { __db = __db.on_drop(#h); }
+                    } else {
+                        quote! {}
+                    };
+                    let list_attr = get_attr("list");
+                    let list_ts = if let Some(e) = list_attr {
+                        quote! { __db = __db.list((#e).to_string()); }
+                    } else if name_str == "SortableList" {
+                        if let Some(id) = get_attr("id") {
+                            quote! { __db = __db.list((#id).to_string()); }
+                        } else {
+                            quote! {}
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    let opacity_attr = get_attr("opacity");
+                    let opacity_ts = if let Some(e) = opacity_attr {
+                        quote! {
+                            __db = __db.opacity(
+                                rui::core::tree::IntoOpacity::into_opacity(#e),
+                            );
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    let direction_attr = get_attr("direction");
+                    let direction_ts = if let Some(e) = direction_attr {
+                        quote! {
+                            __db = __db.direction(rui::utils::drag::Axis::parse(&(#e)));
+                        }
+                    } else {
+                        quote! {}
+                    };
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -4663,17 +4826,24 @@ fn expand_node(
                         quote! { format!("{}:{}:{}#{}", file!(), line!(), #name_str, #idx) }
                     };
                     return quote! {
-                        rui::utils::drag::droppable_from_rsx(
-                            rui::utils::drag::DroppableRsxOpts {
-                                id: #id_ts,
-                                accept: #accept,
-                                group: #group,
-                                list: #list,
-                                disabled: #disabled,
-                                opacity: #opacity,
-                            },
-                            move || #child_el,
-                        )
+                        {
+                            let mut __db = rui::utils::drag::droppable(#id_ts)
+                                .accept(#accept)
+                                .group(#group)
+                                .disabled(#disabled);
+                            #list_ts
+                            #opacity_ts
+                            #direction_ts
+                            #overlap_ts
+                            #drop_checker_ts
+                            #on_drop_activate_ts
+                            #on_drop_deactivate_ts
+                            #on_drag_enter_ts
+                            #on_drag_leave_ts
+                            #on_drop_move_ts
+                            #on_drop_ts
+                            __db.child(move || #child_el)
+                        }
                     };
                 }
 
@@ -4769,12 +4939,18 @@ fn expand_node(
                     } else {
                         quote! {}
                     };
+                    let align_ts = if let Some(v) = get_attr("align") {
+                        quote! { .align(rui::utils::drag::OverlayAlign::parse(&(#v))) }
+                    } else {
+                        quote! {}
+                    };
                     return quote! {
                         rui::core::tree::Element::from(
                             rui::utils::drag::drag_overlay()
                                 #child_ts
                                 #style_ts
                                 #source_opacity_ts
+                                #align_ts
                         )
                     };
                 }
@@ -9165,9 +9341,28 @@ mod rsx_lowering_tests {
         let s = expand(
             r#"<DragProvider id="p"><Droppable id="z" accept="card"><Label>"z"</Label></Droppable><DragOverlay><Label>"g"</Label></DragOverlay></DragProvider>"#,
         );
-        assert!(s.contains("droppable_from_rsx"), "{s}");
+        assert!(s.contains("droppable"), "{s}");
         assert!(s.contains("drag_overlay"), "{s}");
         assert!(s.contains("child"), "{s}");
+    }
+
+    #[test]
+    fn droppable_overlap_and_hooks_emit_builder_chain() {
+        let s = expand(
+            r#"<DragProvider id="p"><Droppable id="z" accept="card" overlap="center" onDragEnter={on_ent} onDrop={on_dp}></Droppable></DragProvider>"#,
+        );
+        assert!(s.contains("DropOverlap"), "{s}");
+        assert!(s.contains("on_drag_enter"), "{s}");
+        assert!(s.contains("on_drop"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_snap_fn_emits_builder() {
+        let s = expand(r#"<DragProvider id="p" snap_fn={f} snap={g} snap_targets={t}></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("snap_fn"), "{s}");
+        assert!(compact.contains("snap_targets"), "{s}");
+        assert!(compact.contains(".snap(g)"), "{s}");
     }
 
     #[test]
@@ -9303,10 +9498,81 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn drag_provider_emits_scroll_sensitivity_and_speed() {
+        let s = expand(
+            r#"<DragProvider id="p" scroll_sensitivity={30} scroll_speed={12}></DragProvider>"#,
+        );
+        assert!(s.contains("scroll_sensitivity"), "{s}");
+        assert!(s.contains("scroll_speed"), "{s}");
+        let camel = expand(
+            r#"<DragProvider id="p" scrollSensitivity={28} scrollSpeed={10}></DragProvider>"#,
+        );
+        assert!(camel.contains("scroll_sensitivity"), "{camel}");
+        assert!(camel.contains("scroll_speed"), "{camel}");
+    }
+
+    #[test]
+    fn drag_provider_emits_debug_hits() {
+        let s = expand(r#"<DragProvider id="p" debug_hits={true}></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("debug_hits(true)"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_inertia() {
+        let s = expand(r#"<DragProvider id="p" inertia={true}></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("inertia(true)"), "{s}");
+    }
+
+    #[test]
     fn sortable_list_defaults_list_to_id() {
         let s = expand(r#"<SortableList id="todo"><Label>"x"</Label></SortableList>"#);
-        assert!(s.contains("droppable_from_rsx"), "{s}");
-        assert!(s.contains("todo"), "{s}");
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("droppable"), "{s}");
+        assert!(compact.contains(".list("), "{s}");
+    }
+
+    #[test]
+    fn sortable_list_emits_direction() {
+        let s = expand(r#"<SortableList id="todo" direction="x"><Label>"x"</Label></SortableList>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("Axis::parse"), "{s}");
+        assert!(compact.contains("direction"), "{s}");
+    }
+
+    #[test]
+    fn drag_overlay_emits_align() {
+        let s = expand(r#"<DragOverlay align="center" />"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("OverlayAlign::parse"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_activation() {
+        let s = expand(r#"<DragProvider id="p" activation="or"></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("Activation::parse"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_sensor() {
+        let s = expand(
+            r#"<DragProvider id="p" sensor_id="kbd" sensor={|_| false}></DragProvider>"#,
+        );
+        let compact = s.replace(' ', "");
+        assert!(compact.contains(".sensor("), "{s}");
+    }
+
+    #[test]
+    fn sortable_item_emits_pull_clone_and_data() {
+        let s = expand(
+            r#"<SortableItem id="t" pull_clone={true} skip_shift={true} data={std::rc::Rc::new(1i32)}><Label>"x"</Label></SortableItem>"#,
+        );
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("pull_clone:true"), "{s}");
+        assert!(compact.contains("skip_shift:true"), "{s}");
+        assert!(compact.contains("data:Some"), "{s}");
     }
 
     #[test]

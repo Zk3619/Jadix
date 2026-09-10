@@ -3,7 +3,8 @@
 //! `window_events` collects [`DragHit`]s from the laid-out tree and calls [`tick`] /
 //! [`end`]. Components start a session from `pointerdown` via [`begin`].
 
-use std::cell::RefCell;
+use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
@@ -11,16 +12,22 @@ use std::time::Instant;
 use crate::core::reactivity::{batch, Signal};
 use crate::core::tree::Element;
 
+use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
+
 use super::autoscroll::AutoScroll;
-use super::collision::{detect, Candidate, CollisionAlg};
-use super::geometry::{Axis, Rect, Restrict, SnapGrid};
+use crate::utils::edge_scroll::pump_at;
+use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
+use super::geometry::{
+    Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid,
+};
 use super::modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
 };
 use super::{
-    ATTR_DRAG_ACCEPT, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
+    ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY,
-    ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT,
+    ATTR_DRAG_TYPE,
 };
 
 pub type DragHandler = Rc<RefCell<dyn FnMut(&DragEvent)>>;
@@ -30,6 +37,8 @@ pub type DragPredicate = Rc<dyn Fn(&DragEvent) -> bool>;
 pub enum DragPhase {
     Pending,
     Active,
+    /// Pointer is up; exponential fling / smoothEnd still drives the ghost.
+    Coasting,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +53,10 @@ pub struct DragEvent {
     pub pointer: [f32; 2],
     pub delta: [f32; 2],
     pub phase: DragPhase,
+    /// SortableJS `pull: 'clone'` session.
+    pub pull_clone: bool,
+    /// Item [`super::registry::set_item_data`] at drag start.
+    pub data: Option<Rc<dyn Any>>,
 }
 
 /// A laid-out draggable or droppable (or both) collected from the element tree.
@@ -63,6 +76,11 @@ pub struct DragHit {
     pub index: Option<usize>,
     pub group: String,
     pub disabled: bool,
+    /// List-level sortable axis (`rui_drag_axis`). `None` inherits the provider.
+    pub list_axis: Option<Axis>,
+    pub skip_shift: bool,
+    pub skip_follow: bool,
+    pub pull_clone: bool,
 }
 
 impl DragHit {
@@ -122,21 +140,35 @@ struct DragSession {
     from_index: Option<usize>,
     item_type: String,
     group: String,
+    /// Configured provider axis (`Start` stays here so sort_axis stays Y).
     axis: Axis,
+    /// Resolved motion lock (interact `lockAxis`; `Start` becomes X or Y on activate).
+    motion_axis: Axis,
+    /// interact.js `startAxis` — must move this way to activate (`Xy` = any).
+    start_axis: Axis,
     threshold: f32,
     restrict: Restrict,
-    snap: Option<SnapGrid>,
+    restrict_end_only: bool,
+    restrict_anchor: RestrictAnchor,
+    snap: Option<Snap>,
     capture_id: String,
     delay_ms: f32,
+    activation: Activation,
     pressed_at: Instant,
+    last_viewport: [f32; 2],
+    pull_clone: bool,
+    data: Option<Rc<dyn Any>>,
 }
 
 pub(super) struct ScopeRuntime {
     pub collision: CollisionAlg,
     pub axis: Axis,
+    pub start_axis: Axis,
     pub threshold: f32,
     pub restrict: Restrict,
-    pub snap: Option<SnapGrid>,
+    pub restrict_end_only: bool,
+    pub restrict_anchor: RestrictAnchor,
+    pub snap: Option<Snap>,
     pub overlay_registered: bool,
     /// In-list source opacity while a `DragOverlay` is open. `0` leaves the
     /// insert hole empty; default overlay uses [`OVERLAY_SOURCE_OPACITY`].
@@ -144,6 +176,9 @@ pub(super) struct ScopeRuntime {
     pub autoscroll: AutoScroll,
     pub empty_insert: f32,
     pub delay_ms: f32,
+    pub activation: Activation,
+    pub collision_fn: Option<CollisionFn>,
+    pub overlay_align: OverlayAlign,
     pub can_drop: Option<DragPredicate>,
     pub on_start: Option<DragHandler>,
     pub on_move: Option<DragHandler>,
@@ -163,6 +198,8 @@ pub(super) struct ScopeRuntime {
     /// Author modifiers (solid-dnd `addTransformer` / dnd-kit `Modifier`).
     /// Built-ins are assembled each tick, not stored here.
     pub modifiers: Vec<DragModifier>,
+    /// Custom sensors (solid-dnd `addSensor`). Pointer is always available.
+    pub sensors: Vec<super::sensor::DragSensor>,
 }
 
 thread_local! {
@@ -183,6 +220,44 @@ thread_local! {
     static PARENT_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
     static LAST_HITS: RefCell<Vec<DragHit>> = const { RefCell::new(Vec::new()) };
     static LAST_SCROLL_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
+    /// Packed row (item + author gap) and the author `gap` inside it,
+    /// snapshotted at activate from rest hits. Live hits after the source
+    /// shell collapses would drop the gap and make target padding / source
+    /// vacate feed back on themselves. `pack_gap` must not be re-derived
+    /// from live `drag_extent` (that signal is the paint chip and can equal
+    /// the pitch).
+    static DRAG_PACK_PITCH: Cell<f32> = const { Cell::new(0.0) };
+    static DRAG_PACK_GAP: Cell<f32> = const { Cell::new(0.0) };
+    /// Definite overlay child size for [`OverlayAlign::Center`].
+    static OVERLAY_GHOST_EXTENT: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
+    static VELOCITY: RefCell<VelocityTracker> = RefCell::new(VelocityTracker::default());
+    static COAST: RefCell<Option<Inertia>> = RefCell::new(None);
+    static SCOPE_INERTIA: RefCell<HashMap<String, InertiaOpts>> = RefCell::new(HashMap::new());
+    static COAST_TICK: Cell<bool> = const { Cell::new(false) };
+    static LAST_COAST_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
+}
+
+pub(super) fn set_scope_inertia(scope_id: &str, opts: InertiaOpts) {
+    SCOPE_INERTIA.with(|m| {
+        m.borrow_mut().insert(scope_id.to_string(), opts);
+    });
+}
+
+fn scope_inertia(scope_id: &str) -> InertiaOpts {
+    SCOPE_INERTIA.with(|m| {
+        m.borrow()
+            .get(scope_id)
+            .copied()
+            .unwrap_or_default()
+    })
+}
+
+pub fn is_coasting() -> bool {
+    SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .is_some_and(|d| d.phase == DragPhase::Coasting)
+    })
 }
 
 fn item_bounds_key(scope: &str, id: &str) -> String {
@@ -215,6 +290,19 @@ pub fn last_hit_rect(scope: &str, id: &str) -> Option<[f32; 4]> {
             .map(|hit| hit.rect.to_bounds())
     });
     from_tick.or_else(|| last_draggable_bounds(scope, id))
+}
+
+pub(crate) fn remember_overlay_ghost_extent(scope: &str, size: [f32; 2]) {
+    if size[0] <= 0.0 || size[1] <= 0.0 {
+        return;
+    }
+    OVERLAY_GHOST_EXTENT.with(|m| {
+        m.borrow_mut().insert(scope.to_string(), size);
+    });
+}
+
+fn overlay_ghost_extent(scope: &str) -> Option<[f32; 2]> {
+    OVERLAY_GHOST_EXTENT.with(|m| m.borrow().get(scope).copied())
 }
 
 pub(crate) fn remember_item_restrict(scope: &str, id: &str, restrict: Option<Restrict>) {
@@ -308,6 +396,28 @@ pub fn start_geometry(
     ([pointer[0] - bounds[0], pointer[1] - bounds[1]], bounds)
 }
 
+pub fn scope_exists(scope_id: &str) -> bool {
+    SCOPES.with(|m| m.borrow().contains_key(scope_id))
+}
+
+/// Builder-registered sensors for one provider (merged with [`super::sensor::add_sensor`] at run time).
+pub fn scope_sensors(scope_id: &str) -> Vec<super::sensor::DragSensor> {
+    SCOPES.with(|m| {
+        m.borrow()
+            .get(scope_id)
+            .map(|s| s.sensors.clone())
+            .unwrap_or_default()
+    })
+}
+
+pub fn active_pull_clone() -> bool {
+    SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .is_some_and(|d| d.pull_clone)
+    })
+}
+
 pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
     SCOPES.with(|m| {
         let mut map = m.borrow_mut();
@@ -315,6 +425,7 @@ pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
         if let Some(old) = map.get(&id) {
             rt.overlay_registered = rt.overlay_registered || old.overlay_registered;
             rt.source_opacity = old.source_opacity;
+            rt.overlay_align = old.overlay_align;
             rt.stack_seq = old.stack_seq;
         }
         map.insert(id, rt);
@@ -386,6 +497,11 @@ pub fn overlay_is_registered(scope_id: &str) -> bool {
     })
 }
 
+/// Viewport origin of the drag ghost. Peek-only: subscribers remount the overlay island.
+pub(super) fn peek_overlay_pos(scope_id: &str) -> Option<[f32; 2]> {
+    SCOPES.with(|m| m.borrow().get(scope_id).map(|s| s.overlay_pos.peek()))
+}
+
 /// Default source-island opacity while `<DragOverlay>` is open and the item
 /// does not set its own `opacity`.
 pub const OVERLAY_SOURCE_OPACITY: f32 = 0.4;
@@ -423,12 +539,39 @@ pub fn active_scope_id() -> Option<String> {
     SESSION.with(|s| s.borrow().as_ref().map(|d| d.scope_id.clone()))
 }
 
+/// Collision winner for the active scope (`None` when idle or vetoed).
+pub fn active_droppable_id() -> Option<String> {
+    let scope = active_scope_id()?;
+    SCOPES.with(|m| {
+        m.borrow()
+            .get(&scope)
+            .and_then(|s| s.active_droppable.peek())
+    })
+}
+
+/// Last `tick` hit table (process-wide). Prefer [`last_hits_in_scope`] or `DragCtx::hits`.
+pub fn last_hits() -> Vec<DragHit> {
+    LAST_HITS.with(|h| h.borrow().clone())
+}
+
+/// [`last_hits`] filtered to one provider. Empty when idle or after another scope's tick.
+pub fn last_hits_in_scope(scope_id: &str) -> Vec<DragHit> {
+    last_hits()
+        .into_iter()
+        .filter(|h| h.scope_id == scope_id)
+        .collect()
+}
+
+pub(crate) fn last_hits_snapshot() -> Vec<DragHit> {
+    last_hits()
+}
+
 /// Translate to apply on the source when no overlay is registered.
 pub fn active_source_translate() -> Option<[f32; 2]> {
     SESSION.with(|s| {
         let sess = s.borrow();
         let sess = sess.as_ref()?;
-        if sess.phase != DragPhase::Active {
+        if sess.phase != DragPhase::Active && sess.phase != DragPhase::Coasting {
             return None;
         }
         let origin =
@@ -446,10 +589,27 @@ fn event_from(
     to_list: Option<String>,
     to_index: Option<usize>,
 ) -> DragEvent {
-    let (dx, dy) = sess.axis.apply(
-        sess.last_pointer[0] - sess.start_pointer[0],
-        sess.last_pointer[1] - sess.start_pointer[1],
-    );
+    event_from_delta(sess, droppable, to_list, to_index, None)
+}
+
+fn event_from_delta(
+    sess: &DragSession,
+    droppable: Option<&DragHit>,
+    to_list: Option<String>,
+    to_index: Option<usize>,
+    origin: Option<[f32; 2]>,
+) -> DragEvent {
+    let (dx, dy) = if let Some(o) = origin {
+        (
+            o[0] - sess.start_pointer[0] + sess.grab_offset[0],
+            o[1] - sess.start_pointer[1] + sess.grab_offset[1],
+        )
+    } else {
+        sess.motion_axis.apply(
+            sess.last_pointer[0] - sess.start_pointer[0],
+            sess.last_pointer[1] - sess.start_pointer[1],
+        )
+    };
     DragEvent {
         scope_id: sess.scope_id.clone(),
         draggable_id: sess.draggable_id.clone(),
@@ -461,11 +621,49 @@ fn event_from(
         pointer: sess.last_pointer,
         delta: [dx, dy],
         phase: sess.phase,
+        pull_clone: sess.pull_clone,
+        data: sess.data.clone(),
     }
 }
 
 /// Start a pointer session. Does not fire `on_drag_start` until the threshold is crossed.
 pub fn begin(opts: BeginDrag) {
+    if is_coasting() {
+        let same = SESSION.with(|s| {
+            s.borrow()
+                .as_ref()
+                .is_some_and(|d| d.draggable_id == opts.draggable_id)
+        });
+        let allow = SESSION.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|d| scope_inertia(&d.scope_id).allow_resume)
+                .unwrap_or(false)
+        });
+        if same && allow {
+            COAST.with(|c| *c.borrow_mut() = None);
+            LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
+            VELOCITY.with(|v| v.borrow_mut().reset());
+            SESSION.with(|s| {
+                if let Some(sess) = s.borrow_mut().as_mut() {
+                    sess.phase = DragPhase::Active;
+                    sess.last_pointer = opts.pointer;
+                }
+            });
+            crate::utils::pointer_drag::begin(
+                crate::utils::pointer_drag::DragKind::Scope,
+                opts.draggable_id.clone(),
+                opts.pointer[0],
+                opts.pointer[1],
+            );
+            crate::app::set_pointer_capture(opts.capture_id);
+            return;
+        }
+        let hits = LAST_HITS.with(|h| h.borrow().clone());
+        let _ = commit_end(&hits);
+    }
+    VELOCITY.with(|v| v.borrow_mut().reset());
+    COAST.with(|c| *c.borrow_mut() = None);
     crate::utils::pointer_drag::begin(
         crate::utils::pointer_drag::DragKind::Scope,
         opts.draggable_id.clone(),
@@ -473,14 +671,49 @@ pub fn begin(opts: BeginDrag) {
         opts.pointer[1],
     );
     crate::app::set_pointer_capture(opts.capture_id.clone());
-    let (axis, threshold, scope_restrict, snap, delay_ms) = SCOPES.with(|m| {
+    let (
+        axis,
+        threshold,
+        scope_restrict,
+        snap,
+        delay_ms,
+        activation,
+        start_axis,
+        restrict_end_only,
+        restrict_anchor,
+    ) = SCOPES.with(|m| {
         m.borrow()
             .get(&opts.scope_id)
-            .map(|s| (s.axis, s.threshold, s.restrict.clone(), s.snap, s.delay_ms))
-            .unwrap_or((Axis::Xy, 4.0, Restrict::None, None, 0.0))
+            .map(|s| {
+                (
+                    s.axis,
+                    s.threshold,
+                    s.restrict.clone(),
+                    s.snap.clone(),
+                    s.delay_ms,
+                    s.activation,
+                    s.start_axis,
+                    s.restrict_end_only,
+                    s.restrict_anchor,
+                )
+            })
+            .unwrap_or((
+                Axis::Xy,
+                4.0,
+                Restrict::None,
+                None,
+                0.0,
+                Activation::And,
+                Axis::Xy,
+                false,
+                RestrictAnchor::FULL,
+            ))
     });
     let restrict =
         item_restrict_override(&opts.scope_id, &opts.draggable_id).unwrap_or(scope_restrict);
+    let motion_axis = if axis == Axis::Start { Axis::Xy } else { axis };
+    let pull_clone = super::registry::item_flags(&opts.scope_id, &opts.draggable_id).pull_clone;
+    let data = super::registry::item_data(&opts.scope_id, &opts.draggable_id);
     SESSION.with(|s| {
         *s.borrow_mut() = Some(DragSession {
             capture_id: opts.capture_id,
@@ -496,11 +729,19 @@ pub fn begin(opts: BeginDrag) {
             item_type: opts.item_type,
             group: opts.group,
             axis,
+            motion_axis,
+            start_axis,
             threshold,
             restrict,
+            restrict_end_only,
+            restrict_anchor,
             snap,
             delay_ms,
+            activation,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone,
+            data,
         });
     });
 }
@@ -530,6 +771,7 @@ fn ghost_origin(
     pointer: [f32; 2],
     viewport: [f32; 2],
     hits: &[DragHit],
+    at_end: bool,
 ) -> [f32; 2] {
     let ctx = DragModifierCtx {
         pointer,
@@ -537,10 +779,13 @@ fn ghost_origin(
         grab_offset: sess.grab_offset,
         start_bounds: sess.start_bounds,
         viewport,
-        axis: sess.axis,
-        snap: sess.snap,
+        axis: sess.motion_axis,
+        snap: sess.snap.clone(),
         restrict: resolve_live_restrict(&sess.restrict, &sess.scope_id, &sess.draggable_id, hits),
         live_slot: live_source_slot(sess, hits),
+        at_end,
+        restrict_end_only: sess.restrict_end_only,
+        restrict_anchor: sess.restrict_anchor,
     };
     let mut pipeline = builtin_modifiers();
     SCOPES.with(|m| {
@@ -560,7 +805,29 @@ fn ghost_origin(
         x: pointer[0] - sess.start_pointer[0],
         y: pointer[1] - sess.start_pointer[1],
     };
-    ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx))
+    let mut origin = ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx));
+    let align = SCOPES.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .map(|s| s.overlay_align)
+            .unwrap_or(OverlayAlign::Grab)
+    });
+    if align == OverlayAlign::Center {
+        let sw = sess.start_bounds[2].max(1.0);
+        let sh = sess.start_bounds[3].max(1.0);
+        let extent = overlay_ghost_extent(&sess.scope_id).or_else(|| {
+            SCOPES.with(|m| {
+                m.borrow()
+                    .get(&sess.scope_id)
+                    .map(|s| s.drag_extent.peek())
+                    .filter(|e| e[0] > 0.0 && e[1] > 0.0)
+            })
+        });
+        let [gw, gh] = extent.unwrap_or([sw, sh]);
+        origin[0] += (sw - gw) * 0.5;
+        origin[1] += (sh - gh) * 0.5;
+    }
+    origin
 }
 
 /// Gallery stacks two Sortable lists that reuse planet names. Collision
@@ -601,12 +868,12 @@ fn moving_item_rect(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) -> R
             sess.axis,
             match sess.axis {
                 Axis::X => width,
-                Axis::Y | Axis::Xy => height,
+                Axis::Y | Axis::Xy | Axis::Start => height,
             },
         );
         match sess.axis {
             Axis::X => width = width.min(stride).max(1.0),
-            Axis::Y | Axis::Xy => height = height.min(stride).max(1.0),
+            Axis::Y | Axis::Xy | Axis::Start => height = height.min(stride).max(1.0),
         }
     }
     Rect {
@@ -838,7 +1105,7 @@ fn pointer_past_list_indexed_content(
     };
     let p = match axis {
         Axis::X => pointer[0],
-        Axis::Y | Axis::Xy => pointer[1],
+        Axis::Y | Axis::Xy | Axis::Start => pointer[1],
     };
     p >= end
 }
@@ -857,7 +1124,7 @@ fn list_indexed_content_end(hits: &[DragHit], list_id: &str, axis: Axis) -> Opti
     let last = items[items.len() - 1];
     let fallback = match axis {
         Axis::X => last.rect.width,
-        Axis::Y | Axis::Xy => last.rect.height,
+        Axis::Y | Axis::Xy | Axis::Start => last.rect.height,
     }
     .max(1.0);
     let pitch = slot_extent_along_axis(hits, list_id, last.index, axis, fallback);
@@ -888,6 +1155,14 @@ fn clamp_tail_append_hover(
 /// Returns `true` when the UI should redraw.
 pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     crate::utils::pointer_drag::tick(x, y);
+    let coasting = SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .is_some_and(|d| d.phase == DragPhase::Coasting)
+    });
+    if coasting && !COAST_TICK.get() {
+        return false;
+    }
     let mut hits = hits.to_vec();
     cap_stretched_indexed_rects(&mut hits);
     let from_list = SESSION.with(|s| s.borrow().as_ref().and_then(|sess| sess.from_list.clone()));
@@ -897,6 +1172,10 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
         return false;
     };
     sess.last_pointer = [x, y];
+    sess.last_viewport = viewport;
+    if sess.phase == DragPhase::Active {
+        VELOCITY.with(|v| v.borrow_mut().sample([x, y], Instant::now()));
+    }
     let dist = {
         let dx = x - sess.start_pointer[0];
         let dy = y - sess.start_pointer[1];
@@ -905,27 +1184,58 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
 
     if sess.phase == DragPhase::Pending {
         let waited_ms = sess.pressed_at.elapsed().as_secs_f32() * 1000.0;
-        if dist < sess.threshold || waited_ms < sess.delay_ms {
+        let far_enough = dist >= sess.threshold;
+        let long_enough = waited_ms >= sess.delay_ms;
+        let activated = match sess.activation {
+            Activation::And => far_enough && long_enough,
+            Activation::Or => far_enough || long_enough,
+        };
+        let dx = x - sess.start_pointer[0];
+        let dy = y - sess.start_pointer[1];
+        // interact cancels the prepared action; we stay Pending so the user can
+        // still cross the required axis (beyond interact).
+        if !activated || !sess.start_axis.allows_start_move(dx, dy) {
             SESSION.with(|s| *s.borrow_mut() = Some(sess));
             return false;
         }
         sess.phase = DragPhase::Active;
+        if sess.axis == Axis::Start && dist >= 1.0 {
+            sess.motion_axis = Axis::resolve_start(dx, dy);
+        }
         activate_scope(&sess, hits);
-        fire(
-            &sess.scope_id,
-            HandlerKind::Start,
-            &event_from(&sess, None, None, None),
-        );
+        let start_ev = event_from(&sess, None, None, None);
+        fire(&sess.scope_id, HandlerKind::Start, &start_ev);
+        let accepting: Vec<String> = hits
+            .iter()
+            .filter(|h| h.is_droppable && h.accepts(&sess))
+            .map(|h| h.id.clone())
+            .collect();
+        super::dropzone::on_drag_activated(&sess.scope_id, &accepting, &start_ev);
     }
 
-    let origin = ghost_origin(&sess, [x, y], viewport, hits);
+    if sess.axis == Axis::Start && sess.motion_axis == Axis::Xy {
+        let dx = x - sess.start_pointer[0];
+        let dy = y - sess.start_pointer[1];
+        if dist >= 1.0 {
+            sess.motion_axis = Axis::resolve_start(dx, dy);
+        }
+    }
+
+    let origin = ghost_origin(&sess, [x, y], viewport, hits, false);
     let dragged = moving_item_rect(&sess, hits, origin);
 
-    let (collision, empty_insert, can_drop) = SCOPES.with(|m| {
+    let (collision, empty_insert, can_drop, collision_fn) = SCOPES.with(|m| {
         m.borrow()
             .get(&sess.scope_id)
-            .map(|s| (s.collision, s.empty_insert, s.can_drop.clone()))
-            .unwrap_or((CollisionAlg::default(), 0.0, None))
+            .map(|s| {
+                (
+                    s.collision,
+                    s.empty_insert,
+                    s.can_drop.clone(),
+                    s.collision_fn.clone(),
+                )
+            })
+            .unwrap_or((CollisionAlg::default(), 0.0, None, None))
     });
     let skip_shell = closest_alg_skips_indexed_list_shell(collision);
     let candidates: Vec<Candidate> = hits
@@ -940,16 +1250,20 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             };
             !list_has_indexed_candidate(hits, &sess, list)
         })
-        .map(|h| {
+        .filter_map(|h| {
             let rect = if h.index.is_none() && empty_insert > 0.0 {
                 h.rect.inflated(empty_insert)
             } else {
                 h.rect
             };
-            Candidate {
+            let overlap = super::dropzone::overlap_for(&sess.scope_id, &h.id);
+            if !overlap.passes([x, y], dragged, rect) {
+                return None;
+            }
+            Some(Candidate {
                 id: h.id.clone(),
                 rect,
-            }
+            })
         })
         .collect();
     let prev_drop = SCOPES.with(|m| {
@@ -957,12 +1271,17 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             .get(&sess.scope_id)
             .and_then(|s| s.active_droppable.peek())
     });
-    let mut next_id = detect(
+    let mut next_id = detect_with(
         collision,
-        [x, y],
-        dragged,
-        &candidates,
-        prev_drop.as_deref(),
+        collision_fn.as_ref(),
+        CollisionInput {
+            pointer: [x, y],
+            dragged,
+            droppables: &candidates,
+            active_id: prev_drop.as_deref(),
+            draggable_id: sess.draggable_id.as_str(),
+            skip_innermost: false,
+        },
     );
     let mut drop_hit = next_id
         .as_ref()
@@ -972,6 +1291,15 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
         if !pred(&probe) {
             next_id = None;
             drop_hit = None;
+        }
+    }
+    if let (Some(id), Some(hit)) = (next_id.as_ref(), drop_hit) {
+        if let Some(checker) = super::dropzone::checker_for(&sess.scope_id, id) {
+            let probe = event_from(&sess, Some(hit), hit.list_id.clone(), hit.index);
+            if !checker(&probe, true) {
+                next_id = None;
+                drop_hit = None;
+            }
         }
     }
 
@@ -1016,6 +1344,12 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     if prev_drop != next_id {
         fire(&sess.scope_id, HandlerKind::Over, &ev);
     }
+    super::dropzone::on_hover_change(
+        &sess.scope_id,
+        prev_drop.as_deref(),
+        next_id.as_deref(),
+        &ev,
+    );
 
     SESSION.with(|s| *s.borrow_mut() = Some(sess));
     true
@@ -1035,12 +1369,13 @@ fn resolve_sortable_hover_index(
     if source_layout_contains(sess, hits, pointer) {
         return sess.from_index;
     }
+    let axis = sort_axis_for_list(hits, list_id, sess.axis);
     let in_shell = list_shell_contains(hits, list_id, pointer);
-    let slots_ok = list_slots_usable(hits, list_id, sess.axis);
+    let slots_ok = list_slots_usable(hits, list_id, axis);
     // Insert slots are `0..=len` (before each row, and after the last). Picking
     // the nearest *item index* maps "below Gamma" onto slot 0 and opens a hole
     // under the folder title (Gallery: 移出 Later → 标题与 Gamma 空一行).
-    match insert_index_along_axis(hits, list_id, pointer, sess.axis) {
+    match insert_index_along_axis(hits, list_id, pointer, axis) {
         Some(hover) => {
             let hover = clamp_tail_append_hover(sess, list_id, hits, hover);
             Some(pin_hover_below_opened_hole(
@@ -1068,11 +1403,11 @@ fn hover_from_press_box(sess: &DragSession, pointer: [f32; 2]) -> Option<usize> 
     let from = sess.from_index?;
     let p = match sess.axis {
         Axis::X => pointer[0],
-        Axis::Y | Axis::Xy => pointer[1],
+        Axis::Y | Axis::Xy | Axis::Start => pointer[1],
     };
     let origin = match sess.axis {
         Axis::X => sess.start_bounds[0],
-        Axis::Y | Axis::Xy => sess.start_bounds[1],
+        Axis::Y | Axis::Xy | Axis::Start => sess.start_bounds[1],
     };
     if p + 0.5 < origin {
         Some(0)
@@ -1106,7 +1441,7 @@ fn nearest_end_insert_slot(
     }
     let p = match sess.axis {
         Axis::X => pointer[0],
-        Axis::Y | Axis::Xy => pointer[1],
+        Axis::Y | Axis::Xy | Axis::Start => pointer[1],
     };
     let first = axis_origin(items[0].rect, sess.axis);
     let last_h = items[items.len() - 1];
@@ -1146,7 +1481,7 @@ fn pin_hover_below_opened_hole(
     }
     let fallback = match sess.axis {
         Axis::X => sess.start_bounds[2].max(1.0),
-        Axis::Y | Axis::Xy => sess.start_bounds[3].max(1.0),
+        Axis::Y | Axis::Xy | Axis::Start => sess.start_bounds[3].max(1.0),
     };
     let pitch = slot_extent_along_axis(hits, list_id, sess.from_index, sess.axis, fallback);
     let Some(hole_pt) = insert_hole_origin(hits, list_id, Some(prev), sess.axis, pitch) else {
@@ -1154,11 +1489,11 @@ fn pin_hover_below_opened_hole(
     };
     let p = match sess.axis {
         Axis::X => pointer[0],
-        Axis::Y | Axis::Xy => pointer[1],
+        Axis::Y | Axis::Xy | Axis::Start => pointer[1],
     };
     let hole = match sess.axis {
         Axis::X => hole_pt[0],
-        Axis::Y | Axis::Xy => hole_pt[1],
+        Axis::Y | Axis::Xy | Axis::Start => hole_pt[1],
     };
     if p < hole + pitch {
         prev
@@ -1220,7 +1555,7 @@ fn cap_rect_to_row_stride(rect: &mut Rect, sess: &DragSession, hits: &[DragHit])
     if layout_extent > stride * STRETCH_RATIO {
         match sess.axis {
             Axis::X => rect.width = stride,
-            Axis::Y | Axis::Xy => rect.height = stride,
+            Axis::Y | Axis::Xy | Axis::Start => rect.height = stride,
         }
     }
 }
@@ -1232,7 +1567,7 @@ fn capped_drag_extent(sess: &DragSession, hits: &[DragHit]) -> [f32; 2] {
     if let Some(list) = sess.from_list.as_deref() {
         let layout = match sess.axis {
             Axis::X => w,
-            Axis::Y | Axis::Xy => h,
+            Axis::Y | Axis::Xy | Axis::Start => h,
         };
         let slot = slot_extent_along_axis(hits, list, sess.from_index, sess.axis, layout);
         let v = if layout > slot * STRETCH_RATIO {
@@ -1242,7 +1577,7 @@ fn capped_drag_extent(sess: &DragSession, hits: &[DragHit]) -> [f32; 2] {
         };
         match sess.axis {
             Axis::X => w = v.max(1.0),
-            Axis::Y | Axis::Xy => h = v.max(1.0),
+            Axis::Y | Axis::Xy | Axis::Start => h = v.max(1.0),
         }
     }
     [w, h]
@@ -1254,7 +1589,21 @@ fn activate_scope(sess: &DragSession, hits: &[DragHit]) {
             rt.active_draggable.set(Some(sess.draggable_id.clone()));
             rt.from_list.set(sess.from_list.clone());
             rt.from_index.set(sess.from_index);
-            rt.drag_extent.set(capped_drag_extent(sess, hits));
+            let extent = capped_drag_extent(sess, hits);
+            rt.drag_extent.set(extent);
+            let chip = match sess.axis {
+                Axis::X => extent[0],
+                Axis::Y | Axis::Xy | Axis::Start => extent[1],
+            };
+            let pitch = row_pitch_along(hits, sess.from_list.as_deref(), sess.axis, chip);
+            DRAG_PACK_PITCH.set(pitch);
+            let gap = sess
+                .from_list
+                .as_deref()
+                .map(|list| inferred_list_gap(&indexed_list_items(hits, list), sess.axis))
+                .unwrap_or(0.0)
+                .max(0.0);
+            DRAG_PACK_GAP.set(gap);
             let origin = [sess.start_bounds[0], sess.start_bounds[1]];
             rt.overlay_pos.set(origin);
             if rt.overlay_registered {
@@ -1288,6 +1637,8 @@ fn fire(scope_id: &str, kind: HandlerKind, ev: &DragEvent) {
 
 fn reset_scope_ui(rt: &ScopeRuntime) {
     // One transition: overlay / active / hover are one session, not six effects.
+    DRAG_PACK_PITCH.set(0.0);
+    DRAG_PACK_GAP.set(0.0);
     batch(|| {
         rt.overlay_open.set(false);
         rt.active_draggable.set(None);
@@ -1300,15 +1651,89 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
 }
 
 /// Finish the session and fire `on_drag_end` when it had become active.
+///
+/// Free-move scopes with [`.inertia`](super::builder::DragScopeBuilder::inertia)
+/// enter [`DragPhase::Coasting`] instead of committing, so the ghost flings.
+/// Sortable (`from_list`) always commits — FLIP must not fight a coast.
 pub fn end(hits: &[DragHit]) -> bool {
+    if !is_coasting() {
+        let can_coast = SESSION.with(|s| {
+            s.borrow().as_ref().is_some_and(|sess| {
+                sess.phase == DragPhase::Active && sess.from_list.is_none()
+            })
+        });
+        if can_coast {
+            let sess = SESSION.with(|s| s.borrow().clone()).unwrap();
+            if try_start_coast(&sess, hits) {
+                SESSION.with(|s| {
+                    if let Some(d) = s.borrow_mut().as_mut() {
+                        d.phase = DragPhase::Coasting;
+                    }
+                });
+                crate::utils::pointer_drag::clear();
+                crate::app::release_pointer_capture();
+                LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
+                return true;
+            }
+        }
+    }
+    commit_end(hits)
+}
+
+fn try_start_coast(sess: &DragSession, hits: &[DragHit]) -> bool {
+    let opts = scope_inertia(&sess.scope_id);
+    let velocity = VELOCITY.with(|v| v.borrow().velocity());
+    if let Some(i) = Inertia::try_fling(velocity, opts) {
+        COAST.with(|c| *c.borrow_mut() = Some(i));
+        return true;
+    }
+    let need_end_mod = sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false)
+        || sess.restrict_end_only;
+    if !need_end_mod {
+        return false;
+    }
+    let from = SCOPES.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .map(|r| r.overlay_pos.peek())
+            .unwrap_or([sess.start_bounds[0], sess.start_bounds[1]])
+    });
+    let to = ghost_origin(sess, sess.last_pointer, sess.last_viewport, hits, true);
+    if let Some(i) = Inertia::try_smooth_end(from, to, opts) {
+        COAST.with(|c| *c.borrow_mut() = Some(i));
+        true
+    } else {
+        false
+    }
+}
+
+fn commit_end(hits: &[DragHit]) -> bool {
     let Some(mut sess) = SESSION.with(|s| s.borrow_mut().take()) else {
         return false;
     };
     crate::utils::pointer_drag::clear();
     crate::app::release_pointer_capture();
-    let was_active = sess.phase == DragPhase::Active;
+    VELOCITY.with(|v| v.borrow_mut().reset());
+    COAST.with(|c| *c.borrow_mut() = None);
+    LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
+    let was_active = sess.phase == DragPhase::Active || sess.phase == DragPhase::Coasting;
     let ev = if was_active {
         sess.phase = DragPhase::Active;
+        let need_end_mod = sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false)
+        || sess.restrict_end_only;
+        let end_origin = if need_end_mod {
+            let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, hits, true);
+            SCOPES.with(|m| {
+                if let Some(rt) = m.borrow().get(&sess.scope_id) {
+                    if rt.overlay_pos.peek() != origin {
+                        rt.overlay_pos.set(origin);
+                    }
+                }
+            });
+            Some(origin)
+        } else {
+            None
+        };
         let drop_id = SCOPES.with(|m| {
             m.borrow()
                 .get(&sess.scope_id)
@@ -1323,7 +1748,9 @@ pub fn end(hits: &[DragHit]) -> bool {
                 .map(|s| (s.hover_list.peek(), s.hover_index.peek()))
                 .unwrap_or((None, None))
         });
-        Some(event_from(&sess, drop_hit, to_list, to_index))
+        Some(event_from_delta(
+            &sess, drop_hit, to_list, to_index, end_origin,
+        ))
     } else {
         None
     };
@@ -1335,9 +1762,59 @@ pub fn end(hits: &[DragHit]) -> bool {
         }
     });
     if let Some(ev) = ev {
+        if let Some(id) = ev.droppable_id.as_deref() {
+            super::dropzone::on_drop(&sess.scope_id, id, &ev);
+        }
+        super::dropzone::on_drag_deactivated(&sess.scope_id, &ev);
         fire(&sess.scope_id, HandlerKind::End, &ev);
     }
     was_active
+}
+
+/// Advance a [`DragPhase::Coasting`] fling / smoothEnd. Call from vsync / wait.
+pub fn pump_inertia(root: &Element, viewport: [f32; 2]) -> bool {
+    if !is_coasting() {
+        LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
+        return false;
+    }
+    let dt = LAST_COAST_AT.with(|slot| {
+        let now = Instant::now();
+        let dt = slot
+            .borrow()
+            .map(|prev| now.saturating_duration_since(prev).as_secs_f32())
+            .unwrap_or(1.0 / 60.0);
+        *slot.borrow_mut() = Some(now);
+        dt
+    });
+    let dt = if dt < 1.0 / 240.0 {
+        1.0 / 60.0
+    } else {
+        dt.min(0.05)
+    };
+    let Some(mut inertia) = COAST.with(|c| c.borrow_mut().take()) else {
+        return commit_end(&collect_hits(root));
+    };
+    match inertia.step(dt) {
+        Some(dxy) => {
+            COAST.with(|c| *c.borrow_mut() = Some(inertia));
+            let next = SESSION.with(|s| {
+                let mut b = s.borrow_mut();
+                if let Some(sess) = b.as_mut() {
+                    sess.last_pointer[0] += dxy[0];
+                    sess.last_pointer[1] += dxy[1];
+                    sess.last_pointer
+                } else {
+                    [0.0, 0.0]
+                }
+            });
+            let hits = collect_hits(root);
+            COAST_TICK.set(true);
+            let dirty = tick(next[0], next[1], &hits, viewport);
+            COAST_TICK.set(false);
+            dirty
+        }
+        None => commit_end(&collect_hits(root)),
+    }
 }
 
 pub fn clear_if_any() {
@@ -1353,11 +1830,18 @@ pub fn cancel() -> bool {
     };
     crate::utils::pointer_drag::clear();
     crate::app::release_pointer_capture();
+    VELOCITY.with(|v| v.borrow_mut().reset());
+    COAST.with(|c| *c.borrow_mut() = None);
+    LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
     SCOPES.with(|m| {
         if let Some(rt) = m.borrow().get(&sess.scope_id) {
             reset_scope_ui(rt);
         }
     });
+    if sess.phase == DragPhase::Active || sess.phase == DragPhase::Coasting {
+        let ev = event_from(&sess, None, None, None);
+        super::dropzone::on_drag_deactivated(&sess.scope_id, &ev);
+    }
     true
 }
 
@@ -1417,10 +1901,10 @@ fn locked_axis_drift(sess: &DragSession, hits: &[DragHit], overlay_pos: [f32; 2]
     let Some(slot) = live_source_slot(sess, hits) else {
         return false;
     };
-    match sess.axis {
+    match sess.motion_axis {
         Axis::Y => (slot.x - overlay_pos[0]).abs() > 0.5,
         Axis::X => (slot.y - overlay_pos[1]).abs() > 0.5,
-        Axis::Xy => false,
+        Axis::Xy | Axis::Start => false,
     }
 }
 
@@ -1455,23 +1939,16 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
                     [0.0, 0.0],
                 ))
         });
-        (cfg, d.axis, overlay_pos)
+        (cfg, d.motion_axis, overlay_pos)
     });
-    let mut moved = false;
-    if cfg.enabled {
-        let dt = LAST_SCROLL_AT.with(|slot| {
-            let now = Instant::now();
-            let dt = slot
-                .borrow()
-                .map(|prev| now.saturating_duration_since(prev).as_secs_f32())
-                .unwrap_or(1.0 / 60.0);
-            *slot.borrow_mut() = Some(now);
-            dt
+    let moved = if cfg.enabled {
+        LAST_SCROLL_AT.with(|slot| pump_at(root, pointer, cfg, axis, slot))
+    } else {
+        LAST_SCROLL_AT.with(|slot| {
+            slot.borrow_mut().take();
         });
-        let mut views = Vec::new();
-        super::autoscroll::collect_scroll_hits(root, &mut views);
-        moved = super::autoscroll::apply(pointer, &views, cfg, dt, axis);
-    }
+        false
+    };
     let hits = collect_hits(root);
     let drift = SESSION.with(|s| {
         s.borrow()
@@ -1497,6 +1974,7 @@ pub fn collect_hits(root: &Element) -> Vec<DragHit> {
     let mut out = Vec::new();
     collect_hits_inner(root, [0.0, 0.0], None, &mut out);
     cap_stretched_indexed_rects(&mut out);
+    super::registry::sync_registered_from_collect(&out);
     out
 }
 
@@ -1657,6 +2135,9 @@ fn collect_hits_inner(
             .attrs
             .get(ATTR_DRAG_DISABLED)
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        let skip_shift = el.attrs.contains_key(ATTR_DRAG_SKIP_SHIFT);
+        let skip_follow = el.attrs.contains_key(ATTR_DRAG_SKIP_FOLLOW);
+        let pull_clone = el.attrs.contains_key(ATTR_DRAG_PULL_CLONE);
         out.push(DragHit {
             id,
             scope_id,
@@ -1669,6 +2150,10 @@ fn collect_hits_inner(
             index: el.attrs.get(ATTR_DRAG_INDEX).and_then(|s| s.parse().ok()),
             group: el.attrs.get(ATTR_DRAG_GROUP).cloned().unwrap_or_default(),
             disabled,
+            list_axis: el.attrs.get(ATTR_DRAG_AXIS).map(|s| Axis::parse(s)),
+            skip_shift,
+            skip_follow,
+            pull_clone,
         });
     }
     let next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
@@ -1702,6 +2187,23 @@ pub fn resolve_insert_index(hit: Option<&DragHit>, fallback_len: usize) -> Optio
 /// Origin deltas below this are layout jitter, not a sortable row pitch.
 const MIN_SLOT_PITCH: f32 = 8.0;
 
+/// List-level `rui_drag_axis` overrides the provider. Missing → `fallback`
+/// (`Xy` sorts as `Y`).
+pub(super) fn sort_axis_for_list(hits: &[DragHit], list_id: &str, fallback: Axis) -> Axis {
+    hits.iter()
+        .filter(|h| h.list_id.as_deref() == Some(list_id))
+        .find_map(|h| h.list_axis)
+        .unwrap_or(fallback)
+        .sort_axis()
+}
+
+pub(super) fn peek_sort_axis(list: Option<&str>, fallback: Axis) -> Axis {
+    let Some(id) = list else {
+        return fallback.sort_axis();
+    };
+    LAST_HITS.with(|h| sort_axis_for_list(&h.borrow(), id, fallback))
+}
+
 /// Sortable insert index along `axis` (SortableJS midpoint semantics).
 ///
 /// Upper half of row `i` → insert before `i`; lower half → insert after `i`.
@@ -1725,11 +2227,11 @@ pub fn insert_index_along_axis(
     items.sort_by_key(|h| h.index.unwrap_or(0));
     let p = match axis {
         Axis::X => pointer[0],
-        Axis::Y | Axis::Xy => pointer[1],
+        Axis::Y | Axis::Xy | Axis::Start => pointer[1],
     };
     let fallback = match axis {
         Axis::X => items[0].rect.width,
-        Axis::Y | Axis::Xy => items[0].rect.height,
+        Axis::Y | Axis::Xy | Axis::Start => items[0].rect.height,
     }
     .max(1.0);
     let last_idx = items[items.len() - 1].index;
@@ -1774,7 +2276,7 @@ pub fn insert_index_along_axis(
 fn axis_origin(rect: Rect, axis: Axis) -> f32 {
     match axis {
         Axis::X => rect.x,
-        Axis::Y | Axis::Xy => rect.y,
+        Axis::Y | Axis::Xy | Axis::Start => rect.y,
     }
 }
 
@@ -1803,7 +2305,7 @@ pub(crate) fn slot_stride_along_axis(
         }
         let stride = match axis {
             Axis::X => (w[1].rect.x - w[0].rect.x).abs(),
-            Axis::Y | Axis::Xy => (w[1].rect.y - w[0].rect.y).abs(),
+            Axis::Y | Axis::Xy | Axis::Start => (w[1].rect.y - w[0].rect.y).abs(),
         };
         // 2px layout jitter is not a row pitch: walking it always falls off
         // the last origin and appends (Gallery dimmed Sortable vs opacity 0).
@@ -1830,7 +2332,7 @@ fn indexed_list_items<'a>(hits: &'a [DragHit], list_id: &str) -> Vec<&'a DragHit
 fn axis_size(rect: Rect, axis: Axis) -> f32 {
     match axis {
         Axis::X => rect.width,
-        Axis::Y | Axis::Xy => rect.height,
+        Axis::Y | Axis::Xy | Axis::Start => rect.height,
     }
 }
 
@@ -1944,12 +2446,12 @@ fn pack_same_list_origins(
         .collect();
     let mut cursor = match axis {
         Axis::X => start[0],
-        Axis::Y | Axis::Xy => start[1],
+        Axis::Y | Axis::Xy | Axis::Start => start[1],
     };
     for (vi, idx) in order.iter().enumerate() {
         let origin = match axis {
             Axis::X => [cursor, start[1]],
-            Axis::Y | Axis::Xy => [start[0], cursor],
+            Axis::Y | Axis::Xy | Axis::Start => [start[0], cursor],
         };
         map.insert(*idx, origin);
         let Some(&orig_pos) = index_to_pos.get(idx) else {
@@ -1970,9 +2472,20 @@ fn pack_item_translate(
     hover_index: Option<usize>,
     axis: Axis,
 ) -> [f32; 2] {
+    if active_pull_clone() {
+        return [0.0, 0.0];
+    }
     let (Some(my_list), Some(my_i), Some(hover_list)) = (my_list, my_index, hover_list) else {
         return [0.0, 0.0];
     };
+    if let Some(hit) = hits
+        .iter()
+        .find(|h| h.list_id.as_deref() == Some(my_list) && h.index == Some(my_i))
+    {
+        if hit.skip_shift {
+            return [0.0, 0.0];
+        }
+    }
     if from_list == Some(hover_list) {
         let (Some(from), Some(hover), true) = (from_index, hover_index, from_list == Some(my_list))
         else {
@@ -1991,22 +2504,11 @@ fn pack_item_translate(
         return [new[0] - layout.rect.x, new[1] - layout.rect.y];
     }
     if from_list == Some(my_list) {
-        let Some(from) = from_index else {
-            return [0.0, 0.0];
-        };
-        if my_i <= from {
-            return [0.0, 0.0];
-        }
-        let fallback = indexed_list_items(hits, my_list)
-            .into_iter()
-            .find(|h| h.index == Some(from))
-            .map(|h| axis_size(h.rect, axis))
-            .unwrap_or(1.0);
-        let extent = slot_extent_along_axis(hits, my_list, Some(from), axis, fallback.max(1.0));
-        return match axis {
-            Axis::X => [-extent, 0.0],
-            Axis::Y | Axis::Xy => [0.0, -extent],
-        };
+        // Source shell is taken out of flow (`position: absolute`). Remaining
+        // origin rows already pack into the hole. A second `-extent` FLIP
+        // walks them into the folder header (Gallery: dragging Alpha leaves
+        // Beta covering "Inbox").
+        return [0.0, 0.0];
     }
     if hover_list != my_list {
         return [0.0, 0.0];
@@ -2022,12 +2524,23 @@ fn pack_item_translate(
         .find(|h| h.index == Some(my_i))
         .map(|h| axis_size(h.rect, axis))
         .unwrap_or(1.0);
-    let extent = from_list
-        .map(|fl| slot_extent_along_axis(hits, fl, from_index, axis, fallback.max(1.0)))
-        .unwrap_or(fallback.max(1.0));
+    // Occupied target: snapshotted packed row. Live source slot after the
+    // shell collapses is chip-only (or 0-stride against the reflowed sibling),
+    // so Gamma would sit flush on the dimmed body.
+    let chip = fallback.max(1.0);
+    let extent = {
+        let pitch = DRAG_PACK_PITCH.get();
+        if pitch >= MIN_SLOT_PITCH {
+            pitch
+        } else {
+            from_list
+                .map(|fl| slot_extent_along_axis(hits, fl, from_index, axis, chip))
+                .unwrap_or(chip)
+        }
+    };
     match axis {
         Axis::X => [extent, 0.0],
-        Axis::Y | Axis::Xy => [0.0, extent],
+        Axis::Y | Axis::Xy | Axis::Start => [0.0, extent],
     }
 }
 
@@ -2075,6 +2588,51 @@ pub(crate) fn list_row_extent(list_id: Option<&str>, axis: Axis, chip: f32) -> f
     }
 }
 
+fn row_pitch_along(hits: &[DragHit], list_id: Option<&str>, axis: Axis, chip: f32) -> f32 {
+    let chip = chip.max(0.0);
+    let Some(list_id) = list_id else {
+        return chip;
+    };
+    let stride = slot_stride_along_axis(hits, list_id, axis, chip);
+    if stride >= MIN_SLOT_PITCH && (chip < 1.0 || stride <= chip * STRETCH_RATIO) {
+        stride
+    } else {
+        chip
+    }
+}
+
+/// Cross-list insert hole on the **target**. Empty lists open `chip` (no gap
+/// until a second row exists). Occupied lists open the snapshotted source
+/// packed row so a one-item Later still gets item+gap.
+pub(crate) fn pack_insert_extent(target_list: Option<&str>, axis: Axis, chip: f32) -> f32 {
+    let chip = chip.max(0.0);
+    let Some(list) = target_list else {
+        return chip;
+    };
+    let occupied = LAST_HITS.with(|h| {
+        h.borrow()
+            .iter()
+            .any(|hit| hit.list_id.as_deref() == Some(list) && hit.index.is_some())
+    });
+    if !occupied {
+        return chip;
+    }
+    let pitch = DRAG_PACK_PITCH.get();
+    if pitch >= MIN_SLOT_PITCH {
+        pitch
+    } else {
+        list_row_extent(Some(list), axis, chip)
+    }
+}
+
+/// Author gap inside the snapshotted packed row. Used to cancel the flex
+/// `gap` a 0-height source shell still occupies. Snapshotted at activate
+/// from neighbour stride − item size — not `pitch - live drag_extent`,
+/// which is 0 when those two happen to match.
+pub(crate) fn pack_gap(_chip: f32) -> f32 {
+    DRAG_PACK_GAP.get().max(0.0)
+}
+
 #[allow(dead_code)]
 pub(crate) fn list_max_index(list_id: Option<&str>) -> Option<usize> {
     let list_id = list_id?;
@@ -2111,7 +2669,7 @@ pub(crate) fn insert_hole_origin(
         if let Some(last) = items.last() {
             let (dx, dy) = match axis {
                 Axis::X => (stride, 0.0),
-                Axis::Y | Axis::Xy => (0.0, stride),
+                Axis::Y | Axis::Xy | Axis::Start => (0.0, stride),
             };
             return Some([last.rect.x + dx, last.rect.y + dy]);
         }
@@ -2138,7 +2696,7 @@ pub(crate) fn source_translate_to_insert_hole(
     };
     let fallback = match axis {
         Axis::X => src.rect.width,
-        Axis::Y | Axis::Xy => src.rect.height,
+        Axis::Y | Axis::Xy | Axis::Start => src.rect.height,
     };
     let Some(hole) = insert_hole_origin(hits, hover_list, hover_index, axis, fallback) else {
         return [0.0, 0.0];
@@ -2208,6 +2766,7 @@ mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
     use crate::core::tree::Element;
+    use std::rc::Rc;
 
     fn hit(id: &str, bounds: [f32; 4], drop: bool) -> DragHit {
         DragHit {
@@ -2222,6 +2781,10 @@ mod tests {
             index: None,
             group: String::new(),
             disabled: false,
+            list_axis: None,
+            skip_shift: false,
+            skip_follow: false,
+            pull_clone: false,
         }
     }
 
@@ -2242,8 +2805,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 8.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -2253,6 +2819,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2269,6 +2838,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2290,9 +2860,431 @@ mod tests {
             assert!(is_active());
             assert_eq!(active_draggable.peek().as_deref(), Some("a"));
             assert_eq!(overlay_pos.peek(), [28.0, 8.0]);
+            assert_eq!(last_hits().len(), 1);
+            assert_eq!(last_hits_in_scope("s")[0].id, "zone");
+            assert!(last_hits_in_scope("other").is_empty());
             let _ = end(&drops);
             assert!(!is_dragging());
             assert!(active_draggable.peek().is_none());
+        });
+    }
+
+    fn seed_velocity(vx: f32, vy: f32) {
+        VELOCITY.with(|v| {
+            let mut t = v.borrow_mut();
+            t.reset();
+            let t0 = Instant::now();
+            t.sample([0.0, 0.0], t0);
+            t.sample(
+                [vx * 0.02, vy * 0.02],
+                t0 + std::time::Duration::from_millis(20),
+            );
+        });
+    }
+
+    #[test]
+    fn free_move_inertia_coasts_then_commits() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            set_scope_inertia(
+                "s",
+                crate::utils::pointer_action::InertiaOpts {
+                    enabled: true,
+                    min_speed: 50.0,
+                    ..Default::default()
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [10.0, 10.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops: Vec<DragHit> = vec![];
+            assert!(tick(20.0, 10.0, &drops, [400.0, 300.0]));
+            seed_velocity(400.0, 0.0);
+            assert!(end(&drops));
+            assert!(is_coasting());
+            assert!(is_dragging());
+            let dummy = Element::new();
+            let mut frames = 0;
+            while is_coasting() && frames < 200 {
+                let _ = pump_inertia(&dummy, [400.0, 300.0]);
+                frames += 1;
+            }
+            assert!(!is_coasting(), "frames={frames}");
+            assert!(!is_dragging());
+        });
+    }
+
+    #[test]
+    fn sortable_does_not_coast() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            set_scope_inertia(
+                "s",
+                crate::utils::pointer_action::InertiaOpts {
+                    enabled: true,
+                    min_speed: 1.0,
+                    ..Default::default()
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [10.0, 10.0, 40.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
+            let _ = tick(40.0, 10.0, &drops, [400.0, 300.0]);
+            seed_velocity(400.0, 0.0);
+            assert!(end(&drops));
+            assert!(!is_coasting());
+            assert!(!is_dragging());
+        });
+    }
+
+    #[test]
+    fn lock_axis_start_pins_secondary_after_first_move() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s-start".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Start,
+                    start_axis: Axis::Xy,
+                    threshold: 4.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s-start".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [2.0, 2.0],
+                start_bounds: [8.0, 8.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
+            assert!(tick(30.0, 18.0, &drops, [400.0, 300.0]));
+            let pos = overlay_pos.peek();
+            assert!(
+                (pos[0] - 28.0).abs() < 1e-3 && (pos[1] - 8.0).abs() < 1e-3,
+                "first move dx>dy must lock X (Y stays at grab origin); got {pos:?}"
+            );
+            let _ = end(&drops);
+        });
+    }
+
+    #[test]
+    fn start_axis_x_stays_pending_on_vertical_then_activates_on_horizontal() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s-sa".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::X,
+                    threshold: 4.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s-sa".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [10.0, 10.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
+            assert!(!tick(10.0, 30.0, &drops, [400.0, 300.0]));
+            assert!(
+                !is_active(),
+                "vertical first move must not activate start_axis=x"
+            );
+            assert!(tick(30.0, 12.0, &drops, [400.0, 300.0]));
+            assert!(is_active());
+            let _ = end(&drops);
+        });
+    }
+
+    #[test]
+    fn snap_end_only_applies_on_end_not_tick() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s-snap".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: Some(Snap::grid(SnapGrid::new(10.0, 10.0).end_only(true))),
+                    overlay_registered: false,
+                    source_opacity: 1.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s-snap".into(),
+                draggable_id: "a".into(),
+                pointer: [0.0, 0.0],
+                grab_offset: [0.0, 0.0],
+                start_bounds: [0.0, 0.0, 20.0, 20.0],
+                from_list: None,
+                from_index: None,
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [0.0, 0.0, 400.0, 300.0], true)];
+            assert!(tick(14.0, 0.0, &drops, [400.0, 300.0]));
+            let mid = overlay_pos.peek();
+            assert!(
+                (mid[0] - 14.0).abs() < 1e-3,
+                "end_only must not snap during tick; got {mid:?}"
+            );
+            let _ = end(&drops);
+            let done = overlay_pos.peek();
+            assert!(
+                (done[0] - 10.0).abs() < 1e-3,
+                "end_only must snap on end; got {done:?}"
+            );
         });
     }
 
@@ -2313,8 +3305,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -2324,6 +3319,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2340,6 +3338,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2390,8 +3389,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -2401,6 +3403,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2417,6 +3422,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2465,8 +3471,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -2476,6 +3485,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2492,6 +3504,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             let mut chip = Element::new();
@@ -2561,8 +3574,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 1.0,
@@ -2572,6 +3588,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2594,6 +3613,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2635,8 +3655,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -2646,6 +3669,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2662,6 +3688,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -2710,8 +3737,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -2721,6 +3751,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -2739,6 +3772,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3150,8 +4184,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::Element("arena".into()),
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.0,
@@ -3161,6 +4198,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3177,6 +4217,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3247,8 +4288,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::Parent,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.0,
@@ -3258,6 +4302,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3274,6 +4321,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             let mut island = Element::new();
@@ -3473,8 +4521,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -3484,6 +4535,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3500,6 +4554,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3565,6 +4620,10 @@ mod tests {
             index,
             group: String::new(),
             disabled: false,
+            list_axis: None,
+            skip_shift: false,
+            skip_follow: false,
+            pull_clone: false,
         }
     }
 
@@ -3585,8 +4644,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 1.0,
@@ -3596,6 +4658,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3612,6 +4677,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3698,8 +4764,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 1.0,
@@ -3709,6 +4778,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3725,6 +4797,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3811,8 +4884,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 1.0,
@@ -3822,6 +4898,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3842,6 +4921,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -3921,8 +5001,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 1.0,
@@ -3932,6 +5015,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -3948,6 +5034,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -4066,8 +5153,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::ClosestCenter,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -4077,6 +5167,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -4093,6 +5186,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -4177,12 +5271,20 @@ mod tests {
             item_type: String::new(),
             group: String::new(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         };
         assert_eq!(
             insert_index_along_axis(&hits, "list", [40.0, 82.0], Axis::Y),
@@ -4211,12 +5313,20 @@ mod tests {
             item_type: String::new(),
             group: String::new(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         };
         let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
         draft.list_id = Some("todo".into());
@@ -4274,12 +5384,20 @@ mod tests {
             item_type: "planet".into(),
             group: String::new(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         };
         assert_eq!(
             insert_index_along_axis(&hits, "planets", [40.0, 340.0], Axis::Y),
@@ -4346,12 +5464,20 @@ mod tests {
             item_type: "planet".into(),
             group: String::new(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         };
         assert_eq!(
             resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 190.0], None),
@@ -4392,12 +5518,20 @@ mod tests {
             item_type: "task".into(),
             group: "board".into(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         };
         let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
         draft.scope_id = "gal-drag-board".into();
@@ -4459,12 +5593,20 @@ mod tests {
             item_type: "file".into(),
             group: "nest".into(),
             axis: Axis::Y,
+            motion_axis: Axis::Y,
+            start_axis: Axis::Xy,
             threshold: 0.0,
             restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
             snap: None,
             capture_id: String::new(),
             delay_ms: 0.0,
+            activation: Activation::And,
             pressed_at: Instant::now(),
+            last_viewport: [0.0, 0.0],
+            pull_clone: false,
+            data: None,
         }
     }
 
@@ -4673,8 +5815,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -4684,6 +5829,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -4700,6 +5848,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -4776,8 +5925,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -4787,6 +5939,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -4803,6 +5958,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -4863,8 +6019,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: true,
                     source_opacity: 0.4,
@@ -4874,6 +6033,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -4890,6 +6052,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -4974,8 +6137,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -4985,6 +6151,9 @@ mod tests {
                     },
                     empty_insert: 8.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -5001,6 +6170,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -5060,8 +6230,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -5071,6 +6244,9 @@ mod tests {
                     },
                     empty_insert: 8.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -5087,6 +6263,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -5164,8 +6341,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -5175,6 +6355,9 @@ mod tests {
                     },
                     empty_insert: 8.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -5191,6 +6374,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -5257,6 +6441,101 @@ mod tests {
         );
     }
 
+    /// Cross-list padding looks up the *target* list. A one-item Later has no
+    /// neighbour stride, so live `list_row_extent` is `chip` and drops the
+    /// author gap. `pack_insert_extent` uses the snapshotted source pitch.
+    #[test]
+    fn list_row_extent_singleton_target_must_keep_source_row_pitch() {
+        let mut alpha = hit("tree-inbox:Alpha", [0.0, 0.0, 160.0, 32.0], true);
+        alpha.index = Some(0);
+        alpha.list_id = Some("tree-inbox".into());
+        let mut beta = hit("tree-inbox:Beta", [0.0, 38.0, 160.0, 32.0], true);
+        beta.index = Some(1);
+        beta.list_id = Some("tree-inbox".into());
+        let mut gamma = hit("tree-later:Gamma", [0.0, 80.0, 160.0, 32.0], true);
+        gamma.index = Some(0);
+        gamma.list_id = Some("tree-later".into());
+        LAST_HITS.with(|h| *h.borrow_mut() = vec![alpha, beta, gamma]);
+        let source_pitch = list_row_extent(Some("tree-inbox"), Axis::Y, 32.0);
+        let live_target = list_row_extent(Some("tree-later"), Axis::Y, 32.0);
+        assert!(
+            (source_pitch - 38.0).abs() < 0.5,
+            "Inbox Alpha→Beta pitch is item+gap; got {source_pitch}"
+        );
+        assert!(
+            (live_target - 32.0).abs() < 0.5,
+            "live Later stride is chip-only; got {live_target}"
+        );
+        DRAG_PACK_PITCH.set(source_pitch);
+        DRAG_PACK_GAP.set(6.0);
+        let target_pad = pack_insert_extent(Some("tree-later"), Axis::Y, 32.0);
+        let gap = pack_gap(32.0);
+        DRAG_PACK_PITCH.set(0.0);
+        DRAG_PACK_GAP.set(0.0);
+        assert!(
+            (target_pad - source_pitch).abs() < 0.5,
+            "Later pad must open the same packed row, not chip-only; \
+             target_pad={target_pad} source_pitch={source_pitch}"
+        );
+        assert!(
+            (gap - 6.0).abs() < 0.5,
+            "pack_gap is pitch - chip; got {gap}"
+        );
+    }
+
+    /// Cross-list: source shell leaves the pack (`position: absolute`). Origin
+    /// siblings already reflow into the hole — a second `-extent` FLIP walks
+    /// them into the folder header (Gallery: Alpha 拖到 Later 时 Beta 盖住 Inbox).
+    /// Target siblings must open the snapshotted packed row, not the live
+    /// collapsed source slot (0 gap between dimmed body and Gamma).
+    #[test]
+    fn cross_list_origin_sibling_stays_put_target_opens_packed_row() {
+        let mut alpha = hit("tree-inbox:Alpha", [8.0, 40.0, 160.0, 32.0], true);
+        alpha.index = Some(0);
+        alpha.list_id = Some("tree-inbox".into());
+        let mut beta = hit("tree-inbox:Beta", [8.0, 40.0, 160.0, 32.0], true);
+        beta.index = Some(1);
+        beta.list_id = Some("tree-inbox".into());
+        let mut gamma = hit("tree-later:Gamma", [8.0, 200.0, 160.0, 32.0], true);
+        gamma.index = Some(0);
+        gamma.list_id = Some("tree-later".into());
+        let hits = vec![alpha, beta, gamma];
+        DRAG_PACK_PITCH.set(38.0);
+        DRAG_PACK_GAP.set(6.0);
+        let origin_beta = pack_item_translate(
+            &hits,
+            Some("tree-inbox"),
+            Some(1),
+            Some("tree-inbox"),
+            Some(0),
+            Some("tree-later"),
+            Some(0),
+            Axis::Y,
+        );
+        let target_gamma = pack_item_translate(
+            &hits,
+            Some("tree-later"),
+            Some(0),
+            Some("tree-inbox"),
+            Some(0),
+            Some("tree-later"),
+            Some(0),
+            Axis::Y,
+        );
+        DRAG_PACK_PITCH.set(0.0);
+        DRAG_PACK_GAP.set(0.0);
+        assert_eq!(
+            origin_beta,
+            [0.0, 0.0],
+            "origin sibling must not FLIP up after the source left the pack; got {origin_beta:?}"
+        );
+        assert!(
+            (target_gamma[1] - 38.0).abs() < 0.5,
+            "target sibling must open the snapshotted packed row (item+gap), not the collapsed live slot; got {}",
+            target_gamma[1]
+        );
+    }
+
     #[test]
     fn folder_drag_over_inner_files_stays_on_outer_list() {
         let (_o, hover) = create_root(|| {
@@ -5274,8 +6553,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::MostIntersecting,
                     axis: Axis::Y,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -5285,6 +6567,9 @@ mod tests {
                     },
                     empty_insert: 8.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -5301,6 +6586,7 @@ mod tests {
                     drag_extent,
                     stack_seq: 0,
                     modifiers: Vec::new(),
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -5373,8 +6659,11 @@ mod tests {
                 ScopeRuntime {
                     collision: CollisionAlg::PointerWithin,
                     axis: Axis::Xy,
+                    start_axis: Axis::Xy,
                     threshold: 0.0,
                     restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
                     overlay_registered: false,
                     source_opacity: 1.0,
@@ -5384,6 +6673,9 @@ mod tests {
                     },
                     empty_insert: 0.0,
                     delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
                     can_drop: None,
                     on_start: None,
                     on_move: None,
@@ -5405,6 +6697,7 @@ mod tests {
                             y: t.y,
                         }
                     })],
+                    sensors: Vec::new(),
                 },
             );
             begin(BeginDrag {
@@ -5456,8 +6749,11 @@ mod tests {
                       drag_extent| ScopeRuntime {
                 collision: CollisionAlg::PointerWithin,
                 axis: Axis::Xy,
+                start_axis: Axis::Xy,
                 threshold: 0.0,
                 restrict: Restrict::None,
+                restrict_end_only: false,
+                restrict_anchor: RestrictAnchor::FULL,
                 snap: None,
                 overlay_registered: false,
                 source_opacity: 1.0,
@@ -5467,6 +6763,9 @@ mod tests {
                 },
                 empty_insert: 0.0,
                 delay_ms: 0.0,
+                activation: Activation::And,
+                collision_fn: None,
+                overlay_align: OverlayAlign::Grab,
                 can_drop: None,
                 on_start: None,
                 on_move: None,
@@ -5483,6 +6782,7 @@ mod tests {
                 drag_extent,
                 stack_seq: 0,
                 modifiers: Vec::new(),
+                sensors: Vec::new(),
             };
             register_scope(
                 "s-mod-rt".into(),
@@ -5550,6 +6850,426 @@ mod tests {
         assert!(
             (after_remove[0] - 10.0).abs() < 0.5 && (after_remove[1] - 30.0).abs() < 0.5,
             "remove_modifier must drop the extra stage, got {after_remove:?}"
+        );
+    }
+
+    fn scope_rt(
+        collision: CollisionAlg,
+        axis: Axis,
+        threshold: f32,
+        delay_ms: f32,
+        activation: Activation,
+        collision_fn: Option<CollisionFn>,
+        can_drop: Option<DragPredicate>,
+        overlay_align: OverlayAlign,
+        overlay_open: Signal<bool>,
+        overlay_pos: Signal<[f32; 2]>,
+        active_draggable: Signal<Option<String>>,
+        active_droppable: Signal<Option<String>>,
+        from_list: Signal<Option<String>>,
+        from_index: Signal<Option<usize>>,
+        hover_list: Signal<Option<String>>,
+        hover_index: Signal<Option<usize>>,
+        drag_extent: Signal<[f32; 2]>,
+    ) -> ScopeRuntime {
+        ScopeRuntime {
+            collision,
+            axis,
+            start_axis: Axis::Xy,
+            threshold,
+            restrict: Restrict::None,
+            restrict_end_only: false,
+            restrict_anchor: RestrictAnchor::FULL,
+            snap: None,
+            overlay_registered: true,
+            source_opacity: 1.0,
+            autoscroll: AutoScroll {
+                enabled: false,
+                ..Default::default()
+            },
+            empty_insert: 0.0,
+            delay_ms,
+            activation,
+            collision_fn,
+            overlay_align,
+            can_drop,
+            on_start: None,
+            on_move: None,
+            on_over: None,
+            on_end: None,
+            overlay_open,
+            overlay_pos,
+            active_draggable,
+            active_droppable,
+            from_list,
+            from_index,
+            hover_list,
+            hover_index,
+            drag_extent,
+            stack_seq: 0,
+            modifiers: Vec::new(),
+            sensors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn collision_fn_session_picks_non_enum_winner() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            let f: CollisionFn = Rc::new(|_| Some("far".into()));
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::ClosestCenter,
+                    Axis::Xy,
+                    0.0,
+                    0.0,
+                    Activation::And,
+                    Some(f),
+                    None,
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [2.0, 2.0],
+                start_bounds: [8.0, 8.0, 40.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![
+                hit("near", [12.0, 0.0, 10.0, 10.0], true),
+                hit("far", [80.0, 80.0, 10.0, 10.0], true),
+            ];
+            assert!(tick(85.0, 85.0, &drops, [400.0, 300.0]));
+            assert_eq!(active_droppable.peek().as_deref(), Some("far"));
+            let _ = end(&drops);
+        });
+    }
+
+    #[test]
+    fn collision_fn_then_can_drop_vetoes() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            let f: CollisionFn = Rc::new(|_| Some("far".into()));
+            let pred: DragPredicate = Rc::new(|ev| ev.droppable_id.as_deref() != Some("far"));
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::ClosestCenter,
+                    Axis::Xy,
+                    0.0,
+                    0.0,
+                    Activation::And,
+                    Some(f),
+                    Some(pred),
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [2.0, 2.0],
+                start_bounds: [8.0, 8.0, 40.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![
+                hit("near", [12.0, 0.0, 10.0, 10.0], true),
+                hit("far", [80.0, 80.0, 10.0, 10.0], true),
+            ];
+            assert!(tick(12.0, 5.0, &drops, [400.0, 300.0]));
+            assert!(
+                active_droppable.peek().is_none(),
+                "can_drop must veto after collision_fn selects"
+            );
+            let _ = end(&drops);
+        });
+    }
+
+    #[test]
+    fn activation_or_fires_on_delay_without_distance() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::PointerWithin,
+                    Axis::Xy,
+                    999.0,
+                    5.0,
+                    Activation::Or,
+                    None,
+                    None,
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [2.0, 2.0],
+                start_bounds: [8.0, 8.0, 40.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
+            assert!(!tick(10.0, 10.0, &drops, [400.0, 300.0]));
+            assert!(!is_active());
+            std::thread::sleep(std::time::Duration::from_millis(12));
+            assert!(tick(10.0, 10.0, &drops, [400.0, 300.0]));
+            assert!(is_active());
+            let _ = end(&drops);
+        });
+    }
+
+    #[test]
+    fn activation_and_needs_distance_even_after_delay() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([0.0_f32, 0.0]);
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::PointerWithin,
+                    Axis::Xy,
+                    999.0,
+                    5.0,
+                    Activation::And,
+                    None,
+                    None,
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [10.0, 10.0],
+                grab_offset: [2.0, 2.0],
+                start_bounds: [8.0, 8.0, 40.0, 24.0],
+                from_list: Some("list".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
+            std::thread::sleep(std::time::Duration::from_millis(12));
+            assert!(!tick(10.0, 10.0, &drops, [400.0, 300.0]));
+            assert!(!is_active());
+            let _ = end(&drops);
+        });
+    }
+
+    fn axis_hit(
+        id: &str,
+        list: &str,
+        bounds: [f32; 4],
+        index: Option<usize>,
+        list_axis: Axis,
+    ) -> DragHit {
+        DragHit {
+            id: id.into(),
+            scope_id: "s".into(),
+            is_draggable: index.is_some(),
+            is_droppable: true,
+            rect: Rect::from_bounds(bounds),
+            item_type: "card".into(),
+            accept: String::new(),
+            list_id: Some(list.into()),
+            index,
+            group: String::new(),
+            disabled: false,
+            list_axis: Some(list_axis),
+            skip_shift: false,
+            skip_follow: false,
+            pull_clone: false,
+        }
+    }
+
+    #[test]
+    fn pull_clone_skips_sibling_shift() {
+        use crate::utils::drag::registry::{set_item_flags, ItemFlags};
+        set_item_flags("s", "a", ItemFlags {
+            pull_clone: true,
+            ..Default::default()
+        });
+        begin(BeginDrag {
+            scope_id: "s".into(),
+            draggable_id: "a".into(),
+            pointer: [0.0, 0.0],
+            grab_offset: [0.0, 0.0],
+            start_bounds: [0.0, 0.0, 10.0, 10.0],
+            from_list: Some("list".into()),
+            from_index: Some(0),
+            item_type: String::new(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(active_pull_clone());
+        let mut a = hit("a", [0.0, 0.0, 10.0, 10.0], true);
+        a.list_id = Some("list".into());
+        a.index = Some(0);
+        let mut b = hit("b", [0.0, 10.0, 10.0, 10.0], true);
+        b.list_id = Some("list".into());
+        b.index = Some(1);
+        let hits = vec![a, b];
+        assert_eq!(
+            pack_item_translate(&hits, Some("list"), Some(1), Some("list"), Some(0), Some("list"), Some(2), Axis::Y),
+            [0.0, 0.0]
+        );
+        let _ = cancel();
+    }
+
+    #[test]
+    fn sortable_list_direction_overrides_provider_axis() {
+        let (_o, (on_vert, on_horiz)) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::PointerWithin,
+                    Axis::Y,
+                    0.0,
+                    0.0,
+                    Activation::And,
+                    None,
+                    None,
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "v0".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 0.0, 80.0, 32.0],
+                from_list: Some("vert".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits = vec![
+                axis_hit("v0", "vert", [0.0, 0.0, 80.0, 32.0], Some(0), Axis::Y),
+                axis_hit("v1", "vert", [0.0, 40.0, 80.0, 32.0], Some(1), Axis::Y),
+                axis_hit("v2", "vert", [0.0, 80.0, 80.0, 32.0], Some(2), Axis::Y),
+                axis_hit("vert", "vert", [0.0, 0.0, 80.0, 120.0], None, Axis::Y),
+                axis_hit("h0", "horiz", [0.0, 200.0, 40.0, 32.0], Some(0), Axis::X),
+                axis_hit("h1", "horiz", [40.0, 200.0, 40.0, 32.0], Some(1), Axis::X),
+                axis_hit("h2", "horiz", [80.0, 200.0, 40.0, 32.0], Some(2), Axis::X),
+                axis_hit("horiz", "horiz", [0.0, 200.0, 120.0, 32.0], None, Axis::X),
+            ];
+            assert!(tick(40.0, 56.0, &hits, [400.0, 300.0]));
+            let on_vert = hover_index.peek();
+            assert_eq!(hover_list.peek().as_deref(), Some("vert"));
+            assert!(tick(90.0, 216.0, &hits, [400.0, 300.0]));
+            let on_horiz = hover_index.peek();
+            assert_eq!(hover_list.peek().as_deref(), Some("horiz"));
+            let _ = end(&hits);
+            (on_vert, on_horiz)
+        });
+        assert_eq!(on_vert, Some(1), "vertical list still splits on Y");
+        assert_eq!(
+            on_horiz,
+            Some(2),
+            "horizontal list must split on X (Y would yield 0)"
         );
     }
 }
