@@ -1,9 +1,10 @@
 # OS 平台层（`crate::platform`）现状与目标结构
 
-> **文档地位**：`crates/rui/src/platform` 的**领域规范**（「是什么 / 缺什么 / 该怎么长」）。  
-> **执行源**：巩固期排期仍以 [`AUTHORITY.md`](../AUTHORITY.md) 为准；本文**不**单独开 WP 编号。  
+> **文档地位**：`crates/rui/src/platform` 的**领域规范**（巩固期 desktop **P0–P3d** facade：职责边界、搬家纪律、`cfg` 分发）。§4 `mobile/` / `embedded/` 草图与 §12 后续项**不在**本期冻结范围。  
+> **冻结状态**：**已冻结**（2026-09-10；库测 `platform::` / `font_loader` 绿 + Win Gallery P2 IME / P3 字体·剪贴板 §8–§9 视觉签收 2026-09-08～09）。纠错（行号、测试命令、Gallery 步骤）可改；**策略变更**（facade API、`cfg` 边界、OS 表搬家纪律、GPU 候选序、剪贴板 I/O 层）须改本文并跑 §9.6 / §10 / §11 自动化，禁止在 `app/` 或 `renderer/` 静默新增 Win32 块。  
+> **执行源**：巩固期排期仍以 [`AUTHORITY.md`](../AUTHORITY.md) 为准；本文**不**单独开 WP 编号。P4 / 移动·鸿蒙见 AUTHORITY **B4** 与本文 §13。  
 > **事实来源**：`crates/rui/src/platform/`、`app/window_chrome.rs`、`app/ime_support.rs`、`renderer/font_loader.rs`、`utils/clipboard.rs`、`app/state.rs`（`acquire_adapter`）、`app/glass_gpu.rs`、`app/hmr_log.rs`；Cargo `[target.'cfg(windows)'.dependencies]` / `[target.'cfg(target_os = "macos")'.dependencies]`。  
-> **审计日期**：2026-09-06；**P0 / P1 落地**：2026-09-08；**P2 IME Win32 迁入**：2026-09-08；**P3 字体路径 / 剪贴板迁入**：2026-09-09（Win 视觉同日签收，先于 P3c）；**P3c GPU 后端排序迁入**：2026-09-09；**P3d 控制台 VT / 本地时钟迁入**：2026-09-09。  
+> **日期**：2026-09-10（治理层冻结签署）；**P0 / P1**：2026-09-08；**P2 IME Win32 迁入**：2026-09-08；**P3 字体路径 / 剪贴板**：2026-09-09（Win 视觉同日签收）；**P3c GPU 后端排序**：2026-09-09；**P3d 控制台 VT / 本地时钟**：2026-09-09。  
 > **关联**：窗口 chrome 验收见 [`multi_window.md`](../ops/multi_window.md)；IME 见 [`ime.md`](../ops/ime.md)；栈预算见 [`stack_and_element_model.md`](stack_and_element_model.md)（ADR-10）；字体路径见 [`font_strategy.md`](font_strategy.md)；剪贴板依赖见 [`crate_deps.md`](../ops/crate_deps.md)；GPU 顺序见 [`size_and_memory.md`](../ops/size_and_memory.md) §8.1（ADR-3）；色域探测远期见 [`color_advanced.md`](color_advanced.md) P3-B。
 
 ---

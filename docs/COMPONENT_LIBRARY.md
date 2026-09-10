@@ -64,7 +64,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](components/component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`drag/`**（WP-DRAG.1 · 超越 Sortable；solid-dnd/interact；不进 prelude）、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、**拖放套件**、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`style/semantic_tone.rs`**（计划 · 语义色 parse + soft chrome · 见 [`component_variants.md`](components/component_variants.md) §6）、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`drag/`**（WP-DRAG.1–3 ☑ · 超越 Sortable；solid-dnd/interact；§7 + §11 Extendable；不进 prelude）、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、**拖放套件**、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`theme_override.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark、应用 patch | 业务状态机；完整 ICC/HDR（见 [`color_advanced.md`](engine/color_advanced.md)）；主题契约见 [`theme.md`](engine/theme.md) |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
@@ -538,7 +538,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 ## 5. 组件清单（代码事实 · 2026-09-05）
 
 来源：`components/mod.rs` `pub use` + Gallery 分区。  
-**分桶权威表**（`experimental` / `verified` / `planned` / `broken` + **id 策略**）：[`component_inventory.md`](components/component_inventory.md)。  
+**分桶权威表**（`experimental` / `verified` / `planned` / `broken` + **id 策略**）：[`component_inventory.md`](components/component_inventory.md)（WP-CV ☑ **已冻结** 2026-09-10）。  
 粗口径：**Gallery 验证** = 对应分区可演示且无未分类 P0（2026-09-05 产品面已走查）；**工程** = 满足 §1；**SemVer 0.1** = §5.2.1（窄于 Gallery 验证面）；样式承诺面见 §5.2.2；尚未 `pub use` 的对位为 `planned`（inventory §1.9）。
 
 参考分工：ShadCN → 产品命名与分区；Solid → 受控 Signal / 细粒度 sync（非组件表）；EUI → **密度标尺**（inventory §3）+ **视觉契约**（[`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md)），不搬架构。

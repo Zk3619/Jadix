@@ -2,7 +2,7 @@
 
 > **文档地位**：资源分层、`jadix_icons` / `jadix_devtools` 等可选 crate 边界、与 W4 伞形发布及 `jadix_components` 拆分的对齐说明。  
 > **状态**：草案（未实施）；执行前以 [`AUTHORITY.md`](../AUTHORITY.md) / [`W4_PRELAUNCH_CHECKLIST.md`](../ops/W4_PRELAUNCH_CHECKLIST.md) 排期为准。  
-> **交叉**：[`devtools.md`](../ops/devtools.md) · [`reactivity_and_hot_reload.md`](../ops/reactivity_and_hot_reload.md) · [`headless.md`](../components/headless.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §3（双书写面）
+> **交叉**：[`devtools.md`](../ops/devtools.md) · [`reactivity_and_hot_reload.md`](../ops/reactivity_and_hot_reload.md) · [`headless.md`](../components/headless.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §3（双书写面）· [`pointer_and_drag_architecture.md`](pointer_and_drag_architecture.md)（同一分层套到指针拖 / DnD）
 
 ---
 

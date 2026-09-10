@@ -1,12 +1,14 @@
 # 组件清单分桶表（C-WP-0.2）
 
-> **文档地位**：规范 [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5 的**控件分桶数据表**；对接 [`AUTHORITY.md`](../AUTHORITY.md) WP-CV.* 走查与身份审计。样式承诺面见 §1.8（不进 CV 分桶）。  
-> **事实来源**：`crates/rui/src/components/mod.rs` `pub use` · `examples/gallery` 侧栏分区 · [`desktop_smoke.md`](../ops/desktop_smoke.md) · `crate_tests/`。  
+> **文档地位**：规范 [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §5 的**控件分桶数据表**（分桶真源）；对接 [`AUTHORITY.md`](../AUTHORITY.md) WP-CV.* 走查与身份审计（**CV 已退出** 2026-08-13）。样式承诺面见 §1.8（不进 CV 分桶）。`utils/drag` 等非 `components/` 导出见 [`drag.md`](drag.md)。  
+> **冻结状态**：**已冻结**（2026-09-10；WP-CV.0–.4 ☑ + Gallery 产品面走查 2026-09-05；`broken` = 无；签署时 `cv_stable_layout` 绿 2026-08-12）。纠错（行号、§5 与 `mod.rs` 对齐、Gallery id）可改；**分桶变更**（新 `pub use`、改桶、`planned` 落地、§5.2.1 升格）须改本文 + 回写规范 §5 并跑 `cargo test -p rui --lib cv_`，禁止只改 Gallery 文案。  
+> **执行源**：WP-CV 已退出；SemVer 0.1 窄名单见规范 §5.2.1（W4 / WP-4.1 决定升格，不自动扩大）。  
+> **事实来源**：`crates/rui/src/components/mod.rs` `pub use` · `examples/gallery` 侧栏分区 · [`desktop_smoke.md`](../ops/desktop_smoke.md) · `crate_tests/components/cv_stable_layout.rs`。  
 > **参考分工**（只取所需，不搬架构）：  
 > - [`Reference/ShadCN-UI`](../../reference/ShadCN-UI) → 产品面命名 / `variant`·`size` / 分区对标  
 > - [`Reference/SolidJS`](../../reference/SolidJS) → 受控 Signal、细粒度 sync、非组件清单  
 > - [`Reference/EUI-NEO-main`](../../reference/EUI-NEO-main) → **密度标尺**（§3）+ **视觉契约**见 [`EUI_NEO_VISUAL.md`](../comparison/EUI_NEO_VISUAL.md)；禁作 API/架构参照  
-> **日期**：2026-09-05（Gallery 产品面走查；根目录文档收口）。前史：2026-08-12 CV 分桶；2026-08-13 §1.10 公开自绘面（含 B16 / B17）  
+> **日期**：2026-09-10（治理层冻结签署）；Gallery 产品面走查 **2026-09-05**；前史：2026-08-12 CV 分桶；2026-08-13 §1.10 公开自绘面（含 B16 / B17）  
 
 交叉：[`AUTHORITY.md`](../AUTHORITY.md) WP-CV.0 · WP-CV.1 · WP-CV.3 · WP-CV.4 · WP-3.11–3.13 · [`drawing.md`](../drawing.md) · [`element_identity.md`](../element_identity.md) · [`gap_analysis.md`](../comparison/gap_analysis.md) §6
 
@@ -17,7 +19,7 @@
 | 桶 | 含义 | 可否进 C1 行为下沉 |
 |----|------|-------------------|
 | **verified** | 主路径有 Win 冒烟签署 **和/或** 有针对性库测，且无未分类 P0 | 是 |
-| **stable-candidate** | 落在规范 §5.2.1 组件稳定面内，Gallery 可演示，**尚未**完成 CV 全量走查 | 仅无 P0 时可进；优先先 CV |
+| **stable-candidate** | 落在规范 §5.2.1 组件稳定面内，Gallery 可演示，**尚未**完成 CV 全量走查 | CV 已退出；**仅** `broken` 修复后过渡或历史表项；新产品面默认 `experimental` → 证据升 `verified` |
 | **experimental** | 已 `pub use`，超出 §5.2.1，或深度/平台差异大；SemVer 可破坏 | 否（除非单独升格） |
 | **planned** | ShadCN 对位、**尚未**进 `components/mod.rs`；勿当已导出 | 否；落地后先入 experimental |
 | **broken** | 已知 P0（崩溃 / 无法开合 / 无法输入 / 布局塌缩）未修 | **否** |
@@ -340,18 +342,18 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`accordion`, `alert`, `alert_dialog`, `aspect_ratio`, `attachment`, `avatar`, `badge`, `breadcrumb`, `bubble`, `button`, `button_group`, `calendar`, `card`, `carousel`, `chart`, `checkbox`, `collapsible`, `color_picker`, `combobox`, `command`, `context_menu`, `date_picker`(+`time_picker`), `dialog`, `drawer`, `dropdown_menu`, `empty`, `form`, `hover_card`, `image`, `input`, `input_adornment`, `input_otp`, `item`, `kbd`, `label`, `list`, `marker`, `menubar`, `message`, `message_scroller`, `navbar`, `navigation_menu`, `pagination`, `popover`, `progress`, `questionnaire`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`, `slider`, `stepper`, `switch`, `table`, `tabs`, `textarea`, `timeline`, `toast`, `toggle`, `toggle_group`, `tooltip`, `tree_view`, `virtual_list`, `virtual_masonry`。
+`accordion`, `alert`, `alert_dialog`, `aspect_ratio`, `attachment`, `avatar`, `badge`, `breadcrumb`, `bubble`, `button`, `button_group`, `calendar`, `card`, `carousel`, `chart`, `checkbox`, `code_editor`, `collapsible`, `color_picker`, `combobox`, `command`, `context_menu`, `date_picker`(+`time_picker`), `dialog`, `drawer`, `dropdown_menu`, `empty`, `form`, `hover_card`, `image`, `input`, `input_adornment`, `input_otp`, `item`, `kbd`, `label`, `list`, `marker`, `menubar`, `message`, `message_scroller`, `navbar`, `navigation_menu`, `pagination`, `popover`, `progress`, `questionnaire`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`, `slider`, `stepper`, `switch`, `table`, `tabs`, `textarea`, `timeline`, `toast`, `toggle`, `toggle_group`, `tooltip`, `tree_view`, `virtual_list`, `virtual_masonry`。
 
 未入产品清单：`base::BaseComponentBuilder`（样式底座）、`internal::*`。  
 **§1.9 `planned` 不得出现在本列表**，直到首次 `pub use` 并改桶。
 
 ---
 
-## 6. 维护规则
+## 6. 维护规则（冻结后仍适用）
 
-1. 新增 `pub use` → 从 §1.9 删对应 `planned` 行，写入分区表 + 规范 §5.1；默认桶 = `experimental`。  
-2. V.1 走查改桶（**仅控件**）：只允许 `stable-candidate` → `verified` / `broken` / 降为 `experimental`。  
-3. `broken` 修复后先回 `stable-candidate`，再经证据升 `verified`。  
+1. 新增 `pub use` → 从 §1.9 删对应 `planned` 行，写入分区表 + §5 清单 + 规范 §5.1；默认桶 = `experimental`。  
+2. 改桶（**仅控件**）：`experimental` → `verified` 须有 Gallery / 库测 / 冒烟证据；`verified` → `broken` 或降为 `experimental` 须记原因。  
+3. `broken` 修复后先回 `stable-candidate`（过渡桶），再经证据升 `verified`。  
 4. 升格进 §5.2.1 须改规范 + CHANGELOG 草稿，不得只改本表。  
 5. 从 ShadCN registry 新增对位意向 → 先加 §1.9 `planned`，禁止直接写进已导出分区表。  
 6. Theme / utility 变更 → 改 §1.8 + 规范 §5.2.2 + 工程 WP（WP-2.9 等）；**禁止**用 CV 控件分桶标记。

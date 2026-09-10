@@ -138,13 +138,13 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 
 - **2D 能力层**：Canvas 变换栈 / clip AABB / save·restore；Svg 场景 Affine；控件 `rotate`/`scale`。**不是**第三套标签。`RenderGraph` + `TexturePool` 统一 path/canvas/image/scene3d/capture/fx。B16 wrap 复用离屏贴图 + 本层 clip。
 - **GPU 2D（可选）**：`RUI_GPU_2D=1` 把 Chart/Svg/Canvas path 叶切到 tessellate 四边形；默认仍 CPU 覆盖率光栅（golden / headless 回退）。
-- **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；`camera` / `light` / `material` builder；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`。
+- **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；`camera` / `light` / `material` builder；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`（绘制分区 Billboard 俯仰对照 + 文本分区三通道 MSDF 卡）。
 - **B16 底座**：`effect_wrap("blur"|"glass"|"liquid"|"vhs"|…)` 捕获子树几何到离屏 → shader pass → 合成；**命中仍走 Element**。产品目录仍 experimental backlog。
 - **B17 底座**：`Timeline`（duration / easing / repeat）接入 `tick_animations`；`text().glyph_fx("split"|"blur"|…)` 在 glyphon prepare 前处理簇级 opacity/offset。不拆每字 DOM span。
 - **变换文字（Bake / SDF / Vector）**：
   - **Coverage**：轴对齐小字 — glyphon + Nearest（默认）。
-  - **Bake**：`rotate` / `transition-transform` / spin 等 sticky 叶子 — 超采样 RGBA（`rui_text_xform_v2:`）+ Linear/mip + 与壳同 `world_linear`。
-  - **Msdf**：缩放越出约 0.5–2 或 3D label — 覆盖率→SDF（`rui_text_msdf_v1:`）+ FS `median`/`pxRange`；`scene3d().label` 经 mat4 投影 billboard。
+  - **Bake**：`rotate` / `transition-transform` / spin 等 sticky 叶子 — 超采样 RGBA（`rui_text_xform_v3:`）+ Linear（无 mip）+ 与壳同 `world_linear`。CPU 缓存 LRU + 16 MiB 字节帽；GPU 淘汰后只回填**本帧仍需要**的 key。
+  - **Msdf**：缩放越出约 0.5–2 或 3D label — 覆盖率→**三通道 MSDF**（`rui_text_msdf_v2:`，边对着色 + FS `median(RGB)`）；`scene3d().label` 经 mat4 投 4 角 + clip `w`（透视校正 UV，非 AABB）。
   - **Vector / Vello**：outline→`PathCommand`→`RUI_GPU_2D` 仅 spike（`utils/text_vector_spike.rs`）；Vello 对照不替换 glyphon。
 
 **2.5D 缺口（对照 EUI · 2026-09-06）**：`style/transform.rs` **解析**了 `rotateX/Y`、`perspective`、`translate3d`，但 `func_to_mat2d` 把 `RotateX` 压成 `scaleY(cos)`、`Perspective` 空操作、`TranslateZ` 丢弃。EUI 的卡片翻转 / tilt 是 **UI 平面真透视**（无 depth buffer，绘制序仍是树 + z-index），不是 `<scene3d>` mesh。加深挂本包能力层 + B16 tilt 前置，**不挡 Beta**、不新开 WP。细则 [`EUI_NEO_VISUAL.md`](comparison/EUI_NEO_VISUAL.md) §3.2。

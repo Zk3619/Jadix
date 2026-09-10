@@ -740,7 +740,7 @@ drag_handle("palette", pos, title_bar)
 |------|------|------------|
 | 列表重排 | [`utils/drag_reorder`](../../crates/rui/src/utils/drag_reorder.rs) + app 指针路由 | 与浮层壳正交 |
 | 指针会话 | [`utils/pointer_drag`](../../crates/rui/src/utils/pointer_drag.rs)（Slider/Toast/Carousel/`FloatingPanel`） | Point 浮层拖拽走 `DragKind::FloatingPanel` + `drag_handle` |
-| **拖拽替身浮层**（sortable 的 drag ghost） | **WP-DRAG.1 ☑** [`utils/drag`](../../crates/rui/src/utils/drag) + [`drag.md`](drag.md) | Pinned portal + **Unanchored** viewport inset（`overlay_pos` → `fixed` left/top；不用 Point/`compute_cursor_menu_placement`，以免钳到底边）；碰撞 `mostIntersecting` / `closestCenter` / `closestCorners` / `pointerWithin` |
+| **拖拽替身浮层**（sortable 的 drag ghost） | **WP-DRAG.1 ☑** [`utils/drag`](../../crates/rui/src/utils/drag) + [`drag.md`](drag.md) | Pinned portal + **Unanchored** viewport inset（`overlay_pos` → `fixed` left/top；不用 Point/`compute_cursor_menu_placement`，以免钳到底边）；碰撞四算法 + `collision_fn`；Overlay `child_for` / `align`；`debug_hits` 槽矩形 |
 | 跨容器拖放 / 改父级 | **WP-DRAG.1 ☑** `group` + `apply_transfer` | 见 [`drag.md`](drag.md) |
 | 浮层入退场 | `floating_motion` / `modal_motion` 已有；产品化加深见 bugs | 壳统一 `motion` 参数 |
 
@@ -749,7 +749,7 @@ drag_handle("palette", pos, title_bar)
 1. **WP-OVL.3 ☑**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
 2. **WP-DRAG.1 ☑**：`utils/drag` 无头套件（solid-dnd 原语 + 超越 Sortable 的自动滚/让位 + interact 修饰 + Point 替身）。  
 3. **WP-DRAG.2 ☑**：实时兄弟让位、边缘自动滚（按住仍滚）、Esc 取消、方向键改插入点。  
-4. **WP-DRAG.3**（可选）：FLIP 时长 ☑ / **嵌套列表加深 ☑ P0** / clone-pull。  
+4. **WP-DRAG.3 ☑**：FLIP 时长 ☑ / **嵌套列表加深 ☑ P0** / clone-pull ☑ + §11（sensor / `data` / 空闲 `hits` / `skip_*`）。见 [drag.md](drag.md) §8。
 5. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Pinned portal + Unanchored viewport inset**（已由 `DragOverlay` 落地）。
 
 ### 9.4 点定位 + 拖拽检查清单
@@ -771,8 +771,9 @@ drag_handle("palette", pos, title_bar)
 | **WP-OVL.2** ☑ | 新增 `utils/anchored_overlay.rs` + RSX 标签（`AnchoredOverlay*`） | 三种 `Placement` 库测绿；`mount_anchored_overlay_is_zero_anchor` 仍绿。Popover 薄包装归 **WP-OVL.4** |
 | **WP-OVL.3** ☑ | Gallery：Point 浮层 + 标题栏拖拽；**RSX 与 Builder 双示例** | `AnchoredOverlayShowcase`；见 [§9](#9-点定位与拖拽solid-dnd-关联) |
 | **WP-OVL.4** | 存量 Dialog/Popover 薄包装迁移；文档链入 [§8.5](#85-双书写面rsx--builder) | 新 PR 禁止手抄 portal 配方 |
-| **WP-DRAG.1** ☑ | `utils/drag`：碰撞 + 替身浮层 + 跨容器 + RSX；见 [drag.md](drag.md) | Gallery `DragShowcase`；库测 collision/session/RSX |
+| **WP-DRAG.1** ☑ | `utils/drag`：碰撞 + 替身浮层 + 跨容器 + RSX；见 [drag.md](drag.md) | Gallery `DragShowcase`；库测 collision/session/RSX；§7 Overlay `child_for` / Debugger |
 | **WP-DRAG.2** ☑ | 实时让位 + 自动滚 + Esc/方向键 | Gallery 行星列表（ScrollArea） |
+| **WP-DRAG.3** ☑ | §11 后置 + clone-pull；RSX `data` / `pull_clone` / `skip_*` | Gallery §11 段；[drag.md](drag.md) §8 |
 
 **不纳入 WP-OVL 首版**：prelude 导出、`Placement::Manual`、焦点陷阱产品化（仍归 C-WP-1.3）。完整拖放栈见 **WP-DRAG.1 ☑** [`drag.md`](drag.md)。  
 **纳入 WP-OVL 首版（原「不纳入」已撤销）**：`AnchoredOverlay` / `ViewportModal` RSX 标签与 `*Opts` 双写（ADR-9）。

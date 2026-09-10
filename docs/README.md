@@ -30,7 +30,7 @@
 
 ### 组件
 
-- [component_inventory.md](components/component_inventory.md) — 分桶 + id 策略（**Gallery 验证 2026-09-05**）
+- [component_inventory.md](components/component_inventory.md) — 分桶 + id 策略（WP-CV ☑ **已冻结** 2026-09-10）
 - [component_variants.md](components/component_variants.md) — variant / size / 受控命名
 - [COMPONENT_LAYERING.md](components/COMPONENT_LAYERING.md) — 体量 × gpui-component（非执行源）
 - [custom_components.md](components/custom_components.md) · [custom_components_suggestions.md](components/custom_components_suggestions.md)
@@ -38,10 +38,10 @@
 
 ### 引擎
 
-- [box_model.md](engine/box_model.md)（WP-2.9 ☑ **已冻结**）· [layout_subtree.md](engine/layout_subtree.md) · [stack_and_element_model.md](engine/stack_and_element_model.md)（ADR-10 ☑ 冻结）· [platform.md](engine/platform.md)（P0–P3d ☑；P3 Win 视觉 2026-09-09 签）
-- [color.md](engine/color.md) · [color_advanced.md](engine/color_advanced.md) · [theme.md](engine/theme.md) · [media.md](engine/media.md)（动态纹理 / 音视频边界；计划 [plans/media-av.md](plans/media-av.md)）· [font_strategy.md](engine/font_strategy.md)（**已冻结**）· [font.md](engine/font.md)（**已冻结**）· [text_align.md](engine/text_align.md)
+- [box_model.md](engine/box_model.md)（WP-2.9 ☑ **已冻结**）· [layout_subtree.md](engine/layout_subtree.md)（WP-2.3 ☑ **已冻结** 2026-09-10）· [stack_and_element_model.md](engine/stack_and_element_model.md)（ADR-10 ☑ 冻结）· [platform.md](engine/platform.md)（P0–P3d ☑ **已冻结** 2026-09-10）
+- [color.md](engine/color.md) · [color_advanced.md](engine/color_advanced.md) · [theme.md](engine/theme.md) · [media.md](engine/media.md)（动态纹理 / 音视频边界；计划 [plans/media-av.md](plans/media-av.md)）· [font_strategy.md](engine/font_strategy.md)（**已冻结**）· [font.md](engine/font.md)（**已冻结**）· [text_align.md](engine/text_align.md)（WP-2.1 ☑ **已冻结** 2026-09-10）
 - [animation_and_motion.md](engine/animation_and_motion.md)（分层选型 + CSS 子集，**已冻结** 2026-09-06）
-- [damage.md](engine/damage.md) · [glyphon_audit.md](engine/glyphon_audit.md) · [assets_and_icons_architecture.md](engine/assets_and_icons_architecture.md)
+- [damage.md](engine/damage.md) · [glyphon_audit.md](engine/glyphon_audit.md) · [assets_and_icons_architecture.md](engine/assets_and_icons_architecture.md) · [pointer_and_drag_architecture.md](engine/pointer_and_drag_architecture.md)（指针拖分层 / 可选 crate 草案）
 
 ### 运维 / 验收
 

@@ -1,6 +1,14 @@
 # 子树布局与上溢升父（WP-2.3）
 
-对应 [ENGINEERING_IMPLEMENTATION_PLAN.md](../archive/ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-2.3**。
+> **文档地位**：布局脏节点、`mark_dirty` 与尺寸上溢升父的**事实契约**（Taffy 子树 compute 与 live app-root compute 边界）。  
+> **冻结状态**：**已冻结**（2026-09-10；库测 `subtree_promote::` / `layout_changed_mark_dirty` / `showcase_collapse` 绿 + Gallery **布局 → WP-2.3** 视觉验收）。纠错（行号、测试命令、Gallery id）可改；**策略变更**（升父规则、live `subtree_root` 策略、Taffy compute 根语义）须改本文并跑 §自动化 测，禁止静默改布局剪枝。  
+> **执行源**：WP-2.3 已退出（[`AUTHORITY.md`](../AUTHORITY.md)，2026-08-10 功能签署）。细则见本文；历史 WP 展开见 [`archive/ENGINEERING_IMPLEMENTATION_PLAN.md`](../archive/ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-2.3**。  
+> **实现锚点**：[`layout/layout_tree.rs`](../../crates/rui/src/layout/layout_tree.rs)（`pick_subtree_compute_root` / `promote_compute_root_for_size_overflow` / `resolve_layout_compute_root` / `mark_dirty_nodes_in_tree`）· [`app/state.rs`](../../crates/rui/src/app/state.rs)（LayoutChanged：`subtree_root: None`）· [`crate_tests/layout/subtree_promote.rs`](../../crates/rui/src/crate_tests/layout/subtree_promote.rs) · [`crate_tests/layout/showcase_collapse.rs`](../../crates/rui/src/crate_tests/layout/showcase_collapse.rs) · Gallery [`layout.rs`](../../examples/gallery/src/pages/layout.rs)（`LayoutSubtreeShowcase`）。  
+> **日期**：2026-09-10（治理层冻结签署；功能已于 2026-08-10 Win 开发机签署）。
+
+交叉：[`damage.md`](damage.md) · [`box_model.md`](box_model.md)
+
+---
 
 ## 契约
 

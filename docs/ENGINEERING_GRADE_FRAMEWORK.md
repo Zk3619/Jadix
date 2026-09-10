@@ -241,7 +241,7 @@ ENGINEERING_GRADE_FRAMEWORK.md      ← 本纲领（门槛 + ADR + 禁区）
 REACTIVITY.md                       ← 细粒度领域规范
 COMPONENT_LIBRARY.md                ← 组件领域规范
 element_identity.md                 ← 跨层身份契约
-component_inventory.md              ← 分桶数据表
+component_inventory.md              ← 分桶数据表（WP-CV ☑ **已冻结** 2026-09-10）
 │
 ├─ 冻结展开：ENGINEERING_IMPLEMENTATION_PLAN · COMPONENT_LIBRARY_PLAN · REACTIVITY_PLAN
 ├─ 从属手册：reactivity_and_hot_reload · headless · custom_components
@@ -364,6 +364,7 @@ flowchart LR
 | [REACTIVITY.md](REACTIVITY.md) | **细粒度响应式领域规范** |
 | [element_identity.md](element_identity.md) | **跨层身份契约**（`id` / `focus_id` / `template_id` / AccessKit） |
 | [box_model.md](engine/box_model.md) | 类 CSS 盒模型契约（WP-2.9 ☑；**已冻结** 2026-09-05） |
+| [layout_subtree.md](engine/layout_subtree.md) | 子树布局 / 上溢升父契约（WP-2.3 ☑；**已冻结** 2026-09-10） |
 | [gap_analysis.md](comparison/gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
 | [STAGE7_ROADMAP.md](archive/STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
 | [PROJECT.md](archive/PROJECT.md) | 愿景与分层初衷 |
@@ -381,8 +382,9 @@ flowchart LR
 | [PUBLISH.md](ops/PUBLISH.md) | crates.io 清单 |
 | [size_and_memory.md](ops/size_and_memory.md) | 体积与内存事实 |
 | [stack_and_element_model.md](engine/stack_and_element_model.md) | **Windows 默认栈、`Element` 堆句柄与对标框架**（ADR-10） |
-| [platform.md](engine/platform.md) | **`crate::platform` OS 层现状、cfg 边界与目标结构** |
+| [platform.md](engine/platform.md) | **`crate::platform` OS 层现状、cfg 边界与目标结构**（P0–P3d ☑；**已冻结** 2026-09-10） |
 | [font_strategy.md](engine/font_strategy.md) | 字体策略契约（**已冻结** 2026-09-06）· [font.md](engine/font.md) 诊断手册 |
+| [text_align.md](engine/text_align.md) | 测宽 ≡ glyphon soft-wrap 契约（WP-2.1 ☑；**已冻结** 2026-09-10） |
 | [animation_and_motion.md](engine/animation_and_motion.md) | CSS 动画 / Motion 分层 + 冻结子集（**已冻结** 2026-09-06） |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
 | [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |

@@ -1,6 +1,7 @@
 # Runtime 扩展点与拆 crate 注册协议
 
-> **范围说明**：本文最初从 `window_events.rs` 的「组件点名簿」切入；拆 crate 与自定义组件接入时，**同类硬编码遍布 runtime 各层**（帧调度、绘制 sync、样式/动画、RSX 宏、资产、输入协议等）。下文以 **window event 为样板**，列出拆箱时应统一提供的 **自注册扩展点**，使 `rui`（core/runtime）不再 `use rui_components::*`。
+> **范围说明**：本文最初从 `window_events.rs` 的「组件点名簿」切入；拆 crate 与自定义组件接入时，**同类硬编码遍布 runtime 各层**（帧调度、绘制 sync、样式/动画、RSX 宏、资产、输入协议等）。下文以 **window event 为样板**，列出拆箱时应统一提供的 **自注册扩展点**，使 `rui`（core/runtime）不再 `use rui_components::*`。  
+> **交叉**：指针拖 / DnD / resize·gesture 的分层与可选 crate 见 [`pointer_and_drag_architecture.md`](pointer_and_drag_architecture.md)（Phase 0 对接本文 `FrameHook` / `PointerCapture`）。
 
 ## 目标
 

@@ -85,10 +85,11 @@ docs/                                ★ 根目录 = 权威 + changelog
 | 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](components/custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
 | `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](engine/animation_and_motion.md) 第一部分（**已冻结**） | 在组件里重复实现 tick；把 presence 塞进 `keyframes`；把 `motion` 迁入 `style/` |
 | CSS 动画 / transition / `@keyframes` 冻结子集、Specified/Used 模型 | [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分（**已冻结**） | 静默扩面不改 §11.4 / §13；`KeyframeStop` 手工字段；冒充 DOM `animation*` 事件；不跑 `anim_freeze` |
-| `platform` OS 层该放哪、cfg 边界、mobile/embedded | [`platform.md`](engine/platform.md) | 在 `app/` 或 `renderer/` 静默新增 Win32 块而不更新该手册 |
+| `platform` OS 层该放哪、cfg 边界、mobile/embedded | [`platform.md`](engine/platform.md)（P0–P3d ☑ **已冻结** 2026-09-10） | 在 `app/` 或 `renderer/` 静默新增 Win32 块而不更新该手册 |
+| 测宽 ≡ glyphon soft-wrap、Chip 原子段、VirtualList 固定行高 | [`text_align.md`](engine/text_align.md)（WP-2.1 ☑，**已冻结** 2026-09-10） | 静默改 `LINE_WIDTH_EPS` / measure 折行 / 破坏 `text_align_*`；把 CSS `text-align` 与本文混淆 |
 | 文本撤销 / `text-undo` feature、Owner 历史、rope | [`plans/text_undo_redo.md`](plans/text_undo_redo.md)（**B19**，**已冻结** L0+L1+L2，**不挡 Beta**） | 打进 `default`；拆 `undo`/`redo` 两个 feature；把 IDE 塞进 `Input`；历史进 `platform/`；不跑 `text_undo_freeze` |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
-| 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（回写规范 §5.2.1） | 只改 Gallery 文案 |
+| 某组件 verified / broken | [`component_inventory.md`](components/component_inventory.md)（WP-CV ☑ **已冻结** 2026-09-10；回写规范 §5.2.1） | 只改 Gallery 文案 |
 
 ### 1.3 旧计划处置
 
@@ -248,7 +249,7 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 - [x] Button · Input · Dialog · Tabs · Checkbox|Switch 有 layout/行为测 **或** 冒烟勾选（CV.2 ☑ 2026-08-12）  
 - [x] 行为控件 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`（CV.4 ☑ 2026-08-12）  
 
-分桶真源：[`component_inventory.md`](components/component_inventory.md) §2（控件）。  
+分桶真源：[`component_inventory.md`](components/component_inventory.md) §2（控件；**已冻结** 2026-09-10）。  
 **当前 `verified`（控件）**：Gallery 产品面已走查（2026-09-05）；CV.1 核心集仍为 Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar（含 smoke / `cv_*` 测）。完整名单见 inventory §1–§2。  
 **仍 `experimental`（不进 SemVer 0.1）**：Form helpers、Chart grammar、VirtualMasonry、Scene3d（feature）、块级 markdown。  
 **Form**：降出 §5.2.1（Context helpers → `experimental`）；**WP-3.9 ☑** 校验路径已加深，仍不升稳定面。  
@@ -264,15 +265,24 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
-| **WP-2.1** | 测宽与 glyphon 分行对齐 | — | ☑ |
+| **WP-2.1** | 测宽与 glyphon 分行对齐 | — | ☑ 2026-08-10；**已冻结** 2026-09-10 · [`text_align.md`](engine/text_align.md) |
 | **WP-2.2** | 细粒度 damage 策略可测（逻辑正式默认；GPU = B8） | — | ☑（GPU PartialLoad / 树级 DL = B8，不挡） |
-| **WP-2.3** | 子树布局上溢升父 | — | ☑ |
+| **WP-2.3** | 子树布局上溢升父 | — | ☑ 2026-08-10；**已冻结** 2026-09-10 · [`layout_subtree.md`](engine/layout_subtree.md) |
 | **WP-2.4** | Anchors/Bindings 挂 Owner + scoped ID | R-WP-1；消费方 C-WP-2.6 | ☑ 2026-08-13；`registry_owner` 测 + `scoped_template_id`/`scoped_focus_id`；Gallery「布局 → WP-2.4」 |
 | **WP-2.5** | Store produce + Resource→EB 契约 | R-WP-4 测 | ☑ 2026-08-13；`produce` 切片测 + `throw_resource_error` e2e + `docs/CHANGELOG.md`；Gallery「布局 → WP-2.5」 |
 | **WP-2.6** | 组件 golden 五场景 | C-WP-3.3 | ☑ 2026-08-13；Button/Input/Dialog/Tabs/ScrollArea；`golden_component_*` + `tests/golden/golden_*.rgba` |
 | **WP-2.7** | 双路径 / 根裸 `get()` 可观测 | R-WP-2 | ☑ 2026-08-13；建议进 Beta；0.1 Win-first 可注明已知限制 |
 | **WP-2.8** | 身份 API 收敛（展示型去必填；空串；试点 scoped） | C-WP-2.6 | ☑ 2026-08-13；前置 CV.4 ☑；框架能力来自 2.4 |
 | **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☑ 2026-08-13；**不挡 Beta**；细则 [`box_model.md`](engine/box_model.md) |
+
+#### WP-2.1 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 测宽对齐（权威）** | `cargo test -p rui --lib text_align_` | 全绿（ASCII/CJK ≡ glyphon；Chip/Mention 原子；VirtualList 行高 21px；空 fontdb 不 panic） | 任一 `FAILED` |
+| **B Gallery（建议）** | `cargo run -p gallery` →「文本」→「WP-2.1)」 | 见 [`text_align.md`](engine/text_align.md) §3 | 窄框横溢；Chip 中段；VirtualList 半屏空白或整窗重建 |
+
+**签署规则**：A 绿即可勾 WP-2.1；B 用于人工抽查，不替代库测。**2026-09-10 治理层冻结**：细则 [`text_align.md`](engine/text_align.md) **已冻结**；CI step「Text measure contract (freeze)」。
 
 WP-2.4 任务要点（已签）：注册表随 Owner dispose（Anchors + Bindings + COMPONENT_*）；`scoped_template_id` / `scoped_focus_id`；长会话无膨胀测 `crate_tests/reactive/registry_owner.rs`；Gallery「布局 → WP-2.4」。文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7。细则见冻结 [`REACTIVITY_PLAN.md`](archive/REACTIVITY_PLAN.md) R-WP-1。
 
@@ -777,7 +787,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 |----|------|------|
 | **WP-DRAG.1** | `utils/drag` 无头套件 + RSX + Gallery | ☑ 2026-09-07 |
 | **WP-DRAG.2** | 实时让位 + 边缘自动滚 + Esc 取消 + 方向键插入 | ☑ 2026-09-07 |
-| **WP-DRAG.3** | FLIP 时长 ☑ / 嵌套列表加深 ☑ P0 / clone-pull | ☐ |
+| **WP-DRAG.3** | FLIP 时长 ☑ / 嵌套列表加深 ☑ P0 / clone-pull | ☑ 2026-09-10 |
 
 ---
 
@@ -892,6 +902,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --no-deps -- -D warnings
 cargo test -p rui --lib
+cargo test -p rui --lib text_align_
 cargo test -p rui --lib --features text-undo
 cargo test -p rui --lib text_undo_freeze
 cargo test -p rui --lib --features text-undo text_undo_freeze
