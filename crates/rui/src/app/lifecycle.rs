@@ -154,6 +154,30 @@ impl super::App {
         self.pinch_prev_dist = Some(dist);
     }
 
+    fn sync_pointer_action_touches(&self) {
+        let scale = (*self.state.borrow())
+            .as_ref()
+            .map(|s| s.window.scale_factor() as f32)
+            .unwrap_or(1.0)
+            .max(1.0);
+        let pts: Vec<(u64, [f32; 2])> = self
+            .active_touches
+            .iter()
+            .map(|(&id, p)| (id, [p.x as f32 / scale, p.y as f32 / scale]))
+            .collect();
+        for &(id, pos) in &pts {
+            if Some(id) != self.primary_touch_id {
+                crate::utils::pointer_drag::tick_pointer(id, pos[0], pos[1]);
+            }
+        }
+        crate::utils::pointer_action::sync_touches(pts);
+        if crate::utils::pointer_action::gesture_is_active() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+    }
+
     /// After 500ms hold without >8px move, fire the same path as right-click once.
     pub(super) fn try_fire_long_press(&mut self) {
         let Some(lp) = self.long_press.as_mut() else {
@@ -533,8 +557,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
-        // Drag kit: keep edge auto-scroll alive while the pointer is held still.
-        if crate::utils::drag::is_active() {
+        // Drag / resize / gesture: keep edge auto-scroll alive while held still.
+        if crate::utils::drag::is_active()
+            || crate::utils::pointer_action::edge_scroll_active()
+        {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 let size = state.window.inner_size();
                 let scale = state.window.scale_factor() as f32;
@@ -542,9 +568,28 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     size.width as f32 / scale.max(1.0),
                     size.height as f32 / scale.max(1.0),
                 ];
-                if crate::utils::drag::pump_autoscroll(&state.root_element, vp) {
+                let scrolled = if crate::utils::drag::is_active() {
+                    crate::utils::drag::pump_autoscroll(&state.root_element, vp)
+                } else {
+                    crate::utils::pointer_action::pump_edge_scroll(&state.root_element)
+                };
+                if scrolled {
                     state.window.request_redraw();
                 }
+            }
+        }
+        if crate::utils::drag::is_coasting() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                let size = state.window.inner_size();
+                let scale = state.window.scale_factor() as f32;
+                let vp = [
+                    size.width as f32 / scale.max(1.0),
+                    size.height as f32 / scale.max(1.0),
+                ];
+                let _ = crate::utils::drag::pump_inertia(&state.root_element, vp);
+                state.window.request_redraw();
+                let wake = now + std::time::Duration::from_millis(16);
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
             }
         }
 
@@ -809,6 +854,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             self.content_scroll_drag = None;
                             self.pinch_prev_dist = Self::touch_pinch_distance(&self.active_touches);
                         }
+                        self.sync_pointer_action_touches();
                     }
                     TouchPhase::Moved => {
                         self.active_touches.insert(touch.id, touch.location);
@@ -825,6 +871,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                                 });
                             }
                         }
+                        self.sync_pointer_action_touches();
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
                         self.active_touches.remove(&touch.id);
@@ -858,6 +905,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                                 self.cursor_pos = npos;
                             }
                         }
+                        self.sync_pointer_action_touches();
                     }
                 }
             }

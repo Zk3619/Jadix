@@ -1304,13 +1304,20 @@ impl super::App {
         let floating_panel_dragging =
             crate::utils::anchored_overlay::tick_floating_panel_drag(x, y);
         let drag_dragging = crate::utils::drag::tick(x, y, &drag_hits, drag_viewport);
-        let drag_scrolled = if crate::utils::drag::is_active() {
-            (*self.state.borrow()).as_ref().is_some_and(|st| {
+        let pointer_action_dragging = crate::utils::pointer_action::on_move(x, y);
+        let drag_scrolled = (*self.state.borrow()).as_ref().is_some_and(|st| {
+            if crate::utils::drag::is_active() {
                 crate::utils::drag::pump_autoscroll(&st.root_element, drag_viewport)
-            })
-        } else {
-            false
-        };
+            } else if crate::utils::pointer_action::edge_scroll_active() {
+                crate::utils::pointer_action::pump_edge_scroll(&st.root_element)
+            } else {
+                false
+            }
+        });
+        let drag_coasting = crate::utils::drag::is_coasting()
+            && (*self.state.borrow()).as_ref().is_some_and(|st| {
+                crate::utils::drag::pump_inertia(&st.root_element, drag_viewport)
+            });
         if slider_dragging
             || toast_dragging
             || color_dragging
@@ -1318,7 +1325,9 @@ impl super::App {
             || resizable_dragging
             || floating_panel_dragging
             || drag_dragging
+            || pointer_action_dragging
             || drag_scrolled
+            || drag_coasting
             || drawer_dragging
             || crate::components::internal::modal_motion::tick_modal_presence()
             || crate::components::internal::floating_motion::tick_floating_presence()
@@ -2184,7 +2193,8 @@ impl super::App {
             crate::components::resizable::clear_resizable_drag_if_any();
             crate::components::drawer::clear_drawer_drag_if_any();
             crate::utils::anchored_overlay::clear_floating_panel_drag();
-            if crate::utils::drag::end(&drag_hits) {
+            let pointer_action_ended = crate::utils::pointer_action::on_up();
+            if crate::utils::drag::end(&drag_hits) || pointer_action_ended {
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
