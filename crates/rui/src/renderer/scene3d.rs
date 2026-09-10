@@ -294,12 +294,9 @@ impl Scene3dGpu {
                     [hw, y + hh * 2.0, 0.0],
                     [-hw, y + hh * 2.0, 0.0],
                 ];
-                if let Some(warp) = crate::renderer::project_billboard_warp(
-                    &mvp,
-                    world,
-                    w as f32,
-                    h as f32,
-                ) {
+                if let Some(warp) =
+                    crate::renderer::project_billboard_warp(&mvp, world, w as f32, h as f32)
+                {
                     let (warp_c01, warp_c23, warp_w) = warp.warp_attrs();
                     let flags =
                         if tex_key.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX) {

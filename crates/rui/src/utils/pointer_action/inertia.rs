@@ -98,8 +98,16 @@ impl VelocityTracker {
 }
 
 enum CoastKind {
-    Fling { vx: f32, vy: f32 },
-    Smooth { from: [f32; 2], to: [f32; 2], t: f32, duration: f32 },
+    Fling {
+        vx: f32,
+        vy: f32,
+    },
+    Smooth {
+        from: [f32; 2],
+        to: [f32; 2],
+        t: f32,
+        duration: f32,
+    },
 }
 
 /// Running coast. `step` returns the displacement this frame, or `None` when done.
@@ -269,10 +277,7 @@ mod tests {
         let mut t = VelocityTracker::default();
         let t0 = Instant::now();
         t.sample([0.0, 0.0], t0);
-        t.sample(
-            [100.0, 0.0],
-            t0 + Duration::from_millis(20),
-        );
+        t.sample([100.0, 0.0], t0 + Duration::from_millis(20));
         let v = t.velocity();
         assert!(v[0] > 1000.0, "{v:?}");
         t.sample([100.0, 0.0], t0 + Duration::from_millis(200));

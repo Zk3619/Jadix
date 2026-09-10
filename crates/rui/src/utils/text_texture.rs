@@ -122,12 +122,7 @@ pub fn is_text_xform_texture_key(key: &str) -> bool {
 
 #[cfg(test)]
 fn cache_peek(key: &str) -> Option<(u32, u32, Vec<u8>)> {
-    with_cache(|c| {
-        c.map
-            .get(key)
-            .map(|e| (e.width, e.height, e.rgba.clone()))
-    })
-    .flatten()
+    with_cache(|c| c.map.get(key).map(|e| (e.width, e.height, e.rgba.clone()))).flatten()
 }
 
 #[cfg(test)]
@@ -533,12 +528,14 @@ fn mask_at(inside: &[bool], w: usize, h: usize, x: i32, y: i32) -> f32 {
 fn sobel_mask(inside: &[bool], w: usize, h: usize, x: usize, y: usize) -> (f32, f32) {
     let x = x as i32;
     let y = y as i32;
-    let gx = mask_at(inside, w, h, x + 1, y - 1) + 2.0 * mask_at(inside, w, h, x + 1, y)
+    let gx = mask_at(inside, w, h, x + 1, y - 1)
+        + 2.0 * mask_at(inside, w, h, x + 1, y)
         + mask_at(inside, w, h, x + 1, y + 1)
         - mask_at(inside, w, h, x - 1, y - 1)
         - 2.0 * mask_at(inside, w, h, x - 1, y)
         - mask_at(inside, w, h, x - 1, y + 1);
-    let gy = mask_at(inside, w, h, x - 1, y + 1) + 2.0 * mask_at(inside, w, h, x, y + 1)
+    let gy = mask_at(inside, w, h, x - 1, y + 1)
+        + 2.0 * mask_at(inside, w, h, x, y + 1)
         + mask_at(inside, w, h, x + 1, y + 1)
         - mask_at(inside, w, h, x - 1, y - 1)
         - 2.0 * mask_at(inside, w, h, x, y - 1)
@@ -1769,10 +1766,7 @@ mod tests {
         assert!(cache_touch("lru-k0"));
         cache_put("lru-knew".into(), 1, 1, px);
         let _ = flush_text_xform_textures(|_| true);
-        assert!(
-            cache_peek("lru-k0").is_some(),
-            "hot key must survive LRU"
-        );
+        assert!(cache_peek("lru-k0").is_some(), "hot key must survive LRU");
         assert!(
             cache_peek("lru-knew").is_some(),
             "newest insert must remain"

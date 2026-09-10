@@ -149,8 +149,7 @@ impl PointerSet {
             return Err(BeginError::MaxReached);
         }
         let element_id = element_id.into();
-        if self.count_on(&element_id) >= self.quota.max_per_element && kind != ActionKind::Gesture
-        {
+        if self.count_on(&element_id) >= self.quota.max_per_element && kind != ActionKind::Gesture {
             return Err(BeginError::MaxPerElement);
         }
         if kind == ActionKind::Gesture {

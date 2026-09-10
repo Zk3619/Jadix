@@ -558,9 +558,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         }
 
         // Drag / resize / gesture: keep edge auto-scroll alive while held still.
-        if crate::utils::drag::is_active()
-            || crate::utils::pointer_action::edge_scroll_active()
-        {
+        if crate::utils::drag::is_active() || crate::utils::pointer_action::edge_scroll_active() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 let size = state.window.inner_size();
                 let scale = state.window.scale_factor() as f32;

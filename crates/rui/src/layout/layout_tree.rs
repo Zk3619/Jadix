@@ -5304,8 +5304,7 @@ impl LayoutTree {
         // Outermost stack parent bands every child (page + overlay bar). Nested
         // `data-stacking-context` (DragProvider under ScrollArea) must not turn
         // each in-flow row into its own glyphon band.
-        let stack_band_only_layered =
-            record_page_stack_bands && overlay_split.page_stack_depth > 0;
+        let stack_band_only_layered = record_page_stack_bands && overlay_split.page_stack_depth > 0;
         if record_page_stack_bands {
             overlay_split.page_stack_depth = overlay_split.page_stack_depth.saturating_add(1);
         }

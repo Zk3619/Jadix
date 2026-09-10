@@ -193,7 +193,12 @@ pub fn pump_edge_scroll(root: &Element) -> bool {
 }
 
 /// Start an edge/corner resize. `signal_key` if set is written `[x,y,w,h]` each tick.
-pub fn begin_resize(start: BoxRect, pointer: [f32; 2], opts: ResizeOpts, signal_key: Option<String>) {
+pub fn begin_resize(
+    start: BoxRect,
+    pointer: [f32; 2],
+    opts: ResizeOpts,
+    signal_key: Option<String>,
+) {
     LIVE_RESIZE.with(|s| {
         *s.borrow_mut() = Some(LiveResize {
             session: ResizeSession::begin(start, pointer, opts),

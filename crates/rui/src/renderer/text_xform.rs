@@ -171,10 +171,7 @@ pub fn project_billboard_warp(
         corners_px[out] = ndc_to_pixel(ndc, viewport_w, viewport_h);
         clip_w[out] = w;
     }
-    Some(BillboardWarp {
-        corners_px,
-        clip_w,
-    })
+    Some(BillboardWarp { corners_px, clip_w })
 }
 
 /// Legacy enum — Pipeline = Coverage/glyphon; Offscreen = Bake path enabled in layout.
@@ -432,8 +429,8 @@ mod tests {
         let mut mvp = mat4_identity();
         mvp[15] = 1.0;
         mvp[11] = 1.0; // clip.w = z + 1 (column-major: m[3+8]=m[11] * z)
-        // Wait: clip.w = m[3]*x + m[7]*y + m[11]*z + m[15]
-        // identity has m[15]=1, m[11]=0. Set m[11]=1 → w = z + 1.
+                       // Wait: clip.w = m[3]*x + m[7]*y + m[11]*z + m[15]
+                       // identity has m[15]=1, m[11]=0. Set m[11]=1 → w = z + 1.
         let world = [
             [-1.0, -0.2, 0.4], // BL near
             [1.0, -0.2, 0.4],  // BR near
