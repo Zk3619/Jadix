@@ -1,8 +1,8 @@
 # Drag (`utils/drag`)
 
-> **Status**: **WP-DRAG.1 ☑** + **WP-DRAG.2 ☑** + **WP-DRAG.3 ☑** + P0 modifier / nested lists + **§7.1–7.5 / §7.7** + **§11 Extendable**（sensor / `data` / 空闲 `hits` / `skip_*` / clone-pull）+ **interact 修饰超越** + **指针动作**（resize / gesture / inertia / 多指 → [`pointer_action`](../../crates/rui/src/utils/pointer_action/mod.rs)）。Experimental — not in `prelude`, not SemVer 0.1. 相对 solid-dnd 0.7.5 **产品面已超**；Extendable 契约见 [SOLID_DND_COMPARISON.md](../comparison/SOLID_DND_COMPARISON.md) **§11** 与下文 **§8**。interact.js：[INTERACT_JS_COMPARISON.md](../comparison/INTERACT_JS_COMPARISON.md)。  
+> **Status**: **WP-DRAG.1 ☑** + **WP-DRAG.2 ☑** + **WP-DRAG.3 ☑** + **WP-DRAG.4 ☑**（Swap live / MultiDrag）+ P0 modifier / nested lists + **§7.1–7.5 / §7.7** + **§11 Extendable**（sensor / `data` / 空闲 `hits` / `skip_*` / clone-pull）+ **interact 修饰超越** + **指针动作**（resize / gesture / inertia / 多指 → [`pointer_action`](../../crates/rui/src/utils/pointer_action/mod.rs)）。Experimental — not in `prelude`, not SemVer 0.1. 相对 solid-dnd 0.7.5 **产品面已超**；Extendable 契约见 [SOLID_DND_COMPARISON.md](../comparison/SOLID_DND_COMPARISON.md) **§11** 与下文 **§8**。interact.js：[INTERACT_JS_COMPARISON.md](../comparison/INTERACT_JS_COMPARISON.md)。SortableJS 列表血统：[SORTABLE_JS_COMPARISON.md](../comparison/SORTABLE_JS_COMPARISON.md)（**2026-09-10 冻结**列表核心；Swap / MultiDrag 同日落地）。  
 > **Parent**: [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) §2.1, [overlay_shells.md](overlay_shells.md) §9, [headless.md](headless.md). 分层 / 可选 crate：[pointer_and_drag_architecture.md](../engine/pointer_and_drag_architecture.md)。  
-> **References**: `Reference/solid-dnd-main`, `Reference/Sortable-master`, `Reference/interact.js-main`。对照专章：[SOLID_DND_COMPARISON.md](../comparison/SOLID_DND_COMPARISON.md)、[SORTABLE_JS_COMPARISON.md](../comparison/SORTABLE_JS_COMPARISON.md)、[INTERACT_JS_COMPARISON.md](../comparison/INTERACT_JS_COMPARISON.md)。  
+> **References**: `reference/solid-dnd-main`, `reference/Sortable-master`, `reference/interact.js-main`。对照专章（均 **2026-09-10 冻结**）：[SOLID_DND_COMPARISON.md](../comparison/SOLID_DND_COMPARISON.md)、[SORTABLE_JS_COMPARISON.md](../comparison/SORTABLE_JS_COMPARISON.md)、[INTERACT_JS_COMPARISON.md](../comparison/INTERACT_JS_COMPARISON.md)。  
 > **North star**: **surpass SortableJS** (~40k★) — not clone it. Sortable is a DOM list plugin; this kit is a deep module: collision, overlay, auto-scroll, keyboard, and dual-write sit behind a small surface. Product chrome stays in the caller.
 
 ```
@@ -160,7 +160,8 @@ Nested lists: collision refines to the **innermost** droppable that contains the
 | `scroll_speed={14}` | `.scroll_speed(14)` | px per display frame |
 | `snap={grid}` / `snap_fn={f}` / `snap_targets={t}` | `.snap` / `.snap_fn` / `.snap_targets` | interact snap 管道 @ 20 |
 | `overlap="center"` / `drop_checker={f}` | `.overlap` / `.drop_checker` | interact dropzone 重叠语义 |
-| `onDragEnter` / `onDragLeave` / `onDrop` / … | `.on_drag_enter` / `.on_drag_leave` / `.on_drop` / … | per-zone 生命周期（camelCase 同名） |
+| `sort_mode="swap"` | `.sort_mode(SortMode::Swap)` | 停兄弟 FLIP；高亮对端；`apply_swap_event` |
+| `multi_drag={true}` | `.multi_drag(true)` | 单击选中；拖已选项一次带走；Overlay 叠卡 |
 
 Value form is the same: `scroll_lock="all"` / `scroll-lock="x"` / `scrollLock="none"`. Flags may also be `scroll-lock-x={true}`.
 
@@ -171,21 +172,29 @@ Container highlight is **not** CSS `:hover`, and the kit does **not** paint colo
 - [`sortable_shift`](../../crates/rui/src/utils/drag/sortable.rs) — applied live to **siblings** (close origin, open insert hole). `source_opacity` 0 leaves that hole empty. Dimmed overlay translates the body onto the hole ([`sortable_source_to_hole`](../../crates/rui/src/utils/drag/sortable.rs)). Distance changes ease over [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) unless the provider sets `animation={false}`; `end` / `cancel` snap so leftover translate cannot invert the rebuilt layout.
 - [`apply_reorder_vec`](../../crates/rui/src/utils/drag_reorder.rs) — same list, on drop.
 - [`apply_transfer`](../../crates/rui/src/utils/drag/sortable.rs) — cross list.
+- [`apply_event`](../../crates/rui/src/utils/drag/sortable.rs) — routes clone / **swap** / **multi** / reorder.
+- [`apply_swap_event`](../../crates/rui/src/utils/drag/sortable.rs) — `SortMode::Swap`：同列 `Vec::swap`，跨列 `mem::swap`。拖中不让位；对端 `rui_drag_swap`。
+- [`apply_multi_event`](../../crates/rui/src/utils/drag/sortable.rs) — 抽出选中项（相对序）整块插入 `to_index`。Provider `multi_drag`：单击（未过阈值）toggle `DragCtx.selected`；拖已选项冻结 `DragEvent.items`。v1 无 Shift 范围选。
 - `<SortableItem>` = draggable + droppable (`also_droppable`).
 - `<SortableList>` / `<Droppable list=…>` = container (no index **appends**). `.direction(Axis::X|Y)` / RSX `direction="x"|"y"` writes list-level insert/FLIP axis; omitting it inherits the provider `axis`. Same provider may host one `direction=y` column and one `direction=x` row (Gallery「SortableList.direction」).
 
-## 6. Roadmap vs SortableJS
+## 6. Alignment vs SortableJS
 
-| | SortableJS | `utils/drag` |
-|--|------------|----------------|
-| List reorder / group | yes | yes |
-| Handle / delay / filter | yes | handle + `delay_ms` + `drag_ignore` |
-| Auto-scroll | rAF | mousemove **and** wait-loop pump |
-| Ghost | CSS class | Pinned `DragOverlay` (viewport inset, not cursor-menu clamp) |
-| Live gap | CSS animation | sibling `translate` + FLIP [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs) (150ms ease; `animation={false}` snaps; drop always snaps) |
-| Keyboard | weak | Esc cancel + arrow insert |
-| Collision | geometry guess | four named algorithms |
-| Clone / nested / multi-drag | plugins | nested lists ☑ (P0) / clone-pull ☑ (`pull_clone` + `apply_clone_event`) |
+列表血统 **已对齐/超**（[SORTABLE_JS_COMPARISON.md](../comparison/SORTABLE_JS_COMPARISON.md) **2026-09-10 冻结**列表核心）。`forceFallback` / `store` **不进套件**（架构）；OnSpill 仍是产品未做。**Swap / MultiDrag 已落地**（WP-DRAG.4）。源码默认 `animation: 0`；本套件默认开 150ms FLIP（对齐 Sortable README 示例）。
+
+| | SortableJS 1.15.7 | `utils/drag` |
+|--|-------------------|----------------|
+| List reorder / group | DOM `insertBefore` + `group.pull`/`put` | `apply_reorder_vec` / `apply_transfer`；`group` 字符串 + `accept` |
+| Handle / delay / filter | `handle` / `delay` / `filter` | `<DragHandle>` + `delay_ms` + `drag_ignore` |
+| Empty insert | `emptyInsertThreshold` 5px | `empty_insert` 8px |
+| `onMove` | `false` 否决；`-1`/`1` 强制插侧 | `can_drop` 布尔否决；插侧 = slot 中点 |
+| Auto-scroll | AutoScroll 30px / 10px/24ms | `edge_scroll` 40px / 14px/帧 + **静止泵** + `scroll_lock` |
+| Ghost | `ghostClass` / `forceFallback` 克隆 | Pinned `DragOverlay`（viewport inset） |
+| Live gap | `animation` ms（源码默认 0） | sibling `translate` + FLIP [`SORTABLE_FLIP_MS`](../../crates/rui/src/utils/drag/sortable.rs)（默认开；`animation={false}` snaps；drop 必 snap） |
+| Keyboard | 无一等 | Esc `cancel` + `nudge_insert` |
+| Collision | `swapThreshold` 几何 | 四算法 + `collision_fn` + sticky |
+| Clone / nested / multi-drag | clone 在 `group.pull`；嵌套易误触；MultiDrag 插件 | nested innermost ☑ / `pull_clone` ☑ / `multi_drag` ☑ |
+| Swap 模式 | Swap 插件 `swapClass` + `swapNodes` | `sort_mode="swap"` + `apply_swap_event` ☑ |
 
 ## 7. Checklist
 
@@ -200,6 +209,7 @@ Container highlight is **not** CSS `:hover`, and the kit does **not** paint colo
 - [x] Modifier pipeline (axis/snap/pin/restrict + author `.modifier`; not CSS `transform`)
 - [x] Extendable §7.1–7.5 / §7.7：`collision_fn`、Overlay `child_for` / `align`、`Activation::Or`、`SortableList.direction`、`debug_hits`、`use_drag().hits()`；Gallery `DragShowcase` 末段
 - [x] Extendable §11 / WP-DRAG.3：`.sensor` / `add_sensor`、`.data` / `DragEvent.data`、`registered_hits_in_scope`（空闲 `hits()`）、`.skip_shift` / `.skip_follow`、`.pull_clone` + `apply_clone_event` / `apply_event`；Gallery `DragShowcase` §11 段
+- [x] WP-DRAG.4：`SortMode::Swap` + `multi_drag` 选择集 / Overlay 叠卡 / `apply_swap_event` / `apply_multi_event`；Gallery §12
 - [x] 指针动作（非拖放）：[`pointer_action`](../../crates/rui/src/utils/pointer_action/mod.rs) resize / gesture / inertia / 多指；自由拖 `.inertia(true)`；Gallery 边角缩放、双指圆点、甩砖
 
 ## 8. Extendable（§11 / WP-DRAG.3）
@@ -209,6 +219,8 @@ solid-dnd README **Extendable** 五项 + Sortable **clone-pull** 均已落地（
 | 能力 | Builder / RSX | 读回 | 提交 / 运行 |
 |------|-----------------|------|-------------|
 | **clone-pull** | `.pull_clone(true)` / `pull_clone={true}` | `DragEvent.pull_clone` | [`apply_clone_event`](../../crates/rui/src/utils/drag/sortable.rs) or [`apply_event`](../../crates/rui/src/utils/drag/sortable.rs) |
+| **Swap** | `.sort_mode(SortMode::Swap)` / `sort_mode="swap"` | `DragEvent.sort_mode` / `rui_drag_swap` | [`apply_swap_event`](../../crates/rui/src/utils/drag/sortable.rs)（`apply_event` 路由） |
+| **MultiDrag** | `.multi_drag(true)` / `multi_drag={true}` | `DragCtx.selected` / `DragEvent.items` / `rui_drag_selected` | [`apply_multi_event`](../../crates/rui/src/utils/drag/sortable.rs)；单击 Pending 结束 toggle，不触发 `on_drag_end` |
 | **`data` 袋** | `.data(Rc::new(T))` / `data={Rc::new(T)}` | [`DragItemCtx::data_as`](../../crates/rui/src/utils/drag/builder.rs) / `DragEvent.data` | TLS registry（不进 Sync `Context`） |
 | **空闲 `hits`** | assemble → [`register_drag_slot_meta`](../../crates/rui/src/utils/drag/builder.rs) | [`use_drag().hits()`](../../crates/rui/src/utils/drag/builder.rs) — 拖中 layout / 空闲 [`registered_hits_in_scope`](../../crates/rui/src/utils/drag/registry.rs) | — |
 | **skipTransform** | `.skip_shift` / `.skip_follow` + RSX 同名 | attrs `rui_drag_skip_*` | 作者自管 motion 时用 `skip_follow` |

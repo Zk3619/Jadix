@@ -3,6 +3,9 @@
 > **地位**：SemVer / 实验面草稿（WP-2.5 任务③）。正式发布前以 [`AUTHORITY.md`](AUTHORITY.md) WP-4.1 为准重写。  
 > **日期**：2026-08-13
 
+- **2026-09-10 Swap + MultiDrag（WP-DRAG.4）**：[`SortMode::Swap`](../crates/rui/src/utils/drag/geometry.rs) 停兄弟 FLIP、高亮对端；[`apply_swap_event`](../crates/rui/src/utils/drag/sortable.rs) / [`apply_multi_event`](../crates/rui/src/utils/drag/sortable.rs)。`multi_drag` 单击选中 + Overlay 叠卡。Gallery §12。手册 [drag.md](components/drag.md) §5 / §8；对照 [SORTABLE_JS_COMPARISON.md](comparison/SORTABLE_JS_COMPARISON.md) §9.2。
+- **2026-09-10 Sortable §9 分类修订**：`forceFallback` / `store` 才是架构永不；Swap / OnSpill / MultiDrag 改为产品未做（Esc ≠ spill；`PointerSet` ≠ 多选拖）。见 [`SORTABLE_JS_COMPARISON.md`](comparison/SORTABLE_JS_COMPARISON.md) §9。
+- **2026-09-10 SortableJS 列表血统对照冻结**：[`SORTABLE_JS_COMPARISON.md`](comparison/SORTABLE_JS_COMPARISON.md) 对 1.15.7 源码钉死（`Sortable.js` defaults / `_prepareGroup` / AutoScroll 24ms / 四插件）；列表核心已对齐或超越；Swap / MultiDrag / OnSpill / `store` 不建议 WP。手册 [drag.md](components/drag.md) §6。
 - **2026-09-10 interact RSX 双写**：`<DragProvider snap_fn snap_targets snap>`、`<Droppable overlap onDragEnter onDrop … drop_checker>` 与 Builder 同路径（`droppable_from_rsx` / 宏展开）。Gallery snap_fn / dropzone 段改为 RSX 演示。
 - **2026-09-10 interact dropzone + snap_fn**：[`dropzone.rs`](../crates/rui/src/utils/drag/dropzone.rs)（`DropOverlap` pointer/center/ratio、per-zone activate/enter/leave/drop hooks、`.drop_checker`）；[`.snap_fn`](../crates/rui/src/utils/drag/builder.rs) / [`SnapTarget::Fn`](../crates/rui/src/utils/drag/geometry.rs)。Gallery 水平磁吸线 + `overlap=center` HUD。对照 [`INTERACT_JS_COMPARISON.md`](comparison/INTERACT_JS_COMPARISON.md) §7.5。
 - **2026-09-10 拖拽动作（非拖放）**：[`pointer_action`](../crates/rui/src/utils/pointer_action/mod.rs) 落地 interact resize / 双指 gesture / inertia / 多指并发（`max`/`maxPerElement`；同元素升 gesture）。自由拖 `.inertia(true)` 滑行，Sortable 仍立即提交。Gallery 边角缩放、双指圆点、甩砖。对照 [`INTERACT_JS_COMPARISON.md`](comparison/INTERACT_JS_COMPARISON.md) §7。不进 `utils/drag` tick。
@@ -49,7 +52,7 @@
 | `queue_media_frame` / `MediaFrame` / `PixelLayout` / `TextureColorSpace` | `media/stream.rs` | **B18 / WP-M.2–M.3**：动态纹理槽；`image-stream` 开 YUV；不解码、不播放；HDR 后置 |
 | `is_remote_src` / `set_remote_asset_fetcher` / `fetch_remote_bytes` / `RemoteAssetFetcher` | `media/remote.rs` | **remote-asset**：远程 `src` 入口；HTTP 由应用注入；默认关 |
 | `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
-| `drag_scope` / `draggable` / `droppable` / `drag_overlay` / `sortable_*` / `DragModifier` / `collision_fn` / `debug_hits` / `DragCtx::hits` / §11（`pull_clone` / `data` / `skip_*` / sensor）；RSX `<DragProvider>` 等；`.inertia`；[`pointer_action`](../crates/rui/src/utils/pointer_action/mod.rs) | `utils/drag/` · `utils/pointer_action/` | **WP-DRAG.1–3 ☑** + 指针动作（resize/gesture/inertia/多指）；不进 SemVer |
+| `drag_scope` / `draggable` / `droppable` / `drag_overlay` / `sortable_*` / `SortMode` / `multi_drag` / `DragModifier` / `collision_fn` / `debug_hits` / `DragCtx::hits` / §11（`pull_clone` / `data` / `skip_*` / sensor）；RSX `<DragProvider>` 等；`.inertia`；[`pointer_action`](../crates/rui/src/utils/pointer_action/mod.rs) | `utils/drag/` · `utils/pointer_action/` | **WP-DRAG.1–4 ☑** + 指针动作（resize/gesture/inertia/多指）；不进 SemVer |
 
 - **2026-09-05 三层动画模型**：引擎 `Timing` + spring 积分；声明式 `transition: … spring()`；编程式 `Animation` 句柄（`run` / `seek` / `set_rate` / `on_finish`）。丢掉 DocumentTimeline、Promise、编程面 composite。手册 [`animation_and_motion.md`](engine/animation_and_motion.md) 第二部分 §11.5。
 - **2026-09-05 gallery wgpu 管线**：`inst_id` 从 VertexOutput loc 15 打进 loc 14 `extra_and_id`，避开 `max_inter_stage_shader_variables`（0..=14）。

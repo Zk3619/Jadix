@@ -2,7 +2,7 @@
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](../AUTHORITY.md) **WP-DRAG.\*** 为准；产品手册见 [drag.md](../components/drag.md) §4；solid-dnd 原语见 [SOLID_DND_COMPARISON.md](SOLID_DND_COMPARISON.md)。  
 > **对照源**：`Reference/interact.js-main`（[interact.js](https://interactjs.io) **1.10.28** 语义）· RUI 以 `crates/rui/src/utils/drag/{geometry,modifier,session}.rs` 为准。  
-> **日期**：2026-09-10 初稿并冻结修饰主路径 · **同日** 推进超越：`lockAxis: start` / `startAxis` / snap `range`+`endOnly` / restrict `endOnly`+`elementRect` · **同日** 指针动作：resize / gesture / inertia / 多指并发落在 [`pointer_action`](../../crates/rui/src/utils/pointer_action/mod.rs)（**不是** `utils/drag` tick）。  
+> **日期**：2026-09-10 初稿并冻结修饰主路径 · **同日** 推进超越：`lockAxis: start` / `startAxis` / snap `range`+`endOnly` / restrict `endOnly`+`elementRect` · **同日** 指针动作：resize / gesture / inertia / 多指并发落在 [`pointer_action`](../../crates/rui/src/utils/pointer_action/mod.rs)（**不是** `utils/drag` tick） · **同日** SortableJS 列表血统专章冻结 → [SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)。  
 > **范围**：拖拽位移修饰（`utils/drag`）+ interact **dropzone** 语义（映射到 `Droppable` + [`dropzone.rs`](../../crates/rui/src/utils/drag/dropzone.rs)）+ 拖拽动作（`utils/pointer_action`）。
 
 **明细入口**：**[§0.1 对齐判定](#01-对齐判定何时可以宣称修饰子集对齐)**、**[§4 能力矩阵](#4-能力矩阵)**、**[§5 行为差异](#5-行为差异)**、**[§7 指针动作](#7-指针动作resize--gesture--inertia--多指)**、**[§7.6 autoScroll 三方对照](#76-边缘自动滚interact-插件-vs-sortable-autoscroll-vs-rui)**、**[§9 全库 parity](#9-全库-parity-的意义与必要性)**。
@@ -135,7 +135,7 @@ interact.js draggable                RUI session::tick
 | snap `range` / `endOnly` | targets 数组 | `SnapGrid` 一等字段 + [`SnapTargets`](../../crates/rui/src/utils/drag/geometry.rs) | **超** |
 | Modifier 管道 + order | 有 | `DragModifier` | 对齐（改名避 CSS） |
 | 距离 / hold 门槛 | 有 | `threshold` + `delay_ms` | 对齐（组合语义见 solid-dnd 专章） |
-| 边缘自动滚 | `@interactjs/auto-scroll` 插件 | Sortable `plugins/AutoScroll` → RUI `autoscroll.rs` | **对齐 Sortable**；**超** interact 列表场景（按住仍泵、`scroll_lock`） |
+| 边缘自动滚 | `@interactjs/auto-scroll` 插件 | Sortable `plugins/AutoScroll` → RUI `edge_scroll.rs` | **对齐 Sortable**；**超** interact 列表场景（按住仍泵、`scroll_lock`） |
 | resize | 一等 | `pointer_action` 边/角 + invert/aspect/min-max | **超** |
 | gesture（pinch/rotate） | 一等 | 双指 + centroid/translation | **超** |
 | inertia | 有 | 自由拖 `.inertia`；Sortable 不滑行 | **超**（列表不跟 FLIP 抢） |
@@ -235,14 +235,14 @@ interact 的 dropzone 是独立 action；RUI **不**复制插件注册表，把�
 
 三家解决的是同一用户问题：**拖/缩到滚动容器边缘时，容器应继续滚，以便把项放进视口外区域。** 实现路径不同；RUI **刻意**跟 Sortable 列表血统，不移植 interact 的插件包。
 
-| 维度 | interact.js `@interactjs/auto-scroll` | Sortable `plugins/AutoScroll` | RUI [`autoscroll.rs`](../../crates/rui/src/utils/drag/autoscroll.rs) |
+| 维度 | interact.js `@interactjs/auto-scroll` | Sortable `plugins/AutoScroll` | RUI [`edge_scroll.rs`](../../crates/rui/src/utils/edge_scroll.rs) |
 |------|--------------------------------------|------------------------------|---------------------------------------------------------------------|
 | **挂载** | 独立插件；`interact(element).draggable({ autoScroll: true \| {…} })` 也可挂在 resize/gesture | 内置插件 `pluginName: 'scroll'`，`Sortable.mount(AutoScroll)`；默认 `scroll: true` | `DragProvider` / `drag_scope` 会话内建；`.autoscroll(false)` / RSX `autoscroll={false}` 关闭 |
 | **触发** | drag/resize/gesture **move** 时检查指针 vs 容器 margin | `dragover` / `pointermove` / `mousemove` / `touchmove`（fallback 路径） | `session::tick` 指针移动 + [`pump_autoscroll`](../../crates/rui/src/utils/drag/session.rs)（**按住不动仍泵**） |
 | **滚谁** | `container`：`window` 或指定 `HTMLElement` | `bubbleScroll`：从 `elementFromPoint` 向上走 **DOM overflow** 祖先链 | layout walk 收集带 `scroll:` 的 **RUI 视口**（`ScrollHit`），非 DOM `overflow` 嗅探 |
 | **边缘带** | `margin`（默认 60px） | `scrollSensitivity`（默认 30px） | `sensitivity`（默认 40px） |
 | **速度** | `speed` **px/s** + rAF 积分；另有 `interval` / `distance` | `scrollSpeed` **px / 24ms interval**（`setInterval`） | `speed` **px / 显示帧**（按 `dt` 缩放，默认约 14px@60Hz） |
-| **轴向** | 指针在 margin 内则 ±1 方向滚 X/Y | 同上（`vx`/`vy` 层叠多层 scroll parent） | `edge_delta` 同上；另加 [`ScrollLock`](../../crates/rui/src/utils/drag/autoscroll.rs)（`scroll-lock-all` / `x` / `y` / `auto`）冻结泵轴 |
+| **轴向** | 指针在 margin 内则 ±1 方向滚 X/Y | 同上（`vx`/`vy` 层叠多层 scroll parent） | `edge_delta` 同上；另加 [`ScrollLock`](../../crates/rui/src/utils/edge_scroll.rs)（`scroll-lock-all` / `x` / `y` / `auto`）冻结泵轴 |
 | **与幽灵** | 改 DOM scroll；跟手靠 CSS `transform` | fallback 时 scroll 间隔内 **重发** `_onTouchMove` 更新 ghost | 滚 `scroll_offset_*` signal（`set_silent` 防重挂载）；overlay 跟 `overlay_pos` + layout slot |
 | **resize/gesture** | autoScroll 同样服务 resize/gesture action | 仅 Sortable 列表拖 | **可选**：`ResizeOpts::autoscroll` / `set_gesture_opts(GestureOpts::autoscroll)` + `pump_edge_scroll`（复用 `edge_scroll.rs`） |
 | **可配置项** | per-action `margin` / `speed` / `container` | `scrollSensitivity` / `scrollSpeed` | 拖放：`.scroll_sensitivity` / `.scroll_speed` / `.autoscroll_opts` + RSX 双写；默认 `sensitivity=40` `speed=14` |
@@ -279,7 +279,7 @@ interact 的 dropzone 是独立 action；RUI **不**复制插件注册表，把�
 
 **是否有必要：否（不建议作为 WP）**：（1）命题不同 — RUI 是 solid-dnd + Sortable + Overlay 拖放套件，全库 parity 与 [SOLID_DND_COMPARISON.md](SOLID_DND_COMPARISON.md) 重复建设；（2）坐标不可兼容 — interact 跟 DOM + `transform`，RUI 跟 layout slot + Pinned overlay（§5.1）；（3）高价值能力已拆进 `utils/drag` / `pointer_action` / `autoscroll`；（4）全库 parity 会施压把 resize/gesture 焊回 interact 式 mega-session，破坏 §7 边界。
 
-**值得单独开项（非全库）**：interact 片段迁移 → 本专章 + [drag.md](../components/drag.md) §4；resize 时要边缘滚 → 复用 `autoscroll.rs` 接 `ResizeSession`。
+**值得单独开项（非全库）**：interact 片段迁移 → 本专章 + [drag.md](../components/drag.md) §4；resize 时要边缘滚 → 复用 [`edge_scroll.rs`](../../crates/rui/src/utils/edge_scroll.rs) 接 `ResizeSession`。
 
 ---
 
@@ -295,5 +295,6 @@ interact 的 dropzone 是独立 action；RUI **不**复制插件注册表，把�
 | **autoScroll** | ☑ §7.6（Sortable 血统；**不**移植 interact 插件包） |
 | **interact 全库 parity** | **不建议**；见 **§9** |
 | **solid-dnd 血统** | 会话 / Overlay / Sortable 见 [SOLID_DND_COMPARISON.md](SOLID_DND_COMPARISON.md)（**已冻结**） |
+| **SortableJS 血统** | 列表 / 边缘滚见 [SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)（**已冻结**） |
 
 一句话收束：**interact.js 对本项目有价值的部分（修饰、dropzone、snap 函数、指针动作、列表边缘滚）已对齐或超越；边缘滚跟 Sortable 而非 interact 插件包；全库 parity 既不必要也与 Sortable/solid-dnd 架构冲突。** 不要把 resize/gesture 焊回 Sortable tick。

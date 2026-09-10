@@ -2,7 +2,7 @@
 
 > **文档地位**：把「所有叫拖的行为」套进与 [`assets_and_icons_architecture.md`](assets_and_icons_architecture.md) 相同的分层：核心契约 / 可选产品目录 / 组件库；对齐 W4 伞形与 `jadix_components`。  
 > **状态**：草案（未实施）；执行前以 [`AUTHORITY.md`](../AUTHORITY.md) / [`W4_PRELAUNCH_CHECKLIST.md`](../ops/W4_PRELAUNCH_CHECKLIST.md) 排期为准。**不挡** W4 四 crate 发布；可选 crate 抽离排在 `jadix_icons` 模板之后。  
-> **交叉**：[`runtime_extension_points.md`](runtime_extension_points.md)（FrameHook / PointerCapture）· [`headless.md`](../components/headless.md) · [`overlay_shells.md`](../components/overlay_shells.md) · [`drag.md`](../components/drag.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §3（双书写面）· [`SOLID_DND_COMPARISON.md`](../comparison/SOLID_DND_COMPARISON.md) · [`INTERACT_JS_COMPARISON.md`](../comparison/INTERACT_JS_COMPARISON.md)
+> **交叉**：[`runtime_extension_points.md`](runtime_extension_points.md)（FrameHook / PointerCapture）· [`headless.md`](../components/headless.md) · [`overlay_shells.md`](../components/overlay_shells.md) · [`drag.md`](../components/drag.md) · [`COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) §3（双书写面）· [`SOLID_DND_COMPARISON.md`](../comparison/SOLID_DND_COMPARISON.md) · [`SORTABLE_JS_COMPARISON.md`](../comparison/SORTABLE_JS_COMPARISON.md) · [`INTERACT_JS_COMPARISON.md`](../comparison/INTERACT_JS_COMPARISON.md)
 
 代码现状以工作区为准：`pointer_drag`、`utils/drag`、`pointer_action`、`resizable.rs`、`anchored_overlay::drag_handle`、`App::textarea_resize_drag`。本文只定分层，不改 SemVer 稳定面。
 

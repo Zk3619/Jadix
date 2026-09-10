@@ -52,6 +52,6 @@
 
 ### 非执行源
 
-- 对照：[REFERENCE_COMPARISON.md](comparison/REFERENCE_COMPARISON.md) · [GPUI_ECOSYSTEM_COMPARISON.md](comparison/GPUI_ECOSYSTEM_COMPARISON.md) · [FREYA_COMPARISON.md](comparison/FREYA_COMPARISON.md) · [EUI_NEO_VISUAL.md](comparison/EUI_NEO_VISUAL.md) · [gap_analysis.md](comparison/gap_analysis.md)
+- 对照：[REFERENCE_COMPARISON.md](comparison/REFERENCE_COMPARISON.md) · [GPUI_ECOSYSTEM_COMPARISON.md](comparison/GPUI_ECOSYSTEM_COMPARISON.md) · [FREYA_COMPARISON.md](comparison/FREYA_COMPARISON.md) · [EUI_NEO_VISUAL.md](comparison/EUI_NEO_VISUAL.md) · [gap_analysis.md](comparison/gap_analysis.md) · 拖放三专章：[SOLID_DND_COMPARISON.md](comparison/SOLID_DND_COMPARISON.md) · [SORTABLE_JS_COMPARISON.md](comparison/SORTABLE_JS_COMPARISON.md) · [INTERACT_JS_COMPARISON.md](comparison/INTERACT_JS_COMPARISON.md)（均 **2026-09-10 冻结**）
 - 冻结计划：[ENGINEERING_IMPLEMENTATION_PLAN.md](archive/ENGINEERING_IMPLEMENTATION_PLAN.md) · [COMPONENT_LIBRARY_PLAN.md](archive/COMPONENT_LIBRARY_PLAN.md) · [REACTIVITY_PLAN.md](archive/REACTIVITY_PLAN.md)
 - 历史：[PROJECT.md](archive/PROJECT.md) · [STAGE7_ROADMAP.md](archive/STAGE7_ROADMAP.md) · [NAMING_DECISION.md](archive/NAMING_DECISION.md)（已锁定 `jadix` / 琢玉）

@@ -2,9 +2,9 @@
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](../AUTHORITY.md) **WP-DRAG.\*** 为准；产品手册见 [drag.md](../components/drag.md)；浮层几何见 [overlay_shells.md](../components/overlay_shells.md) §9。  
 > **对照源**：`Reference/solid-dnd-main`（[@thisbeyond/solid-dnd](https://github.com/thisbeyond/solid-dnd) **0.7.5**）· RUI 以 `crates/rui/src/utils/drag` 为准。  
-> **日期**：2026-09-08 初稿 · **2026-09-09** §8 P0 · **2026-09-10** §7 + **§11 Extendable** + WP-DRAG.3 落地 · **同日** interact.js 专章冻结 → [INTERACT_JS_COMPARISON.md](INTERACT_JS_COMPARISON.md)。  
+> **日期**：2026-09-08 初稿 · **2026-09-09** §8 P0 · **2026-09-10** §7 + **§11 Extendable** + WP-DRAG.3 落地 · **同日** interact.js 专章冻结 → [INTERACT_JS_COMPARISON.md](INTERACT_JS_COMPARISON.md) · **同日** SortableJS 列表血统冻结 → [SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)。  
 > **冻结**：**2026-09-10** — §7 + §11 + WP-DRAG.3 已全部 ☑；库测 `cargo test -p rui --lib utils::drag` 162 passed。本专章 **不再扩 scope**。  
-> **范围**：本专章只对照 **solid-dnd**。SortableJS 列表血统见 [SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)；**interact.js** 见 [INTERACT_JS_COMPARISON.md](INTERACT_JS_COMPARISON.md)（**已冻结**）。
+> **范围**：本专章只对照 **solid-dnd**。SortableJS 列表血统见 [SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)（**已冻结**）；**interact.js** 见 [INTERACT_JS_COMPARISON.md](INTERACT_JS_COMPARISON.md)（**已冻结**）。
 
 **明细入口**：**[§0.1](#01-对齐判定何时可以宣称对齐-075)** · **[§4](#4-能力矩阵)** · **[§5](#5-行为差异不是有无而是语义不同)** · **[§6](#6-相对-solid-dnd-已补的缺口)** · **[§7](#7-已落地契约对齐-extendable)** · **[§8](#8-建议优先级)** · **[§11](#11-extendable-2026-09-10-已落地)**。
 
@@ -438,7 +438,7 @@ let slots = ctx.hits(); // 本 scope；peek，不订 overlay_pos
 | `collision.rs` | 四算法 + sticky + innermost + `CollisionFn` / `detect_with` |
 | `overlay.rs` | Pinned ghost；pos peek 跟手；`child_for` / `align` |
 | `sortable.rs` | 让位 / transfer；`direction` 写 `rui_drag_axis` |
-| `autoscroll.rs` | 边缘滚 + `ScrollLock` |
+| [`edge_scroll.rs`](../../crates/rui/src/utils/edge_scroll.rs) | 边缘滚 + `ScrollLock`（`drag/autoscroll.rs` re-export） |
 | `geometry.rs` | `Axis` / `Restrict` / `SnapGrid` / `DragStack` / `contains_rect` |
 | `debug.rs` | `DragDropDebugger`：槽矩形 overlay |
 | `crates/rui_macros/src/lib.rs` ~2092+ | `<DragProvider>` RSX |
@@ -456,6 +456,7 @@ let slots = ctx.hits(); // 本 scope；peek，不订 overlay_pos
 | **相对缺失（挡「Extendable 对齐」）** | 无 |
 | **双方都没有、对标 dnd-kit / Sortable 插件** | 多选、ARIA live |
 | **interact.js 血统** | 专章 **[INTERACT_JS_COMPARISON.md](INTERACT_JS_COMPARISON.md)**（**已冻结**） |
+| **SortableJS 血统** | 专章 **[SORTABLE_JS_COMPARISON.md](SORTABLE_JS_COMPARISON.md)**（**已冻结** 2026-09-10） |
 | **冻结** | §7 + §11 ☑ · `utils::drag` 162 passed · **2026-09-10** |
 
 一句话收束：**模型已经是 solid-dnd 的；产品能力已经超过 0.7.5。§7 Extendable + §11 + WP-DRAG.3 已全部落地并验证。本专章 2026-09-10 冻结。**

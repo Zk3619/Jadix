@@ -27,7 +27,7 @@
 | KeyedOverlay | [`utils/keyed_overlay`](../../crates/rui/src/utils/keyed_overlay.rs) | **WP-PRIM.3**；portal + 同 key 调和（shadow/transform mid） |
 | LayoutGroup / slot_list | [`utils/layout_group`](../../crates/rui/src/utils/layout_group.rs) | **WP-PRIM.4**；rank → offset/scale 目标 |
 | **AnchoredOverlay / ViewportModal** | [`utils/anchored_overlay`](../../crates/rui/src/utils/anchored_overlay.rs) **WP-OVL.2 ☑**；[`utils/viewport_modal`](../../crates/rui/src/utils/viewport_modal.rs) **WP-OVL.1 ☑** | 浮层编排壳；收敛 `popup` + `portal_overlay` + `internal/*_motion` |
-| **Drag** | [`utils/drag`](../../crates/rui/src/utils/drag) **WP-DRAG.1–2 ☑** | 超越 Sortable：自动滚 / 让位 / Esc·方向键；Point 替身；`collision_fn` / Overlay `child_for`；手册 [drag.md](drag.md) |
+| **Drag** | [`utils/drag`](../../crates/rui/src/utils/drag) **WP-DRAG.1–4 ☑** | 超越 Sortable：自动滚 / 让位 / Esc·方向键；Point 替身；`collision_fn` / Overlay `child_for`；Swap / MultiDrag；手册 [drag.md](drag.md) |
 | Toast 产品策略 | `components/toast/{timer,queue,swipe}` | 单组件拆分（**非**框架原语；已从 internal 折回） |
 | Carousel 产品策略 | `components/carousel/{track,snap,loop_anim,autoplay}` | 同上 |
 

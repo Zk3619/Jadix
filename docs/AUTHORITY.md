@@ -781,13 +781,14 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 ### 5.6d Wave Drag — 拖放套件（**不挡 Beta**）
 
-> 对齐 solid-dnd / SortableJS / interact.js；替身浮层走 [overlay_shells.md](components/overlay_shells.md) Point + Pinned。手册 [`drag.md`](components/drag.md)。
+> 对齐 solid-dnd / SortableJS / interact.js；替身浮层走 [overlay_shells.md](components/overlay_shells.md) Point + Pinned。手册 [`drag.md`](components/drag.md)。对照三专章 **2026-09-10 冻结**：[SOLID_DND_COMPARISON.md](comparison/SOLID_DND_COMPARISON.md) · [SORTABLE_JS_COMPARISON.md](comparison/SORTABLE_JS_COMPARISON.md) · [INTERACT_JS_COMPARISON.md](comparison/INTERACT_JS_COMPARISON.md)。
 
 | ID | 主题 | 状态 |
 |----|------|------|
 | **WP-DRAG.1** | `utils/drag` 无头套件 + RSX + Gallery | ☑ 2026-09-07 |
 | **WP-DRAG.2** | 实时让位 + 边缘自动滚 + Esc 取消 + 方向键插入 | ☑ 2026-09-07 |
 | **WP-DRAG.3** | FLIP 时长 ☑ / 嵌套列表加深 ☑ P0 / clone-pull | ☑ 2026-09-10 |
+| **WP-DRAG.4** | Swap live（`SortMode`）+ MultiDrag 选择集 | ☑ 2026-09-10 · **不挡 Beta** |
 
 ---
 

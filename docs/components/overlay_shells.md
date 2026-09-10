@@ -749,8 +749,9 @@ drag_handle("palette", pos, title_bar)
 1. **WP-OVL.3 ☑**：Gallery Point 面板 + 标题栏拖拽改 `pos`（验证壳）。  
 2. **WP-DRAG.1 ☑**：`utils/drag` 无头套件（solid-dnd 原语 + 超越 Sortable 的自动滚/让位 + interact 修饰 + Point 替身）。  
 3. **WP-DRAG.2 ☑**：实时兄弟让位、边缘自动滚（按住仍滚）、Esc 取消、方向键改插入点。  
-4. **WP-DRAG.3 ☑**：FLIP 时长 ☑ / **嵌套列表加深 ☑ P0** / clone-pull ☑ + §11（sensor / `data` / 空闲 `hits` / `skip_*`）。见 [drag.md](drag.md) §8。
-5. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Pinned portal + Unanchored viewport inset**（已由 `DragOverlay` 落地）。
+4. **WP-DRAG.3 ☑**：FLIP 时长 ☑ / **嵌套列表加深 ☑ P0** / clone-pull ☑ + §11（sensor / `data` / 空闲 `hits` / `skip_*`）。见 [drag.md](drag.md) §8。  
+5. **WP-DRAG.4 ☑**：Swap live + MultiDrag 选择集（不挡 Beta）。  
+6. 参考生态：Solid [solid-dnd](https://github.com/thisbeyond/solid-dnd) / SortableJS 的 **drag overlay layer** ≈ 本框架 **Pinned portal + Unanchored viewport inset**（已由 `DragOverlay` 落地）。
 
 ### 9.4 点定位 + 拖拽检查清单
 
@@ -774,6 +775,7 @@ drag_handle("palette", pos, title_bar)
 | **WP-DRAG.1** ☑ | `utils/drag`：碰撞 + 替身浮层 + 跨容器 + RSX；见 [drag.md](drag.md) | Gallery `DragShowcase`；库测 collision/session/RSX；§7 Overlay `child_for` / Debugger |
 | **WP-DRAG.2** ☑ | 实时让位 + 自动滚 + Esc/方向键 | Gallery 行星列表（ScrollArea） |
 | **WP-DRAG.3** ☑ | §11 后置 + clone-pull；RSX `data` / `pull_clone` / `skip_*` | Gallery §11 段；[drag.md](drag.md) §8 |
+| **WP-DRAG.4** ☑ | `SortMode::Swap` + `multi_drag`；不挡 Beta | Gallery §12；[drag.md](drag.md) §5 / §8 |
 
 **不纳入 WP-OVL 首版**：prelude 导出、`Placement::Manual`、焦点陷阱产品化（仍归 C-WP-1.3）。完整拖放栈见 **WP-DRAG.1 ☑** [`drag.md`](drag.md)。  
 **纳入 WP-OVL 首版（原「不纳入」已撤销）**：`AnchoredOverlay` / `ViewportModal` RSX 标签与 `*Opts` 双写（ADR-9）。
