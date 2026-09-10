@@ -6,9 +6,9 @@ use std::rc::Rc;
 
 use rui::utils::drag::{
     apply_event, apply_reorder_vec, apply_transfer, begin_draggable, detect, drag_overlay,
-    drag_scope, last_hit_rect, last_pointer, run_scope_sensors, set_debug_drag_hits,
-    sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx, DragEvent, DragItemCtx,
-    OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
+    drag_scope, last_drag_extent, last_hit_rect, last_overlay_pos, last_pointer, run_scope_sensors,
+    set_debug_drag_hits, sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx,
+    DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
     SnapTargets,
 };
 use rui::utils::pointer_action::{
@@ -106,12 +106,7 @@ fn keyed_sortable_flags_chips(
             }
         }
     );
-    Element::from(
-        vstack()
-            .w("100%")
-            .gap("0.375rem")
-            .children(rows),
-    )
+    Element::from(vstack().w("100%").gap("0.375rem").children(rows))
 }
 
 fn keyed_pull_clone_chips(items: Signal<Vec<String>>) -> Element {
@@ -139,12 +134,7 @@ fn keyed_pull_clone_chips(items: Signal<Vec<String>>) -> Element {
             }
         }
     );
-    Element::from(
-        vstack()
-            .w("100%")
-            .gap("0.375rem")
-            .children(rows),
-    )
+    Element::from(vstack().w("100%").gap("0.375rem").children(rows))
 }
 
 fn rsx_sortable_flags_column(
@@ -410,6 +400,209 @@ fn compact_chip(label: &str) -> Element {
     }
 }
 
+fn swap_chip(label: &str, list: &'static str, index: usize, item_id: String) -> Element {
+    let ctx = use_drag();
+    compact_chip(label).reactive_sync(move |el, _| {
+        let over = ctx.as_ref().is_some_and(|c| {
+            c.active_draggable.peek().is_some()
+                && c.hover_list.peek().as_deref() == Some(list)
+                && c.hover_index.peek() == Some(index)
+                && c.active_draggable.peek().as_deref() != Some(item_id.as_str())
+        });
+        let border = parse_color(if over { "primary" } else { "border" });
+        let bg = parse_color(if over { "accent" } else { "card" });
+        let mut changed = LayoutStatus::Clean;
+        if el.style.bg_color != bg {
+            el.style.bg_color = bg;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.border_color != border {
+            el.style.border_color = border;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        changed
+    })
+}
+
+fn multi_select_chip(label: &str, item_id: &str) -> Element {
+    let ctx = use_drag();
+    let selected = ctx
+        .as_ref()
+        .is_some_and(|c| c.selected.get().iter().any(|x| x == item_id));
+    let bg = if selected { "accent" } else { "card" };
+    let border = if selected { "primary" } else { "border" };
+    ui! {
+        <HStack
+            p="0.375rem 0.65rem"
+            gap="0.375rem"
+            items="center"
+            rounded="0.5rem"
+            border_style="solid"
+            border_width="1px"
+            border_color={border}
+            cursor="grab"
+            bg={bg}
+        >
+            <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
+            <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
+        </HStack>
+    }
+}
+
+fn apply_two_list_event(
+    left: Signal<Vec<String>>,
+    right: Signal<Vec<String>>,
+    left_id: &str,
+    ev: &DragEvent,
+) {
+    let from = ev.from_list.as_deref().unwrap_or("");
+    let to = ev.to_list.as_deref().unwrap_or(from);
+    if from == to {
+        let mut v = if from == left_id {
+            left.peek()
+        } else {
+            right.peek()
+        };
+        apply_event(&mut v, None, ev);
+        if from == left_id {
+            left.set(v);
+        } else {
+            right.set(v);
+        }
+        return;
+    }
+    let mut src = if from == left_id {
+        left.peek()
+    } else {
+        right.peek()
+    };
+    let mut dst = if to == left_id {
+        left.peek()
+    } else {
+        right.peek()
+    };
+    apply_event(&mut src, Some(&mut dst), ev);
+    if from == left_id {
+        left.set(src);
+        right.set(dst);
+    } else {
+        right.set(src);
+        left.set(dst);
+    }
+}
+
+fn keyed_swap_chips(
+    rows_id: &'static str,
+    items: Signal<Vec<String>>,
+    list: &'static str,
+) -> Element {
+    let items_snap = items.get();
+    let rows = rui::for_keyed!(
+        rows_id,
+        items_snap.as_slice(),
+        |s: &String| s.clone(),
+        |label: &String| {
+            let name = label.clone();
+            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
+            let id = format!("{list}:{name}");
+            ui! {
+                <SortableItem
+                    id={id.clone()}
+                    item_type="swap"
+                    accept="swap"
+                    group="swap-demo"
+                    list={list}
+                    index={i}
+                    source_opacity={0.4}
+                >
+                    { swap_chip(&name, list, i, id.clone()) }
+                </SortableItem>
+            }
+        }
+    );
+    Element::from(vstack().w("100%").gap("0.375rem").children(rows))
+}
+
+fn keyed_multi_chips(items: Signal<Vec<String>>) -> Element {
+    let items_snap = items.get();
+    let rows = rui::for_keyed!(
+        "gal-drag-multi-rows",
+        items_snap.as_slice(),
+        |s: &String| s.clone(),
+        |label: &String| {
+            let name = label.clone();
+            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
+            let id = format!("multi:{name}");
+            ui! {
+                <SortableItem
+                    id={id.clone()}
+                    item_type="multi"
+                    accept="multi"
+                    list="multi-list"
+                    index={i}
+                    source_opacity={0.4}
+                >
+                    { multi_select_chip(&name, &id) }
+                </SortableItem>
+            }
+        }
+    );
+    Element::from(vstack().w("100%").gap("0.375rem").children(rows))
+}
+
+fn rsx_swap_board(
+    left: Signal<Vec<String>>,
+    right: Signal<Vec<String>>,
+    on_end: impl FnMut(&DragEvent) + 'static,
+) -> Element {
+    ui! {
+        <DragProvider id="gal-drag-swap" collision="closest-center" sort_mode="swap" onDragEnd={on_end}>
+            <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                <VStack gap="0.375rem" min_w="10rem">
+                    <Label text_size="0.75rem" color="muted-foreground">"左 · 不让位，高亮对端"</Label>
+                    <SortableList id="swap-left" group="swap-demo" accept="swap">
+                        { keyed_swap_chips("gal-drag-swap-left-rows", left, "swap-left") }
+                    </SortableList>
+                </VStack>
+                <VStack gap="0.375rem" min_w="10rem">
+                    <Label text_size="0.75rem" color="muted-foreground">"右 · 跨列 mem::swap"</Label>
+                    <SortableList id="swap-right" group="swap-demo" accept="swap">
+                        { keyed_swap_chips("gal-drag-swap-right-rows", right, "swap-right") }
+                    </SortableList>
+                </VStack>
+            </HStack>
+            <DragOverlay class="shadow-lg" />
+        </DragProvider>
+    }
+}
+
+fn multi_selected_hud(n: usize) -> Element {
+    let ctx = use_drag();
+    let selected_n = ctx.as_ref().map(|c| c.selected.get().len()).unwrap_or(0);
+    let hint = format!("共 {n} 项 · 已选 {selected_n} · 单击选中，拖已选项一次带走");
+    ui! {
+        <Label text_size="0.75rem" color="muted-foreground">{ hint }</Label>
+    }
+}
+
+fn rsx_multi_board(
+    items: Signal<Vec<String>>,
+    on_end: impl FnMut(&DragEvent) + 'static,
+) -> Element {
+    let n = items.get().len();
+    ui! {
+        <DragProvider id="gal-drag-multi" collision="closest-center" multi_drag={true} onDragEnd={on_end}>
+            <VStack gap="0.375rem" w="100%">
+                { multi_selected_hud(n) }
+                <SortableList id="multi-list" accept="multi">
+                    { keyed_multi_chips(items) }
+                </SortableList>
+                <DragOverlay class="shadow-lg" />
+            </VStack>
+        </DragProvider>
+    }
+}
+
 /// Overlay `child_for`: typed ghost smaller than the source (`align=center` pins the midpoint).
 fn typed_overlay_ghost(item: &DragItemCtx) -> Element {
     let (icon, caption) = match item.item_type.as_str() {
@@ -558,12 +751,7 @@ fn persist_snap_pos(pos: Signal<[f32; 2]>, grid: SnapGrid) -> impl FnMut(&DragEv
     }
 }
 
-fn resize_handle(
-    rect: Signal<[f32; 4]>,
-    left: f32,
-    top: f32,
-    edges: Edges,
-) -> Element {
+fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> Element {
     let cursor = edges.cursor().to_string();
     let chrome: Element = ui! {
         <Box
@@ -581,19 +769,21 @@ fn resize_handle(
             z_index={2}
         />
     };
-    interactive(chrome).on_mousedown(move |e: &MouseEvent| {
-        let r = rect.peek();
-        begin_resize(
-            BoxRect::from_xywh(r[0], r[1], r[2], r[3]),
-            [e.x, e.y],
-            ResizeOpts::default()
-                .edges(edges)
-                .invert(Invert::Reposition)
-                .min_size(64.0, 48.0)
-                .autoscroll(true),
-            Some("gal_drag_resize_rect".into()),
-        );
-    }).into()
+    interactive(chrome)
+        .on_mousedown(move |e: &MouseEvent| {
+            let r = rect.peek();
+            begin_resize(
+                BoxRect::from_xywh(r[0], r[1], r[2], r[3]),
+                [e.x, e.y],
+                ResizeOpts::default()
+                    .edges(edges)
+                    .invert(Invert::Reposition)
+                    .min_size(64.0, 48.0)
+                    .autoscroll(true),
+                Some("gal_drag_resize_rect".into()),
+            );
+        })
+        .into()
 }
 
 fn resize_board(rect: Signal<[f32; 4]>) -> Element {
@@ -788,23 +978,52 @@ fn list_chip(label: &str) -> Element {
     }
 }
 
-/// Overlay rotate from pointer vs arena: NW −45°, NE 45°, SW −135°, SE 135°.
-/// Center stays 0°. Appearance only — CSS rotate on the overlay, not a kit modifier.
-fn corner_card_angle(pointer: [f32; 2], bounds: [f32; 4]) -> f32 {
-    let w = bounds[2].max(1.0);
-    let h = bounds[3].max(1.0);
-    let u = ((pointer[0] - bounds[0]) / w).clamp(0.0, 1.0);
-    let v = ((pointer[1] - bounds[1]) / h).clamp(0.0, 1.0);
+/// Overlay rotate from ghost travel vs arena: NW −45°, NE 45°, SW −135°, SE 135°.
+/// Center stays 0°. `origin` is the ghost top-left; `extent` is ghost size so the
+/// clamped corners of `restrict` map onto the labeled angles (pointer-in-arena
+/// never reaches 0/1 while the grab sits on the card).
+/// Appearance only — CSS rotate on the overlay, not a kit modifier.
+fn corner_card_angle(origin: [f32; 2], bounds: [f32; 4], extent: [f32; 2]) -> f32 {
+    let travel_w = (bounds[2] - extent[0]).max(1.0);
+    let travel_h = (bounds[3] - extent[1]).max(1.0);
+    let u = ((origin[0] - bounds[0]) / travel_w).clamp(0.0, 1.0);
+    let v = ((origin[1] - bounds[1]) / travel_h).clamp(0.0, 1.0);
     let top = -45.0 + 90.0 * u;
     let bot = -135.0 + 270.0 * u;
     top + (bot - top) * v
 }
 
 fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
-    last_pointer()
-        .zip(last_hit_rect(scope, arena))
-        .map(|(p, r)| corner_card_angle(p, r))
-        .unwrap_or(0.0)
+    let Some(bounds) = last_hit_rect(scope, arena) else {
+        return 0.0;
+    };
+    let origin = last_overlay_pos(scope).or_else(last_pointer);
+    let Some(origin) = origin else {
+        return 0.0;
+    };
+    let extent = last_drag_extent(scope).unwrap_or([0.0, 0.0]);
+    corner_card_angle(origin, bounds, extent)
+}
+
+#[cfg(test)]
+mod corner_tilt_tests {
+    use super::corner_card_angle;
+
+    #[test]
+    fn travel_corners_match_labels() {
+        let bounds = [0.0, 0.0, 200.0, 120.0];
+        let extent = [40.0, 24.0];
+        let nw = corner_card_angle([0.0, 0.0], bounds, extent);
+        let ne = corner_card_angle([160.0, 0.0], bounds, extent);
+        let sw = corner_card_angle([0.0, 96.0], bounds, extent);
+        let se = corner_card_angle([160.0, 96.0], bounds, extent);
+        let mid = corner_card_angle([80.0, 48.0], bounds, extent);
+        assert!((nw + 45.0).abs() < 0.01, "{nw}");
+        assert!((ne - 45.0).abs() < 0.01, "{ne}");
+        assert!((sw + 135.0).abs() < 0.01, "{sw}");
+        assert!((se - 135.0).abs() < 0.01, "{se}");
+        assert!(mid.abs() < 0.01, "{mid}");
+    }
 }
 
 fn corner_hint(text: &str) -> Element {
@@ -1284,7 +1503,9 @@ pub(crate) fn DragShowcase() -> Element {
     let snap_pos = use_signal("gal_drag_snap_pos", || [16.0_f32, 16.0]);
     let snap_multi_pos = use_signal("gal_drag_snap_multi_pos", || [16.0_f32, 16.0]);
     let snap_fn_pos = use_signal("gal_drag_snap_fn_pos", || [16.0_f32, 40.0]);
-    let dropzone_hud = use_signal("gal_drag_dropzone_hud", || "overlap=center · 未进入".to_string());
+    let dropzone_hud = use_signal("gal_drag_dropzone_hud", || {
+        "overlap=center · 未进入".to_string()
+    });
     let snap_end_pos = use_signal("gal_drag_snap_end_pos", || [16.0_f32, 16.0]);
     let start_lock_pos = use_signal("gal_drag_start_lock_pos", || [16.0_f32, 16.0]);
     let fling_pos = use_signal("gal_drag_fling_pos", || [16.0_f32, 16.0]);
@@ -1299,6 +1520,29 @@ pub(crate) fn DragShowcase() -> Element {
     let clone_tags = use_signal("gal_drag_clone", || {
         vec!["Rust".to_string(), "UI".to_string(), "Drag".to_string()]
     });
+    let swap_left = use_signal("gal_drag_swap_left", || {
+        vec![
+            "Mercury".to_string(),
+            "Venus".to_string(),
+            "Earth".to_string(),
+        ]
+    });
+    let swap_right = use_signal("gal_drag_swap_right", || {
+        vec![
+            "Mars".to_string(),
+            "Jupiter".to_string(),
+            "Saturn".to_string(),
+        ]
+    });
+    let multi_tags = use_signal("gal_drag_multi", || {
+        vec![
+            "Alpha".to_string(),
+            "Beta".to_string(),
+            "Gamma".to_string(),
+            "Delta".to_string(),
+            "Epsilon".to_string(),
+        ]
+    });
     let shift_normal = use_signal("gal_drag_shift_normal", || {
         vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()]
     });
@@ -1306,9 +1550,15 @@ pub(crate) fn DragShowcase() -> Element {
         vec!["Alpha".to_string(), "Pin".to_string(), "Gamma".to_string()]
     });
     let shift_follow = use_signal("gal_drag_shift_follow", || {
-        vec!["Alpha".to_string(), "Follow".to_string(), "Gamma".to_string()]
+        vec![
+            "Alpha".to_string(),
+            "Follow".to_string(),
+            "Gamma".to_string(),
+        ]
     });
-    let data_note = use_signal("gal_drag_data_note", || "拖起看幽灵上的 payload".to_string());
+    let data_note = use_signal("gal_drag_data_note", || {
+        "拖起看幽灵上的 payload".to_string()
+    });
     let sensor_target = use_signal("gal_drag_sensor_target", || None::<String>);
 
     let clone_on_end = {
@@ -1321,6 +1571,25 @@ pub(crate) fn DragShowcase() -> Element {
     };
     let clone_board = rsx_pull_clone_board(clone_tags, clone_on_end);
 
+    let swap_on_end = {
+        let swap_left = swap_left.clone();
+        let swap_right = swap_right.clone();
+        move |ev: &DragEvent| {
+            apply_two_list_event(swap_left, swap_right, "swap-left", ev);
+        }
+    };
+    let swap_board = rsx_swap_board(swap_left, swap_right, swap_on_end);
+
+    let multi_on_end = {
+        let multi_tags = multi_tags.clone();
+        move |ev: &DragEvent| {
+            let mut v = multi_tags.peek();
+            apply_event(&mut v, None, ev);
+            multi_tags.set(v);
+        }
+    };
+    let multi_board = rsx_multi_board(multi_tags, multi_on_end);
+
     let data_board = {
         let data_note = data_note.clone();
         Element::from(
@@ -1328,7 +1597,11 @@ pub(crate) fn DragShowcase() -> Element {
                 .on_drag_start({
                     let data_note = data_note.clone();
                     move |ev| {
-                        if let Some(n) = ev.data.as_ref().and_then(|d| d.downcast_ref::<i32>().copied()) {
+                        if let Some(n) = ev
+                            .data
+                            .as_ref()
+                            .and_then(|d| d.downcast_ref::<i32>().copied())
+                        {
                             data_note.set(format!("drag_start · data={n}"));
                         }
                     }
@@ -1336,11 +1609,12 @@ pub(crate) fn DragShowcase() -> Element {
                 .on_drag_end({
                     let data_note = data_note.clone();
                     move |ev| {
-                        if let Some(n) = ev.data.as_ref().and_then(|d| d.downcast_ref::<i32>().copied()) {
-                            data_note.set(format!(
-                                "drag_end · data={n} · id={}",
-                                ev.draggable_id
-                            ));
+                        if let Some(n) = ev
+                            .data
+                            .as_ref()
+                            .and_then(|d| d.downcast_ref::<i32>().copied())
+                        {
+                            data_note.set(format!("drag_end · data={n} · id={}", ev.draggable_id));
                         }
                     }
                 })
@@ -1410,28 +1684,32 @@ pub(crate) fn DragShowcase() -> Element {
             }),
     );
 
-    let skip_on_end = move |ev: &DragEvent| {
-        match ev.from_list.as_deref() {
-            Some("shift-normal") => {
-                let Some(from) = ev.from_index else { return; };
-                let mut v = shift_normal.peek();
-                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-                shift_normal.set(v);
-            }
-            Some("shift-pinned") => {
-                let Some(from) = ev.from_index else { return; };
-                let mut v = shift_pinned.peek();
-                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-                shift_pinned.set(v);
-            }
-            Some("shift-follow") => {
-                let Some(from) = ev.from_index else { return; };
-                let mut v = shift_follow.peek();
-                apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-                shift_follow.set(v);
-            }
-            _ => {}
+    let skip_on_end = move |ev: &DragEvent| match ev.from_list.as_deref() {
+        Some("shift-normal") => {
+            let Some(from) = ev.from_index else {
+                return;
+            };
+            let mut v = shift_normal.peek();
+            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+            shift_normal.set(v);
         }
+        Some("shift-pinned") => {
+            let Some(from) = ev.from_index else {
+                return;
+            };
+            let mut v = shift_pinned.peek();
+            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+            shift_pinned.set(v);
+        }
+        Some("shift-follow") => {
+            let Some(from) = ev.from_index else {
+                return;
+            };
+            let mut v = shift_follow.peek();
+            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
+            shift_follow.set(v);
+        }
+        _ => {}
     };
     let skip_shift_board =
         rsx_skip_flags_board(shift_normal, shift_pinned, shift_follow, skip_on_end);
@@ -1927,9 +2205,9 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 四角旋转"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "容器内一张卡片。restrict 填容器 id（corners-arena）或 parent（无需给父级分配 id，钳作者容器并跳过 kit shell）。本例用 arena id，浮层钳在整块虚线框内而不是整个视口：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按指针在容器内的位置插值）。缺省/viewport 仍可拖出父级做跨容器投放。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
+                    "容器内一张卡片。restrict 填容器 id（corners-arena）或 parent（无需给父级分配 id，钳作者容器并跳过 kit shell）。本例用 arena id，浮层钳在整块虚线框内而不是整个视口：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按浮层在钳制行程内的位置插值）。缺省/viewport 仍可拖出父级做跨容器投放。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
                 </Label>
-                <DragProvider id="gal-drag-corners" collision="pointer-within">
+                <DragProvider id="gal-drag-corners" collision="pointer-within" threshold={0}>
                     <Droppable id="corners-arena">
                         <VStack
                             w="100%"
@@ -2580,6 +2858,20 @@ pub(crate) fn DragShowcase() -> Element {
                     "`<SortableItem pull_clone={{true}}>` — 拖中不让位；松手 `apply_event` insert 副本。本段纯 RSX。"
                 </Label>
                 { clone_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§12 · Swap · SortMode"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<DragProvider sort_mode=\"swap\">` — 拖中不让位，高亮对端 `rui_drag_swap`；松手 `apply_event` 走 `Vec::swap` / 跨列 `mem::swap`。与插入 FLIP 互斥。"
+                </Label>
+                { swap_board }
+
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"§12 · MultiDrag · 多选拖"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "`<DragProvider multi_drag={{true}}>` — 单击（未过阈值）切换选中；拖已选项一次带走，Overlay 叠卡。v1 无 Shift 范围选。"
+                </Label>
+                { multi_board }
 
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§11 · data 袋 · DragItemCtx / DragEvent"</Label>

@@ -26,23 +26,24 @@ use super::autoscroll::{AutoScroll, ScrollLock};
 use super::collision::{CollisionAlg, CollisionFn, CollisionInput};
 use super::dropzone::{DropCheckerFn, DropOverlap, DropzoneHandler};
 use super::geometry::{
-    Activation, Axis, DragStack, OverlayAlign, Restrict, RestrictAnchor, Snap, SnapGrid,
-    SnapPointFn, SnapTargets,
+    Activation, Axis, DragStack, OverlayAlign, Restrict, RestrictAnchor, Snap, SnapPointFn,
+    SnapTargets, SortMode,
 };
 use super::session::{
-    active_source_translate, begin, bump_auto_stack, hit_hosts_id,
-    live_cross_list_source_translate, live_pack_item_translate, live_same_list_source_translate,
-    overlay_is_registered, overlay_source_opacity, pack_insert_extent, peek_sort_axis,
-    remember_item_restrict, start_geometry, BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
+    active_drag_ids, active_sort_mode, active_source_translate, begin, bump_auto_stack,
+    hit_hosts_id, live_cross_list_source_translate, live_pack_item_translate,
+    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity,
+    pack_insert_extent, peek_sort_axis, register_scope_product, remember_item_restrict,
+    scope_selected_contains, start_geometry, BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
 use super::sortable::SORTABLE_FLIP_MS;
-use crate::utils::pointer_action::InertiaOpts;
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL,
-    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW,
-    ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_TYPE,
+    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SELECTED,
+    ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_SWAP, ATTR_DRAG_TYPE,
 };
+use crate::utils::pointer_action::InertiaOpts;
 
 #[derive(Clone)]
 pub struct DragCtx {
@@ -59,6 +60,10 @@ pub struct DragCtx {
     pub axis: Axis,
     /// Sibling / source-hole FLIP. `false` snaps translate (SortableJS `animation: 0`).
     pub animation: bool,
+    pub sort_mode: SortMode,
+    pub multi_drag: bool,
+    /// Click-select set when [`Self::multi_drag`] is on. Survives rebuilds via named signal.
+    pub selected: Signal<Vec<String>>,
 }
 
 impl DragCtx {
@@ -617,6 +622,20 @@ fn apply_item_shift_motion(
     }
 }
 
+fn write_flag_attr(el: &mut Element, key: &str, on: bool) -> bool {
+    let have = el.attrs.get(key).map(String::as_str);
+    if on {
+        if have != Some("1") {
+            el.set_attr(key, "1");
+            return true;
+        }
+    } else if have.is_some() {
+        el.attrs.remove(key);
+        return true;
+    }
+    false
+}
+
 /// Live sortable chrome (opacity / sibling translate) is paint-only.
 /// Subscribing `hover_index` / `overlay_pos` inside the island remounts every
 /// pointer move; `h=auto` placeholders then collapse and the list height jitters.
@@ -670,11 +689,12 @@ fn apply_live_drag_chrome(
             let src_op = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
             let hide = src_op <= 0.001;
             let cross = lists_cross;
-            // opacity 0: origin slot empty. Dimmed: body sits in the insert hole
-            // siblings opened — origin is covered by 让位, so pinning the dimmed
-            // chip there is invisible (Gallery screenshot).
+            let swap = active_sort_mode() == SortMode::Swap;
             want_opacity = src_op;
-            if hide {
+            if swap {
+                want_translate = [0.0, 0.0];
+                follow_pointer = false;
+            } else if hide {
                 follow_pointer = true;
             } else if cross {
                 if let (Some(fl), Some(fi), Some(hl)) =
@@ -712,7 +732,13 @@ fn apply_live_drag_chrome(
         }
     } else {
         auto_bumped.set(false);
-        if also_droppable {
+        let in_group = active_drag_ids().iter().any(|x| x == id);
+        if active_sort_mode() == SortMode::Swap {
+            want_translate = [0.0, 0.0];
+        } else if in_group {
+            want_opacity = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
+            want_translate = [0.0, 0.0];
+        } else if also_droppable {
             if flags.skip_shift || super::session::active_pull_clone() {
                 want_translate = [0.0, 0.0];
             } else {
@@ -752,6 +778,17 @@ fn apply_live_drag_chrome(
         if el.attrs.get(ATTR_DRAG_LIST).map(String::as_str) != Some(list.as_str()) {
             el.set_attr(ATTR_DRAG_LIST, list);
         }
+    }
+    let swap_peer = active_sort_mode() == SortMode::Swap
+        && session_live
+        && !is_active
+        && hover_index.peek() == index
+        && hover_list.peek() == list;
+    if write_flag_attr(el, ATTR_DRAG_SWAP, swap_peer) {
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    if write_flag_attr(el, ATTR_DRAG_SELECTED, scope_selected_contains(scope, id)) {
+        changed = changed.merge(LayoutStatus::StyleChanged);
     }
     if (el.style.opacity - want_opacity).abs() > 0.001 {
         el.style.opacity = want_opacity.clamp(0.0, 1.0);
@@ -995,6 +1032,10 @@ pub struct DragScopeBuilder {
     on_end: Option<DragHandler>,
     /// Sibling / source-hole FLIP. Default `true` (`SORTABLE_FLIP_MS`). `false` snaps.
     animation: bool,
+    /// Insert-and-shift (default) vs live Swap (no FLIP, highlight peer).
+    sort_mode: SortMode,
+    /// Click-select + batch drag. Overlay stacks frozen ids.
+    multi_drag: bool,
     modifiers: Vec<super::modifier::DragModifier>,
     sensors: Vec<super::sensor::DragSensor>,
     /// Paint collision slots (solid-dnd `DragDropDebugger`). Sticky process-wide flag.
@@ -1025,6 +1066,8 @@ pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
         on_over: None,
         on_end: None,
         animation: true,
+        sort_mode: SortMode::Insert,
+        multi_drag: false,
         modifiers: Vec::new(),
         sensors: Vec::new(),
         debug_hits: false,
@@ -1145,6 +1188,16 @@ impl DragScopeBuilder {
         self.animation = yes;
         self
     }
+    /// `insert` (default, sibling FLIP) or `swap` (Sortable Swap: no shift, highlight peer).
+    pub fn sort_mode(mut self, mode: SortMode) -> Self {
+        self.sort_mode = mode;
+        self
+    }
+    /// Click toggles selection; dragging a selected item freezes the set.
+    pub fn multi_drag(mut self, yes: bool) -> Self {
+        self.multi_drag = yes;
+        self
+    }
     /// Draw layout-slot rectangles (dashed idle, bold active droppable).
     /// Sets the process-wide [`super::set_debug_drag_hits`] flag when `true`.
     pub fn debug_hits(mut self, yes: bool) -> Self {
@@ -1228,6 +1281,8 @@ impl DragScopeBuilder {
         let hover_list = use_signal(format!("{id}__drag_hover_list").as_str(), || None::<String>);
         let hover_index = use_signal(format!("{id}__drag_hover_index").as_str(), || None::<usize>);
         let drag_extent = use_signal(format!("{id}__drag_extent").as_str(), || [0.0_f32, 0.0]);
+        let selected = use_signal(format!("{id}__drag_selected").as_str(), Vec::<String>::new);
+        register_scope_product(id.clone(), self.sort_mode, self.multi_drag, selected);
         super::session::register_scope(
             id.clone(),
             ScopeRuntime {
@@ -1280,6 +1335,9 @@ impl DragScopeBuilder {
             drag_extent,
             axis: self.axis,
             animation: self.animation,
+            sort_mode: self.sort_mode,
+            multi_drag: self.multi_drag,
+            selected,
         };
         let mut root = with_child_owner(|| {
             provide_context(drag_context(), ctx);
@@ -1567,6 +1625,7 @@ fn assemble_draggable(
     let drag_extent_sig = ctx.drag_extent;
     let axis = ctx.axis;
     let animation = ctx.animation;
+    let selected_sig = ctx.selected;
     let handle_only = cfg.handle_only;
     let disabled = cfg.disabled;
     let also_droppable = cfg.also_droppable;
@@ -1594,6 +1653,7 @@ fn assemble_draggable(
     let island = reactive_view_sized(tid, island_w, "auto", move || {
         let index = index_sig.get();
         let list = list_sig.get();
+        let _ = selected_sig.get();
         let mut item_ctx = item_ctx.clone();
         item_ctx.index = index;
         item_ctx.list = list.clone();
@@ -1819,10 +1879,7 @@ impl DroppableBuilder {
         self.dropzone.checker = Some(f);
         self
     }
-    pub fn on_drop_activate(
-        mut self,
-        f: impl FnMut(&super::session::DragEvent) + 'static,
-    ) -> Self {
+    pub fn on_drop_activate(mut self, f: impl FnMut(&super::session::DragEvent) + 'static) -> Self {
         self.dropzone.hooks.on_activate = Some(Rc::new(RefCell::new(f)));
         self
     }

@@ -88,10 +88,19 @@ pub fn overlap_for(scope: &str, id: &str) -> DropOverlap {
 }
 
 pub fn checker_for(scope: &str, id: &str) -> Option<DropCheckerFn> {
-    CONFIG.with(|m| m.borrow().get(&slot_key(scope, id)).and_then(|c| c.checker.clone()))
+    CONFIG.with(|m| {
+        m.borrow()
+            .get(&slot_key(scope, id))
+            .and_then(|c| c.checker.clone())
+    })
 }
 
-fn fire_hook(scope: &str, id: &str, pick: impl Fn(&DropzoneHooks) -> &Option<DropzoneHandler>, ev: &DragEvent) {
+fn fire_hook(
+    scope: &str,
+    id: &str,
+    pick: impl Fn(&DropzoneHooks) -> &Option<DropzoneHandler>,
+    ev: &DragEvent,
+) {
     CONFIG.with(|m| {
         let key = slot_key(scope, id);
         let borrowed = m.borrow();
@@ -134,7 +143,10 @@ pub fn on_hover_change(scope: &str, prev: Option<&str>, next: Option<&str>, ev: 
         if let Some(n) = next {
             fire_hook(scope, n, |h| &h.on_enter, ev);
         }
-        ENTERED.with(|m| m.borrow_mut().insert(scope.to_string(), next.map(str::to_string)));
+        ENTERED.with(|m| {
+            m.borrow_mut()
+                .insert(scope.to_string(), next.map(str::to_string))
+        });
     }
     if let Some(n) = next {
         fire_hook(scope, n, |h| &h.on_move, ev);

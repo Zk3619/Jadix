@@ -59,11 +59,7 @@ pub fn item_flags(scope: &str, id: &str) -> ItemFlags {
 pub fn register_slot_meta(hit: DragHit) {
     let key = slot_key(&hit.scope_id, &hit.id);
     REGISTERED.with(|m| {
-        let rect = m
-            .borrow()
-            .get(&key)
-            .map(|h| h.rect)
-            .unwrap_or_default();
+        let rect = m.borrow().get(&key).map(|h| h.rect).unwrap_or_default();
         let mut h = hit;
         h.rect = rect;
         m.borrow_mut().insert(key, h);

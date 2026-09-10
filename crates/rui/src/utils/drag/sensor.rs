@@ -27,7 +27,10 @@ pub struct DragSensor {
 }
 
 impl DragSensor {
-    pub fn new(id: impl Into<String>, activator: impl Fn(&DragSensorCtx) -> bool + 'static) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        activator: impl Fn(&DragSensorCtx) -> bool + 'static,
+    ) -> Self {
         Self {
             id: id.into(),
             activator: Rc::new(activator),
@@ -100,11 +103,7 @@ pub fn run_scope_sensors(scope_id: &str) -> bool {
 }
 
 /// Start a drag from the registered idle hit table (sensor / keyboard helpers).
-pub fn begin_draggable(
-    scope_id: &str,
-    draggable_id: &str,
-    begin: &Rc<dyn Fn(BeginDrag)>,
-) -> bool {
+pub fn begin_draggable(scope_id: &str, draggable_id: &str, begin: &Rc<dyn Fn(BeginDrag)>) -> bool {
     let hits = super::registry::registered_hits_in_scope(scope_id);
     let Some(hit) = hits
         .iter()

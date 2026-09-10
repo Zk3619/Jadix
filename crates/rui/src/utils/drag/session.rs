@@ -15,10 +15,9 @@ use crate::core::tree::Element;
 use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
 
 use super::autoscroll::AutoScroll;
-use crate::utils::edge_scroll::pump_at;
 use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
 use super::geometry::{
-    Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid,
+    Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid, SortMode,
 };
 use super::modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
@@ -29,6 +28,7 @@ use super::{
     ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT,
     ATTR_DRAG_TYPE,
 };
+use crate::utils::edge_scroll::pump_at;
 
 pub type DragHandler = Rc<RefCell<dyn FnMut(&DragEvent)>>;
 pub type DragPredicate = Rc<dyn Fn(&DragEvent) -> bool>;
@@ -39,6 +39,14 @@ pub enum DragPhase {
     Active,
     /// Pointer is up; exponential fling / smoothEnd still drives the ghost.
     Coasting,
+}
+
+/// One item in a drag (single or MultiDrag freeze).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragItemRef {
+    pub id: String,
+    pub from_list: Option<String>,
+    pub from_index: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +65,10 @@ pub struct DragEvent {
     pub pull_clone: bool,
     /// Item [`super::registry::set_item_data`] at drag start.
     pub data: Option<Rc<dyn Any>>,
+    /// Provider [`SortMode`] frozen at `begin`.
+    pub sort_mode: SortMode,
+    /// Frozen drag set. Length 1 = single item; `> 1` = MultiDrag.
+    pub items: Vec<DragItemRef>,
 }
 
 /// A laid-out draggable or droppable (or both) collected from the element tree.
@@ -158,6 +170,15 @@ struct DragSession {
     last_viewport: [f32; 2],
     pull_clone: bool,
     data: Option<Rc<dyn Any>>,
+    sort_mode: SortMode,
+    /// Frozen at activate (click-select set, or just the primary id).
+    items: Vec<DragItemRef>,
+}
+
+struct ScopeProduct {
+    sort_mode: SortMode,
+    multi_drag: bool,
+    selected: Signal<Vec<String>>,
 }
 
 pub(super) struct ScopeRuntime {
@@ -233,6 +254,9 @@ thread_local! {
     static VELOCITY: RefCell<VelocityTracker> = RefCell::new(VelocityTracker::default());
     static COAST: RefCell<Option<Inertia>> = RefCell::new(None);
     static SCOPE_INERTIA: RefCell<HashMap<String, InertiaOpts>> = RefCell::new(HashMap::new());
+    /// Sort / multi-select product flags. Separate from [`ScopeRuntime`] so
+    /// session tests do not reconstruct every field.
+    static SCOPE_PRODUCT: RefCell<HashMap<String, ScopeProduct>> = RefCell::new(HashMap::new());
     static COAST_TICK: Cell<bool> = const { Cell::new(false) };
     static LAST_COAST_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
@@ -244,12 +268,7 @@ pub(super) fn set_scope_inertia(scope_id: &str, opts: InertiaOpts) {
 }
 
 fn scope_inertia(scope_id: &str) -> InertiaOpts {
-    SCOPE_INERTIA.with(|m| {
-        m.borrow()
-            .get(scope_id)
-            .copied()
-            .unwrap_or_default()
-    })
+    SCOPE_INERTIA.with(|m| m.borrow().get(scope_id).copied().unwrap_or_default())
 }
 
 pub fn is_coasting() -> bool {
@@ -411,11 +430,137 @@ pub fn scope_sensors(scope_id: &str) -> Vec<super::sensor::DragSensor> {
 }
 
 pub fn active_pull_clone() -> bool {
+    SESSION.with(|s| s.borrow().as_ref().is_some_and(|d| d.pull_clone))
+}
+
+pub(super) fn register_scope_product(
+    id: String,
+    sort_mode: SortMode,
+    multi_drag: bool,
+    selected: Signal<Vec<String>>,
+) {
+    SCOPE_PRODUCT.with(|m| {
+        m.borrow_mut().insert(
+            id,
+            ScopeProduct {
+                sort_mode,
+                multi_drag,
+                selected,
+            },
+        );
+    });
+}
+
+pub(super) fn scope_sort_mode(id: &str) -> SortMode {
+    SCOPE_PRODUCT.with(|m| m.borrow().get(id).map(|p| p.sort_mode).unwrap_or_default())
+}
+
+pub(super) fn scope_multi_drag(id: &str) -> bool {
+    SCOPE_PRODUCT.with(|m| m.borrow().get(id).is_some_and(|p| p.multi_drag))
+}
+
+pub(super) fn scope_selected_contains(scope: &str, id: &str) -> bool {
+    SCOPE_PRODUCT.with(|m| {
+        m.borrow()
+            .get(scope)
+            .is_some_and(|p| p.selected.peek().iter().any(|x| x == id))
+    })
+}
+
+/// Provider [`SortMode`] of the live session (`Insert` when idle).
+pub fn active_sort_mode() -> SortMode {
     SESSION.with(|s| {
         s.borrow()
             .as_ref()
-            .is_some_and(|d| d.pull_clone)
+            .map(|d| d.sort_mode)
+            .unwrap_or(SortMode::Insert)
     })
+}
+
+/// Frozen drag ids (`[primary]` when idle / single). Overlay stacks these.
+pub fn active_drag_ids() -> Vec<String> {
+    SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|d| {
+                if d.items.is_empty() {
+                    vec![d.draggable_id.clone()]
+                } else {
+                    d.items.iter().map(|i| i.id.clone()).collect()
+                }
+            })
+            .unwrap_or_default()
+    })
+}
+
+fn active_drag_group_contains(id: &str) -> bool {
+    SESSION.with(|s| {
+        s.borrow()
+            .as_ref()
+            .is_some_and(|d| d.items.len() > 1 && d.items.iter().any(|i| i.id == id))
+    })
+}
+
+fn try_click_select(scope: &str, id: &str) {
+    let Some(selected) = SCOPE_PRODUCT.with(|m| {
+        m.borrow()
+            .get(scope)
+            .and_then(|p| p.multi_drag.then_some(p.selected))
+    }) else {
+        return;
+    };
+    let mut v = selected.peek();
+    if let Some(i) = v.iter().position(|x| x == id) {
+        v.remove(i);
+    } else {
+        v.push(id.to_string());
+    }
+    selected.set(v);
+    crate::app::runtime::request_redraw();
+}
+
+fn freeze_drag_items(sess: &mut DragSession, hits: &[DragHit]) {
+    let primary = DragItemRef {
+        id: sess.draggable_id.clone(),
+        from_list: sess.from_list.clone(),
+        from_index: sess.from_index,
+    };
+    if sess.sort_mode == SortMode::Swap || !scope_multi_drag(&sess.scope_id) {
+        sess.items = vec![primary];
+        return;
+    }
+    let selected = SCOPE_PRODUCT.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .map(|p| p.selected.peek())
+            .unwrap_or_default()
+    });
+    if !selected.iter().any(|sid| sid == &sess.draggable_id) {
+        sess.items = vec![primary];
+        return;
+    }
+    let from_list = sess.from_list.clone();
+    let mut refs: Vec<DragItemRef> = hits
+        .iter()
+        .filter(|h| {
+            h.scope_id == sess.scope_id
+                && h.is_draggable
+                && h.index.is_some()
+                && h.list_id == from_list
+                && selected.iter().any(|sid| sid == &h.id)
+        })
+        .map(|h| DragItemRef {
+            id: h.id.clone(),
+            from_list: h.list_id.clone(),
+            from_index: h.index,
+        })
+        .collect();
+    refs.sort_by_key(|r| r.from_index);
+    refs.dedup_by(|a, b| a.id == b.id);
+    if refs.is_empty() {
+        refs.push(primary);
+    }
+    sess.items = refs;
 }
 
 pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
@@ -500,6 +645,16 @@ pub fn overlay_is_registered(scope_id: &str) -> bool {
 /// Viewport origin of the drag ghost. Peek-only: subscribers remount the overlay island.
 pub(super) fn peek_overlay_pos(scope_id: &str) -> Option<[f32; 2]> {
     SCOPES.with(|m| m.borrow().get(scope_id).map(|s| s.overlay_pos.peek()))
+}
+
+/// [`peek_overlay_pos`] for authors (Gallery overlay `rotate` / HUD). Does not subscribe.
+pub fn last_overlay_pos(scope_id: &str) -> Option<[f32; 2]> {
+    peek_overlay_pos(scope_id)
+}
+
+/// Live ghost size for this scope (`drag_extent`). Peek-only.
+pub fn last_drag_extent(scope_id: &str) -> Option<[f32; 2]> {
+    SCOPES.with(|m| m.borrow().get(scope_id).map(|s| s.drag_extent.peek()))
 }
 
 /// Default source-island opacity while `<DragOverlay>` is open and the item
@@ -623,6 +778,16 @@ fn event_from_delta(
         phase: sess.phase,
         pull_clone: sess.pull_clone,
         data: sess.data.clone(),
+        sort_mode: sess.sort_mode,
+        items: if sess.items.is_empty() {
+            vec![DragItemRef {
+                id: sess.draggable_id.clone(),
+                from_list: sess.from_list.clone(),
+                from_index: sess.from_index,
+            }]
+        } else {
+            sess.items.clone()
+        },
     }
 }
 
@@ -714,6 +879,12 @@ pub fn begin(opts: BeginDrag) {
     let motion_axis = if axis == Axis::Start { Axis::Xy } else { axis };
     let pull_clone = super::registry::item_flags(&opts.scope_id, &opts.draggable_id).pull_clone;
     let data = super::registry::item_data(&opts.scope_id, &opts.draggable_id);
+    let sort_mode = scope_sort_mode(&opts.scope_id);
+    let items = vec![DragItemRef {
+        id: opts.draggable_id.clone(),
+        from_list: opts.from_list.clone(),
+        from_index: opts.from_index,
+    }];
     SESSION.with(|s| {
         *s.borrow_mut() = Some(DragSession {
             capture_id: opts.capture_id,
@@ -742,6 +913,8 @@ pub fn begin(opts: BeginDrag) {
             last_viewport: [0.0, 0.0],
             pull_clone,
             data,
+            sort_mode,
+            items,
         });
     });
 }
@@ -1173,6 +1346,12 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     };
     sess.last_pointer = [x, y];
     sess.last_viewport = viewport;
+    SESSION.with(|s| {
+        if let Some(d) = s.borrow_mut().as_mut() {
+            d.last_pointer = sess.last_pointer;
+            d.last_viewport = sess.last_viewport;
+        }
+    });
     if sess.phase == DragPhase::Active {
         VELOCITY.with(|v| v.borrow_mut().sample([x, y], Instant::now()));
     }
@@ -1202,6 +1381,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
         if sess.axis == Axis::Start && dist >= 1.0 {
             sess.motion_axis = Axis::resolve_start(dx, dy);
         }
+        freeze_drag_items(&mut sess, hits);
         activate_scope(&sess, hits);
         let start_ev = event_from(&sess, None, None, None);
         fire(&sess.scope_id, HandlerKind::Start, &start_ev);
@@ -1321,7 +1501,11 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             let hover_index = hover_list
                 .as_deref()
                 .and_then(|list| {
-                    resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
+                    if sess.sort_mode == SortMode::Swap {
+                        resolve_swap_hover_index(hits, list, [x, y])
+                    } else {
+                        resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
+                    }
                 })
                 .or(sess.from_index);
             if rt.hover_list.peek() != hover_list {
@@ -1353,6 +1537,27 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
 
     SESSION.with(|s| *s.borrow_mut() = Some(sess));
     true
+}
+
+/// Swap mode: hover is the **item** under the pointer, never an insert slot.
+fn resolve_swap_hover_index(hits: &[DragHit], list_id: &str, pointer: [f32; 2]) -> Option<usize> {
+    let items = indexed_list_items(hits, list_id);
+    if items.is_empty() {
+        return None;
+    }
+    for h in &items {
+        if h.rect.contains_point(pointer) {
+            return h.index;
+        }
+    }
+    items
+        .iter()
+        .min_by(|a, b| {
+            point_rect_distance(pointer, a.rect)
+                .partial_cmp(&point_rect_distance(pointer, b.rect))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|h| h.index)
 }
 
 /// Sortable insert index: midpoint row split, then pin below the opened hole.
@@ -1658,9 +1863,9 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
 pub fn end(hits: &[DragHit]) -> bool {
     if !is_coasting() {
         let can_coast = SESSION.with(|s| {
-            s.borrow().as_ref().is_some_and(|sess| {
-                sess.phase == DragPhase::Active && sess.from_list.is_none()
-            })
+            s.borrow()
+                .as_ref()
+                .is_some_and(|sess| sess.phase == DragPhase::Active && sess.from_list.is_none())
         });
         if can_coast {
             let sess = SESSION.with(|s| s.borrow().clone()).unwrap();
@@ -1687,8 +1892,8 @@ fn try_start_coast(sess: &DragSession, hits: &[DragHit]) -> bool {
         COAST.with(|c| *c.borrow_mut() = Some(i));
         return true;
     }
-    let need_end_mod = sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false)
-        || sess.restrict_end_only;
+    let need_end_mod =
+        sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false) || sess.restrict_end_only;
     if !need_end_mod {
         return false;
     }
@@ -1719,8 +1924,8 @@ fn commit_end(hits: &[DragHit]) -> bool {
     let was_active = sess.phase == DragPhase::Active || sess.phase == DragPhase::Coasting;
     let ev = if was_active {
         sess.phase = DragPhase::Active;
-        let need_end_mod = sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false)
-        || sess.restrict_end_only;
+        let need_end_mod =
+            sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false) || sess.restrict_end_only;
         let end_origin = if need_end_mod {
             let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, hits, true);
             SCOPES.with(|m| {
@@ -1752,6 +1957,7 @@ fn commit_end(hits: &[DragHit]) -> bool {
             &sess, drop_hit, to_list, to_index, end_origin,
         ))
     } else {
+        try_click_select(&sess.scope_id, &sess.draggable_id);
         None
     };
     // Clear live preview before `on_drag_end` mutates the Vec, so the rebuild
@@ -2472,7 +2678,7 @@ fn pack_item_translate(
     hover_index: Option<usize>,
     axis: Axis,
 ) -> [f32; 2] {
-    if active_pull_clone() {
+    if active_pull_clone() || active_sort_mode() == SortMode::Swap {
         return [0.0, 0.0];
     }
     let (Some(my_list), Some(my_i), Some(hover_list)) = (my_list, my_index, hover_list) else {
@@ -2482,7 +2688,7 @@ fn pack_item_translate(
         .iter()
         .find(|h| h.list_id.as_deref() == Some(my_list) && h.index == Some(my_i))
     {
-        if hit.skip_shift {
+        if hit.skip_shift || active_drag_group_contains(&hit.id) {
             return [0.0, 0.0];
         }
     }
@@ -5285,6 +5491,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         assert_eq!(
             insert_index_along_axis(&hits, "list", [40.0, 82.0], Axis::Y),
@@ -5327,6 +5535,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
         draft.list_id = Some("todo".into());
@@ -5398,6 +5608,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         assert_eq!(
             insert_index_along_axis(&hits, "planets", [40.0, 340.0], Axis::Y),
@@ -5478,6 +5690,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         assert_eq!(
             resolve_sortable_hover_index(&hits, &sess, "planets", [40.0, 190.0], None),
@@ -5532,6 +5746,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         let mut draft = hit("todo:Draft RFC", [0.0, 0.0, 80.0, 32.0], true);
         draft.scope_id = "gal-drag-board".into();
@@ -5607,6 +5823,8 @@ mod tests {
             last_viewport: [0.0, 0.0],
             pull_clone: false,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         }
     }
 
@@ -7167,12 +7385,39 @@ mod tests {
     }
 
     #[test]
+    fn swap_hover_picks_item_not_insert_slot() {
+        let hits = vec![
+            axis_hit("a", "list", [0.0, 0.0, 40.0, 20.0], Some(0), Axis::Y),
+            axis_hit("b", "list", [0.0, 24.0, 40.0, 20.0], Some(1), Axis::Y),
+            axis_hit("c", "list", [0.0, 48.0, 40.0, 20.0], Some(2), Axis::Y),
+        ];
+        assert_eq!(
+            resolve_swap_hover_index(&hits, "list", [20.0, 34.0]),
+            Some(1),
+            "pointer inside B"
+        );
+        assert_eq!(
+            resolve_swap_hover_index(&hits, "list", [20.0, 100.0]),
+            Some(2),
+            "past last row still the last item, not append"
+        );
+        assert_eq!(
+            resolve_swap_hover_index(&hits, "list", [20.0, 10.0]),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn pull_clone_skips_sibling_shift() {
         use crate::utils::drag::registry::{set_item_flags, ItemFlags};
-        set_item_flags("s", "a", ItemFlags {
-            pull_clone: true,
-            ..Default::default()
-        });
+        set_item_flags(
+            "s",
+            "a",
+            ItemFlags {
+                pull_clone: true,
+                ..Default::default()
+            },
+        );
         begin(BeginDrag {
             scope_id: "s".into(),
             draggable_id: "a".into(),
@@ -7194,7 +7439,16 @@ mod tests {
         b.index = Some(1);
         let hits = vec![a, b];
         assert_eq!(
-            pack_item_translate(&hits, Some("list"), Some(1), Some("list"), Some(0), Some("list"), Some(2), Axis::Y),
+            pack_item_translate(
+                &hits,
+                Some("list"),
+                Some(1),
+                Some("list"),
+                Some(0),
+                Some("list"),
+                Some(2),
+                Axis::Y
+            ),
             [0.0, 0.0]
         );
         let _ = cancel();

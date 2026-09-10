@@ -96,6 +96,33 @@ impl Activation {
     }
 }
 
+/// Live list preview: insert-and-shift (default) vs swap two items (Sortable Swap plugin).
+///
+/// `Swap` turns off sibling FLIP and paints `rui_drag_swap` on the peer. Submit
+/// with [`super::sortable::apply_swap_event`] / [`super::sortable::apply_event`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortMode {
+    #[default]
+    Insert,
+    Swap,
+}
+
+impl SortMode {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "swap" | "exchange" => Self::Swap,
+            _ => Self::Insert,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Insert => "insert",
+            Self::Swap => "swap",
+        }
+    }
+}
+
 /// Ghost origin vs the source box (solid-dnd overlay measure / center).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OverlayAlign {
@@ -348,11 +375,7 @@ pub struct SnapTargets {
 impl SnapTargets {
     pub fn new(grids: impl Into<Vec<SnapGrid>>) -> Self {
         Self {
-            targets: grids
-                .into()
-                .into_iter()
-                .map(SnapTarget::Grid)
-                .collect(),
+            targets: grids.into().into_iter().map(SnapTarget::Grid).collect(),
             range: 0.0,
             end_only: false,
         }

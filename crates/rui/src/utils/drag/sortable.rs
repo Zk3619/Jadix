@@ -13,7 +13,7 @@ use crate::core::tree::{Element, IntoOpacity};
 use crate::utils::drag_reorder::apply_reorder_vec;
 
 use super::builder::{draggable, droppable, DroppableBuilder};
-use super::geometry::{Axis, DragStack, Restrict};
+use super::geometry::{Axis, DragStack, Restrict, SortMode};
 use super::session::DragEvent;
 
 pub use crate::utils::drag_reorder::{
@@ -148,6 +148,14 @@ pub fn apply_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &Dr
         apply_clone_event(from, to, ev);
         return;
     }
+    if ev.sort_mode == SortMode::Swap {
+        apply_swap_event(from, to, ev);
+        return;
+    }
+    if ev.items.len() > 1 {
+        apply_multi_event(from, to, ev);
+        return;
+    }
     let Some(from_index) = ev.from_index else {
         return;
     };
@@ -155,6 +163,79 @@ pub fn apply_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &Dr
     match to {
         None => apply_reorder_vec(from, from_index, to_index),
         Some(dest) => apply_transfer(from, dest, from_index, to_index),
+    }
+}
+
+/// Sortable Swap plugin: exchange two indices. Cross-list swaps values in place.
+pub fn apply_swap_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
+    let Some(fi) = ev.from_index else {
+        return;
+    };
+    let Some(ti) = ev.to_index else {
+        return;
+    };
+    match to {
+        None => {
+            if fi < from.len() && ti < from.len() && fi != ti {
+                from.swap(fi, ti);
+            }
+        }
+        Some(dest)
+            if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() =>
+        {
+            if fi < from.len() && ti < from.len() && fi != ti {
+                from.swap(fi, ti);
+            }
+        }
+        Some(dest) => {
+            if fi < from.len() && ti < dest.len() {
+                std::mem::swap(&mut from[fi], &mut dest[ti]);
+            }
+        }
+    }
+}
+
+/// MultiDrag: lift selected indices (stable relative order) and splice at `to_index`.
+pub fn apply_multi_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
+    let mut idxs: Vec<usize> = ev.items.iter().filter_map(|i| i.from_index).collect();
+    idxs.sort_unstable();
+    idxs.dedup();
+    if idxs.len() <= 1 {
+        let Some(from_index) = ev.from_index.or(idxs.first().copied()) else {
+            return;
+        };
+        let to_index = ev.to_index.unwrap_or(from.len().saturating_sub(1));
+        match to {
+            None => apply_reorder_vec(from, from_index, to_index),
+            Some(dest) => apply_transfer(from, dest, from_index, to_index),
+        }
+        return;
+    }
+    let mut taken = Vec::with_capacity(idxs.len());
+    for i in idxs.iter().rev() {
+        if *i < from.len() {
+            taken.push(from.remove(*i));
+        }
+    }
+    taken.reverse();
+    if taken.is_empty() {
+        return;
+    }
+    let to_index = ev.to_index.unwrap_or(0);
+    let same_list = ev.from_list.is_some() && ev.from_list == ev.to_list;
+    if to.is_none() || same_list {
+        let removed_before = idxs.iter().filter(|i| **i < to_index).count();
+        let insert_at = to_index.saturating_sub(removed_before).min(from.len());
+        for (k, item) in taken.into_iter().enumerate() {
+            from.insert(insert_at + k, item);
+        }
+        return;
+    }
+    if let Some(dest) = to {
+        let insert_at = to_index.min(dest.len());
+        for (k, item) in taken.into_iter().enumerate() {
+            dest.insert(insert_at + k, item);
+        }
     }
 }
 
@@ -171,7 +252,9 @@ pub fn apply_clone_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, e
         None => {
             from.insert(to_index.min(from.len()), item);
         }
-        Some(dest) if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() => {
+        Some(dest)
+            if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() =>
+        {
             from.insert(to_index.min(from.len()), item);
         }
         Some(dest) => {
@@ -466,7 +549,7 @@ mod tests {
 
     #[test]
     fn clone_event_inserts_without_remove() {
-        use crate::utils::drag::{DragEvent, DragPhase};
+        use crate::utils::drag::{DragEvent, DragPhase, SortMode};
         let mut items = vec!["a", "b", "c"];
         let ev = DragEvent {
             scope_id: "s".into(),
@@ -481,6 +564,8 @@ mod tests {
             phase: DragPhase::Active,
             pull_clone: true,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         apply_clone_event(&mut items, None, &ev);
         assert_eq!(items, vec!["a", "b", "a", "c"]);
@@ -489,7 +574,7 @@ mod tests {
 
     #[test]
     fn apply_event_routes_clone() {
-        use crate::utils::drag::{DragEvent, DragPhase};
+        use crate::utils::drag::{DragEvent, DragPhase, SortMode};
         let mut items = vec![1, 2, 3];
         let ev = DragEvent {
             scope_id: "s".into(),
@@ -504,8 +589,114 @@ mod tests {
             phase: DragPhase::Active,
             pull_clone: true,
             data: None,
+            sort_mode: SortMode::Insert,
+            items: Vec::new(),
         };
         apply_event(&mut items, None, &ev);
         assert_eq!(items, vec![1, 1, 2, 3]);
+    }
+
+    fn ev(
+        from_list: &str,
+        from_index: usize,
+        to_list: &str,
+        to_index: usize,
+        sort_mode: SortMode,
+        items: Vec<(usize, &str)>,
+    ) -> crate::utils::drag::DragEvent {
+        use crate::utils::drag::{DragEvent, DragItemRef, DragPhase};
+        DragEvent {
+            scope_id: "s".into(),
+            draggable_id: items
+                .first()
+                .map(|(_, id)| (*id).to_string())
+                .unwrap_or_else(|| "x".into()),
+            droppable_id: None,
+            from_list: Some(from_list.into()),
+            from_index: Some(from_index),
+            to_list: Some(to_list.into()),
+            to_index: Some(to_index),
+            pointer: [0.0, 0.0],
+            delta: [0.0, 0.0],
+            phase: DragPhase::Active,
+            pull_clone: false,
+            data: None,
+            sort_mode,
+            items: items
+                .into_iter()
+                .map(|(i, id)| DragItemRef {
+                    id: id.into(),
+                    from_list: Some(from_list.into()),
+                    from_index: Some(i),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn apply_swap_same_list() {
+        let mut items = vec!["a", "b", "c", "d"];
+        apply_event(
+            &mut items,
+            None,
+            &ev("l", 0, "l", 2, SortMode::Swap, vec![(0, "a")]),
+        );
+        assert_eq!(items, vec!["c", "b", "a", "d"]);
+    }
+
+    #[test]
+    fn apply_swap_cross_list() {
+        let mut a = vec!["a", "b"];
+        let mut b = vec!["x", "y"];
+        apply_event(
+            &mut a,
+            Some(&mut b),
+            &ev("left", 0, "right", 1, SortMode::Swap, vec![(0, "a")]),
+        );
+        assert_eq!(a, vec!["y", "b"]);
+        assert_eq!(b, vec!["x", "a"]);
+    }
+
+    #[test]
+    fn apply_multi_same_list_block() {
+        let mut items = vec!["a", "b", "c", "d", "e"];
+        apply_event(
+            &mut items,
+            None,
+            &ev("l", 1, "l", 5, SortMode::Insert, vec![(1, "b"), (3, "d")]),
+        );
+        // remove b@1 d@3 → rest [a,c,e]; append slot 5, removed_before=2 → insert 3
+        assert_eq!(items, vec!["a", "c", "e", "b", "d"]);
+    }
+
+    #[test]
+    fn apply_multi_to_head() {
+        let mut items = vec!["a", "b", "c", "d"];
+        apply_event(
+            &mut items,
+            None,
+            &ev("l", 1, "l", 0, SortMode::Insert, vec![(1, "b"), (2, "c")]),
+        );
+        assert_eq!(items, vec!["b", "c", "a", "d"]);
+    }
+
+    #[test]
+    fn apply_multi_cross_list() {
+        let mut a = vec!["a", "b", "c"];
+        let mut b = vec!["x"];
+        apply_event(
+            &mut a,
+            Some(&mut b),
+            &ev(
+                "left",
+                0,
+                "right",
+                1,
+                SortMode::Insert,
+                vec![(0, "a"), (2, "c")],
+            ),
+        );
+        assert_eq!(a, vec!["b"]);
+        assert_eq!(b, vec!["x", "a", "c"]);
     }
 }

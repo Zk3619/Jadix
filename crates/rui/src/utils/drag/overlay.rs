@@ -19,7 +19,9 @@ use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{clone_source_preview, require_drag, source_preview_item, DragItemCtx};
 use super::geometry::OverlayAlign;
-use super::session::{mark_overlay_registered, remember_overlay_ghost_extent, with_scope};
+use super::session::{
+    active_drag_ids, mark_overlay_registered, remember_overlay_ghost_extent, with_scope,
+};
 use super::{
     ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE, ATTR_DRAG_GROUP,
     ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
@@ -40,6 +42,10 @@ fn place_drag_ghost(mut panel: Element, ghost_id: &str, origin: [f32; 2]) -> Ele
     panel.set_attr(ATTR_FLOATING, ghost_id);
     panel.set_attr(ATTR_DRAG_OVERLAY, "1");
     panel.set_attr(crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+    // Rotate (Gallery 四角) paints outside the layout box; hidden overflow clips the ghost
+    // to nothing until the next origin write.
+    panel.style.overflow.x = taffy::style::Overflow::Visible;
+    panel.style.overflow.y = taffy::style::Overflow::Visible;
     panel
         .pointer_events_none()
         .fixed()
@@ -63,13 +69,33 @@ fn write_ghost_origin(el: &mut Element, origin: [f32; 2]) -> bool {
 
 /// Pointer chrome: `overlay_pos` must not subscribe the island (that remounts
 /// `clone_source_preview` every move). Same contract as sortable item chrome.
-fn follow_overlay_pos(panel: Element, pos: Signal<[f32; 2]>) -> Element {
+///
+/// Author `.style()` (Gallery `rotate={last_pointer…}`) is sampled here so tilt
+/// follows the pointer without remounting. Island rebuild only sees `open` /
+/// `active` / `extent`.
+fn follow_overlay_pos(
+    panel: Element,
+    pos: Signal<[f32; 2]>,
+    decorate: Option<Rc<dyn Fn(Element) -> Element>>,
+) -> Element {
     panel.reactive_sync(move |el, _| {
+        let mut changed = LayoutStatus::Clean;
         if write_ghost_origin(el, pos.peek()) {
-            LayoutStatus::LayoutChanged
-        } else {
-            LayoutStatus::Clean
+            changed = changed.merge(LayoutStatus::LayoutChanged);
         }
+        if let Some(dec) = &decorate {
+            let sample = dec(Element::new());
+            if (el.style.rotate_deg - sample.style.rotate_deg).abs() > 0.01 {
+                el.style.rotate_deg = sample.style.rotate_deg;
+                changed = changed.merge(LayoutStatus::StyleChanged);
+            }
+        }
+        // First open: portal hoist can leave a 0×0 box. Origin often does not
+        // change on press, so a LayoutChanged here is the only relayout.
+        if el.layout_bounds[2] < 1.0 || el.layout_bounds[3] < 1.0 {
+            changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
+        changed
     })
 }
 
@@ -202,6 +228,19 @@ fn suffix_ghost_ids(el: &mut Element, suffix: &str) {
     }
 }
 
+fn stacked_ghost_panel(scope: &str, ids: &[String]) -> Element {
+    let mut wrap = Element::new().relative();
+    for (i, id) in ids.iter().enumerate() {
+        let mut chip = clone_source_preview(scope, id).unwrap_or_else(Element::new);
+        if i > 0 {
+            let o = i as f32 * 4.0;
+            chip = chip.absolute().left(o).top(o);
+        }
+        wrap = wrap.child(chip);
+    }
+    wrap
+}
+
 impl From<DragOverlayBuilder> for Element {
     fn from(builder: DragOverlayBuilder) -> Self {
         let ctx = require_drag("DragOverlay");
@@ -268,14 +307,24 @@ impl From<DragOverlayBuilder> for Element {
             } else if let Some(body) = &custom {
                 isolate_reads(|| body())
             } else if let Some(id) = source_id.as_deref() {
-                isolate_reads(|| clone_source_preview(&scope_id, id).unwrap_or_else(Element::new))
+                isolate_reads(|| {
+                    let ids = active_drag_ids();
+                    if ids.len() > 1 {
+                        stacked_ghost_panel(&scope_id, &ids)
+                    } else {
+                        clone_source_preview(&scope_id, id).unwrap_or_else(Element::new)
+                    }
+                })
             } else {
                 Element::new().w(0.0).h(0.0)
             };
             strip_source_session_attrs(&mut panel);
             suffix_ghost_ids(&mut panel, ghost_id.as_str());
             if following_source {
-                panel = pin_percent_size_to_extent(panel, extent.get());
+                let ids = active_drag_ids();
+                if ids.len() <= 1 {
+                    panel = pin_percent_size_to_extent(panel, extent.get());
+                }
             }
             if let Some(dec) = &decorate {
                 panel = dec(panel);
@@ -287,7 +336,7 @@ impl From<DragOverlayBuilder> for Element {
                 remember_overlay_ghost_extent(&scope_id, [w, h]);
             }
             panel = place_drag_ghost(panel, ghost_id.as_str(), pos.peek());
-            panel = follow_overlay_pos(panel, pos);
+            panel = follow_overlay_pos(panel, pos, decorate.clone());
             mount_anchored_overlay(panel, oz.panel)
         });
         reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
@@ -1216,6 +1265,70 @@ mod tests {
             assert!(
                 texts.iter().any(|t| t == "本体文案"),
                 "style overlay must keep source text, got {texts:?}"
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// RSX `rotate={last_pointer…}` is `.style()` on the ghost. Island rebuild
+    /// skips `overlay_pos`; chrome must re-sample or Gallery 四角 freezes.
+    #[test]
+    fn overlay_style_rotate_tracks_pointer_without_remount() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{drag_overlay, drag_scope, draggable, last_pointer, tick};
+
+        let (_o, live) = mount_scope_tree(|| {
+            drag_scope("ov-rot").threshold(0.0).child(|| {
+                let chip = draggable("chip").child(|| Element::new().text("tilt").w(80.0).h(32.0));
+                let overlay: Element = drag_overlay()
+                    .style(|el| {
+                        let deg = last_pointer().map(|p| p[0]).unwrap_or(0.0);
+                        el.rotate(deg)
+                    })
+                    .into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let first = ghost.style.rotate_deg;
+            assert!(
+                (first - 50.0).abs() < 0.5,
+                "activate tick pointer.x=50; rotate={first}"
+            );
+        }
+        assert!(tick(200.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            let ghost = find_ghost(&tree).expect("ghost");
+            let frozen = ghost.style.rotate_deg;
+            assert!(
+                (frozen - 50.0).abs() < 0.5,
+                "tick must not remount the island; rotate still first sample, got {frozen}"
+            );
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            let ghost = find_ghost(&tree).expect("ghost after chrome");
+            assert!(
+                (ghost.style.rotate_deg - 200.0).abs() < 0.5,
+                "chrome must re-sample style rotate from last_pointer; got {}",
+                ghost.style.rotate_deg
             );
         }
         let _ = crate::utils::drag::end(&[]);

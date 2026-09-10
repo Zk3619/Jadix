@@ -2155,6 +2155,14 @@ fn expand_node(
                     let animation = get_attr("animation")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
+                    let sort_mode = get_attr("sort_mode")
+                        .or_else(|| get_attr("sortMode"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "insert".to_string() });
+                    let multi_drag = get_attr("multi_drag")
+                        .or_else(|| get_attr("multiDrag"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
                     let debug_hits = get_attr("debug_hits")
                         .or_else(|| get_attr("debugHits"))
                         .map(|e| quote! { #e })
@@ -2276,6 +2284,8 @@ fn expand_node(
                             #scroll_speed_ts
                             __b = __b.scroll_lock(rui::utils::drag::ScrollLock::parse(&(#scroll_lock)));
                             __b = __b.animation(#animation);
+                            __b = __b.sort_mode(rui::utils::drag::SortMode::parse(&(#sort_mode)));
+                            __b = __b.multi_drag(#multi_drag);
                             __b = __b.debug_hits(#debug_hits);
                             __b = __b.inertia(#inertia);
                             #snap_ts
@@ -9476,6 +9486,19 @@ mod rsx_lowering_tests {
         let s = expand(r#"<DragProvider id="p" animation={false}></DragProvider>"#);
         assert!(s.contains("animation"), "{s}");
         assert!(s.contains("false"), "{s}");
+    }
+
+    #[test]
+    fn drag_provider_emits_sort_mode_and_multi_drag() {
+        let s = expand(r#"<DragProvider id="p" sort_mode="swap" multi_drag={true}></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("SortMode::parse"), "{s}");
+        assert!(compact.contains("\"swap\""), "{s}");
+        assert!(compact.contains("multi_drag(true)"), "{s}");
+        let camel = expand(r#"<DragProvider id="p" sortMode="swap" multiDrag={true}></DragProvider>"#);
+        let compact_camel = camel.replace(' ', "");
+        assert!(compact_camel.contains("SortMode::parse"), "{camel}");
+        assert!(compact_camel.contains("multi_drag(true)"), "{camel}");
     }
 
     #[test]
