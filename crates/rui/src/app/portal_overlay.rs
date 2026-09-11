@@ -73,10 +73,23 @@ thread_local! {
 }
 
 fn with_stack_mut<R>(f: impl FnOnce(&mut Vec<OverlayLayer>) -> R) -> R {
-    OVERLAY_STACKS.with(|cell| {
+    with_stack_mut_in(window_scope::active(), f)
+}
+
+/// Overlay stack for an explicit window scope (commit-style; does not read TLS on Drop).
+fn with_stack_mut_in<R>(scope: WindowScope, f: impl FnOnce(&mut Vec<OverlayLayer>) -> R) -> R {
+    let mut f = Some(f);
+    let mut result = None;
+    let _ = OVERLAY_STACKS.try_with(|cell| {
         let mut map = cell.borrow_mut();
-        f(map.entry(window_scope::active()).or_default())
-    })
+        result = Some(f.take().expect("overlay stack callback")(
+            map.entry(scope).or_default(),
+        ));
+    });
+    match result {
+        Some(r) => r,
+        None => f.take().expect("overlay stack callback")(&mut Vec::new()),
+    }
 }
 
 fn z_for_index(i: usize) -> OverlayZ {
@@ -201,7 +214,9 @@ fn portal_sync_inner(
         OverlayMode::Stacked => {
             // Close conflicting layers *after* releasing the stack borrow — same rule as
             // [`try_close_top`]: `open.set` may rebuild and re-enter [`portal_sync`].
-            let (z, to_close) = with_stack_mut(|stack| {
+            // Capture scope once: unmount Drop must not re-read TLS after a window switch.
+            let scope = window_scope::active();
+            let (z, to_close) = with_stack_mut_in(scope, |stack| {
                 let mut to_close = prune_closed(stack);
                 if active {
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
@@ -524,7 +539,7 @@ pub(crate) fn modal_stack_metrics(id: &str) -> (usize, usize) {
 }
 
 pub(crate) fn drop_overlay_stack(scope: WindowScope) {
-    OVERLAY_STACKS.with(|cell| {
+    let _ = OVERLAY_STACKS.try_with(|cell| {
         cell.borrow_mut().remove(&scope);
     });
 }
@@ -998,6 +1013,22 @@ mod tests {
         assert!(!primary.peek());
         assert_eq!(depth(), 0);
         assert!(secondary.peek());
+        clear();
+    }
+
+    #[test]
+    fn dropping_secondary_overlay_stack_does_not_clear_primary() {
+        use crate::app::window_scope::{enter, WindowScope};
+        clear();
+        let primary = Signal::new(true);
+        assert!(portal_sync("p", primary, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        let _g = enter(WindowScope::Secondary(3));
+        let secondary = Signal::new(true);
+        assert!(portal_sync("s", secondary, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        drop(_g);
+        super::drop_overlay_stack(WindowScope::Secondary(3));
+        assert_eq!(depth(), 1);
+        assert!(primary.peek());
         clear();
     }
 }

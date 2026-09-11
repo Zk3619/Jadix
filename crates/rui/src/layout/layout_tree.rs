@@ -165,6 +165,60 @@ pub fn portal_hit_passthrough(el: &Element) -> bool {
         || el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
 }
 
+/// Island that hosts (or hosted) a portal: live `rui_portal`, keep-alive slot, or hoisted root.
+///
+/// Overlay open/close reconciles these 0×0 placeholders. That is not page structure — GPU
+/// FullClear of the gallery is wrong; callers scissor to [`hoisted_portal_damage`] instead.
+pub(crate) fn subtree_declares_portal(el: &Element) -> bool {
+    crate::core::tree::any_in_tree(el, |n| {
+        n.attrs.get("rui_portal").map(String::as_str) == Some("1")
+            || n.attrs.contains_key(ATTR_PORTAL_SLOT)
+            || n.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+    })
+}
+
+/// Union of laid-out hoisted overlay boxes (logical px `[x,y,w,h]`).
+///
+/// Used as PartialLoad scissor when a popover/tooltip/menu joins or leaves the portal layer.
+/// A viewport-filling modal underlay still covers the window via [`crate::app::damage::damage_covers_full`].
+pub(crate) fn hoisted_portal_damage(root: &Element) -> Option<[f32; 4]> {
+    let boxes = hoisted_portal_boxes(root);
+    let first = *boxes.first()?;
+    Some(boxes.iter().copied().skip(1).fold(first, |e, b| {
+        let x = e[0].min(b[0]);
+        let y = e[1].min(b[1]);
+        let x2 = (e[0] + e[2]).max(b[0] + b[2]);
+        let y2 = (e[1] + e[3]).max(b[1] + b[3]);
+        [x, y, x2 - x, y2 - y]
+    }))
+}
+
+/// Each hoisted overlay child's visual box (no union — node present submits separately).
+pub(crate) fn hoisted_portal_boxes(root: &Element) -> Vec<[f32; 4]> {
+    let mut out = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1") {
+            return;
+        }
+        let b = el.layout_bounds;
+        if b[2] <= 0.0 || b[3] <= 0.0 {
+            return;
+        }
+        out.push(b);
+    });
+    out
+}
+
+fn subtree_has_drag_overlay(el: &Element) -> bool {
+    if el
+        .attrs
+        .contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
+    {
+        return true;
+    }
+    el.children.iter().any(subtree_has_drag_overlay)
+}
+
 /// Lift `rui_portal=1` subtrees onto their mount host (Solid `<Portal mount={…}>`).
 ///
 /// Aligns with Solid’s Portal model: **move** content to a mount and **keep it alive** while
@@ -225,8 +279,12 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
             fresh_keys.insert(key.clone());
             // Same portal key was already live: adopt CSS transition mid from the previous
             // hoisted tree (not layout_node — that breaks Taffy SlotMap topology).
+            // Drag overlay ghosts are paint clones: grafting last frame's chip onto a
+            // closed empty host leaves a frozen ghost on the portal layer.
             if let Some(mut prev_node) = prev.remove(&key) {
-                crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev_node);
+                if !subtree_has_drag_overlay(&node) && !subtree_has_drag_overlay(&prev_node) {
+                    crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev_node);
+                }
             }
             prepare_hoisted_node(&mut node, &key);
             place_hoisted(
@@ -1812,6 +1870,69 @@ pub struct OverlayBandRange {
     pub underlay_opacity: f32,
 }
 
+/// Collect slots belonging to one Element (Taffy node). Present draws these
+/// ranges under that node's scissor — never a union AABB of neighbors.
+#[derive(Clone, Copy, Debug)]
+pub struct NodePaint {
+    pub key: u64,
+    pub bounds: [f32; 4],
+    pub overlay: bool,
+    pub instance: (usize, usize),
+    pub textured: (usize, usize),
+    pub text: (usize, usize),
+    pub chrome: (usize, usize),
+    pub paint_ops: (usize, usize),
+}
+
+thread_local! {
+    static NODE_PAINTS: std::cell::RefCell<Vec<NodePaint>> = std::cell::RefCell::new(Vec::new());
+}
+
+fn begin_node_paint_collect() {
+    NODE_PAINTS.with(|s| s.borrow_mut().clear());
+}
+
+fn take_node_paints() -> Vec<NodePaint> {
+    NODE_PAINTS.with(|s| std::mem::take(&mut *s.borrow_mut()))
+}
+
+fn record_node_paint(
+    node: NodeId,
+    el: &Element,
+    start: crate::layout::collect_cache::DlCursor,
+    instances: &[InstanceInput],
+    textured: &[TexturedDraw],
+    text: &[TextLayoutInfo],
+    chrome: &[InstanceInput],
+    paint_ops: &[PaintOp],
+    overlay: bool,
+) {
+    let b = el.layout_bounds;
+    if b[2] <= 0.0 && b[3] <= 0.0 {
+        return;
+    }
+    let end = crate::layout::collect_cache::DlCursor::capture(
+        instances,
+        textured,
+        text,
+        chrome,
+        &[],
+        paint_ops,
+    );
+    NODE_PAINTS.with(|s| {
+        s.borrow_mut().push(NodePaint {
+            key: u64::from(node),
+            bounds: b,
+            overlay,
+            instance: (start.instances, end.instances),
+            textured: (start.textured, end.textured),
+            text: (start.text, end.text),
+            chrome: (start.chrome, end.chrome),
+            paint_ops: (start.paint_ops, end.paint_ops),
+        });
+    });
+}
+
 impl OverlayPaintSplit {
     /// Expand [`Self::bands`] (or a single synthetic band) into end-exclusive ranges.
     pub fn band_ranges(
@@ -2031,6 +2152,8 @@ pub struct RenderResult {
     pub prof: LayoutProfileMs,
     /// Per-SDF-instance polygon clip (even-odd). Length matches [`Self::instances`].
     pub clip_polys: Vec<crate::style::GpuClipPoly>,
+    /// Per-element collect slots for node present (no cross-node AABB cull).
+    pub node_paints: Vec<NodePaint>,
 }
 
 /// Post-layout geometry/style snapshot for one text run (consumed by glyphon).
@@ -2089,8 +2212,13 @@ pub struct LayoutTree {
     /// Test spy: Taffy measure-function invocations in the last compute (text leaves).
     #[cfg(test)]
     pub(crate) text_measure_calls: std::cell::Cell<u32>,
+    /// Test spy: [`Self::build_and_layout`] invocations (full tree walk).
+    #[cfg(test)]
+    pub(crate) full_rebuilds: u32,
     /// Frame-local collect output; `std::mem::take` hands buffers to [`RenderResult`].
     collect_scratch: CollectScratch,
+    /// Cross-frame fingerprint DL for paint-only sibling skip.
+    collect_skip: crate::layout::collect_cache::CollectSkipState,
 }
 
 /// Layout-side resident structures (Taffy + measure metadata).
@@ -2109,6 +2237,17 @@ impl LayoutTree {
             text_measurements: self.text_measurements.len(),
             has_root: self.root_node.is_some(),
         }
+    }
+
+    /// Paint-only and local StructureChanged frames may replay fingerprint DL for clean siblings.
+    /// Scroll-only collect and cold/portal full Taffy rebuilds must pass `false` (no DL clone).
+    pub fn set_collect_skip_allowed(&mut self, allowed: bool) {
+        self.collect_skip.allowed = allowed;
+    }
+
+    /// `(skipped_siblings, patched_dl)` from the last collect.
+    pub fn last_collect_skip_counts(&self) -> (u32, u32) {
+        (self.collect_skip.skipped, self.collect_skip.patched)
     }
 }
 
@@ -2528,6 +2667,8 @@ struct CollectFrame {
     scrollbar_overlay_collect: bool,
     thumb_geometry_override: Option<[f32; 4]>,
     walk: Option<CollectWalk>,
+    cache_start: crate::layout::collect_cache::DlCursor,
+    cache_geom: crate::layout::collect_cache::GeomKey,
 }
 
 fn collect_commit_extent(
@@ -2621,7 +2762,10 @@ impl LayoutTree {
             last_compute_root: None,
             #[cfg(test)]
             text_measure_calls: std::cell::Cell::new(0),
+            #[cfg(test)]
+            full_rebuilds: 0,
             collect_scratch: CollectScratch::default(),
+            collect_skip: crate::layout::collect_cache::CollectSkipState::default(),
         }
     }
 
@@ -2777,18 +2921,87 @@ impl LayoutTree {
         false
     }
 
+    /// Create Taffy nodes only for children that have no `layout_node` yet.
+    fn attach_unbuilt_taffy_nodes(&mut self, root: &mut Element) {
+        let mut stack: Vec<*mut Element> = vec![root as *mut Element];
+        while let Some(ptr) = stack.pop() {
+            let el = unsafe { &mut *ptr };
+            if el.layout_node.is_some() {
+                let ctx = self.unit_ctx_from_parent_layout(el);
+                let (child_cb_w, child_cb_h) = el.style.estimate_content_box(&ctx);
+                let child_parent_dir = matches!(el.style.display, Display::Flex).then_some(
+                    el.style.writing_mode.map_flex_direction(
+                        el.style.direction,
+                        el.style.flex_direction,
+                    ),
+                );
+                for i in 0..el.children.len() {
+                    if el.children[i].layout_node.is_none() {
+                        self.build_taffy_node_mut(
+                            &mut el.children[i],
+                            child_cb_w,
+                            child_cb_h,
+                            child_parent_dir,
+                        );
+                    }
+                }
+            }
+            for c in el.children.iter_mut().rev() {
+                stack.push(c as *mut Element);
+            }
+        }
+    }
+
+    fn remove_taffy_subtree(&mut self, id: NodeId) {
+        if !self.total_nodes.contains(&id) {
+            return;
+        }
+        if let Ok(kids) = self.taffy.children(id) {
+            for k in kids {
+                self.remove_taffy_subtree(k);
+            }
+        }
+        self.collect_skip.evict(id);
+        let _ = self.taffy.remove(id);
+        self.total_nodes.remove(&id);
+        self.text_measurements.remove(&id);
+        self.visited_nodes.remove(&id);
+    }
+
     /// Keep Taffy child order in lockstep with `element.children`.
     ///
     /// Keyed list reorder reuses the same nodes (`LayoutChanged`, not
     /// `StructureChanged`). [`Self::build_and_layout_fast_ex`] never rebuilds the
     /// Taffy tree, so without this walk `compute_layout` packs the previous order.
+    ///
+    /// Cross-parent moves (kanban / sortable) keep the child's `layout_node`. A
+    /// parent-local `remove_taffy_subtree` would free that SlotMap key before the
+    /// destination `set_children` — Taffy panics: `invalid SlotMap key used`.
+    /// Reparent every live id first, then drop nodes the element tree no longer
+    /// references.
     pub(crate) fn sync_taffy_children_from_elements(&mut self, root: &Element) {
+        let mut live = std::collections::HashSet::new();
         let mut stack = vec![root];
         while let Some(el) = stack.pop() {
             if let Some(nid) = el.layout_node {
                 if self.total_nodes.contains(&nid) {
-                    let child_nodes: Vec<NodeId> =
-                        el.children.iter().filter_map(|c| c.layout_node).collect();
+                    live.insert(nid);
+                }
+            }
+            for c in el.children.iter().rev() {
+                stack.push(c);
+            }
+        }
+
+        stack = vec![root];
+        while let Some(el) = stack.pop() {
+            if let Some(nid) = el.layout_node {
+                if self.total_nodes.contains(&nid) {
+                    let child_nodes: Vec<NodeId> = el
+                        .children
+                        .iter()
+                        .filter_map(|c| c.layout_node.filter(|id| live.contains(id)))
+                        .collect();
                     let kids_changed = self
                         .taffy
                         .children(nid)
@@ -2802,6 +3015,16 @@ impl LayoutTree {
             for c in el.children.iter().rev() {
                 stack.push(c);
             }
+        }
+
+        let orphans: Vec<NodeId> = self
+            .total_nodes
+            .iter()
+            .copied()
+            .filter(|id| !live.contains(id))
+            .collect();
+        for id in orphans {
+            self.remove_taffy_subtree(id);
         }
     }
 
@@ -2906,6 +3129,12 @@ impl LayoutTree {
 
         // Invariant: never layout/paint unhoisted `rui_portal` nodes (Solid keep-alive + body mount).
         let _ = hoist_portal_subtrees(root);
+        // Full rebuild may recycle Taffy `NodeId`s; fingerprint keys would alias.
+        self.collect_skip.invalidate();
+        #[cfg(test)]
+        {
+            self.full_rebuilds = self.full_rebuilds.saturating_add(1);
+        }
 
         let t_rebuild_begin = Instant::now();
         self.viewport = [width.max(0.0), height.max(0.0)];
@@ -3007,16 +3236,16 @@ impl LayoutTree {
         subtree_root: Option<NodeId>,
     ) -> RenderResult {
         // Solid invariant: portals must be on their mount before any layout/collect.
+        // Layer rewrite without a Taffy rebuild desyncs `element.children` vs `taffy.children`
+        // and can mark overlay_split too early (page text prepared as culled overlay → empty bubbles).
         let portal_dirty = hoist_portal_subtrees(root);
-        // `write_placed_ghost` (and any in-place subtree swap) inserts Elements
-        // with `layout_node = None`. Fast path only `set_children` on existing
-        // ids, so those nodes stay 0×0 — a bordered radius clone paints as a
-        // dot. Rebuild so the new subtree enters Taffy.
-        if portal_dirty > 0
-            || self.root_node.is_none()
-            || Self::subtree_has_unbuilt_taffy_nodes(root)
-        {
+        if portal_dirty > 0 || self.root_node.is_none() {
             return self.build_and_layout(root, width, height, mouse_pos);
+        }
+        // `write_placed_ghost` / `<Show>` insert Elements with `layout_node = None`.
+        // Attach only those subtrees — do not walk the whole gallery through `build_and_layout`.
+        if Self::subtree_has_unbuilt_taffy_nodes(root) {
+            self.attach_unbuilt_taffy_nodes(root);
         }
 
         let root_node = self
@@ -3132,6 +3361,7 @@ impl LayoutTree {
     ) -> RenderResult {
         let mut scratch = std::mem::take(&mut self.collect_scratch);
         scratch.clear_for_collect();
+        begin_node_paint_collect();
         let mut hover_cursor = None;
         let mut overlay_split = OverlayPaintSplit::default();
         let mut paint_rec = PaintRecorder::default();
@@ -3148,6 +3378,12 @@ impl LayoutTree {
             crate::app::devtools::begin_highlight_collect();
             crate::app::devtools::set_highlight_collect_root(root);
         }
+        let mut skip = std::mem::take(&mut self.collect_skip);
+        if scroll_only {
+            skip.allowed = false;
+        }
+        skip.begin_frame();
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(root);
         self.collect_instances_mut(
             root,
             root_node,
@@ -3173,7 +3409,11 @@ impl LayoutTree {
             &mut overlay_split,
             &mut paint_rec,
             &mut scratch.clip_polys,
+            &mut skip,
         );
+        skip.end_frame();
+        crate::app::frame_stats::note_collect_skip(skip.skipped, skip.patched);
+        self.collect_skip = skip;
         while scratch.clip_polys.len() < scratch.instances.len() {
             scratch.clip_polys.push(crate::style::GpuClipPoly::NONE);
         }
@@ -3275,6 +3515,7 @@ impl LayoutTree {
             scroll_metrics: std::mem::take(&mut scratch.scroll_metrics),
             hover_cursor,
             clip_polys: std::mem::take(&mut scratch.clip_polys),
+            node_paints: take_node_paints(),
             prof: LayoutProfileMs {
                 rebuild_ms,
                 setup_ms,
@@ -3642,6 +3883,25 @@ impl LayoutTree {
         self.stamp_descendants_layout_bounds_from_taffy(child, node, abs, size);
     }
 
+    fn collect_skip_geom(
+        &self,
+        frame: &CollectFrame,
+    ) -> crate::layout::collect_cache::GeomKey {
+        let size = self
+            .taffy
+            .layout(frame.node)
+            .map(|cl| [cl.size.width, cl.size.height])
+            .unwrap_or([0.0, 0.0]);
+        crate::layout::collect_cache::geom_key(
+            frame.abs_offset,
+            size,
+            frame.scroll_acc,
+            frame.parent_clip,
+            frame.ancestor_opacity,
+            frame.ancestor_scale,
+        )
+    }
+
     /// `ancestor_scroll_viewport_rest`: nearest ancestor `scroll:{id}` viewport id for this subtree.
     /// Used so nested ScrollAreas do not inflate parent content extents (matches
     /// `scroll_support::collect_descendant_extent`); fixes thumb math for middle layers in 3+ nesting.
@@ -3672,6 +3932,7 @@ impl LayoutTree {
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
         clip_polys: &mut Vec<crate::style::GpuClipPoly>,
+        skip: &mut crate::layout::collect_cache::CollectSkipState,
     ) -> [f32; 2] {
         crate::style::begin_named_clip_pass();
         let mut stack = vec![CollectFrame {
@@ -3689,6 +3950,8 @@ impl LayoutTree {
             scrollbar_overlay_collect,
             thumb_geometry_override,
             walk: None,
+            cache_start: crate::layout::collect_cache::DlCursor::default(),
+            cache_geom: crate::layout::collect_cache::GeomKey::default(),
         }];
         let mut root_extent = [0.0_f32, 0.0];
 
@@ -3698,6 +3961,68 @@ impl LayoutTree {
             if frame.walk.is_none() {
                 #[cfg(test)]
                 stack_probe::mark_collect();
+                frame.cache_geom = self.collect_skip_geom(&frame);
+                let replay_start = crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                );
+                if !_scroll_only {
+                    if let Some(extent) = skip.try_replay(
+                        frame.node,
+                        element,
+                        frame.cache_geom,
+                        instances,
+                        textured_draws,
+                        text_nodes,
+                        input_chrome_instances,
+                        clip_polys,
+                        &mut paint_rec.ops,
+                    ) {
+                        record_node_paint(
+                            frame.node,
+                            element,
+                            replay_start,
+                            instances,
+                            textured_draws,
+                            text_nodes,
+                            input_chrome_instances,
+                            &paint_rec.ops,
+                            overlay_split.marked,
+                        );
+                        if let Ok(cl) = self.taffy.layout(frame.node) {
+                            self.stamp_skipped_sibling_hit_bounds(
+                                element,
+                                frame.node,
+                                frame.abs_offset,
+                                [cl.size.width, cl.size.height],
+                            );
+                        }
+                        let [lx, ly, lw, lh] = element.layout_bounds;
+                        if mouse_pos[0] >= lx
+                            && mouse_pos[0] <= lx + lw
+                            && mouse_pos[1] >= ly
+                            && mouse_pos[1] <= ly + lh
+                        {
+                            if element.cursor.is_some() {
+                                *hover_cursor = element.cursor.clone();
+                            }
+                        }
+                        collect_commit_extent(&mut stack, extent, &mut root_extent);
+                        continue;
+                    }
+                }
+                frame.cache_start = crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                );
                 match self.collect_paint_node(
                     element,
                     frame.node,
@@ -3726,6 +4051,30 @@ impl LayoutTree {
                     clip_polys,
                 ) {
                     CollectPaintOutcome::Done(extent) => {
+                        skip.store(
+                            frame.node,
+                            element,
+                            frame.cache_geom,
+                            frame.cache_start,
+                            instances,
+                            textured_draws,
+                            text_nodes,
+                            input_chrome_instances,
+                            clip_polys,
+                            &paint_rec.ops,
+                            extent,
+                        );
+                        record_node_paint(
+                            frame.node,
+                            element,
+                            frame.cache_start,
+                            instances,
+                            textured_draws,
+                            text_nodes,
+                            input_chrome_instances,
+                            &paint_rec.ops,
+                            overlay_split.marked,
+                        );
                         collect_commit_extent(&mut stack, extent, &mut root_extent);
                         continue;
                     }
@@ -3742,6 +4091,30 @@ impl LayoutTree {
                             painted,
                         ) {
                             CollectWalkStart::Done(extent) => {
+                                skip.store(
+                                    frame.node,
+                                    element,
+                                    frame.cache_geom,
+                                    frame.cache_start,
+                                    instances,
+                                    textured_draws,
+                                    text_nodes,
+                                    input_chrome_instances,
+                                    clip_polys,
+                                    &paint_rec.ops,
+                                    extent,
+                                );
+                                record_node_paint(
+                                    frame.node,
+                                    element,
+                                    frame.cache_start,
+                                    instances,
+                                    textured_draws,
+                                    text_nodes,
+                                    input_chrome_instances,
+                                    &paint_rec.ops,
+                                    overlay_split.marked,
+                                );
                                 collect_commit_extent(&mut stack, extent, &mut root_extent);
                                 continue;
                             }
@@ -3784,6 +4157,8 @@ impl LayoutTree {
                     scrollbar_overlay_collect: frame.scrollbar_overlay_collect,
                     thumb_geometry_override: job.thumb_ov,
                     walk: None,
+                    cache_start: crate::layout::collect_cache::DlCursor::default(),
+                    cache_geom: crate::layout::collect_cache::GeomKey::default(),
                 };
                 stack.push(frame);
                 stack.push(child_frame);
@@ -3801,6 +4176,30 @@ impl LayoutTree {
                     paint_rec,
                     clip_polys,
                     walk,
+                );
+                skip.store(
+                    frame.node,
+                    element,
+                    frame.cache_geom,
+                    frame.cache_start,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                    extent,
+                );
+                record_node_paint(
+                    frame.node,
+                    element,
+                    frame.cache_start,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    &paint_rec.ops,
+                    overlay_split.marked,
                 );
                 collect_commit_extent(&mut stack, extent, &mut root_extent);
             }
@@ -7548,6 +7947,84 @@ mod portal_hoist_tests {
             layer_children(&root)[0].style.bg_color[3] > 0.99,
             "panel background must stay opaque"
         );
+    }
+
+    #[test]
+    fn source_slot_after_hoist_is_a_portal_island() {
+        let mut panel = Element::new().w(80.0).h(32.0);
+        panel.set_attr("rui_portal", "1");
+        panel.set_attr(ATTR_PORTAL_KEY, "rx-expand");
+        let island = Element::new().w(0.0).h(0.0).child(panel);
+        assert!(subtree_declares_portal(&island));
+
+        let mut root = Element::new().w(800.0).h(600.0).child(island);
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        let source = root
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() != Some(PORTAL_LAYER_ID))
+            .expect("source island");
+        assert!(
+            subtree_declares_portal(source),
+            "keep-alive slot must still count as a portal island so close skips FullClear"
+        );
+        assert!(!subtree_declares_portal(&Element::new().text("page")));
+    }
+
+    #[test]
+    fn hoisted_popover_damage_is_local_modal_underlay_covers_viewport() {
+        let page = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .text("gallery page")
+            .template_id("page");
+
+        let mut popover = Element::new().w(72.0).h(36.0).template_id("rx-panel");
+        popover.set_attr("rui_portal", "1");
+        popover.set_attr(ATTR_PORTAL_KEY, "rx");
+        popover.layout_bounds = [120.0, 80.0, 72.0, 36.0];
+
+        let mut root = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .child(page)
+            .child(popover);
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        // Hoist does not run Taffy; stamp the laid-out box onto the lifted node.
+        if let Some(layer) = root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        {
+            for c in &mut layer.children {
+                if c.template_id.as_deref() == Some("rx-panel") {
+                    c.layout_bounds = [120.0, 80.0, 72.0, 36.0];
+                }
+            }
+        }
+        let d = hoisted_portal_damage(&root).expect("popover box");
+        assert!((d[2] - 72.0).abs() < 0.5 && (d[3] - 36.0).abs() < 0.5);
+        assert!(!crate::app::damage::damage_covers_full([0.0, 0.0, 800.0, 600.0], d));
+
+        let mut underlay = Element::new().w(800.0).h(600.0).template_id("dlg-underlay");
+        underlay.set_attr("rui_portal", "1");
+        underlay.set_attr(ATTR_PORTAL_KEY, "dlg");
+        let mut modal_root = Element::new().w(800.0).h(600.0).child(underlay);
+        assert!(hoist_portal_subtrees(&mut modal_root) >= 1);
+        if let Some(layer) = modal_root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        {
+            for c in &mut layer.children {
+                c.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+            }
+        }
+        let full = hoisted_portal_damage(&modal_root).expect("underlay");
+        assert!(crate::app::damage::damage_covers_full(
+            [0.0, 0.0, 800.0, 600.0],
+            full
+        ));
     }
 
     #[test]

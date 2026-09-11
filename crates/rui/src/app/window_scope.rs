@@ -40,7 +40,11 @@ pub(crate) fn active() -> WindowScope {
 }
 
 pub(crate) fn active_window_id() -> Option<WindowId> {
-    ACTIVE_WINDOW_ID.get().or_else(window_id_for_active_token)
+    ACTIVE_WINDOW_ID
+        .try_with(|c| c.get())
+        .ok()
+        .flatten()
+        .or_else(window_id_for_active_token)
 }
 
 pub(crate) fn window_id_for_active_token() -> Option<WindowId> {
@@ -48,7 +52,10 @@ pub(crate) fn window_id_for_active_token() -> Option<WindowId> {
     if t == 0 {
         None
     } else {
-        TOKEN_TO_WINDOW.with(|m| m.borrow().get(&t).copied())
+        TOKEN_TO_WINDOW
+            .try_with(|m| m.borrow().get(&t).copied())
+            .ok()
+            .flatten()
     }
 }
 
@@ -68,22 +75,32 @@ pub(crate) fn tree_home_for(scope: WindowScope) -> TreeHome {
 
 /// Allocate (or reuse) the secondary-window token for `id`.
 pub(crate) fn token_for_secondary(id: WindowId) -> u64 {
-    TOKENS.with(|m| {
-        *m.borrow_mut().entry(id).or_insert_with(|| {
-            let n = NEXT_TOKEN.get();
-            NEXT_TOKEN.set(n + 1);
-            TOKEN_TO_WINDOW.with(|rev| {
-                rev.borrow_mut().insert(n, id);
-            });
-            n
+    TOKENS
+        .try_with(|m| {
+            *m.borrow_mut().entry(id).or_insert_with(|| {
+                let n = NEXT_TOKEN
+                    .try_with(|c| {
+                        let n = c.get();
+                        c.set(n + 1);
+                        n
+                    })
+                    .unwrap_or(1);
+                let _ = TOKEN_TO_WINDOW.try_with(|rev| {
+                    rev.borrow_mut().insert(n, id);
+                });
+                n
+            })
         })
-    })
+        .unwrap_or(0)
 }
 
 pub(crate) fn forget_secondary(id: WindowId) -> Option<u64> {
-    let token = TOKENS.with(|m| m.borrow_mut().remove(&id));
+    let token = TOKENS
+        .try_with(|m| m.borrow_mut().remove(&id))
+        .ok()
+        .flatten();
     if let Some(t) = token {
-        TOKEN_TO_WINDOW.with(|rev| {
+        let _ = TOKEN_TO_WINDOW.try_with(|rev| {
             rev.borrow_mut().remove(&t);
         });
     }
@@ -97,15 +114,16 @@ pub(crate) struct WindowScopeGuard {
 
 impl Drop for WindowScopeGuard {
     fn drop(&mut self) {
-        ACTIVE_WINDOW_ID.set(self.prev_window);
+        // Restore is best-effort: TLS may already be dead during thread teardown.
+        let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(self.prev_window));
         let _ = crate::core::reactivity::set_signal_key_scope(self.prev_suffix);
     }
 }
 
 pub(crate) fn enter(scope: WindowScope) -> WindowScopeGuard {
-    let prev_window = ACTIVE_WINDOW_ID.get();
+    let prev_window = ACTIVE_WINDOW_ID.try_with(|c| c.get()).unwrap_or(None);
     if matches!(scope, WindowScope::Primary) {
-        ACTIVE_WINDOW_ID.set(None);
+        let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(None));
     }
     let suffix = match scope {
         WindowScope::Primary => 0,
@@ -124,7 +142,9 @@ pub(crate) fn enter_primary() -> WindowScopeGuard {
 
 pub(crate) fn enter_secondary_id(id: WindowId) -> WindowScopeGuard {
     let token = token_for_secondary(id);
-    let prev_window = ACTIVE_WINDOW_ID.replace(Some(id));
+    let prev_window = ACTIVE_WINDOW_ID
+        .try_with(|c| c.replace(Some(id)))
+        .unwrap_or(None);
     let prev_suffix = crate::core::reactivity::set_signal_key_scope(token);
     WindowScopeGuard {
         prev_suffix,
@@ -135,14 +155,14 @@ pub(crate) fn enter_secondary_id(id: WindowId) -> WindowScopeGuard {
 /// Permanently switch to primary scope (no restore-on-drop). Use on primary `Focused(true)`
 /// so a prior secondary enter cannot leave `SIGNAL_KEY_SCOPE` stuck non-zero.
 pub(crate) fn force_primary() {
-    ACTIVE_WINDOW_ID.set(None);
+    let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(None));
     let _ = crate::core::reactivity::set_signal_key_scope(0);
 }
 
 /// Permanently switch to a secondary scope (no restore-on-drop). Use on secondary focus.
 pub(crate) fn force_secondary_id(id: WindowId) {
     let token = token_for_secondary(id);
-    ACTIVE_WINDOW_ID.set(Some(id));
+    let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(Some(id)));
     let _ = crate::core::reactivity::set_signal_key_scope(token);
 }
 

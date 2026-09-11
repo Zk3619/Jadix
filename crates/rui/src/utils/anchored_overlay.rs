@@ -673,7 +673,12 @@ fn apply_size_attrs(
     );
     panel.set_attr(ATTR_FLOATING_MIN_W, "0");
     if let Some(w) = width.map(str::trim).filter(|s| !s.is_empty()) {
-        panel.set_attr(ATTR_FLOATING_W, w);
+        // `"auto"` means content-sized. Writing it as `rui_floating_w` makes sync
+        // treat it as an explicit px (parse fallback = trigger width) and lock
+        // AvatarGroup / similar expand panels to ~two faces.
+        if !w.eq_ignore_ascii_case("auto") {
+            panel.set_attr(ATTR_FLOATING_W, w);
+        }
     }
     if let Some(h) = max_h.map(str::trim).filter(|s| !s.is_empty()) {
         panel.set_attr(ATTR_FLOATING_MAX_H, h);
@@ -841,6 +846,36 @@ mod tests {
             assert_eq!(find_attr(&panel, ATTR_FLOATING_STRATEGY), Some("fixed"));
             assert_eq!(find_attr(&panel, ATTR_FLOATING_MAX_H), Some("24rem"));
             assert!(find_attr(&panel, ATTR_FLOATING_POINT).is_none());
+        });
+    }
+
+    #[test]
+    fn placement_width_auto_does_not_seed_explicit_w() {
+        create_root(|| {
+            let mut panel = Element::new().text("p");
+            apply_placement(
+                &mut panel,
+                "ao-auto-w",
+                &Placement::Trigger {
+                    focus_id: "btn".into(),
+                    placement: PopupPlacement::BottomStart,
+                    gap: 4.0,
+                    strategy: FloatingStrategy::Fixed,
+                },
+                Signal::new(String::new()),
+                "",
+                false,
+                None,
+                Some("auto"),
+            );
+            assert_eq!(
+                find_attr(&panel, ATTR_FLOATING_MATCH_TRIGGER),
+                Some("0")
+            );
+            assert!(
+                find_attr(&panel, ATTR_FLOATING_W).is_none(),
+                "width=auto must not write rui_floating_w (sync would parse it as trigger px)"
+            );
         });
     }
 

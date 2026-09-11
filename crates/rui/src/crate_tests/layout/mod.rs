@@ -3,6 +3,7 @@ mod box_model_contract;
 mod box_model_gallery_colors;
 mod canvas_scene;
 mod collect_clip_cull;
+mod collect_skip;
 mod css_filter_overflow;
 mod dialog_first_open_cost;
 mod gallery_inset_overflow;

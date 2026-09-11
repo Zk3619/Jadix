@@ -915,6 +915,8 @@ pub struct ElementInner {
     /// `scroll_only` sibling band cull reuses this so content height / thumb geometry stay stable.
     pub(crate) collect_extent: [f32; 2],
     pub(crate) collect_extent_valid: bool,
+    /// Bottom-up paint fingerprint for collect skip ([`crate::layout::collect_cache`]).
+    pub(crate) collect_paint_hash: u64,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
     /// Last collect `render_rect` (paint space). DevTools highlight prefers this over abs−scroll.
@@ -1025,6 +1027,7 @@ fn blank_inner() -> ElementInner {
         layout_bounds: [0.0, 0.0, 0.0, 0.0],
         collect_extent: [0.0, 0.0],
         collect_extent_valid: false,
+        collect_paint_hash: 0,
         sticky_visual_offset: [0.0, 0.0],
         #[cfg(feature = "devtools")]
         paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
@@ -3614,9 +3617,10 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
 pub(crate) struct ReactiveSyncCollect {
     /// Nodes whose style/measure must be pushed into Taffy after sync.
     pub layout_dirty: Vec<NodeId>,
-    /// `LayoutChanged` (or structure) under the page tree — FullClear.
+    /// `LayoutChanged` / page `StructureChanged` under the page tree — FullClear.
     pub page_layout_changed: bool,
-    /// `LayoutChanged` only under [`crate::layout::layout_tree::PORTAL_LAYER_ID`].
+    /// `LayoutChanged` or overlay `StructureChanged` under the portal layer / a
+    /// `rui_portal` subtree (bubble +N expand) — not a page FullClear.
     pub portal_layout_changed: bool,
 }
 
@@ -3684,8 +3688,18 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                     }
                 }
                 LayoutStatus::StructureChanged => {
-                    // Structure (dialog mount, list remount, …) still needs a coherent FullClear.
-                    collect.page_layout_changed = true;
+                    // Page remount (route / Show / For) → FullClear. Overlay Show-mount
+                    // (bubble +N / popover) is portal membership — scissor to the hoisted box.
+                    let portalish = in_portal
+                        || crate::layout::layout_tree::subtree_declares_portal(element);
+                    if portalish {
+                        collect.portal_layout_changed = true;
+                        crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
+                            element, before,
+                        ));
+                    } else {
+                        collect.page_layout_changed = true;
+                    }
                     push_subtree_layout_nodes(element, &mut collect.layout_dirty);
                 }
                 LayoutStatus::Clean | LayoutStatus::StyleChanged => {}

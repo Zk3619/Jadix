@@ -51,6 +51,8 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
 }
 
 pub mod damage;
+pub(crate) mod draw_cull;
+pub mod frame_stats;
 #[cfg(debug_assertions)]
 mod hmr_log;
 #[cfg(any(debug_assertions, test))]

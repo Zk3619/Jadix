@@ -112,3 +112,56 @@ fn portal_layout_changed_collects_dirty_without_page_flag() {
         "portal pile height should update without remasuring page text, got {after_h}"
     );
 }
+
+#[test]
+fn portal_structure_changed_does_not_set_page_layout_flag() {
+    // Bubble +N Show-mounts a `rui_portal` under the page tree. That StructureChanged
+    // must not be classified as page geometry (which FullClears the gallery).
+    let mut tree = LayoutTree::new();
+    let mut pop = Element::new().w(80.0).h(32.0).template_id("rx-panel");
+    pop.set_attr("rui_portal", "1");
+    pop.set_attr(
+        crate::layout::layout_tree::ATTR_PORTAL_KEY,
+        "bubble_rx_test",
+    );
+    pop = pop.reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| {
+        LayoutStatus::StructureChanged
+    });
+    let page_text = Element::new()
+        .text("gallery bubble caption")
+        .text_size(14.0)
+        .w(200.0)
+        .template_id("page-text");
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .child(page_text)
+        .child(pop);
+
+    tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let mut impact = LayoutStatus::Clean;
+    let mut collect = ReactiveSyncCollect::default();
+    crate::core::tree::sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        800.0,
+        600.0,
+        [0.0, 0.0],
+        false,
+        &mut collect,
+    );
+    assert_eq!(impact, LayoutStatus::StructureChanged);
+    assert!(
+        collect.portal_layout_changed,
+        "rui_portal Show-mount must set portal_layout_changed"
+    );
+    assert!(
+        !collect.page_layout_changed,
+        "bubble +N expand must not be a page FullClear"
+    );
+    assert!(crate::app::damage::skip_full_clear_for_portal_structure(
+        true,
+        collect.page_layout_changed,
+    ));
+}

@@ -260,7 +260,12 @@ pub use crate::utils::font::{
     set_text_defaults, text_defaults, TextDefaults,
 };
 pub use app::damage::{
-    full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
+    arm_policy_snapshot, full_clear_frame_count, partial_load_frame_count,
+    reset_frame_policy_counters, suppress_policy_counts, take_policy_snapshot, PolicySnapshot,
+};
+pub use app::frame_stats::{
+    last_patched_dl, last_scene_batches, last_skipped_siblings, patched_dl_count,
+    reset_collect_skip_counters, skipped_siblings_count, SceneBatches,
 };
 pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{

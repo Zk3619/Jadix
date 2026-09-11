@@ -411,11 +411,13 @@ impl SecondaryWindowState {
             self.pending_layout_dirty.clear();
         }
 
-        let scroll_only = !portal_only_layout
-            && matches!(
-                sync_impact,
-                LayoutStatus::Clean | LayoutStatus::StyleChanged
-            );
+        self.layout_tree.set_collect_skip_allowed(
+            !use_full
+                && matches!(
+                    sync_impact,
+                    LayoutStatus::Clean | LayoutStatus::StyleChanged
+                ),
+        );
 
         let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
@@ -430,7 +432,7 @@ impl SecondaryWindowState {
                 logical_w,
                 logical_h,
                 [0.0, 0.0],
-                scroll_only,
+                false,
                 true,
             )
         };

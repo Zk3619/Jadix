@@ -57,15 +57,18 @@ impl super::App {
         //    and leave the process wedged with a live HWND (Windows file lock on gallery.exe).
         let mut secs = std::mem::take(&mut *self.secondaries.borrow_mut());
         for (id, mut sec) in secs.drain() {
+            // Unmount hooks (portal_sync) must run under this window's scope, not Primary.
+            let _scope = super::window_scope::enter_secondary_id(id);
+            sec.hide_window();
+            sec.trim_before_drop();
+            drop(sec.take_owner());
+            drop(sec);
+            drop(_scope);
             if let Some(token) = super::window_scope::forget_secondary(id) {
                 super::portal_overlay::drop_overlay_stack(
                     super::window_scope::WindowScope::Secondary(token),
                 );
             }
-            sec.hide_window();
-            sec.trim_before_drop();
-            drop(sec.take_owner());
-            drop(sec);
         }
         self.secondary_accesskit.clear();
         self.ime_owner_window = None;
@@ -90,12 +93,10 @@ impl super::App {
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
-        if let Some(token) = super::window_scope::forget_secondary(id) {
-            super::portal_overlay::drop_overlay_stack(super::window_scope::WindowScope::Secondary(
-                token,
-            ));
-        }
         if let Some(mut sec) = self.secondaries.borrow_mut().remove(&id) {
+            // Keep SIGNAL_KEY_SCOPE on this window while Owner/unmount runs so
+            // portal_sync cannot write the primary overlay stack.
+            let _scope = super::window_scope::enter_secondary_id(id);
             let mut scroll_rests = std::collections::HashSet::new();
             collect_scroll_rests(&sec.root_element, &mut scroll_rests);
             for rest in &scroll_rests {
@@ -106,6 +107,12 @@ impl super::App {
             sec.trim_before_drop();
             drop(sec.take_owner());
             drop(sec);
+            drop(_scope);
+        }
+        if let Some(token) = super::window_scope::forget_secondary(id) {
+            super::portal_overlay::drop_overlay_stack(super::window_scope::WindowScope::Secondary(
+                token,
+            ));
         }
         self.secondary_accesskit.remove(&id);
         if self.ime_owner_window == Some(id) {

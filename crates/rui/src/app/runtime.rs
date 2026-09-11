@@ -243,6 +243,9 @@ pub fn request_redraw() {
 /// Promote nested portals (e.g. menu submenu) while AppState is free to borrow.
 /// Safe no-op when no runtime is installed or the tree is already borrowed.
 pub fn try_hoist_portals_now() {
+    if !crate::core::reactivity::runtime_tls_alive() {
+        return;
+    }
     APP_RUNTIME.with(|c| {
         let rt_slot = c.borrow();
         let Some(rt) = rt_slot.as_ref() else {
@@ -264,7 +267,7 @@ pub fn try_hoist_portals_now() {
                     &mut state.root_element,
                 );
                 if n > 0 {
-                    state.mark_full_redraw();
+                    state.mark_portal_membership_dirty();
                     state.window.request_redraw();
                 }
             }

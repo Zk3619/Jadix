@@ -172,6 +172,7 @@ fn showcase_show_toggle_keeps_title_above_buttons() {
     let mut card = build_card();
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut card, 800.0, 600.0, [-1.0, -1.0]);
+    let rebuilds_after_cold = tree.full_rebuilds;
     let mut before = Vec::new();
     dump_abs(&tree, &card, 0.0, 0.0, &mut before);
     let title_y = before
@@ -217,6 +218,10 @@ fn showcase_show_toggle_keeps_title_above_buttons() {
     }
     let _ =
         tree.build_and_layout_fast_ex(&mut card, 800.0, 600.0, [-1.0, -1.0], false, false, None);
+    assert_eq!(
+        tree.full_rebuilds, rebuilds_after_cold,
+        "Show toggle must attach unbuilt nodes, not rebuild the whole Taffy tree"
+    );
 
     let mut after = Vec::new();
     dump_abs(&tree, &card, 0.0, 0.0, &mut after);

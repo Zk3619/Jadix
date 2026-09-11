@@ -30,14 +30,16 @@ thread_local! {
 
 fn armed_map_set(armed: bool) {
     let scope = window_scope::active();
-    UNDERLAY_CLOSE_ARMED.with(|m| {
+    let _ = UNDERLAY_CLOSE_ARMED.try_with(|m| {
         m.borrow_mut().insert(scope, armed);
     });
 }
 
 fn armed_map_get() -> bool {
     let scope = window_scope::active();
-    UNDERLAY_CLOSE_ARMED.with(|m| *m.borrow().get(&scope).unwrap_or(&true))
+    UNDERLAY_CLOSE_ARMED
+        .try_with(|m| *m.borrow().get(&scope).unwrap_or(&true))
+        .unwrap_or(true)
 }
 
 /// Call when an overlay transitions to open (before/with `open.set(true)`).
@@ -505,8 +507,18 @@ fn expand_measure_pending(el: &Element) -> bool {
 
 /// Placement must not own `max-size.height` while accordion keyframes run, or while
 /// Expand is measuring unconstrained content height.
+fn expand_from_h_set(el: &Element) -> bool {
+    el.attrs
+        .get(ATTR_FLOATING_EXPAND_FROM_H)
+        .and_then(|s| s.parse::<f32>().ok())
+        .is_some_and(|h| h > 0.5)
+}
+
 fn skip_placement_max_h(el: &Element) -> bool {
-    height_keyframe_animation_active(el) || expand_measure_pending(el)
+    // Expand panels own max-height from the first rebuild (`from_h` is on the fresh
+    // tree before MEASURE / keyframes). Writing viewport cap here is a 1-frame
+    // fullscreen flash of the muted chrome.
+    height_keyframe_animation_active(el) || expand_measure_pending(el) || expand_from_h_set(el)
 }
 
 fn floating_estimate_h(el: &Element) -> f32 {
@@ -709,8 +721,9 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
             .attrs
             .get(ATTR_FLOATING_W)
             .or_else(|| el.attrs.get("rui_select_menu_w"))
+            .and_then(|w| parse_explicit_floating_w(w, 0.0))
         {
-            p.w = parse_css_px(w, 0.0);
+            p.w = w;
             p.width_auto = false;
         } else if !match_trigger {
             p.width_auto = true;
@@ -731,7 +744,11 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
             .get(ATTR_FLOATING_MAX_H)
             .or_else(|| el.attrs.get("rui_select_max_h"))
             .map(|s| parse_css_px(s, 4096.0))
-            .unwrap_or(if strategy_fixed { 0.0 } else { 4096.0 });
+            .unwrap_or(if strategy_fixed || expand_from_h_set(el) {
+                0.0
+            } else {
+                4096.0
+            });
         place.set_silent(p);
     }
     // Always write so absolute panels never stay on `auto` insets.
@@ -747,6 +764,17 @@ fn parse_css_px(raw: &str, fallback: f32) -> f32 {
         return n.trim().parse::<f32>().unwrap_or(fallback);
     }
     s.parse::<f32>().unwrap_or(fallback)
+}
+
+/// Explicit panel width. `"auto"` / empty is content-sized — not a length (would
+/// otherwise `parse` as the fallback, usually trigger width).
+fn parse_explicit_floating_w(raw: &str, fallback: f32) -> Option<f32> {
+    let s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(parse_css_px(s, fallback))
+    }
 }
 
 /// Parse min-width: absolute length, `trigger`, or `trigger+1.75rem` (anchor-relative geometry).
@@ -866,7 +894,7 @@ fn apply_floating_menus(
             .attrs
             .get(ATTR_FLOATING_W)
             .or_else(|| el.attrs.get("rui_select_menu_w"))
-            .map(|s| parse_css_px(s, tb[2]));
+            .and_then(|s| parse_explicit_floating_w(s, tb[2]));
         let attr_min_w = el
             .attrs
             .get(ATTR_FLOATING_MIN_W)
@@ -1368,6 +1396,31 @@ mod tests {
     }
 
     #[test]
+    fn write_floating_place_skips_max_h_when_expand_from_h() {
+        use taffy::style::Dimension;
+
+        let mut el = Element::new().absolute().w(160.0);
+        el.style.max_size.height = Dimension::length(28.0);
+        el.set_attr(ATTR_FLOATING_EXPAND_FROM_H, "28");
+        let place = FloatingPlace {
+            x: 10.0,
+            y: 20.0,
+            w: 160.0,
+            max_h: 400.0,
+            width_auto: false,
+            min_w: 0.0,
+        };
+        let _ = write_floating_place(&mut el, place);
+        match crate::layout::dim_kind(el.style.max_size.height) {
+            crate::layout::DimKind::Length(h) => assert!(
+                (h - 28.0).abs() < 0.1,
+                "expand from_h panel must not take viewport max_h before MEASURE, got {h}"
+            ),
+            other => panic!("expected preserved clip height, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn sync_floating_estimate_h_uses_content_h_not_clip() {
         let mut trigger = Element::new().focus_id("t-clip");
         // Near the bottom: clipped height would stay below; content height must flip above.
@@ -1612,6 +1665,39 @@ mod tests {
         match crate::layout::dim_kind(menu.style.min_size.width) {
             crate::layout::DimKind::Length(w) => assert!((w - 80.0).abs() < 0.5),
             other => panic!("min-width should be trigger width, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_floating_w_attr_auto_is_content_sized() {
+        let mut trigger = Element::new().focus_id("t-auto-w");
+        trigger.layout_bounds = [20.0, 40.0, 96.0, 32.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "expand-auto-w",
+            "t-auto-w",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        panel.set_attr(ATTR_FLOATING_W, "auto");
+        panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
+        panel.layout_bounds = [0.0, 0.0, 240.0, 48.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let menu = &root.children[1];
+        assert!(
+            menu.style.size.width.is_auto(),
+            "rui_floating_w=auto must stay content-sized, not lock to trigger width {}",
+            crate::layout::dim_length_px(menu.style.size.width).unwrap_or(-1.0)
+        );
+        match crate::layout::dim_kind(menu.style.min_size.width) {
+            crate::layout::DimKind::Auto => {}
+            crate::layout::DimKind::Length(w) if w < 0.5 => {}
+            other => panic!("w=auto must not floor min-width to trigger, got {other:?}"),
         }
     }
 

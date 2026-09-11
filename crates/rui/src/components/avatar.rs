@@ -1489,6 +1489,8 @@ fn build_avatar_group(
         kind: OverlayKind::Popover,
         motion: FloatingMotionKind::Expand,
         mode: OverlayMode::Stacked,
+        // Content-sized. `"auto"` must not be written as `rui_floating_w` (that attr is
+        // an explicit px; parse fallback is trigger width → overlay locks to ~2 faces).
         width: Some("auto".into()),
         ..Default::default()
     };

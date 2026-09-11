@@ -1258,13 +1258,7 @@ fn push_button_paint_damage(el: &Element) {
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
-    let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
-    crate::app::damage::push_frame_paint_damage([
-        b[0] - pad,
-        b[1] - pad,
-        b[2] + pad * 2.0,
-        b[3] + pad * 2.0,
-    ]);
+    crate::app::damage::push_frame_paint_element(el);
 }
 
 fn sync_button_focus_ring_shadow(
@@ -1496,6 +1490,32 @@ mod chrome_tests {
         let (hover, _, _) = button_chrome_for_variant("default", 1.0);
         assert_eq!(hex(rest), "#000000");
         assert_eq!(hex(hover), "#333333");
+    }
+
+    #[test]
+    fn hover_does_not_toggle_border_presence() {
+        // 0↔1px border is a Taffy box change. Hover must stay paint-only.
+        set_theme_mode(ThemeMode::Light);
+        for variant in [
+            "default",
+            "secondary",
+            "outline",
+            "ghost",
+            "link",
+            "destructive",
+            "success",
+            "warning",
+        ] {
+            let (_, _, rest) = button_chrome_for_variant(variant, 0.0);
+            let (_, _, hover) = button_chrome_for_variant(variant, 1.0);
+            assert_eq!(
+                rest.is_some(),
+                hover.is_some(),
+                "{variant}: rest border={} hover border={}",
+                rest.is_some(),
+                hover.is_some()
+            );
+        }
     }
 
     #[test]

@@ -518,3 +518,121 @@ fn portal_hoist_does_not_remasure_unchanged_page_text() {
         "hoisting a dialog must measure the overlay, not every page label; cold={cold} after={after_hoist}"
     );
 }
+
+/// Hoist of a new portal **does** full-rebuild Taffy (layer rewrite). Page labels
+/// must still get boxes — the live bug was overlay_split marking too early so
+/// bubble captions vanished while chrome remained.
+#[test]
+fn portal_hoist_rebuilds_but_keeps_page_text_boxes() {
+    let mut labels = Vec::new();
+    for i in 0..16 {
+        labels.push(
+            Element::new()
+                .text(format!("page label {i:02}"))
+                .text_size(14.0)
+                .w(400.0)
+                .template_id(format!("page-label-{i}")),
+        );
+    }
+    let page = Element::new()
+        .w(800.0)
+        .flex_col()
+        .template_id("page")
+        .children(labels);
+    let island = Element::new().w(0.0).h(0.0).template_id("dialog-island");
+    let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let rebuilds_after_cold = tree.full_rebuilds;
+
+    let mut dlg = Element::new()
+        .w(240.0)
+        .h(120.0)
+        .template_id("dlg-panel")
+        .child(Element::new().text("Dialog title").text_size(18.0));
+    dlg.set_attr("rui_portal", "1");
+    dlg.set_attr(ATTR_PORTAL_KEY, "dlg-panel");
+    let island = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some("dialog-island"))
+        .expect("island");
+    island.children.push(dlg);
+
+    let out =
+        tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    assert!(
+        tree.full_rebuilds > rebuilds_after_cold,
+        "portal membership must rebuild Taffy so overlay_split stays a suffix"
+    );
+    assert_eq!(count_in_layer(&root), 1, "panel must land on the portal layer");
+    let panel = find_by_tid(&root, "dlg-panel").expect("hoisted panel");
+    assert!(
+        panel.layout_bounds[2] > 0.0 && panel.layout_bounds[3] > 0.0,
+        "overlay must receive a real layout box, got {:?}",
+        panel.layout_bounds
+    );
+    let label = find_by_tid(&root, "page-label-0").expect("page label");
+    assert!(
+        label.layout_bounds[2] > 0.0,
+        "page text box must survive hoist, got {:?}",
+        label.layout_bounds
+    );
+    assert!(
+        !out.text_nodes.is_empty(),
+        "page + overlay glyphs must be collected"
+    );
+}
+
+/// Live bubble +N: 0×0 `floating_portal_anchor` + `rui_portal` panel, then fast layout.
+/// Collect must emit overlay instances (otherwise PartialLoad has nothing to draw).
+#[test]
+fn anchored_overlay_hoist_emits_overlay_instances() {
+    let page = Element::new()
+        .w(800.0)
+        .h(400.0)
+        .flex_col()
+        .child(Element::new().text("page label").text_size(14.0).w(400.0));
+    let island = Element::new().w(0.0).h(0.0).template_id("rx-island");
+    let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
+
+    let mut tree = LayoutTree::new();
+    let cold = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let page_n = cold.instances.len();
+
+    let mut panel = Element::new()
+        .w(160.0)
+        .h(40.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .template_id("rx-panel")
+        .child(Element::new().text("👍").text_size(16.0));
+    panel.set_attr("rui_portal", "1");
+    panel.set_attr(ATTR_PORTAL_KEY, "rx-panel");
+    let anchor = Element::new().w(0.0).h(0.0).child(panel);
+    let island = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some("rx-island"))
+        .expect("island");
+    island.children.push(anchor);
+
+    let out = tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    assert_eq!(count_in_layer(&root), 1);
+    assert!(
+        out.overlay_split.instance_start < out.instances.len(),
+        "reaction expand must collect overlay quads (start={} len={})",
+        out.overlay_split.instance_start,
+        out.instances.len()
+    );
+    assert!(
+        out.instances.len() > page_n,
+        "overlay paint must add instances beyond the page"
+    );
+    let panel = find_by_tid(&root, "rx-panel").expect("panel");
+    assert!(
+        panel.layout_bounds[2] > 0.0 && panel.layout_bounds[3] > 0.0,
+        "anchored panel box {:?}",
+        panel.layout_bounds
+    );
+}
