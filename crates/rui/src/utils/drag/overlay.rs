@@ -300,7 +300,8 @@ fn sync_drag_overlay_ghost(
         let have = el.attrs.get(ATTR_GHOST_FOR).cloned().unwrap_or_default();
         if body_key != have || want_clip != have_clip {
             if body_key.is_empty() {
-                write_placed_ghost(el, Element::new(), &ghost_id, pos.peek(), None);
+                write_placed_ghost(el, Element::new(), &ghost_id, [0.0, 0.0], None);
+                el.attrs.remove(ATTR_GHOST_FOR);
             } else {
                 let body = build_ghost_body(
                     &custom,
@@ -318,6 +319,9 @@ fn sync_drag_overlay_ghost(
             // New Element tree, no `layout_node`. LayoutChanged would keep the
             // empty host's 0×0 Taffy box (bordered radius → a leftover dot).
             changed = changed.merge(LayoutStatus::StructureChanged);
+        }
+        if !is_open {
+            return changed;
         }
         let origin = pos.peek();
         let moved = if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
@@ -1237,6 +1241,288 @@ mod tests {
         reset_registered_anchors();
     }
 
+    /// Gallery veto demo: drop into an empty column then drag again. Close
+    /// must empty the portal ghost; a second drag must follow `overlay_pos`
+    /// (not a frozen hoist-adopt leftover).
+    #[test]
+    fn overlay_ghost_tracks_pos_after_empty_list_transfer() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::reactivity::Signal;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            apply_transfer, begin, collect_hits, drag_overlay, drag_scope, droppable, end,
+            last_overlay_pos, sortable_item, start_geometry, tick, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("veto")
+                .accept("veto")
+                .group("veto")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w("100%").h(32.0))
+        }
+
+        let open = Signal::new(vec!["Move me".to_string()]);
+        let empty = Signal::new(Vec::<String>::new());
+
+        let (_o, live) = mount_scope_tree({
+            let open = open;
+            let empty = empty;
+            move || {
+                drag_scope("ov-empty-xfer")
+                    .threshold(0.0)
+                    .empty_insert(48.0)
+                    .on_drag_end({
+                        let open = open;
+                        let empty = empty;
+                        move |ev| {
+                            let Some(from) = ev.from_list.as_deref() else {
+                                return;
+                            };
+                            let Some(to) = ev.to_list.as_deref() else {
+                                return;
+                            };
+                            if from == to {
+                                return;
+                            }
+                            let Some(from_index) = ev.from_index else {
+                                return;
+                            };
+                            let mut src = if from == "open" {
+                                open.peek()
+                            } else {
+                                empty.peek()
+                            };
+                            let mut dst = if to == "open" {
+                                open.peek()
+                            } else {
+                                empty.peek()
+                            };
+                            let to_index = ev.to_index.unwrap_or(dst.len());
+                            apply_transfer(&mut src, &mut dst, from_index, to_index);
+                            if from == "open" {
+                                open.set(src);
+                                empty.set(dst);
+                            } else {
+                                empty.set(src);
+                                open.set(dst);
+                            }
+                        }
+                    })
+                    .child(move || {
+                        let mk = |id: &'static str, files: Signal<Vec<String>>, title| {
+                            droppable(id)
+                                .list(id)
+                                .group("veto")
+                                .accept("veto")
+                                .child(move || {
+                                    let items = files.get();
+                                    let rows: Vec<Element> = items
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, name)| chip(id, name.clone(), i))
+                                        .collect();
+                                    Element::from(
+                                        vstack()
+                                            .w(200.0)
+                                            .p(8.0)
+                                            .min_h(80.0)
+                                            .gap(6.0)
+                                            .child(Element::new().text(title).h(20.0))
+                                            .child(
+                                                vstack().w("100%").min_h(0.0).children(rows),
+                                            ),
+                                    )
+                                })
+                        };
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(hstack().gap(40.0).children([
+                            mk("open", open, "Open"),
+                            mk("empty", empty, "Empty"),
+                            overlay,
+                        ]))
+                    })
+            }
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "open:Move me")
+            .expect("src");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-empty-xfer",
+            "open:Move me",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-empty-xfer".into(),
+            draggable_id: "open:Move me".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("open".into()),
+            from_index: Some(0),
+            item_type: "veto".into(),
+            group: "veto".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let empty_hit = hits0.iter().find(|h| h.id == "empty").expect("empty");
+        let dest = [
+            empty_hit.rect.x + 20.0,
+            empty_hit.rect.y + empty_hit.rect.height.max(8.0) * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let mut lt = crate::layout::LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout_persisted(&mut lt, &mut tree, false);
+            let empty_el = find_droppable(&tree, "empty").expect("empty");
+            assert!(
+                find_hole_preview(empty_el).is_some(),
+                "cross-list empty column must paint a dimmed body"
+            );
+            let pos_enter = crate::utils::drag::last_overlay_pos("ov-empty-xfer")
+                .expect("overlay_pos on enter");
+            let ghost_enter = find_ghost(&tree).expect("ghost on enter");
+            assert!(
+                (ghost_enter.layout_bounds[0] - pos_enter[0]).abs() < 2.0
+                    && (ghost_enter.layout_bounds[1] - pos_enter[1]).abs() < 2.0,
+                "ghost must still follow overlay_pos when hover first enters the empty column; \
+                 bounds={:?} pos={pos_enter:?}",
+                ghost_enter.layout_bounds
+            );
+        }
+
+        let dest_move = [dest[0] + 36.0, dest[1] + 28.0];
+        let hits_move = collect_hits(&live.borrow());
+        assert!(tick(dest_move[0], dest_move[1], &hits_move, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            lt.set_collect_skip_allowed(true);
+            hoist_and_layout_persisted(&mut lt, &mut tree, true);
+            let pos = crate::utils::drag::last_overlay_pos("ov-empty-xfer")
+                .expect("overlay_pos after move");
+            let ghost = find_ghost(&tree).expect("ghost after move");
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 8.0,
+                "hovering empty must not collapse the overlay; bounds={:?}",
+                ghost.layout_bounds
+            );
+            assert!(
+                (ghost.layout_bounds[0] - pos[0]).abs() < 2.0
+                    && (ghost.layout_bounds[1] - pos[1]).abs() < 2.0,
+                "overlay must keep following the pointer over the empty column, not freeze \
+                 at first hover; bounds={:?} pos={pos:?}",
+                ghost.layout_bounds
+            );
+        }
+
+        let hits_end = collect_hits(&live.borrow());
+        assert!(end(&hits_end));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("closed host stays mounted");
+            assert!(
+                ghost.children.is_empty() && ghost.text.is_none(),
+                "closed host must not keep clone children after empty-list drop"
+            );
+            assert!(
+                ghost.style.border_width < 0.01 && ghost.layout_bounds[2] < 1.0,
+                "closed host must not keep a painted box; bounds={:?} border={}",
+                ghost.layout_bounds,
+                ghost.style.border_width
+            );
+            let mut n = 0usize;
+            crate::core::tree::walk_elements(&tree, |el| {
+                if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
+                    n += 1;
+                }
+            });
+            assert_eq!(n, 1, "must not leak a second frozen ghost on the portal layer");
+        }
+
+        let hits2 = collect_hits(&live.borrow());
+        let src2 = hits2
+            .iter()
+            .find(|h| h.id == "empty:Move me")
+            .expect("transferred");
+        let pointer2 = [
+            src2.rect.x + src2.rect.width * 0.5,
+            src2.rect.y + src2.rect.height * 0.5,
+        ];
+        let (grab2, bounds2) = start_geometry(
+            "ov-empty-xfer",
+            "empty:Move me",
+            pointer2,
+            [src2.rect.x, src2.rect.y, src2.rect.width, src2.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-empty-xfer".into(),
+            draggable_id: "empty:Move me".into(),
+            pointer: pointer2,
+            grab_offset: grab2,
+            start_bounds: bounds2,
+            from_list: Some("empty".into()),
+            from_index: Some(0),
+            item_type: "veto".into(),
+            group: "veto".into(),
+            capture_id: "cap2".into(),
+        });
+        let dest2 = [pointer2[0] + 60.0, pointer2[1] + 40.0];
+        assert!(tick(dest2[0], dest2[1], &hits2, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let pos = last_overlay_pos("ov-empty-xfer").expect("overlay_pos");
+            let ghost = find_ghost(&tree).expect("second-drag ghost");
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 8.0,
+                "second drag must rebuild the ghost, not keep a 0×0 leftover; bounds={:?}",
+                ghost.layout_bounds
+            );
+            assert!(
+                (ghost.layout_bounds[0] - pos[0]).abs() < 2.0
+                    && (ghost.layout_bounds[1] - pos[1]).abs() < 2.0,
+                "second-drag ghost must follow overlay_pos, not freeze at the last drop; \
+                 bounds={:?} pos={pos:?}",
+                ghost.layout_bounds
+            );
+        }
+
+        let hits_end2 = collect_hits(&live.borrow());
+        let _ = end(&hits_end2);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
     /// Paint-time clone is not a tracked effect. Nested islands must inline
     /// their render, not return an empty placeholder.
     #[test]
@@ -1625,6 +1911,11 @@ mod tests {
             return Some(el);
         }
         el.children.iter().find_map(find_hole_preview)
+    }
+
+    /// Hole preview origin is paint `translate` (inset stays 0).
+    fn preview_visual_y(el: &Element) -> f32 {
+        el.layout_bounds[1] + el.style.translate[1]
     }
 
     fn collect_tids(el: &Element, out: &mut Vec<String>) {
@@ -3434,9 +3725,664 @@ mod tests {
                 texts.iter().any(|t| t.contains("src")),
                 "hole preview must clone the source body; texts={texts:?}"
             );
+            assert!(
+                crate::layout::lpa_length_px(preview.style.inset.left)
+                    .unwrap_or(0.0)
+                    .abs()
+                    < 0.5
+                    && crate::layout::lpa_length_px(preview.style.inset.top)
+                        .unwrap_or(0.0)
+                        .abs()
+                        < 0.5,
+                "hole preview origin must be paint translate, not inset; inset=({:?}, {:?})",
+                preview.style.inset.left,
+                preview.style.inset.top
+            );
         }
 
         let _ = end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    fn width_spec_is_percent(el: &Element) -> bool {
+        use crate::style::UnitSlot;
+        el.style.unit_specs.iter().any(|(s, d)| {
+            matches!(*s, UnitSlot::Width | UnitSlot::InlineSize) && d.has_percent()
+        })
+    }
+
+    /// Gallery kanban `list_chip` is `w=100%` inside a padded, bordered column.
+    /// Pinning `size.width` alone is rebaked from `unit_specs` (`width: 100%` of
+    /// the abspos padding box) — a sliver wider than the in-flow sibling.
+    #[test]
+    fn cross_list_hole_preview_keeps_stretched_row_width() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, draggable, droppable, end,
+            start_geometry, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-cross-w").threshold(0.0).child(move || {
+                let overlay: Element = drag_overlay().into();
+                let mk = |id: &'static str, list: &'static str, idx: usize| {
+                    draggable(id)
+                        .also_droppable(true)
+                        .item_type("task")
+                        .group("board")
+                        .list(list)
+                        .index(idx)
+                        .child(move || Element::new().text("Draft RFC").w("100%").h(32.0))
+                };
+                let left = droppable("todo")
+                    .list("todo")
+                    .group("board")
+                    .accept("task")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p(8.0)
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(mk("src", "todo", 0)),
+                        )
+                    });
+                let right = droppable("doing")
+                    .list("doing")
+                    .group("board")
+                    .accept("task")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p(8.0)
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(mk("dst", "doing", 0)),
+                        )
+                    });
+                Element::from(hstack().gap(40.0).children([left, right, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0.iter().find(|h| h.id == "src").expect("src");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-cross-w",
+            "src",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-cross-w".into(),
+            draggable_id: "src".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("todo".into()),
+            from_index: Some(0),
+            item_type: "task".into(),
+            group: "board".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let doing_hit = hits0.iter().find(|h| h.id == "doing").expect("doing");
+        let dest = [
+            doing_hit.rect.x + 20.0,
+            doing_hit.rect.y + doing_hit.rect.height.max(8.0) * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let doing = find_droppable(&tree, "doing").expect("doing");
+            let dst = find_draggable(&tree, "dst").expect("dst");
+            let preview = find_hole_preview(doing).expect("target hole preview");
+            assert!(
+                !width_spec_is_percent(preview),
+                "pin must drop w=100% from unit_specs or layout rebakes the padding box"
+            );
+            assert!(
+                (preview.layout_bounds[2] - dst.layout_bounds[2]).abs() < 2.0,
+                "hole preview must match the in-flow sibling, not the column padding box; \
+                 preview_w={} dst_w={} doing_w={}",
+                preview.layout_bounds[2],
+                dst.layout_bounds[2],
+                doing.layout_bounds[2]
+            );
+            assert!(
+                preview.layout_bounds[2] + 8.0 < doing.layout_bounds[2],
+                "preview must stay inside padding/border; preview_w={} doing_w={}",
+                preview.layout_bounds[2],
+                doing.layout_bounds[2]
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery board: `p="0.5rem"` column + title + inner `w=100%` list of
+    /// `SortableItem` chips. The hole clone must match the in-flow chip, not
+    /// `100%` of the column padding box (~16px too wide).
+    #[test]
+    fn cross_list_hole_preview_matches_kanban_chip_inside_padded_column() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, droppable, end, sortable_item,
+            start_geometry, tick, BeginDrag,
+        };
+
+        fn chip(label: &'static str) -> Element {
+            Element::from(
+                hstack()
+                    .w("100%")
+                    .p("0.5rem")
+                    .h(32.0)
+                    .border_style("solid")
+                    .border_width(1.0)
+                    .child(Element::new().text(label)),
+            )
+        }
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-kanban-w").threshold(0.0).child(move || {
+                let overlay: Element = drag_overlay().into();
+                let item = |id: &'static str, list: &'static str, idx: usize, label: &'static str| {
+                    sortable_item(id)
+                        .item_type("task")
+                        .group("board")
+                        .list(list)
+                        .index(idx)
+                        .child(move || chip(label))
+                };
+                let todo = droppable("todo")
+                    .list("todo")
+                    .group("board")
+                    .accept("task")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p("0.5rem")
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(Element::new().text("todo").h(16.0))
+                                .child(
+                                    vstack()
+                                        .w("100%")
+                                        .gap("0.375rem")
+                                        .child(item("src", "todo", 0, "Draft RFC")),
+                                ),
+                        )
+                    });
+                let doing = droppable("doing")
+                    .list("doing")
+                    .group("board")
+                    .accept("task")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p("0.5rem")
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(Element::new().text("doing").h(16.0))
+                                .child(
+                                    vstack()
+                                        .w("100%")
+                                        .gap("0.375rem")
+                                        .child(item("dst", "doing", 0, "Write tests")),
+                                ),
+                        )
+                    });
+                Element::from(hstack().gap(40.0).children([todo, doing, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0.iter().find(|h| h.id == "src").expect("src");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-kanban-w",
+            "src",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-kanban-w".into(),
+            draggable_id: "src".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("todo".into()),
+            from_index: Some(0),
+            item_type: "task".into(),
+            group: "board".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let doing_hit = hits0.iter().find(|h| h.id == "doing").expect("doing");
+        let dest = [
+            doing_hit.rect.x + 20.0,
+            doing_hit.rect.y + doing_hit.rect.height.max(8.0) * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let doing = find_droppable(&tree, "doing").expect("doing");
+            let dst = find_draggable(&tree, "dst").expect("dst");
+            let preview = find_hole_preview(doing).expect("target hole preview");
+            assert!(
+                !width_spec_is_percent(preview),
+                "kanban hole preview must not keep w=100% in unit_specs"
+            );
+            assert!(
+                (preview.layout_bounds[2] - dst.layout_bounds[2]).abs() < 2.0,
+                "kanban hole preview must match Write tests, not the column padding box; \
+                 preview_w={} dst_w={} doing_w={}",
+                preview.layout_bounds[2],
+                dst.layout_bounds[2],
+                doing.layout_bounds[2]
+            );
+            assert!(
+                preview.layout_bounds[2] + 8.0 < doing.layout_bounds[2],
+                "preview must sit inside 0.5rem padding; preview_w={} doing_w={}",
+                preview.layout_bounds[2],
+                doing.layout_bounds[2]
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery `use_drag().hits` empty column: title + inner `w=100%` list.
+    /// The dimmed body must sit in the list pack, not over the header.
+    #[test]
+    fn cross_list_empty_column_hole_preview_sits_below_title() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, droppable, end, sortable_item,
+            start_geometry, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-empty-title").threshold(0.0).child(move || {
+                let overlay: Element = drag_overlay().into();
+                let src = droppable("open")
+                    .list("open")
+                    .group("veto")
+                    .accept("veto")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p(8.0)
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(Element::new().text("Open").h(20.0))
+                                .child(
+                                    vstack().w("100%").child(
+                                        sortable_item("Move me")
+                                            .item_type("veto")
+                                            .group("veto")
+                                            .list("open")
+                                            .index(0)
+                                            .source_opacity(0.4)
+                                            .child(|| {
+                                                Element::new().text("Move me").w("100%").h(32.0)
+                                            }),
+                                    ),
+                                ),
+                        )
+                    });
+                let empty = droppable("empty")
+                    .list("empty")
+                    .group("veto")
+                    .accept("veto")
+                    .child(move || {
+                        Element::from(
+                            vstack()
+                                .w(200.0)
+                                .p(8.0)
+                                .border_style("solid")
+                                .border_width(1.0)
+                                .child(Element::new().text("Empty").h(20.0))
+                                .child(vstack().w("100%").min_h(0.0)),
+                        )
+                    });
+                Element::from(hstack().gap(40.0).children([src, empty, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0.iter().find(|h| h.id == "Move me").expect("src");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-empty-title",
+            "Move me",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-empty-title".into(),
+            draggable_id: "Move me".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("open".into()),
+            from_index: Some(0),
+            item_type: "veto".into(),
+            group: "veto".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let empty_hit = hits0.iter().find(|h| h.id == "empty").expect("empty");
+        let dest = [
+            empty_hit.rect.x + 20.0,
+            empty_hit.rect.y + empty_hit.rect.height.max(8.0) * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            fn zero_trailing_pack(el: &mut Element) {
+                if el
+                    .attrs
+                    .get(crate::utils::drag::ATTR_DRAG_DROPPABLE)
+                    .map(String::as_str)
+                    == Some("empty")
+                {
+                    for c in el.children.iter_mut().rev() {
+                        if c.attrs
+                            .contains_key(crate::utils::drag::ATTR_DRAG_HOLE_PREVIEW)
+                            || c.style.position == taffy::style::Position::Absolute
+                            || c.style.position_fixed
+                        {
+                            continue;
+                        }
+                        c.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+                        return;
+                    }
+                }
+                for c in &mut el.children {
+                    zero_trailing_pack(c);
+                }
+            }
+            zero_trailing_pack(&mut tree);
+            // Droppable islands keep inner layout_bounds 0-based while hits
+            // stay page-space. Chrome must not subtract the hit origin.
+            fn shift_layout_tree(el: &mut Element, dx: f32, dy: f32) {
+                el.layout_bounds[0] += dx;
+                el.layout_bounds[1] += dy;
+                for c in &mut el.children {
+                    shift_layout_tree(c, dx, dy);
+                }
+            }
+            fn localize_droppable(el: &mut Element, id: &str) -> bool {
+                if el
+                    .attrs
+                    .get(crate::utils::drag::ATTR_DRAG_DROPPABLE)
+                    .map(String::as_str)
+                    == Some(id)
+                {
+                    let dx = -el.layout_bounds[0];
+                    let dy = -el.layout_bounds[1];
+                    shift_layout_tree(el, dx, dy);
+                    return true;
+                }
+                el.children.iter_mut().any(|c| localize_droppable(c, id))
+            }
+            localize_droppable(&mut tree, "empty");
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let empty = find_droppable(&tree, "empty").expect("empty");
+            let title = empty
+                .children
+                .iter()
+                .find(|c| c.text.as_deref() == Some("Empty"))
+                .expect("title");
+            let title_bottom = title.layout_bounds[1] + title.layout_bounds[3];
+            let preview = find_hole_preview(empty).expect("empty hole preview");
+            let py = preview_visual_y(preview);
+            assert!(
+                py + 1.0 >= title_bottom,
+                "dimmed body must sit below the column title, not over it; \
+                 preview_y={py} title_bottom={title_bottom} empty_y={}",
+                empty.layout_bounds[1]
+            );
+            assert!(
+                py + 1.0 >= empty.layout_bounds[1]
+                    && py < empty.layout_bounds[1] + empty.layout_bounds[3] + 48.0,
+                "dimmed body must stay inside the empty column, not translate to (0,0); \
+                 preview_y={py} empty={:?}",
+                empty.layout_bounds
+            );
+            assert!(
+                preview.layout_bounds[2] > 10.0 && preview.layout_bounds[3] > 8.0,
+                "empty-column hole preview must keep chip size; bounds={:?}",
+                preview.layout_bounds
+            );
+            assert!(
+                preview.style.translate[0].abs() < empty.layout_bounds[2] + 8.0
+                    && preview.style.translate[1] >= -1.0
+                    && preview.style.translate[1] < empty.layout_bounds[3] + 48.0,
+                "empty-column hole translate must be local to the column CB, not \
+                 pack-minus-hit-origin; translate={:?} empty={:?}",
+                preview.style.translate,
+                empty.layout_bounds
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery Locked: `can_drop` rejects the item. Pickup is allowed (`disabled`
+    /// is the no-drag switch); parking in the empty column is not.
+    #[test]
+    fn can_drop_veto_does_not_preview_or_hover_empty_column() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, droppable, end, sortable_item,
+            start_geometry, tick, BeginDrag, ATTR_DRAG_OVER,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-locked-veto")
+                .threshold(0.0)
+                .can_drop(|ev| !ev.draggable_id.contains("Locked"))
+                .child(move || {
+                    let overlay: Element = drag_overlay().into();
+                    let src = droppable("open")
+                        .list("open")
+                        .group("veto")
+                        .accept("veto")
+                        .child(move || {
+                            Element::from(
+                                vstack()
+                                    .w(200.0)
+                                    .p(8.0)
+                                    .child(
+                                        sortable_item("open:Locked")
+                                            .item_type("veto")
+                                            .group("veto")
+                                            .list("open")
+                                            .index(0)
+                                            .source_opacity(0.4)
+                                            .child(|| {
+                                                Element::new().text("Locked").w("100%").h(32.0)
+                                            }),
+                                    ),
+                            )
+                        });
+                    let empty = droppable("empty")
+                        .list("empty")
+                        .group("veto")
+                        .accept("veto")
+                        .child(move || {
+                            Element::from(
+                                vstack()
+                                    .w(200.0)
+                                    .p(8.0)
+                                    .min_h(80.0)
+                                    .child(Element::new().text("Empty").h(20.0))
+                                    .child(vstack().w("100%").min_h(0.0)),
+                            )
+                        });
+                    Element::from(hstack().gap(40.0).children([src, empty, overlay]))
+                })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0.iter().find(|h| h.id == "open:Locked").expect("locked");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-locked-veto",
+            "open:Locked",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-locked-veto".into(),
+            draggable_id: "open:Locked".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("open".into()),
+            from_index: Some(0),
+            item_type: "veto".into(),
+            group: "veto".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let empty_hit = hits0.iter().find(|h| h.id == "empty").expect("empty");
+        let dest = [
+            empty_hit.rect.x + 20.0,
+            empty_hit.rect.y + empty_hit.rect.height.max(8.0) * 0.5,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        {
+            let mut tree = live.borrow_mut();
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+            hoist_and_layout(&mut tree);
+            let empty = find_droppable(&tree, "empty").expect("empty");
+            assert!(
+                find_hole_preview(empty).is_none(),
+                "can_drop veto must not paint a hole preview in the empty column"
+            );
+            assert_ne!(
+                empty.attrs.get(ATTR_DRAG_OVER).map(String::as_str),
+                Some("1"),
+                "can_drop veto must not mark the empty column as hover"
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
         clear_test_reconcile_root();
         reset_registered_anchors();
     }
@@ -3958,7 +4904,7 @@ mod tests {
                 inbox_b[1],
                 beta.style.translate
             );
-            let preview_top = preview.layout_bounds[1];
+            let preview_top = preview_visual_y(preview);
             let preview_bot = preview_top + preview.layout_bounds[3];
             let gamma_vis_top = gamma.layout_bounds[1] + gamma.style.translate[1];
             let hole_gap = gamma_vis_top - preview_bot;
@@ -4829,7 +5775,7 @@ mod tests {
             let preview = find_hole_preview(later).expect("Later hole preview");
             let gamma_bottom =
                 gamma.layout_bounds[1] + gamma.style.translate[1] + gamma.layout_bounds[3];
-            let preview_top = preview.layout_bounds[1];
+            let preview_top = preview_visual_y(preview);
             let gap = preview_top - gamma_bottom;
             let author_gap = row_pitch - 32.0;
             assert!(
@@ -5036,7 +5982,7 @@ mod tests {
             let inbox = find_droppable(&tree, "tree-inbox").expect("tree-inbox");
             let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("Alpha");
             let preview = find_hole_preview(inbox).expect("Inbox hole preview");
-            let preview_bot = preview.layout_bounds[1] + preview.layout_bounds[3];
+            let preview_bot = preview_visual_y(preview) + preview.layout_bounds[3];
             let alpha_top = alpha.layout_bounds[1] + alpha.style.translate[1];
             let gap = alpha_top - preview_bot;
             assert!(
@@ -5250,7 +6196,7 @@ mod tests {
             );
             let later_top = later.layout_bounds[1];
             let later_bottom = later.layout_bounds[1] + later.layout_bounds[3];
-            let preview_top = preview.layout_bounds[1];
+            let preview_top = preview_visual_y(preview);
             let preview_bot = preview_top + preview.layout_bounds[3];
             assert!(
                 preview_bot > later_top - 1.0 && preview_top < later_bottom + 1.0,

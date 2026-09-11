@@ -12,7 +12,8 @@ use crate::app::reactive::reactive_view_sized;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, IntoOpacity, LayoutStatus, ATTR_POINTER_EVENTS};
+use crate::core::tree::{Element, IntoOpacity, LayoutStatus, UnitSlot, ATTR_POINTER_EVENTS};
+use crate::layout::dimension::CssDim;
 use crate::layout::{dim_kind, DimKind, LayoutTree};
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
@@ -979,20 +980,188 @@ fn strip_preview_session_attrs(el: &mut Element) {
     }
 }
 
-fn set_abs_inset(el: &mut Element, left: f32, top: f32) -> bool {
-    let have_l = crate::layout::lpa_length_px(el.style.inset.left).unwrap_or(0.0);
-    let have_t = crate::layout::lpa_length_px(el.style.inset.top).unwrap_or(0.0);
-    if (have_l - left).abs() < 0.5 && (have_t - top).abs() < 0.5 {
-        return false;
+/// In-flow chip width under the target list (skip the abspos hole clone).
+/// Hits can lag a frame; the live tree is what Taffy just painted.
+fn inflow_indexed_width(list_el: &Element, list: &str) -> Option<f32> {
+    fn walk(el: &Element, list: &str, out: &mut Option<f32>) {
+        if el.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW) {
+            return;
+        }
+        let listed = el.attrs.get(ATTR_DRAG_LIST).map(String::as_str) == Some(list);
+        if listed
+            && el.attrs.contains_key(ATTR_DRAG_INDEX)
+            && el.attrs.contains_key(ATTR_DRAG_DRAGGABLE)
+            && el.layout_bounds[2] > 1.0
+        {
+            let w = el.layout_bounds[2];
+            *out = Some(out.map_or(w, |prev| prev.min(w)));
+            return;
+        }
+        for c in &el.children {
+            walk(c, list, out);
+        }
     }
-    el.style.inset.left = taffy::style::LengthPercentageAuto::length(left);
-    el.style.inset.top = taffy::style::LengthPercentageAuto::length(top);
-    true
+    let mut out = None;
+    walk(list_el, list, &mut out);
+    out
+}
+
+fn slot_has_percent(el: &Element, slot: UnitSlot) -> bool {
+    el.style
+        .unit_specs
+        .iter()
+        .any(|(s, d)| *s == slot && d.has_percent())
+}
+
+/// Target row width for a `w=100%` clone.
+///
+/// Prefer an in-flow chip under the list (Gallery "Write tests"), then a hit
+/// rect, then `drag_extent`, then the list content box. Absolute `width: 100%`
+/// resolves against the padding box — that is a sliver wider than the chip.
+fn hole_preview_slot_extent(list_el: &Element, list: &str, drag_extent: [f32; 2]) -> [f32; 2] {
+    let sibling_w = inflow_indexed_width(list_el, list).or_else(|| {
+        last_hits()
+            .iter()
+            .find(|h| {
+                h.list_id.as_deref() == Some(list)
+                    && h.index.is_some()
+                    && h.rect.is_usable()
+                    && h.rect.width > 1.0
+            })
+            .map(|h| h.rect.width)
+    });
+    let [_, border_r, _, border_l] = list_el.style.resolved_border_widths();
+    let pad_l = crate::layout::lp_length_px(list_el.style.padding.left).unwrap_or(0.0);
+    let pad_r = crate::layout::lp_length_px(list_el.style.padding.right).unwrap_or(0.0);
+    let content_w =
+        (list_el.layout_bounds[2] - pad_l - pad_r - border_l - border_r).max(0.0);
+    let mut w = sibling_w
+        .or_else(|| (drag_extent[0] > 1.0).then_some(drag_extent[0]))
+        .filter(|x| *x > 1.0)
+        .unwrap_or(content_w);
+    if content_w > 1.0 {
+        w = w.min(content_w);
+    }
+    [w.max(0.0), drag_extent[1].max(0.0)]
+}
+
+/// Pin through [`Style::set_css_dim`] so `unit_specs` drops `width: 100%`.
+/// Writing `size.width` alone is overwritten on the next Taffy bake.
+fn pin_percent_size_to_slot(el: &mut Element, slot: [f32; 2]) -> bool {
+    let mut changed = false;
+    let hole = el.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW);
+    let spec_w_pct = slot_has_percent(el, UnitSlot::Width)
+        || slot_has_percent(el, UnitSlot::InlineSize);
+    let pin_w = slot[0] > 0.0
+        && (spec_w_pct
+            || matches!(dim_kind(el.style.size.width), DimKind::Percent(_))
+            || (hole && matches!(dim_kind(el.style.size.width), DimKind::Length(_))));
+    if pin_w {
+        let want = taffy::style::Dimension::length(slot[0]);
+        if spec_w_pct || !dims_eq(el.style.size.width, want) {
+            el.style.set_css_dim(UnitSlot::Width, CssDim::Px(slot[0]));
+            changed = true;
+        }
+    }
+    let spec_h_pct = slot_has_percent(el, UnitSlot::Height)
+        || slot_has_percent(el, UnitSlot::BlockSize);
+    if slot[1] > 0.0
+        && (spec_h_pct || matches!(dim_kind(el.style.size.height), DimKind::Percent(_)))
+    {
+        let want = taffy::style::Dimension::length(slot[1]);
+        if spec_h_pct || !dims_eq(el.style.size.height, want) {
+            el.style.set_css_dim(UnitSlot::Height, CssDim::Px(slot[1]));
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn preview_visual_bounds(el: &Element) -> [f32; 4] {
+    let b = el.layout_bounds;
+    [
+        b[0] + el.style.translate[0],
+        b[1] + el.style.translate[1],
+        b[2],
+        b[3],
+    ]
+}
+
+/// Paint-only origin: inset is layout (full-page Taffy + FullClear every
+/// `hover_index`). Translate is the same path as sibling FLIP.
+fn sync_preview_paint_origin(preview: &mut Element, local: [f32; 2]) -> LayoutStatus {
+    let mut changed = LayoutStatus::Clean;
+    let have_l = crate::layout::lpa_length_px(preview.style.inset.left).unwrap_or(0.0);
+    let have_t = crate::layout::lpa_length_px(preview.style.inset.top).unwrap_or(0.0);
+    if have_l.abs() > 0.5 || have_t.abs() > 0.5 {
+        preview.style.inset.left = taffy::style::LengthPercentageAuto::length(0.0);
+        preview.style.inset.top = taffy::style::LengthPercentageAuto::length(0.0);
+        changed = changed.merge(LayoutStatus::LayoutChanged);
+    }
+    if (preview.style.translate[0] - local[0]).abs() > 0.5
+        || (preview.style.translate[1] - local[1]).abs() > 0.5
+    {
+        crate::app::damage::push_frame_paint_damage(preview_visual_bounds(preview));
+        preview.style.translate = local;
+        crate::app::damage::push_frame_paint_damage(preview_visual_bounds(preview));
+        changed = changed.merge(LayoutStatus::StyleChanged);
+    }
+    changed
+}
+
+/// Empty-list insert hole in **`list_el`'s layout space** (page or island-local).
+/// Just below the first in-flow chrome (Gallery kanban title). Skip a trailing
+/// 0×0 / unstamped child — that origin is `(0,0)`. Skip a child that fills the
+/// column (`min_h`) so the hole does not sit past the bottom.
+fn empty_list_pack_origin(list_el: &Element) -> Option<[f32; 2]> {
+    let lb = list_el.layout_bounds;
+    if lb[2] <= 1.0 && lb[3] <= 1.0 {
+        return None;
+    }
+    let in_shell = |b: [f32; 4]| {
+        let cx = b[0] + b[2] * 0.5;
+        let cy = b[1] + b[3] * 0.5;
+        cx >= lb[0] - 1.0
+            && cx <= lb[0] + lb[2] + 1.0
+            && cy >= lb[1] - 1.0
+            && cy <= lb[1] + lb[3] + 1.0
+    };
+    let gap = crate::layout::lp_length_px(list_el.style.gap.height).unwrap_or(0.0);
+    let mut below_chrome = None;
+    for c in &list_el.children {
+        if c.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW) {
+            continue;
+        }
+        if c.style.position == taffy::style::Position::Absolute || c.style.position_fixed {
+            continue;
+        }
+        let b = c.layout_bounds;
+        if b[3] > 1.0 && b[3] < lb[3] - 2.0 && in_shell(b) {
+            below_chrome = Some([b[0], b[1] + b[3] + gap]);
+            continue;
+        }
+        if below_chrome.is_some() && in_shell(b) {
+            return Some([b[0], b[1]]);
+        }
+    }
+    below_chrome
+}
+
+/// Abspos hole translate is relative to the droppable CB (`el`), not the hit
+/// table. Island inner `layout_bounds` are often 0-based while `LAST_HITS` are
+/// page — subtracting the hit origin sends the dimmed body off-screen.
+fn empty_list_hole_local(list_el: &Element) -> Option<[f32; 2]> {
+    let pack = empty_list_pack_origin(list_el)?;
+    Some([
+        pack[0] - list_el.layout_bounds[0],
+        pack[1] - list_el.layout_bounds[1],
+    ])
 }
 
 /// Cross-list dimmed body: a paint-only clone parented by the **target** list.
-/// Relative inset stays correct when the origin column vacates and the target
-/// moves; the source island itself stays in the origin tree at opacity 0.
+/// Translate (not inset) tracks the hole so origin-column vacate does not
+/// LayoutChanged every pointer move. `w=100%` is pinned to the target slot —
+/// the overlay ghost already does this via `pin_percent_size_to_extent`.
 fn sync_cross_list_hole_preview(
     el: &mut Element,
     scope: &str,
@@ -1003,6 +1172,7 @@ fn sync_cross_list_hole_preview(
     axis: Axis,
     chip: f32,
     overlay_on: bool,
+    drag_extent: [f32; 2],
 ) -> LayoutStatus {
     let show = overlay_on
         && from_list.is_some()
@@ -1022,7 +1192,7 @@ fn sync_cross_list_hole_preview(
     if !show || src_op <= 0.001 || src_id.is_none() {
         if let Some(i) = existing {
             el.children.remove(i);
-            return LayoutStatus::LayoutChanged;
+            return LayoutStatus::StructureChanged;
         }
         return LayoutStatus::Clean;
     }
@@ -1032,21 +1202,32 @@ fn sync_cross_list_hole_preview(
     let Some(hole) = insert_hole_origin(&hits, list, hover_index, axis, chip.max(1.0)) else {
         return LayoutStatus::Clean;
     };
+    let has_items = hits
+        .iter()
+        .any(|h| h.list_id.as_deref() == Some(list) && h.index.is_some());
     let list_origin = hits
         .iter()
         .find(|h| h.list_id.as_deref() == Some(list) && h.index.is_none())
         .map(|h| [h.rect.x, h.rect.y])
         .unwrap_or([el.layout_bounds[0], el.layout_bounds[1]]);
-    let local = [hole[0] - list_origin[0], hole[1] - list_origin[1]];
+    let local = if !has_items {
+        empty_list_hole_local(el).unwrap_or([
+            hole[0] - list_origin[0],
+            hole[1] - list_origin[1],
+        ])
+    } else {
+        [hole[0] - list_origin[0], hole[1] - list_origin[1]]
+    };
+    let slot = hole_preview_slot_extent(el, list, drag_extent);
     if let Some(i) = existing {
         let preview = &mut el.children[i];
-        let mut changed = LayoutStatus::Clean;
-        if set_abs_inset(preview, local[0], local[1]) {
-            changed = changed.merge(LayoutStatus::LayoutChanged);
-        }
+        let mut changed = sync_preview_paint_origin(preview, local);
         if (preview.style.opacity - src_op).abs() > 0.001 {
             preview.style.opacity = src_op;
             changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        if pin_percent_size_to_slot(preview, slot) {
+            changed = changed.merge(LayoutStatus::LayoutChanged);
         }
         return changed;
     }
@@ -1057,11 +1238,14 @@ fn sync_cross_list_hole_preview(
     preview.set_attr(ATTR_DRAG_HOLE_PREVIEW, "1");
     preview.set_attr(ATTR_POINTER_EVENTS, "none");
     preview.style.position = taffy::style::Position::Absolute;
-    preview.style.inset.left = taffy::style::LengthPercentageAuto::length(local[0]);
-    preview.style.inset.top = taffy::style::LengthPercentageAuto::length(local[1]);
+    preview.style.align_self = Some(taffy::style::AlignSelf::FLEX_START);
+    preview.style.inset.left = taffy::style::LengthPercentageAuto::length(0.0);
+    preview.style.inset.top = taffy::style::LengthPercentageAuto::length(0.0);
+    preview.style.translate = local;
     preview.style.opacity = src_op;
+    let _ = pin_percent_size_to_slot(&mut preview, slot);
     el.children.push(preview);
-    LayoutStatus::LayoutChanged
+    LayoutStatus::StructureChanged
 }
 
 /// Paint-only droppable chrome: `rui_drag_over` (solid-dnd `isActiveDroppable`)
@@ -1207,6 +1391,7 @@ fn apply_live_droppable_chrome(
         axis,
         chip,
         overlay_on,
+        drag_extent.peek(),
     ));
     changed
 }

@@ -391,13 +391,14 @@ pub(crate) fn overlay_center_origin_now(scope: &str) -> Option<[f32; 2]> {
     Some(origin)
 }
 
-/// Remember a measured ghost size, then pin Center origin to the live pointer.
+/// Remember a measured ghost size, then pin origin to the live pointer.
+/// Center align recomputes from the chip size; Grab uses `overlay_pos`.
 pub(crate) fn overlay_origin_after_ghost_measure(
     scope: &str,
     size: [f32; 2],
 ) -> Option<[f32; 2]> {
     remember_overlay_ghost_extent(scope, size);
-    overlay_center_origin_now(scope)
+    overlay_center_origin_now(scope).or_else(|| peek_overlay_pos(scope))
 }
 
 pub(crate) fn remember_item_restrict(scope: &str, id: &str, restrict: Option<Restrict>) {
@@ -894,6 +895,27 @@ fn event_from_delta(
         } else {
             sess.items.clone()
         },
+    }
+}
+
+fn list_passes_can_drop(
+    pred: &DragPredicate,
+    sess: &DragSession,
+    hits: &[DragHit],
+    list: &str,
+) -> bool {
+    let hit = hits
+        .iter()
+        .find(|h| h.list_id.as_deref() == Some(list) && h.index.is_none())
+        .or_else(|| hits.iter().find(|h| h.list_id.as_deref() == Some(list)));
+    match hit {
+        Some(h) => pred(&event_from(
+            sess,
+            Some(h),
+            Some(list.to_string()),
+            h.index,
+        )),
+        None => true,
     }
 }
 
@@ -1604,37 +1626,64 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
 
     LAST_HITS.with(|h| *h.borrow_mut() = hits.to_vec());
 
-    SCOPES.with(|m| {
-        if let Some(rt) = m.borrow().get(&sess.scope_id) {
-            if rt.overlay_pos.peek() != origin {
-                rt.overlay_pos.set(origin);
-            }
-            if rt.active_droppable.peek() != next_id {
-                rt.active_droppable.set(next_id.clone());
-            }
-            let prev_list = rt.hover_list.peek();
-            let hover_list = resolve_sortable_hover_list(hits, &sess, [x, y], prev_list.as_deref());
-            // Probe with the pointer, not `dragged.center()`. A stretched
-            // island box puts the center past the last row (Gallery: 松手永远进队尾).
-            let prev_hover = rt.hover_index.peek();
-            let hover_index = hover_list
-                .as_deref()
-                .and_then(|list| {
-                    if sess.sort_mode == SortMode::Swap {
-                        resolve_swap_hover_index(hits, list, [x, y])
-                    } else {
-                        resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
-                    }
-                })
-                .or(sess.from_index);
-            if rt.hover_list.peek() != hover_list {
-                rt.hover_list.set(hover_list.clone());
-            }
-            if rt.hover_index.peek() != hover_index {
-                rt.hover_index.set(hover_index);
+    // Copy handles out first: `.set` may flush overlay islands, which must
+    // not run under `SCOPES.borrow()` (same as [`activate_scope`]). One
+    // `batch` so hover list / index / highlight do not remount twice.
+    let ui = SCOPES.with(|m| {
+        m.borrow().get(&sess.scope_id).map(|rt| {
+            (
+                rt.overlay_pos,
+                rt.active_droppable,
+                rt.hover_list,
+                rt.hover_index,
+            )
+        })
+    });
+    if let Some((overlay_pos, active_droppable, hover_list_sig, hover_index_sig)) = ui {
+        let prev_list = hover_list_sig.peek();
+        let mut hover_list = resolve_sortable_hover_list(hits, &sess, [x, y], prev_list.as_deref());
+        // `can_drop` (Sortable `onMove`) must also veto sortable hover — otherwise
+        // Gallery Locked still parks in the empty column: active_droppable is
+        // cleared but hole preview / apply_transfer follow hover_list.
+        if let (Some(pred), Some(list)) = (can_drop.as_ref(), hover_list.as_deref()) {
+            if !list_passes_can_drop(pred, &sess, hits, list) {
+                hover_list = sess.from_list.clone();
             }
         }
-    });
+        // Probe with the pointer, not `dragged.center()`. A stretched
+        // island box puts the center past the last row (Gallery: 松手永远进队尾).
+        let prev_hover = hover_index_sig.peek();
+        let hover_index = hover_list
+            .as_deref()
+            .and_then(|list| {
+                if sess.sort_mode == SortMode::Swap {
+                    resolve_swap_hover_index(hits, list, [x, y])
+                } else {
+                    resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
+                }
+            })
+            .or(sess.from_index);
+        let pos_changed = overlay_pos.peek() != origin;
+        let drop_changed = active_droppable.peek() != next_id;
+        let list_changed = hover_list_sig.peek() != hover_list;
+        let index_changed = hover_index_sig.peek() != hover_index;
+        if pos_changed || drop_changed || list_changed || index_changed {
+            batch(|| {
+                if pos_changed {
+                    overlay_pos.set(origin);
+                }
+                if drop_changed {
+                    active_droppable.set(next_id.clone());
+                }
+                if list_changed {
+                    hover_list_sig.set(hover_list.clone());
+                }
+                if index_changed {
+                    hover_index_sig.set(hover_index);
+                }
+            });
+        }
+    }
 
     let (to_list, to_index) = SCOPES.with(|m| {
         m.borrow()
