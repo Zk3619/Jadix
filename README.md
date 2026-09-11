@@ -10,10 +10,10 @@
 ## 项目简介 | Overview
 
 **中文**  
-RUI 是一个纯 Rust 原生 UI 工作区，目标是在不依赖高层 GUI 框架的前提下，构建现代化、可组合、可扩展的跨平台 UI 引擎。项目参考了 Docs 中的核心设计思路（分层架构、信号驱动更新、ShadCN 风格组件体验、开发期热重载），并已在实际代码中落地了可运行的核心链路。
+RUI 是一个纯 Rust 原生 UI 工作区，目标是在不依赖高层 GUI 框架的前提下，构建现代化、可组合、可扩展的跨平台 UI 引擎。项目采用分层架构、信号驱动更新、ShadCN 风格组件体验与开发期热重载等设计目标，并已在实际代码中落地了可运行的核心链路。
 
 **English**  
-RUI is a pure Rust-native UI workspace aimed at building a modern, composable, and extensible cross-platform UI engine without relying on heavyweight high-level GUI frameworks. It follows the core design ideas documented in `Docs` (layered architecture, signal-driven updates, ShadCN-like component experience, and dev-time hot reload), with working implementations already present in code.
+RUI is a pure Rust-native UI workspace aimed at building a modern, composable, and extensible cross-platform UI engine without relying on heavyweight high-level GUI frameworks. It targets layered architecture, signal-driven updates, a ShadCN-like component experience, and dev-time hot reload, with working implementations already present in code.
 
 ---
 
@@ -30,8 +30,8 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
   基于 `winit`（窗口/事件）、`wgpu`（GPU 渲染）、`taffy`（Flex/Grid 布局）、`glyphon`（文本）构建。
 
 - **声明式 UI · 双书写面 | Dual authoring**  
-  - **中文**：`ui!` 类 RSX 标签与 `button()` / `*Builder` 纯 Rust 链式 API **同等一等公民**，可互嵌；不强制类 HTML 标签。详见 [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §3。  
-  - **English**: RSX-like `ui!` tags and pure-Rust `*Builder` APIs are **both first-class** and nestable; HTML-like tags are optional. See [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §3.
+  - **中文**：`ui!` 类 RSX 标签与 `button()` / `*Builder` 纯 Rust 链式 API **同等一等公民**，可互嵌；不强制类 HTML 标签。  
+  - **English**: RSX-like `ui!` tags and pure-Rust `*Builder` APIs are **both first-class** and nestable; HTML-like tags are optional.
 
 - **组件宏 | Component macro**  
   提供 `#[component]`，支持类似前端组件化的复用；函数体可用标签或 Builder 构建子树。
@@ -67,12 +67,9 @@ rui/
 │  ├─ rui_macros/           # #[component] / ui! 宏 | Proc-macro crate
 │  ├─ rui_style_tokens/     # utility 真源 | Shared style tokens
 │  └─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
-├─ examples/
-│  └─ gallery/              # 组件与能力展示 | Component gallery
-└─ docs/                    # 权威规范 + changelog；专题见子目录（AUTHORITY.md）
+└─ examples/
+   └─ gallery/              # 组件与能力展示 | Component gallery
 ```
-
-**文档入口 | Docs entry**：[AUTHORITY.md](docs/AUTHORITY.md)（唯一执行源）· [文档地图](docs/README.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [REACTIVITY.md](docs/REACTIVITY.md) · [CHANGELOG.md](docs/CHANGELOG.md)
 
 ---
 
@@ -158,8 +155,6 @@ fn toolbar() -> Element {
 
 ## 细粒度原语（阶段 3/4）| Fine-grained Primitives (Stage 3/4)
 
-设计与热重载约定见 **[docs/ops/reactivity_and_hot_reload.md](docs/ops/reactivity_and_hot_reload.md)**。
-
 - **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
   Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.
 - **`create_memo`**：派生只读值，依赖变化时重算；读者通过 `.get()` 订阅 memo 输出（见 `crates/rui/src/core/reactivity.rs`）。
@@ -216,7 +211,7 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 - 完善组件分层与复用（primitives/components patterns）
 - 加强宏能力与错误提示质量
 - 优化布局与渲染热路径性能
-- 扩展示例与文档覆盖面
+- 扩展示例覆盖面
 - 持续推进无障碍与跨平台细节
 
 ---

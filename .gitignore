@@ -31,8 +31,11 @@ crates/rui/tmp_stack_crumb.txt
 !examples/
 !examples/**
 
+# Published docs placeholder (content lives in development-docs/, ignored).
 !docs/
-!docs/**
+docs/*
+!docs/.gitkeep
+development-docs/
 
 !scripts/
 !scripts/**
