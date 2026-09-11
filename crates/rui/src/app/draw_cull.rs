@@ -201,18 +201,124 @@ pub(crate) fn opaque_fill_color_at(
     x: f32,
     y: f32,
 ) -> Option<[f32; 4]> {
-    instances.iter().rev().find_map(|i| {
-        if !instance_fill_opaque(i) {
+    opaque_fill_color_at_skipping(instances, x, y, |_| false)
+}
+
+pub(crate) fn opaque_fill_color_at_skipping(
+    instances: &[InstanceInput],
+    x: f32,
+    y: f32,
+    skip: impl Fn(usize) -> bool,
+) -> Option<[f32; 4]> {
+    instances.iter().enumerate().rev().find_map(|(i, inst)| {
+        if skip(i) || !instance_fill_opaque(inst) {
             return None;
         }
-        let [px, py] = i.rect_pos;
-        let [pw, ph] = i.rect_size;
+        let [px, py] = inst.rect_pos;
+        let [pw, ph] = inst.rect_size;
         if x >= px && y >= py && x < px + pw && y < py + ph {
-            Some(i.color)
+            Some(inst.color)
         } else {
             None
         }
     })
+}
+
+fn slot_matches_dirty(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    p: &NodePaint,
+) -> bool {
+    !p.overlay
+        && super::damage::paint_dirty_matches_slot(dirty_key, dirty_bounds, p.key, p.bounds)
+}
+
+/// Card/page fill behind a dirty widget. Skips the widget's own instances
+/// (Default's opaque chrome would otherwise report itself as the background).
+pub(crate) fn node_present_behind_color(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    x: f32,
+    y: f32,
+) -> Option<[f32; 4]> {
+    opaque_fill_color_at_skipping(instances, x, y, |i| {
+        node_paints.iter().any(|p| {
+            slot_matches_dirty(dirty_key, dirty_bounds, p) && i >= p.instance.0 && i < p.instance.1
+        })
+    })
+}
+
+/// Shader vertex AA pad is +2px; keep this below gallery `gap-2` (8 logical px).
+pub(crate) const NODE_PRESENT_RESET_PAD_PHYSICAL: f32 = 3.0;
+
+/// Tight AABB of this dirty node's instances (physical), plus `pad` for SDF AA / underline offset.
+/// Must not use the node scissor pad (8px) — that overlaps `gap-2` siblings.
+pub(crate) fn node_present_reset_rect(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    pad: f32,
+) -> Option<[f32; 4]> {
+    let mut acc: Option<[f32; 4]> = None;
+    for p in node_paints {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p) {
+            continue;
+        }
+        let lo = p.instance.0.min(instances.len());
+        let hi = p.instance.1.min(instances.len());
+        for inst in &instances[lo..hi] {
+            let b = instance_paint_bounds(inst);
+            if b[2] <= 0.0 || b[3] <= 0.0 {
+                continue;
+            }
+            acc = Some(match acc {
+                Some(prev) => union_xywh(prev, b),
+                None => b,
+            });
+        }
+    }
+    acc.map(|r| padded_xywh(r, pad.max(0.0)))
+}
+
+/// Axis-aligned dest wipe for node present: card fill behind this widget, never the widget itself.
+pub(crate) fn node_present_dest_reset(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+) -> Option<([f32; 4], [f32; 4])> {
+    let rect = node_present_reset_rect(
+        dirty_key,
+        dirty_bounds,
+        node_paints,
+        instances,
+        NODE_PRESENT_RESET_PAD_PHYSICAL,
+    )?;
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
+    let color = node_present_behind_color(
+        dirty_key,
+        dirty_bounds,
+        node_paints,
+        instances,
+        cx,
+        cy,
+    )?;
+    Some((rect, color))
+}
+
+/// Dest-reset wipes retain glyphs; opaque chrome also covers them. Either needs glyphon.
+pub(crate) fn node_present_needs_glyphs(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+) -> bool {
+    node_present_dest_reset(dirty_key, dirty_bounds, node_paints, instances).is_some()
+        || node_dirty_has_opaque_fill(dirty_key, dirty_bounds, node_paints, instances)
 }
 
 /// Hover chrome whose fill covers this dirty node's glyphs (primary vs link/ghost rest).
@@ -223,14 +329,7 @@ pub(crate) fn node_dirty_has_opaque_fill(
     instances: &[InstanceInput],
 ) -> bool {
     node_paints.iter().any(|p| {
-        if p.overlay
-            || !super::damage::paint_dirty_matches_slot(
-                dirty_key,
-                dirty_bounds,
-                p.key,
-                p.bounds,
-            )
-        {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p) {
             return false;
         }
         let lo = p.instance.0.min(instances.len());
@@ -412,5 +511,61 @@ mod tests {
             &[p],
             &[inst]
         ));
+    }
+
+    #[test]
+    fn dest_reset_skips_self_and_uses_card_behind() {
+        let mut card = blank_instance(0.0, 0.0, 200.0, 80.0);
+        card.color = [0.96, 0.96, 0.96, 1.0];
+        let mut button = blank_instance(10.0, 10.0, 40.0, 20.0);
+        button.color = [0.1, 0.1, 0.1, 1.0];
+        let p = NodePaint {
+            key: 7,
+            bounds: [10.0, 10.0, 40.0, 20.0],
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        };
+        let instances = [card, button];
+        assert_eq!(
+            node_present_behind_color(7, p.bounds, &[p], &instances, 30.0, 20.0),
+            Some([0.96, 0.96, 0.96, 1.0])
+        );
+        let (rect, color) =
+            node_present_dest_reset(7, p.bounds, &[p], &instances).expect("card behind default");
+        assert_eq!(color, [0.96, 0.96, 0.96, 1.0]);
+        assert!(rect[0] <= 10.0 - 2.0);
+        assert!(rect[1] <= 10.0 - 2.0);
+        assert!(rect[0] + rect[2] >= 50.0 + 2.0);
+        assert!(rect[1] + rect[3] >= 30.0 + 2.0);
+        assert!(rect[2] < 80.0, "must not expand to the whole card");
+        assert!(node_present_needs_glyphs(7, p.bounds, &[p], &instances));
+    }
+
+    #[test]
+    fn dest_reset_works_for_transparent_ghost_on_card() {
+        let mut card = blank_instance(0.0, 0.0, 200.0, 80.0);
+        card.color = [1.0, 1.0, 1.0, 1.0];
+        let mut ghost = blank_instance(60.0, 10.0, 40.0, 20.0);
+        ghost.color = [0.2, 0.2, 0.2, 0.0];
+        let p = NodePaint {
+            key: 8,
+            bounds: [60.0, 10.0, 40.0, 20.0],
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        };
+        let instances = [card, ghost];
+        assert!(!node_dirty_has_opaque_fill(8, p.bounds, &[p], &instances));
+        let (_, color) =
+            node_present_dest_reset(8, p.bounds, &[p], &instances).expect("card behind ghost");
+        assert_eq!(color, [1.0, 1.0, 1.0, 1.0]);
+        assert!(node_present_needs_glyphs(8, p.bounds, &[p], &instances));
     }
 }

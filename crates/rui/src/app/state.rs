@@ -163,6 +163,8 @@ pub(super) struct AppState {
     last_text_ui_scale: f32,
     last_text_surface_size: [u32; 2],
     last_underline_instances: Vec<crate::renderer::InstanceInput>,
+    /// Flattened underlines last submitted to GPU (survives page-stack `last_underline_instances.clear()`).
+    last_presented_underlines: Vec<crate::renderer::InstanceInput>,
     last_caret_instances: Vec<crate::renderer::InstanceInput>,
     last_caret_blink_phase: u128,
     cpu_text_profiler: CpuTextProfiler,
@@ -298,6 +300,29 @@ fn hash_present_underline_layers(
     }
     for ul in overlay_band_underlines {
         hasher.write(bytemuck::cast_slice(ul));
+    }
+}
+
+/// Underlines actually on screen after this frame's prepare.
+///
+/// Page-stack prepare stores bands and **clears** `last_underline_instances`.
+/// Reuse frames also push empty band vecs. Node present must not treat that
+/// as "no decorations" or Link leave cannot erase, and the next hover stacks.
+fn current_underline_layer(
+    has_page_stack_bands: bool,
+    reuse_page_stack: bool,
+    page_stack_flat: &[InstanceInput],
+    page_underlines: &[InstanceInput],
+    last_presented: &[InstanceInput],
+) -> Vec<InstanceInput> {
+    if has_page_stack_bands {
+        if page_stack_flat.is_empty() && reuse_page_stack {
+            last_presented.to_vec()
+        } else {
+            page_stack_flat.to_vec()
+        }
+    } else {
+        page_underlines.to_vec()
     }
 }
 
@@ -1359,6 +1384,7 @@ impl AppState {
             last_text_ui_scale: 0.0,
             last_text_surface_size: [0, 0],
             last_underline_instances: Vec::new(),
+            last_presented_underlines: Vec::new(),
             last_caret_instances: Vec::new(),
             last_caret_blink_phase: 0,
             cpu_text_profiler: CpuTextProfiler::new(),
@@ -1878,6 +1904,31 @@ impl AppState {
                 }
                 PaintDirtyKind::Node => {
                     if allow_primitives {
+                        let page = &scaled_instances
+                            [..overlay_inst_start.min(scaled_instances.len())];
+                        // Load + src-over of the same rounded SDF stacks AA (Default
+                        // looks smaller / jittery). Ghost leave cannot erase an opaque
+                        // hover fill. Wipe the widget AABB with the card behind it —
+                        // never the widget's own fill, never window Clear / parent slot.
+                        if let Some((rect, color)) = super::draw_cull::node_present_dest_reset(
+                            dirty.key,
+                            dirty.bounds,
+                            node_paints,
+                            page,
+                        ) {
+                            draw_scissor_clear(
+                                render_pass,
+                                &self.pipeline,
+                                &self.device,
+                                rect,
+                                wgpu::Color {
+                                    r: color[0] as f64,
+                                    g: color[1] as f64,
+                                    b: color[2] as f64,
+                                    a: 1.0,
+                                },
+                            );
+                        }
                         self.draw_matching_node_paints(
                             render_pass,
                             node_paints,
@@ -1905,15 +1956,15 @@ impl AppState {
                             cull_phys,
                         );
                     }
-                    // Opaque fill covers retain glyphs — redraw this node's labels.
-                    // Transparent chrome (link / ghost rest) must not src-over glyphon
-                    // again or the caption looks bold and decorations stack.
+                    // Dest-reset (or opaque chrome) covers retain glyphs — redraw labels.
+                    // Skip glyphon only when dest stayed intact and fill is transparent
+                    // (Link without a card behind): a second glyphon would bold the caption.
                     let redraw_glyphs = capture_text_ready
-                        && super::draw_cull::node_dirty_has_opaque_fill(
+                        && super::draw_cull::node_present_needs_glyphs(
                             dirty.key,
                             dirty.bounds,
                             node_paints,
-                            scaled_instances,
+                            &scaled_instances[..overlay_inst_start.min(scaled_instances.len())],
                         );
                     if redraw_glyphs {
                         self.capture_text_renderer.render(render_pass);
@@ -1939,6 +1990,13 @@ impl AppState {
         cull_phys: Option<[f32; 4]>,
     ) {
         let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
+        let erase_color = cull_phys.and_then(|cull| {
+            super::draw_cull::opaque_fill_color_at(
+                page,
+                cull[0] + cull[2] * 0.5,
+                cull[1] + cull[3] * 0.5,
+            )
+        });
         let owned = |list: &[InstanceInput]| -> Vec<InstanceInput> {
             match cull_phys {
                 Some(cull) => list
@@ -1962,8 +2020,13 @@ impl AppState {
                 .filter_map(|ul| {
                     let cx = ul.rect_pos[0] + ul.rect_size[0] * 0.5;
                     let cy = ul.rect_pos[1] + ul.rect_size[1] * 0.5;
-                    let color = super::draw_cull::opaque_fill_color_at(page, cx, cy)?;
+                    let color = erase_color
+                        .or_else(|| super::draw_cull::opaque_fill_color_at(page, cx, cy))?;
                     let mut out = ul;
+                    out.rect_pos[0] -= 1.0;
+                    out.rect_pos[1] -= 1.0;
+                    out.rect_size[0] += 2.0;
+                    out.rect_size[1] += 2.0;
                     out.color = color;
                     out.border_width = 0.0;
                     out.border_color = [0.0; 4];
@@ -2008,7 +2071,10 @@ impl AppState {
                 // ended on glyphon (TriangleStrip, strip_index_format None).
                 // Indexed SDF draws with the leftover Uint16 index buffer panic:
                 // "strip index format None must match index buffer format Uint16".
-                self.pipeline.bind_sdf(render_pass, true, dummy);
+                // Clip-poly SSBO is indexed by `instance_index`. A ranged draw on
+                // GLES can feed a relative index and clip the fill to another
+                // widget's inset round-clip (Default looks 1px smaller on hover).
+                self.pipeline.bind_sdf(render_pass, false, dummy);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                 render_pass.set_index_buffer(
@@ -3804,7 +3870,6 @@ impl AppState {
         let mut page_stack_band_underlines: Vec<Vec<InstanceInput>> = Vec::new();
         let mut page_stack_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>> =
             Vec::new();
-        let prev_underline_instances = self.last_underline_instances.clone();
         let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
             self.ensure_page_stack_band_text_renderers(page_stack_band_ranges.len());
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
@@ -4087,11 +4152,12 @@ impl AppState {
                 match d.kind {
                     super::damage::PaintDirtyKind::OverlayRestore => true,
                     super::damage::PaintDirtyKind::Node => {
-                        super::draw_cull::node_dirty_has_opaque_fill(
+                        super::draw_cull::node_present_needs_glyphs(
                             d.key,
                             d.bounds,
                             &render_result.node_paints,
-                            &scaled_instances,
+                            &scaled_instances
+                                [..overlay_inst_start.min(scaled_instances.len())],
                         )
                     }
                     super::damage::PaintDirtyKind::Overlay => false,
@@ -4173,6 +4239,19 @@ impl AppState {
             });
         }
         let text_done = Instant::now();
+        let prev_presented_underlines = self.last_presented_underlines.clone();
+        let page_stack_underline_flat: Vec<InstanceInput> = page_stack_band_underlines
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let presented_underlines = current_underline_layer(
+            has_page_stack_bands,
+            reuse_page_stack,
+            &page_stack_underline_flat,
+            &underline_instances,
+            &prev_presented_underlines,
+        );
 
         // Skip swapchain acquire/submit/present when this redraw produced the same GPU content
         // as the last presented frame (e.g. scrollbar visibility timer wake with no fade yet).
@@ -4288,6 +4367,7 @@ impl AppState {
                 return Ok(());
             }
             self.last_gpu_frame_fp = frame_fp;
+            self.last_presented_underlines = presented_underlines.clone();
         }
 
         // Acquire swapchain image as late as possible so CPU-side text/layout work can overlap
@@ -4750,17 +4830,6 @@ impl AppState {
             // Overlay PartialLoad: Load keeps page pixels; drawing fills here without
             // matching glyphon is the empty-shell bug.
             if gpu_present.use_node_present {
-                let node_page_underlines: Cow<[InstanceInput]> = if has_page_stack_bands {
-                    Cow::Owned(
-                        page_stack_band_underlines
-                            .iter()
-                            .flatten()
-                            .copied()
-                            .collect(),
-                    )
-                } else {
-                    Cow::Borrowed(&underline_instances)
-                };
                 self.encode_node_present(
                     &mut render_pass,
                     &render_result.paint_ops,
@@ -4776,8 +4845,8 @@ impl AppState {
                     ui_scale,
                     &overlay_band_ranges,
                     capture_text_ready,
-                    node_page_underlines.as_ref(),
-                    &prev_underline_instances,
+                    &presented_underlines,
+                    &prev_presented_underlines,
                 );
             } else if allow_primitives && !use_backdrop_blur && !retain_page_pixels {
                 if has_page_stack_bands {
@@ -6714,5 +6783,20 @@ mod present_fingerprint_tests {
             hovered, rest,
             "Link hover:underline leave must bust last_gpu_frame_fp on the page-stack path"
         );
+    }
+
+    #[test]
+    fn page_stack_reuse_keeps_last_presented_underlines() {
+        let line = InstanceInput::zeroed();
+        let last = vec![line];
+        let reused = super::current_underline_layer(true, true, &[], &[], &last);
+        assert_eq!(reused.len(), 1);
+        let left = super::current_underline_layer(true, false, &[], &[], &last);
+        assert!(
+            left.is_empty(),
+            "leave (not reuse) must drop decorations so node present can erase"
+        );
+        let hovered = super::current_underline_layer(true, false, &[line], &[], &[]);
+        assert_eq!(hovered.len(), 1);
     }
 }
