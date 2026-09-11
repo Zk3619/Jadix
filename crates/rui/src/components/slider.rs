@@ -33,6 +33,7 @@ use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{is_variant_style_overridden, use_ui_transition_cubic, VariantStyleField};
+use crate::tokens;
 use crate::utils::controlled::resolve_f32_signal;
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
@@ -110,8 +111,8 @@ struct SliderDrag {
 }
 
 /// Rest / hover 拇指阴影：`(color, blur)`（无纵向偏移）。
-const THUMB_SHADOW_REST: ([f32; 4], f32) = ([0.0, 0.0, 0.0, 0.18], 2.5);
-const THUMB_SHADOW_HOVER: ([f32; 4], f32) = ([0.0, 0.0, 0.0, 0.42], 5.0);
+const THUMB_SHADOW_REST: ([f32; 4], f32) = (tokens::shadow_ink(0.18), 2.5);
+const THUMB_SHADOW_HOVER: ([f32; 4], f32) = (tokens::shadow_ink(0.42), 5.0);
 
 fn slider_shadow_anim_key(id: &str) -> String {
     format!("rui:slider_thumb_shadow:{id}")

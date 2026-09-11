@@ -1553,6 +1553,7 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]
         TransitionProperty::LetterSpacing => {
             if let Some(t) = transition_tick_text() {
                 t.letter_spacing = val[0];
+                t.letter_spacing_specified = true;
             }
         }
         TransitionProperty::TextDecorationColor => {

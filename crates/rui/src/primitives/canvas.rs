@@ -765,7 +765,7 @@ impl CanvasBuilder {
         self
     }
 
-    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+    pub fn cursor(mut self, value: impl crate::style::IntoCursor) -> Self {
         self.el = self.el.cursor(value);
         self
     }

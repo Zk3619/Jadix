@@ -15,6 +15,7 @@ use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSyn
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
+use crate::tokens;
 use crate::utils::text_field::{
     attach_text_edit_field_lifecycle, bind_controlled_value, focus_id_for_text_edit,
 };
@@ -219,7 +220,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     } else {
         container = container.bg(bg).border(border_c, 1.0);
         if !is_focused && !disabled {
-            container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
+            container = container.shadow(tokens::shadow_rgba(tokens::Elevation::Xs), 1.0);
         }
     }
 

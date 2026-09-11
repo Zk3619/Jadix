@@ -54,10 +54,8 @@
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::cell::Cell;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use rui_macros::component;
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
@@ -77,12 +75,15 @@ use crate::layout::{first_track_fr, set_first_track_fr};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
+    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
-use crate::utils::motion::{clear_motion, ensure_motion_transitions, motion_is_animating};
-use crate::utils::presence::{ExitGate, PresencePhase};
+use crate::utils::collapse_panel::{
+    apply_collapse_motion, sync_collapse_panel_presence, use_collapse_panel_presence,
+    CollapseKeyframes, CollapsePanelPresence,
+};
+use crate::utils::motion::{ensure_motion_transitions, motion_is_animating};
+use crate::utils::presence::PresencePhase;
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_fragment;
@@ -182,13 +183,7 @@ fn toggle_open_item(open: &mut Vec<String>, value: &str, multiple: bool) {
     }
 }
 
-const ACCORDION_DOWN: &str = "accordion-down";
-const ACCORDION_UP: &str = "accordion-up";
-
 thread_local! {
-    static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<AccordionPanelPresenceCell>>>> =
-        const { RefCell::new(Vec::new()) };
-    static PENDING_ACCORDION_UNMOUNTS: RefCell<Vec<Signal<bool>>> = const { RefCell::new(Vec::new()) };
     static ACCORDION_USE_GRID_FR: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
@@ -209,144 +204,12 @@ pub fn accordion_use_grid_fr() -> bool {
     }
 }
 
-const PANEL_EXIT: Duration = Duration::from_millis(ACCORDION_MS as u64);
-
-#[derive(Clone)]
-struct AccordionPanelPresenceHandle {
-    cell: Rc<RefCell<AccordionPanelPresenceCell>>,
+fn use_accordion_panel_presence(key: &str) -> CollapsePanelPresence {
+    use_collapse_panel_presence(key)
 }
 
-struct AccordionPanelPresenceCell {
-    mounted: Signal<bool>,
-    gate: ExitGate,
-    needs_enter: bool,
-    enter_active: bool,
-    exit_armed: bool,
-    /// 是否已做过至少一次 presence 同步（区分冷启动 defaultOpen 与后续再展开）。
-    initialized: bool,
-    /// 退场 CSS `accordion-up` 是否仍待 seed（对位 Dialog `needs_exit_anim`）。
-    needs_exit_anim: bool,
-}
-
-fn use_accordion_panel_presence(key: &str) -> AccordionPanelPresenceHandle {
-    let cell_key = format!("__rui_accordion_panel:{key}");
-    let mounted_key = format!("__rui_accordion_mounted:{key}");
-    let cell = use_signal(cell_key.as_str(), || {
-        let mounted = use_signal(mounted_key.as_str(), || false);
-        let rc = Rc::new(RefCell::new(AccordionPanelPresenceCell {
-            mounted,
-            gate: ExitGate::new(false, PANEL_EXIT),
-            needs_enter: false,
-            enter_active: false,
-            exit_armed: false,
-            initialized: false,
-            needs_exit_anim: false,
-        }));
-        PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
-        rc
-    });
-    AccordionPanelPresenceHandle {
-        cell: cell.try_peek().expect("accordion panel presence cell"),
-    }
-}
-
-fn accordion_panel_mounted_signal(handle: &AccordionPanelPresenceHandle) -> Signal<bool> {
-    handle.cell.borrow().mounted
-}
-
-fn sync_accordion_panel_presence(
-    handle: &AccordionPanelPresenceHandle,
-    want: bool,
-) -> PresencePhase {
-    let mounted_sig = accordion_panel_mounted_signal(handle);
-    let (phase, mounted, set_mounted) = {
-        let mut c = handle.cell.borrow_mut();
-        let was = c.gate.phase();
-        let changed = c.gate.set_present(want, Instant::now());
-        let phase = c.gate.phase();
-        let mounted = c.gate.is_mounted();
-        if want
-            && matches!(phase, PresencePhase::Present)
-            && (changed || was == PresencePhase::Absent)
-        {
-            if !c.initialized {
-                c.needs_enter = false;
-                c.enter_active = false;
-            } else if changed && was != PresencePhase::Present {
-                c.needs_enter = true;
-                c.enter_active = false;
-            }
-            c.exit_armed = false;
-            c.needs_exit_anim = false;
-        }
-        c.initialized = true;
-        if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
-            c.exit_armed = true;
-            c.needs_enter = false;
-            c.enter_active = false;
-            c.needs_exit_anim = true;
-        }
-        let set_mounted = c
-            .mounted
-            .try_peek()
-            .map(|was| was != mounted)
-            .unwrap_or(false);
-        (phase, mounted, set_mounted)
-    };
-    if set_mounted {
-        mounted_sig.set(mounted);
-    }
-    phase
-}
-
-/// 事件循环推进退场；CSS 退场完成在 [`drain_pending_accordion_unmounts`] 卸树。
-pub(crate) fn tick_accordion_panel_presence() -> bool {
-    drain_pending_accordion_unmounts();
-    let now = Instant::now();
-    let mut needs_frame = false;
-    let mut unmount: Vec<Signal<bool>> = Vec::new();
-    PANEL_PRESENCE_REGISTRY.with(|reg| {
-        for cell in reg.borrow().iter() {
-            let maybe_unmount = {
-                let mut c = cell.borrow_mut();
-                if c.gate.phase() == PresencePhase::Exiting {
-                    if c.exit_armed {
-                        // 墙钟 ExitGate 不得打断 accordion-up（对位 Dialog CSS 退场）。
-                        needs_frame = true;
-                        None
-                    } else if c.gate.tick(now) {
-                        c.needs_enter = false;
-                        c.enter_active = false;
-                        c.exit_armed = false;
-                        c.needs_exit_anim = false;
-                        Some(c.mounted)
-                    } else {
-                        needs_frame = true;
-                        None
-                    }
-                } else if c.enter_active && c.gate.phase() == PresencePhase::Present {
-                    needs_frame = true;
-                    None
-                } else {
-                    None
-                }
-            };
-            if let Some(sig) = maybe_unmount {
-                unmount.push(sig);
-            }
-        }
-    });
-    for sig in unmount {
-        sig.set(false);
-    }
-    needs_frame
-}
-
-fn drain_pending_accordion_unmounts() {
-    let pending = PENDING_ACCORDION_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    for sig in pending {
-        sig.set(false);
-    }
+fn sync_accordion_panel_presence(handle: &CollapsePanelPresence, want: bool) -> PresencePhase {
+    sync_collapse_panel_presence(handle, want)
 }
 
 fn chevron_transition_entries() -> [TransitionEntry; 1] {
@@ -358,65 +221,8 @@ fn chevron_transition_entries() -> [TransitionEntry; 1] {
     }]
 }
 
-fn panel_content_height(el: &Element) -> f32 {
-    el.used_layout.anim_height().max(el.layout_bounds[3])
-}
-
-fn accordion_has_exit_anim(el: &Element) -> bool {
-    el.style.animations.iter().any(|a| a.name == ACCORDION_UP)
-}
-
 fn reset_accordion_anim_snapshot(el: &mut Element) {
     el.animation_snapshot = Default::default();
-}
-
-fn seed_accordion_enter_anim(el: &mut Element) {
-    clear_motion(el);
-    el.style.max_size.height = Dimension::auto();
-    el.style.animations = vec![keyframes_anim_entry(
-        ACCORDION_DOWN,
-        ACCORDION_MS,
-        TimingFunction::EaseOut,
-        AnimationFillMode::Both,
-    )];
-    reset_accordion_anim_snapshot(el);
-}
-
-fn seed_accordion_exit_anim(el: &mut Element) {
-    clear_motion(el);
-    el.style.max_size.height = Dimension::auto();
-    el.style.animations = vec![keyframes_anim_entry(
-        ACCORDION_UP,
-        ACCORDION_MS,
-        TimingFunction::EaseIn,
-        AnimationFillMode::Both,
-    )];
-    reset_accordion_anim_snapshot(el);
-}
-
-fn finish_accordion_panel_exit(presence: &AccordionPanelPresenceHandle) {
-    let mounted_sig = accordion_panel_mounted_signal(presence);
-    {
-        let mut c = presence.cell.borrow_mut();
-        c.gate.force_absent();
-        c.exit_armed = false;
-        c.needs_exit_anim = false;
-        c.enter_active = false;
-        c.needs_exit_anim = false;
-    }
-    PENDING_ACCORDION_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
-    crate::app::runtime::request_redraw();
-}
-
-fn accordion_panel_phase(presence: &AccordionPanelPresenceHandle) -> PresencePhase {
-    presence.cell.borrow().gate.phase()
-}
-
-fn max_height_is_auto(el: &Element) -> bool {
-    matches!(
-        crate::layout::dim_kind(el.style.max_size.height),
-        crate::layout::DimKind::Auto
-    )
 }
 
 /// 内容区正文统一 normal(400)；覆盖 `<Label>` 默认 medium(500) 以免比 Trigger 更粗。
@@ -447,7 +253,7 @@ fn register_accordion_open_redraw_effect(instance_id: &str, open_sig: Signal<Vec
 fn sync_accordion_panel_open(
     open_sig: Signal<Vec<String>>,
     value: &str,
-    presence: &AccordionPanelPresenceHandle,
+    presence: &CollapsePanelPresence,
 ) {
     let want = open_sig
         .try_peek()
@@ -527,7 +333,7 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
     let value_anchor = value.clone();
     let presence = use_accordion_panel_presence(&format!("{menu_id}:presence:{value}"));
     let sync_presence = presence.clone();
-    let mounted = accordion_panel_mounted_signal(&presence);
+    let mounted = presence.mounted();
     let open_sync = open_sig;
     let value_for_presence = value.clone();
     sync_accordion_panel_open(open_sync, &value_for_presence, &presence);
@@ -600,162 +406,12 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
 fn apply_accordion_panel_motion(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
-    presence: &AccordionPanelPresenceHandle,
+    presence: &CollapsePanelPresence,
 ) -> LayoutStatus {
     if accordion_use_grid_fr() {
         return apply_accordion_panel_motion_grid(el, layout_tree, presence);
     }
-    apply_accordion_panel_motion_max_height(el, layout_tree, presence)
-}
-
-fn apply_accordion_panel_motion_max_height(
-    el: &mut Element,
-    layout_tree: &mut LayoutTree,
-    presence: &AccordionPanelPresenceHandle,
-) -> LayoutStatus {
-    let phase = accordion_panel_phase(presence);
-    if !phase.is_mounted() {
-        let mut layout = false;
-        if el.style.display != Display::None {
-            el.style.display = Display::None;
-            layout = true;
-        }
-        if layout && el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        return LayoutStatus::Clean;
-    }
-
-    let exiting = phase == PresencePhase::Exiting;
-    let open_visual = phase == PresencePhase::Present && !exiting;
-    let mut layout = false;
-
-    let measuring_enter = open_visual && presence.cell.borrow().needs_enter;
-
-    if el.style.display != Display::Flex {
-        el.style.display = Display::Flex;
-        layout = true;
-    }
-    if el.style.overflow.y != Overflow::Hidden {
-        el.style.overflow.y = Overflow::Hidden;
-        layout = true;
-    }
-    if !measuring_enter && (el.style.opacity - 1.0).abs() > 0.001 {
-        el.style.opacity = 1.0;
-    }
-    if el.style.scale != [1.0, 1.0] {
-        el.style.scale = [1.0, 1.0];
-    }
-
-    let w = crate::layout::dim_kind(el.style.size.width);
-    if !matches!(w, crate::layout::DimKind::Percent(_)) {
-        el.style.size.width = Dimension::percent(1.0);
-        layout = true;
-    }
-    if !matches!(
-        crate::layout::dim_kind(el.style.size.height),
-        crate::layout::DimKind::Auto
-    ) {
-        el.style.size.height = Dimension::auto();
-        layout = true;
-    }
-
-    let (needs_enter, needs_exit_anim) = {
-        let mut c = presence.cell.borrow_mut();
-        let needs_enter = c.needs_enter;
-        let needs_exit_anim = c.needs_exit_anim;
-        if needs_enter && open_visual {
-            c.enter_active = true;
-        }
-        if needs_exit_anim && exiting {
-            c.needs_exit_anim = false;
-        }
-        (needs_enter, needs_exit_anim)
-    };
-
-    // 只在首次退场或 wrap 被重建（仍 armed 且丢失 accordion-up）时 seed。
-    // 动画结束后清 list 不得再 seed，否则会每帧 LayoutChanged。
-    let exit_armed = presence.cell.borrow().exit_armed;
-    if exiting && (needs_exit_anim || (!accordion_has_exit_anim(el) && exit_armed)) {
-        seed_accordion_exit_anim(el);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if exiting {
-        if animation_run_active(&el.style, &el.animation_snapshot) {
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        el.style.animations.clear();
-        el.style.max_size.height = Dimension::length(0.0);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        finish_accordion_panel_exit(presence);
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if open_visual && needs_enter {
-        if !max_height_is_auto(el) {
-            el.style.max_size.height = Dimension::auto();
-            layout = true;
-        }
-        let measured = panel_content_height(el);
-        if measured < 1.0 {
-            el.style.opacity = 0.0;
-            if layout && el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
-                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-                return LayoutStatus::LayoutChanged;
-            }
-            return if layout {
-                LayoutStatus::LayoutChanged
-            } else {
-                LayoutStatus::Clean
-            };
-        }
-        presence.cell.borrow_mut().needs_enter = false;
-        if (el.style.opacity - 1.0).abs() > 0.001 {
-            el.style.opacity = 1.0;
-        }
-        seed_accordion_enter_anim(el);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if open_visual {
-        if animation_run_active(&el.style, &el.animation_snapshot) {
-            if el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
-            }
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        el.style.animations.clear();
-        if el.style.max_size.height != Dimension::auto() {
-            el.style.max_size.height = Dimension::auto();
-            layout = true;
-        }
-        presence.cell.borrow_mut().enter_active = false;
-    }
-
-    if layout && el.layout_node.is_some() {
-        layout_tree.update_taffy_node_style(el);
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    LayoutStatus::Clean
+    apply_collapse_motion(el, layout_tree, presence, CollapseKeyframes::ACCORDION)
 }
 
 fn grid_rows_transition_entry(timing: TimingFunction) -> TransitionEntry {
@@ -836,9 +492,9 @@ fn seed_accordion_grid_fr(el: &mut Element, from_fr: f32, to_fr: f32, timing: Ti
 fn apply_accordion_panel_motion_grid(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
-    presence: &AccordionPanelPresenceHandle,
+    presence: &CollapsePanelPresence,
 ) -> LayoutStatus {
-    let phase = accordion_panel_phase(presence);
+    let phase = presence.phase();
     if !phase.is_mounted() {
         let mut layout = false;
         if el.style.display != Display::None {
@@ -857,20 +513,8 @@ fn apply_accordion_panel_motion_grid(
     let open_visual = phase == PresencePhase::Present && !exiting;
     let mut layout = apply_grid_panel_shell(el);
 
-    let (needs_enter, needs_exit_anim) = {
-        let mut c = presence.cell.borrow_mut();
-        let needs_enter = c.needs_enter;
-        let needs_exit_anim = c.needs_exit_anim;
-        if needs_enter && open_visual {
-            c.enter_active = true;
-        }
-        if needs_exit_anim && exiting {
-            c.needs_exit_anim = false;
-        }
-        (needs_enter, needs_exit_anim)
-    };
-
-    let exit_armed = presence.cell.borrow().exit_armed;
+    let (needs_enter, needs_exit_anim) = presence.begin_frame_flags(open_visual, exiting);
+    let exit_armed = presence.exit_armed();
     if exiting && (needs_exit_anim || (!accordion_has_grid_exit(el) && exit_armed)) {
         let from = first_track_fr(&el.style.grid_template_rows)
             .unwrap_or(1.0)
@@ -893,13 +537,13 @@ fn apply_accordion_panel_motion_grid(
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
-        finish_accordion_panel_exit(presence);
+        presence.finish_exit();
         crate::app::damage::push_frame_paint_damage(el.layout_bounds);
         return LayoutStatus::LayoutChanged;
     }
 
     if open_visual && needs_enter {
-        presence.cell.borrow_mut().needs_enter = false;
+        presence.clear_needs_enter();
         seed_accordion_grid_fr(el, 0.0, 1.0, TimingFunction::EaseOut);
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
@@ -922,7 +566,7 @@ fn apply_accordion_panel_motion_grid(
             set_first_track_fr(&mut el.style.grid_template_rows, 1.0);
             layout = true;
         }
-        presence.cell.borrow_mut().enter_active = false;
+        presence.clear_enter_active();
     }
 
     if layout && el.layout_node.is_some() {
@@ -1597,16 +1241,19 @@ mod tests {
         el.layout_bounds = [0.0, 0.0, 100.0, 48.0];
         let bounds = el.layout_bounds;
         el.used_layout.stamp_border_box(bounds, false);
-        seed_accordion_exit_anim(&mut el);
+        crate::utils::collapse_panel::seed_collapse_exit_anim(
+            &mut el,
+            crate::utils::CollapseKeyframes::ACCORDION,
+        );
         assert!(
-            animation_run_active(&el.style, &el.animation_snapshot),
+            crate::style::animation_run_active(&el.style, &el.animation_snapshot),
             "fresh accordion-up must count as animating"
         );
         for _ in 0..20 {
             let _ = el.tick_css_animations(0.016);
         }
         assert!(
-            !animation_run_active(&el.style, &el.animation_snapshot),
+            !crate::style::animation_run_active(&el.style, &el.animation_snapshot),
             "finished accordion-up must not keep LayoutChanged pumping"
         );
     }
@@ -1727,24 +1374,24 @@ mod tests {
             let p = use_accordion_panel_presence("acc_enter_measure");
             sync_accordion_panel_presence(&p, false);
             sync_accordion_panel_presence(&p, true);
-            assert!(p.cell.borrow().needs_enter);
+            assert!(p.needs_enter());
             let mut el = Element::new();
             el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
             let mut tree = LayoutTree::new();
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
             assert!(
-                p.cell.borrow().needs_enter,
+                p.needs_enter(),
                 "must keep needs_enter until height is known"
             );
             assert!(
-                !el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
+                !el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "must not seed down with 0 height"
             );
             el.layout_bounds = [0.0, 0.0, 100.0, 64.0];
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
-            assert!(!p.cell.borrow().needs_enter);
+            assert!(!p.needs_enter());
             assert!(
-                el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
+                el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "first real expand must run accordion-down"
             );
         });
@@ -1765,17 +1412,17 @@ mod tests {
             let p = use_accordion_panel_presence("acc_enter_grid_fr");
             sync_accordion_panel_presence(&p, false);
             sync_accordion_panel_presence(&p, true);
-            assert!(p.cell.borrow().needs_enter);
+            assert!(p.needs_enter());
             let mut el = Element::new();
             el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
             let mut tree = LayoutTree::new();
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
             assert!(
-                !p.cell.borrow().needs_enter,
+                !p.needs_enter(),
                 "grid-fr must not wait for used height"
             );
             assert!(
-                !el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
+                !el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "grid-fr path must not seed accordion-down"
             );
             assert_eq!(el.style.display, Display::Grid);

@@ -75,7 +75,7 @@ pub use crate::app::{run, run_with, WindowBackdrop, WindowOptions};
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
-pub use crate::core::tree::{collect_ui, Element, LayoutStatus};
+pub use crate::core::tree::{collect_ui, Element, LayoutStatus, PointerEvents};
 
 // ---------------------------------------------------------------------------
 // 布局 / 叶子原语（Builder 面常用）
@@ -108,10 +108,16 @@ pub use crate::utils::{
 // ---------------------------------------------------------------------------
 
 pub use crate::style::{
-    classes, clear_theme_overrides, get_theme, install_theme_overrides, is_dark_theme,
-    load_and_install_theme_overrides, load_theme_overrides, set_theme_mode, theme_mode,
-    toggle_theme_mode, ClassPart, DesignTokensPatch, FocusRingStyle, Theme, ThemeMode,
-    ThemeOverrides,
+    apply_style_file_batch, apply_stylesheet_rules, apply_stylesheet_rules_tree, apply_theme_patch,
+    classes, clear_stylesheets,
+    clear_theme_overrides, collect_matching_rules, get_theme, install_theme_overrides,
+    is_dark_theme, load_and_install_theme_overrides, load_stylesheet, load_theme_overrides,
+    parse_stylesheet, parse_theme_overrides_str, register_stylesheet, reload_stylesheets,
+    set_theme_mode, theme_mode, toggle_theme_mode, watch_stylesheets, ClassPart, DesignTokensPatch,
+    FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow,
+    IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule, Stylesheet,
+    StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError, ThemeOverrides,
+    TRANSPARENT,
 };
 
 // ---------------------------------------------------------------------------
@@ -639,6 +645,8 @@ pub use crate::components::{
     BarChartProps,
     Button,
     ButtonBuilder,
+    ButtonSize,
+    ButtonVariant,
     // ButtonGroup（复合）
     ButtonGroup,
     ButtonGroupBuilder,
@@ -1152,6 +1160,8 @@ pub use crate::components::{
     ScrollbarBuilder,
     ScrollbarOrientation,
     ScrollbarProps,
+    ScrollbarVariant,
+    ScrollbarVisibility,
     Select,
     SelectBuilder,
     SelectContentOpts,
@@ -1332,6 +1342,8 @@ pub use crate::components::{
     ToasterProps,
     Toggle,
     ToggleBuilder,
+    ToggleSize,
+    ToggleVariant,
     ToggleGroup,
     ToggleGroupBuilder,
     ToggleGroupCtx,

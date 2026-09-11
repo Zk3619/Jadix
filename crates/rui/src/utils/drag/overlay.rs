@@ -10,22 +10,27 @@
 
 use std::rc::Rc;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::core::reactivity::{isolate_reads, Signal};
+use crate::core::reactivity::{isolate_reads, with_child_owner, Signal};
 use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutStatus, UnitSlot};
 use crate::layout::{dim_kind, dim_length_px, DimKind};
+use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
 use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
 
-use super::builder::{clone_source_preview, require_drag, source_preview_item, DragItemCtx};
+use super::builder::{
+    clone_source_preview, provide_drag_ctx, require_drag, source_preview_item, DragCtx, DragItemCtx,
+};
 use super::geometry::OverlayAlign;
 use super::session::{
-    active_drag_ids, mark_overlay_registered, remember_overlay_ghost_extent, with_scope,
+    active_drag_ids, mark_overlay_registered, overlay_center_origin_now,
+    overlay_origin_after_ghost_measure, peek_restrict_clip, remember_overlay_ghost_extent,
+    with_scope,
 };
 use super::{
     ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE, ATTR_DRAG_GROUP,
     ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
-    ATTR_DRAG_OVER, ATTR_DRAG_OVERLAY, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_OVER, ATTR_DRAG_OVERLAY, ATTR_DRAG_OVERLAY_CLIP, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 /// Pin the ghost at viewport `origin` (item top-left, already grab-offset).
@@ -38,62 +43,304 @@ use super::{
 /// clones pin `drag_extent` so `w=100%` does not resolve against the portal CB;
 /// a custom overlay child keeps its author size (stretching a chip to the Handle
 /// row is the huge empty slab).
-fn place_drag_ghost(mut panel: Element, ghost_id: &str, origin: [f32; 2]) -> Element {
-    panel.set_attr(ATTR_FLOATING, ghost_id);
-    panel.set_attr(ATTR_DRAG_OVERLAY, "1");
-    panel.set_attr(crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP, "1");
-    // Rotate (Gallery 四角) paints outside the layout box; hidden overflow clips the ghost
-    // to nothing until the next origin write.
+///
+/// `clip` (`RestrictOverflow::Hidden`): wrap in a viewport clip shell so rotation
+/// / center-anchor corners do not paint past the restrict box. Inner ghost is
+/// `absolute` (not `fixed`) so it does not escape the shell's overflow.
+fn place_drag_ghost(
+    mut panel: Element,
+    ghost_id: &str,
+    origin: [f32; 2],
+    clip: Option<[f32; 4]>,
+) -> Element {
     panel.style.overflow.x = taffy::style::Overflow::Visible;
     panel.style.overflow.y = taffy::style::Overflow::Visible;
-    panel
-        .pointer_events_none()
-        .fixed()
-        .left(origin[0])
-        .top(origin[1])
+    if let Some(bbox) = clip.filter(|b| b[2] > 0.5 && b[3] > 0.5) {
+        // Inner is `absolute` and must not carry `ATTR_DRAG_OVERLAY`: the heap
+        // walk in `sync_overlay_ghost_insets` would rewrite relative inset with
+        // the viewport origin.
+        panel = panel
+            .pointer_events_none()
+            .absolute()
+            .left(origin[0] - bbox[0])
+            .top(origin[1] - bbox[1]);
+        let mut shell = Element::new()
+            .pointer_events_none()
+            .fixed()
+            .left(bbox[0])
+            .top(bbox[1])
+            .w(bbox[2])
+            .h(bbox[3])
+            .overflow("hidden")
+            .child(panel);
+        shell.set_attr(ATTR_FLOATING, ghost_id);
+        shell.set_attr(ATTR_DRAG_OVERLAY, "1");
+        shell.set_attr(ATTR_DRAG_OVERLAY_CLIP, "1");
+        shell.set_attr(crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+        shell
+    } else {
+        panel.set_attr(ATTR_FLOATING, ghost_id);
+        panel.set_attr(ATTR_DRAG_OVERLAY, "1");
+        panel.set_attr(crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+        panel
+            .pointer_events_none()
+            .fixed()
+            .left(origin[0])
+            .top(origin[1])
+    }
+}
+
+fn write_len(el: &mut Element, slot: UnitSlot, v: f32) -> bool {
+    let same = match slot {
+        UnitSlot::Width => dim_length_px(el.style.size.width).is_some_and(|x| (x - v).abs() < 0.01),
+        UnitSlot::Height => {
+            dim_length_px(el.style.size.height).is_some_and(|x| (x - v).abs() < 0.01)
+        }
+        UnitSlot::InsetL => {
+            lpa_length_px(el.style.inset.left).is_some_and(|x| (x - v).abs() < 0.01)
+        }
+        UnitSlot::InsetT => lpa_length_px(el.style.inset.top).is_some_and(|x| (x - v).abs() < 0.01),
+        _ => return false,
+    };
+    if same {
+        return false;
+    }
+    el.style.set_css_dim(slot, v.into_css_dim());
+    true
 }
 
 /// Write `fixed` left/top without reconstructing the ghost. Returns whether inset changed.
 fn write_ghost_origin(el: &mut Element, origin: [f32; 2]) -> bool {
-    let same_x = lpa_length_px(el.style.inset.left).is_some_and(|x| (x - origin[0]).abs() < 0.01);
-    let same_y = lpa_length_px(el.style.inset.top).is_some_and(|y| (y - origin[1]).abs() < 0.01);
-    if same_x && same_y {
-        return false;
-    }
-    el.style
-        .set_css_dim(UnitSlot::InsetL, origin[0].into_css_dim());
-    el.style
-        .set_css_dim(UnitSlot::InsetT, origin[1].into_css_dim());
-    true
+    let dx = write_len(el, UnitSlot::InsetL, origin[0]);
+    let dy = write_len(el, UnitSlot::InsetT, origin[1]);
+    dx || dy
 }
 
-/// Pointer chrome: `overlay_pos` must not subscribe the island (that remounts
-/// `clone_source_preview` every move). Same contract as sortable item chrome.
-///
-/// Author `.style()` (Gallery `rotate={last_pointer…}`) is sampled here so tilt
-/// follows the pointer without remounting. Island rebuild only sees `open` /
-/// `active` / `extent`.
-fn follow_overlay_pos(
+fn write_clip_shell(el: &mut Element, bbox: [f32; 4], origin: [f32; 2]) -> bool {
+    let mut changed = write_ghost_origin(el, [bbox[0], bbox[1]]);
+    changed = write_len(el, UnitSlot::Width, bbox[2]) || changed;
+    changed = write_len(el, UnitSlot::Height, bbox[3]) || changed;
+    if let Some(inner) = el.children.first_mut() {
+        changed = write_ghost_origin(inner, [origin[0] - bbox[0], origin[1] - bbox[1]]) || changed;
+    }
+    changed
+}
+
+fn paint_target(el: &mut Element) -> &mut Element {
+    if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() && !el.children.is_empty() {
+        &mut el.children[0]
+    } else {
+        el
+    }
+}
+
+/// After Taffy measured an auto-sized Center ghost, pin paint origin to the
+/// live pointer in the same collect (inset + `overlay_pos`). Clip shells keep
+/// the restrict box; their size is not the chip.
+pub(crate) fn adjust_overlay_collect_origin(
+    el: &mut Element,
+    measured: [f32; 2],
+) -> Option<[f32; 2]> {
+    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none()
+        || el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some()
+    {
+        return None;
+    }
+    let scope = el
+        .attrs
+        .get(ATTR_FLOATING)?
+        .strip_suffix("__ghost")?
+        .to_string();
+    let origin = overlay_origin_after_ghost_measure(&scope, measured)?;
+    write_ghost_origin(el, origin);
+    Some(origin)
+}
+
+const ATTR_GHOST_FOR: &str = "rui_drag_ghost_for";
+
+fn build_ghost_body(
+    custom: &Option<Rc<dyn Fn() -> Element>>,
+    body_for: &Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    decorate: &Option<Rc<dyn Fn(Element) -> Element>>,
+    source_id: Option<String>,
+    scope_id: &str,
+    ghost_id: &str,
+    extent: [f32; 2],
+    drag_ctx: &DragCtx,
+) -> Element {
+    with_child_owner(|| {
+        provide_drag_ctx(drag_ctx.clone());
+        build_ghost_body_inner(
+            custom, body_for, decorate, source_id, scope_id, ghost_id, extent,
+        )
+    })
+}
+
+fn build_ghost_body_inner(
+    custom: &Option<Rc<dyn Fn() -> Element>>,
+    body_for: &Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    decorate: &Option<Rc<dyn Fn(Element) -> Element>>,
+    source_id: Option<String>,
+    scope_id: &str,
+    ghost_id: &str,
+    extent: [f32; 2],
+) -> Element {
+    let following_source = custom.is_none() && body_for.is_none();
+    let mut panel = if let Some(for_item) = body_for {
+        match source_id.as_deref() {
+            Some(id) => {
+                let item = source_preview_item(scope_id, id).unwrap_or_else(|| DragItemCtx {
+                    id: id.to_string(),
+                    scope_id: scope_id.to_string(),
+                    list: None,
+                    index: None,
+                    item_type: String::new(),
+                    group: String::new(),
+                });
+                isolate_reads(|| for_item(&item))
+            }
+            None => Element::new().w(0.0).h(0.0),
+        }
+    } else if let Some(body) = custom {
+        isolate_reads(|| body())
+    } else if let Some(id) = source_id.as_deref() {
+        isolate_reads(|| {
+            let ids = active_drag_ids();
+            if ids.len() > 1 {
+                stacked_ghost_panel(scope_id, &ids)
+            } else {
+                clone_source_preview(scope_id, id).unwrap_or_else(Element::new)
+            }
+        })
+    } else {
+        Element::new().w(0.0).h(0.0)
+    };
+    strip_source_session_attrs(&mut panel);
+    suffix_ghost_ids(&mut panel, ghost_id);
+    if following_source {
+        let ids = active_drag_ids();
+        if ids.len() <= 1 {
+            panel = pin_percent_size_to_extent(panel, extent);
+        }
+    }
+    if let Some(dec) = decorate {
+        panel = dec(panel);
+    }
+    if let (Some(w), Some(h)) = (
+        dim_length_px(panel.style.size.width),
+        dim_length_px(panel.style.size.height),
+    ) {
+        remember_overlay_ghost_extent(scope_id, [w, h]);
+    }
+    panel
+}
+
+/// The portal node *is* [`place_drag_ghost`] output — same as remount, without
+/// `try_reconcile`. Grafting a clone onto a previously laid-out 0×0 host
+/// (`adopt`) keeps `used_layout` / border-box at a point; close then leaves
+/// that bordered pill on the layer.
+fn write_placed_ghost(
+    host: &mut Element,
+    body: Element,
+    ghost_id: &str,
+    origin: [f32; 2],
+    clip: Option<[f32; 4]>,
+) {
+    let sync = host.reactive_sync.take();
+    let z = host.style.z_index;
+    let portal_key = host.attrs.get(ATTR_PORTAL_KEY).cloned();
+    let portal = host.attrs.get("rui_portal").cloned();
+    let portal_mount = host.attrs.get(ATTR_PORTAL_MOUNT).cloned();
+    *host = place_drag_ghost(body, ghost_id, origin, clip);
+    host.reactive_sync = sync;
+    if z != 0 {
+        host.style.z_index = z;
+    }
+    if let Some(k) = portal_key {
+        host.set_attr(ATTR_PORTAL_KEY, k);
+    }
+    if let Some(v) = portal {
+        host.set_attr("rui_portal", v);
+    }
+    if let Some(m) = portal_mount {
+        host.set_attr(ATTR_PORTAL_MOUNT, m);
+    }
+}
+
+/// Paint-time ghost body + origin. The island itself must not remount on
+/// `overlay_open`: `try_reconcile_subtree` misses when AppState is borrowed
+/// (pointerdown / first activating move), and source chrome already hid the body.
+fn sync_drag_overlay_ghost(
     panel: Element,
+    open: Signal<bool>,
     pos: Signal<[f32; 2]>,
+    active: Signal<Option<String>>,
+    extent: Signal<[f32; 2]>,
+    scope_id: String,
+    ghost_id: String,
+    custom: Option<Rc<dyn Fn() -> Element>>,
+    body_for: Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
     decorate: Option<Rc<dyn Fn(Element) -> Element>>,
+    drag_ctx: DragCtx,
 ) -> Element {
     panel.reactive_sync(move |el, _| {
         let mut changed = LayoutStatus::Clean;
-        if write_ghost_origin(el, pos.peek()) {
-            changed = changed.merge(LayoutStatus::LayoutChanged);
-        }
-        if let Some(dec) = &decorate {
-            let sample = dec(Element::new());
-            if (el.style.rotate_deg - sample.style.rotate_deg).abs() > 0.01 {
-                el.style.rotate_deg = sample.style.rotate_deg;
-                changed = changed.merge(LayoutStatus::StyleChanged);
+        let is_open = open.peek();
+        let source_id = active.peek();
+        let clip = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5);
+        let want_clip = is_open && clip.is_some();
+        let have_clip = el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some();
+        let body_key = if !is_open {
+            String::new()
+        } else if let Some(id) = &source_id {
+            id.clone()
+        } else {
+            "__open__".to_string()
+        };
+        let have = el.attrs.get(ATTR_GHOST_FOR).cloned().unwrap_or_default();
+        if body_key != have || want_clip != have_clip {
+            if body_key.is_empty() {
+                write_placed_ghost(el, Element::new(), &ghost_id, pos.peek(), None);
+            } else {
+                let body = build_ghost_body(
+                    &custom,
+                    &body_for,
+                    &decorate,
+                    source_id,
+                    &scope_id,
+                    &ghost_id,
+                    extent.peek(),
+                    &drag_ctx,
+                );
+                write_placed_ghost(el, body, &ghost_id, pos.peek(), clip);
+                el.set_attr(ATTR_GHOST_FOR, body_key);
             }
+            // New Element tree, no `layout_node`. LayoutChanged would keep the
+            // empty host's 0×0 Taffy box (bordered radius → a leftover dot).
+            changed = changed.merge(LayoutStatus::StructureChanged);
         }
-        // First open: portal hoist can leave a 0×0 box. Origin often does not
-        // change on press, so a LayoutChanged here is the only relayout.
-        if el.layout_bounds[2] < 1.0 || el.layout_bounds[3] < 1.0 {
+        let origin = pos.peek();
+        let moved = if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+            if let Some(bbox) = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5) {
+                write_clip_shell(el, bbox, origin)
+            } else {
+                write_ghost_origin(el, origin)
+            }
+        } else {
+            write_ghost_origin(el, origin)
+        };
+        if moved {
             changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
+        if is_open {
+            if let Some(dec) = &decorate {
+                let sample = dec(Element::new());
+                let target = paint_target(el);
+                if (target.style.rotate_deg - sample.style.rotate_deg).abs() > 0.01 {
+                    target.style.rotate_deg = sample.style.rotate_deg;
+                    changed = changed.merge(LayoutStatus::StyleChanged);
+                }
+            }
         }
         changed
     })
@@ -105,12 +352,35 @@ pub(crate) fn sync_overlay_ghost_insets(el: &mut Element) {
     while let Some(ptr) = stack.pop() {
         let el = unsafe { &mut *ptr };
         if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
+            if let Some(scope) = el
+                .attrs
+                .get(ATTR_FLOATING)
+                .and_then(|fid| fid.strip_suffix("__ghost"))
+                .map(str::to_string)
+            {
+                if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_none() {
+                    let [_, _, w, h] = el.layout_bounds;
+                    if w > 1.0 && h > 1.0 {
+                        remember_overlay_ghost_extent(&scope, [w, h]);
+                    }
+                }
+            }
             let origin = el.attrs.get(ATTR_FLOATING).cloned().and_then(|fid| {
-                fid.strip_suffix("__ghost")
-                    .and_then(super::session::peek_overlay_pos)
+                fid.strip_suffix("__ghost").and_then(|scope| {
+                    overlay_center_origin_now(scope)
+                        .or_else(|| super::session::peek_overlay_pos(scope))
+                })
             });
             if let Some(p) = origin {
-                write_ghost_origin(el, p);
+                if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+                    if let Some(bbox) = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5) {
+                        write_clip_shell(el, bbox, p);
+                    } else {
+                        write_ghost_origin(el, p);
+                    }
+                } else if el.style.position_fixed {
+                    write_ghost_origin(el, p);
+                }
             }
         }
         let n = el.children.len();
@@ -138,7 +408,7 @@ fn pin_percent_size_to_extent(mut panel: Element, extent: [f32; 2]) -> Element {
 /// Default (no [`Self::child`]): the ghost is the active draggable's author body.
 /// [`Self::style`] is applied on top of that clone (or on a custom child).
 pub struct DragOverlayBuilder {
-    body: Option<Box<dyn Fn() -> Element>>,
+    body: Option<Rc<dyn Fn() -> Element>>,
     body_for: Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
     decorate: Option<Rc<dyn Fn(Element) -> Element>>,
     /// Source-island opacity while this overlay is open. Applied to the **body**,
@@ -149,7 +419,7 @@ pub struct DragOverlayBuilder {
 
 impl DragOverlayBuilder {
     pub fn child(mut self, body: impl Fn() -> Element + 'static) -> Self {
-        self.body = Some(Box::new(body));
+        self.body = Some(Rc::new(body));
         self
     }
 
@@ -160,7 +430,8 @@ impl DragOverlayBuilder {
         self
     }
 
-    /// Ghost origin vs the source box. Default [`OverlayAlign::Grab`].
+    /// Ghost origin vs the pointer. Default [`OverlayAlign::Grab`].
+    /// [`OverlayAlign::Center`] pins the ghost midpoint to the pointer.
     pub fn align(mut self, align: OverlayAlign) -> Self {
         self.align = align;
         self
@@ -263,81 +534,36 @@ impl From<DragOverlayBuilder> for Element {
         let ghost_id = format!("{}__ghost", ctx.id);
 
         reactive_anchor(view_id.clone(), move || {
-            // Subscribe before portal_sync: Pinned + closed returns None via peek,
-            // so a skipped `.get()` would never re-run when the drag activates
-            // (date_picker panel island, same contract).
-            // Do **not** subscribe `overlay_pos`: every pointer / autoscroll tick
-            // would remount this island (`clone_source_preview` + portal_sync).
-            let is_open = open.get();
-            let source_id = active.get();
-            if !is_open {
-                let _ = portal_sync(
-                    ghost_id.as_str(),
-                    open,
-                    OverlayKind::Popover,
-                    OverlayMode::Pinned,
-                );
-                return Element::new().w(0.0).h(0.0);
-            }
-            let Some(oz) = portal_sync(
+            // Mount the portal host once. Do **not** subscribe `open` / `active` /
+            // `overlay_pos`: remount-on-open races AppState `try_borrow_mut`
+            // (pointerdown / first activating move) and leaves source_opacity=0
+            // with no stand-in. Body + origin are paint (`sync_drag_overlay_ghost`).
+            let _ = portal_sync(
                 ghost_id.as_str(),
                 open,
                 OverlayKind::Popover,
                 OverlayMode::Pinned,
-            ) else {
-                return Element::new().w(0.0).h(0.0);
-            };
-            let following_source = custom.is_none() && body_for.is_none();
-            let mut panel = if let Some(for_item) = &body_for {
-                match source_id.as_deref() {
-                    Some(id) => {
-                        let item =
-                            source_preview_item(&scope_id, id).unwrap_or_else(|| DragItemCtx {
-                                id: id.to_string(),
-                                scope_id: scope_id.clone(),
-                                list: None,
-                                index: None,
-                                item_type: String::new(),
-                                group: String::new(),
-                            });
-                        isolate_reads(|| for_item(&item))
-                    }
-                    None => Element::new().w(0.0).h(0.0),
-                }
-            } else if let Some(body) = &custom {
-                isolate_reads(|| body())
-            } else if let Some(id) = source_id.as_deref() {
-                isolate_reads(|| {
-                    let ids = active_drag_ids();
-                    if ids.len() > 1 {
-                        stacked_ghost_panel(&scope_id, &ids)
-                    } else {
-                        clone_source_preview(&scope_id, id).unwrap_or_else(Element::new)
-                    }
-                })
-            } else {
-                Element::new().w(0.0).h(0.0)
-            };
-            strip_source_session_attrs(&mut panel);
-            suffix_ghost_ids(&mut panel, ghost_id.as_str());
-            if following_source {
-                let ids = active_drag_ids();
-                if ids.len() <= 1 {
-                    panel = pin_percent_size_to_extent(panel, extent.get());
-                }
-            }
-            if let Some(dec) = &decorate {
-                panel = dec(panel);
-            }
-            if let (Some(w), Some(h)) = (
-                dim_length_px(panel.style.size.width),
-                dim_length_px(panel.style.size.height),
-            ) {
-                remember_overlay_ghost_extent(&scope_id, [w, h]);
-            }
-            panel = place_drag_ghost(panel, ghost_id.as_str(), pos.peek());
-            panel = follow_overlay_pos(panel, pos, decorate.clone());
-            mount_anchored_overlay(panel, oz.panel)
+            );
+            let mut panel = place_drag_ghost(
+                Element::new(),
+                ghost_id.as_str(),
+                pos.peek(),
+                None,
+            );
+            panel = sync_drag_overlay_ghost(
+                panel,
+                open,
+                pos,
+                active,
+                extent,
+                scope_id.clone(),
+                ghost_id.clone(),
+                custom.clone(),
+                body_for.clone(),
+                decorate.clone(),
+                ctx.clone(),
+            );
+            mount_anchored_overlay(panel, pinned_overlay_z().panel)
         });
         reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
     }
@@ -360,6 +586,8 @@ pub fn drag_overlay_from_rsx(body: impl Fn() -> Element + 'static) -> Element {
 
 #[cfg(test)]
 mod tests {
+    extern crate self as rui;
+
     use super::*;
     use crate::core::reactivity::{create_render_effect, create_root, Signal};
     use crate::utils::popup::{ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT};
@@ -425,6 +653,748 @@ mod tests {
         });
     }
 
+    /// Press at threshold 0 must mount the overlay ghost *and* dim/hide the
+    /// source in the same chrome pass. A second mousemove used to be required
+    /// Press must not apply `source_opacity` / overlay — `0` would erase the
+    /// chip before a ghost exists. First movement opens the ghost immediately.
+    #[test]
+    fn press_keeps_source_first_move_shows_ghost() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, droppable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-press").threshold(0.0).child(move || {
+                let chip = draggable("chip")
+                    .item_type("chip")
+                    .source_opacity(0.0)
+                    .child(|| Element::new().text("src").w(80.0).h(32.0));
+                let zone = droppable("inbox").accept("chip").child(|| {
+                    Element::new()
+                        .w(120.0)
+                        .h(48.0)
+                        .text("drop")
+                });
+                let overlay: Element = drag_overlay().source_opacity(0.0).into();
+                Element::from(vstack().children([chip, zone, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid.clone(),
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(
+            !tick(40.0, 16.0, &[], [800.0, 600.0]),
+            "press stays pending so source_opacity=0 cannot erase the chip"
+        );
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let src = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                src.style.opacity > 0.5,
+                "press must leave the source at rest opacity; opacity={}",
+                src.style.opacity
+            );
+            if let Some(ghost) = find_ghost(&tree) {
+                assert!(
+                    ghost.layout_bounds[2] < 1.0 && ghost.layout_bounds[3] < 1.0,
+                    "ghost must stay an empty host on press; bounds={:?}",
+                    ghost.layout_bounds
+                );
+            }
+        }
+        assert!(
+            tick(41.0, 16.0, &[], [800.0, 600.0]),
+            "first movement opens the overlay immediately"
+        );
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("overlay host");
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 10.0,
+                "ghost must have size on the first drag attempt; bounds={:?}",
+                ghost.layout_bounds
+            );
+            let src = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                src.style.opacity <= 0.001,
+                "source_opacity 0 applies once the ghost is up; opacity={}",
+                src.style.opacity
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Custom overlay child: same press / first-move contract as the default clone.
+    #[test]
+    fn press_without_move_mounts_custom_ghost() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-press-custom").threshold(0.0).child(move || {
+                let chip = draggable("chip")
+                    .item_type("chip")
+                    .source_opacity(0.0)
+                    .child(|| Element::new().text("源卡片").w(80.0).h(32.0));
+                let overlay: Element = drag_overlay()
+                    .source_opacity(0.0)
+                    .child(|| Element::new().text("自定义替身").w(80.0).h(32.0))
+                    .into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(!tick(40.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let src = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                src.style.opacity > 0.5,
+                "press must keep the custom-demo source visible; opacity={}",
+                src.style.opacity
+            );
+        }
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("custom overlay host");
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            assert!(
+                texts.iter().any(|t| t == "自定义替身"),
+                "custom ghost must paint on the first drag attempt; texts={texts:?} bounds={:?}",
+                ghost.layout_bounds
+            );
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 10.0,
+                "custom ghost must have size on first move; bounds={:?}",
+                ghost.layout_bounds
+            );
+            let src = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                src.style.opacity <= 0.001,
+                "source_opacity 0 applies once the ghost is up; opacity={}",
+                src.style.opacity
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Production pointerdown holds AppState, so `try_reconcile_subtree` misses.
+    /// The ghost must still appear on the first paint walk (no remount, no drain).
+    #[test]
+    fn activate_paints_ghost_when_reconcile_misses() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-miss").threshold(0.0).child(move || {
+                let chip = draggable("chip")
+                    .item_type("chip")
+                    .source_opacity(0.0)
+                    .child(|| Element::new().text("src").w(80.0).h(32.0));
+                let overlay: Element = drag_overlay().source_opacity(0.0).into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        clear_test_reconcile_root();
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        install_test_reconcile_root(std::rc::Rc::clone(&live));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("host");
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 10.0,
+                "ghost must paint without a reconcile remount; bounds={:?}",
+                ghost.layout_bounds
+            );
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            assert!(
+                texts.iter().any(|t| t.contains("src")),
+                "ghost body missing after paint-only fill; texts={texts:?}"
+            );
+            let src = find_draggable(&tree, "chip").expect("source");
+            assert!(src.style.opacity <= 0.001);
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery `card_chip`: auto-sized chip (padding / border / text, no w×h).
+    /// Page layout measures the empty overlay host first; the ghost must be
+    /// `place_drag_ghost(clone)`, not a 0×0 bordered pill grafted onto that host.
+    #[test]
+    fn gallery_auto_chip_ghost_is_not_a_dot() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-gallery-chip").threshold(0.0).child(move || {
+                let chip = draggable("chip").item_type("chip").child(|| {
+                    Element::new()
+                        .text("可拖卡片")
+                        .p(8.0)
+                        .rounded(8.0)
+                        .border_style("solid")
+                        .border_width(1.0)
+                });
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            assert!(
+                texts.iter().any(|t| t.contains("可拖卡片")),
+                "ghost must clone chip text, not an empty bordered shell; texts={texts:?}"
+            );
+            assert!(
+                ghost.layout_bounds[2] > 40.0 && ghost.layout_bounds[3] > 16.0,
+                "auto chip must not collapse to a border-radius dot; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("closed host");
+            assert!(
+                ghost.style.border_width < 0.01
+                    && ghost.layout_bounds[2] < 1.0
+                    && ghost.layout_bounds[3] < 1.0,
+                "closed host must be an empty placement shell; bounds={:?} border={}",
+                ghost.layout_bounds,
+                ghost.style.border_width
+            );
+        }
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery `card_chip`: HStack + Icon + Label, no w×h.
+    /// Leaf `.text().p()` staying green does not cover this path — the live
+    /// symptom is a bordered radius dot with no chip text.
+    #[test]
+    fn gallery_hstack_icon_label_ghost_is_not_a_dot() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::components::{Label, LabelProps};
+        use crate::primitives::vstack;
+        use crate::ui;
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
+
+        fn card_chip(label: &str) -> Element {
+            ui! {
+                <HStack
+                    p="0.5rem 0.65rem"
+                    gap="0.5rem"
+                    items="center"
+                    rounded="0.5rem"
+                    border_style="solid"
+                    border_width="1px"
+                    border_color="border"
+                    cursor="grab"
+                    bg="transparent"
+                >
+                    <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
+                    <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
+                </HStack>
+            }
+        }
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-gallery-card-chip").threshold(0.0).child(move || {
+                let chip = draggable("chip").item_type("chip").child(|| card_chip("可拖卡片"));
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            let kids = ghost.children.len();
+            let [_, _, w, h] = ghost.layout_bounds;
+            assert!(
+                texts.iter().any(|t| t.contains("可拖卡片")),
+                "hstack+icon+label ghost must clone chip text, not an empty bordered shell; texts={texts:?} kids={kids} bounds={:?} border={}",
+                ghost.layout_bounds,
+                ghost.style.border_width
+            );
+            assert!(
+                w > 40.0 && h >= 14.0,
+                "auto card_chip must hug cloned content, not collapse to a border-radius dot; bounds={:?}",
+                ghost.layout_bounds
+            );
+            assert!(
+                w < 200.0,
+                "auto card_chip must not inherit the stretched parent box; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Product path: idle full layout, then `write_placed_ghost` + `build_and_layout_fast`.
+    /// `hoist_and_layout` (`LayoutTree::new` + full rebuild) stays green while Gallery
+    /// paints a bordered radius dot — the clone has no `layout_node` and fast path
+    /// keeps the empty host's 0×0 Taffy box.
+    #[test]
+    fn gallery_card_chip_ghost_is_not_a_dot_on_appstate_fast_path() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::components::{Label, LabelProps};
+        use crate::primitives::vstack;
+        use crate::ui;
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
+
+        fn card_chip(label: &str) -> Element {
+            ui! {
+                <HStack
+                    p="0.5rem 0.65rem"
+                    gap="0.5rem"
+                    items="center"
+                    rounded="0.5rem"
+                    border_style="solid"
+                    border_width="1px"
+                    border_color="border"
+                    cursor="grab"
+                    bg="transparent"
+                >
+                    <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
+                    <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
+                </HStack>
+            }
+        }
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-gallery-fast-chip").threshold(0.0).child(move || {
+                let chip = draggable("chip").item_type("chip").child(|| card_chip("可拖卡片"));
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let mut lt = crate::layout::LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout_persisted(&mut lt, &mut tree, false);
+            let ghost = find_ghost(&tree).expect("idle host");
+            assert!(
+                ghost.layout_bounds[2] < 1.0 && ghost.layout_bounds[3] < 1.0,
+                "idle overlay host must be an empty 0×0 shell; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout_persisted(&mut lt, &mut tree, true);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            let kids = ghost.children.len();
+            let [_, _, w, h] = ghost.layout_bounds;
+            assert!(
+                texts.iter().any(|t| t.contains("可拖卡片")),
+                "fast-path ghost must clone chip text, not an empty bordered shell; texts={texts:?} kids={kids} bounds={:?} border={}",
+                ghost.layout_bounds,
+                ghost.style.border_width
+            );
+            assert!(
+                w > 40.0 && h >= 14.0,
+                "fast-path auto card_chip must hug cloned content, not collapse to a border-radius dot; bounds={:?}",
+                ghost.layout_bounds
+            );
+            assert!(
+                w < 200.0,
+                "fast-path auto card_chip must not inherit the stretched parent box; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout_persisted(&mut lt, &mut tree, true);
+            let ghost = find_ghost(&tree).expect("closed host");
+            assert!(
+                ghost.style.border_width < 0.01
+                    && ghost.layout_bounds[2] < 1.0
+                    && ghost.layout_bounds[3] < 1.0,
+                "closed host on the fast path must be an empty placement shell; bounds={:?} border={}",
+                ghost.layout_bounds,
+                ghost.style.border_width
+            );
+        }
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Always-mounted host: close must un-adopt chip chrome. Clearing children
+    /// only leaves a bordered 0-content pill on the portal layer.
+    #[test]
+    fn overlay_close_restores_empty_shell() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-close-shell").threshold(0.0).child(move || {
+                let chip = draggable("chip").item_type("chip").source_opacity(0.0).child(|| {
+                    Element::new()
+                        .text("src")
+                        .w(80.0)
+                        .h(32.0)
+                        .border_style("solid")
+                        .border_width(1.0)
+                        .rounded(8.0)
+                });
+                let overlay: Element = drag_overlay().source_opacity(0.0).into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("open host");
+            assert!(
+                ghost.style.border_width > 0.5,
+                "open ghost must carry the clone border"
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("closed host stays mounted");
+            assert!(
+                ghost.children.is_empty() && ghost.text.is_none(),
+                "closed host must not keep clone children"
+            );
+            assert!(
+                ghost.style.border_width < 0.01,
+                "closed host must not keep adopted border (leftover dot); width={}",
+                ghost.style.border_width
+            );
+            assert!(
+                ghost.layout_bounds[2] < 1.0 && ghost.layout_bounds[3] < 1.0,
+                "closed host must not keep a painted box; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Paint-time clone is not a tracked effect. Nested islands must inline
+    /// their render, not return an empty placeholder.
+    #[test]
+    fn overlay_clone_inlines_nested_island() {
+        use crate::app::reactive::{reactive_view, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-inline-island").threshold(0.0).child(move || {
+                let chip = draggable("chip").item_type("chip").child(|| {
+                    reactive_view("ov-inline-island__lbl", || {
+                        Element::new().text("岛内文案").w(80.0).h(32.0)
+                    })
+                });
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            assert!(
+                texts.iter().any(|t| t.contains("岛内文案")),
+                "clone must inline nested reactive_view; texts={texts:?}"
+            );
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 10.0,
+                "inlined island must keep size; bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Droppable paint chrome (`rui_drag_over`) must flip on the activating press
+    /// tick, not the first mousemove.
+    #[test]
+    fn press_without_move_marks_active_droppable() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, droppable, tick, BeginDrag, DragHit,
+            ATTR_DRAG_OVER,
+        };
+
+        let (_o, live) = mount_scope_tree(move || {
+            drag_scope("ov-press-drop").threshold(0.0).child(move || {
+                let chip = draggable("chip")
+                    .item_type("chip")
+                    .child(|| Element::new().text("src").w(80.0).h(32.0));
+                let zone = droppable("inbox").accept("chip").child(|| {
+                    Element::new().w(200.0).h(80.0).text("drop")
+                });
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, zone, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        let hits = vec![
+            DragHit {
+                id: "chip".into(),
+                scope_id: sid.clone(),
+                is_draggable: true,
+                is_droppable: false,
+                rect: crate::utils::drag::Rect::from_bounds([30.0, 8.0, 80.0, 32.0]),
+                item_type: "chip".into(),
+                accept: String::new(),
+                list_id: None,
+                index: None,
+                group: String::new(),
+                disabled: false,
+                list_axis: None,
+                skip_shift: false,
+                skip_follow: false,
+                pull_clone: false,
+            },
+            DragHit {
+                id: "inbox".into(),
+                scope_id: sid.clone(),
+                is_draggable: false,
+                is_droppable: true,
+                rect: crate::utils::drag::Rect::from_bounds([0.0, 0.0, 200.0, 80.0]),
+                item_type: String::new(),
+                accept: "chip".into(),
+                list_id: Some("inbox".into()),
+                index: None,
+                group: String::new(),
+                disabled: false,
+                list_axis: None,
+                skip_shift: false,
+                skip_follow: false,
+                pull_clone: false,
+            },
+        ];
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: "chip".into(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(!tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            let zone = find_droppable(&tree, "inbox").expect("inbox");
+            assert_ne!(
+                zone.attrs.get(ATTR_DRAG_OVER).map(String::as_str),
+                Some("1"),
+                "droppable chrome must not light on press"
+            );
+        }
+        assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            let zone = find_droppable(&tree, "inbox").expect("inbox");
+            assert_eq!(
+                zone.attrs.get(ATTR_DRAG_OVER).map(String::as_str),
+                Some("1"),
+                "droppable chrome lights on the first drag attempt"
+            );
+        }
+        let _ = crate::utils::drag::end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
     #[test]
     fn overlay_child_for_sees_active_id() {
         use crate::app::reactive::reset_registered_anchors;
@@ -456,7 +1426,7 @@ mod tests {
             }
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -475,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_center_aligns_ghost_to_source_center() {
+    fn overlay_center_aligns_ghost_to_pointer() {
         use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
         let (_o, (pos, ghost)) = create_root(|| {
             let _el: Element = drag_scope("ov-c")
@@ -494,6 +1464,7 @@ mod tests {
                 group: String::new(),
                 capture_id: "cap".into(),
             });
+            remember_overlay_ghost_extent("ov-c", [20.0, 10.0]);
             let hits: [crate::utils::drag::DragHit; 0] = [];
             assert!(tick(30.0, 10.0, &hits, [400.0, 300.0]));
             let pos = super::super::session::peek_overlay_pos("ov-c").unwrap();
@@ -501,16 +1472,71 @@ mod tests {
             (pos, [20.0_f32, 10.0])
         });
         let ghost_c = [pos[0] + ghost[0] * 0.5, pos[1] + ghost[1] * 0.5];
-        let source_c = [8.0 + 20.0 + 20.0, 8.0 + 12.0];
+        let pointer = [30.0_f32, 10.0];
         assert!(
-            (ghost_c[0] - source_c[0]).abs() < 0.5 && (ghost_c[1] - source_c[1]).abs() < 0.5,
-            "center ghost {ghost_c:?} vs source {source_c:?} (origin {pos:?})"
+            (ghost_c[0] - pointer[0]).abs() < 0.5 && (ghost_c[1] - pointer[1]).abs() < 0.5,
+            "center ghost {ghost_c:?} vs pointer {pointer:?} (origin {pos:?})"
         );
     }
 
     #[test]
+    fn overlay_center_pins_autosize_child_for_to_pointer_after_layout() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
+
+        let (_o, live) = mount_scope_tree(|| {
+            drag_scope("ov-c-auto").threshold(0.0).child(|| {
+                let chip = draggable("chip").child(|| Element::new().text("src").w(80.0).h(32.0));
+                let overlay: Element = drag_overlay()
+                    .align(OverlayAlign::Center)
+                    .child_for(|_| Element::new().text("g").p(4.0))
+                    .into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid,
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: String::new(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        let pointer = [70.0_f32, 40.0];
+        assert!(tick(pointer[0], pointer[1], &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("ghost");
+            let [x, y, w, h] = ghost.layout_bounds;
+            assert!(
+                w > 1.0 && h > 1.0,
+                "auto-sized child_for ghost must layout, got {w}x{h}"
+            );
+            let cx = x + w * 0.5;
+            let cy = y + h * 0.5;
+            assert!(
+                (cx - pointer[0]).abs() < 0.5 && (cy - pointer[1]).abs() < 0.5,
+                "ghost center [{cx}, {cy}] vs pointer {pointer:?} bounds={:?}",
+                ghost.layout_bounds
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    #[test]
     fn ghost_pins_viewport_origin_without_point_attr() {
-        let el = place_drag_ghost(Element::new().text("card"), "g1", [120.0, 80.0]);
+        let el = place_drag_ghost(Element::new().text("card"), "g1", [120.0, 80.0], None);
         assert_eq!(el.attrs.get(ATTR_FLOATING).map(String::as_str), Some("g1"));
         assert_eq!(
             el.attrs.get(ATTR_DRAG_OVERLAY).map(String::as_str),
@@ -543,11 +1569,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ghost_clip_shell_wraps_and_offsets_inner() {
+        let el = place_drag_ghost(
+            Element::new().w(40.0).h(24.0).text("card"),
+            "g1",
+            [80.0, 40.0],
+            Some([10.0, 20.0, 200.0, 120.0]),
+        );
+        assert_eq!(
+            el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).map(String::as_str),
+            Some("1")
+        );
+        assert!(el.style.position_fixed);
+        assert_eq!(
+            crate::layout::lpa_length_px(el.style.inset.left),
+            Some(10.0)
+        );
+        assert_eq!(crate::layout::lpa_length_px(el.style.inset.top), Some(20.0));
+        assert_eq!(
+            crate::layout::dim_length_px(el.style.size.width),
+            Some(200.0)
+        );
+        assert_eq!(
+            crate::layout::dim_length_px(el.style.size.height),
+            Some(120.0)
+        );
+        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+        assert_eq!(el.style.overflow.y, taffy::style::Overflow::Hidden);
+        let inner = el.children.first().expect("clip shell wraps the ghost");
+        assert!(inner.attrs.get(ATTR_DRAG_OVERLAY).is_none());
+        assert!(!inner.style.position_fixed);
+        assert_eq!(
+            crate::layout::lpa_length_px(inner.style.inset.left),
+            Some(70.0)
+        );
+        assert_eq!(
+            crate::layout::lpa_length_px(inner.style.inset.top),
+            Some(20.0)
+        );
+    }
+
     fn find_ghost(el: &Element) -> Option<&Element> {
         if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
             return Some(el);
         }
         el.children.iter().find_map(find_ghost)
+    }
+
+    fn find_hole_preview(el: &Element) -> Option<&Element> {
+        if el
+            .attrs
+            .contains_key(crate::utils::drag::ATTR_DRAG_HOLE_PREVIEW)
+        {
+            return Some(el);
+        }
+        el.children.iter().find_map(find_hole_preview)
     }
 
     fn collect_tids(el: &Element, out: &mut Vec<String>) {
@@ -655,10 +1732,9 @@ mod tests {
             tick(50.0, 20.0, &[], [800.0, 600.0]),
             "threshold 0 must activate"
         );
-        drain_deferred_view_remounts();
-
         {
             let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
             let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
             let mut lt = crate::layout::LayoutTree::new();
             let _ = lt.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
@@ -1025,7 +2101,13 @@ mod tests {
         reset_registered_anchors();
     }
 
-    fn activate_chip(sid: &str, pointer: [f32; 2], grab: [f32; 2], bounds: [f32; 4]) {
+    fn activate_chip(
+        live: &std::cell::RefCell<Element>,
+        sid: &str,
+        pointer: [f32; 2],
+        grab: [f32; 2],
+        bounds: [f32; 4],
+    ) {
         use crate::utils::drag::{begin, tick, BeginDrag};
         begin(BeginDrag {
             scope_id: sid.into(),
@@ -1045,13 +2127,34 @@ mod tests {
             &[],
             [800.0, 600.0]
         ));
-        crate::app::reactive::drain_deferred_view_remounts();
+        // Same order as AppState paint: chrome (fills the always-mounted host) then layout.
+        let mut tree = live.borrow_mut();
+        sync_drag_chrome(&mut tree);
     }
 
     fn hoist_and_layout(tree: &mut Element) {
-        let _ = crate::layout::layout_tree::hoist_portal_subtrees(tree);
-        let mut lt = crate::layout::LayoutTree::new();
-        let _ = lt.build_and_layout(tree, 800.0, 600.0, [0.0, 0.0]);
+        crate::core::reactivity::with_ui_build_stack(|| {
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(tree);
+            let mut lt = crate::layout::LayoutTree::new();
+            let _ = lt.build_and_layout(tree, 800.0, 600.0, [0.0, 0.0]);
+        });
+    }
+
+    /// Same `LayoutTree` across frames — Gallery paint never does `LayoutTree::new()`
+    /// after idle. `fast` is AppState's `LayoutChanged` path (`build_and_layout_fast`).
+    fn hoist_and_layout_persisted(
+        lt: &mut crate::layout::LayoutTree,
+        tree: &mut Element,
+        fast: bool,
+    ) {
+        crate::core::reactivity::with_ui_build_stack(|| {
+            if fast {
+                let _ = lt.build_and_layout_fast(tree, 800.0, 600.0, [0.0, 0.0], false, false);
+            } else {
+                let _ = crate::layout::layout_tree::hoist_portal_subtrees(tree);
+                let _ = lt.build_and_layout(tree, 800.0, 600.0, [0.0, 0.0]);
+            }
+        });
     }
 
     /// Empty `<DragOverlay>` must render the source item's text, not a dummy
@@ -1076,7 +2179,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 200.0, 40.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 200.0, 40.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1157,9 +2260,9 @@ mod tests {
             capture_id: "cap".into(),
         });
         assert!(tick(50.0, 20.0, &[], [800.0, 600.0]));
-        crate::app::reactive::drain_deferred_view_remounts();
         {
             let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
             hoist_and_layout(&mut tree);
             let gamma = find_draggable(&tree, "tree-later:Gamma")
                 .expect("clone must not steal the live inner island");
@@ -1202,7 +2305,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
         {
             let mut tree = live.borrow_mut();
             let mut lt = crate::layout::LayoutTree::new();
@@ -1234,6 +2337,66 @@ mod tests {
         reset_registered_anchors();
     }
 
+    /// Paint chrome runs every frame while the overlay is open. Snapshot must
+    /// stay the resting author body — `opacity > 0.05` used to recapture 0.4.
+    #[test]
+    fn source_snapshot_ignores_live_source_opacity() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
+        };
+
+        let (_o, live) = mount_scope_tree(|| {
+            drag_scope("ov-snap-undim").threshold(0.0).child(|| {
+                let chip = draggable("chip")
+                    .child(|| Element::new().text("本体文案").w(80.0).h(32.0).opacity(1.0));
+                let overlay: Element = drag_overlay().into();
+                Element::from(vstack().children([chip, overlay]))
+            })
+        });
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+        }
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        begin(BeginDrag {
+            scope_id: sid.clone(),
+            draggable_id: "chip".into(),
+            pointer: [40.0, 16.0],
+            grab_offset: [10.0, 8.0],
+            start_bounds: [30.0, 8.0, 80.0, 32.0],
+            from_list: None,
+            from_index: None,
+            item_type: String::new(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(41.0, 16.0, &[], [800.0, 600.0]));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            let source = find_draggable(&tree, "chip").expect("source");
+            assert!(
+                (source.style.opacity - 0.4).abs() < 0.05,
+                "live source is dimmed; opacity={}",
+                source.style.opacity
+            );
+            // Second paint: the old `opacity > 0.05` guard recaptured 0.4.
+            sync_drag_chrome(&mut tree);
+            let clone = super::clone_source_preview(&sid, "chip").expect("snapshot");
+            assert!(
+                (clone.style.opacity - 1.0).abs() < 0.01,
+                "ghost snapshot must stay the undimmed author body; got {}",
+                clone.style.opacity
+            );
+        }
+        let _ = crate::utils::drag::end(&[]);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
     #[test]
     fn ghost_author_style_overrides_source_opacity() {
         use crate::app::reactive::reset_registered_anchors;
@@ -1250,7 +2413,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1294,7 +2457,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1358,7 +2521,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 48.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 48.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1403,7 +2566,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 72.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 72.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1447,7 +2610,7 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -1478,6 +2641,7 @@ mod tests {
                 .text("task"),
             "g1",
             [120.0, 80.0],
+            None,
         );
         let mut root = Element::new()
             .w(800.0)
@@ -1522,7 +2686,7 @@ mod tests {
             .h(32.0)
             .bg([1.0, 0.0, 0.0, 1.0])
             .text("handled");
-        let panel = place_drag_ghost(inner, "g1", [24.0, 16.0]);
+        let panel = place_drag_ghost(inner, "g1", [24.0, 16.0], None);
         let mut root = Element::new()
             .w(800.0)
             .h(600.0)
@@ -1588,7 +2752,7 @@ mod tests {
         if let Some(t) = inner_tid {
             inner.template_id = Some(t.into());
         }
-        let panel = place_drag_ghost(inner, "g1", origin);
+        let panel = place_drag_ghost(inner, "g1", origin, None);
         let mut el = mount_anchored_overlay(panel, 901);
         el.template_id = Some(tid.into());
         el
@@ -1818,7 +2982,7 @@ mod tests {
             hit("venus", 40.0, 1),
             hit("earth", 80.0, 2),
         ];
-        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
         assert!(
             tick(40.0, 88.0, &hits, [800.0, 600.0]),
@@ -1959,7 +3123,7 @@ mod tests {
             hit("beta", 0.0, 38.0, "inbox", 1),
             hit("gamma", 96.0, 0.0, "later", 0),
         ];
-        assert!(tick(40.0, 16.0, &inbox_hits, [800.0, 600.0]));
+        assert!(tick(41.0, 16.0, &inbox_hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
         let n_open = runs.get();
         assert!(
@@ -2079,7 +3243,7 @@ mod tests {
             hit("venus", 40.0, 1),
             hit("earth", 80.0, 2),
         ];
-        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
         {
             let mut tree = live.borrow_mut();
@@ -2151,8 +3315,8 @@ mod tests {
         reset_registered_anchors();
     }
 
-    /// Default overlay (opacity 0.4): the dimmed source must translate onto the target
-    /// list hole (not opacity 0 in the origin slot).
+    /// Default overlay (opacity 0.4): the target list paints a dimmed hole preview
+    /// (source island stays in the origin tree at opacity 0).
     #[test]
     fn dimmed_source_cross_list_appears_in_target_hole() {
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
@@ -2228,7 +3392,7 @@ mod tests {
             hit("dst", "doing", 120.0, 0.0, Some(0)),
             hit("doing", "doing", 120.0, 0.0, None),
         ];
-        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
         assert!(tick(140.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
@@ -2248,14 +3412,27 @@ mod tests {
             hoist_and_layout(&mut tree);
             let src = find_draggable(&tree, "src").expect("src");
             assert!(
-                (src.style.opacity - 0.4).abs() < 0.05,
-                "cross-list with default overlay opacity must keep a dimmed body; opacity={}",
+                src.style.opacity < 0.05,
+                "cross-list source island stays in origin at 0; opacity={}",
                 src.style.opacity
             );
             assert!(
-                src.style.translate[0] > 50.0,
-                "dimmed source must translate into the target column; translate={:?}",
+                src.style.translate[0].abs() < 1.0 && src.style.translate[1].abs() < 1.0,
+                "source must not translate into the target; translate={:?}",
                 src.style.translate
+            );
+            let doing = find_droppable(&tree, "doing").expect("doing");
+            let preview = find_hole_preview(doing).expect("target hole preview");
+            assert!(
+                (preview.style.opacity - 0.4).abs() < 0.05,
+                "target hole preview must be dimmed; opacity={}",
+                preview.style.opacity
+            );
+            let mut texts = Vec::new();
+            collect_texts(preview, &mut texts);
+            assert!(
+                texts.iter().any(|t| t.contains("src")),
+                "hole preview must clone the source body; texts={texts:?}"
             );
         }
 
@@ -2428,7 +3605,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         let later_hit = hits0
@@ -2692,7 +3869,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         // Same-list hover on Beta opens a -pitch FLIP. Crossing to Later must
@@ -2725,6 +3902,7 @@ mod tests {
         {
             let mut tree = live.borrow_mut();
             sync_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
         }
 
         {
@@ -2737,26 +3915,28 @@ mod tests {
                 "overlay ghost must keep Alpha while hover is outside the source list; got {ghost_texts:?}"
             );
 
-            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("dimmed source");
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("source island");
             let beta = find_draggable(&tree, "tree-inbox:Beta").expect("origin sibling");
             let gamma = find_draggable(&tree, "tree-later:Gamma").expect("target sibling");
+            let later = find_droppable(&tree, "tree-later").expect("tree-later");
+            let preview = find_hole_preview(later).expect("Later hole preview");
             let inbox_b = find_draggable(&tree, "folder:Inbox")
                 .expect("Inbox")
                 .layout_bounds;
             assert!(
-                (alpha.style.opacity - 0.4).abs() < 0.05,
-                "in-list source must stay dimmed (0.4), not vanish; opacity={}",
+                alpha.style.opacity < 0.05,
+                "cross-list source island stays in origin at 0; opacity={}",
                 alpha.style.opacity
             );
             assert!(
-                alpha.style.translate[1].abs() > 8.0,
-                "dimmed source must translate onto the Later hole; translate={:?}",
-                alpha.style.translate
+                (preview.style.opacity - 0.4).abs() < 0.05,
+                "target hole preview must stay dimmed (0.4); opacity={}",
+                preview.style.opacity
             );
             assert!(
-                alpha.layout_bounds[3] > 8.0,
-                "dimmed source must keep a paint box; height={}",
-                alpha.layout_bounds[3]
+                preview.layout_bounds[3] > 8.0,
+                "hole preview must keep a paint box; height={}",
+                preview.layout_bounds[3]
             );
             assert!(
                 beta.style.translate[1].abs() < 2.0,
@@ -2778,24 +3958,17 @@ mod tests {
                 inbox_b[1],
                 beta.style.translate
             );
-            let alpha_vis_top = alpha.layout_bounds[1] + alpha.style.translate[1];
-            let alpha_vis_bot = alpha_vis_top + alpha.layout_bounds[3];
+            let preview_top = preview.layout_bounds[1];
+            let preview_bot = preview_top + preview.layout_bounds[3];
             let gamma_vis_top = gamma.layout_bounds[1] + gamma.style.translate[1];
-            let hole_gap = gamma_vis_top - alpha_vis_bot;
+            let hole_gap = gamma_vis_top - preview_bot;
             assert!(
                 (hole_gap - 6.0).abs() < 2.5,
-                "dimmed body and Gamma must keep the author list gap; gap={hole_gap} \
-                 alpha_vis=[{alpha_vis_top}, {alpha_vis_bot}] gamma_vis_top={gamma_vis_top} \
-                 alpha_t={:?} gamma_t={:?}",
-                alpha.style.translate,
+                "hole preview and Gamma must keep the author list gap; gap={hole_gap} \
+                 preview=[{preview_top}, {preview_bot}] gamma_vis_top={gamma_vis_top} \
+                 preview_b={:?} gamma_t={:?}",
+                preview.layout_bounds,
                 gamma.style.translate
-            );
-
-            let inbox_shell = find_item_shell(&tree, "folder:Inbox").expect("Inbox shell");
-            assert!(
-                inbox_shell.style.z_index >= 2,
-                "origin folder shell must stack above Later so the dimmed body can paint into the hole; z={}",
-                inbox_shell.style.z_index
             );
 
             let alpha_shell = find_item_shell(&tree, "tree-inbox:Alpha").expect("Alpha shell");
@@ -3022,7 +4195,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         let later_hit = hits0
@@ -3039,32 +4212,28 @@ mod tests {
         {
             let mut tree = live.borrow_mut();
             sync_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
         }
 
         {
             let tree = live.borrow();
-            let beta = find_draggable(&tree, "tree-inbox:Beta").expect("dimmed source");
+            let beta = find_draggable(&tree, "tree-inbox:Beta").expect("source island");
+            let later = find_droppable(&tree, "tree-later").expect("tree-later");
+            let preview = find_hole_preview(later).expect("Later hole preview");
             assert!(
-                (beta.style.opacity - 0.4).abs() < 0.05,
-                "Beta uses the same source_opacity 0.4 as Alpha; opacity={}",
+                beta.style.opacity < 0.05,
+                "cross-list source island stays in origin at 0; opacity={}",
                 beta.style.opacity
             );
             assert!(
-                beta.style.translate[1].abs() > 8.0,
-                "last-item dimmed source must translate onto the Later hole; translate={:?}",
-                beta.style.translate
+                (preview.style.opacity - 0.4).abs() < 0.05,
+                "Beta hole preview uses source_opacity 0.4; opacity={}",
+                preview.style.opacity
             );
             assert!(
-                beta.layout_bounds[3] > 8.0,
-                "last-item source must keep a paint box (height cap used to crush it to 0); height={}",
-                beta.layout_bounds[3]
-            );
-
-            let inbox_shell = find_item_shell(&tree, "folder:Inbox").expect("Inbox shell");
-            assert!(
-                inbox_shell.style.z_index >= 2,
-                "origin folder must stay stacked even when the last file's rect sticks out; z={}",
-                inbox_shell.style.z_index
+                preview.layout_bounds[3] > 8.0,
+                "last-item hole preview must keep a paint box; height={}",
+                preview.layout_bounds[3]
             );
 
             let beta_shell = find_item_shell(&tree, "tree-inbox:Beta").expect("Beta shell");
@@ -3319,7 +4488,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         let later_hit = hits0
@@ -3456,6 +4625,660 @@ mod tests {
         );
 
         let _ = crate::utils::drag::end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery: drag Beta under Later/Gamma (append, not committed). The
+    /// dimmed body must keep the author list gap — chip-only append sits flush.
+    #[test]
+    fn nested_folder_beta_under_gamma_keeps_author_gap() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, end, sortable_item, sortable_list,
+            start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        fn relayout(tree: &mut Element) {
+            sync_chrome(tree);
+            hoist_and_layout(tree);
+        }
+
+        let (_o, live) = mount_scope_tree({
+            move || {
+                drag_scope("ov-nest-under-gamma")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .animation(false)
+                    .child(move || {
+                        let inbox_card = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .children([
+                                                    chip("tree-inbox", "Alpha".into(), 0),
+                                                    chip("tree-inbox", "Beta".into(), 1),
+                                                ]),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later_card = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Gamma".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(
+                            vstack()
+                                .w(220.0)
+                                .gap(8.0)
+                                .children([inbox_card, later_card, overlay]),
+                        )
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let (row_pitch, hits0) = {
+            let tree = live.borrow();
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha")
+                .expect("Alpha")
+                .layout_bounds;
+            let beta = find_draggable(&tree, "tree-inbox:Beta")
+                .expect("Beta")
+                .layout_bounds;
+            (beta[1] - alpha[1], collect_hits(&tree))
+        };
+        assert!(
+            row_pitch > 32.0,
+            "precondition: Inbox stride includes author gap; pitch={row_pitch}"
+        );
+
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Beta")
+            .expect("Beta");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-under-gamma",
+            "tree-inbox:Beta",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-under-gamma".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let gamma0 = hits0
+            .iter()
+            .find(|h| h.id == "tree-later:Gamma")
+            .expect("Gamma");
+        let dest_under = [
+            gamma0.rect.x + 20.0,
+            gamma0.rect.y + gamma0.rect.height * 0.75,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest_under[0], dest_under[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            relayout(&mut tree);
+        }
+        let hits2 = collect_hits(&live.borrow());
+        assert!(tick(dest_under[0], dest_under[1], &hits2, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            relayout(&mut tree);
+        }
+
+        {
+            let tree = live.borrow();
+            let later = find_droppable(&tree, "tree-later").expect("tree-later");
+            let gamma = find_draggable(&tree, "tree-later:Gamma").expect("Gamma");
+            let preview = find_hole_preview(later).expect("Later hole preview");
+            let gamma_bottom =
+                gamma.layout_bounds[1] + gamma.style.translate[1] + gamma.layout_bounds[3];
+            let preview_top = preview.layout_bounds[1];
+            let gap = preview_top - gamma_bottom;
+            let author_gap = row_pitch - 32.0;
+            assert!(
+                (gap - author_gap).abs() < 2.0,
+                "hole preview under Gamma must keep author gap; \
+                 gap={gap} author_gap={author_gap} row_pitch={row_pitch} \
+                 gamma={:?} g_tr={:?} preview={:?}",
+                gamma.layout_bounds,
+                gamma.style.translate,
+                preview.layout_bounds
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Gallery: Later/Gamma onto Inbox above Alpha. Source Later is a singleton
+    /// (chip-only pitch). The hole must keep Inbox's author gap, not sit flush.
+    #[test]
+    fn nested_folder_gamma_above_inbox_item_keeps_author_gap() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, end, sortable_item, sortable_list,
+            start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        let (_o, live) = mount_scope_tree({
+            move || {
+                drag_scope("ov-nest-gamma-above-alpha")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .animation(false)
+                    .child(move || {
+                        let inbox_card = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .children([
+                                                    chip("tree-inbox", "Alpha".into(), 0),
+                                                    chip("tree-inbox", "Beta".into(), 1),
+                                                ]),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later_card = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Gamma".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        Element::from(
+                            vstack()
+                                .w(220.0)
+                                .gap(8.0)
+                                .children([inbox_card, later_card, overlay]),
+                        )
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let (row_pitch, hits0) = {
+            let tree = live.borrow();
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha")
+                .expect("Alpha")
+                .layout_bounds;
+            let beta = find_draggable(&tree, "tree-inbox:Beta")
+                .expect("Beta")
+                .layout_bounds;
+            (beta[1] - alpha[1], collect_hits(&tree))
+        };
+        let author_gap = row_pitch - 32.0;
+        assert!(
+            author_gap > 4.0,
+            "precondition: Inbox has an author gap; pitch={row_pitch} gap={author_gap}"
+        );
+
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-later:Gamma")
+            .expect("Gamma");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-gamma-above-alpha",
+            "tree-later:Gamma",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-gamma-above-alpha".into(),
+            draggable_id: "tree-later:Gamma".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-later".into()),
+            from_index: Some(0),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let alpha0 = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Alpha")
+            .expect("Alpha");
+        let dest = [
+            alpha0.rect.x + 20.0,
+            alpha0.rect.y + alpha0.rect.height * 0.25,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            sync_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+        }
+
+        {
+            let tree = live.borrow();
+            let inbox = find_droppable(&tree, "tree-inbox").expect("tree-inbox");
+            let alpha = find_draggable(&tree, "tree-inbox:Alpha").expect("Alpha");
+            let preview = find_hole_preview(inbox).expect("Inbox hole preview");
+            let preview_bot = preview.layout_bounds[1] + preview.layout_bounds[3];
+            let alpha_top = alpha.layout_bounds[1] + alpha.style.translate[1];
+            let gap = alpha_top - preview_bot;
+            assert!(
+                (gap - author_gap).abs() < 2.0,
+                "Gamma hole preview above Alpha must keep Inbox author gap; \
+                 gap={gap} author_gap={author_gap} row_pitch={row_pitch} \
+                 preview={:?} alpha={:?} a_tr={:?}",
+                preview.layout_bounds,
+                alpha.layout_bounds,
+                alpha.style.translate
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    /// Production path: overlay + live hits + chrome + layout.
+    /// After Inbox→Later, the target list paints the dimmed body in the hole
+    /// on the first paint — holding still does not tick again.
+    #[test]
+    fn nested_folder_beta_cross_list_dimmed_body_appears_in_later() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin, collect_hits, drag_overlay, drag_scope, end, sortable_item, sortable_list,
+            start_geometry, tick, Axis, BeginDrag,
+        };
+
+        fn chip(list: &'static str, name: String, idx: usize) -> Element {
+            let label = name.clone();
+            sortable_item(format!("{list}:{label}"))
+                .item_type("file")
+                .accept("file")
+                .group("nest")
+                .list(list)
+                .index(idx)
+                .source_opacity(0.4)
+                .child(move || Element::new().text(label.clone()).w(160.0).h(32.0))
+        }
+
+        fn folder_card(title: &str, inner: Element) -> Element {
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .min_h(0.0)
+                    .h("auto")
+                    .gap(6.0)
+                    .p(8.0)
+                    .child(Element::new().text(title.to_string()).h(20.0))
+                    .child(inner),
+            )
+        }
+
+        fn sync_chrome(tree: &mut Element) {
+            let mut lt = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                tree,
+                &mut lt,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+            );
+        }
+
+        let (_o, live) = mount_scope_tree({
+            move || {
+                drag_scope("ov-nest-body-in-later")
+                    .threshold(0.0)
+                    .axis(Axis::Y)
+                    .animation(false)
+                    .child(move || {
+                        let inbox_card = sortable_item("folder:Inbox")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(0)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-inbox")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .children([
+                                                    chip("tree-inbox", "Alpha".into(), 0),
+                                                    chip("tree-inbox", "Beta".into(), 1),
+                                                ]),
+                                        )
+                                    });
+                                folder_card("Inbox", inner)
+                            });
+                        let later_card = sortable_item("folder:Later")
+                            .item_type("folder")
+                            .accept("folder")
+                            .list("tree-root")
+                            .index(1)
+                            .source_opacity(0.4)
+                            .child(|| {
+                                let inner = sortable_list("tree-later")
+                                    .accept("file")
+                                    .group("nest")
+                                    .child(|| {
+                                        Element::from(
+                                            vstack()
+                                                .w("100%")
+                                                .min_h(0.0)
+                                                .h("auto")
+                                                .gap(6.0)
+                                                .child(chip("tree-later", "Gamma".into(), 0)),
+                                        )
+                                    });
+                                folder_card("Later", inner)
+                            });
+                        let overlay: Element = drag_overlay().into();
+                        // Gallery hosts the nest inside ScrollArea (`overflow: auto`).
+                        // A 0-tall vacated shell is clip-culled and never paints Beta.
+                        Element::from(
+                            vstack()
+                                .w(220.0)
+                                .h(400.0)
+                                .overflow("hidden")
+                                .gap(8.0)
+                                .children([inbox_card, later_card, overlay]),
+                        )
+                    })
+            }
+        });
+
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout(&mut tree);
+        }
+
+        let hits0 = collect_hits(&live.borrow());
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "tree-inbox:Beta")
+            .expect("Beta");
+        let pointer = [
+            src.rect.x + src.rect.width * 0.5,
+            src.rect.y + src.rect.height * 0.5,
+        ];
+        let (grab_offset, start_bounds) = start_geometry(
+            "ov-nest-body-in-later",
+            "tree-inbox:Beta",
+            pointer,
+            [src.rect.x, src.rect.y, src.rect.width, src.rect.height],
+        );
+        begin(BeginDrag {
+            scope_id: "ov-nest-body-in-later".into(),
+            draggable_id: "tree-inbox:Beta".into(),
+            pointer,
+            grab_offset,
+            start_bounds,
+            from_list: Some("tree-inbox".into()),
+            from_index: Some(1),
+            item_type: "file".into(),
+            group: "nest".into(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+
+        let gamma0 = hits0
+            .iter()
+            .find(|h| h.id == "tree-later:Gamma")
+            .expect("Gamma");
+        let dest = [
+            gamma0.rect.x + 20.0,
+            gamma0.rect.y + gamma0.rect.height * 0.75,
+        ];
+        let hits1 = collect_hits(&live.borrow());
+        assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
+        drain_deferred_view_remounts();
+        let painted = {
+            let mut tree = live.borrow_mut();
+            sync_chrome(&mut tree);
+            crate::core::reactivity::with_ui_build_stack(|| {
+                let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+                let mut lt = crate::layout::LayoutTree::new();
+                lt.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0])
+            })
+        };
+
+        {
+            let tree = live.borrow();
+            let later = find_droppable(&tree, "tree-later").expect("tree-later");
+            let gamma = find_draggable(&tree, "tree-later:Gamma").expect("Gamma");
+            let beta = find_draggable(&tree, "tree-inbox:Beta").expect("source island");
+            let preview = find_hole_preview(later).expect("Later hole preview");
+            assert!(
+                beta.style.opacity < 0.05,
+                "cross-list source island stays in origin at 0; opacity={}",
+                beta.style.opacity
+            );
+            assert!(
+                (preview.style.opacity - 0.4).abs() < 0.05,
+                "hole preview must stay dimmed; opacity={}",
+                preview.style.opacity
+            );
+            let later_top = later.layout_bounds[1];
+            let later_bottom = later.layout_bounds[1] + later.layout_bounds[3];
+            let preview_top = preview.layout_bounds[1];
+            let preview_bot = preview_top + preview.layout_bounds[3];
+            assert!(
+                preview_bot > later_top - 1.0 && preview_top < later_bottom + 1.0,
+                "hole preview must sit inside Later; preview={:?} later={:?} gamma={:?}",
+                preview.layout_bounds,
+                later.layout_bounds,
+                gamma.layout_bounds
+            );
+            let mut preview_texts = Vec::new();
+            collect_texts(preview, &mut preview_texts);
+            assert!(
+                preview_texts.iter().any(|t| t.contains("Beta")),
+                "hole preview must clone Beta, not the portal ghost; texts={preview_texts:?}"
+            );
+            let ghost = find_ghost(&tree).expect("overlay ghost");
+            let painted_beta = painted
+                .text_nodes
+                .iter()
+                .filter(|t| t.text.contains("Beta"))
+                .count();
+            assert!(
+                painted_beta >= 2,
+                "ghost + hole preview must both paint Beta; count={painted_beta} ghost_z={}",
+                ghost.style.z_index
+            );
+        }
+
+        let _ = end(&collect_hits(&live.borrow()));
         clear_test_reconcile_root();
         reset_registered_anchors();
     }
@@ -3640,7 +5463,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         let inbox_folder = hits0
@@ -3664,16 +5487,17 @@ mod tests {
                 pad > 16.0,
                 "empty Inbox must grow a row of padding for the incoming file; pad={pad}"
             );
-            let beta = find_draggable(&tree, "tree-later:Beta").expect("dimmed source");
+            let beta = find_draggable(&tree, "tree-later:Beta").expect("source island");
+            let preview = find_hole_preview(inbox_list).expect("Inbox hole preview");
             assert!(
-                (beta.style.opacity - 0.4).abs() < 0.05,
-                "Beta must keep source_opacity 0.4; opacity={}",
+                beta.style.opacity < 0.05,
+                "cross-list source island stays in origin at 0; opacity={}",
                 beta.style.opacity
             );
             assert!(
-                beta.style.translate[1].abs() > 8.0,
-                "dimmed Beta must translate onto the empty Inbox hole; translate={:?}",
-                beta.style.translate
+                (preview.style.opacity - 0.4).abs() < 0.05,
+                "empty Inbox hole preview must stay dimmed; opacity={}",
+                preview.style.opacity
             );
         }
 
@@ -3796,7 +5620,7 @@ mod tests {
             group: String::new(),
             capture_id: "cap".into(),
         });
-        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        assert!(tick(grab[0] + 1.0, grab[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
         let hits1 = collect_hits(&live.borrow());
         assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
@@ -4001,7 +5825,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        assert!(tick(grab[0] + 1.0, grab[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
         let hits1 = collect_hits(&live.borrow());
         assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
@@ -4249,7 +6073,7 @@ mod tests {
             group: "nest".into(),
             capture_id: "cap".into(),
         });
-        assert!(tick(grab[0], grab[1], &hits0, [800.0, 600.0]));
+        assert!(tick(grab[0] + 1.0, grab[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
         let hits1 = collect_hits(&live.borrow());
         assert!(tick(dest[0], dest[1], &hits1, [800.0, 600.0]));
@@ -4376,7 +6200,7 @@ mod tests {
             hit("todo", "todo", 0.0, None),
             hit("doing", "doing", 88.0, None),
         ];
-        assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+        assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
         assert!(tick(128.0, 16.0, &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
@@ -4559,7 +6383,7 @@ mod tests {
             capture_id: "cap".into(),
         });
         let hits = collect_hits(&live.borrow());
-        assert!(tick(pointer[0], pointer[1], &hits, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         assert_eq!(
@@ -4746,7 +6570,7 @@ mod tests {
             group: String::new(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
         {
@@ -4957,7 +6781,7 @@ mod tests {
             group: String::new(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
         let at_lift = hover_sig.get().expect("hover signal").peek();
         assert_eq!(
@@ -5151,7 +6975,7 @@ mod tests {
             group: String::new(),
             capture_id: "cap".into(),
         });
-        assert!(tick(pointer[0], pointer[1], &hits0, [800.0, 600.0]));
+        assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
         {
             let mut tree = live.borrow_mut();

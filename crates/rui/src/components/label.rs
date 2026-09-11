@@ -274,17 +274,17 @@ impl LabelBuilder {
         self
     }
 
-    pub fn color(mut self, color: [u8; 4]) -> Self {
+    pub fn color(mut self, color: impl crate::style::IntoTextColor) -> Self {
         self.inner = self.inner.color(color);
         self
     }
 
-    pub fn text_color(mut self, color: [u8; 4]) -> Self {
+    pub fn text_color(mut self, color: impl crate::style::IntoTextColor) -> Self {
         self.inner = self.inner.color(color);
         self
     }
 
-    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+    pub fn text_align(mut self, align: impl Into<crate::style::TextAlignDeclaration>) -> Self {
         self.inner = self.inner.text_align(align);
         self
     }
@@ -317,7 +317,7 @@ impl LabelBuilder {
         self.inner.el = self.inner.el.h(h);
         self
     }
-    pub fn bg(mut self, bg: [f32; 4]) -> Self {
+    pub fn bg(mut self, bg: impl crate::style::IntoPaintColor) -> Self {
         self.inner.el = self.inner.el.bg(bg);
         self
     }

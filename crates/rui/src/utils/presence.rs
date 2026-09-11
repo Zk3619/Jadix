@@ -10,9 +10,19 @@
 //! - **Absent**：退场结束，可卸树
 //!
 //! Toast 等队列组件可只吃 [`exit_elapsed`] / [`ExitGate`] 状态机；带 UI 的
-//! `presence(...)` 包装器跟进（需与 reconcile / portal 同 key 契约对齐后再暴露）。
+//! [`presence`] 包装器在 reconcile / portal 同 key 契约对齐后暴露（WP-PRIM.5）。
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+use crate::app::reactive::reactive_view;
+use crate::core::reactivity::Signal;
+use crate::core::tree::Element;
+use crate::utils::panel_presence::{
+    sync_panel_presence, tick_panel_cells, use_panel_presence, PanelPresence, PanelPresenceCell,
+    SyncPolicy,
+};
 
 /// 挂载相位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -125,6 +135,112 @@ pub fn exit_elapsed_at(started: Instant, duration: Duration, now: Instant) -> bo
     now.duration_since(started) >= duration
 }
 
+/// Stable `template_id` suffix for [`presence`] islands (`{id}__presence`).
+pub const PRESENCE_SUFFIX: &str = "__presence";
+
+/// `{scope_id}__presence` — reconcile / keyed motion hook target.
+pub fn presence_template_id(scope_id: &str) -> String {
+    format!("{scope_id}{PRESENCE_SUFFIX}")
+}
+
+pub fn is_presence_wrapper_tid(tid: Option<&str>) -> bool {
+    tid.is_some_and(|t| t.ends_with(PRESENCE_SUFFIX))
+}
+
+thread_local! {
+    static GENERIC_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<PanelPresenceCell<()>>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Shared ExitGate cell for generic show/hide wrappers (not collapse / floating / modal).
+pub type GenericPresenceHandle = PanelPresence<()>;
+
+pub fn use_generic_presence(scope_id: &str, exit_ms: u64) -> GenericPresenceHandle {
+    use_panel_presence(
+        &format!("__rui_generic_presence:{scope_id}"),
+        &format!("__rui_generic_mounted:{scope_id}"),
+        Duration::from_millis(exit_ms.max(1)),
+        || (),
+        |rc| {
+            GENERIC_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(rc));
+        },
+        |rc| {
+            GENERIC_PRESENCE_REGISTRY.with(|r| {
+                r.borrow_mut().retain(|c| !Rc::ptr_eq(c, &rc));
+            });
+        },
+    )
+}
+
+pub fn sync_generic_presence(handle: &GenericPresenceHandle, want: bool) -> PresencePhase {
+    sync_panel_presence(
+        handle,
+        want,
+        SyncPolicy {
+            skip_first_enter: false,
+            silent_mounted: false,
+            mutex_kick: false,
+        },
+        |_, _| {},
+    )
+}
+
+/// UI-thread tick: Exiting → Absent, clears mounted. Returns true when a redraw is needed.
+pub fn tick_generic_presence() -> bool {
+    let now = Instant::now();
+    let outcome = GENERIC_PRESENCE_REGISTRY.with(|r| {
+        tick_panel_cells(
+            &r.borrow(),
+            now,
+            |_| false,
+            |c| {
+                if c.mounted.is_alive() {
+                    c.mounted.set(false);
+                }
+            },
+            false,
+        )
+    });
+    outcome.needs_frame || !outcome.unmount.is_empty()
+}
+
+pub fn generic_presence_next_wake_at() -> Option<Instant> {
+    GENERIC_PRESENCE_REGISTRY.with(|r| {
+        let mut next = None::<Instant>;
+        for cell in r.borrow().iter() {
+            let c = cell.borrow();
+            if c.gate.phase() != PresencePhase::Exiting {
+                continue;
+            }
+            let Some(started) = c.gate.exit_started() else {
+                continue;
+            };
+            let end = started + c.gate.exit_duration();
+            next = Some(next.map_or(end, |t| t.min(end)));
+        }
+        next
+    })
+}
+
+/// Element wrapper: `show=false` keeps the subtree mounted until [`exit_ms`] elapses.
+pub fn presence(
+    scope_id: impl Into<String>,
+    show: Signal<bool>,
+    exit_ms: u64,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
+    let scope_id = scope_id.into();
+    let handle = use_generic_presence(&scope_id, exit_ms);
+    let view_id = presence_template_id(&scope_id);
+    reactive_view(view_id, move || {
+        let phase = sync_generic_presence(&handle, show.get());
+        if phase == PresencePhase::Absent {
+            return Element::new();
+        }
+        body()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +278,37 @@ mod tests {
             Duration::from_millis(50),
             t0 + Duration::from_millis(50)
         ));
+    }
+
+    #[test]
+    fn generic_presence_exits_after_duration() {
+        use crate::core::reactivity::{create_root, use_signal};
+
+        create_root(|| {
+            let show = use_signal("gp-test-show", || true);
+            let _el = presence("gp-demo", show, 50, || Element::new().text("hi"));
+            let handle = use_generic_presence("gp-demo", 50);
+            assert_eq!(
+                sync_generic_presence(&handle, true),
+                PresencePhase::Present
+            );
+            assert_eq!(
+                sync_generic_presence(&handle, false),
+                PresencePhase::Exiting
+            );
+            assert!(handle.mounted().get());
+            let t0 = Instant::now();
+            GENERIC_PRESENCE_REGISTRY.with(|r| {
+                for cell in r.borrow().iter() {
+                    let mut c = cell.borrow_mut();
+                    if c.gate.phase() == PresencePhase::Exiting {
+                        c.gate.exit_started = Some(t0 - Duration::from_millis(60));
+                    }
+                }
+            });
+            assert!(tick_generic_presence());
+            assert_eq!(handle.phase(), PresencePhase::Absent);
+            assert!(!handle.mounted().get());
+        });
     }
 }

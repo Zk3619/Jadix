@@ -8,7 +8,7 @@ use crate::utils::keyed_overlay::{mount_reactive_anchor, viewport_portal_stage};
 /// Builder：配置宿主布局/锚点/上限策略。
 pub struct ToasterBuilder {
     variant: ToastLayout,
-    position: String,
+    position: ToastPosition,
     overflow: ToastOverflow,
     limit: usize,
 }
@@ -16,7 +16,7 @@ pub struct ToasterBuilder {
 pub fn toaster() -> ToasterBuilder {
     ToasterBuilder {
         variant: ToastLayout::Stack,
-        position: "top-center".into(),
+        position: ToastPosition::TopCenter,
         overflow: ToastOverflow::Displace,
         limit: DEFAULT_LIMIT,
     }
@@ -29,35 +29,29 @@ pub fn toast_host() -> Element {
 
 impl ToasterBuilder {
     /// `stack`（默认）| `list`。切换时套用布局默认锚点（stack→顶中，list→右下）。
-    pub fn variant(mut self, v: impl Into<String>) -> Self {
-        self.variant = ToastLayout::parse(&v.into());
+    pub fn variant(mut self, v: impl Into<ToastLayout>) -> Self {
+        self.variant = v.into();
         self.position = match self.variant {
-            ToastLayout::List => ToastPosition::BottomRight.as_str().to_string(),
-            ToastLayout::Stack => ToastPosition::TopCenter.as_str().to_string(),
+            ToastLayout::List => ToastPosition::BottomRight,
+            ToastLayout::Stack => ToastPosition::TopCenter,
         };
         self
     }
-    pub fn layout(mut self, layout: ToastLayout) -> Self {
-        self.variant = layout;
-        self.position = match layout {
-            ToastLayout::List => ToastPosition::BottomRight.as_str().to_string(),
-            ToastLayout::Stack => ToastPosition::TopCenter.as_str().to_string(),
-        };
-        self
+    pub fn layout(self, layout: impl Into<ToastLayout>) -> Self {
+        self.variant(layout)
     }
     /// `top-center`（stack 默认）| `top-right` | `top-left` | `bottom-left` | `bottom-center` | `bottom-right`（list 默认）。
-    pub fn position(mut self, p: impl Into<String>) -> Self {
-        self.position = ToastPosition::parse(&p.into()).as_str().to_string();
+    pub fn position(mut self, p: impl Into<ToastPosition>) -> Self {
+        self.position = p.into();
         self
     }
     /// 上限策略：`displace`（挤出最旧）| `wait`（等待空位）。
-    pub fn overflow(mut self, v: impl Into<String>) -> Self {
-        self.overflow = ToastOverflow::parse(&v.into());
+    pub fn overflow(mut self, v: impl Into<ToastOverflow>) -> Self {
+        self.overflow = v.into();
         self
     }
-    pub fn overflow_policy(mut self, policy: ToastOverflow) -> Self {
-        self.overflow = policy;
-        self
+    pub fn overflow_policy(self, policy: impl Into<ToastOverflow>) -> Self {
+        self.overflow(policy)
     }
     /// 同时可见上限（默认 3，至少 1）。
     pub fn limit(mut self, n: usize) -> Self {
@@ -82,7 +76,7 @@ impl From<ToasterBuilder> for Element {
             );
         }
         layout_signal().set(builder.variant.as_str().to_string());
-        position_signal().set(ToastPosition::parse(&builder.position).as_str().to_string());
+        position_signal().set(builder.position.as_str().to_string());
         overflow_signal().set(builder.overflow.as_str().to_string());
         limit_signal().set(builder.limit.max(1));
         match builder.overflow {

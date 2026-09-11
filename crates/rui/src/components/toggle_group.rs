@@ -65,8 +65,9 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     control_focus_ring_active, focus_ring_color, is_variant_style_overridden, with_class_list,
-    VariantStyleField, FOCUS_RING_BLUR,
+    VariantStyleField, FOCUS_RING_BLUR, TRANSPARENT,
 };
+use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
@@ -90,100 +91,8 @@ const DEFAULT_SPACING: u8 = 2;
 // Variant / size / orientation
 // ---------------------------------------------------------------------------
 
-/// Toggle chrome: ShadCN `default` (borderless) / `outline`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ToggleGroupVariant {
-    #[default]
-    Default,
-    Outline,
-}
-
-impl ToggleGroupVariant {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Outline => "outline",
-        }
-    }
-
-    pub fn is_outline(self) -> bool {
-        matches!(self, Self::Outline)
-    }
-}
-
-impl From<&str> for ToggleGroupVariant {
-    fn from(s: &str) -> Self {
-        s.parse().unwrap_or_default()
-    }
-}
-
-impl From<String> for ToggleGroupVariant {
-    fn from(s: String) -> Self {
-        Self::from(s.as_str())
-    }
-}
-
-impl std::str::FromStr for ToggleGroupVariant {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.trim().to_ascii_lowercase().as_str() {
-            "outline" => Self::Outline,
-            _ => Self::Default,
-        })
-    }
-}
-
-/// Toggle size ladder (same padding as [`super::toggle`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ToggleGroupSize {
-    Sm,
-    #[default]
-    Default,
-    Lg,
-}
-
-impl ToggleGroupSize {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sm => "sm",
-            Self::Default => "default",
-            Self::Lg => "lg",
-        }
-    }
-
-    fn min_px(self) -> f32 {
-        match self {
-            Self::Sm => 32.0,
-            Self::Default => 36.0,
-            Self::Lg => 40.0,
-        }
-    }
-}
-
-impl From<&str> for ToggleGroupSize {
-    fn from(s: &str) -> Self {
-        s.parse().unwrap_or_default()
-    }
-}
-
-impl From<String> for ToggleGroupSize {
-    fn from(s: String) -> Self {
-        Self::from(s.as_str())
-    }
-}
-
-impl std::str::FromStr for ToggleGroupSize {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.trim().to_ascii_lowercase().as_str() {
-            "sm" | "small" => Self::Sm,
-            "lg" | "large" => Self::Lg,
-            _ => Self::Default,
-        })
-    }
-}
+/// Toggle Group chrome shares [`ToggleVariant`] / [`ToggleSize`].
+pub use super::toggle::{ToggleSize as ToggleGroupSize, ToggleVariant as ToggleGroupVariant};
 
 /// Group flex direction (ShadCN `orientation`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -563,7 +472,7 @@ fn build_toggle_group_item(
     let outline = ctx.variant.is_outline();
     let (bg, border, fg) = toggle_chip_colors(pressed, disabled, outline, segmented);
     let border_w = if outline && !segmented { 1.0 } else { 0.0 };
-    let (px, py, text_px) = toggle_size_pad(ctx.size.as_str());
+    let (px, py, text_px) = toggle_size_pad(ctx.size);
     let min_px = ctx.size.min_px();
 
     let nodes = nodes_from_label_or_children(label, children, fg, text_px);
@@ -837,9 +746,9 @@ fn sync_toggle_group_pressed(
             let (want_shadow, want_blur) = if show_ring {
                 (focus_ring_color(), FOCUS_RING_BLUR)
             } else if pressed {
-                ([0.0, 0.0, 0.0, 0.08], 2.0)
+                (tokens::shadow_ink(0.08), 2.0)
             } else {
-                ([0.0, 0.0, 0.0, 0.0], 0.0)
+                (TRANSPARENT, 0.0)
             };
             if !is_variant_style_overridden(&option.attrs, VariantStyleField::Shadow)
                 && ((option.style.shadow_blur - want_blur).abs() > 0.01

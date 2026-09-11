@@ -12,7 +12,7 @@ use crate::app::reactive::reactive_view_sized;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, IntoOpacity, LayoutStatus};
+use crate::core::tree::{Element, IntoOpacity, LayoutStatus, ATTR_POINTER_EVENTS};
 use crate::layout::{dim_kind, DimKind, LayoutTree};
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
@@ -26,22 +26,23 @@ use super::autoscroll::{AutoScroll, ScrollLock};
 use super::collision::{CollisionAlg, CollisionFn, CollisionInput};
 use super::dropzone::{DropCheckerFn, DropOverlap, DropzoneHandler};
 use super::geometry::{
-    Activation, Axis, DragStack, OverlayAlign, Restrict, RestrictAnchor, Snap, SnapPointFn,
-    SnapTargets, SortMode,
+    Activation, Axis, DragStack, OverlayAlign, Restrict, RestrictAnchor, RestrictOverflow, Snap,
+    SnapPointFn, SnapTargets, SortMode,
 };
 use super::session::{
-    active_drag_ids, active_sort_mode, active_source_translate, begin, bump_auto_stack,
-    hit_hosts_id, live_cross_list_source_translate, live_pack_item_translate,
-    live_same_list_source_translate, overlay_is_registered, overlay_source_opacity,
-    pack_insert_extent, peek_sort_axis, register_scope_product, remember_item_restrict,
-    scope_selected_contains, start_geometry, BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
+    active_drag_ids, active_draggable_id, active_pull_clone, active_sort_mode,
+    active_source_translate, begin, bump_auto_stack, insert_hole_origin, last_hits,
+    live_pack_item_translate, live_same_list_source_translate, overlay_is_registered,
+    overlay_source_opacity, pack_insert_extent, peek_sort_axis, register_scope_product,
+    remember_draggable_bounds, remember_item_restrict, scope_selected_contains, start_geometry,
+    BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
 use super::sortable::SORTABLE_FLIP_MS;
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
-    ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL,
-    ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SELECTED,
-    ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_SWAP, ATTR_DRAG_TYPE,
+    ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_HOLE_PREVIEW, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX,
+    ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE,
+    ATTR_DRAG_SELECTED, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_SWAP, ATTR_DRAG_TYPE,
 };
 use crate::utils::pointer_action::InertiaOpts;
 
@@ -126,6 +127,11 @@ pub(super) fn require_drag(part: &str) -> DragCtx {
     })
 }
 
+/// Paint-time overlay clone is not under the provider owner — re-provide `DragCtx`.
+pub(super) fn provide_drag_ctx(ctx: DragCtx) {
+    provide_context(drag_context(), ctx);
+}
+
 fn wrap_fragment(mut el: Element) -> Element {
     if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
         Element::from(vstack().children(std::mem::take(&mut el.children)))
@@ -140,10 +146,17 @@ fn wrap_fragment(mut el: Element) -> Element {
 struct SourcePreview {
     body: Rc<dyn Fn() -> Element>,
     item: DragItemCtx,
+    source_opacity: Option<f32>,
 }
 
 thread_local! {
     static SOURCE_PREVIEWS: RefCell<HashMap<(String, String), SourcePreview>> =
+        RefCell::new(HashMap::new());
+    /// Last materialized author tree (before drag chrome). Overlay paint copies
+    /// this instead of re-running `ui!` / components — that second evaluation
+    /// is not under the live owner and overflows the MSVC-debug stack on
+    /// Gallery `card_chip` (HStack + Icon + Label), leaving a bordered dot.
+    static SOURCE_SNAPSHOTS: RefCell<HashMap<(String, String), Element>> =
         RefCell::new(HashMap::new());
     /// Overlay follow-source clone re-runs the author body. Nested
     /// `assemble_draggable` / `assemble_droppable` would otherwise reuse the
@@ -152,21 +165,28 @@ thread_local! {
     static CLONING_OVERLAY_GHOST: Cell<bool> = const { Cell::new(false) };
 }
 
-struct OverlayGhostCloneGuard(bool);
+struct OverlayGhostCloneGuard {
+    prev: bool,
+    _inline: crate::app::reactive::InlineIslandGuard,
+}
 
 impl OverlayGhostCloneGuard {
     fn enter() -> Self {
+        let inline = crate::app::reactive::InlineIslandGuard::enter();
         CLONING_OVERLAY_GHOST.with(|c| {
             let prev = c.get();
             c.set(true);
-            Self(prev)
+            Self {
+                prev,
+                _inline: inline,
+            }
         })
     }
 }
 
 impl Drop for OverlayGhostCloneGuard {
     fn drop(&mut self) {
-        CLONING_OVERLAY_GHOST.with(|c| c.set(self.0));
+        CLONING_OVERLAY_GHOST.with(|c| c.set(self.prev));
     }
 }
 
@@ -214,13 +234,93 @@ fn register_source_preview(
     id: &str,
     body: Rc<dyn Fn() -> Element>,
     item: DragItemCtx,
+    source_opacity: Option<f32>,
 ) {
     SOURCE_PREVIEWS.with(|m| {
         m.borrow_mut().insert(
             (scope.to_string(), id.to_string()),
-            SourcePreview { body, item },
+            SourcePreview {
+                body,
+                item,
+                source_opacity,
+            },
         );
     });
+}
+
+fn registered_source_opacity(scope: &str, id: &str) -> Option<f32> {
+    SOURCE_PREVIEWS.with(|m| {
+        m.borrow()
+            .get(&(scope.to_string(), id.to_string()))
+            .and_then(|p| p.source_opacity)
+    })
+}
+
+fn effective_source_opacity(scope: &str, id: &str) -> f32 {
+    registered_source_opacity(scope, id).unwrap_or_else(|| overlay_source_opacity(scope))
+}
+
+fn remember_source_snapshot(scope: &str, id: &str, el: &Element) {
+    SOURCE_SNAPSHOTS.with(|m| {
+        m.borrow_mut()
+            .insert((scope.to_string(), id.to_string()), clone_visual_tree(el));
+    });
+}
+
+/// Assemble-time `wrap_fragment(body)` still has `reactive_view` shells
+/// (`REACTIVE_PLACEHOLDER_HASH`). Using that copy as the ghost drops nested
+/// island text (folder → header-only chip). Prefer a snapshot only when every
+/// island has already painted.
+fn snapshot_has_unresolved_island(el: &Element) -> bool {
+    let mut stack: Vec<*const Element> = vec![el as *const Element];
+    while let Some(ptr) = stack.pop() {
+        let el = unsafe { &*ptr };
+        if el.template_hash.as_deref() == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH) {
+            return true;
+        }
+        for child in &el.children {
+            stack.push(child as *const Element);
+        }
+    }
+    false
+}
+
+/// Paint-only copy: styles / text / children, no handlers, no Taffy identity.
+/// Heap walk — do not map snapshot depth onto the OS stack (Gallery `card_chip`
+/// clone used to re-enter `ui!` and overflow MSVC-debug 1 MiB).
+fn clone_visual_tree(src: &Element) -> Element {
+    fn copy_fields(src: &Element) -> Element {
+        let mut dst = Element::new();
+        *dst.style = (*src.style).clone();
+        *dst.text_style = (*src.text_style).clone();
+        dst.text = src.text.clone();
+        dst.text_spans = src.text_spans.clone();
+        dst.text_shape_suffix = src.text_shape_suffix.clone();
+        dst.cursor = src.cursor.clone();
+        dst.template_hash = src.template_hash.clone();
+        dst.template_id = src.template_id.clone();
+        dst.focus_id = src.focus_id.clone();
+        dst.image_texture = src.image_texture.clone();
+        dst.class_set = src.class_set.clone();
+        dst.attrs = src.attrs.clone();
+        dst
+    }
+    let mut root = copy_fields(src);
+    let mut stack: Vec<(*const Element, *mut Element)> =
+        vec![(src as *const Element, &mut root as *mut Element)];
+    while let Some((s, d)) = stack.pop() {
+        let src = unsafe { &*s };
+        let dst = unsafe { &mut *d };
+        dst.children = src.children.iter().map(copy_fields).collect();
+        let n = dst.children.len();
+        for i in 0..n {
+            stack.push((
+                &src.children[i] as *const Element,
+                &mut dst.children[i] as *mut Element,
+            ));
+        }
+    }
+    root
 }
 
 /// Item metadata captured with the author body (Overlay `child_for`).
@@ -232,13 +332,23 @@ pub(super) fn source_preview_item(scope: &str, draggable_id: &str) -> Option<Dra
     })
 }
 
-/// Re-run the active item's author body (not the dimmed/translated island wrapper).
+/// Copy the last painted author body (not the dimmed/translated island wrapper).
+/// Re-running `body` during overlay paint is a second tree in the wrong owner —
+/// Gallery `card_chip` overflows and the ghost collapses to a bordered dot.
 pub(super) fn clone_source_preview(scope: &str, draggable_id: &str) -> Option<Element> {
-    let preview = SOURCE_PREVIEWS.with(|m| {
-        m.borrow()
-            .get(&(scope.to_string(), draggable_id.to_string()))
-            .cloned()
-    })?;
+    let key = (scope.to_string(), draggable_id.to_string());
+    if let Some(el) = SOURCE_SNAPSHOTS.with(|m| {
+        m.borrow().get(&key).and_then(|snap| {
+            if snapshot_has_unresolved_island(snap) {
+                None
+            } else {
+                Some(clone_visual_tree(snap))
+            }
+        })
+    }) {
+        return Some(el);
+    }
+    let preview = SOURCE_PREVIEWS.with(|m| m.borrow().get(&key).cloned())?;
     Some(with_child_owner(|| {
         let _ghost = OverlayGhostCloneGuard::enter();
         provide_context(item_context(), preview.item);
@@ -306,11 +416,6 @@ fn sync_stacking_context_attr(el: &mut Element, on: bool) -> bool {
         el.attrs.remove(ATTR_STACKING_CONTEXT);
     }
     true
-}
-
-fn subtree_has_draggable(el: &Element, id: &str) -> bool {
-    el.attrs.get(ATTR_DRAG_DRAGGABLE).map(String::as_str) == Some(id)
-        || el.children.iter().any(|c| subtree_has_draggable(c, id))
 }
 
 fn trail_margin_px(el: &Element, axis: Axis) -> f32 {
@@ -417,19 +522,6 @@ fn apply_shell_stack_z(
         want_z = want_z.max(1);
     }
     let mut changed = LayoutStatus::Clean;
-    // Nested folder card: the dimmed file translates into another list, but
-    // paint is clipped to this shell's stacking context. Raise any ancestor
-    // whose *tree* still hosts the source (last-item rects stick out after
-    // the origin list shrinks, so hit-rect containment is not enough).
-    if !is_active {
-        if let Some(active_id) = active.peek().as_deref() {
-            if subtree_has_draggable(el, active_id) || hit_hosts_id(id, active_id) {
-                want_z = want_z.max(2);
-                el.style.overflow.x = taffy::style::Overflow::Visible;
-                el.style.overflow.y = taffy::style::Overflow::Visible;
-            }
-        }
-    }
     if el.style.z_index != want_z {
         el.style.z_index = want_z;
         changed = changed.merge(LayoutStatus::StyleChanged);
@@ -664,6 +756,17 @@ fn apply_live_drag_chrome(
     motion: &mut MotionStyle,
     author_island_block: &Cell<Option<(taffy::style::Dimension, taffy::style::Dimension)>>,
 ) -> LayoutStatus {
+    let _ = drag_extent;
+    if el.layout_bounds[2] > 1.0 && el.layout_bounds[3] > 1.0 {
+        remember_draggable_bounds(scope, id, el.layout_bounds);
+    }
+    // Paint-time tree has nested islands filled. Assemble snapshot does not.
+    // Only recapture while the island is still at author opacity. `> 0.05`
+    // used to keep writing after the kit dimmed to 0.4, so the next ghost
+    // fill cloned the faded source.
+    if (el.style.opacity - author_opacity).abs() <= 0.02 && !snapshot_has_unresolved_island(el) {
+        remember_source_snapshot(scope, id, el);
+    }
     let list = list_sig.peek();
     let index = index_sig.peek();
     let is_active = active.peek().as_deref() == Some(id);
@@ -690,25 +793,21 @@ fn apply_live_drag_chrome(
             let hide = src_op <= 0.001;
             let cross = lists_cross;
             let swap = active_sort_mode() == SortMode::Swap;
-            want_opacity = src_op;
             if swap {
+                want_opacity = src_op;
                 want_translate = [0.0, 0.0];
                 follow_pointer = false;
             } else if hide {
+                want_opacity = src_op;
                 follow_pointer = true;
             } else if cross {
-                if let (Some(fl), Some(fi), Some(hl)) =
-                    (from_l.as_deref(), from_index.peek(), hover_l.as_deref())
-                {
-                    want_translate = live_cross_list_source_translate(
-                        fl,
-                        fi,
-                        hl,
-                        hover_index.peek(),
-                        peek_sort_axis(Some(hl), axis),
-                    );
-                }
+                // Body is painted by the target list's hole preview. Translating
+                // this island across containers cannot follow a moving origin.
+                want_opacity = 0.0;
+                want_translate = [0.0, 0.0];
+                follow_pointer = true;
             } else {
+                want_opacity = src_op;
                 want_translate = live_source_hole_translate(
                     axis,
                     list.as_deref(),
@@ -736,7 +835,8 @@ fn apply_live_drag_chrome(
         if active_sort_mode() == SortMode::Swap {
             want_translate = [0.0, 0.0];
         } else if in_group {
-            want_opacity = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
+            let src_op = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
+            want_opacity = src_op;
             want_translate = [0.0, 0.0];
         } else if also_droppable {
             if flags.skip_shift || super::session::active_pull_clone() {
@@ -810,38 +910,20 @@ fn apply_live_drag_chrome(
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
     let cross = is_active && from_l.is_some() && hover_l.is_some() && from_l != hover_l;
-    let author_sz = if cross {
-        author_island_block.get().unwrap_or((
-            taffy::style::Dimension::auto(),
-            taffy::style::Dimension::auto(),
-        ))
-    } else {
-        match author_island_block.get() {
-            Some(v) => v,
-            None => {
-                let v = match axis {
-                    Axis::X => (el.style.size.width, el.style.min_size.width),
-                    Axis::Y | Axis::Xy | Axis::Start => {
-                        (el.style.size.height, el.style.min_size.height)
-                    }
-                };
-                author_island_block.set(Some(v));
-                v
-            }
+    let author_sz = match author_island_block.get() {
+        Some(v) => v,
+        None => {
+            let v = match axis {
+                Axis::X => (el.style.size.width, el.style.min_size.width),
+                Axis::Y | Axis::Xy | Axis::Start => {
+                    (el.style.size.height, el.style.min_size.height)
+                }
+            };
+            author_island_block.set(Some(v));
+            v
         }
     };
-    let want_sz = if cross {
-        let e = drag_extent.peek();
-        let px = match axis {
-            Axis::X => e[0],
-            Axis::Y | Axis::Xy | Axis::Start => e[1],
-        }
-        .max(1.0);
-        let d = taffy::style::Dimension::length(px);
-        (d, d)
-    } else {
-        author_sz
-    };
+    let want_sz = author_sz;
     let have_sz = match axis {
         Axis::X => (el.style.size.width, el.style.min_size.width),
         Axis::Y | Axis::Xy | Axis::Start => (el.style.size.height, el.style.min_size.height),
@@ -870,17 +952,132 @@ fn apply_live_drag_chrome(
     )
 }
 
+fn strip_preview_session_attrs(el: &mut Element) {
+    for key in [
+        ATTR_DRAG_DRAGGABLE,
+        ATTR_DRAG_DROPPABLE,
+        ATTR_DRAG_HANDLE,
+        ATTR_DRAG_IGNORE,
+        ATTR_DRAG_SCOPE,
+        ATTR_DRAG_TYPE,
+        ATTR_DRAG_LIST,
+        ATTR_DRAG_INDEX,
+        ATTR_DRAG_GROUP,
+        ATTR_DRAG_DISABLED,
+        ATTR_DRAG_OVER,
+        ATTR_DRAG_ITEM_SHELL,
+        ATTR_DRAG_HOLE_PREVIEW,
+    ] {
+        el.attrs.remove(key);
+    }
+    el.on_mousedown = None;
+    el.on_mouseup = None;
+    el.on_mousemove = None;
+    el.on_click = None;
+    for child in &mut el.children {
+        strip_preview_session_attrs(child);
+    }
+}
+
+fn set_abs_inset(el: &mut Element, left: f32, top: f32) -> bool {
+    let have_l = crate::layout::lpa_length_px(el.style.inset.left).unwrap_or(0.0);
+    let have_t = crate::layout::lpa_length_px(el.style.inset.top).unwrap_or(0.0);
+    if (have_l - left).abs() < 0.5 && (have_t - top).abs() < 0.5 {
+        return false;
+    }
+    el.style.inset.left = taffy::style::LengthPercentageAuto::length(left);
+    el.style.inset.top = taffy::style::LengthPercentageAuto::length(top);
+    true
+}
+
+/// Cross-list dimmed body: a paint-only clone parented by the **target** list.
+/// Relative inset stays correct when the origin column vacates and the target
+/// moves; the source island itself stays in the origin tree at opacity 0.
+fn sync_cross_list_hole_preview(
+    el: &mut Element,
+    scope: &str,
+    list: &str,
+    from_list: Option<&str>,
+    hover_list: Option<&str>,
+    hover_index: Option<usize>,
+    axis: Axis,
+    chip: f32,
+    overlay_on: bool,
+) -> LayoutStatus {
+    let show = overlay_on
+        && from_list.is_some()
+        && hover_list == Some(list)
+        && from_list != hover_list
+        && active_sort_mode() != SortMode::Swap
+        && !active_pull_clone();
+    let existing = el
+        .children
+        .iter()
+        .position(|c| c.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW));
+    let src_id = active_draggable_id();
+    let src_op = src_id
+        .as_deref()
+        .map(|id| effective_source_opacity(scope, id))
+        .unwrap_or(0.0);
+    if !show || src_op <= 0.001 || src_id.is_none() {
+        if let Some(i) = existing {
+            el.children.remove(i);
+            return LayoutStatus::LayoutChanged;
+        }
+        return LayoutStatus::Clean;
+    }
+    let src_id = src_id.unwrap();
+    let hits = last_hits();
+    let axis = peek_sort_axis(Some(list), axis);
+    let Some(hole) = insert_hole_origin(&hits, list, hover_index, axis, chip.max(1.0)) else {
+        return LayoutStatus::Clean;
+    };
+    let list_origin = hits
+        .iter()
+        .find(|h| h.list_id.as_deref() == Some(list) && h.index.is_none())
+        .map(|h| [h.rect.x, h.rect.y])
+        .unwrap_or([el.layout_bounds[0], el.layout_bounds[1]]);
+    let local = [hole[0] - list_origin[0], hole[1] - list_origin[1]];
+    if let Some(i) = existing {
+        let preview = &mut el.children[i];
+        let mut changed = LayoutStatus::Clean;
+        if set_abs_inset(preview, local[0], local[1]) {
+            changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
+        if (preview.style.opacity - src_op).abs() > 0.001 {
+            preview.style.opacity = src_op;
+            changed = changed.merge(LayoutStatus::StyleChanged);
+        }
+        return changed;
+    }
+    let Some(mut preview) = clone_source_preview(scope, &src_id) else {
+        return LayoutStatus::Clean;
+    };
+    strip_preview_session_attrs(&mut preview);
+    preview.set_attr(ATTR_DRAG_HOLE_PREVIEW, "1");
+    preview.set_attr(ATTR_POINTER_EVENTS, "none");
+    preview.style.position = taffy::style::Position::Absolute;
+    preview.style.inset.left = taffy::style::LengthPercentageAuto::length(local[0]);
+    preview.style.inset.top = taffy::style::LengthPercentageAuto::length(local[1]);
+    preview.style.opacity = src_op;
+    el.children.push(preview);
+    LayoutStatus::LayoutChanged
+}
+
 /// Paint-only droppable chrome: `rui_drag_over` (solid-dnd `isActiveDroppable`)
-/// on the **hover target**, not the origin list, and a stacking bump so a
-/// dimmed source translated into another column paints above the target
-/// container. Colors stay with the caller.
+/// on the **hover target**, not the origin list. Cross-list hover parents a
+/// hole preview here so the dimmed body is a target descendant. Colors stay
+/// with the caller.
 fn apply_live_droppable_chrome(
     el: &mut Element,
+    scope: &str,
     id: &str,
     list: &str,
     active_droppable: Signal<Option<String>>,
     from_list: Signal<Option<String>>,
     hover_list: Signal<Option<String>>,
+    hover_index: Signal<Option<usize>>,
+    overlay_open: Signal<bool>,
     drag_extent: Signal<[f32; 2]>,
     axis: Axis,
     author_pad: &Cell<Option<f32>>,
@@ -893,7 +1090,8 @@ fn apply_live_droppable_chrome(
     let hover = hover_list.peek();
     let over = active_droppable.peek().as_deref() == Some(id) || hover.as_deref() == Some(list);
     let is_origin = from.as_deref() == Some(list);
-    let cross = is_origin && hover.is_some() && hover != from;
+    let is_origin_cross = is_origin && hover.is_some() && hover != from;
+    let is_target_cross = hover.as_deref() == Some(list) && from.is_some() && from != hover;
     let mut changed = LayoutStatus::Clean;
     let want_over = if over { Some("1") } else { None };
     let have_over = el.attrs.get(ATTR_DRAG_OVER).map(String::as_str);
@@ -905,7 +1103,7 @@ fn apply_live_droppable_chrome(
         }
         changed = changed.merge(LayoutStatus::StyleChanged);
     }
-    let want_z = if cross { author_z.max(2) } else { author_z };
+    let want_z = author_z;
     if el.style.z_index != want_z {
         el.style.z_index = want_z;
         changed = changed.merge(LayoutStatus::StyleChanged);
@@ -930,10 +1128,9 @@ fn apply_live_droppable_chrome(
         }
         .max(0.0)
     };
-    // Occupied target: snapshotted packed row (item + author gap). A
-    // one-item Later has no neighbour stride, so live `list_row_extent`
-    // would drop the gap (Gallery: 移回 Inbox 撑开/收缩都偏小). Empty
-    // lists still open `chip` only — there is no gap until a second row.
+    // Occupied target: one packed row. Empty lists still open `chip` only.
+    // Mid-list insert FLIPs siblings (paint-only); trailing pad grows the
+    // list so the last row still fits after the shift.
     let extent = pack_insert_extent(Some(list), axis, chip);
     let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover
     {
@@ -986,7 +1183,7 @@ fn apply_live_droppable_chrome(
             v
         }
     };
-    let want_pos = if cross {
+    let want_pos = if is_origin_cross || is_target_cross {
         taffy::style::Position::Relative
     } else {
         base_pos
@@ -995,10 +1192,22 @@ fn apply_live_droppable_chrome(
         el.style.position = want_pos;
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
-    if cross {
+    if is_origin_cross || is_target_cross {
         el.style.overflow.x = taffy::style::Overflow::Visible;
         el.style.overflow.y = taffy::style::Overflow::Visible;
     }
+    let overlay_on = overlay_is_registered(scope) && overlay_open.peek();
+    changed = changed.merge(sync_cross_list_hole_preview(
+        el,
+        scope,
+        list,
+        from.as_deref(),
+        hover.as_deref(),
+        hover_index.peek(),
+        axis,
+        chip,
+        overlay_on,
+    ));
     changed
 }
 
@@ -1019,6 +1228,7 @@ pub struct DragScopeBuilder {
     restrict: Restrict,
     restrict_end_only: bool,
     restrict_anchor: RestrictAnchor,
+    restrict_overflow: RestrictOverflow,
     snap: Option<Snap>,
     delay_ms: f32,
     empty_insert: f32,
@@ -1054,6 +1264,7 @@ pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
         restrict: Restrict::None,
         restrict_end_only: false,
         restrict_anchor: RestrictAnchor::FULL,
+        restrict_overflow: RestrictOverflow::Visible,
         snap: None,
         delay_ms: 0.0,
         empty_insert: 8.0,
@@ -1111,6 +1322,12 @@ impl DragScopeBuilder {
     /// `elementRect`). [`RestrictAnchor::CENTER`] only pins the midpoint.
     pub fn restrict_anchor(mut self, anchor: RestrictAnchor) -> Self {
         self.restrict_anchor = anchor;
+        self
+    }
+    /// Ghost paint vs the restrict box: `visible` (default, 透出) or `hidden` (裁切).
+    /// Position is still clamped; this only clips overlay ink that extends past the box.
+    pub fn restrict_overflow(mut self, overflow: impl Into<RestrictOverflow>) -> Self {
+        self.restrict_overflow = overflow.into();
         self
     }
     pub fn snap(mut self, snap: impl Into<Snap>) -> Self {
@@ -1293,6 +1510,7 @@ impl DragScopeBuilder {
                 restrict: self.restrict,
                 restrict_end_only: self.restrict_end_only,
                 restrict_anchor: self.restrict_anchor,
+                restrict_overflow: self.restrict_overflow,
                 snap: self.snap,
                 overlay_registered: false,
                 source_opacity: 1.0,
@@ -1365,6 +1583,7 @@ pub fn drag_scope_from_rsx(opts: DragScopeRsxOpts, body: impl FnOnce() -> Elemen
     b.restrict = opts.restrict;
     b.restrict_end_only = opts.restrict_end_only;
     b.restrict_anchor = opts.restrict_anchor;
+    b.restrict_overflow = opts.restrict_overflow;
     if let Some(snap) = opts.snap {
         b = b.snap(snap);
     }
@@ -1394,6 +1613,7 @@ pub struct DragScopeRsxOpts {
     pub restrict: Restrict,
     pub restrict_end_only: bool,
     pub restrict_anchor: RestrictAnchor,
+    pub restrict_overflow: RestrictOverflow,
     pub snap: Option<Snap>,
     pub snap_targets: Option<SnapTargets>,
     pub snap_fn: Option<SnapPointFn>,
@@ -1413,6 +1633,7 @@ impl Default for DragScopeRsxOpts {
             restrict: Restrict::default(),
             restrict_end_only: false,
             restrict_anchor: RestrictAnchor::FULL,
+            restrict_overflow: RestrictOverflow::Visible,
             snap: None,
             snap_targets: None,
             snap_fn: None,
@@ -1676,11 +1897,13 @@ fn assemble_draggable(
             &id_for_mark,
             Rc::clone(&body),
             item_ctx.clone(),
+            source_opacity,
         );
         let mut el = with_child_owner(|| {
             provide_context(item_context(), item_ctx.clone());
             wrap_fragment((body)())
         });
+        remember_source_snapshot(&scope_for_mark, &id_for_mark, &el);
         mark_scope(&mut el, &scope_for_mark);
         el.set_attr(ATTR_DRAG_DRAGGABLE, &id_for_mark);
         if also_droppable {
@@ -1961,6 +2184,8 @@ fn assemble_droppable(
     let active_droppable = ctx.active_droppable;
     let from_list = ctx.from_list;
     let hover_list = ctx.hover_list;
+    let hover_index = ctx.hover_index;
+    let overlay_open = ctx.overlay_open;
     let drag_extent = ctx.drag_extent;
     let axis = ctx.axis;
 
@@ -2012,6 +2237,7 @@ fn assemble_droppable(
         let prev = el.reactive_sync.take();
         let id_chrome = id_mark.clone();
         let list_chrome = list.clone();
+        let scope_chrome = scope_mark.clone();
         let author_pad = Rc::new(Cell::new(None::<f32>));
         let author_margin = Rc::new(Cell::new(None::<f32>));
         let author_pos = Rc::new(Cell::new(None::<taffy::style::Position>));
@@ -2022,11 +2248,14 @@ fn assemble_droppable(
                 .unwrap_or(LayoutStatus::Clean);
             st = st.merge(apply_live_droppable_chrome(
                 el,
+                &scope_chrome,
                 &id_chrome,
                 &list_chrome,
                 active_droppable,
                 from_list,
                 hover_list,
+                hover_index,
+                overlay_open,
                 drag_extent,
                 axis,
                 author_pad.as_ref(),

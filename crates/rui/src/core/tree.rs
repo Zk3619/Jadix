@@ -12,8 +12,9 @@ pub use crate::layout::dimension::{
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
-    parse_color, parse_text_color, CursorKind, CursorValue, LineStyle, TextDecorationStyle,
-    TextOverflow, TextStyle,
+    parse_color, parse_text_color, CursorKind, CursorValue, IntoAlignItems, IntoCursor,
+    IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle,
+    TextAlignDeclaration, TextDecorationStyle, TextOverflow, TextStyle,
 };
 pub use crate::style::{Style, UnitSlot};
 
@@ -189,6 +190,24 @@ impl PointerEvents {
             }),
             Self::Auto | Self::BoundingBox | Self::None | Self::BoxNone => None,
         }
+    }
+}
+
+impl From<&str> for PointerEvents {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for PointerEvents {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for PointerEvents {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -1415,17 +1434,6 @@ impl Element {
         }
     }
 
-    fn parse_overflow_mode(mode: &str) -> taffy::style::Overflow {
-        match mode.to_ascii_lowercase().as_str() {
-            "hidden" => taffy::style::Overflow::Hidden,
-            "clip" => taffy::style::Overflow::Clip,
-            "scroll" => taffy::style::Overflow::Scroll,
-            // Taffy does not expose CSS `auto`; map to scrollable behavior.
-            "auto" => taffy::style::Overflow::Scroll,
-            _ => taffy::style::Overflow::Visible,
-        }
-    }
-
     /// Allocates from the TLS inner slab, or the heap on a miss. `#[inline(never)]`
     /// keeps the `ElementInner` temporary inside this frame (MSVC debug would
     /// otherwise reserve it in every inlined caller).
@@ -1476,8 +1484,8 @@ impl Element {
 
     /// CSS [`cursor`](https://developer.mozilla.org/zh-CN/docs/Web/CSS/Reference/Properties/cursor)。
     /// `inherit` / `unset` 清除本节点声明（沿用祖先）。
-    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
-        self.cursor = CursorValue::parse_css(value.as_ref());
+    pub fn cursor(mut self, value: impl IntoCursor) -> Self {
+        self.cursor = value.into_cursor();
         self
     }
 
@@ -1617,8 +1625,8 @@ impl Element {
     /// - **SVG 专用**：`bounding-box` | `visiblePainted` | `visibleFill` | `visibleStroke` |
     ///   `visible` | `painted` | `fill` | `stroke` | `all`  
     ///   （Icon / `<svg>` 叶推荐 `bounding-box`；有 path 场景时 SVG 关键字走 fill/stroke 几何）
-    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
-        let parsed = PointerEvents::parse(mode.as_ref());
+    pub fn pointer_events(mut self, mode: impl Into<PointerEvents>) -> Self {
+        let parsed = mode.into();
         // Always persist（含 `auto`），以便 Svg 叶区分「显式 auto」与「未设置 → 默认 bounding-box」。
         self.set_attr(ATTR_POINTER_EVENTS, parsed.as_str());
         self
@@ -1696,18 +1704,18 @@ impl Element {
         self.gap_y(g)
     }
 
-    pub fn overflow(mut self, mode: impl AsRef<str>) -> Self {
-        let o = Self::parse_overflow_mode(mode.as_ref());
+    pub fn overflow(mut self, mode: impl IntoOverflow) -> Self {
+        let o = mode.into_overflow();
         self.style.overflow.x = o;
         self.style.overflow.y = o;
         self
     }
-    pub fn overflow_x(mut self, mode: impl AsRef<str>) -> Self {
-        self.style.overflow.x = Self::parse_overflow_mode(mode.as_ref());
+    pub fn overflow_x(mut self, mode: impl IntoOverflow) -> Self {
+        self.style.overflow.x = mode.into_overflow();
         self
     }
-    pub fn overflow_y(mut self, mode: impl AsRef<str>) -> Self {
-        self.style.overflow.y = Self::parse_overflow_mode(mode.as_ref());
+    pub fn overflow_y(mut self, mode: impl IntoOverflow) -> Self {
+        self.style.overflow.y = mode.into_overflow();
         self
     }
     /// Static string, [`crate::core::reactivity::Signal`], or `|| String` compute.
@@ -1721,8 +1729,8 @@ impl Element {
             .insert("font_family".to_string(), "1".to_string());
         self
     }
-    pub fn text_color(mut self, color: [u8; 4]) -> Self {
-        self.text_style.color = Some(color);
+    pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
+        self.text_style.color = Some(color.into_text_color());
         self
     }
     pub fn text_size(mut self, size: f32) -> Self {
@@ -1814,8 +1822,8 @@ impl Element {
         });
         self
     }
-    pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {
-        self.text_style.decoration_color = Some(color);
+    pub fn text_decoration_color(mut self, color: impl IntoTextColor) -> Self {
+        self.text_style.decoration_color = Some(color.into_text_color());
         self.text_style.decoration_color_specified = true;
         self
     }
@@ -1850,9 +1858,9 @@ impl Element {
         self.text_style.shadow_offset[1] = dy.into_f32();
         self
     }
-    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
-        use crate::style::{TextAlign, TextAlignDeclaration};
-        match TextAlign::parse_declaration(align.as_ref()) {
+    pub fn text_align(mut self, align: impl Into<TextAlignDeclaration>) -> Self {
+        use crate::style::TextAlign;
+        match align.into() {
             TextAlignDeclaration::Inherit => {
                 self.text_style.align = None;
             }
@@ -2040,23 +2048,23 @@ impl Element {
         self.attrs.insert("aria-labelledby".to_string(), ids.into());
         self
     }
-    pub fn bg(mut self, color: [f32; 4]) -> Self {
-        self.style.bg_color = color;
+    pub fn bg(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.bg_color = color.into_paint_color();
         self
     }
-    pub fn border(mut self, color: [f32; 4], width: f32) -> Self {
+    pub fn border(mut self, color: impl IntoPaintColor, width: f32) -> Self {
         self.style.border_style = LineStyle::Solid;
-        self.style.border_color = color;
+        self.style.border_color = color.into_paint_color();
         self.style.border_color_sides = None;
         self.style.set_uniform_border_width(width);
         self
     }
-    pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.border_style = LineStyle::from_css_keyword(style.as_ref());
+    pub fn border_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.border_style = style.into();
         self
     }
-    pub fn border_color(mut self, color: [f32; 4]) -> Self {
-        self.style.border_color = color;
+    pub fn border_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.border_color = color.into_paint_color();
         self.style.border_color_sides = None;
         self
     }
@@ -2081,38 +2089,38 @@ impl Element {
         self.style.set_border_side_width(3, width.into_f32());
         self
     }
-    pub fn border_top_color(mut self, color: [f32; 4]) -> Self {
-        self.style.set_border_side_color(0, color);
+    pub fn border_top_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.set_border_side_color(0, color.into_paint_color());
         self
     }
-    pub fn border_right_color(mut self, color: [f32; 4]) -> Self {
-        self.style.set_border_side_color(1, color);
+    pub fn border_right_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.set_border_side_color(1, color.into_paint_color());
         self
     }
-    pub fn border_bottom_color(mut self, color: [f32; 4]) -> Self {
-        self.style.set_border_side_color(2, color);
+    pub fn border_bottom_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.set_border_side_color(2, color.into_paint_color());
         self
     }
-    pub fn border_left_color(mut self, color: [f32; 4]) -> Self {
-        self.style.set_border_side_color(3, color);
+    pub fn border_left_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.set_border_side_color(3, color.into_paint_color());
         self
     }
-    pub fn border_top(self, color: [f32; 4], width: impl IntoF32) -> Self {
+    pub fn border_top(self, color: impl IntoPaintColor, width: impl IntoF32) -> Self {
         self.ensure_border_solid()
             .border_top_color(color)
             .border_top_width(width)
     }
-    pub fn border_right(self, color: [f32; 4], width: impl IntoF32) -> Self {
+    pub fn border_right(self, color: impl IntoPaintColor, width: impl IntoF32) -> Self {
         self.ensure_border_solid()
             .border_right_color(color)
             .border_right_width(width)
     }
-    pub fn border_bottom(self, color: [f32; 4], width: impl IntoF32) -> Self {
+    pub fn border_bottom(self, color: impl IntoPaintColor, width: impl IntoF32) -> Self {
         self.ensure_border_solid()
             .border_bottom_color(color)
             .border_bottom_width(width)
     }
-    pub fn border_left(self, color: [f32; 4], width: impl IntoF32) -> Self {
+    pub fn border_left(self, color: impl IntoPaintColor, width: impl IntoF32) -> Self {
         self.ensure_border_solid()
             .border_left_color(color)
             .border_left_width(width)
@@ -2130,37 +2138,33 @@ impl Element {
         self.border_bottom_width(width)
     }
     // Per-side style
-    pub fn border_top_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style
-            .set_border_side_style(0, LineStyle::from_css_keyword(style.as_ref()));
+    pub fn border_top_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.set_border_side_style(0, style.into());
         self
     }
-    pub fn border_right_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style
-            .set_border_side_style(1, LineStyle::from_css_keyword(style.as_ref()));
+    pub fn border_right_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.set_border_side_style(1, style.into());
         self
     }
-    pub fn border_bottom_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style
-            .set_border_side_style(2, LineStyle::from_css_keyword(style.as_ref()));
+    pub fn border_bottom_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.set_border_side_style(2, style.into());
         self
     }
-    pub fn border_left_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style
-            .set_border_side_style(3, LineStyle::from_css_keyword(style.as_ref()));
+    pub fn border_left_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.set_border_side_style(3, style.into());
         self
     }
     // Logical property style
-    pub fn border_inline_start_style(self, style: impl AsRef<str>) -> Self {
+    pub fn border_inline_start_style(self, style: impl Into<LineStyle>) -> Self {
         self.border_left_style(style)
     }
-    pub fn border_inline_end_style(self, style: impl AsRef<str>) -> Self {
+    pub fn border_inline_end_style(self, style: impl Into<LineStyle>) -> Self {
         self.border_right_style(style)
     }
-    pub fn border_block_start_style(self, style: impl AsRef<str>) -> Self {
+    pub fn border_block_start_style(self, style: impl Into<LineStyle>) -> Self {
         self.border_top_style(style)
     }
-    pub fn border_block_end_style(self, style: impl AsRef<str>) -> Self {
+    pub fn border_block_end_style(self, style: impl Into<LineStyle>) -> Self {
         self.border_bottom_style(style)
     }
     // Logical property color
@@ -2297,12 +2301,12 @@ impl Element {
         self.style.outline_width = width;
         self
     }
-    pub fn outline_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.outline_style = LineStyle::from_css_keyword(style.as_ref());
+    pub fn outline_style(mut self, style: impl Into<LineStyle>) -> Self {
+        self.style.outline_style = style.into();
         self
     }
-    pub fn outline_color(mut self, color: [f32; 4]) -> Self {
-        self.style.outline_color = color;
+    pub fn outline_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.outline_color = color.into_paint_color();
         self
     }
     pub fn outline_width(mut self, width: f32) -> Self {
@@ -2927,43 +2931,20 @@ impl Element {
     }
 
     /// `justify-content`，与 CSS / Tailwind `justify-*` 一致（区别于 [`Self::flex_items`] / `align-items`）。
-    pub fn justify(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.justify_content = Some(match s.as_str() {
-            "center" => JustifyContent::CENTER,
-            "start" | "flex-start" => JustifyContent::FLEX_START,
-            "end" | "flex-end" => JustifyContent::FLEX_END,
-            "between" | "space-between" => JustifyContent::SPACE_BETWEEN,
-            "around" | "space-around" => JustifyContent::SPACE_AROUND,
-            "evenly" | "space-evenly" => JustifyContent::SPACE_EVENLY,
-            _ => JustifyContent::FLEX_START,
-        });
+    pub fn justify(mut self, keyword: impl IntoJustifyContent) -> Self {
+        self.style.justify_content = Some(keyword.into_justify_content());
         self
     }
 
     /// `align-items`，与 RSX `items` / `align`、Tailwind `items-*` 一致。
-    pub fn flex_items(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.align_items = Some(match s.as_str() {
-            "center" => AlignItems::CENTER,
-            "start" | "flex-start" => AlignItems::FLEX_START,
-            "end" | "flex-end" => AlignItems::FLEX_END,
-            "stretch" => AlignItems::STRETCH,
-            "baseline" => AlignItems::BASELINE,
-            _ => AlignItems::STRETCH,
-        });
+    pub fn flex_items(mut self, keyword: impl IntoAlignItems) -> Self {
+        self.style.align_items = Some(keyword.into_align_items());
         self
     }
 
     /// `flex-wrap`：`wrap` / `nowrap` / `wrap-reverse`。
-    pub fn flex_wrap_kw(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.flex_wrap = match s.as_str() {
-            "wrap" => FlexWrap::Wrap,
-            "wrap-reverse" | "wrap_reverse" => FlexWrap::WrapReverse,
-            "nowrap" | "no-wrap" | "none" => FlexWrap::NoWrap,
-            _ => FlexWrap::NoWrap,
-        };
+    pub fn flex_wrap_kw(mut self, keyword: impl IntoFlexWrap) -> Self {
+        self.style.flex_wrap = keyword.into_flex_wrap();
         self
     }
 
@@ -3487,6 +3468,7 @@ impl Element {
     }
     pub fn letter_spacing(mut self, spacing: f32) -> Self {
         self.text_style.letter_spacing = spacing;
+        self.text_style.letter_spacing_specified = true;
         self
     }
     pub fn top(self, val: impl IntoCssDim) -> Self {

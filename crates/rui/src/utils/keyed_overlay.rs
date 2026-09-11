@@ -191,6 +191,7 @@ pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -
     }
     let preserve = !fresh.style.transition.is_empty()
         && (is_keyed_motion_item(fresh.template_id.as_deref())
+            || crate::utils::presence::is_presence_wrapper_tid(fresh.template_id.as_deref())
             || prev.transition_snapshot.has_active_tweens()
             || prev.transition_snapshot.has_any_tweens()
             || !prev.style.transition.is_empty()

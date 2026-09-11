@@ -343,6 +343,26 @@ impl super::App {
                         super::pointer_events::PointerKind::Down,
                     );
 
+                    if crate::utils::drag::is_dragging() {
+                        let (hits, viewport) = {
+                            let secs = self.secondaries.borrow();
+                            if let Some(sec) = secs.get(&id) {
+                                let size = sec.window.inner_size();
+                                let scale = sec.window.scale_factor() as f32;
+                                (
+                                    crate::utils::drag::collect_hits(&sec.root_element),
+                                    [
+                                        size.width as f32 / scale.max(1.0),
+                                        size.height as f32 / scale.max(1.0),
+                                    ],
+                                )
+                            } else {
+                                (Vec::new(), [0.0_f32, 0.0])
+                            }
+                        };
+                        let _ = crate::utils::drag::tick(x, y, &hits, viewport);
+                    }
+
                     use_signal("__rui_focus_visible", || false).set(false);
 
                     let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());

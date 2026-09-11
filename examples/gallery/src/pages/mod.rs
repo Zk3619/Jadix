@@ -9,6 +9,7 @@ pub(crate) mod navigation;
 pub(crate) mod overlay_shells;
 pub(crate) mod overlays;
 pub(crate) mod text;
+pub(crate) mod theme;
 
 pub(crate) use basics::*;
 pub(crate) use data::*;
@@ -21,3 +22,4 @@ pub(crate) use navigation::*;
 pub(crate) use overlay_shells::*;
 pub(crate) use overlays::*;
 pub(crate) use text::*;
+pub(crate) use theme::*;

@@ -123,13 +123,14 @@ impl SortMode {
     }
 }
 
-/// Ghost origin vs the source box (solid-dnd overlay measure / center).
+/// Ghost origin vs the pointer (solid-dnd overlay measure / center).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OverlayAlign {
     /// `origin = pointer - grab_offset` (item top-left follows the grab point).
     #[default]
     Grab,
-    /// Source-box center minus ghost half-size, then pointer delta.
+    /// Ghost center follows the (axis / restrict / snap) pointer:
+    /// `origin = pointer - ghost_size / 2`.
     Center,
 }
 
@@ -526,6 +527,52 @@ impl Default for RestrictAnchor {
     }
 }
 
+/// Paint overflow of the ghost vs the restrict box.
+///
+/// Position is still clamped by [`Restrict`] / [`RestrictAnchor`]. This only
+/// decides whether ink that extends past the box (rotation, a larger custom
+/// overlay, [`RestrictAnchor::CENTER`] corners) is **shown** or **clipped**.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RestrictOverflow {
+    /// Ghost may paint outside the restrict box (Pinned overlay default).
+    #[default]
+    Visible,
+    /// Clip the ghost to the restrict rectangle (viewport-space overflow hidden).
+    Hidden,
+}
+
+impl RestrictOverflow {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "hidden" | "clip" | "hide" => Self::Hidden,
+            _ => Self::Visible,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+        }
+    }
+
+    pub fn is_hidden(self) -> bool {
+        matches!(self, Self::Hidden)
+    }
+}
+
+impl From<&str> for RestrictOverflow {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for RestrictOverflow {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
 /// Viewport-space rectangle (logical px). Matches solid-dnd `Layout`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
@@ -783,6 +830,18 @@ mod tests {
         );
         assert!((origin[0] + 10.0).abs() < 1e-3, "{origin:?}");
         assert!((origin[1] + 10.0).abs() < 1e-3, "{origin:?}");
+    }
+
+    #[test]
+    fn restrict_overflow_parse() {
+        assert_eq!(RestrictOverflow::parse(""), RestrictOverflow::Visible);
+        assert_eq!(
+            RestrictOverflow::parse("visible"),
+            RestrictOverflow::Visible
+        );
+        assert_eq!(RestrictOverflow::parse("hidden"), RestrictOverflow::Hidden);
+        assert_eq!(RestrictOverflow::parse("clip"), RestrictOverflow::Hidden);
+        assert_eq!(RestrictOverflow::Hidden.as_str(), "hidden");
     }
 
     #[test]

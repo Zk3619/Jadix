@@ -230,4 +230,6 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Bundled fonts and icon assets are listed in [NOTICE](NOTICE).
+
+Dependency licenses are audited with [`deny.toml`](deny.toml) (`cargo deny check licenses`).

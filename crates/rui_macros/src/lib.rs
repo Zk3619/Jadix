@@ -664,6 +664,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         let children = #crate_path::app::reactive::take_component_children(&id);
                         #merge_base_stmt
                         let mut __el = { #body };
+                        __el = #crate_path::style::apply_stylesheet_rules_tree(__el);
                         if let Some(base_fn) = base.take() {
                             let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
                             __el = base_fn(builder).el;
@@ -679,6 +680,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#field_unwrapping)*
                 #merge_base_stmt
                 let mut __el = { #body };
+                __el = #crate_path::style::apply_stylesheet_rules_tree(__el);
                 #post_apply_base_stmt
                 __el
             })
@@ -2111,6 +2113,10 @@ fn expand_node(
                         .or_else(|| get_attr("restrictAnchor"))
                         .map(|e| quote! { rui::utils::drag::RestrictAnchor::parse(&(#e)) })
                         .unwrap_or_else(|| quote! { rui::utils::drag::RestrictAnchor::FULL });
+                    let restrict_overflow = get_attr("restrict_overflow")
+                        .or_else(|| get_attr("restrictOverflow"))
+                        .map(|e| quote! { rui::utils::drag::RestrictOverflow::parse(&(#e)) })
+                        .unwrap_or_else(|| quote! { rui::utils::drag::RestrictOverflow::Visible });
                     let threshold = get_attr("threshold")
                         .map(|e| quote_unitless_f32(e))
                         .unwrap_or_else(|| quote! { 4.0f32 });
@@ -2131,8 +2137,8 @@ fn expand_node(
                     let autoscroll = get_attr("autoscroll")
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
-                    let scroll_sensitivity = get_attr("scroll_sensitivity")
-                        .or_else(|| get_attr("scrollSensitivity"));
+                    let scroll_sensitivity =
+                        get_attr("scroll_sensitivity").or_else(|| get_attr("scrollSensitivity"));
                     let scroll_speed = get_attr("scroll_speed").or_else(|| get_attr("scrollSpeed"));
                     let scroll_lock = get_attr("scroll_lock")
                         .or_else(|| get_attr("scrollLock"))
@@ -2276,6 +2282,7 @@ fn expand_node(
                             __b = __b.restrict(rui::utils::drag::Restrict::parse(&(#restrict)));
                             __b = __b.restrict_end_only(#restrict_end_only);
                             __b = __b.restrict_anchor(#restrict_anchor);
+                            __b = __b.restrict_overflow(#restrict_overflow);
                             __b = __b.delay_ms(#delay_ms);
                             __b = __b.activation(#activation);
                             __b = __b.empty_insert(#empty_insert);
@@ -4533,6 +4540,15 @@ fn expand_node(
                         .unwrap_or_else(|| {
                             quote! { rui::utils::anchored_overlay::FloatingMotionKind::Fade }
                         });
+                    let mode = get_attr("mode")
+                        .map(|e| {
+                            quote! {
+                                rui::utils::anchored_overlay::parse_overlay_mode(&(#e).to_string())
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            quote! { rui::app::portal_overlay::OverlayMode::Stacked }
+                        });
                     let match_trigger = get_attr("match_trigger_width")
                         .or_else(|| get_attr("matchTriggerWidth"))
                         .map(|e| quote! { (#e) })
@@ -4568,23 +4584,27 @@ fn expand_node(
                     };
                     return quote! {
                         rui::utils::anchored_overlay::anchored_overlay_content_from_rsx(
-                            rui::utils::anchored_overlay::AnchoredOverlayContentOpts {
-                                placement: None,
-                                placement_mode: #placement_mode,
-                                side: #side,
-                                align: #align,
-                                side_offset: #side_offset,
-                                focus_id: #focus_id,
-                                strategy: #strategy,
-                                pos: #pos,
-                                x: #x,
-                                y: #y,
-                                gap: #gap,
-                                kind: #kind,
-                                motion: #motion,
-                                match_trigger_width: #match_trigger,
-                                max_h: #max_h,
-                                width: #width,
+                            {
+                                let mut __opts =
+                                    rui::utils::anchored_overlay::AnchoredOverlayContentOpts::default();
+                                __opts.placement = None;
+                                __opts.placement_mode = #placement_mode;
+                                __opts.side = #side;
+                                __opts.align = #align;
+                                __opts.side_offset = #side_offset;
+                                __opts.focus_id = #focus_id;
+                                __opts.strategy = #strategy;
+                                __opts.pos = #pos;
+                                __opts.x = #x;
+                                __opts.y = #y;
+                                __opts.gap = #gap;
+                                __opts.kind = #kind;
+                                __opts.motion = #motion;
+                                __opts.mode = #mode;
+                                __opts.match_trigger_width = #match_trigger;
+                                __opts.max_h = #max_h;
+                                __opts.width = #width;
+                                __opts
                             },
                             move || #child_el,
                         )
@@ -4732,14 +4752,14 @@ fn expand_node(
                         quote! {}
                     };
                     let drop_checker = get_attr("drop_checker").or_else(|| get_attr("dropChecker"));
-                    let on_drop_activate = get_attr("on_drop_activate")
-                        .or_else(|| get_attr("onDropActivate"));
-                    let on_drop_deactivate = get_attr("on_drop_deactivate")
-                        .or_else(|| get_attr("onDropDeactivate"));
-                    let on_drag_enter = get_attr("on_drag_enter")
-                        .or_else(|| get_attr("onDragEnter"));
-                    let on_drag_leave = get_attr("on_drag_leave")
-                        .or_else(|| get_attr("onDragLeave"));
+                    let on_drop_activate =
+                        get_attr("on_drop_activate").or_else(|| get_attr("onDropActivate"));
+                    let on_drop_deactivate =
+                        get_attr("on_drop_deactivate").or_else(|| get_attr("onDropDeactivate"));
+                    let on_drag_enter =
+                        get_attr("on_drag_enter").or_else(|| get_attr("onDragEnter"));
+                    let on_drag_leave =
+                        get_attr("on_drag_leave").or_else(|| get_attr("onDragLeave"));
                     let on_drop_move = get_attr("on_drop_move").or_else(|| get_attr("onDropMove"));
                     let on_drop = get_attr("on_drop").or_else(|| get_attr("onDrop"));
                     let drop_checker_ts = if let Some(f) = drop_checker {
@@ -7692,7 +7712,7 @@ fn expand_node(
                                 #(#prop_names: #prop_values,)*
                                 #rest_ts
                             });
-                            __rui_comp
+                            rui::style::apply_stylesheet_rules_tree(__rui_comp)
                         }
                     };
                 }
@@ -7705,6 +7725,7 @@ fn expand_node(
                             #(#prop_names: #prop_values,)*
                             #rest_ts
                         }).into();
+                        __rui_el = rui::style::apply_stylesheet_rules_tree(__rui_el);
                         #(#chrome_binds)*
                         #ref_bind_ts
                         __rui_el
@@ -9368,7 +9389,8 @@ mod rsx_lowering_tests {
 
     #[test]
     fn drag_provider_snap_fn_emits_builder() {
-        let s = expand(r#"<DragProvider id="p" snap_fn={f} snap={g} snap_targets={t}></DragProvider>"#);
+        let s =
+            expand(r#"<DragProvider id="p" snap_fn={f} snap={g} snap_targets={t}></DragProvider>"#);
         let compact = s.replace(' ', "");
         assert!(compact.contains("snap_fn"), "{s}");
         assert!(compact.contains("snap_targets"), "{s}");
@@ -9490,12 +9512,14 @@ mod rsx_lowering_tests {
 
     #[test]
     fn drag_provider_emits_sort_mode_and_multi_drag() {
-        let s = expand(r#"<DragProvider id="p" sort_mode="swap" multi_drag={true}></DragProvider>"#);
+        let s =
+            expand(r#"<DragProvider id="p" sort_mode="swap" multi_drag={true}></DragProvider>"#);
         let compact = s.replace(' ', "");
         assert!(compact.contains("SortMode::parse"), "{s}");
         assert!(compact.contains("\"swap\""), "{s}");
         assert!(compact.contains("multi_drag(true)"), "{s}");
-        let camel = expand(r#"<DragProvider id="p" sortMode="swap" multiDrag={true}></DragProvider>"#);
+        let camel =
+            expand(r#"<DragProvider id="p" sortMode="swap" multiDrag={true}></DragProvider>"#);
         let compact_camel = camel.replace(' ', "");
         assert!(compact_camel.contains("SortMode::parse"), "{camel}");
         assert!(compact_camel.contains("multi_drag(true)"), "{camel}");
@@ -9558,7 +9582,8 @@ mod rsx_lowering_tests {
 
     #[test]
     fn sortable_list_emits_direction() {
-        let s = expand(r#"<SortableList id="todo" direction="x"><Label>"x"</Label></SortableList>"#);
+        let s =
+            expand(r#"<SortableList id="todo" direction="x"><Label>"x"</Label></SortableList>"#);
         let compact = s.replace(' ', "");
         assert!(compact.contains("Axis::parse"), "{s}");
         assert!(compact.contains("direction"), "{s}");
@@ -9579,10 +9604,22 @@ mod rsx_lowering_tests {
     }
 
     #[test]
-    fn drag_provider_emits_sensor() {
-        let s = expand(
-            r#"<DragProvider id="p" sensor_id="kbd" sensor={|_| false}></DragProvider>"#,
+    fn drag_provider_emits_restrict_overflow() {
+        let s = expand(r#"<DragProvider id="p" restrict_overflow="hidden"></DragProvider>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("RestrictOverflow::parse"), "{s}");
+        assert!(compact.contains("restrict_overflow"), "{s}");
+        let camel = expand(r#"<DragProvider id="p" restrictOverflow="hidden"></DragProvider>"#);
+        assert!(
+            camel.replace(' ', "").contains("RestrictOverflow::parse"),
+            "{camel}"
         );
+    }
+
+    #[test]
+    fn drag_provider_emits_sensor() {
+        let s =
+            expand(r#"<DragProvider id="p" sensor_id="kbd" sensor={|_| false}></DragProvider>"#);
         let compact = s.replace(' ', "");
         assert!(compact.contains(".sensor("), "{s}");
     }

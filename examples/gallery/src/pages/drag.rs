@@ -603,7 +603,7 @@ fn rsx_multi_board(
     }
 }
 
-/// Overlay `child_for`: typed ghost smaller than the source (`align=center` pins the midpoint).
+/// Overlay `child_for`: typed ghost smaller than the source (`align=center` pins the midpoint to the pointer).
 fn typed_overlay_ghost(item: &DragItemCtx) -> Element {
     let (icon, caption) = match item.item_type.as_str() {
         "file" => ("file-text", "文件"),
@@ -2205,7 +2205,7 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 四角旋转"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "容器内一张卡片。restrict 填容器 id（corners-arena）或 parent（无需给父级分配 id，钳作者容器并跳过 kit shell）。本例用 arena id，浮层钳在整块虚线框内而不是整个视口：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按浮层在钳制行程内的位置插值）。缺省/viewport 仍可拖出父级做跨容器投放。source_opacity 0，只看到旋转浮层；松手卡片仍留在容器里。"
+                    "容器内一张卡片。restrict 填容器 id（corners-arena）或 parent（无需给父级分配 id，钳作者容器并跳过 kit shell）。本例用 arena id，浮层钳在整块虚线框内而不是整个视口：左上 −45°、右上 45°、左下 −135°、右下 135°（中心 0°，按浮层在钳制行程内的位置插值）。缺省 restrict_overflow=visible 让旋转角透出虚线框；下例 hidden 则裁切。缺省/viewport 仍可拖出父级做跨容器投放。source_opacity 0，只看到旋转浮层；按下不改本体，一开始拖就出替身，松手卡片仍留在容器里。"
                 </Label>
                 <DragProvider id="gal-drag-corners" collision="pointer-within" threshold={0}>
                     <Droppable id="corners-arena">
@@ -2243,13 +2243,54 @@ pub(crate) fn DragShowcase() -> Element {
                     />
                 </DragProvider>
 
+                <Label font_weight="600" text_size="0.875rem">"DragOverlay · 约束溢出隐藏"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "同样钳四角虚线框，但 restrict_overflow=hidden：旋转角裁在框内（透出是缺省 visible）。按下不改本体，一开始拖就出替身。"
+                </Label>
+                <DragProvider id="gal-drag-corners-clip" collision="pointer-within" threshold={0} restrict_overflow="hidden">
+                    <Droppable id="corners-clip-arena">
+                        <VStack
+                            w="100%"
+                            min_h="16rem"
+                            p="0.5rem"
+                            gap="0.25rem"
+                            rounded="0.75rem"
+                            bg="muted"
+                            border_style="dashed"
+                            border_width="1px"
+                            border_color="border"
+                            justify="between"
+                        >
+                            <HStack w="100%" justify="between">
+                                { corner_hint("−45°") }
+                                { corner_hint("45°") }
+                            </HStack>
+                            <Box w="100%" grow="1" items="center" justify="center">
+                                <Draggable id="corner-clip-card" item_type="chip" source_opacity={0} restrict="corners-clip-arena">
+                                    { card_chip("溢出隐藏") }
+                                </Draggable>
+                            </Box>
+                            <HStack w="100%" justify="between">
+                                { corner_hint("−135°") }
+                                { corner_hint("135°") }
+                            </HStack>
+                        </VStack>
+                    </Droppable>
+                    <DragOverlay
+                        class="shadow-lg"
+                        source_opacity={0}
+                        rotate={corner_overlay_angle("gal-drag-corners-clip", "corners-clip-arena")}
+                    />
+                </DragProvider>
+
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 自定义子树"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "子节点整段替换克隆：拖起时源卡片 source_opacity 0，只看到「自定义替身」。松手后源卡片进入容器。"
+                    "子节点整段替换克隆：按下不改本体；一开始拖就出「自定义替身」，源卡片 source_opacity 0。松手后源卡片进入容器。"
                 </Label>
                 <DragProvider
                     id="gal-drag-custom-ov"
                     collision="pointer-within"
+                    threshold={0}
                     onDragEnd={park_on_drop(custom_inbox, "custom-inbox")}
                 >
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
@@ -2287,10 +2328,11 @@ pub(crate) fn DragShowcase() -> Element {
 
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · 无本体仅浮层"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "源项 source_opacity 0：拖起后源位留空，只看到跟随指针的浮层。松手进右侧；拖到空白处放回。"
+                    "源项 source_opacity 0：按下不改本体；一开始拖源位留空，只看到跟随指针的浮层。松手进右侧；拖到空白处放回。"
                 </Label>
                 <DragProvider
                     id="gal-drag-hide-src"
+                    threshold={0}
                     collision="pointer-within"
                     onDragEnd={park_on_drop(ghost_only, "ghost-inbox")}
                 >
@@ -2634,7 +2676,7 @@ pub(crate) fn DragShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"DragOverlay · child_for + align=center"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "Builder child_for 按 item_type 画小幽灵（文件 / 文件夹），align=center 把幽灵中心钉在源卡片中心再跟手，不再贴抓点。RSX 函数 children 第一刀只走 Builder。"
+                    "Builder child_for 按 item_type 画小幽灵（文件 / 文件夹），align=center 把幽灵中心钉在鼠标，不再贴抓点。RSX 函数 children 第一刀只走 Builder。"
                 </Label>
                 <DragProvider id="gal-drag-child-for" collision="pointer-within">
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">

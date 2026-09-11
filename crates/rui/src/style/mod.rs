@@ -21,12 +21,14 @@ mod element_style;
 pub mod filter;
 mod focus_ring;
 pub(crate) mod gradient;
+mod into_value;
 pub mod keyframes;
 mod keyframes_parse;
 pub(crate) mod offset_path;
 mod scroll_timeline;
 mod semantic_tone;
 mod specified;
+pub mod stylesheet;
 pub mod svg_filter;
 mod tailwind_leading;
 mod text_style;
@@ -65,7 +67,13 @@ pub use clip_path::{
     ClipCoord, ClipFillRule, ClipPath, GpuClipPoly, GPU_CLIP_MAX_PTS,
 };
 pub use color::{
-    color_mix_over_background, parse_color, parse_text_color, try_parse_color, try_parse_text_color,
+    color_mix_over_background, parse_color, parse_text_color, try_parse_color,
+    try_parse_text_color, TRANSPARENT,
+};
+pub use into_value::{
+    overflow_as_str, parse_align_items, parse_flex_wrap, parse_justify_content,
+    parse_overflow_keyword, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
+    IntoOverflow, IntoPaintColor, IntoTextColor,
 };
 pub use color_space::{
     color_mix_over_surface, display_srgba_to_linear_srgba, encode_linear_srgb_component,
@@ -119,6 +127,13 @@ pub use semantic_tone::{
     SoftSemanticMix, MODAL_OVERLAY_OPACITY_NEUTRAL, SEMANTIC_MEDIA_WASH_ALPHA,
 };
 pub use specified::SpecifiedPresent;
+pub use stylesheet::{
+    apply_style_file_batch, apply_stylesheet_rules, apply_stylesheet_rules_tree, clear_stylesheets,
+    collect_matching_rules,
+    load_stylesheet, parse_stylesheet, register_stylesheet, reload_stylesheets, watch_stylesheets,
+    MatchedStyleRule, Selector, StyleRule, Stylesheet, StylesheetError,
+};
+pub(crate) use stylesheet::take_style_hot_rebuild;
 pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,
     resolve_filter_list_to_graph, resolve_svg_filter_url, FilterGraph, FilterParseError,
@@ -138,9 +153,9 @@ pub use theme::{
     theme_mode, toggle_theme_mode, with_theme, DesignTokens, FocusRingStyle, Theme, ThemeMode,
 };
 pub use theme_override::{
-    clear_theme_overrides, compose_theme, install_theme_overrides,
-    load_and_install_theme_overrides, load_theme_overrides, DesignTokensPatch, ThemeOverrideError,
-    ThemeOverrides,
+    apply_theme_patch, clear_theme_overrides, compose_theme, install_theme_overrides,
+    load_and_install_theme_overrides, load_theme_overrides, parse_theme_overrides_str,
+    DesignTokensPatch, ThemeOverrideError, ThemeOverrides,
 };
 pub use timeline::{
     any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,

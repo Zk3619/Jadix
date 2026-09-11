@@ -1,4 +1,4 @@
-//! Application-level theme token overrides (`theme.toml` / `theme.json`).
+//! Application-level theme token overrides (`theme.toml` only).
 //!
 //! Patches merge onto built-in shadcn v4 defaults per [`ThemeMode`]; [`set_theme_mode`]
 //! reapplies the active patch so light/dark toggles keep user branding.
@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::color::try_parse_color;
 use super::theme::{
@@ -19,7 +19,7 @@ thread_local! {
 }
 
 /// Partial token overrides for one theme mode (`[light]` / `[dark]` in `theme.toml`).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct DesignTokensPatch {
     pub background: Option<String>,
@@ -97,8 +97,8 @@ pub struct DesignTokensPatch {
     pub radius: Option<f32>,
 }
 
-/// Light/dark tables from `theme.toml` / `theme.json`.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+/// Light/dark tables from `theme.toml`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ThemeOverrides {
     pub light: DesignTokensPatch,
@@ -139,7 +139,7 @@ pub fn install_theme_overrides(overrides: ThemeOverrides) -> Result<(), ThemeOve
     Ok(())
 }
 
-/// Load `theme.toml` or `theme.json` and install.
+/// Load `theme.toml` and install.
 pub fn load_and_install_theme_overrides(path: impl AsRef<Path>) -> Result<(), ThemeOverrideError> {
     let overrides = load_theme_overrides(path)?;
     install_theme_overrides(overrides)
@@ -147,17 +147,33 @@ pub fn load_and_install_theme_overrides(path: impl AsRef<Path>) -> Result<(), Th
 
 pub fn load_theme_overrides(path: impl AsRef<Path>) -> Result<ThemeOverrides, ThemeOverrideError> {
     let path = path.as_ref();
-    let raw = fs::read_to_string(path).map_err(ThemeOverrideError::Io)?;
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    match ext.as_str() {
-        "toml" => toml::from_str(&raw).map_err(ThemeOverrideError::Toml),
-        "json" => serde_json::from_str(&raw).map_err(ThemeOverrideError::Json),
-        _ => Err(ThemeOverrideError::UnsupportedExtension(ext)),
+    if ext != "toml" {
+        return Err(ThemeOverrideError::UnsupportedExtension(ext.into()));
     }
+    let raw = fs::read_to_string(path).map_err(ThemeOverrideError::Io)?;
+    parse_theme_overrides_str(&raw)
+}
+
+/// Parse a `theme.toml` body.
+pub fn parse_theme_overrides_str(raw: &str) -> Result<ThemeOverrides, ThemeOverrideError> {
+    toml::from_str(raw).map_err(|e| ThemeOverrideError::Toml(e.to_string()))
+}
+
+/// Merge a single-mode patch onto built-in tokens for `mode` (does not store USER_OVERRIDES).
+pub fn apply_theme_patch(patch: &DesignTokensPatch, mode: ThemeMode) -> Theme {
+    let mut theme = match mode {
+        ThemeMode::Light => Theme::light(),
+        ThemeMode::Dark => Theme::dark(),
+    };
+    if let Err(err) = apply_design_tokens_patch(&mut theme.colors, patch) {
+        log::warn!("apply_theme_patch failed: {err}");
+    }
+    theme
 }
 
 /// Clear user overrides and restore built-in tokens for the current mode.
@@ -280,8 +296,7 @@ fn parse_focus_ring_style(raw: Option<&str>) -> Option<FocusRingStyle> {
 #[derive(Debug)]
 pub enum ThemeOverrideError {
     Io(std::io::Error),
-    Toml(toml::de::Error),
-    Json(serde_json::Error),
+    Toml(String),
     UnsupportedExtension(String),
     UnknownColor { field: String, value: String },
     UnknownFocusRingStyle { value: String },
@@ -292,8 +307,7 @@ impl std::fmt::Display for ThemeOverrideError {
         match self {
             Self::Io(e) => write!(f, "read theme file: {e}"),
             Self::Toml(e) => write!(f, "parse theme TOML: {e}"),
-            Self::Json(e) => write!(f, "parse theme JSON: {e}"),
-            Self::UnsupportedExtension(ext) => write!(f, "unsupported theme extension: {ext}"),
+            Self::UnsupportedExtension(ext) => write!(f, "unsupported theme extension: {ext} (use .toml)"),
             Self::UnknownColor { field, value } => {
                 write!(f, "unknown color for {field}: {value}")
             }
@@ -311,23 +325,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn json_patch_roundtrip() {
-        let raw = r#"{
-            "light": { "destructive": "oklch(0.577 0.245 27.325)" },
-            "dark": { "primary": "oklch(0.922 0 0)" }
-        }"#;
-        let patch: ThemeOverrides = serde_json::from_str(raw).expect("json");
+    fn toml_patch_parses_kebab_keys() {
+        let raw = r#"
+            [light]
+            primary-foreground = "oklch(0.985 0 0)"
+            destructive = "oklch(0.577 0.245 27.325)"
+            [dark]
+            primary = "oklch(0.922 0 0)"
+        "#;
+        let patch = parse_theme_overrides_str(raw).expect("toml");
+        assert!(patch.light.primary_foreground.is_some());
         assert!(patch.light.destructive.is_some());
         assert!(patch.dark.primary.is_some());
     }
 
     #[test]
-    fn toml_patch_parses_kebab_keys() {
-        let raw = r#"
-            [light]
-            primary-foreground = "oklch(0.985 0 0)"
-        "#;
-        let patch: ThemeOverrides = toml::from_str(raw).expect("toml");
-        assert!(patch.light.primary_foreground.is_some());
+    fn apply_theme_patch_only_changes_destructive() {
+        let patch = DesignTokensPatch {
+            destructive: Some("oklch(0.62 0.25 30)".into()),
+            ..Default::default()
+        };
+        let theme = apply_theme_patch(&patch, ThemeMode::Light);
+        let base = Theme::light();
+        assert_ne!(theme.colors.destructive, base.colors.destructive);
+        assert_eq!(theme.colors.primary, base.colors.primary);
+    }
+
+    #[test]
+    fn reject_non_toml_extension() {
+        let err = load_theme_overrides("theme.json").unwrap_err();
+        assert!(matches!(err, ThemeOverrideError::UnsupportedExtension(_)));
     }
 }

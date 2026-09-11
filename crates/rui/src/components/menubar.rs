@@ -356,7 +356,7 @@ pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 's
             },
             class: opts.class,
             style: opts.style,
-            motion: crate::components::internal::floating_motion::FloatingMotionKind::Expand,
+            motion: crate::utils::floating_kind::FloatingMotionKind::Expand,
         },
         body,
     );
@@ -375,7 +375,7 @@ pub fn menubar_sub_content(class: Option<String>, body: impl Fn() -> Element + '
     // Keep dropdown-menu-sub-content slot / placeholder identity for floating sync.
     crate::components::dropdown_menu::dropdown_menu_sub_content_ex(
         class,
-        crate::components::internal::floating_motion::FloatingMotionKind::Expand,
+        crate::utils::floating_kind::FloatingMotionKind::Expand,
         body,
     )
 }

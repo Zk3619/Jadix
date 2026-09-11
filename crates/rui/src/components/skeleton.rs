@@ -109,8 +109,8 @@ impl SkeletonBuilder {
         self
     }
 
-    pub fn bg(mut self, token: impl AsRef<str>) -> Self {
-        self.el = self.el.bg(parse_color(token.as_ref()));
+    pub fn bg(mut self, token: impl crate::style::IntoPaintColor) -> Self {
+        self.el = self.el.bg(token);
         self
     }
 }

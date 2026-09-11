@@ -43,8 +43,8 @@ pub use dropzone::{
 };
 pub use geometry::{
     clamp_origin_to_box, clamp_origin_to_box_anchor, distance, Activation, Axis, DragStack,
-    OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid, SnapPointFn, SnapTarget,
-    SnapTargets, SortMode,
+    OverlayAlign, Rect, Restrict, RestrictAnchor, RestrictOverflow, Snap, SnapGrid, SnapPointFn,
+    SnapTarget, SnapTargets, SortMode,
 };
 pub use modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
@@ -89,6 +89,8 @@ pub const ATTR_DRAG_GROUP: &str = "rui_drag_group";
 pub const ATTR_DRAG_DISABLED: &str = "rui_drag_disabled";
 pub const ATTR_DRAG_HANDLE: &str = "rui_drag_handle";
 pub const ATTR_DRAG_OVERLAY: &str = "rui_drag_overlay";
+/// Clip shell around a [`ATTR_DRAG_OVERLAY`] ghost (`RestrictOverflow::Hidden`).
+pub const ATTR_DRAG_OVERLAY_CLIP: &str = "rui_drag_overlay_clip";
 pub const ATTR_DRAG_IGNORE: &str = "rui_drag_ignore";
 /// Collision target (solid-dnd `isActiveDroppable`). Paint-only; not CSS `:hover`.
 pub const ATTR_DRAG_OVER: &str = "rui_drag_over";
@@ -107,3 +109,6 @@ pub const ATTR_DRAG_PULL_CLONE: &str = "rui_drag_pull_clone";
 pub const ATTR_DRAG_SWAP: &str = "rui_drag_swap";
 /// MultiDrag click-select (Sortable `selectedClass`).
 pub const ATTR_DRAG_SELECTED: &str = "rui_drag_selected";
+/// Paint-only clone of the source sitting in a **target** insert hole (cross-list).
+/// Not a hit target; stripped of session attrs so collision never sees it.
+pub const ATTR_DRAG_HOLE_PREVIEW: &str = "rui_drag_hole_preview";

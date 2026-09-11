@@ -27,7 +27,7 @@
 //! Builder `.class()` / `.style()` land on the **trigger**. Panel card: `.content_class()` /
 //! `.content_style()`. Sugar internals (day cells, HMS comboboxes) stay default chrome.
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
 use crate::components::base::SlotChrome;
 use crate::components::button::button;
@@ -37,16 +37,17 @@ use crate::components::calendar::{
 };
 use crate::components::combobox::{combobox, ComboboxItemData};
 use crate::components::separator::separator;
-use crate::core::reactivity::{isolate_reads, use_signal, Signal};
+use crate::core::reactivity::{isolate_reads, use_signal, with_child_owner, Signal};
 use crate::core::tree::{parse_text_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
+};
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
-};
+use crate::utils::popup::{PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W};
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
@@ -638,9 +639,24 @@ fn build_date_picker_view(
             .child(reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none());
     }
 
-    // 浮层只订 open：改 HMS / 选日不重建 portal（否则 Calendar/Combobox 占位塌成图二）。
-    let panel_anchor = format!("{id}__panel_view");
-    {
+    let trigger_fid = use_signal(
+        format!("{id}__dp_trigger_fid").as_str(),
+        || trigger_focus_id(&id),
+    );
+    let panel_slot = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
+        let ao_opts = AnchoredOverlayContentOpts {
+            placement: Some(Placement::trigger(
+                trigger_focus_id(&id),
+                PopupPlacement::BottomStart,
+                4.0,
+                FloatingStrategy::Fixed,
+            )),
+            kind: OverlayKind::Popover,
+            motion: FloatingMotionKind::Fade,
+            mode: OverlayMode::Stacked,
+            ..Default::default()
+        };
         let id = id.clone();
         let kind = kind;
         let caption = caption;
@@ -652,30 +668,18 @@ fn build_date_picker_view(
         let minute = minute;
         let second = second;
         let content_chrome = content_chrome.clone();
-        reactive_anchor(panel_anchor.clone(), move || {
-            // 先订 open：关闭时 portal_sync 返回 None 也必须留下订阅。
-            let is_open = open.get();
-            if !is_open {
-                let _ = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked);
-                return Element::new().w(0.0).h(0.0);
-            }
-            let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked)
-            else {
-                return Element::new().w(0.0).h(0.0);
-            };
+        anchored_overlay_content(ao_opts, move || {
             if kind == DatePickerKind::Week {
                 // 周列表依赖年/月；Month 用 caption Select，勿订 year/month（否则换年重建 Select）。
                 let _ = year.get();
                 let _ = month.get();
             }
             // isolate_reads：is_tracking 仍为 true，Calendar/Combobox 才能注册 anchor。
-            // Untrackable (current_effect=None → reactive_anchor returns directly → only the dividing line/colon is left in the floating layer).
             isolate_reads(|| {
-                build_date_picker_floating_panel(
+                let mut panel = build_date_picker_panel_content(
                     &id,
                     kind,
                     caption,
-                    oz.panel,
                     open,
                     val,
                     year,
@@ -683,21 +687,23 @@ fn build_date_picker_view(
                     hour,
                     minute,
                     second,
-                    content_chrome.clone(),
-                )
+                );
+                panel = content_chrome.apply(panel);
+                panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+                panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+                panel
             })
-        });
-    }
-    view = view.child(reactive_placeholder_sized(panel_anchor, 0.0, 0.0).pointer_events_box_none());
+        })
+    });
+    view = view.child(panel_slot);
 
     view
 }
 
-fn build_date_picker_floating_panel(
+fn build_date_picker_panel_content(
     id: &str,
     kind: DatePickerKind,
     caption: CalendarCaption,
-    oz_panel: i32,
     open: Signal<bool>,
     val: Signal<String>,
     year: Signal<i32>,
@@ -705,7 +711,6 @@ fn build_date_picker_floating_panel(
     hour: Signal<String>,
     minute: Signal<String>,
     second: Signal<String>,
-    content_chrome: SlotChrome,
 ) -> Element {
     // Week 导航要订 year/month；Month/DateTime 只 peek，避免改选项拆掉浮层内 Select。
     let (y, m) = match kind {
@@ -719,7 +724,7 @@ fn build_date_picker_floating_panel(
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.12], 8.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 8.0)
         .overflow("hidden");
 
     match kind {
@@ -881,15 +886,7 @@ fn build_date_picker_floating_panel(
         }
     }
 
-    let trigger_fid = trigger_focus_id(id);
-    let mut floating = content_chrome.apply(panel);
-    floating = floating.absolute();
-    mark_floating(&mut floating, id, &trigger_fid, PopupPlacement::BottomStart);
-    floating.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-    floating.set_attr(ATTR_FLOATING_MIN_W, "0");
-    floating.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-    apply_stored_floating_place(&mut floating, id);
-    mount_anchored_overlay(floating, oz_panel)
+    panel
 }
 
 impl From<DatePickerBuilder> for Element {
@@ -1097,11 +1094,10 @@ mod tests {
                     runs.set(runs.get() + 1);
                     let _ = open.get();
                     isolate_reads(|| {
-                        let _ = build_date_picker_floating_panel(
+                        let _ = build_date_picker_panel_content(
                             "t-p",
                             DatePickerKind::DateTimeLocal,
                             CalendarCaption::Label,
-                            1,
                             open,
                             val,
                             year,
@@ -1109,7 +1105,6 @@ mod tests {
                             hour,
                             minute,
                             second,
-                            SlotChrome::default(),
                         );
                     });
                 }

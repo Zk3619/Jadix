@@ -7,6 +7,7 @@ use rui::primitives::r#box::vstack;
 use rui::tokens;
 use rui::utils::anchored_overlay::{anchored_overlay, drag_handle, FloatingStrategy, Placement};
 use rui::utils::popup::{disarm_underlay_close, PopupPlacement};
+use rui::utils::presence::presence;
 
 fn shell_panel(title: &str, body: &str, extra: Element) -> Element {
     let mut panel: Element = vstack()
@@ -594,6 +595,147 @@ fn local_scrim_key_scene() -> Element {
                 </Box>
             </Portal>
         </Box>
+    }
+}
+
+fn presence_demo_card(title: &str, body: &str) -> Element {
+    let mut panel: Element = vstack()
+        .w("12rem")
+        .p("0.75rem")
+        .gap("0.35rem")
+        .rounded("0.5rem")
+        .into();
+    panel = panel
+        .bg(tokens::popover())
+        .border_style("solid")
+        .border_width(1.0)
+        .border_color(tokens::border())
+        .shadow([0.0, 0.0, 0.0, 0.12], 10.0);
+    panel.child(ui! {
+        <VStack gap="0.35rem" w="100%">
+            <Label font_weight="600" text_size="0.875rem">{ title.to_string() }</Label>
+            <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                { body.to_string() }
+            </Label>
+        </VStack>
+    })
+}
+
+#[component]
+pub(crate) fn PresenceShowcase() -> Element {
+    let instant_open = use_signal("gal_pres_instant_open", || false);
+    let presence_open = use_signal("gal_pres_exit_open", || false);
+
+    let instant_b = {
+        let open = instant_open;
+        ui! {
+            <HStack gap="0.5rem" items="center" wrap="wrap">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    on_click={move || open.set(!open.peek())}
+                >
+                    { if open.get() { "关闭 Builder 即时卸树" } else { "打开 Builder 即时卸树" } }
+                </Button>
+                <Show when={open.get()}>
+                    { presence_demo_card(
+                        "即时卸树 · Builder",
+                        "open=false 后子树立刻消失，无退场窗口。",
+                    ) }
+                </Show>
+            </HStack>
+        }
+    };
+
+    let presence_rsx = presence(
+        "gal-pres-exit-rsx",
+        presence_open,
+        320,
+        move || {
+            let exiting = !presence_open.peek();
+            let mut card = presence_demo_card(
+                "presence() · RSX",
+                "仍挂载至 exit_ms；作者用 opacity 播退场。",
+            );
+            card = card
+                .opacity(if exiting { 0.0 } else { 1.0 })
+                .transition("opacity 320ms ease");
+            card
+        },
+    );
+
+    let presence_b = {
+        let open = presence_open;
+        let panel = presence(
+            "gal-pres-exit-b",
+            open,
+            320,
+            move || {
+                let exiting = !open.peek();
+                let mut card = presence_demo_card(
+                    "presence() · Builder",
+                    "open=false 后仍挂载 320ms；opacity 过渡模拟退场。",
+                );
+                card = card
+                    .opacity(if exiting { 0.0 } else { 1.0 })
+                    .transition("opacity 320ms ease");
+                card
+            },
+        );
+        ui! {
+            <HStack gap="0.5rem" items="center" wrap="wrap">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    on_click={move || open.set(!open.peek())}
+                >
+                    { if open.get() { "关闭 Builder presence" } else { "打开 Builder presence" } }
+                </Button>
+                { panel }
+            </HStack>
+        }
+    };
+
+    ui! {
+        <MyCard title="Presence：即时卸树 vs 退场保留">
+            <VStack gap="0.75rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "utils::presence::presence：show=false 进入 Exiting，墙钟到期再 Absent。对比 Show when / if 的即时卸树。"
+                </Label>
+                <Label font_weight="600" text_size="0.875rem">"即时卸树 · RSX"</Label>
+                <HStack gap="0.5rem" items="center" wrap="wrap">
+                    <Button
+                        variant="default"
+                        size="sm"
+                        on_click={move || instant_open.set(!instant_open.peek())}
+                    >
+                        { if instant_open.get() { "关闭 RSX 即时卸树" } else { "打开 RSX 即时卸树" } }
+                    </Button>
+                    <Show when={instant_open.get()}>
+                        { presence_demo_card(
+                            "即时卸树 · RSX",
+                            "条件块 false 后子树当帧卸掉。",
+                        ) }
+                    </Show>
+                </HStack>
+                <Label font_weight="600" text_size="0.875rem">"即时卸树 · Builder"</Label>
+                { instant_b }
+                <Separator />
+                <Label font_weight="600" text_size="0.875rem">"presence() 退场 · RSX"</Label>
+                <HStack gap="0.5rem" items="center" wrap="wrap">
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        on_click={move || presence_open.set(!presence_open.peek())}
+                    >
+                        { if presence_open.get() { "关闭 RSX presence" } else { "打开 RSX presence" } }
+                    </Button>
+                    { presence_rsx }
+                </HStack>
+                <Label font_weight="600" text_size="0.875rem">"presence() 退场 · Builder"</Label>
+                { presence_b }
+            </VStack>
+        </MyCard>
     }
 }
 

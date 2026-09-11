@@ -2193,7 +2193,7 @@ impl SvgBuilder {
 
     /// Hit policy on the Svg leaf ([CSS pointer-events](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)).
     /// Defaults in [`From`] to SVG-only `bounding-box`; override with generic `auto`/`none` or other SVG keywords (path-level fill/stroke).
-    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+    pub fn pointer_events(mut self, mode: impl Into<crate::core::tree::PointerEvents>) -> Self {
         self.el = self.el.pointer_events(mode);
         self
     }

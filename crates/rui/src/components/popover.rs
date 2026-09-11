@@ -58,10 +58,6 @@
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
@@ -73,11 +69,11 @@ use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
-use crate::utils::popup::{
-    disarm_underlay_close, mark_floating_with_gap, mount_anchored_overlay, panel_block_clicks,
-    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
-    ATTR_FLOATING_W,
+use crate::utils::anchored_overlay::{
+    anchored_overlay, anchored_overlay_content, provide_anchored_overlay_context,
+    AnchoredOverlayContentOpts, FloatingMotionKind, FloatingStrategy, Placement,
 };
+use crate::utils::popup::{disarm_underlay_close, PopupPlacement};
 use crate::utils::take_packed;
 use rui_macros::component;
 
@@ -122,6 +118,7 @@ pub fn popover_scope(
         format!("{id}__popover_trigger")
     });
     let mut root = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             popover_context(),
             PopoverCtx {
@@ -339,66 +336,24 @@ pub fn popover_surface(mut body: Element, width: Option<&str>) -> Element {
 /// ShadCN `PopoverContent`：Portal + floating；仅在 open 时构建。
 /// `ui!` 中由宏编成此函数。
 pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 'static) -> Element {
-    let ctx = require_popover("PopoverContent");
-    let open = ctx.open;
-    let id = ctx.id.clone();
-    let trigger_fid = ctx.trigger_fid;
-    let placement = popover_side_align_to_placement(&opts.side, &opts.align);
-    let side_offset = opts.side_offset;
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let strategy = opts.strategy.filter(|s| !s.trim().is_empty());
-    let width = opts.width;
-    let view_id = format!("{id}__popover_view");
-    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
-
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &id,
-            open,
-            &presence,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-        ) else {
-            return Element::new().w(0.0).h(0.0);
-        };
-
-        let mut panel = popover_surface(body(), width.as_deref());
-        panel = chrome.apply(panel);
-        let anchor = trigger_fid.peek();
-        mark_floating_with_gap(&mut panel, &id, &anchor, placement, side_offset);
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
-        if let Some(ref w) = width {
-            let w = w.trim();
-            if !w.is_empty() && !w.eq_ignore_ascii_case("auto") {
-                panel.set_attr(ATTR_FLOATING_W, w);
-            }
-        } else {
-            panel.set_attr(ATTR_FLOATING_W, "18rem");
-        }
-        if strategy
-            .as_deref()
-            .is_some_and(|s| s.eq_ignore_ascii_case("fixed"))
-        {
-            panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-        }
-        panel = panel.absolute();
-        if apply_floating_panel_motion(
-            &id,
-            &mut panel,
-            FloatingMotionKind::Fade,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+    let width = opts.width.clone();
+    let strategy = opts.strategy.clone().unwrap_or_default();
+    let ao_opts = AnchoredOverlayContentOpts {
+        side: opts.side.clone(),
+        align: opts.align.clone(),
+        side_offset: opts.side_offset,
+        strategy,
+        kind: OverlayKind::Popover,
+        motion: FloatingMotionKind::Fade,
+        mode: OverlayMode::Stacked,
+        width: width.clone().or_else(|| Some("18rem".into())),
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
+        let panel = popover_surface(body(), width.as_deref());
+        chrome.apply(panel)
+    })
 }
 
 /// ShadCN `PopoverHeader`。
@@ -572,61 +527,43 @@ impl From<PopoverPanelBuilder> for Element {
             open,
             body,
             id,
-            z_override,
             anchor_focus_id,
             placement,
             side_offset,
             strategy,
+            ..
         } = builder;
         let id = id.unwrap_or_else(|| "popover".into());
-        let view_id = format!("{id}__popover_panel_view");
-        let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
-
-        reactive_view(view_id, move || {
-            let Some((phase, oz)) = floating_portal_phase(
-                &id,
-                open,
-                &presence,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-            ) else {
-                return Element::new();
-            };
-            let inner_body = if let Some(build) = &body {
-                build()
-            } else {
-                Element::new()
-            };
-            let mut inner = popover_surface(inner_body, None);
-            if let Some(anchor) = &anchor_focus_id {
-                mark_floating_with_gap(&mut inner, &id, anchor, placement, side_offset);
-                if strategy.eq_ignore_ascii_case("fixed") {
-                    inner.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-                }
-                inner.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-                inner.set_attr(ATTR_FLOATING_W, "18rem");
-                inner = inner.absolute();
-            }
-            if apply_floating_panel_motion(
-                &id,
-                &mut inner,
-                FloatingMotionKind::Fade,
-                phase,
-                &presence,
-                open,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-                None,
-            ) {
-                crate::app::runtime::request_redraw();
-            }
-            let z = z_override.unwrap_or(oz.panel);
-            if anchor_focus_id.is_some() {
-                mount_anchored_overlay(inner, z)
-            } else {
-                panel_block_clicks(inner, z)
-            }
-        })
+        let Some(build) = body else {
+            return Element::new();
+        };
+        let strat = if strategy.trim().eq_ignore_ascii_case("fixed") {
+            FloatingStrategy::Fixed
+        } else {
+            FloatingStrategy::Auto
+        };
+        if let Some(anchor) = anchor_focus_id {
+            anchored_overlay(&id)
+                .open(open)
+                .placement(Placement::Trigger {
+                    focus_id: anchor,
+                    placement,
+                    gap: side_offset,
+                    strategy: strat,
+                })
+                .kind(OverlayKind::Popover)
+                .width("18rem")
+                .child(move || popover_surface(build(), None))
+                .into()
+        } else {
+            anchored_overlay(&id)
+                .open(open)
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover)
+                .width("18rem")
+                .child(move || popover_surface(build(), None).fixed().top("1rem").right("1rem"))
+                .into()
+        }
     }
 }
 
@@ -659,7 +596,7 @@ mod tests {
             })
         });
         fn find_zero(el: &Element) -> bool {
-            let is_view = el.template_id.as_deref() == Some("pop-anchor__popover_view");
+            let is_view = el.template_id.as_deref() == Some("pop-anchor__view");
             let dim0 = crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
                 && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0);
             (is_view && dim0) || el.children.iter().any(find_zero)
@@ -683,54 +620,38 @@ mod tests {
     #[test]
     fn content_keeps_panel_tid_while_exiting() {
         use crate::app::portal_overlay::clear_overlay_stack;
-        use crate::components::internal::floating_motion::{
-            apply_floating_panel_motion, floating_mounted_signal, floating_portal_phase,
-            use_floating_presence, FloatingMotionKind,
-        };
         use crate::core::reactivity::Signal;
+        use crate::utils::anchored_overlay::{
+            anchored_overlay_is_mounted, anchored_overlay_phase,
+            apply_anchored_overlay_panel_motion, AnchoredOverlayContentOpts,
+        };
         use crate::utils::presence::PresencePhase;
 
         clear_overlay_stack();
         create_root(|| {
             let open = Signal::new(true);
             let id = "pop-exit-smoke";
-            let presence = use_floating_presence(id, FloatingMotionKind::Fade);
-            let Some((phase, _)) = floating_portal_phase(
-                id,
-                open,
-                &presence,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-            ) else {
-                panic!("must mount when open");
+            let opts = AnchoredOverlayContentOpts {
+                kind: OverlayKind::Popover,
+                motion: FloatingMotionKind::Fade,
+                mode: OverlayMode::Stacked,
+                ..Default::default()
             };
-            assert_eq!(phase, PresencePhase::Present);
+            assert_eq!(
+                anchored_overlay_phase(id, open, &opts),
+                Some(PresencePhase::Present)
+            );
 
             open.set(false);
-            let Some((phase, _)) = floating_portal_phase(
-                id,
-                open,
-                &presence,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-            ) else {
-                panic!("must stay mounted while exiting");
-            };
-            assert_eq!(phase, PresencePhase::Exiting);
-            assert!(floating_mounted_signal(&presence).peek());
+            assert_eq!(
+                anchored_overlay_phase(id, open, &opts),
+                Some(PresencePhase::Exiting),
+                "must stay mounted while exiting"
+            );
+            assert!(anchored_overlay_is_mounted(id, &opts));
 
             let mut panel = Element::new();
-            apply_floating_panel_motion(
-                id,
-                &mut panel,
-                FloatingMotionKind::Fade,
-                phase,
-                &presence,
-                open,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-                None,
-            );
+            apply_anchored_overlay_panel_motion(id, &mut panel, &opts, open);
             assert_eq!(
                 panel.template_id.as_deref(),
                 Some("pop-exit-smoke__floating_panel")

@@ -6,4 +6,10 @@ description = "Shared Tailwind/Uno-style utility token catalog and variant parsi
 license = "MIT"
 repository = "https://github.com/Zk3619/rui"
 
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/src/**/*",
+]
+
 [dependencies]

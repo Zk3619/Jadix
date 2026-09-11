@@ -1,0 +1,3 @@
+# WP-STY.1 color audit allowlist.
+# One `path:line:…` hit per line (as printed by ripgrep -n). Must include a reason in a comment above.
+# Shrink this list; do not add new product chrome without a token.

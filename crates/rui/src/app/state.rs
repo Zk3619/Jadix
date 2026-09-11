@@ -2036,7 +2036,7 @@ impl AppState {
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
         let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
         let (viewport_w, viewport_h) = self.logical_size();
-        crate::components::drawer::set_drawer_viewport_size(viewport_w, viewport_h);
+        crate::utils::modal_motion::set_modal_viewport_size(viewport_w, viewport_h);
         crate::components::carousel::begin_carousel_paint_frame();
         crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
@@ -2265,10 +2265,10 @@ impl AppState {
         // tick skips them via `modal_shell_defer_css_tick` so we do not double-step
         // (or step a stale un-hoisted copy).
         let modal_needs_frame =
-            crate::components::internal::modal_motion::flush_modal_shell_motion_subtree(
+            crate::utils::modal_motion::flush_modal_shell_motion_subtree(
                 &mut self.root_element,
             );
-        let modal_css_ticking = crate::components::internal::modal_motion::tick_hoisted_modal_css(
+        let modal_css_ticking = crate::utils::modal_motion::tick_hoisted_modal_css(
             &mut self.root_element,
         );
         // Floating Expand 依赖 layout_bounds 测高；Fade 也可在 layout 后 seed。
@@ -2555,16 +2555,16 @@ impl AppState {
         }
         // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
         let floating_needs_frame =
-            crate::components::internal::floating_motion::flush_floating_motion_subtree(
+            crate::utils::floating_motion::flush_floating_motion_subtree(
                 &mut self.root_element,
             );
         let floating_css_ticking =
-            crate::components::internal::floating_motion::tick_hoisted_floating_css(
+            crate::utils::floating_motion::tick_hoisted_floating_css(
                 &mut self.root_element,
             );
         if floating_needs_frame || floating_css_ticking {
             // Expand 写入的 max-height keyframe 需再跑一趟 Taffy，本帧才能裁剪高度。
-            crate::components::internal::floating_motion::mark_floating_panels_layout_dirty(
+            crate::utils::floating_motion::mark_floating_panels_layout_dirty(
                 &self.root_element,
                 &mut self.layout_tree,
             );
@@ -3227,7 +3227,7 @@ impl AppState {
                         (upload_done - layout_done).as_secs_f32() * 1000.0,
                         (fx_done - fx_begin).as_secs_f32() * 1000.0,
                         (text_done - fx_done).as_secs_f32() * 1000.0,
-                        crate::components::internal::modal_motion::any_modal_css_needs_frame(),
+                        crate::utils::modal_motion::any_modal_css_needs_frame(),
                     );
                 }
                 if !self.needs_text_settle {
@@ -4035,7 +4035,7 @@ impl AppState {
                     (encode_done - acquire_done).as_secs_f32() * 1000.0,
                     (submit_done - submit_begin).as_secs_f32() * 1000.0,
                     (draw_done - present_begin).as_secs_f32() * 1000.0,
-                    crate::components::internal::modal_motion::any_modal_css_needs_frame(),
+                    crate::utils::modal_motion::any_modal_css_needs_frame(),
                 );
             }
 

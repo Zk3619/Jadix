@@ -16,6 +16,7 @@ fn gallery_section_body(section: &str) -> rui::core::tree::Element {
         "navigation" => GallerySectionNavigation(GallerySectionNavigationProps::default()),
         "layout" => GallerySectionLayout(GallerySectionLayoutProps::default()),
         "text" => GallerySectionText(GallerySectionTextProps::default()),
+        "theme" => GallerySectionTheme(GallerySectionThemeProps::default()),
         "about" => GallerySectionAbout(GallerySectionAboutProps::default()),
         _ => GallerySectionBasics(GallerySectionBasicsProps::default()),
     }
@@ -1114,6 +1115,7 @@ fn headless_layout_all_sections_does_not_overflow() {
                     "navigation",
                     "layout",
                     "text",
+                    "theme",
                     "about",
                 ] {
                     let mut tree = gallery_section_body(key);
@@ -1138,6 +1140,25 @@ fn gallery_find_attr(el: &rui::core::tree::Element, key: &str, value: &str) -> b
         stack.extend(el.children.iter().rev());
     }
     false
+}
+
+#[test]
+fn theme_section_mounts_controls() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, tree) = create_root(|| gallery_section_body("theme"));
+        assert!(
+            find_tid(&tree, "gal-theme-apply")
+                || gallery_find_attr(&tree, "id", "gal-theme-apply"),
+            "theme section must mount apply theme.toml"
+        );
+        assert!(
+            find_tid(&tree, "gal-theme-sheet")
+                || gallery_find_attr(&tree, "id", "gal-theme-sheet"),
+            "theme section must mount apply styles.toml"
+        );
+        rui::app::reactive::reset_registered_anchors();
+    });
 }
 
 #[test]

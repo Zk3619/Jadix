@@ -28,14 +28,22 @@ fn display_watch_path(path: &Path, root: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn hmr_update_detail(first: &Path, root: &Path, templates: usize, wgsl: usize) -> String {
+fn hmr_update_detail(
+    first: &Path,
+    root: &Path,
+    templates: usize,
+    wgsl: usize,
+    styles: usize,
+) -> String {
     let file = display_watch_path(first, root);
-    match (templates, wgsl) {
-        (1, 0) => format!("{file} (1 template)"),
-        (n, 0) => format!("{file} ({n} templates)"),
-        (0, 1) => format!("{file} (1 asset)"),
-        (0, w) => format!("{file} ({w} assets)"),
-        (n, w) => format!("{file} ({n} templates, {w} assets)"),
+    match (templates, wgsl, styles) {
+        (1, 0, 0) => format!("{file} (1 template)"),
+        (n, 0, 0) => format!("{file} ({n} templates)"),
+        (0, 1, 0) => format!("{file} (1 asset)"),
+        (0, w, 0) => format!("{file} ({w} assets)"),
+        (0, 0, 1) => format!("{file} (1 stylesheet)"),
+        (0, 0, s) => format!("{file} ({s} stylesheets)"),
+        (n, w, s) => format!("{file} ({n} templates, {w} assets, {s} stylesheets)"),
     }
 }
 
@@ -97,23 +105,30 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                 if now.duration_since(last_sent) < Duration::from_millis(DEBOUNCE_MS) {
                     continue;
                 }
-                let (rust_files, wgsl_files) = partition_rust_and_wgsl(&changed, watch_path);
-                if rust_files.is_empty() && wgsl_files.is_empty() {
+                let (rust_files, wgsl_files, style_files) =
+                    partition_tracked(&changed, watch_path);
+                if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
                     continue;
                 }
                 match send_dev_batch(
                     addr,
                     &rust_files,
                     &wgsl_files,
+                    &style_files,
                     &mut template_cache,
                     &mut last_wire_payload,
                 ) {
-                    Ok(SendOutcome::Sent { templates, wgsl }) => {
+                    Ok(SendOutcome::Sent {
+                        templates,
+                        wgsl,
+                        styles,
+                    }) => {
                         hmr_log::update(&hmr_update_detail(
                             &changed[0],
                             watch_path,
                             templates,
                             wgsl,
+                            styles,
                         ));
                         last_sent = now;
                     }
@@ -141,23 +156,30 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                 if changed.is_empty() {
                     continue;
                 }
-                let (rust_files, wgsl_files) = partition_rust_and_wgsl(&changed, watch_path);
-                if rust_files.is_empty() && wgsl_files.is_empty() {
+                let (rust_files, wgsl_files, style_files) =
+                    partition_tracked(&changed, watch_path);
+                if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
                     continue;
                 }
                 match send_dev_batch(
                     addr,
                     &rust_files,
                     &wgsl_files,
+                    &style_files,
                     &mut template_cache,
                     &mut last_wire_payload,
                 ) {
-                    Ok(SendOutcome::Sent { templates, wgsl }) => {
+                    Ok(SendOutcome::Sent {
+                        templates,
+                        wgsl,
+                        styles,
+                    }) => {
                         hmr_log::update(&hmr_update_detail(
                             &changed[0],
                             watch_path,
                             templates,
                             wgsl,
+                            styles,
                         ));
                         last_poll_sent = Instant::now();
                         last_sent = Instant::now();
@@ -276,21 +298,61 @@ fn is_tracked_wgsl(path: &Path, root: &Path) -> bool {
         && under_crates_or_examples(path, root)
 }
 
-fn is_tracked_project_file(path: &Path, root: &Path) -> bool {
-    is_project_source_file(path, root) || is_tracked_wgsl(path, root)
+fn is_stylesheet_name(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "theme.toml"
+            | "theme.json"
+            | "styles.toml"
+            | "styles.json"
+            | "styles.css"
+            | "styles.rui"
+            | "globals.css"
+            | "globals.rui"
+    ) || ((name.starts_with("theme.") || name.starts_with("styles."))
+        && matches!(ext.as_str(), "toml" | "json" | "css" | "rui"))
 }
 
-fn partition_rust_and_wgsl(paths: &[PathBuf], root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+fn is_tracked_stylesheet(path: &Path, root: &Path) -> bool {
+    if !is_stylesheet_name(path) || is_ignored_dir_path(path) {
+        return false;
+    }
+    under_crates_or_examples(path, root) || path.starts_with(root)
+}
+
+fn is_tracked_project_file(path: &Path, root: &Path) -> bool {
+    is_project_source_file(path, root)
+        || is_tracked_wgsl(path, root)
+        || is_tracked_stylesheet(path, root)
+}
+
+fn partition_tracked(
+    paths: &[PathBuf],
+    root: &Path,
+) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     let mut rust = Vec::new();
     let mut wgsl = Vec::new();
+    let mut style = Vec::new();
     for p in paths {
         if is_project_source_file(p, root) {
             rust.push(p.clone());
         } else if is_tracked_wgsl(p, root) {
             wgsl.push(p.clone());
+        } else if is_tracked_stylesheet(p, root) {
+            style.push(p.clone());
         }
     }
-    (rust, wgsl)
+    (rust, wgsl, style)
 }
 
 fn is_ignored_dir_path(path: &Path) -> bool {
@@ -354,7 +416,11 @@ fn build_template_patch_msg(
 }
 
 enum SendOutcome {
-    Sent { templates: usize, wgsl: usize },
+    Sent {
+        templates: usize,
+        wgsl: usize,
+        styles: usize,
+    },
     Duplicate,
     Empty,
 }
@@ -363,11 +429,13 @@ fn send_dev_batch(
     addr: &str,
     rust_files: &[PathBuf],
     wgsl_files: &[PathBuf],
+    style_files: &[PathBuf],
     template_cache: &mut HashMap<String, Vec<TemplateFragment>>,
     last_wire_payload: &mut Option<String>,
 ) -> std::io::Result<SendOutcome> {
     let mut wire_chunks: Vec<String> = Vec::new();
     let mut wgsl_n = 0usize;
+    let mut style_n = 0usize;
     if !wgsl_files.is_empty() {
         let paths: Vec<String> = wgsl_files
             .iter()
@@ -381,6 +449,20 @@ fn send_dev_batch(
             serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
         wire_chunks.push(payload);
         wgsl_n = wgsl_files.len();
+    }
+    if !style_files.is_empty() {
+        let paths: Vec<String> = style_files
+            .iter()
+            .map(|p| normalize_path_for_id(p))
+            .collect();
+        let msg = OutgoingStylesheetReload {
+            kind: "stylesheet_reload",
+            paths,
+        };
+        let payload =
+            serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
+        wire_chunks.push(payload);
+        style_n = style_files.len();
     }
     let template_count = if !rust_files.is_empty() {
         let msg = build_template_patch_msg(rust_files, template_cache);
@@ -416,6 +498,7 @@ fn send_dev_batch(
     Ok(SendOutcome::Sent {
         templates: template_count,
         wgsl: wgsl_n,
+        styles: style_n,
     })
 }
 
@@ -428,6 +511,12 @@ struct OutgoingTemplatePatch {
 
 #[derive(Serialize)]
 struct OutgoingAssetReload {
+    kind: &'static str,
+    paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct OutgoingStylesheetReload {
     kind: &'static str,
     paths: Vec<String>,
 }
@@ -678,6 +767,19 @@ mod tests {
         assert_eq!(blocks[0].line, 1);
         assert_eq!(blocks[0].column, 5);
         assert!(blocks[0].body.contains("hi"));
+    }
+
+    #[test]
+    fn tracks_gallery_theme_and_styles_not_cargo_toml() {
+        let root = Path::new(".");
+        assert!(is_stylesheet_name(Path::new("examples/gallery/theme.toml")));
+        assert!(is_stylesheet_name(Path::new("styles.css")));
+        assert!(!is_stylesheet_name(Path::new("Cargo.toml")));
+        assert!(is_tracked_stylesheet(
+            Path::new("examples/gallery/styles.toml"),
+            root
+        ));
+        assert!(!is_tracked_stylesheet(Path::new("Cargo.toml"), root));
     }
 
     #[test]

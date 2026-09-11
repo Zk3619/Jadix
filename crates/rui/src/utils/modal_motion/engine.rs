@@ -10,6 +10,9 @@
 //! （`rui-modal-slide-in-*` / `rui-modal-slide-out-*`），遮罩 `fade-in-0` / `fade-out-0`。
 //! 退场若再写 closed 像素 `translate` / opacity=0 当 specified，会一帧卸掉壳。
 //! [`flush_modal_shell_motion_subtree`] 仍负责入场 seed 与退场 keyframes。
+//!
+//! 种类与视口在 [`crate::utils::modal_surface`]；runtime tick/flush 走
+//! [`crate::utils::modal_motion`]。本文件是 crate-private 引擎，不升作者面。
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -53,47 +56,10 @@ fn dialog_zoom_tid(modal_id: &str) -> String {
     format!("{modal_id}__modal_zoom")
 }
 
-/// 面板运动曲线（Dialog 淡入缩放；Sheet/Drawer 贴边滑入）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ModalSurfaceMotion {
-    DialogFade,
-    SlideFromTop,
-    SlideFromBottom,
-    SlideFromLeft,
-    SlideFromRight,
-}
+/// Author kind lives in [`crate::utils::modal_surface`]; engine stays here.
+pub use crate::utils::modal_surface::ModalSurfaceMotion;
 
 impl ModalSurfaceMotion {
-    pub fn from_attr(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "slide-top" | "sheet-top" | "top" => Self::SlideFromTop,
-            "slide-bottom" | "sheet-bottom" | "bottom" => Self::SlideFromBottom,
-            "slide-left" | "sheet-left" | "left" => Self::SlideFromLeft,
-            "slide-right" | "sheet-right" | "right" | "sheet-slide" => Self::SlideFromRight,
-            _ => Self::DialogFade,
-        }
-    }
-
-    pub(crate) fn from_sheet_side(side: crate::components::sheet::SheetSide) -> Self {
-        use crate::components::sheet::SheetSide;
-        match side {
-            SheetSide::Top => Self::SlideFromTop,
-            SheetSide::Right => Self::SlideFromRight,
-            SheetSide::Bottom => Self::SlideFromBottom,
-            SheetSide::Left => Self::SlideFromLeft,
-        }
-    }
-
-    pub(crate) fn from_drawer_direction(dir: crate::components::drawer::DrawerDirection) -> Self {
-        use crate::components::drawer::DrawerDirection;
-        match dir {
-            DrawerDirection::Down => Self::SlideFromBottom,
-            DrawerDirection::Up => Self::SlideFromTop,
-            DrawerDirection::Left => Self::SlideFromLeft,
-            DrawerDirection::Right => Self::SlideFromRight,
-        }
-    }
-
     fn closed_translate(self, slide_axis_px: f32) -> [f32; 2] {
         let d = slide_axis_px.max(1.0);
         match self {
@@ -147,8 +113,9 @@ fn slide_axis_for_panel(motion: ModalSurfaceMotion, panel: &Element, fallback: f
 
 /// Pre-layout fallback: Sheet/Drawer pass viewport; `0` collapses travel to 1px
 /// (instant open, overlay fades while the panel sits until ExitGate).
+#[allow(dead_code)]
 pub(crate) fn default_slide_axis_px(motion: ModalSurfaceMotion) -> f32 {
-    let (vw, vh) = crate::components::drawer::drawer_viewport_size();
+    let (vw, vh) = crate::utils::modal_surface::modal_viewport_size();
     match motion {
         ModalSurfaceMotion::DialogFade => 0.0,
         ModalSurfaceMotion::SlideFromTop | ModalSurfaceMotion::SlideFromBottom => vh,
@@ -205,8 +172,8 @@ impl ModalPresenceHandle {
 
     /// [`motion_busy`] using the gate's current phase (paint-sync / focus).
     pub(crate) fn is_motion_busy(&self) -> bool {
-        let c = self.cell.borrow();
-        c.needs_enter || c.enter_active || c.gate.phase() == PresencePhase::Exiting
+        let phase = self.cell.borrow().gate.phase();
+        self.motion_busy(phase)
     }
 }
 
@@ -221,6 +188,20 @@ thread_local! {
     static MODAL_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
     /// One-shot: `about_to_wait` must `Poll` instead of caret/long-press `WaitUntil`.
     static MODAL_FORCE_IMMEDIATE_WAKE: Cell<bool> = const { Cell::new(false) };
+    /// Drawer snap-commit after CSS settle. Engine must not import `components::drawer`.
+    static SLIDE_SETTLE_COMPLETE: Cell<Option<fn(&str)>> = const { Cell::new(None) };
+}
+
+pub(crate) fn register_slide_settle_complete(f: fn(&str)) {
+    SLIDE_SETTLE_COMPLETE.with(|c| c.set(Some(f)));
+}
+
+fn notify_slide_settle_complete(id: &str) {
+    SLIDE_SETTLE_COMPLETE.with(|c| {
+        if let Some(f) = c.get() {
+            f(id);
+        }
+    });
 }
 
 /// True while hoisted Dialog/Sheet/Drawer CSS still has frames to paint.
@@ -652,7 +633,7 @@ fn settle_modal_enter_if_ready(
         }
         crate::utils::popup::arm_underlay_close();
         if let Some(id) = modal_id {
-            crate::components::drawer::on_modal_slide_settle_complete(&id);
+            notify_slide_settle_complete(&id);
         }
     }
     !settled

@@ -118,6 +118,24 @@ impl ToastLayout {
     }
 }
 
+impl From<&str> for ToastLayout {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ToastLayout {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ToastLayout {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 /// 条目语气（solid-ui `toastVariants`）。
 ///
 /// `Destructive` 与 `Error` 为同一视觉变体（浅红色边框/阴影/文案）。
@@ -170,6 +188,24 @@ impl ToastTone {
     }
 }
 
+impl From<&str> for ToastTone {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ToastTone {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ToastTone {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 /// 可见队列已满时，新通知的处理策略。
 ///
 /// **`limit` 只限制同时展示条数**；被挤出的项进入 [`toast_pending`]，计时继续，有空位后从**堆叠最底（队列最旧侧）**归队（仅堆叠重排，不顶栏滑入）。
@@ -196,6 +232,24 @@ impl ToastOverflow {
             Self::Displace => "displace",
             Self::Wait => "wait",
         }
+    }
+}
+
+impl From<&str> for ToastOverflow {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ToastOverflow {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ToastOverflow {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -240,6 +294,24 @@ impl ToastPosition {
             self,
             Self::BottomLeft | Self::BottomCenter | Self::BottomRight
         )
+    }
+}
+
+impl From<&str> for ToastPosition {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ToastPosition {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ToastPosition {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -898,8 +970,8 @@ fn visible_limit() -> usize {
 
 /// 运行时切换宿主布局（`stack` / `list`），供 Gallery / 命令式切换。
 /// 顺带套用布局默认锚点：stack → 顶中，list → 右下。
-pub fn toast_set_layout(variant: impl Into<String>) {
-    let layout = ToastLayout::parse(&variant.into());
+pub fn toast_set_layout(variant: impl Into<ToastLayout>) {
+    let layout = variant.into();
     layout_signal().set(layout.as_str().to_string());
     match layout {
         ToastLayout::List => {
@@ -917,14 +989,14 @@ pub fn toast_set_layout(variant: impl Into<String>) {
 }
 
 /// 运行时切换锚点位置（六向，见 [`ToastPosition`]）。
-pub fn toast_set_position(position: impl Into<String>) {
-    let p = ToastPosition::parse(&position.into());
+pub fn toast_set_position(position: impl Into<ToastPosition>) {
+    let p = position.into();
     position_signal().set(p.as_str().to_string());
 }
 
 /// 运行时切换上限策略：`displace` | `wait`。
-pub fn toast_set_overflow(overflow: impl Into<String>) {
-    let policy = ToastOverflow::parse(&overflow.into());
+pub fn toast_set_overflow(overflow: impl Into<ToastOverflow>) {
+    let policy = overflow.into();
     overflow_signal().set(policy.as_str().to_string());
     match policy {
         ToastOverflow::Displace => flush_pending_by_displace(),
@@ -1251,13 +1323,12 @@ impl ToastBuilder {
         self
     }
     /// 条目语气：`default` / `info` / `success` / `warning` / `destructive`（=`error`）。
-    pub fn variant(mut self, v: impl Into<String>) -> Self {
-        self.tone = ToastTone::parse(&v.into());
+    pub fn variant(mut self, v: impl Into<ToastTone>) -> Self {
+        self.tone = v.into();
         self
     }
-    pub fn tone(mut self, t: ToastTone) -> Self {
-        self.tone = t;
-        self
+    pub fn tone(self, t: impl Into<ToastTone>) -> Self {
+        self.variant(t)
     }
     /// 是否在左侧居中显示语气图标。默认：非 `default` 为 true。
     pub fn icon(mut self, show: bool) -> Self {
@@ -1275,18 +1346,18 @@ impl ToastBuilder {
         self
     }
     /// 显式背景色（覆盖变体 chroming）。
-    pub fn bg(mut self, color: impl AsRef<str>) -> Self {
-        self.bg_override = Some(crate::style::parse_color(color.as_ref()));
+    pub fn bg(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.bg_override = Some(color.into_paint_color());
         self
     }
     /// 显式边框色。
-    pub fn border_color(mut self, color: impl AsRef<str>) -> Self {
-        self.border_override = Some(crate::style::parse_color(color.as_ref()));
+    pub fn border_color(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.border_override = Some(color.into_paint_color());
         self
     }
     /// 显式前景字色（标题/描述/图标）。
-    pub fn color(mut self, color: impl AsRef<str>) -> Self {
-        self.fg_override = Some(crate::style::parse_text_color(color.as_ref()));
+    pub fn color(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.fg_override = Some(color.into_text_color());
         self
     }
     pub fn duration(mut self, ms: u64) -> Self {

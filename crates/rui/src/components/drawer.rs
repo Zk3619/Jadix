@@ -13,7 +13,7 @@
 //!     └── DrawerClose         // 任意子节点点击关闭
 //! ```
 //!
-//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
+//! Modal-shell overlay / Portal z: see [`crate::utils::modal_shell`];
 //! 面板表面在本模块内实现（默认自底部滑入、顶圆角 + 拖柄）。`ui!` 中 `<Drawer>` /
 //! `<DrawerContent>` is expanded by macro.
 //!
@@ -60,12 +60,10 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
-use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
-    ModalPresenceHandle, ModalSurfaceMotion,
-};
-use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+use crate::utils::modal_shell::ShellOverlayOpts;
+use crate::utils::viewport_modal::{
+    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
+    ModalSurfaceMotion, ViewportModalLayerOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -80,7 +78,7 @@ use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
@@ -121,6 +119,15 @@ impl DrawerDirection {
 
     fn is_vertical(self) -> bool {
         matches!(self, Self::Down | Self::Up)
+    }
+
+    pub(crate) fn to_surface_motion(self) -> ModalSurfaceMotion {
+        match self {
+            Self::Down => ModalSurfaceMotion::SlideFromBottom,
+            Self::Up => ModalSurfaceMotion::SlideFromTop,
+            Self::Left => ModalSurfaceMotion::SlideFromLeft,
+            Self::Right => ModalSurfaceMotion::SlideFromRight,
+        }
     }
 }
 
@@ -544,7 +551,7 @@ fn apply_drawer_shell_surface(
     let radius = 8.0;
     panel = panel
         .bg(tokens::background())
-        .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Xl), 16.0)
         .gap("1rem");
 
     match direction {
@@ -620,25 +627,21 @@ fn apply_drawer_shell_surface(
     panel
 }
 
-fn drawer_shell_frame(
+fn drawer_shell_panel(
     modal_id: &str,
     open: Signal<bool>,
-    zs: &ModalShellZs,
     inner: Element,
-    overlay_opts: &ShellOverlayOpts,
     direction: DrawerDirection,
     width: Option<&str>,
     height: Option<&str>,
     show_swipe_handle: bool,
-    modal: bool,
     snap_points: &[DrawerSnapPoint],
     snap_to_sequential: bool,
     scale_background: bool,
     chrome_close: Option<Element>,
-    presence: &ModalPresenceHandle,
-    phase: PresencePhase,
     panel_chrome: crate::components::base::SlotChrome,
 ) -> Element {
+    ensure_slide_settle_hook();
     let (vw, vh) = drawer_viewport_size();
     let axis = if direction.is_vertical() {
         drawer_y_max_h(vh)
@@ -651,11 +654,10 @@ fn drawer_shell_frame(
     let _ = drawer_layout_bump(modal_id).get();
     let frac = drawer_open_fraction_tracked(modal_id);
     let dragging = is_drawer_dragging(modal_id);
-    let (visible_px, extra) = if direction.is_vertical() {
-        let (h, extra) = drawer_y_shell_metrics(frac, vh);
-        (Some(h), extra)
+    let visible_px = if direction.is_vertical() {
+        Some(drawer_y_shell_metrics(frac, vh).0)
     } else {
-        (None, drawer_drag_translate(direction, frac, axis))
+        None
     };
 
     let handle = |dir: DrawerDirection| {
@@ -745,61 +747,13 @@ fn drawer_shell_frame(
     // Scale only at rest after enter/snap — live swipe, enter, and exit would
     // zoom the page under the mask (Vaul applies this to a single wrapper).
     let rest_frac = drawer_frac_signal(modal_id).peek();
-    let motion_busy = presence.motion_busy(phase);
+    let motion_busy = viewport_modal_motion_busy(modal_id);
     register_drawer_scale_background(
         modal_id,
         scale_background && !motion_busy && !dragging,
         rest_frac,
     );
-
-    if modal {
-        let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
-        if apply_modal_shell_motion(
-            modal_id,
-            &mut overlay_el,
-            &mut panel,
-            ModalSurfaceMotion::from_drawer_direction(direction),
-            phase,
-            presence,
-            extra,
-            dragging,
-            axis,
-        ) {
-            request_redraw();
-        }
-        let stage: Element = r#box()
-            .inset(0.0)
-            .w("100%")
-            .h("100%")
-            .overflow("hidden")
-            .child(panel)
-            .into();
-        let stage = mount_viewport_portal_stage(stage, zs.panel);
-        mount_modal_layer(overlay_el, stage)
-    } else {
-        let mut dummy_overlay = Element::new();
-        if apply_modal_shell_motion(
-            modal_id,
-            &mut dummy_overlay,
-            &mut panel,
-            ModalSurfaceMotion::from_drawer_direction(direction),
-            phase,
-            presence,
-            extra,
-            dragging,
-            axis,
-        ) {
-            request_redraw();
-        }
-        let stage: Element = r#box()
-            .inset(0.0)
-            .w("100%")
-            .h("100%")
-            .overflow("hidden")
-            .child(panel)
-            .into();
-        mount_viewport_portal_stage(stage, zs.panel)
-    }
+    panel
 }
 
 // ---------------------------------------------------------------------------
@@ -960,32 +914,41 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     let snap_to_sequential = opts.snap_to_sequential_point;
     let scale_background = opts.scale_background;
     let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let presence = use_modal_presence(&id);
-    let mounted = mounted_signal(&presence);
     let had_mounted_key = format!("{id}__drawer_had_mounted");
     let had_mounted = use_signal(had_mounted_key.as_str(), || false);
 
     reactive_view(view_id, move || {
-        let want = open.get();
-        let phase = sync_modal_presence(&presence, want);
         let owner = format!("drawer:{id}");
-        let m = mounted.get();
-        if m && !had_mounted.peek() {
-            let (vw, vh) = drawer_viewport_size();
-            let axis = direction.axis_viewport(vw, vh);
-            reset_drawer_open_fraction(&id, &snap_points, axis);
-        }
-        had_mounted.set(m);
-        if !m {
-            clear_drawer_scale_background(&id);
-            clear_drawer_y_settling(&id);
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        }
-        let Some(zs) = modal_sync(&id, mounted) else {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
+        let (vw, vh) = drawer_viewport_size();
+        let axis = if direction.is_vertical() {
+            drawer_y_max_h(vh)
+        } else {
+            direction.axis_viewport(vw, vh)
         };
+        let frac = drawer_open_fraction_tracked(&id);
+        let dragging = is_drawer_dragging(&id);
+        let extra = if direction.is_vertical() {
+            drawer_y_shell_metrics(frac, vh).1
+        } else {
+            drawer_drag_translate(direction, frac, axis)
+        };
+        let mut layer_opts = ViewportModalLayerOpts::slide(direction.to_surface_motion(), axis);
+        layer_opts.extra_translate = extra;
+        layer_opts.dragging = dragging;
+        layer_opts.overlay = modal;
+        layer_opts.stage_overflow_hidden = true;
+        viewport_modal_layer(&id, open, &overlay, layer_opts, |phase| {
+            let Some(phase) = phase else {
+                clear_drawer_scale_background(&id);
+                clear_drawer_y_settling(&id);
+                sync_focus_trap(&owner, false, "");
+                return None;
+            };
+            let m = viewport_modal_is_mounted(&id, open);
+            if m && !had_mounted.peek() {
+                reset_drawer_open_fraction(&id, &snap_points, axis);
+            }
+            had_mounted.set(m);
 
         let mut inner = body();
         inner = inner
@@ -1025,25 +988,21 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
             sync_focus_trap(&owner, true, ring.join(","));
         }
 
-        drawer_shell_frame(
-            &id,
-            open,
-            &zs,
-            inner,
-            &overlay,
-            direction,
-            width.as_deref(),
-            height.as_deref(),
-            show_swipe_handle,
-            modal,
-            &snap_points,
-            snap_to_sequential,
-            scale_background,
-            chrome_close,
-            &presence,
-            phase,
-            panel_chrome.clone(),
-        )
+            Some(drawer_shell_panel(
+                &id,
+                open,
+                inner,
+                direction,
+                width.as_deref(),
+                height.as_deref(),
+                show_swipe_handle,
+                &snap_points,
+                snap_to_sequential,
+                scale_background,
+                chrome_close,
+                panel_chrome.clone(),
+            ))
+        })
     })
 }
 
@@ -1227,7 +1186,6 @@ const SCALE_BG_MAX_SHRINK: f32 = 0.04;
 const DRAWER_DRAG_COMMIT_PX: f32 = 2.0;
 
 thread_local! {
-    static DRAWER_VIEWPORT: RefCell<(f32, f32)> = const { RefCell::new((800.0, 600.0)) };
     static DRAWER_DRAG: RefCell<Option<DrawerDrag>> = const { RefCell::new(None) };
     static DRAWER_LIVE_FRAC: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG: RefCell<Option<DrawerScaleBg>> = const { RefCell::new(None) };
@@ -1265,13 +1223,18 @@ struct DrawerDrag {
     captured: bool,
 }
 
-/// 由窗口事件循环每帧写入逻辑视口（供吸附 travel 计算）。
+/// 逻辑视口由 [`crate::utils::modal_surface`] 持有；Drawer 只转发。
+#[cfg(test)]
 pub(crate) fn set_drawer_viewport_size(w: f32, h: f32) {
-    DRAWER_VIEWPORT.with(|v| *v.borrow_mut() = (w.max(1.0), h.max(1.0)));
+    crate::utils::modal_surface::set_modal_viewport_size(w, h);
 }
 
 pub(crate) fn drawer_viewport_size() -> (f32, f32) {
-    DRAWER_VIEWPORT.with(|v| *v.borrow())
+    crate::utils::modal_surface::modal_viewport_size()
+}
+
+fn ensure_slide_settle_hook() {
+    crate::utils::modal_motion::register_slide_settle_complete(on_modal_slide_settle_complete);
 }
 
 fn drawer_frac_signal(id: &str) -> Signal<f32> {
@@ -1391,6 +1354,7 @@ fn begin_drawer_drag(
     capture_id: String,
     exclusive: bool,
 ) {
+    ensure_slide_settle_hook();
     let (vw, vh) = drawer_viewport_size();
     let axis_px = if direction.is_vertical() {
         drawer_y_max_h(vh)
@@ -1410,7 +1374,7 @@ fn begin_drawer_drag(
     } else {
         drawer_drag_translate(direction, start_frac, axis_px)
     };
-    crate::components::internal::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
+    crate::utils::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
     DRAWER_DRAG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerDrag {
             id,
@@ -1607,13 +1571,13 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
     if drag.direction.is_vertical() {
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id,
             [0.0, 0.0],
             true,
             next,
         );
-        crate::components::internal::modal_motion::patch_modal_overlay_opacity(
+        crate::utils::modal_motion::patch_modal_overlay_opacity(
             root,
             &drag.id,
             next.clamp(0.0, 1.0),
@@ -1622,13 +1586,13 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
         request_redraw();
     } else {
         let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id, extra, true, next,
         );
-        crate::components::internal::modal_motion::patch_modal_panel_transform(
+        crate::utils::modal_motion::patch_modal_panel_transform(
             root, &drag.id, extra,
         );
-        crate::components::internal::modal_motion::patch_modal_overlay_opacity(
+        crate::utils::modal_motion::patch_modal_overlay_opacity(
             root,
             &drag.id,
             next.clamp(0.0, 1.0),
@@ -1657,7 +1621,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
         } else {
             drawer_drag_translate(drag.direction, rest, drag.axis_px)
         };
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id, extra, false, rest,
         );
         request_redraw();
@@ -1668,7 +1632,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
     let dismiss = should_dismiss_drawer(frac, drag.velocity, lowest);
     if dismiss {
         let extra = drawer_drag_translate(drag.direction, frac, drag.axis_px);
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id, extra, false, frac,
         );
         drag.open.set(false);
@@ -1683,7 +1647,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
     };
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
     if drag.direction.is_vertical() {
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id,
             [0.0, 0.0],
             false,
@@ -1693,10 +1657,10 @@ pub(crate) fn clear_drawer_drag_if_any() {
     } else {
         let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
         let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
-        crate::components::internal::modal_motion::note_modal_shell_drag(
+        crate::utils::modal_motion::note_modal_shell_drag(
             &drag.id, to, false, target,
         );
-        crate::components::internal::modal_motion::arm_modal_slide_settle(&drag.id, from);
+        crate::utils::modal_motion::arm_modal_slide_settle(&drag.id, from);
     }
     if target < DRAWER_CLOSE_THRESHOLD {
         drag.open.set(false);

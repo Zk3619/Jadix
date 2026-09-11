@@ -16,8 +16,7 @@
 //! ## Open/close delays (Solid-style)
 //! Same shape as Solid `createEffect` + `setTimeout` / `onCleanup`: on the **UI thread**,
 //! `create_effect` watches hover intent and registers deadlines in this module's timer table; the event loop
-//! [`AboutToWait`](crate::app::lifecycle) wakes via [`hover_card_next_wake_at`] and
-//! [`tick_hover_card`] (browser single-thread timer parity — **no** worker thread, no cross-thread Signal touches).
+//! [`AboutToWait`](crate::app::lifecycle) wakes via [`crate::utils::hover_intent`].
 //!
 //! `ui!` `<HoverCard>` / `<HoverCardContent>` are macro-expanded. Builder
 //! [`hover_card`] / [`HoverCardBuilder::child`] share the same implementation.
@@ -40,22 +39,12 @@
 //! hover_card("demo").open_signal(hc_open).child(|| { /* Trigger + content */ })
 //! ```
 
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
-use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::app::runtime::request_redraw;
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
+use crate::app::portal_overlay::OverlayMode;
 use crate::components::label::label;
-use crate::components::popover::popover_side_align_to_placement;
 use crate::core::reactivity::{
-    create_context, create_effect, on_cleanup, provide_context, untrack, use_context, use_signal,
-    with_child_owner, Context, Signal,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
 use crate::impl_simple_slot_builder;
@@ -64,131 +53,20 @@ use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
-use crate::utils::popup::{
-    mark_floating_with_gap, mount_anchored_overlay, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
 };
+use crate::utils::floating_motion::FloatingMotionKind;
+use crate::utils::hover_intent::{
+    bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
+};
+use crate::utils::popup::{ATTR_FLOATING_W};
 use rui_macros::component;
 
 /// Default open delay (ms); demos often use `delay={10}` — product default stays snappy.
 const DEFAULT_OPEN_DELAY_MS: u64 = 10;
 /// Default close delay (ms); demos use `closeDelay={100}` so the pointer can cross the sideOffset gap.
 const DEFAULT_CLOSE_DELAY_MS: u64 = 100;
-
-// ---------------------------------------------------------------------------
-// Solid-style delay timers (UI-thread Instant table ≡ setTimeout queue)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TimerKind {
-    Open,
-    Close,
-}
-
-struct PendingTimer {
-    at: Instant,
-    kind: TimerKind,
-    open: Signal<bool>,
-    trigger_hovered: Signal<bool>,
-    content_hovered: Signal<bool>,
-}
-
-thread_local! {
-    static TIMERS: RefCell<HashMap<String, PendingTimer>> = RefCell::new(HashMap::new());
-}
-
-fn clear_timer(id: &str) {
-    TIMERS.with(|m| {
-        m.borrow_mut().remove(id);
-    });
-}
-
-fn arm_timer(
-    id: &str,
-    delay_ms: u64,
-    kind: TimerKind,
-    open: Signal<bool>,
-    trigger_hovered: Signal<bool>,
-    content_hovered: Signal<bool>,
-) {
-    if delay_ms == 0 {
-        // Settle immediately (same intent checks).
-        match kind {
-            TimerKind::Open => {
-                if trigger_hovered.peek() || content_hovered.peek() {
-                    if !open.peek() {
-                        open.set(true);
-                    }
-                }
-            }
-            TimerKind::Close => {
-                if !trigger_hovered.peek() && !content_hovered.peek() && open.peek() {
-                    open.set(false);
-                }
-            }
-        }
-        clear_timer(id);
-        return;
-    }
-    let at = Instant::now() + Duration::from_millis(delay_ms);
-    TIMERS.with(|m| {
-        m.borrow_mut().insert(
-            id.to_string(),
-            PendingTimer {
-                at,
-                kind,
-                open,
-                trigger_hovered,
-                content_hovered,
-            },
-        );
-    });
-    // Wake the event loop so AboutToWait can schedule WaitUntil.
-    request_redraw();
-}
-
-/// Settle expired timers; called from lifecycle. Returns whether `open` changed.
-pub(crate) fn tick_hover_card() -> bool {
-    let now = Instant::now();
-    let due: Vec<(String, PendingTimer)> = TIMERS.with(|m| {
-        let mut map = m.borrow_mut();
-        let keys: Vec<String> = map
-            .iter()
-            .filter(|(_, t)| t.at <= now)
-            .map(|(k, _)| k.clone())
-            .collect();
-        keys.into_iter()
-            .filter_map(|k| map.remove(&k).map(|t| (k, t)))
-            .collect()
-    });
-    let mut changed = false;
-    for (_id, t) in due {
-        match t.kind {
-            TimerKind::Open => {
-                if t.trigger_hovered.peek() || t.content_hovered.peek() {
-                    if !t.open.peek() {
-                        t.open.set(true);
-                        changed = true;
-                    }
-                }
-            }
-            TimerKind::Close => {
-                if !t.trigger_hovered.peek() && !t.content_hovered.peek() {
-                    if t.open.peek() {
-                        t.open.set(false);
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
-    changed
-}
-
-/// Next Instant when the event loop should wake.
-pub(crate) fn hover_card_next_wake_at() -> Option<Instant> {
-    TIMERS.with(|m| m.borrow().values().map(|t| t.at).min())
-}
 
 // ---------------------------------------------------------------------------
 // Context / scope
@@ -245,6 +123,7 @@ pub fn hover_card_scope(
     });
 
     let mut root = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             hover_card_context(),
             HoverCardCtx {
@@ -258,42 +137,16 @@ pub fn hover_card_scope(
             },
         );
 
-        // Solid: createEffect(hover → schedule open/close); clearTimeout on owner dispose.
-        let eff_id = id.clone();
-        create_effect(move || {
-            let want = trigger_hovered.get() || content_hovered.get();
-            let od = open_delay_ms.get();
-            let cd = close_delay_ms.get();
-            let is_open = untrack(|| open.peek());
-            // Matches Solid's clearTimeout before an effect re-runs.
-            clear_timer(&eff_id);
-            if want {
-                if !is_open {
-                    arm_timer(
-                        &eff_id,
-                        od,
-                        TimerKind::Open,
-                        open,
-                        trigger_hovered,
-                        content_hovered,
-                    );
-                }
-            } else if is_open {
-                arm_timer(
-                    &eff_id,
-                    cd,
-                    TimerKind::Close,
-                    open,
-                    trigger_hovered,
-                    content_hovered,
-                );
-            }
-        });
-
-        let cleanup_id = id.clone();
-        on_cleanup(move || {
-            clear_timer(&cleanup_id);
-        });
+        bind_hover_intent_effect(
+            &id,
+            HoverIntent {
+                open,
+                trigger_hovered,
+                content_hovered,
+                open_delay_ms,
+                close_delay_ms,
+            },
+        );
 
         body()
     });
@@ -339,28 +192,11 @@ fn is_text_leaf(el: &Element) -> bool {
 }
 
 fn chain_hover_intent(
-    mut el: Element,
+    el: Element,
     on_enter: impl Fn() + 'static,
     on_leave: impl Fn() + 'static,
 ) -> Element {
-    let prev = el.on_hover.clone();
-    el = el.on_hover(move |hovered| {
-        if let Some(ref rc) = prev {
-            rc.borrow_mut()(hovered);
-        }
-        if hovered {
-            on_enter();
-        } else {
-            on_leave();
-        }
-    });
-    el
-}
-
-fn set_hovered(sig: Signal<bool>, v: bool) {
-    if sig.peek() != v {
-        sig.set(v);
-    }
+    chain_region_hover(el, on_enter, on_leave)
 }
 
 // ---------------------------------------------------------------------------
@@ -372,9 +208,7 @@ fn set_hovered(sig: Signal<bool>, v: bool) {
 #[allow(non_snake_case)]
 pub fn HoverCardTrigger(
     id: String,
-    /// Open delay (ms). RSX: `openDelay` / `delay`.
     open_delay: Option<u64>,
-    /// Close delay (ms). RSX: `closeDelay`.
     close_delay: Option<u64>,
     children: Option<Element>,
 ) -> Element {
@@ -481,7 +315,7 @@ pub fn hover_card_surface(mut body: Element, width: Option<&str>) -> Element {
         .border_width(1.0)
         .border_color(tokens::border())
         // Approximate shadow-md
-        .shadow([0.0, 0.0, 0.0, 0.12], 10.0);
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 10.0);
     if is_text_leaf(&body) {
         let t = body.text.clone().unwrap_or_default();
         body = text(t)
@@ -515,29 +349,19 @@ pub fn hover_card_content(
     body: impl Fn() -> Element + 'static,
 ) -> Element {
     let ctx = require_hover_card("HoverCardContent");
-    let open = ctx.open;
-    let id = ctx.id.clone();
-    let trigger_fid = ctx.trigger_fid;
-    let placement = popover_side_align_to_placement(&opts.side, &opts.align);
-    let side_offset = opts.side_offset;
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let width = opts.width;
-    let view_id = format!("{id}__hover_card_view");
     let content_hovered = ctx.content_hovered;
-    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
-
-    reactive_anchor(view_id.clone(), move || {
-        // Pinned: hover preview is not on the Esc stack (same tier as Tooltip).
-        let Some((phase, oz)) = floating_portal_phase(
-            &id,
-            open,
-            &presence,
-            OverlayKind::Tooltip,
-            OverlayMode::Pinned,
-        ) else {
-            return Element::new();
-        };
-
+    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let width = opts.width.clone();
+    let ao_opts = AnchoredOverlayContentOpts {
+        side: opts.side.clone(),
+        align: opts.align.clone(),
+        side_offset: opts.side_offset,
+        kind: crate::app::portal_overlay::OverlayKind::Tooltip,
+        motion: FloatingMotionKind::Fade,
+        mode: OverlayMode::Pinned,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         let mut panel = hover_card_surface(body(), width.as_deref());
         panel = chrome.apply(panel);
         let ch = content_hovered;
@@ -546,30 +370,9 @@ pub fn hover_card_content(
             move || set_hovered(ch, true),
             move || set_hovered(ch, false),
         );
-        let anchor = trigger_fid.peek();
-        mark_floating_with_gap(&mut panel, &id, &anchor, placement, side_offset);
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
-        // Fixed width must land in ATTR_FLOATING_W: otherwise sync treats content-auto, first frame centers a 32px estimate,
-        // then stomps the class/`opts.width` length → X jumps after layout.
         seed_hover_card_floating_w(&mut panel, width.as_deref());
-        panel = panel.absolute();
-        if apply_floating_panel_motion(
-            &id,
-            &mut panel,
-            FloatingMotionKind::Fade,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Tooltip,
-            OverlayMode::Pinned,
-            None,
-        ) {
-            request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel
+    })
 }
 
 impl_simple_slot_builder!(
@@ -616,6 +419,7 @@ impl HoverCardContentSlotBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::popover::popover_side_align_to_placement;
     use crate::core::reactivity::create_root;
     use crate::style::with_class_list;
     use crate::utils::popup::PopupPlacement;
@@ -638,7 +442,7 @@ mod tests {
             })
         });
         fn find_zero(el: &Element) -> bool {
-            let is_view = el.template_id.as_deref() == Some("hc-anchor__hover_card_view");
+            let is_view = el.template_id.as_deref() == Some("hc-anchor__view");
             let dim0 = crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
                 && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0);
             (is_view && dim0) || el.children.iter().any(find_zero)
@@ -688,17 +492,27 @@ mod tests {
 
     #[test]
     fn zero_delay_open_closes_via_intent() {
+        use crate::utils::hover_intent::{arm_close, arm_open, HoverIntent};
         let (_owner, _) = create_root(|| {
             let open = use_signal("hc-zd-open", || false);
             let th = use_signal("hc-zd-th", || false);
             let ch = use_signal("hc-zd-ch", || false);
-            arm_timer("hc-zd", 0, TimerKind::Open, open, th, ch);
+            let od = use_signal("hc-zd-od", || 0_u64);
+            let cd = use_signal("hc-zd-cd", || 0_u64);
+            let intent = HoverIntent {
+                open,
+                trigger_hovered: th,
+                content_hovered: ch,
+                open_delay_ms: od,
+                close_delay_ms: cd,
+            };
+            arm_open("hc-zd", intent);
             assert!(!open.peek());
             th.set(true);
-            arm_timer("hc-zd", 0, TimerKind::Open, open, th, ch);
+            arm_open("hc-zd", intent);
             assert!(open.peek());
             th.set(false);
-            arm_timer("hc-zd", 0, TimerKind::Close, open, th, ch);
+            arm_close("hc-zd", intent);
             assert!(!open.peek());
             Element::new()
         });

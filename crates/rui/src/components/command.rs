@@ -72,22 +72,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::base::SlotChrome;
 use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
-#[cfg(test)]
-use crate::components::internal::floating_motion::{
-    clear_pending_floating_enter, sync_floating_presence,
-};
-use crate::components::internal::modal_motion::{
-    mounted_signal, sync_modal_presence, use_modal_presence,
+use crate::utils::modal_shell::ShellOverlayOpts;
+use crate::utils::viewport_modal::{
+    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
+    ViewportModalLayerOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -100,14 +94,12 @@ use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, r#box, vstack};
+use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::activate_registry;
-use crate::utils::popup::{
-    mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
-};
+use crate::utils::popup::swallow_clicks;
 use crate::utils::take_packed;
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
@@ -386,8 +378,7 @@ fn stamp_command_palette_attrs(
 
 fn command_palette_motion_busy(id: &str, surface: &str) -> bool {
     match surface {
-        "dialog" => use_modal_presence(id).is_motion_busy(),
-        "overlay" => use_floating_presence(id, FloatingMotionKind::Fade).is_motion_busy(),
+        "dialog" | "overlay" => viewport_modal_motion_busy(id),
         _ => false,
     }
 }
@@ -470,18 +461,15 @@ pub fn command_dialog_scope(
     let placeholder = command_placeholder(placeholder);
     let body: Rc<dyn Fn() -> Element> = Rc::new(body);
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__open").as_str(), || false));
-    let presence = use_modal_presence(&id);
     let reset_view = format!("{id}__cmd_reset");
     reactive_anchor(reset_view.clone(), {
         let reset_id = id.clone();
         let open = open;
-        let presence = presence.clone();
         move || {
             // Match CommandOverlay: keep highlight stable during exit animation.
             // Resetting `active` to 0 while the dialog is still mounted forces the
             // first item accent via `sync_command_item_paint_subtree` (visible flicker).
-            let _ = sync_modal_presence(&presence, open.get());
-            if !mounted_signal(&presence).get() {
+            if !viewport_modal_is_mounted(&reset_id, open) {
                 reset_command_session(&reset_id);
             }
             Element::new()
@@ -539,30 +527,33 @@ pub fn command_overlay_scope(
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__cmd_open").as_str(), || false));
     let body: Rc<dyn Fn() -> Element> = Rc::new(body);
     let view_id = format!("{id}__cmd_overlay");
-    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
     reactive_anchor(view_id.clone(), {
         let id = id.clone();
         let body = body.clone();
         let placeholder = placeholder.clone();
         move || {
-            let Some((phase, oz)) = floating_portal_phase(
+            let overlay_opts =
+                ShellOverlayOpts::from_content_parts(None, Some(0.0), true, Some(0.0));
+            viewport_modal_layer(
                 &id,
                 open,
-                &presence,
-                OverlayKind::Modal,
-                OverlayMode::Stacked,
-            ) else {
-                reset_command_session(&id);
-                return Element::new();
-            };
-            let inner = command_paint(
-                id.clone(),
-                open,
-                placeholder.clone(),
-                CommandSurface::Overlay,
-                body.clone(),
-            );
-            command_overlay_frame(open, oz, inner, &id, phase, &presence)
+                &overlay_opts,
+                ViewportModalLayerOpts::dialog_fade(),
+                |phase| {
+                    if phase.is_none() {
+                        reset_command_session(&id);
+                        return None;
+                    }
+                    let inner = command_paint(
+                        id.clone(),
+                        open,
+                        placeholder.clone(),
+                        CommandSurface::Overlay,
+                        body.clone(),
+                    );
+                    Some(command_overlay_panel(inner, &id))
+                },
+            )
         }
     });
     // Anchor must be a child: when gallery does `let el = ui! { <CommandOverlay/> }`, the outer `ui!`
@@ -575,15 +566,8 @@ pub fn command_overlay_scope(
         .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
-/// Transparent underlay + viewport stage (ShadCN CommandDialog chrome, centered in the viewport).
-fn command_overlay_frame(
-    open: Signal<bool>,
-    oz: OverlayZ,
-    inner: Element,
-    overlay_id: &str,
-    phase: crate::utils::presence::PresencePhase,
-    presence: &crate::components::internal::floating_motion::FloatingPresenceHandle,
-) -> Element {
+/// ShadCN CommandDialog chrome (transparent scrim is applied by the viewport shell).
+fn command_overlay_panel(inner: Element, overlay_id: &str) -> Element {
     // ShadCN aria CommandDialog: `top-1/3 translate-y-0 overflow-hidden p-0`;
     // width matches DialogContent `w-full max-w-lg`. solid-ui uses `overflow-hidden p-0`.
     let mut panel: Element = vstack()
@@ -600,41 +584,14 @@ fn command_overlay_frame(
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Xl), 16.0)
         .pb("0.5rem");
     // Avoid `overflow:hidden`: Taffy treats the node as a scroll box and crushes the list main axis to 0 under auto height
     //(only the flex_shrink:0 search row remains). Corner radius is painted by the panel SDF, not by clipping.
     panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+    panel.template_id = Some(format!("{overlay_id}__modal_zoom"));
     // Stage is already portaled; do not wrap `panel_block_clicks` (nested `rui_portal` would hoist the panel out of the centered stage).
-    panel = swallow_clicks(panel);
-    if apply_floating_panel_motion(
-        overlay_id,
-        &mut panel,
-        FloatingMotionKind::Fade,
-        phase,
-        presence,
-        open,
-        OverlayKind::Modal,
-        OverlayMode::Stacked,
-        None,
-    ) {
-        crate::app::runtime::request_redraw();
-    }
-
-    // `fixed`: viewport containing block + collect clears ancestor overflow clips (even before the hoisted flag is set).
-    // Cross-axis center the palette; a full-width centering row would eat left/right clicks
-    // that must reach the underlay (close on outside press).
-    let mut stage: Element = r#box()
-        .inset(0.0)
-        .w("100%")
-        .h("100%")
-        .items_center()
-        .justify_center()
-        .child(panel)
-        .into();
-    stage = mount_viewport_portal_stage(stage, oz.panel);
-
-    mount_modal_layer(underlay_close_on_click(open, oz.underlay), stage)
+    swallow_clicks(panel)
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,6 +1296,7 @@ fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
             el.text_style.size = Some(12.0);
             el.text_style.line_height_px = Some(16.0);
             el.text_style.letter_spacing = 0.4;
+            el.text_style.letter_spacing_specified = true;
             el.text_style.color = Some(parse_text_color("muted-foreground"));
             return false;
         }
@@ -1661,33 +1619,31 @@ mod tests {
         stage.children.first().expect("palette panel")
     }
 
+    fn command_overlay_frame_open(overlay_id: &str, inner: Element) -> Element {
+        let open = Signal::new(true);
+        let overlay_opts =
+            ShellOverlayOpts::from_content_parts(None, Some(0.0), true, Some(0.0));
+        viewport_modal_layer(
+            overlay_id,
+            open,
+            &overlay_opts,
+            ViewportModalLayerOpts::dialog_fade(),
+            |_| Some(command_overlay_panel(inner, overlay_id)),
+        )
+    }
+
     #[test]
     fn command_overlay_list_inset_from_panel_edges() {
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
             let inner = command_paint(
                 "cmd-pad-reg".into(),
-                open,
+                Signal::new(true),
                 "Type a command or search...".into(),
                 CommandSurface::Overlay,
                 gallery_overlay_body(),
             );
-            let presence = use_floating_presence("cmd-pad-reg-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                inner,
-                "cmd-pad-reg-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
-            );
+            let frame = command_overlay_frame_open("cmd-pad-reg-t", inner);
             Element::new().w(800.0).h(600.0).child(frame)
         });
         let _ = hoist_portal_subtrees(&mut root);
@@ -1714,23 +1670,8 @@ mod tests {
     fn command_overlay_frame_hoists_viewport_stage() {
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
             let inner = Element::new().w(200.0).h(48.0).bg([0.2, 0.2, 0.2, 1.0]);
-            let presence = use_floating_presence("cmd-overlay-frame-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                inner,
-                "cmd-overlay-frame-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
-            );
+            let frame = command_overlay_frame_open("cmd-overlay-frame-t", inner);
             Element::new().w(800.0).h(600.0).child(frame)
         });
 
@@ -1774,23 +1715,8 @@ mod tests {
 
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
             let inner = Element::new().w(200.0).h(48.0).bg([0.2, 0.2, 0.2, 1.0]);
-            let presence = use_floating_presence("cmd-overlay-sides-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                inner,
-                "cmd-overlay-sides-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
-            );
+            let frame = command_overlay_frame_open("cmd-overlay-sides-t", inner);
             Element::new().w(800.0).h(600.0).child(frame)
         });
 
@@ -1831,21 +1757,9 @@ mod tests {
         use crate::components::toast::toast_push;
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
-            let presence = use_floating_presence("cmd-overlay-toast-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                Element::new().w(200.0).h(48.0),
+            let frame = command_overlay_frame_open(
                 "cmd-overlay-toast-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
+                Element::new().w(200.0).h(48.0),
             );
             Element::new()
                 .w(800.0)
@@ -1940,29 +1854,14 @@ mod tests {
     fn command_overlay_keeps_left_radius_and_list_items() {
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
             let inner = command_paint(
                 "gal-cmd".into(),
-                open,
+                Signal::new(true),
                 "Type a command or search...".into(),
                 CommandSurface::Overlay,
                 gallery_overlay_body(),
             );
-            let presence = use_floating_presence("cmd-overlay-radius-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                inner,
-                "cmd-overlay-radius-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
-            );
+            let frame = command_overlay_frame_open("cmd-overlay-radius-t", inner);
             let host = Element::new()
                 .w(0.0)
                 .h(0.0)
@@ -2093,27 +1992,12 @@ mod tests {
     fn command_overlay_visible_in_gallery_scroll_card() {
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let open = Signal::new(true);
-            let oz = OverlayZ {
-                underlay: 1000,
-                panel: 1001,
-            };
             let inner: Element = vstack()
                 .w("100%")
                 .child(Element::new().w("100%").h(36.0).bg([0.2, 0.2, 0.2, 1.0]))
                 .child(Element::new().w("100%").h(80.0).bg([0.3, 0.3, 0.3, 1.0]))
                 .into();
-            let presence = use_floating_presence("cmd-overlay-gallery-t", FloatingMotionKind::Fade);
-            let _ = sync_floating_presence(&presence, true);
-            clear_pending_floating_enter(&presence);
-            let frame = command_overlay_frame(
-                open,
-                oz,
-                inner,
-                "cmd-overlay-gallery-t",
-                crate::utils::presence::PresencePhase::Present,
-                &presence,
-            );
+            let frame = command_overlay_frame_open("cmd-overlay-gallery-t", inner);
             let host = Element::new()
                 .w(0.0)
                 .h(0.0)
@@ -2200,11 +2084,12 @@ mod tests {
 
     #[test]
     fn command_dialog_session_reset_waits_for_unmount() {
-        use crate::components::internal::modal_motion::{
-            mounted_signal, sync_modal_presence, use_modal_presence,
-        };
         use crate::utils::presence::PresencePhase;
+        use crate::utils::viewport_modal::{
+            viewport_modal_force_unmount, viewport_modal_is_mounted, viewport_modal_phase,
+        };
 
+        clear_overlay_stack();
         let _owner = create_root(|| {
             let id = "cmd-reset-wait";
             let filter_id = format!("{id}__filter");
@@ -2213,18 +2098,20 @@ mod tests {
             use_signal(input_value_signal_key(&filter_id).as_str(), String::new)
                 .set("query".into());
             active.set(2);
-            let presence = use_modal_presence(id);
 
-            sync_modal_presence(&presence, true);
-            assert!(mounted_signal(&presence).get());
+            assert_eq!(
+                viewport_modal_phase(id, open),
+                Some(PresencePhase::Present)
+            );
+            assert!(viewport_modal_is_mounted(id, open));
 
             open.set(false);
             assert_eq!(
-                sync_modal_presence(&presence, false),
-                PresencePhase::Exiting
+                viewport_modal_phase(id, open),
+                Some(PresencePhase::Exiting)
             );
             assert!(
-                mounted_signal(&presence).get(),
+                viewport_modal_is_mounted(id, open),
                 "dialog must stay mounted during exit animation"
             );
             assert_eq!(active.get(), 2, "active must not reset while still mounted");
@@ -2234,7 +2121,7 @@ mod tests {
                 "filter must not clear while still mounted"
             );
 
-            mounted_signal(&presence).set(false);
+            viewport_modal_force_unmount(id);
             reset_command_session(id);
             assert_eq!(active.get(), 0);
             assert_eq!(
@@ -2242,6 +2129,7 @@ mod tests {
                 ""
             );
         });
+        clear_overlay_stack();
     }
 
     fn walk_cmd<'a>(el: &'a Element, f: &mut impl FnMut(&'a Element)) {
@@ -2366,16 +2254,16 @@ mod tests {
 
     #[test]
     fn command_dialog_does_not_focus_filter_during_enter() {
-        use crate::components::internal::modal_motion::{
-            clear_pending_modal_enter, sync_modal_presence, use_modal_presence,
+        use crate::utils::viewport_modal::{
+            viewport_modal_clear_pending_enter, viewport_modal_motion_busy, viewport_modal_phase,
         };
+        clear_overlay_stack();
         let (_owner, _) = create_root(|| {
             let id = "cmd-focus-enter";
             let open = Signal::new(true);
-            let presence = use_modal_presence(id);
-            sync_modal_presence(&presence, true);
+            let _ = viewport_modal_phase(id, open);
             assert!(
-                presence.is_motion_busy(),
+                viewport_modal_motion_busy(id),
                 "opening a dialog must arm enter motion"
             );
             use_signal("__rui_button_focus_id", String::new).set(String::new());
@@ -2400,7 +2288,7 @@ mod tests {
                 want,
                 "paint sync must not focus the filter while enter is busy"
             );
-            clear_pending_modal_enter(&presence);
+            viewport_modal_clear_pending_enter(id);
             sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
             assert_eq!(
                 use_signal("__rui_button_focus_id", String::new).peek(),
@@ -2408,20 +2296,21 @@ mod tests {
                 "filter focuses only after enter motion is idle"
             );
         });
+        clear_overlay_stack();
     }
 
     #[test]
     fn command_overlay_does_not_focus_filter_during_enter() {
-        use crate::components::internal::floating_motion::{
-            clear_pending_floating_enter, sync_floating_presence, use_floating_presence,
+        use crate::utils::viewport_modal::{
+            viewport_modal_clear_pending_enter, viewport_modal_motion_busy, viewport_modal_phase,
         };
+        clear_overlay_stack();
         let (_owner, _) = create_root(|| {
             let id = "cmd-focus-overlay";
             let open = Signal::new(true);
-            let presence = use_floating_presence(id, FloatingMotionKind::Fade);
-            sync_floating_presence(&presence, true);
+            let _ = viewport_modal_phase(id, open);
             assert!(
-                presence.is_motion_busy(),
+                viewport_modal_motion_busy(id),
                 "opening an overlay must arm enter motion"
             );
             use_signal("__rui_button_focus_id", String::new).set(String::new());
@@ -2446,7 +2335,7 @@ mod tests {
                 want,
                 "paint sync must not focus the overlay filter while enter is busy"
             );
-            clear_pending_floating_enter(&presence);
+            viewport_modal_clear_pending_enter(id);
             sync_command_item_paint_subtree(&mut root, &mut tree, &mut impact);
             assert_eq!(
                 use_signal("__rui_button_focus_id", String::new).peek(),
@@ -2454,6 +2343,7 @@ mod tests {
                 "overlay filter focuses only after enter motion is idle"
             );
         });
+        clear_overlay_stack();
     }
 
     #[test]
@@ -2695,16 +2585,11 @@ mod tests {
     fn layout_command_dialog_host(modal_id: &str, body: Rc<dyn Fn() -> Element>) -> Element {
         use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
-        use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
-        use crate::components::internal::modal_shell::{
-            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        use crate::utils::modal_shell::{
+            default_modal_overlay_color, ShellOverlayOpts,
         };
-        use crate::utils::presence::PresencePhase;
 
         let open = Signal::new(true);
-        let handle = use_modal_presence(modal_id);
-        sync_modal_presence(&handle, true);
-        let zs = modal_sync(modal_id, open).expect("modal_sync");
         let overlay_opts = ShellOverlayOpts {
             color: default_modal_overlay_color(None, Some(0.5)),
             close_on_click: true,
@@ -2720,13 +2605,10 @@ mod tests {
         let shell = dialog_shell_frame(
             modal_id,
             open,
-            &zs,
             inner,
             &overlay_opts,
             None,
             true,
-            &handle,
-            PresencePhase::Present,
             None,
             None,
             None,
@@ -2812,9 +2694,10 @@ mod tests {
     /// `__modal_zoom` layer scaling about the card center (lower rows move down).
     #[test]
     fn command_dialog_item_y_stable_across_enter_settle() {
-        use crate::components::internal::modal_motion::{
-            flush_modal_shell_motion_subtree, tick_hoisted_modal_css, use_modal_presence,
+        use crate::utils::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };
+        use crate::utils::viewport_modal::viewport_modal_motion_busy;
         use crate::utils::text_field::input_focus_id;
 
         crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2839,7 +2722,7 @@ mod tests {
         for frame in 0..24 {
             let _ = flush_modal_shell_motion_subtree(&mut host);
             let _ = tick_hoisted_modal_css(&mut host);
-            let busy = use_modal_presence(modal_id).is_motion_busy();
+            let busy = viewport_modal_motion_busy(modal_id);
             let _ = crate::renderer::take_capture_jobs();
             let mut tree = LayoutTree::new();
             let result = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);
@@ -2912,19 +2795,14 @@ mod tests {
     fn command_dialog_list_max_scroll_reveals_last_item() {
         use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
-        use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
-        use crate::components::internal::modal_shell::{
-            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        use crate::utils::modal_shell::{
+            default_modal_overlay_color, ShellOverlayOpts,
         };
-        use crate::utils::presence::PresencePhase;
 
         clear_overlay_stack();
         let modal_id = "cmd-dlg-scroll-end";
         let (_owner, mut host) = create_root(|| {
             let open = Signal::new(true);
-            let handle = use_modal_presence(modal_id);
-            sync_modal_presence(&handle, true);
-            let zs = modal_sync(modal_id, open).expect("modal_sync");
             let overlay_opts = ShellOverlayOpts {
                 color: default_modal_overlay_color(None, Some(0.5)),
                 close_on_click: true,
@@ -2940,13 +2818,10 @@ mod tests {
             let shell = dialog_shell_frame(
                 modal_id,
                 open,
-                &zs,
                 inner,
                 &overlay_opts,
                 None,
                 true,
-                &handle,
-                PresencePhase::Present,
                 None,
                 None,
                 None,

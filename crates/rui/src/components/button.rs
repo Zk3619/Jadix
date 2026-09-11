@@ -332,6 +332,12 @@ impl From<String> for ButtonVariant {
     }
 }
 
+impl From<&String> for ButtonVariant {
+    fn from(s: &String) -> Self {
+        s.parse().unwrap_or(Self::Default)
+    }
+}
+
 impl std::str::FromStr for ButtonVariant {
     type Err = ();
 
@@ -392,6 +398,12 @@ impl From<String> for ButtonSize {
     }
 }
 
+impl From<&String> for ButtonSize {
+    fn from(s: &String) -> Self {
+        s.parse().unwrap_or(Self::Default)
+    }
+}
+
 impl std::str::FromStr for ButtonSize {
     type Err = ();
 
@@ -411,6 +423,20 @@ impl std::str::FromStr for ButtonSize {
 }
 
 impl ButtonSize {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Xs => "xs",
+            Self::Sm => "sm",
+            Self::Default => "default",
+            Self::Lg => "lg",
+            Self::Icon => "icon",
+            Self::IconXs => "icon-xs",
+            Self::IconSm => "icon-sm",
+            Self::IconLg => "icon-lg",
+        }
+    }
+
     fn height(&self) -> &'static str {
         match self {
             Self::Inline => "auto",
@@ -637,16 +663,16 @@ impl ButtonBuilder {
         self
     }
 
-    pub fn variant(mut self, v: &str) -> Self {
-        self.variant = v.parse().unwrap_or(ButtonVariant::Default);
+    pub fn variant(mut self, v: impl Into<ButtonVariant>) -> Self {
+        self.variant = v.into();
         if self.variant == ButtonVariant::Link && self.text_style.underline_offset_px.is_none() {
             self.text_style.underline_offset_px = Some(LINK_UNDERLINE_OFFSET_PX);
         }
         self
     }
 
-    pub fn size(mut self, s: &str) -> Self {
-        self.size = s.parse().unwrap_or(ButtonSize::Default);
+    pub fn size(mut self, s: impl Into<ButtonSize>) -> Self {
+        self.size = s.into();
         self.container = self.container.gap(self.size.gap());
         self.text_style.size_px = IntoF32::into_f32(self.size.text_size());
         if self.size.is_icon() {
@@ -679,7 +705,8 @@ impl ButtonBuilder {
         self
     }
 
-    pub fn text_color(mut self, color: [u8; 4]) -> Self {
+    pub fn text_color(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        let color = color.into_text_color();
         self.text_style.color = color;
         self.explicit_text_color = Some(color);
         self
@@ -723,7 +750,7 @@ impl ButtonBuilder {
         self
     }
 
-    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+    pub fn cursor(mut self, value: impl crate::style::IntoCursor) -> Self {
         self.container = self.container.cursor(value);
         self
     }
@@ -782,7 +809,7 @@ impl ButtonBuilder {
         self.container = self.container.gap(g);
         self
     }
-    pub fn bg(mut self, color: [f32; 4]) -> Self {
+    pub fn bg(mut self, color: impl crate::style::IntoPaintColor) -> Self {
         self.container = self.container.bg(color);
         self
     }

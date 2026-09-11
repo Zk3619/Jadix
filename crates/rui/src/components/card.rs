@@ -80,7 +80,7 @@ pub fn Card(children: Option<Element>) -> Element {
             .border_color(parse_color("border"))
             .border_width(1.0)
             .rounded(tokens::RADIUS_LG)
-            .shadow([0.0, 0.0, 0.0, 0.08], 4.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Sm), 4.0)
             .children(kids),
     )
 }
@@ -566,6 +566,35 @@ impl From<CardBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_title_picks_up_stylesheet_slot_rule() {
+        use crate::style::{
+            clear_stylesheets, parse_stylesheet, register_stylesheet,
+        };
+        clear_stylesheets();
+        let sheet = parse_stylesheet(
+            r#"
+[[rule]]
+selectors = ["[data-slot=card-title]"]
+classes = "italic"
+"#,
+        )
+        .unwrap();
+        register_stylesheet(sheet).unwrap();
+        let el = CardTitle(CardTitleProps {
+            children: Some(Element::from(text("Hi"))),
+            ..Default::default()
+        });
+        let cs = el.class_set.as_ref().expect("class_set");
+        assert!(
+            cs.base.iter().any(|c| c == "italic"),
+            "#[component] exit must bind [data-slot=card-title]; got {:?}",
+            cs.base
+        );
+        assert_eq!(el.attrs.get("data-rui-sheet").map(String::as_str), Some("1"));
+        clear_stylesheets();
+    }
 
     #[test]
     fn builder_header_title_class_and_style() {

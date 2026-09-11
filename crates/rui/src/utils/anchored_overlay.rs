@@ -10,9 +10,13 @@ use std::sync::OnceLock;
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::floating_motion::{
+use crate::utils::floating_motion::{
     apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    FloatingPresenceHandle,
 };
+
+#[cfg(test)]
+use crate::utils::floating_motion::floating_mounted_signal;
 use crate::core::reactivity::{
     create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
@@ -25,7 +29,7 @@ use crate::utils::popup::{
     ATTR_FLOATING_W,
 };
 
-pub use crate::components::internal::floating_motion::FloatingMotionKind;
+pub use crate::utils::floating_kind::FloatingMotionKind;
 
 // ---------------------------------------------------------------------------
 // Placement
@@ -126,6 +130,14 @@ pub fn parse_floating_motion(s: &str) -> FloatingMotionKind {
     }
 }
 
+pub fn parse_overlay_mode(s: &str) -> OverlayMode {
+    if s.trim().eq_ignore_ascii_case("pinned") {
+        OverlayMode::Pinned
+    } else {
+        OverlayMode::Stacked
+    }
+}
+
 /// Build [`Placement`] from RSX attrs. Call from [`anchored_overlay_content`] (has overlay id).
 pub fn placement_from_rsx(
     overlay_id: &str,
@@ -176,6 +188,22 @@ fn overlay_context() -> Context<AnchoredOverlayCtx> {
 
 pub fn use_anchored_overlay() -> Option<AnchoredOverlayCtx> {
     use_context(overlay_context())
+}
+
+/// Provide anchored-overlay context inside an existing scope (Popover / Tooltip / HoverCard).
+pub fn provide_anchored_overlay_context(
+    open: Signal<bool>,
+    id: String,
+    trigger_fid: Signal<String>,
+) {
+    provide_context(
+        overlay_context(),
+        AnchoredOverlayCtx {
+            open,
+            id,
+            trigger_fid,
+        },
+    );
 }
 
 fn require_anchored_overlay(part: &str) -> AnchoredOverlayCtx {
@@ -309,6 +337,7 @@ impl AnchoredOverlayBuilder {
                 gap: 0.0,
                 kind: self.kind.unwrap_or(OverlayKind::Popover),
                 motion: self.motion.unwrap_or(FloatingMotionKind::Fade),
+                mode: OverlayMode::Stacked,
                 match_trigger_width: self.match_trigger_width,
                 max_h: self.max_h,
                 width: self.width,
@@ -349,6 +378,7 @@ pub struct AnchoredOverlayContentOpts {
     pub gap: f32,
     pub kind: OverlayKind,
     pub motion: FloatingMotionKind,
+    pub mode: OverlayMode,
     pub match_trigger_width: bool,
     pub max_h: Option<String>,
     pub width: Option<String>,
@@ -370,6 +400,7 @@ impl Default for AnchoredOverlayContentOpts {
             gap: 0.0,
             kind: OverlayKind::Popover,
             motion: FloatingMotionKind::Fade,
+            mode: OverlayMode::Stacked,
             match_trigger_width: false,
             max_h: None,
             width: None,
@@ -390,6 +421,11 @@ impl AnchoredOverlayContentOpts {
 
     pub fn motion(mut self, motion: FloatingMotionKind) -> Self {
         self.motion = motion;
+        self
+    }
+
+    pub fn mode(mut self, mode: OverlayMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -468,12 +504,12 @@ fn assemble_panel(
     id: &str,
     open: Signal<bool>,
     trigger_fid: Signal<String>,
-    presence: &crate::components::internal::floating_motion::FloatingPresenceHandle,
+    presence: &FloatingPresenceHandle,
     opts: &AnchoredOverlayContentOpts,
     mut panel: Element,
 ) -> Element {
     let Some((phase, oz)) =
-        floating_portal_phase(id, open, presence, opts.kind, OverlayMode::Stacked)
+        floating_portal_phase(id, open, presence, opts.kind, opts.mode)
     else {
         return Element::new().w(0.0).h(0.0);
     };
@@ -503,14 +539,57 @@ fn assemble_panel(
         presence,
         open,
         opts.kind,
-        OverlayMode::Stacked,
-        None,
+        opts.mode,
+        opts.max_h.as_deref().and_then(parse_max_h_cap_px),
     ) {
         crate::app::runtime::request_redraw();
     }
     // Same 0×0 portal mount as Trigger/Point. Unanchored must not wrap a viewport
     // stage: author `fixed` / inset already resolve against the window.
     mount_anchored_overlay(panel, oz.panel)
+}
+
+/// Smoke: current portal phase. `None` when not mounted.
+#[cfg(test)]
+pub(crate) fn anchored_overlay_phase(
+    id: &str,
+    open: Signal<bool>,
+    opts: &AnchoredOverlayContentOpts,
+) -> Option<crate::utils::presence::PresencePhase> {
+    let presence = use_floating_presence(id, opts.motion);
+    floating_portal_phase(id, open, &presence, opts.kind, opts.mode).map(|(phase, _)| phase)
+}
+
+/// Smoke: exit animation still mounted after `open` is false.
+#[cfg(test)]
+pub(crate) fn anchored_overlay_is_mounted(id: &str, opts: &AnchoredOverlayContentOpts) -> bool {
+    let presence = use_floating_presence(id, opts.motion);
+    floating_mounted_signal(&presence).peek()
+}
+
+/// Smoke: apply panel motion without exposing the presence handle.
+#[cfg(test)]
+pub(crate) fn apply_anchored_overlay_panel_motion(
+    id: &str,
+    panel: &mut Element,
+    opts: &AnchoredOverlayContentOpts,
+    open: Signal<bool>,
+) -> bool {
+    let presence = use_floating_presence(id, opts.motion);
+    let Some((phase, _)) = floating_portal_phase(id, open, &presence, opts.kind, opts.mode) else {
+        return false;
+    };
+    apply_floating_panel_motion(
+        id,
+        panel,
+        opts.motion,
+        phase,
+        &presence,
+        open,
+        opts.kind,
+        opts.mode,
+        opts.max_h.as_deref().and_then(parse_max_h_cap_px),
+    )
 }
 
 fn apply_placement(
@@ -569,6 +648,17 @@ fn take_absolute(panel: &mut Element) {
     let mut taken = Element::new();
     std::mem::swap(panel, &mut taken);
     *panel = taken.absolute();
+}
+
+fn parse_max_h_cap_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix("rem") {
+        n.trim().parse::<f32>().ok().map(|v| v * 16.0)
+    } else if let Some(n) = s.strip_suffix("px") {
+        n.trim().parse().ok()
+    } else {
+        s.parse().ok()
+    }
 }
 
 fn apply_size_attrs(
@@ -874,5 +964,28 @@ mod tests {
             clear_floating_panel_drag();
             assert!(!is_floating_panel_dragging());
         });
+    }
+
+    #[test]
+    fn smoke_phase_hides_presence_handle() {
+        use crate::utils::presence::PresencePhase;
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let opts = AnchoredOverlayContentOpts::default()
+                .kind(OverlayKind::Popover)
+                .motion(FloatingMotionKind::Fade);
+            assert_eq!(
+                anchored_overlay_phase("ao-phase", open, &opts),
+                Some(PresencePhase::Present)
+            );
+            open.set(false);
+            assert_eq!(
+                anchored_overlay_phase("ao-phase", open, &opts),
+                Some(PresencePhase::Exiting)
+            );
+            assert!(anchored_overlay_is_mounted("ao-phase", &opts));
+        });
+        clear_overlay_stack();
     }
 }

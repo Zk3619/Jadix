@@ -80,7 +80,7 @@ use std::sync::OnceLock;
 use rui_macros::component;
 
 use crate::components::base::{BaseComponentBuilder, SlotChrome};
-use crate::components::button::button;
+use crate::components::button::{button, ButtonSize, ButtonVariant};
 use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
@@ -1019,6 +1019,23 @@ pub fn MessageScrollerItem(
     apply_base(el, base_builder)
 }
 
+/// Jump button product default is Button `outline` / `sm` (empty RSX attr → these).
+fn jump_button_variant(raw: &str) -> ButtonVariant {
+    if raw.trim().is_empty() {
+        ButtonVariant::Outline
+    } else {
+        raw.into()
+    }
+}
+
+fn jump_button_size(raw: &str) -> ButtonSize {
+    if raw.trim().is_empty() {
+        ButtonSize::Sm
+    } else {
+        raw.into()
+    }
+}
+
 /// Absolute jump control. Default icon is Lucide `arrow-down` (rotated for `start`).
 ///
 /// RSX `<MessageScrollerButton direction="end">`.
@@ -1033,16 +1050,8 @@ pub fn MessageScrollerButton(
 ) -> Element {
     let ctx = require_message_scroller("MessageScrollerButton");
     let kids = children.map(take_packed).unwrap_or_default();
-    let variant = if variant.trim().is_empty() {
-        "outline"
-    } else {
-        variant.trim()
-    };
-    let size = if size.trim().is_empty() {
-        "sm"
-    } else {
-        size.trim()
-    };
+    let variant = jump_button_variant(&variant);
+    let size = jump_button_size(&size);
     let btn_id = format!("{}:btn-{}", ctx.id, direction.as_str());
     let jump_ctx = ctx.clone();
     let jump_dir = direction;
@@ -1373,8 +1382,8 @@ impl From<MessageScrollerItemBuilder> for Element {
 
 pub struct MessageScrollerButtonBuilder {
     direction: MessageScrollerDirection,
-    variant: String,
-    size: String,
+    variant: ButtonVariant,
+    size: ButtonSize,
     chrome: SlotChrome,
     children: Vec<Element>,
 }
@@ -1382,8 +1391,8 @@ pub struct MessageScrollerButtonBuilder {
 pub fn message_scroller_button() -> MessageScrollerButtonBuilder {
     MessageScrollerButtonBuilder {
         direction: MessageScrollerDirection::End,
-        variant: String::new(),
-        size: String::new(),
+        variant: ButtonVariant::Outline,
+        size: ButtonSize::Sm,
         chrome: SlotChrome::default(),
         children: Vec::new(),
     }
@@ -1397,12 +1406,12 @@ impl MessageScrollerButtonBuilder {
         self
     }
 
-    pub fn variant(mut self, variant: impl Into<String>) -> Self {
+    pub fn variant(mut self, variant: impl Into<ButtonVariant>) -> Self {
         self.variant = variant.into();
         self
     }
 
-    pub fn size(mut self, size: impl Into<String>) -> Self {
+    pub fn size(mut self, size: impl Into<ButtonSize>) -> Self {
         self.size = size.into();
         self
     }
@@ -1423,8 +1432,8 @@ impl From<MessageScrollerButtonBuilder> for Element {
     fn from(builder: MessageScrollerButtonBuilder) -> Self {
         let el = MessageScrollerButton(MessageScrollerButtonProps {
             direction: Some(builder.direction),
-            variant: Some(builder.variant),
-            size: Some(builder.size),
+            variant: Some(builder.variant.as_paint_key().to_string()),
+            size: Some(builder.size.as_str().to_string()),
             children: packed_children(builder.children),
             base: None,
             base_builder: None,

@@ -1,6 +1,9 @@
 use crate::style::theme::get_theme;
 
-fn f32_to_u8(c: [f32; 4]) -> [u8; 4] {
+/// Fully transparent fill. Product paths should use this instead of `[0,0,0,0]`.
+pub const TRANSPARENT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+
+pub(crate) fn f32_to_u8(c: [f32; 4]) -> [u8; 4] {
     [
         (c[0] * 255.0) as u8,
         (c[1] * 255.0) as u8,
@@ -224,7 +227,7 @@ fn tailwind_rgb(family: &str, shade: u32) -> Option<(u8, u8, u8)> {
     }
 }
 
-fn rgba_u8_to_f32(c: [u8; 4]) -> [f32; 4] {
+pub(crate) fn rgba_u8_to_f32(c: [u8; 4]) -> [f32; 4] {
     [
         c[0] as f32 / 255.0,
         c[1] as f32 / 255.0,

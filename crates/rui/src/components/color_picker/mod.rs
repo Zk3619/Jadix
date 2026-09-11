@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{bind_style, bind_text, reactive_component_live, StylePatch};
 use crate::components::base::{SlotChrome, SlotMap};
 use crate::components::button::button;
@@ -43,17 +43,18 @@ use crate::components::input::{input, input_value_signal_key};
 use crate::components::select::{select, SelectItemData};
 use crate::components::separator::separator;
 use crate::components::slider::slider;
-use crate::core::reactivity::{create_effect, use_signal, Signal};
+use crate::core::reactivity::{create_effect, use_signal, with_child_owner, Signal};
 use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
-use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
-use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
 };
+use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
+use crate::utils::popup::{PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER};
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;

@@ -28,13 +28,9 @@
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::label::label;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
 use crate::impl_simple_slot_builder;
@@ -43,23 +39,30 @@ use crate::primitives::r#box::r#box;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
-use crate::utils::popup::{
-    mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingStrategy, Placement,
 };
+use crate::utils::floating_motion::FloatingMotionKind;
+use crate::utils::hover_intent::{bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent};
+use crate::utils::popup::PopupPlacement;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
 
-/// Root context: `open` + stable instance `id` + trigger `focus_id`.
+/// Root context: `open` + stable instance `id` + trigger `focus_id` + hover intent.
 #[derive(Clone)]
 pub struct TooltipCtx {
     pub open: Signal<bool>,
     pub id: String,
     /// Trigger focus_id (Content anchor); written when Trigger mounts.
     pub trigger_fid: Signal<String>,
+    trigger_hovered: Signal<bool>,
+    content_hovered: Signal<bool>,
+    open_delay_ms: Signal<u64>,
+    close_delay_ms: Signal<u64>,
 }
 
 fn tooltip_context() -> Context<TooltipCtx> {
@@ -89,15 +92,36 @@ pub fn tooltip_scope(
     let trigger_fid = use_signal(format!("{id}__tooltip_trigger_fid").as_str(), || {
         format!("{id}__tooltip_trigger")
     });
-    provide_context(
-        tooltip_context(),
-        TooltipCtx {
-            open,
-            id: id.clone(),
-            trigger_fid,
-        },
-    );
-    let mut root = body();
+    let trigger_hovered = use_signal(format!("{id}__tooltip_th").as_str(), || false);
+    let content_hovered = use_signal(format!("{id}__tooltip_ch").as_str(), || false);
+    let open_delay_ms = use_signal(format!("{id}__tooltip_od").as_str(), || 0_u64);
+    let close_delay_ms = use_signal(format!("{id}__tooltip_cd").as_str(), || 0_u64);
+    let mut root = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
+        provide_context(
+            tooltip_context(),
+            TooltipCtx {
+                open,
+                id: id.clone(),
+                trigger_fid,
+                trigger_hovered,
+                content_hovered,
+                open_delay_ms,
+                close_delay_ms,
+            },
+        );
+        bind_hover_intent_effect(
+            &id,
+            HoverIntent {
+                open,
+                trigger_hovered,
+                content_hovered,
+                open_delay_ms,
+                close_delay_ms,
+            },
+        );
+        body()
+    });
     if root.template_id.is_none() {
         root.template_id = Some(format!("{id}__tooltip"));
     }
@@ -122,7 +146,7 @@ pub fn tooltip_bubble(mut body: Element) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.06], 3.0);
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Xs), 3.0);
     if is_text_leaf(&body) {
         let t = body.text.clone().unwrap_or_default();
         body = text(t)
@@ -133,15 +157,12 @@ pub fn tooltip_bubble(mut body: Element) -> Element {
     panel.child(body)
 }
 
-fn chain_hover(mut el: Element, open: Signal<bool>) -> Element {
-    let prev = el.on_hover.clone();
-    el = el.on_hover(move |hovered| {
-        if let Some(ref rc) = prev {
-            rc.borrow_mut()(hovered);
-        }
-        open.set(hovered);
-    });
-    el
+fn chain_hover(
+    el: Element,
+    on_enter: impl Fn() + 'static,
+    on_leave: impl Fn() + 'static,
+) -> Element {
+    chain_region_hover(el, on_enter, on_leave)
 }
 
 /// solid-ui / shadcn `side` → [`PopupPlacement`]（`bottom`/`top` 为水平居中，空间不足时贴边）。
@@ -164,9 +185,27 @@ pub fn tooltip_side_to_placement(side: &str) -> PopupPlacement {
 /// solid-ui `TooltipTrigger`：子节点为组件时挂载 hover；纯文本则默认 [`Label`]。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
+pub fn TooltipTrigger(
+    id: String,
+    open_delay: Option<u64>,
+    close_delay: Option<u64>,
+    children: Option<Element>,
+) -> Element {
     let ctx = require_tooltip("TooltipTrigger");
-    let open = ctx.open;
+    if let Some(ms) = open_delay {
+        ctx.open_delay_ms.set(ms);
+    }
+    if let Some(ms) = close_delay {
+        ctx.close_delay_ms.set(ms);
+    }
+    let enter = {
+        let h = ctx.trigger_hovered;
+        move || set_hovered(h, true)
+    };
+    let leave = {
+        let h = ctx.trigger_hovered;
+        move || set_hovered(h, false)
+    };
     let trigger_id = if id.is_empty() {
         format!("{}__tooltip_trigger", ctx.id)
     } else {
@@ -176,11 +215,16 @@ pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
 
     match children {
         None => {
+            let h = ctx.trigger_hovered;
             let mut el: Element = interactive(label(trigger_id.as_str()).text("Hover").into())
                 .focus_id(trigger_id.as_str())
                 .focusable(true)
                 .into();
-            el = chain_hover(el, open);
+            el = chain_hover(
+                el,
+                move || set_hovered(h, true),
+                move || set_hovered(h, false),
+            );
             el
         }
         Some(c) if is_text_leaf(&c) => {
@@ -189,7 +233,7 @@ pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
                 .focus_id(trigger_id.as_str())
                 .focusable(true)
                 .into();
-            el = chain_hover(el, open);
+            el = chain_hover(el, enter, leave);
             el
         }
         Some(mut c) => {
@@ -198,7 +242,7 @@ pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
             }
             let fid = c.focus_id.clone().unwrap_or(trigger_id);
             ctx.trigger_fid.set(fid);
-            chain_hover(c, open)
+            chain_hover(c, enter, leave)
         }
     }
 }
@@ -232,49 +276,26 @@ impl TooltipContentOpts {
 /// `ui!` lowers to this function via the macro (subtree rebuilt lazily when open).
 pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tooltip("TooltipContent");
-    let open = ctx.open;
-    let id = ctx.id.clone();
-    let trigger_fid = ctx.trigger_fid;
-    let placement = tooltip_side_to_placement(&opts.side);
+    let content_hovered = ctx.content_hovered;
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let view_id = format!("{id}__tooltip_view");
-    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
-
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &id,
-            open,
-            &presence,
-            OverlayKind::Tooltip,
-            OverlayMode::Pinned,
-        ) else {
-            return Element::new();
-        };
+    let placement = tooltip_side_to_placement(&opts.side);
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger("", placement, 4.0, FloatingStrategy::Auto)),
+        kind: OverlayKind::Tooltip,
+        motion: FloatingMotionKind::Fade,
+        mode: OverlayMode::Pinned,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         let mut panel = tooltip_bubble(body());
         panel = chrome.apply(panel);
-        let anchor = trigger_fid.peek();
-        // 默认 Bottom；`compute_anchored_placement` 在下方空间不足时翻到上方。
-        // gutter/sideOffset ≈ 4；w-fit（不匹配触发器宽）。
-        mark_floating_with_gap(&mut panel, &id, &anchor, placement, 4.0);
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
-        panel = panel.absolute();
-        if apply_floating_panel_motion(
-            &id,
-            &mut panel,
-            FloatingMotionKind::Fade,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Tooltip,
-            OverlayMode::Pinned,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        let ch = content_hovered;
+        chain_hover(
+            panel,
+            move || set_hovered(ch, true),
+            move || set_hovered(ch, false),
+        )
+    })
 }
 
 impl_simple_slot_builder!(
@@ -361,6 +382,8 @@ impl TooltipBuilder {
             let trigger = build(open_sig);
             let trigger = TooltipTrigger(TooltipTriggerProps {
                 id: String::new(),
+                open_delay: None,
+                close_delay: None,
                 children: Some(trigger),
                 base: None,
             });
@@ -427,7 +450,7 @@ mod tests {
             })
         });
         fn find_zero(el: &Element) -> bool {
-            let is_view = el.template_id.as_deref() == Some("tip-anchor__tooltip_view");
+            let is_view = el.template_id.as_deref() == Some("tip-anchor__view");
             let dim0 = crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
                 && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0);
             (is_view && dim0) || el.children.iter().any(find_zero)

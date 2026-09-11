@@ -64,10 +64,6 @@ use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -86,12 +82,12 @@ use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::activate_registry;
-use crate::utils::lucide_glyph;
-use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, mark_floating_with_gap,
-    mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
-    FLOATING_TRIGGER_GAP,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
 };
+use crate::utils::lucide_glyph;
+use crate::utils::popup::{disarm_underlay_close, PopupPlacement, FLOATING_TRIGGER_GAP};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{roving_edge, roving_move};
 use crate::utils::take_packed;
@@ -279,6 +275,7 @@ pub fn dropdown_menu_scope(
         format!("{id}__dd_trigger")
     });
     let mut root = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             dropdown_menu_context(),
             DropdownMenuCtx {
@@ -607,9 +604,7 @@ pub fn dropdown_menu_content(
 ) -> Element {
     let ctx = require_dropdown_menu("DropdownMenuContent");
     let open = ctx.open;
-    let id = ctx.id.clone();
-    let trigger_fid = ctx.trigger_fid;
-    let menu_id = id.clone();
+    let menu_id = ctx.id.clone();
     let _ = ctx.active;
     let placement = if opts.placement.trim().is_empty() {
         ctx.placement
@@ -618,22 +613,19 @@ pub fn dropdown_menu_content(
     };
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let motion = opts.motion;
-    let view_id = format!("{id}__dd_view");
-    let presence = use_floating_presence(&id, motion);
-
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &id,
-            open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            if !open.peek() {
-                close_open_subs(&menu_id);
-            }
-            return Element::new().w(0.0).h(0.0);
-        };
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            placement,
+            0.0,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion,
+        mode: OverlayMode::Stacked,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         if !open.peek() {
             close_open_subs(&menu_id);
         }
@@ -674,32 +666,12 @@ pub fn dropdown_menu_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
             .absolute();
         panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
-        panel = panel.accesskit_role("menu");
-        let anchor = trigger_fid.peek();
-        mark_floating(&mut panel, &id, &anchor, placement);
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
-        apply_stored_floating_place(&mut panel, &id);
-        if apply_floating_panel_motion(
-            &id,
-            &mut panel,
-            motion,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel.accesskit_role("menu")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,6 +1095,7 @@ pub fn dropdown_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> 
         format!("{sid}__trigger")
     });
     let kids = with_child_owner(|| {
+        provide_anchored_overlay_context(open, sid.clone(), trigger_fid);
         provide_context(
             dropdown_menu_sub_context(),
             DropdownMenuSubCtx {
@@ -1269,10 +1242,19 @@ pub(crate) fn dropdown_menu_sub_content_ex(
     let sid = sub.id.clone();
     let trigger_fid = sub.trigger_fid;
     let class = class.filter(|s| !s.trim().is_empty());
-    let view_id = format!("{sid}__view");
-    let presence = use_floating_presence(&sid, motion);
-
-    reactive_anchor(view_id.clone(), move || {
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            PopupPlacement::RightStart,
+            SUBMENU_VISUAL_GAP_PX,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion,
+        mode: OverlayMode::Stacked,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         let parent_is_open = parent_open.get();
         let remount_n = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
         if !parent_is_open {
@@ -1281,30 +1263,8 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             }
             use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
-            let _ = floating_portal_phase(
-                &sid,
-                sub_open,
-                &presence,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
             return Element::new().w(0.0).h(0.0);
         }
-        let Some((phase, oz)) = floating_portal_phase(
-            &sid,
-            sub_open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE)
-                .set_silent(ACTIVE_NONE);
-            log::debug!(
-                target: "rui::menu_sub",
-                "sub_content portal_sync NONE sid={sid} parent_open={parent_is_open} remount={remount_n}"
-            );
-            return Element::new().w(0.0).h(0.0);
-        };
 
         let kids = with_child_owner(|| {
             let sub_active = use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE);
@@ -1342,51 +1302,19 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
             .absolute();
         if let Some(ref c) = class {
             panel = with_class_list(panel, c);
         }
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
-        panel = panel.accesskit_role("menu");
         let fid = trigger_fid.peek();
-        mark_floating_with_gap(
-            &mut panel,
-            &sid,
-            fid.as_str(),
-            PopupPlacement::RightStart,
-            SUBMENU_VISUAL_GAP_PX,
-        );
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
-        apply_stored_floating_place(&mut panel, &sid);
-        if apply_floating_panel_motion(
-            &sid,
-            &mut panel,
-            motion,
-            phase,
-            &presence,
-            sub_open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        let mounted = mount_anchored_overlay(panel, oz.panel);
         log::debug!(
             target: "rui::menu_sub",
-            "sub_content BUILD sid={sid} fid={fid} oz={} remount={remount_n} kids_portal={}",
-            oz.panel,
-            mounted
-                .children
-                .first()
-                .and_then(|c| c.attrs.get("rui_portal").map(String::as_str))
-                .unwrap_or("-")
+            "sub_content BUILD sid={sid} fid={fid} remount={remount_n}"
         );
-        mounted
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel.accesskit_role("menu")
+    })
 }
 
 /// 每帧按 `{id}__dd_active` 写回高亮（`peek`，不订阅根 effect）。

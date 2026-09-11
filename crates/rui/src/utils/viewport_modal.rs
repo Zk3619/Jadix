@@ -6,12 +6,12 @@
 use std::sync::OnceLock;
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::modal_motion::{
+use crate::utils::modal_motion::{
     apply_modal_shell_motion, default_slide_axis_px, mounted_signal, sync_modal_presence,
-    use_modal_presence,
+    use_modal_presence, ModalPresenceHandle,
 };
-use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync_presence, ShellOverlayOpts as InternalOverlayOpts,
+use crate::utils::modal_shell::{
+    build_modal_overlay, modal_sync_presence, ShellOverlayOpts as ModalOverlayOpts,
 };
 use crate::core::reactivity::{
     create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
@@ -20,9 +20,11 @@ use crate::core::reactivity::{
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::presence::PresencePhase;
+use crate::utils::modal_shell::ModalShellZs;
 
-pub use crate::components::internal::modal_motion::ModalSurfaceMotion;
-pub use crate::components::internal::modal_shell::{
+pub use crate::utils::modal_motion::ModalSurfaceMotion;
+pub use crate::utils::modal_shell::{
     DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
 };
 
@@ -51,8 +53,8 @@ impl Default for ShellOverlayOpts {
 }
 
 impl ShellOverlayOpts {
-    fn to_internal(&self) -> InternalOverlayOpts {
-        InternalOverlayOpts::from_content_parts(
+    fn to_internal(&self) -> ModalOverlayOpts {
+        ModalOverlayOpts::from_content_parts(
             self.color.as_deref(),
             self.opacity,
             self.close_on_click,
@@ -282,26 +284,203 @@ pub fn viewport_modal_content_from_rsx(
     viewport_modal_content(opts, body)
 }
 
+/// Sync `open` → presence + portal z-index. `None` when the shell is not mounted.
+pub(crate) struct ViewportModalPortal {
+    pub phase: PresencePhase,
+    pub zs: ModalShellZs,
+}
+
+pub(crate) fn sync_viewport_modal_portal(
+    id: &str,
+    open: Signal<bool>,
+    presence: &ModalPresenceHandle,
+) -> Option<ViewportModalPortal> {
+    let phase = sync_modal_presence(presence, open.get());
+    let mounted = mounted_signal(presence);
+    if !mounted.get() {
+        let _ = modal_sync_presence(id, open, mounted);
+        return None;
+    }
+    let zs = modal_sync_presence(id, open, mounted)?;
+    Some(ViewportModalPortal { phase, zs })
+}
+
+pub(crate) fn apply_viewport_modal_motion(
+    modal_id: &str,
+    presence: &ModalPresenceHandle,
+    motion: ModalSurfaceMotion,
+    phase: PresencePhase,
+    overlay_el: &mut Element,
+    panel: &mut Element,
+    extra_translate: [f32; 2],
+    dragging: bool,
+    slide_axis_px: f32,
+) -> bool {
+    apply_modal_shell_motion(
+        modal_id,
+        overlay_el,
+        panel,
+        motion,
+        phase,
+        presence,
+        extra_translate,
+        dragging,
+        slide_axis_px,
+    )
+}
+
+pub(crate) fn mount_viewport_modal_layer(
+    overlay_el: Element,
+    stage: Element,
+    zs: &ModalShellZs,
+) -> Element {
+    mount_modal_layer(overlay_el, mount_viewport_portal_stage(stage, zs.panel))
+}
+
+/// Product chrome → overlay / motion / stage / mount. Callers see [`PresencePhase`], not a handle.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewportModalLayerOpts {
+    pub motion: ModalSurfaceMotion,
+    pub extra_translate: [f32; 2],
+    pub dragging: bool,
+    pub slide_axis_px: f32,
+    pub overlay: bool,
+    pub center_stage: bool,
+    pub stage_overflow_hidden: bool,
+}
+
+impl ViewportModalLayerOpts {
+    pub fn dialog_fade() -> Self {
+        Self {
+            motion: ModalSurfaceMotion::DialogFade,
+            extra_translate: [0.0, 0.0],
+            dragging: false,
+            slide_axis_px: 0.0,
+            overlay: true,
+            center_stage: true,
+            stage_overflow_hidden: false,
+        }
+    }
+
+    pub fn slide(motion: ModalSurfaceMotion, slide_axis_px: f32) -> Self {
+        Self {
+            motion,
+            extra_translate: [0.0, 0.0],
+            dragging: false,
+            slide_axis_px,
+            overlay: true,
+            center_stage: false,
+            stage_overflow_hidden: false,
+        }
+    }
+}
+
+/// Enter / CSS settle / exit — Command focus and Drawer page-scale.
+pub fn viewport_modal_motion_busy(id: &str) -> bool {
+    use_modal_presence(id).is_motion_busy()
+}
+
+/// Logical `open` may already be false; `true` while the exit animation is still mounted.
+pub fn viewport_modal_is_mounted(id: &str, open: Signal<bool>) -> bool {
+    let presence = use_modal_presence(id);
+    let _ = sync_modal_presence(&presence, open.get());
+    mounted_signal(&presence).get()
+}
+
+/// Current portal phase. `None` when the shell is not mounted.
+pub fn viewport_modal_phase(id: &str, open: Signal<bool>) -> Option<PresencePhase> {
+    let presence = use_modal_presence(id);
+    sync_viewport_modal_portal(id, open, &presence).map(|p| p.phase)
+}
+
+#[cfg(test)]
+pub(crate) fn viewport_modal_clear_pending_enter(id: &str) {
+    crate::utils::modal_motion::clear_pending_modal_enter(&use_modal_presence(id));
+}
+
+#[cfg(test)]
+pub(crate) fn viewport_modal_force_unmount(id: &str) {
+    mounted_signal(&use_modal_presence(id)).set(false);
+}
+
+/// Sync presence + portal, then mount product `panel` (or empty when `body` returns `None`).
+///
+/// `body(None)` = not mounted (clear focus trap / session). `body(Some(phase))` returns the
+/// chromed motion panel; the shell owns overlay, motion, stage, and mount.
+pub fn viewport_modal_layer(
+    id: &str,
+    open: Signal<bool>,
+    overlay: &ModalOverlayOpts,
+    opts: ViewportModalLayerOpts,
+    body: impl FnOnce(Option<PresencePhase>) -> Option<Element>,
+) -> Element {
+    let presence = use_modal_presence(id);
+    let portal = sync_viewport_modal_portal(id, open, &presence);
+    let phase = portal.as_ref().map(|p| p.phase);
+    let Some(panel) = body(phase) else {
+        return Element::new();
+    };
+    let Some(portal) = portal else {
+        return Element::new();
+    };
+    finish_viewport_modal_layer(id, open, overlay, opts, &presence, portal, panel)
+}
+
+fn finish_viewport_modal_layer(
+    id: &str,
+    open: Signal<bool>,
+    overlay: &ModalOverlayOpts,
+    opts: ViewportModalLayerOpts,
+    presence: &ModalPresenceHandle,
+    portal: ViewportModalPortal,
+    mut panel: Element,
+) -> Element {
+    let mut overlay_el = if opts.overlay {
+        build_modal_overlay(open, portal.zs.underlay, overlay)
+    } else {
+        Element::new()
+    };
+    if apply_viewport_modal_motion(
+        id,
+        presence,
+        opts.motion,
+        portal.phase,
+        &mut overlay_el,
+        &mut panel,
+        opts.extra_translate,
+        opts.dragging,
+        opts.slide_axis_px,
+    ) {
+        crate::app::runtime::request_redraw();
+    }
+    let mut stage = r#box().inset(0.0).w("100%").h("100%");
+    if opts.center_stage {
+        stage = stage.items_center().justify_center();
+    }
+    if opts.stage_overflow_hidden {
+        stage = stage.overflow("hidden");
+    }
+    let stage: Element = stage.child(panel).into();
+    if opts.overlay {
+        mount_viewport_modal_layer(overlay_el, stage, &portal.zs)
+    } else {
+        mount_viewport_portal_stage(stage, portal.zs.panel)
+    }
+}
+
 fn assemble_modal(
     id: &str,
     open: Signal<bool>,
-    presence: &crate::components::internal::modal_motion::ModalPresenceHandle,
+    presence: &ModalPresenceHandle,
     overlay_opts: &ShellOverlayOpts,
     opts: ViewportModalContentOpts,
     body: Element,
 ) -> Element {
-    let want = open.get();
-    let phase = sync_modal_presence(presence, want);
-    let mounted = mounted_signal(presence);
-    if !mounted.get() {
-        let _ = modal_sync_presence(id, open, mounted);
-        return Element::new().w(0.0).h(0.0);
-    }
-    let Some(zs) = modal_sync_presence(id, open, mounted) else {
+    let Some(portal) = sync_viewport_modal_portal(id, open, presence) else {
         return Element::new().w(0.0).h(0.0);
     };
 
-    let mut overlay_el = build_modal_overlay(open, zs.underlay, &overlay_opts.to_internal());
+    let mut overlay_el = build_modal_overlay(open, portal.zs.underlay, &overlay_opts.to_internal());
     let mut stage = if opts.raw_stage {
         body
     } else {
@@ -317,13 +496,13 @@ fn assemble_modal(
     // overlay stays at opacity 0; a later rebuild shows the scrim but ExitGate
     // never completes, so overlay click / close become no-ops.
     panel = wrap_dialog_fade_zoom(id, opts.motion, panel);
-    if apply_modal_shell_motion(
+    if apply_viewport_modal_motion(
         id,
+        presence,
+        opts.motion,
+        portal.phase,
         &mut overlay_el,
         &mut panel,
-        opts.motion,
-        phase,
-        presence,
         [0.0, 0.0],
         false,
         default_slide_axis_px(opts.motion),
@@ -331,7 +510,7 @@ fn assemble_modal(
         crate::app::runtime::request_redraw();
     }
     stage = stage.child(panel);
-    mount_modal_layer(overlay_el, mount_viewport_portal_stage(stage, zs.panel))
+    mount_viewport_modal_layer(overlay_el, stage, &portal.zs)
 }
 
 fn wrap_dialog_fade_zoom(modal_id: &str, motion: ModalSurfaceMotion, panel: Element) -> Element {
@@ -462,6 +641,30 @@ mod tests {
         clear_overlay_stack();
     }
 
+    #[test]
+    fn layer_callback_sees_phase_not_handle() {
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let overlay = ModalOverlayOpts::from_content_parts(None, None, true, None);
+            let mut saw_phase = false;
+            let mounted = viewport_modal_layer(
+                "vm-layer",
+                open,
+                &overlay,
+                ViewportModalLayerOpts::dialog_fade(),
+                |phase| {
+                    saw_phase = phase.is_some();
+                    Some(Element::new().text("card").w("16rem").h("8rem"))
+                },
+            );
+            assert!(saw_phase, "open layer must pass PresencePhase, not a handle");
+            assert!(has_portal(&mounted), "layer must portal overlay + stage");
+            assert!(!portal_nests_portal(&mounted));
+        });
+        clear_overlay_stack();
+    }
+
     fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
         if el.template_id.as_deref() == Some(want) {
             return Some(el);
@@ -471,7 +674,7 @@ mod tests {
 
     #[test]
     fn dialog_fade_seeds_overlay_fade_in_on_flush() {
-        use crate::components::internal::modal_motion::flush_modal_shell_motion_subtree;
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         clear_overlay_stack();
         create_root(|| {
             let open = Signal::new(true);
@@ -517,7 +720,7 @@ mod tests {
 
     #[test]
     fn slide_from_right_seeds_offscreen_translate_on_flush() {
-        use crate::components::internal::modal_motion::flush_modal_shell_motion_subtree;
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         clear_overlay_stack();
         create_root(|| {
             let open = Signal::new(true);
@@ -582,7 +785,7 @@ mod tests {
 
     #[test]
     fn slide_exit_seeds_before_and_after_portal_hoist() {
-        use crate::components::internal::modal_motion::flush_modal_shell_motion_subtree;
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         use crate::layout::layout_tree::{hoist_portal_subtrees, PORTAL_LAYER_ID};
         clear_overlay_stack();
         create_root(|| {
@@ -631,6 +834,26 @@ mod tests {
                 ov.style.animations.iter().any(|a| a.name == "fade-out-0"),
                 "overlay fade-out must survive hoist"
             );
+        });
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn phase_api_hides_presence_handle() {
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            assert_eq!(
+                viewport_modal_phase("vm-phase", open),
+                Some(PresencePhase::Present)
+            );
+            assert!(viewport_modal_is_mounted("vm-phase", open));
+            open.set(false);
+            assert_eq!(
+                viewport_modal_phase("vm-phase", open),
+                Some(PresencePhase::Exiting)
+            );
+            assert!(viewport_modal_is_mounted("vm-phase", open));
         });
         clear_overlay_stack();
     }

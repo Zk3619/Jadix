@@ -24,13 +24,128 @@ use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_TOGGLE};
 use rui_macros::component;
 
+/// Toggle chrome: ShadCN `default` (borderless) / `outline`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToggleVariant {
+    #[default]
+    Default,
+    Outline,
+}
+
+impl ToggleVariant {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Outline => "outline",
+        }
+    }
+
+    pub fn is_outline(self) -> bool {
+        matches!(self, Self::Outline)
+    }
+}
+
+impl From<&str> for ToggleVariant {
+    fn from(s: &str) -> Self {
+        s.parse().unwrap_or_default()
+    }
+}
+
+impl From<String> for ToggleVariant {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl From<&String> for ToggleVariant {
+    fn from(s: &String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl std::str::FromStr for ToggleVariant {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "outline" => Self::Outline,
+            _ => Self::Default,
+        })
+    }
+}
+
+/// Toggle size ladder: `sm` / `default` / `lg`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToggleSize {
+    Sm,
+    #[default]
+    Default,
+    Lg,
+}
+
+impl ToggleSize {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sm => "sm",
+            Self::Default => "default",
+            Self::Lg => "lg",
+        }
+    }
+
+    pub fn pad(self) -> (&'static str, &'static str, f32) {
+        match self {
+            Self::Sm => ("0.5rem", "0.25rem", 12.0),
+            Self::Lg => ("1rem", "0.5rem", 16.0),
+            Self::Default => ("0.75rem", "0.375rem", 14.0),
+        }
+    }
+
+    pub(crate) fn min_px(self) -> f32 {
+        match self {
+            Self::Sm => 32.0,
+            Self::Default => 36.0,
+            Self::Lg => 40.0,
+        }
+    }
+}
+
+impl From<&str> for ToggleSize {
+    fn from(s: &str) -> Self {
+        s.parse().unwrap_or_default()
+    }
+}
+
+impl From<String> for ToggleSize {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl From<&String> for ToggleSize {
+    fn from(s: &String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl std::str::FromStr for ToggleSize {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "sm" | "small" => Self::Sm,
+            "lg" | "large" => Self::Lg,
+            _ => Self::Default,
+        })
+    }
+}
+
 pub struct ToggleBuilder {
     id: String,
     pressed: Option<Signal<bool>>,
     default_pressed: bool,
     disabled: bool,
-    variant: String,
-    size: String,
+    variant: ToggleVariant,
+    size: ToggleSize,
     label: String,
     children: Vec<Element>,
     chrome: SlotChrome,
@@ -69,8 +184,8 @@ pub fn toggle(id: impl Into<String>) -> ToggleBuilder {
         pressed: None,
         default_pressed: false,
         disabled: false,
-        variant: "default".into(),
-        size: "default".into(),
+        variant: ToggleVariant::Default,
+        size: ToggleSize::Default,
         label: String::new(),
         children: Vec::new(),
         chrome: SlotChrome::default(),
@@ -92,11 +207,11 @@ impl ToggleBuilder {
         self.disabled = v;
         self
     }
-    pub fn variant(mut self, v: impl Into<String>) -> Self {
+    pub fn variant(mut self, v: impl Into<ToggleVariant>) -> Self {
         self.variant = v.into();
         self
     }
-    pub fn size(mut self, s: impl Into<String>) -> Self {
+    pub fn size(mut self, s: impl Into<ToggleSize>) -> Self {
         self.size = s.into();
         self
     }
@@ -110,12 +225,8 @@ impl ToggleBuilder {
     }
 }
 
-pub(crate) fn toggle_size_pad(size: &str) -> (&'static str, &'static str, f32) {
-    match size {
-        "sm" => ("0.5rem", "0.25rem", 12.0),
-        "lg" => ("1rem", "0.5rem", 16.0),
-        _ => ("0.75rem", "0.375rem", 14.0),
-    }
+pub(crate) fn toggle_size_pad(size: ToggleSize) -> (&'static str, &'static str, f32) {
+    size.pad()
 }
 
 impl From<ToggleBuilder> for Element {
@@ -129,9 +240,9 @@ impl From<ToggleBuilder> for Element {
         );
         let pressed = sig.peek();
         let disabled = builder.disabled;
-        let outline = builder.variant == "outline";
+        let outline = builder.variant.is_outline();
 
-        let (px, py, text_px) = toggle_size_pad(&builder.size);
+        let (px, py, text_px) = toggle_size_pad(builder.size);
         let mut bg = if pressed {
             parse_color("accent")
         } else {

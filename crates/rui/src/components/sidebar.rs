@@ -93,6 +93,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, with_class_list};
+use crate::tokens;
 use crate::utils::icon_provider::ATTR_ICON_SRC;
 use crate::utils::lucide::{lucide_glyph, ATTR_ICON_NAME};
 use crate::utils::resolve_instance_id;
@@ -288,6 +289,24 @@ impl SidebarMenuButtonVariant {
     }
 }
 
+impl From<&str> for SidebarMenuButtonVariant {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for SidebarMenuButtonVariant {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for SidebarMenuButtonVariant {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SidebarMenuButtonSize {
     #[default]
@@ -326,6 +345,24 @@ impl SidebarMenuButtonSize {
             Self::Sm => MENU_TEXT_SIZE_SM_PX,
             Self::Default | Self::Lg => MENU_TEXT_SIZE_PX,
         }
+    }
+}
+
+impl From<&str> for SidebarMenuButtonSize {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for SidebarMenuButtonSize {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for SidebarMenuButtonSize {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -1250,7 +1287,7 @@ fn wrap_sidebar_inner(kids: Vec<Element>, variant: SidebarVariant, _side: Sideba
             .overflow_y("hidden")
             .rounded("0.5rem")
             .border(parse_color("sidebar-border"), 1.0)
-            .box_shadow_color([0.0, 0.0, 0.0, 0.05])
+            .box_shadow_color(tokens::shadow_ink(0.05))
             .box_shadow_blur(2.0)
             .box_shadow_offset_x(0.0)
             .box_shadow_offset_y(1.0)
@@ -1616,7 +1653,7 @@ pub fn SidebarInset(
             .m("0.5rem")
             .rounded("0.75rem")
             .overflow("hidden")
-            .box_shadow_color([0.0, 0.0, 0.0, 0.12])
+            .box_shadow_color(tokens::shadow_rgba(tokens::Elevation::Md))
             .box_shadow_blur(8.0)
             .box_shadow_offset_x(0.0)
             .box_shadow_offset_y(2.0)
@@ -1809,12 +1846,12 @@ impl SidebarMenuButtonBuilder {
         self.is_active = v;
         self
     }
-    pub fn variant(mut self, v: impl AsRef<str>) -> Self {
-        self.variant = SidebarMenuButtonVariant::parse(v.as_ref());
+    pub fn variant(mut self, v: impl Into<SidebarMenuButtonVariant>) -> Self {
+        self.variant = v.into();
         self
     }
-    pub fn size(mut self, v: impl AsRef<str>) -> Self {
-        self.size = SidebarMenuButtonSize::parse(v.as_ref());
+    pub fn size(mut self, v: impl Into<SidebarMenuButtonSize>) -> Self {
+        self.size = v.into();
         self
     }
     pub fn class(mut self, c: impl Into<String>) -> Self {

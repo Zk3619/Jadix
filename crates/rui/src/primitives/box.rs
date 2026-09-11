@@ -8,6 +8,10 @@ use crate::layout::GridTrack;
 
 use crate::core::scroll_viewport::maybe_activate_scroll_viewport;
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoF32};
+use crate::style::{
+    IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor,
+    IntoTextColor,
+};
 
 pub struct BoxBuilder {
     pub(crate) el: Element,
@@ -258,7 +262,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn bg(mut self, color: [f32; 4]) -> Self {
+    pub fn bg(mut self, color: impl IntoPaintColor) -> Self {
         self.el = self.el.bg(color);
         self
     }
@@ -279,15 +283,15 @@ impl BoxBuilder {
         self
     }
 
-    pub fn border(mut self, color: [f32; 4], width: f32) -> Self {
+    pub fn border(mut self, color: impl IntoPaintColor, width: f32) -> Self {
         self.el = self.el.border(color, width);
         self
     }
-    pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
+    pub fn border_style(mut self, style: impl Into<crate::style::LineStyle>) -> Self {
         self.el = self.el.border_style(style);
         self
     }
-    pub fn border_color(mut self, color: [f32; 4]) -> Self {
+    pub fn border_color(mut self, color: impl IntoPaintColor) -> Self {
         self.el = self.el.border_color(color);
         self
     }
@@ -465,20 +469,17 @@ impl BoxBuilder {
         self
     }
 
-    pub fn items(mut self, align: impl Into<String>) -> Self {
-        let s = align.into();
-        self.el = self.el.flex_items(&s);
+    pub fn items(mut self, align: impl IntoAlignItems) -> Self {
+        self.el = self.el.flex_items(align);
         self
     }
-    pub fn wrap(mut self, w: impl Into<String>) -> Self {
-        let s = w.into();
-        self.el = self.el.flex_wrap_kw(&s);
+    pub fn wrap(mut self, w: impl IntoFlexWrap) -> Self {
+        self.el = self.el.flex_wrap_kw(w);
         self
     }
 
-    pub fn justify(mut self, keyword: impl Into<String>) -> Self {
-        let s = keyword.into();
-        self.el = self.el.justify(&s);
+    pub fn justify(mut self, keyword: impl IntoJustifyContent) -> Self {
+        self.el = self.el.justify(keyword);
         self
     }
 
@@ -681,12 +682,12 @@ impl BoxBuilder {
         self
     }
 
-    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+    pub fn pointer_events(mut self, mode: impl Into<crate::core::tree::PointerEvents>) -> Self {
         self.el = self.el.pointer_events(mode);
         self
     }
 
-    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+    pub fn cursor(mut self, value: impl IntoCursor) -> Self {
         self.el = self.el.cursor(value);
         self
     }
@@ -793,7 +794,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn text_color(mut self, color: [u8; 4]) -> Self {
+    pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
         self.el = self.el.text_color(color);
         self
     }
@@ -873,7 +874,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+    pub fn text_align(mut self, align: impl Into<crate::style::TextAlignDeclaration>) -> Self {
         self.el = self.el.text_align(align);
         self
     }
@@ -902,16 +903,16 @@ impl BoxBuilder {
         self
     }
 
-    pub fn overflow(mut self, mode: impl Into<String>) -> Self {
-        self.el = self.el.overflow(mode.into());
+    pub fn overflow(mut self, mode: impl IntoOverflow) -> Self {
+        self.el = self.el.overflow(mode);
         self
     }
-    pub fn overflow_x(mut self, mode: impl Into<String>) -> Self {
-        self.el = self.el.overflow_x(mode.into());
+    pub fn overflow_x(mut self, mode: impl IntoOverflow) -> Self {
+        self.el = self.el.overflow_x(mode);
         self
     }
-    pub fn overflow_y(mut self, mode: impl Into<String>) -> Self {
-        self.el = self.el.overflow_y(mode.into());
+    pub fn overflow_y(mut self, mode: impl IntoOverflow) -> Self {
+        self.el = self.el.overflow_y(mode);
         self
     }
 

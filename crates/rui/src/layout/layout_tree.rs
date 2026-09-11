@@ -1235,6 +1235,9 @@ fn apply_inheritable_text_fields(
         ts.line_height_px = parent.line_height_px;
         ts.line_height_scale = parent.line_height_scale;
     }
+    if !ts.letter_spacing_specified {
+        ts.letter_spacing = parent.letter_spacing;
+    }
 }
 
 fn cascade_inheritable_text_style(root: &mut Element, parent_style: Option<TextStyle>) {
@@ -2759,6 +2762,21 @@ impl LayoutTree {
         }
     }
 
+    /// Parent already has a Taffy id, a child does not — fast path cannot
+    /// measure that child (`sync_taffy_children_from_elements` skips `None`).
+    fn subtree_has_unbuilt_taffy_nodes(root: &Element) -> bool {
+        let mut stack = vec![root];
+        while let Some(el) = stack.pop() {
+            if el.layout_node.is_some() && el.children.iter().any(|c| c.layout_node.is_none()) {
+                return true;
+            }
+            for c in el.children.iter().rev() {
+                stack.push(c);
+            }
+        }
+        false
+    }
+
     /// Keep Taffy child order in lockstep with `element.children`.
     ///
     /// Keyed list reorder reuses the same nodes (`LayoutChanged`, not
@@ -2990,7 +3008,14 @@ impl LayoutTree {
     ) -> RenderResult {
         // Solid invariant: portals must be on their mount before any layout/collect.
         let portal_dirty = hoist_portal_subtrees(root);
-        if portal_dirty > 0 || self.root_node.is_none() {
+        // `write_placed_ghost` (and any in-place subtree swap) inserts Elements
+        // with `layout_node = None`. Fast path only `set_children` on existing
+        // ids, so those nodes stay 0×0 — a bordered radius clone paints as a
+        // dot. Rebuild so the new subtree enters Taffy.
+        if portal_dirty > 0
+            || self.root_node.is_none()
+            || Self::subtree_has_unbuilt_taffy_nodes(root)
+        {
             return self.build_and_layout(root, width, height, mouse_pos);
         }
 
@@ -3409,7 +3434,15 @@ impl LayoutTree {
                     let is_text_leaf = element.text.is_some() && child_nodes.is_empty();
 
                     let node_id = if let Some(existing_id) = element.layout_node {
-                        if self.total_nodes.contains(&existing_id) {
+                        // SlotMap ids restart at 0 on a new `TaffyTree`. A stale
+                        // `layout_node` from a dropped tree can numerically match a
+                        // node just created for a *different* element; reusing it
+                        // parents two Element nodes onto one Taffy id and
+                        // `compute_layout` recurses until the stack dies (Gallery
+                        // `card_chip` ghost after `LayoutTree::new()`).
+                        if self.total_nodes.contains(&existing_id)
+                            && !self.visited_nodes.contains(&existing_id)
+                        {
                             // set_style / set_children dirty the node even when the value is
                             // identical. Portal hoist (Dialog open) rewrites only the overlay
                             // layer — the page walk must not remasure every gallery text leaf.
@@ -3903,6 +3936,19 @@ impl LayoutTree {
                 layout.size.width,
                 layout.size.height,
             )
+        };
+
+        let (abs_x, abs_y) = if crate::utils::drag::is_active() {
+            if let Some(origin) = crate::utils::drag::overlay::adjust_overlay_collect_origin(
+                element,
+                [lay_w, lay_h],
+            ) {
+                (origin[0], origin[1])
+            } else {
+                (abs_x, abs_y)
+            }
+        } else {
+            (abs_x, abs_y)
         };
 
         element.layout_bounds = [abs_x, abs_y, lay_w, lay_h];
@@ -8732,24 +8778,18 @@ mod portal_hoist_tests {
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
-        use crate::components::internal::modal_motion::{
-            flush_modal_shell_motion_subtree, sync_modal_presence, use_modal_presence,
-        };
-        use crate::components::internal::modal_shell::{
-            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
+        use crate::utils::modal_shell::{
+            default_modal_overlay_color, ShellOverlayOpts,
         };
         use crate::components::scroll_area::scroll_area;
         use crate::core::reactivity::{create_root, Signal};
-        use crate::utils::presence::PresencePhase;
 
         let _ = crate::renderer::take_capture_jobs();
         clear_overlay_stack();
         let modal_id = "gal-dialog";
         let (_owner, mut host) = create_root(|| {
             let open = Signal::new(true);
-            let handle = use_modal_presence(modal_id);
-            sync_modal_presence(&handle, true);
-            let zs = modal_sync(modal_id, open).expect("modal_sync");
             let overlay_opts = ShellOverlayOpts {
                 color: default_modal_overlay_color(None, Some(0.5)),
                 close_on_click: true,
@@ -8784,13 +8824,10 @@ mod portal_hoist_tests {
             let shell = dialog_shell_frame(
                 modal_id,
                 open,
-                &zs,
                 inner,
                 &overlay_opts,
                 None,
                 false,
-                &handle,
-                PresencePhase::Present,
                 None,
                 None,
                 None,

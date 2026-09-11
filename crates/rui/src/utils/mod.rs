@@ -2,6 +2,7 @@ pub mod activate_registry;
 pub mod anchored_overlay;
 pub mod block_on;
 pub mod clipboard;
+pub mod collapse_panel;
 pub mod controlled;
 pub mod document_registry;
 pub mod drag;
@@ -9,8 +10,11 @@ pub mod drag_reorder;
 pub mod edge_scroll;
 pub mod element_pack;
 pub mod file_dialog;
+pub mod floating_kind;
+pub mod floating_motion;
 pub mod focus_trap;
 pub mod font;
+pub mod hover_intent;
 pub mod icon_provider;
 pub mod icon_texture;
 pub mod input_hit;
@@ -21,8 +25,12 @@ pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
 pub mod lucide_animated;
+pub mod modal_motion;
+pub mod modal_shell;
+pub mod modal_surface;
 pub mod motion;
 pub mod overflow_fit;
+pub mod panel_presence;
 pub mod pointer_action;
 pub mod pointer_drag;
 pub mod popup;
@@ -43,6 +51,11 @@ pub mod virtual_list;
 pub mod virtual_masonry;
 
 pub use block_on::block_on;
+pub use collapse_panel::{
+    apply_collapse_motion, seed_collapse_enter_anim, seed_collapse_exit_anim,
+    sync_collapse_panel_presence, tick_collapse_panel_presence, use_collapse_panel_presence,
+    CollapseKeyframes, CollapsePanelPresence,
+};
 pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
 pub use document_registry::{
     default_document_registry, document_field_id, DocumentHandle, DocumentRegistry,
@@ -97,7 +110,11 @@ pub use popup::{
     ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
 };
-pub use presence::{exit_elapsed, exit_elapsed_at, ExitGate, PresencePhase};
+pub use presence::{
+    exit_elapsed, exit_elapsed_at, generic_presence_next_wake_at, is_presence_wrapper_tid,
+    presence, presence_template_id, sync_generic_presence, tick_generic_presence,
+    use_generic_presence, ExitGate, GenericPresenceHandle, PresencePhase, PRESENCE_SUFFIX,
+};
 pub use roving::{roving_edge, roving_move};
 pub use text_buffer::{StringBuffer, TextBuffer};
 pub use text_edit_history::{edit_group, EditTransactionGuard, SetTextUndoPolicy, TextUndoConfig};

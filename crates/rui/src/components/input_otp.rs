@@ -54,6 +54,7 @@ use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
     focus_ring_destructive_color, parse_color, parse_text_color, with_class_list,
 };
+use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::instance_id::resolve_instance_id;
 use crate::utils::lucide::lucide_glyph;
@@ -124,7 +125,7 @@ fn otp_edge_name(is_first: bool, is_last: bool) -> &'static str {
 
 /// shadcn `shadow-xs` ≈ `0 1px 2px 0 rgb(0 0 0 / 0.05)`。
 fn slot_shadow_xs(el: &mut Element) {
-    el.style.shadow_color = [0.0, 0.0, 0.0, 0.05];
+    el.style.shadow_color = tokens::shadow_ink(0.05);
     el.style.shadow_offset = [0.0, 1.0];
     el.style.shadow_blur = 2.0;
     el.style.shadow_spread = 0.0;

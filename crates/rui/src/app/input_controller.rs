@@ -6,8 +6,8 @@ use crate::components::input::{
     filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
 };
 use crate::utils::clipboard::{
-    edit_shortcut_letter, get_text as clipboard_get_text, is_redo_shortcut, is_undo_shortcut,
-    sanitize_pasted_line, set_text as clipboard_set_text,
+    consumes_undo_redo_letter, edit_shortcut_letter, get_text as clipboard_get_text,
+    is_redo_shortcut, is_undo_shortcut, sanitize_pasted_line, set_text as clipboard_set_text,
     shortcut_modifiers as clipboard_shortcut_modifiers,
 };
 use crate::utils::input_hit::collect_focusable_ids;
@@ -642,6 +642,9 @@ impl super::App {
                                                 crate::utils::text_edit_history::EditKind::Replace,
                                             );
                                         }
+                                        handled = true;
+                                    }
+                                    _ if consumes_undo_redo_letter(Some(k), &self.modifiers) => {
                                         handled = true;
                                     }
                                     _ => {}

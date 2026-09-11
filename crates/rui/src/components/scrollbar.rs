@@ -35,17 +35,74 @@ pub enum ScrollbarOrientation {
     Vertical,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ScrollbarVariant {
+    #[default]
     Capsule,
     Rect,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl ScrollbarVariant {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "rect" | "rectangle" => Self::Rect,
+            _ => Self::Capsule,
+        }
+    }
+}
+
+impl From<&str> for ScrollbarVariant {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ScrollbarVariant {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ScrollbarVariant {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ScrollbarVisibility {
+    #[default]
     Auto,
     Always,
     Never,
+}
+
+impl ScrollbarVisibility {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "always" => Self::Always,
+            "never" => Self::Never,
+            _ => Self::Auto,
+        }
+    }
+}
+
+impl From<&str> for ScrollbarVisibility {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for ScrollbarVisibility {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+impl From<&String> for ScrollbarVisibility {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
 }
 
 pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {
@@ -301,11 +358,8 @@ impl ScrollbarBuilder {
         self
     }
 
-    pub fn variant(mut self, variant: impl AsRef<str>) -> Self {
-        self.variant = match variant.as_ref().to_ascii_lowercase().as_str() {
-            "rect" | "rectangle" => ScrollbarVariant::Rect,
-            _ => ScrollbarVariant::Capsule,
-        };
+    pub fn variant(mut self, variant: impl Into<ScrollbarVariant>) -> Self {
+        self.variant = variant.into();
         self
     }
 
@@ -319,12 +373,8 @@ impl ScrollbarBuilder {
         self
     }
 
-    pub fn visibility(mut self, mode: impl AsRef<str>) -> Self {
-        self.visibility = match mode.as_ref().to_ascii_lowercase().as_str() {
-            "always" => ScrollbarVisibility::Always,
-            "never" => ScrollbarVisibility::Never,
-            _ => ScrollbarVisibility::Auto,
-        };
+    pub fn visibility(mut self, mode: impl Into<ScrollbarVisibility>) -> Self {
+        self.visibility = mode.into();
         self
     }
 

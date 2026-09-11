@@ -47,6 +47,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
+use crate::tokens;
 use crate::utils::resolve_instance_id;
 use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_SWITCH};
 use rui_macros::component;
@@ -211,7 +212,7 @@ fn build_thumb(translate_x: f32) -> Element {
         .min_h(THUMB_PX)
         .rounded_full()
         .bg(thumb_bg())
-        .shadow([0.0, 0.0, 0.0, 0.12], 4.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 4.0)
         .flex_shrink(0.0)
         .into();
     thumb = thumb.translate(translate_x, 0.0);

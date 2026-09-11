@@ -17,6 +17,8 @@ crates/rui/tmp_stack_crumb.txt
 !.gitignore
 
 !README.md
+!LICENSE
+!NOTICE
 
 # Allow root Rust manifest/lock files
 !Cargo.toml
@@ -34,6 +36,8 @@ crates/rui/tmp_stack_crumb.txt
 
 !scripts/
 !scripts/**
+
+!deny.toml
 
 # CI definitions (ignored by the blanket `*` above without this)
 !.github/

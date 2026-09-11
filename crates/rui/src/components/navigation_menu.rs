@@ -77,9 +77,6 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
@@ -88,10 +85,12 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::with_class_list;
 use crate::tokens;
-use crate::utils::lucide::lucide_glyph;
-use crate::utils::popup::{
-    mark_floating, mount_anchored_overlay, panel_block_clicks, PopupPlacement,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
 };
+use crate::utils::lucide::lucide_glyph;
+use crate::utils::popup::PopupPlacement;
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
@@ -399,28 +398,27 @@ pub fn navigation_menu_content(
     let item = require_navigation_menu_item("NavigationMenuContent");
     let expanded = menu.expanded;
     let open = item.open;
-    let menu_id = menu.id.clone();
     let value = item.value.clone();
-    let overlay_key = format!("{menu_id}:{value}");
+    let overlay_key = format!("{}:{}", menu.id, value);
     let trigger_fid = item.trigger_fid;
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let _ = menu.viewport;
-    let view_id = format!("{overlay_key}__nm_content_view");
-    let presence = use_floating_presence(&overlay_key, FloatingMotionKind::Expand);
-
-    // Portal 内容必须用 0×0 占位（对齐 DropdownMenuContent）；切勿 reactive_view 默认 100%×100%。
-    reactive_anchor(view_id.clone(), move || {
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            PopupPlacement::BottomStart,
+            0.0,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion: FloatingMotionKind::Expand,
+        mode: OverlayMode::Stacked,
+        width: Some("14rem".into()),
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         let is_open = expanded.get().as_deref() == Some(value.as_str());
         open.set(is_open);
-        let Some((phase, oz)) = floating_portal_phase(
-            &overlay_key,
-            open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            return Element::new().w(0.0).h(0.0);
-        };
 
         let _guard = enter_content_body();
         let rows = body();
@@ -469,37 +467,13 @@ pub fn navigation_menu_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
             .absolute(true)
             .into();
         panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
-        let anchor = trigger_fid.peek();
-        mark_floating(
-            &mut panel,
-            &overlay_key,
-            &anchor,
-            PopupPlacement::BottomStart,
-        );
-        panel.set_attr("rui_floating_match_trigger", "0");
-        panel.set_attr("rui_floating_min_w", "14rem");
-        if apply_floating_panel_motion(
-            &overlay_key,
-            &mut panel,
-            FloatingMotionKind::Expand,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        let panel = panel_block_clicks(panel, oz.panel);
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +529,9 @@ pub fn navigation_menu_item(
         || format!("{}:{}:trigger", menu.id, value),
     );
 
+    let overlay_key = format!("{}:{}", menu.id, value);
     with_child_owner(|| {
+        provide_anchored_overlay_context(open, overlay_key, trigger_fid);
         provide_context(
             navigation_menu_item_context(),
             NavigationMenuItemCtx {

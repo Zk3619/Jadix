@@ -34,14 +34,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{
-    bind_style, bind_text, reactive_anchor, reactive_placeholder_sized, StylePatch,
-};
+use crate::app::reactive::{bind_style, bind_text, StylePatch};
 use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -54,11 +49,14 @@ use crate::impl_simple_slot_builder;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
+};
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, mount_anchored_overlay,
-    PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
-    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    disarm_underlay_close, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
@@ -73,6 +71,8 @@ use rui_macros::component;
 pub struct SelectCtx {
     pub id: String,
     pub open: Signal<bool>,
+    /// Trigger focus_id (Content anchor); written when Trigger mounts.
+    pub trigger_fid: Signal<String>,
     pub value: Signal<String>,
     pub placeholder: String,
     /// value → 展示文案（由 [`SelectItem`] 注册，供 [`SelectValue`] 读取）。
@@ -164,12 +164,17 @@ pub fn select_scope(
     let value =
         value.unwrap_or_else(|| use_signal(format!("{id}__select_value").as_str(), String::new));
     let labels = use_signal(format!("{id}__select_labels").as_str(), HashMap::new);
+    let trigger_fid = use_signal(format!("{id}__select_trigger_fid").as_str(), || {
+        format!("{id}:trigger")
+    });
     with_child_owner(move || {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             select_context(),
             SelectCtx {
                 id: id.clone(),
                 open,
+                trigger_fid,
                 value,
                 placeholder,
                 labels,
@@ -220,6 +225,7 @@ pub fn SelectTrigger(
     let ctx = require_select("SelectTrigger");
     let open = ctx.open;
     let trigger_id = format!("{}:trigger", ctx.id);
+    ctx.trigger_fid.set(trigger_id.clone());
     let class = class
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.trigger_class.clone());
@@ -378,11 +384,8 @@ impl SelectContentOpts {
 /// ShadCN `SelectContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
 pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_select("SelectContent");
-    let open = ctx.open;
     let value = ctx.value;
     let id = ctx.id.clone();
-    let view_id = format!("{id}__select_content");
-    let trigger_id = format!("{id}:trigger");
     let match_trigger = opts.match_trigger.unwrap_or(ctx.match_trigger);
     let menu_width = opts.menu_width.or(ctx.menu_width.clone());
     let menu_height = opts.menu_height.or(ctx.menu_height.clone());
@@ -405,28 +408,24 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         let _ = body();
     }
 
-    // Do **not** use [`reactive_view`]'s default placeholder (`h/w: 100%`): inside
-    // DialogBody that inflates scroll content and can leave scrollbar metrics stuck
-    // at "no overflow" until a later portal dirty (e.g. opening the menu once).
-    // Use a real reactive placeholder (hash + unmount hook) so Dialog remount can
-    // re-register the menu effect after teardown.
     let id_for_effect = id.clone();
-    let presence = use_floating_presence(&id, FloatingMotionKind::Expand);
-    let max_h_cap = max_height.as_deref().and_then(parse_css_length_px);
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &id_for_effect,
-            open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-            return Element::new().w(0.0).h(0.0);
-        };
-        if !open.peek() {
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            placement,
+            0.0,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion: FloatingMotionKind::Expand,
+        mode: OverlayMode::Stacked,
+        match_trigger_width: match_trigger,
+        max_h: max_height.clone(),
+        width: menu_width.clone(),
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
+        if !ctx.open.peek() {
             crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
                 "{id_for_effect}:menu_scroll"
             ));
@@ -490,13 +489,10 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             .bg(tokens::background())
             .rounded("0.5rem")
             .outline(ring, 1.0)
-            // Dialog shell uses shadow([0,0,0,0.16], 16); menu is a bit lighter/tighter.
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
-            .min_w("9rem")
-            .absolute();
+            // Dialog shell uses elevation Xl (0.16 / 16); menu is a bit lighter/tighter.
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
+            .min_w("9rem");
 
-        mark_floating(&mut menu, &id_for_effect, &trigger_id, placement);
-        apply_stored_floating_place(&mut menu, &id_for_effect);
         menu.set_attr(
             ATTR_FLOATING_MATCH_TRIGGER,
             if match_trigger { "1" } else { "0" },
@@ -526,34 +522,8 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             }
             .apply(menu);
         }
-        if apply_floating_panel_motion(
-            &id_for_effect,
-            &mut menu,
-            FloatingMotionKind::Expand,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            max_h_cap,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-
-        mount_anchored_overlay(menu, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
-}
-
-fn parse_css_length_px(s: &str) -> Option<f32> {
-    let s = s.trim();
-    if let Some(n) = s.strip_suffix("rem") {
-        n.trim().parse::<f32>().ok().map(|v| v * 16.0)
-    } else if let Some(n) = s.strip_suffix("px") {
-        n.trim().parse().ok()
-    } else {
-        s.parse().ok()
-    }
+        menu
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,6 +1033,9 @@ impl From<SelectBuilder> for Element {
             })
         });
         let labels = use_signal(format!("{id}__select_labels").as_str(), HashMap::new);
+        let trigger_fid = use_signal(format!("{id}__select_trigger_fid").as_str(), || {
+            format!("{id}:trigger")
+        });
 
         // Pre-register labels for SelectValue.
         for e in &entries {
@@ -1083,11 +1056,13 @@ impl From<SelectBuilder> for Element {
         }
 
         with_child_owner(move || {
+            provide_anchored_overlay_context(open, id.clone(), trigger_fid);
             provide_context(
                 select_context(),
                 SelectCtx {
                     id: id.clone(),
                     open,
+                    trigger_fid,
                     value: val,
                     placeholder: placeholder.clone(),
                     labels,
@@ -1398,8 +1373,8 @@ mod tests {
             "SelectTrigger must use {{id}}:trigger focus id"
         );
         assert!(
-            has_template(&el, "sel_c__select_content"),
-            "SelectContent reactive_view anchor must be present"
+            has_template(&el, "sel_c__view"),
+            "SelectContent anchored overlay anchor must be present"
         );
         assert_eq!(el.template_id.as_deref(), Some("sel_c__select"));
     }
@@ -1419,6 +1394,7 @@ mod tests {
                 SelectCtx {
                     id: "sv_bt".into(),
                     open,
+                    trigger_fid: use_signal("sv_bt__select_trigger_fid", || "sv_bt:trigger".into()),
                     value,
                     placeholder: "Pick".into(),
                     labels,
@@ -1532,44 +1508,40 @@ mod tests {
 
     #[test]
     fn content_keeps_panel_tid_while_exiting() {
-        use crate::app::portal_overlay::clear_overlay_stack;
-        use crate::components::internal::floating_motion::floating_mounted_signal;
+        use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode};
         use crate::core::reactivity::Signal;
+        use crate::utils::anchored_overlay::{
+            anchored_overlay_is_mounted, anchored_overlay_phase,
+            apply_anchored_overlay_panel_motion, AnchoredOverlayContentOpts,
+        };
+        use crate::utils::floating_motion::FloatingMotionKind;
         use crate::utils::presence::PresencePhase;
 
         clear_overlay_stack();
         create_root(|| {
             let open = Signal::new(true);
             let id = "sel-exit-smoke";
-            let presence = use_floating_presence(id, FloatingMotionKind::Expand);
-            let Some((phase, _)) =
-                floating_portal_phase(id, open, &presence, OverlayKind::Menu, OverlayMode::Stacked)
-            else {
-                panic!("must mount when open");
+            let opts = AnchoredOverlayContentOpts {
+                kind: OverlayKind::Menu,
+                motion: FloatingMotionKind::Expand,
+                mode: OverlayMode::Stacked,
+                ..Default::default()
             };
-            assert_eq!(phase, PresencePhase::Present);
+            assert_eq!(
+                anchored_overlay_phase(id, open, &opts),
+                Some(PresencePhase::Present)
+            );
 
             open.set(false);
-            let Some((phase, _)) =
-                floating_portal_phase(id, open, &presence, OverlayKind::Menu, OverlayMode::Stacked)
-            else {
-                panic!("must stay mounted while exiting");
-            };
-            assert_eq!(phase, PresencePhase::Exiting);
-            assert!(floating_mounted_signal(&presence).peek());
+            assert_eq!(
+                anchored_overlay_phase(id, open, &opts),
+                Some(PresencePhase::Exiting),
+                "must stay mounted while exiting"
+            );
+            assert!(anchored_overlay_is_mounted(id, &opts));
 
             let mut panel = Element::new();
-            apply_floating_panel_motion(
-                id,
-                &mut panel,
-                FloatingMotionKind::Expand,
-                phase,
-                &presence,
-                open,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-                None,
-            );
+            apply_anchored_overlay_panel_motion(id, &mut panel, &opts, open);
             assert_eq!(
                 panel.template_id.as_deref(),
                 Some("sel-exit-smoke__floating_panel")

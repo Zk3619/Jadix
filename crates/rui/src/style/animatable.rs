@@ -975,7 +975,10 @@ pub fn write_value(style: &mut Style, text: &mut TextStyle, id: PropertyId, v: &
         (PropertyId::LineHeight, AnimatableValue::Scalar(x)) => {
             text.line_height_px = Some(x.max(0.0))
         }
-        (PropertyId::LetterSpacing, AnimatableValue::Scalar(x)) => text.letter_spacing = *x,
+        (PropertyId::LetterSpacing, AnimatableValue::Scalar(x)) => {
+            text.letter_spacing = *x;
+            text.letter_spacing_specified = true;
+        }
         (PropertyId::TextDecorationColor, AnimatableValue::Color(c)) => {
             text.decoration_color = Some(f32_color_to_u8(*c));
             text.decoration_color_specified = true;

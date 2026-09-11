@@ -17,14 +17,18 @@ use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
 use super::autoscroll::AutoScroll;
 use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
 use super::geometry::{
-    Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, Snap, SnapGrid, SortMode,
+    Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, RestrictOverflow, Snap,
+    SortMode,
 };
+#[cfg(test)]
+use super::geometry::SnapGrid;
 use super::modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
-    ATTR_DRAG_GROUP, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST, ATTR_DRAG_OVERLAY,
+    ATTR_DRAG_GROUP, ATTR_DRAG_HOLE_PREVIEW, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
+    ATTR_DRAG_OVERLAY,
     ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT,
     ATTR_DRAG_TYPE,
 };
@@ -189,6 +193,7 @@ pub(super) struct ScopeRuntime {
     pub restrict: Restrict,
     pub restrict_end_only: bool,
     pub restrict_anchor: RestrictAnchor,
+    pub restrict_overflow: RestrictOverflow,
     pub snap: Option<Snap>,
     pub overlay_registered: bool,
     /// In-list source opacity while a `DragOverlay` is open. `0` leaves the
@@ -249,7 +254,8 @@ thread_local! {
     /// the pitch).
     static DRAG_PACK_PITCH: Cell<f32> = const { Cell::new(0.0) };
     static DRAG_PACK_GAP: Cell<f32> = const { Cell::new(0.0) };
-    /// Definite overlay child size for [`OverlayAlign::Center`].
+    /// Laid-out overlay child size for [`OverlayAlign::Center`]
+    /// (`origin = pointer - size / 2`).
     static OVERLAY_GHOST_EXTENT: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
     static VELOCITY: RefCell<VelocityTracker> = RefCell::new(VelocityTracker::default());
     static COAST: RefCell<Option<Inertia>> = RefCell::new(None);
@@ -259,6 +265,8 @@ thread_local! {
     static SCOPE_PRODUCT: RefCell<HashMap<String, ScopeProduct>> = RefCell::new(HashMap::new());
     static COAST_TICK: Cell<bool> = const { Cell::new(false) };
     static LAST_COAST_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
+    /// Viewport-space restrict box while `RestrictOverflow::Hidden` (overlay clip).
+    static RESTRICT_CLIP: RefCell<Option<[f32; 4]>> = const { RefCell::new(None) };
 }
 
 pub(super) fn set_scope_inertia(scope_id: &str, opts: InertiaOpts) {
@@ -283,7 +291,7 @@ fn item_bounds_key(scope: &str, id: &str) -> String {
     format!("{scope}\0{id}")
 }
 
-fn remember_draggable_bounds(scope: &str, id: &str, bounds: [f32; 4]) {
+pub(crate) fn remember_draggable_bounds(scope: &str, id: &str, bounds: [f32; 4]) {
     if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
         return;
     }
@@ -320,8 +328,76 @@ pub(crate) fn remember_overlay_ghost_extent(scope: &str, size: [f32; 2]) {
     });
 }
 
+fn clear_overlay_ghost_extent(scope: &str) {
+    OVERLAY_GHOST_EXTENT.with(|m| {
+        m.borrow_mut().remove(scope);
+    });
+}
+
 fn overlay_ghost_extent(scope: &str) -> Option<[f32; 2]> {
     OVERLAY_GHOST_EXTENT.with(|m| m.borrow().get(scope).copied())
+}
+
+fn resolved_overlay_ghost_size(sess: &DragSession) -> [f32; 2] {
+    overlay_ghost_extent(&sess.scope_id)
+        .or_else(|| {
+            SCOPES.with(|m| {
+                m.borrow()
+                    .get(&sess.scope_id)
+                    .map(|s| s.drag_extent.peek())
+                    .filter(|e| e[0] > 0.0 && e[1] > 0.0)
+            })
+        })
+        .unwrap_or([
+            sess.start_bounds[2].max(1.0),
+            sess.start_bounds[3].max(1.0),
+        ])
+}
+
+/// Recompute the Center ghost origin after Taffy (or a style measure) knows
+/// the real chip size. `None` when this scope is not `OverlayAlign::Center`.
+pub(crate) fn overlay_center_origin_now(scope: &str) -> Option<[f32; 2]> {
+    let align = SCOPES.with(|m| {
+        m.borrow()
+            .get(scope)
+            .map(|s| s.overlay_align)
+            .unwrap_or(OverlayAlign::Grab)
+    });
+    if align != OverlayAlign::Center {
+        return None;
+    }
+    let origin = SESSION.with(|s| {
+        let sess = s.borrow();
+        let sess = sess.as_ref()?;
+        if sess.scope_id != scope {
+            return None;
+        }
+        let hits = LAST_HITS.with(|h| h.borrow().clone());
+        Some(ghost_origin(
+            sess,
+            sess.last_pointer,
+            sess.last_viewport,
+            &hits,
+            false,
+        ))
+    })?;
+    SCOPES.with(|m| {
+        if let Some(rt) = m.borrow().get(scope) {
+            if rt.overlay_pos.peek() != origin {
+                rt.overlay_pos.set(origin);
+            }
+        }
+    });
+    Some(origin)
+}
+
+/// Remember a measured ghost size, then pin Center origin to the live pointer.
+pub(crate) fn overlay_origin_after_ghost_measure(
+    scope: &str,
+    size: [f32; 2],
+) -> Option<[f32; 2]> {
+    remember_overlay_ghost_extent(scope, size);
+    overlay_center_origin_now(scope)
 }
 
 pub(crate) fn remember_item_restrict(scope: &str, id: &str, restrict: Option<Restrict>) {
@@ -400,7 +476,8 @@ fn resolve_live_restrict(
 
 /// Walk the laid-out tree so handle `pointerdown` can resolve the item rect.
 pub fn refresh_hit_cache(root: &Element) {
-    let _ = collect_hits(root);
+    let hits = collect_hits(root);
+    LAST_HITS.with(|h| *h.borrow_mut() = hits);
 }
 
 /// Grab offset + start box for [`begin`]. Prefers the cached item rect so a
@@ -478,10 +555,13 @@ pub fn active_sort_mode() -> SortMode {
 }
 
 /// Frozen drag ids (`[primary]` when idle / single). Overlay stacks these.
+/// Pending press is not a drag — returning the id here would dim/raise the
+/// source (`source_opacity=0`) before a ghost exists.
 pub fn active_drag_ids() -> Vec<String> {
     SESSION.with(|s| {
         s.borrow()
             .as_ref()
+            .filter(|d| d.phase == DragPhase::Active || d.phase == DragPhase::Coasting)
             .map(|d| {
                 if d.items.is_empty() {
                     vec![d.draggable_id.clone()]
@@ -650,6 +730,32 @@ pub(super) fn peek_overlay_pos(scope_id: &str) -> Option<[f32; 2]> {
 /// [`peek_overlay_pos`] for authors (Gallery overlay `rotate` / HUD). Does not subscribe.
 pub fn last_overlay_pos(scope_id: &str) -> Option<[f32; 2]> {
     peek_overlay_pos(scope_id)
+}
+
+pub(super) fn scope_restrict_overflow(scope_id: &str) -> RestrictOverflow {
+    SCOPES.with(|m| {
+        m.borrow()
+            .get(scope_id)
+            .map(|s| s.restrict_overflow)
+            .unwrap_or(RestrictOverflow::Visible)
+    })
+}
+
+/// Viewport-space restrict rectangle while overflow is [`RestrictOverflow::Hidden`].
+pub(super) fn peek_restrict_clip() -> Option<[f32; 4]> {
+    RESTRICT_CLIP.with(|c| *c.borrow())
+}
+
+fn set_restrict_clip(box_: Option<[f32; 4]>) {
+    RESTRICT_CLIP.with(|c| *c.borrow_mut() = box_);
+}
+
+fn restrict_clip_bounds(resolved: &Restrict, viewport: [f32; 2]) -> Option<[f32; 4]> {
+    match resolved {
+        Restrict::None | Restrict::Parent | Restrict::Element(_) => None,
+        Restrict::Viewport => Some([0.0, 0.0, viewport[0].max(1.0), viewport[1].max(1.0)]),
+        Restrict::Rect(r) => Some(*r),
+    }
 }
 
 /// Live ghost size for this scope (`drag_extent`). Peek-only.
@@ -885,6 +991,7 @@ pub fn begin(opts: BeginDrag) {
         from_list: opts.from_list.clone(),
         from_index: opts.from_index,
     }];
+    clear_overlay_ghost_extent(&opts.scope_id);
     SESSION.with(|s| {
         *s.borrow_mut() = Some(DragSession {
             capture_id: opts.capture_id,
@@ -946,7 +1053,7 @@ fn ghost_origin(
     hits: &[DragHit],
     at_end: bool,
 ) -> [f32; 2] {
-    let ctx = DragModifierCtx {
+    let mut ctx = DragModifierCtx {
         pointer,
         start_pointer: sess.start_pointer,
         grab_offset: sess.grab_offset,
@@ -960,6 +1067,24 @@ fn ghost_origin(
         restrict_end_only: sess.restrict_end_only,
         restrict_anchor: sess.restrict_anchor,
     };
+    let align = SCOPES.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .map(|s| s.overlay_align)
+            .unwrap_or(OverlayAlign::Grab)
+    });
+    if align == OverlayAlign::Center {
+        // Treat the grab point as the ghost midpoint so axis / restrict / snap
+        // operate on the chip that follows the pointer, not the source box.
+        let [gw, gh] = resolved_overlay_ghost_size(sess);
+        ctx.grab_offset = [gw * 0.5, gh * 0.5];
+        ctx.start_bounds = [
+            sess.start_pointer[0] - gw * 0.5,
+            sess.start_pointer[1] - gh * 0.5,
+            gw.max(1.0),
+            gh.max(1.0),
+        ];
+    }
     let mut pipeline = builtin_modifiers();
     SCOPES.with(|m| {
         if let Some(rt) = m.borrow().get(&sess.scope_id) {
@@ -978,27 +1103,12 @@ fn ghost_origin(
         x: pointer[0] - sess.start_pointer[0],
         y: pointer[1] - sess.start_pointer[1],
     };
-    let mut origin = ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx));
-    let align = SCOPES.with(|m| {
-        m.borrow()
-            .get(&sess.scope_id)
-            .map(|s| s.overlay_align)
-            .unwrap_or(OverlayAlign::Grab)
-    });
-    if align == OverlayAlign::Center {
-        let sw = sess.start_bounds[2].max(1.0);
-        let sh = sess.start_bounds[3].max(1.0);
-        let extent = overlay_ghost_extent(&sess.scope_id).or_else(|| {
-            SCOPES.with(|m| {
-                m.borrow()
-                    .get(&sess.scope_id)
-                    .map(|s| s.drag_extent.peek())
-                    .filter(|e| e[0] > 0.0 && e[1] > 0.0)
-            })
-        });
-        let [gw, gh] = extent.unwrap_or([sw, sh]);
-        origin[0] += (sw - gw) * 0.5;
-        origin[1] += (sh - gh) * 0.5;
+    let origin = ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx));
+    let overflow = scope_restrict_overflow(&sess.scope_id);
+    if overflow.is_hidden() && !(sess.restrict_end_only && !at_end) {
+        set_restrict_clip(restrict_clip_bounds(&ctx.restrict, viewport));
+    } else {
+        set_restrict_clip(None);
     }
     origin
 }
@@ -1363,12 +1473,18 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
 
     if sess.phase == DragPhase::Pending {
         let waited_ms = sess.pressed_at.elapsed().as_secs_f32() * 1000.0;
+        // Press-only (`dist == 0`) stays Pending even when `threshold` / `delay_ms`
+        // are 0. Opening the overlay on pointerdown applies `source_opacity` and
+        // Auto-stack raise before a ghost exists — `source_opacity=0` then
+        // erases the source. A drag *attempt* is the first movement.
+        let attempted = dist > 0.0;
         let far_enough = dist >= sess.threshold;
         let long_enough = waited_ms >= sess.delay_ms;
-        let activated = match sess.activation {
-            Activation::And => far_enough && long_enough,
-            Activation::Or => far_enough || long_enough,
-        };
+        let activated = attempted
+            && match sess.activation {
+                Activation::And => far_enough && long_enough,
+                Activation::Or => far_enough || long_enough,
+            };
         let dx = x - sess.start_pointer[0];
         let dy = y - sess.start_pointer[1];
         // interact cancels the prepared action; we stay Pending so the user can
@@ -1382,7 +1498,10 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             sess.motion_axis = Axis::resolve_start(dx, dy);
         }
         freeze_drag_items(&mut sess, hits);
-        activate_scope(&sess, hits);
+        // Clip box + origin must exist before `overlay_open` so Hidden overflow
+        // mounts a clip shell on the first island rebuild (no extra mousemove).
+        let origin = ghost_origin(&sess, [x, y], viewport, hits, false);
+        activate_scope(&sess, hits, origin);
         let start_ev = event_from(&sess, None, None, None);
         fire(&sess.scope_id, HandlerKind::Start, &start_ev);
         let accepting: Vec<String> = hits
@@ -1788,34 +1907,53 @@ fn capped_drag_extent(sess: &DragSession, hits: &[DragHit]) -> [f32; 2] {
     [w, h]
 }
 
-fn activate_scope(sess: &DragSession, hits: &[DragHit]) {
-    SCOPES.with(|m| {
-        if let Some(rt) = m.borrow().get(&sess.scope_id) {
-            rt.active_draggable.set(Some(sess.draggable_id.clone()));
-            rt.from_list.set(sess.from_list.clone());
-            rt.from_index.set(sess.from_index);
-            let extent = capped_drag_extent(sess, hits);
-            rt.drag_extent.set(extent);
-            let chip = match sess.axis {
-                Axis::X => extent[0],
-                Axis::Y | Axis::Xy | Axis::Start => extent[1],
-            };
-            let pitch = row_pitch_along(hits, sess.from_list.as_deref(), sess.axis, chip);
-            DRAG_PACK_PITCH.set(pitch);
-            let gap = sess
-                .from_list
-                .as_deref()
-                .map(|list| inferred_list_gap(&indexed_list_items(hits, list), sess.axis))
-                .unwrap_or(0.0)
-                .max(0.0);
-            DRAG_PACK_GAP.set(gap);
-            let origin = [sess.start_bounds[0], sess.start_bounds[1]];
-            rt.overlay_pos.set(origin);
-            if rt.overlay_registered {
-                rt.overlay_open.set(true);
-            }
-        }
+fn activate_scope(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) {
+    let extent = capped_drag_extent(sess, hits);
+    let chip = match sess.axis {
+        Axis::X => extent[0],
+        Axis::Y | Axis::Xy | Axis::Start => extent[1],
+    };
+    let pitch = row_pitch_along(hits, sess.from_list.as_deref(), sess.axis, chip);
+    DRAG_PACK_PITCH.set(pitch);
+    let gap = sess
+        .from_list
+        .as_deref()
+        .map(|list| inferred_list_gap(&indexed_list_items(hits, list), sess.axis))
+        .unwrap_or(0.0)
+        .max(0.0);
+    DRAG_PACK_GAP.set(gap);
+    // Copy signal handles out first: `.set` flushes the overlay island, which
+    // must not run under `SCOPES.borrow()` (`with_scope` is `borrow_mut`).
+    let ui = SCOPES.with(|m| {
+        m.borrow().get(&sess.scope_id).map(|rt| {
+            (
+                rt.active_draggable,
+                rt.from_list,
+                rt.from_index,
+                rt.drag_extent,
+                rt.overlay_pos,
+                rt.overlay_open,
+                rt.overlay_registered,
+            )
+        })
     });
+    if let Some((active, from_list, from_index, drag_extent, overlay_pos, overlay_open, registered)) =
+        ui
+    {
+        // One flush, same as [`reset_scope_ui`]. Sequential `.set` remounted the
+        // overlay while `open` was still false (empty 0×0), then again when
+        // `open` flipped — a miss on that second pass hid the source with no ghost.
+        batch(|| {
+            active.set(Some(sess.draggable_id.clone()));
+            from_list.set(sess.from_list.clone());
+            from_index.set(sess.from_index);
+            drag_extent.set(extent);
+            overlay_pos.set(origin);
+            if registered {
+                overlay_open.set(true);
+            }
+        });
+    }
     crate::app::set_pointer_capture(sess.capture_id.clone());
 }
 
@@ -1844,6 +1982,7 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
     // One transition: overlay / active / hover are one session, not six effects.
     DRAG_PACK_PITCH.set(0.0);
     DRAG_PACK_GAP.set(0.0);
+    set_restrict_clip(None);
     batch(|| {
         rt.overlay_open.set(false);
         rt.active_draggable.set(None);
@@ -2034,6 +2173,7 @@ pub fn cancel() -> bool {
     let Some(sess) = SESSION.with(|s| s.borrow_mut().take()) else {
         return false;
     };
+    set_restrict_clip(None);
     crate::utils::pointer_drag::clear();
     crate::app::release_pointer_capture();
     VELOCITY.with(|v| v.borrow_mut().reset());
@@ -2290,7 +2430,7 @@ fn collect_hits_inner(
     ancestor: Option<RestrictAncestor>,
     out: &mut Vec<DragHit>,
 ) {
-    if el.attrs.contains_key(ATTR_DRAG_OVERLAY) {
+    if el.attrs.contains_key(ATTR_DRAG_OVERLAY) || el.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW) {
         return;
     }
     // Pointer-space layout slot (scroll applied). Sortable preview translate
@@ -2730,20 +2870,12 @@ fn pack_item_translate(
         .find(|h| h.index == Some(my_i))
         .map(|h| axis_size(h.rect, axis))
         .unwrap_or(1.0);
-    // Occupied target: snapshotted packed row. Live source slot after the
-    // shell collapses is chip-only (or 0-stride against the reflowed sibling),
-    // so Gamma would sit flush on the dimmed body.
+    // Occupied target: one packed row. Prefer the target's own neighbour
+    // stride (Inbox Alpha→Beta includes the author gap). A singleton source
+    // snapshots chip-only, and shifting Inbox by that pitch sits Gamma flush
+    // on Alpha/Beta (Gallery: Later→Inbox 插到任意项之上).
     let chip = fallback.max(1.0);
-    let extent = {
-        let pitch = DRAG_PACK_PITCH.get();
-        if pitch >= MIN_SLOT_PITCH {
-            pitch
-        } else {
-            from_list
-                .map(|fl| slot_extent_along_axis(hits, fl, from_index, axis, chip))
-                .unwrap_or(chip)
-        }
-    };
+    let extent = packed_row_extent(hits, Some(my_list), axis, chip);
     match axis {
         Axis::X => [extent, 0.0],
         Axis::Y | Axis::Xy | Axis::Start => [0.0, extent],
@@ -2773,6 +2905,7 @@ pub(crate) fn live_pack_item_translate(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32) -> f32 {
     let Some(list_id) = list_id else {
         return fallback;
@@ -2784,6 +2917,7 @@ pub(crate) fn list_slot_stride(list_id: Option<&str>, axis: Axis, fallback: f32)
 /// (item + gap). A stretched `also_droppable` island can be taller than the
 /// row; using `.max(chip)` then pulls the origin folder by the whole card
 /// (Gallery: 移出 Beta 后 Inbox 收缩过大).
+#[cfg(test)]
 pub(crate) fn list_row_extent(list_id: Option<&str>, axis: Axis, chip: f32) -> f32 {
     let chip = chip.max(0.0);
     let stride = list_slot_stride(list_id, axis, chip);
@@ -2807,27 +2941,49 @@ fn row_pitch_along(hits: &[DragHit], list_id: Option<&str>, axis: Axis, chip: f3
     }
 }
 
+/// One packed row for a cross-list hole: the larger of the target neighbour
+/// stride and the snapshotted source pitch. Target stride keeps Inbox's
+/// author gap when the source was a singleton (Later/Gamma). Source pitch
+/// keeps item+gap when the target itself is a singleton (Later).
+fn packed_row_extent(hits: &[DragHit], target_list: Option<&str>, axis: Axis, chip: f32) -> f32 {
+    let chip = chip.max(0.0);
+    let target = row_pitch_along(hits, target_list, axis, chip);
+    let source = DRAG_PACK_PITCH.get();
+    if source >= MIN_SLOT_PITCH {
+        source.max(target)
+    } else {
+        target.max(chip)
+    }
+}
+
 /// Cross-list insert hole on the **target**. Empty lists open `chip` (no gap
-/// until a second row exists). Occupied lists open the snapshotted source
-/// packed row so a one-item Later still gets item+gap.
+/// until a second row exists). Occupied lists open one packed row.
 pub(crate) fn pack_insert_extent(target_list: Option<&str>, axis: Axis, chip: f32) -> f32 {
     let chip = chip.max(0.0);
     let Some(list) = target_list else {
         return chip;
     };
-    let occupied = LAST_HITS.with(|h| {
-        h.borrow()
+    LAST_HITS.with(|h| {
+        let hits = h.borrow();
+        let occupied = hits
             .iter()
-            .any(|hit| hit.list_id.as_deref() == Some(list) && hit.index.is_some())
-    });
-    if !occupied {
-        return chip;
-    }
-    let pitch = DRAG_PACK_PITCH.get();
-    if pitch >= MIN_SLOT_PITCH {
-        pitch
-    } else {
-        list_row_extent(Some(list), axis, chip)
+            .any(|hit| hit.list_id.as_deref() == Some(list) && hit.index.is_some());
+        if !occupied {
+            return chip;
+        }
+        packed_row_extent(&hits, Some(list), axis, chip)
+    })
+}
+
+/// True when the hover is past the last occupied slot (append), or the list
+/// is empty. Mid-list insert opens the hole by sibling FLIP — trailing pad
+/// would stack a second hole under the last row.
+#[cfg(test)]
+pub(crate) fn list_is_append_hover(list: &str, hover_index: Option<usize>) -> bool {
+    match (list_max_index(Some(list)), hover_index) {
+        (None, _) => true,
+        (Some(last), Some(hover)) => hover > last,
+        (Some(_), None) => true,
     }
 }
 
@@ -2835,11 +2991,12 @@ pub(crate) fn pack_insert_extent(target_list: Option<&str>, axis: Axis, chip: f3
 /// `gap` a 0-height source shell still occupies. Snapshotted at activate
 /// from neighbour stride − item size — not `pitch - live drag_extent`,
 /// which is 0 when those two happen to match.
+#[cfg(test)]
 pub(crate) fn pack_gap(_chip: f32) -> f32 {
     DRAG_PACK_GAP.get().max(0.0)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn list_max_index(list_id: Option<&str>) -> Option<usize> {
     let list_id = list_id?;
     LAST_HITS.with(|h| {
@@ -2852,6 +3009,9 @@ pub(crate) fn list_max_index(list_id: Option<&str>) -> Option<usize> {
 }
 
 /// Layout origin of the opened insert hole in `list_id` (pre-translate slots).
+/// Append (`hover` past last index) uses the snapshotted packed row so a
+/// one-item target still opens item+gap — live `slot_extent` of a singleton
+/// is chip-only (Gallery: Beta 移到 Later/Gamma 之下时贴死).
 pub(crate) fn insert_hole_origin(
     hits: &[DragHit],
     list_id: &str,
@@ -2864,10 +3024,7 @@ pub(crate) fn insert_hole_origin(
         .filter(|h| h.list_id.as_deref() == Some(list_id) && h.index.is_some())
         .collect();
     items.sort_by_key(|h| h.index.unwrap_or(0));
-    let stride = items
-        .last()
-        .map(|h| slot_extent_along_axis(hits, list_id, h.index, axis, fallback_extent.max(1.0)))
-        .unwrap_or(fallback_extent.max(1.0));
+    let stride = packed_row_extent(hits, Some(list_id), axis, fallback_extent.max(1.0));
     if let Some(hover) = hover_index {
         if let Some(h) = items.iter().find(|h| h.index == Some(hover)) {
             return Some([h.rect.x, h.rect.y]);
@@ -2886,6 +3043,7 @@ pub(crate) fn insert_hole_origin(
 }
 
 /// Translate that places the origin-list source onto the target insert hole.
+#[cfg(test)]
 pub(crate) fn source_translate_to_insert_hole(
     hits: &[DragHit],
     from_list: &str,
@@ -2894,55 +3052,41 @@ pub(crate) fn source_translate_to_insert_hole(
     hover_index: Option<usize>,
     axis: Axis,
 ) -> [f32; 2] {
-    let Some(src) = hits
-        .iter()
-        .find(|h| h.list_id.as_deref() == Some(from_list) && h.index == Some(from_index))
-    else {
-        return [0.0, 0.0];
-    };
-    let fallback = match axis {
-        Axis::X => src.rect.width,
-        Axis::Y | Axis::Xy | Axis::Start => src.rect.height,
-    };
-    let Some(hole) = insert_hole_origin(hits, hover_list, hover_index, axis, fallback) else {
-        return [0.0, 0.0];
-    };
-    [hole[0] - src.rect.x, hole[1] - src.rect.y]
+    source_translate_to_insert_hole_at(
+        hits,
+        from_list,
+        from_index,
+        hover_list,
+        hover_index,
+        axis,
+        None,
+    )
+    .unwrap_or([0.0, 0.0])
 }
 
-/// True when `outer_id`'s last hit rect strictly contains `inner_id` (nested
-/// folder shell wrapping the active file). Raise that ancestor stacking
-/// context so a cross-list dimmed source can paint into the target hole.
-pub(crate) fn hit_hosts_id(outer_id: &str, inner_id: &str) -> bool {
-    LAST_HITS.with(|h| {
-        let hits = h.borrow();
-        let Some(outer) = hits.iter().find(|hit| hit.id == outer_id) else {
-            return false;
-        };
-        let Some(inner) = hits.iter().find(|hit| hit.id == inner_id) else {
-            return false;
-        };
-        outer.id != inner.id && outer.rect.contains_rect(inner.rect)
-    })
-}
-
-pub(crate) fn live_cross_list_source_translate(
+#[cfg(test)]
+fn source_translate_to_insert_hole_at(
+    hits: &[DragHit],
     from_list: &str,
     from_index: usize,
     hover_list: &str,
     hover_index: Option<usize>,
     axis: Axis,
-) -> [f32; 2] {
-    LAST_HITS.with(|h| {
-        source_translate_to_insert_hole(
-            &h.borrow(),
-            from_list,
-            from_index,
-            hover_list,
-            hover_index,
-            axis,
-        )
-    })
+    origin: Option<[f32; 2]>,
+) -> Option<[f32; 2]> {
+    let src = hits
+        .iter()
+        .find(|h| h.list_id.as_deref() == Some(from_list) && h.index == Some(from_index));
+    let fallback = src
+        .map(|s| match axis {
+            Axis::X => s.rect.width,
+            Axis::Y | Axis::Xy | Axis::Start => s.rect.height,
+        })
+        .unwrap_or(0.0)
+        .max(1.0);
+    let hole = insert_hole_origin(hits, hover_list, hover_index, axis, fallback)?;
+    let origin = origin.or_else(|| src.map(|s| [s.rect.x, s.rect.y]))?;
+    Some([hole[0] - origin[0], hole[1] - origin[1]])
 }
 
 /// Same-list dimmed source: layout-measured hole, not `(hover-from)*pitch`.
@@ -3017,6 +3161,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3075,6 +3220,93 @@ mod tests {
         });
     }
 
+    #[test]
+    fn threshold_zero_stays_pending_on_press_activates_on_first_move() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::None,
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "a".into(),
+                pointer: [20.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [10.0, 8.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(!is_active(), "begin stays pending until tick");
+            assert!(!overlay_open.peek());
+            assert!(
+                !tick(20.0, 16.0, &[], [400.0, 300.0]),
+                "press must not activate: source_opacity/stack chrome would fire with no ghost"
+            );
+            assert!(!is_active());
+            assert!(
+                !overlay_open.peek(),
+                "overlay stays closed on press so a 0-opacity source is not erased"
+            );
+            assert!(
+                tick(21.0, 16.0, &[], [400.0, 300.0]),
+                "first movement is the drag attempt — overlay opens immediately"
+            );
+            assert!(is_active());
+            assert!(overlay_open.peek());
+            let _ = end(&[]);
+        });
+    }
+
     fn seed_velocity(vx: f32, vy: f32) {
         VELOCITY.with(|v| {
             let mut t = v.borrow_mut();
@@ -3111,6 +3343,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3201,6 +3434,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3283,6 +3517,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3359,6 +3594,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3436,6 +3672,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: Some(Snap::grid(SnapGrid::new(10.0, 10.0).end_only(true))),
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3517,6 +3754,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -3601,6 +3839,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -3683,6 +3922,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -3786,6 +4026,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3867,6 +4108,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -3949,6 +4191,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -4396,6 +4639,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.0,
                     autoscroll: AutoScroll {
@@ -4475,6 +4719,92 @@ mod tests {
         });
     }
 
+    #[test]
+    fn restrict_overflow_hidden_records_clip_box() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::Element("arena".into()),
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    restrict_overflow: RestrictOverflow::Hidden,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            let mut card = hit("card", [80.0, 40.0, 40.0, 24.0], false);
+            card.scope_id = "s".into();
+            card.is_draggable = true;
+            let mut arena = hit("arena", [10.0, 20.0, 200.0, 120.0], true);
+            arena.scope_id = "s".into();
+            let hits = vec![card, arena];
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(500.0, 500.0, &hits, [800.0, 600.0]));
+            let clip = peek_restrict_clip().expect("hidden overflow stores the restrict box");
+            assert!(
+                (clip[0] - 10.0).abs() < 0.5
+                    && (clip[1] - 20.0).abs() < 0.5
+                    && (clip[2] - 200.0).abs() < 0.5
+                    && (clip[3] - 120.0).abs() < 0.5,
+                "clip must be the arena box, got {clip:?}"
+            );
+            let _ = end(&hits);
+            assert!(peek_restrict_clip().is_none());
+        });
+    }
+
     /// `restrict="parent"`: ghost stays inside the author box recorded by
     /// [`collect_hits`], not the window and not a named id.
     #[test]
@@ -4500,6 +4830,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.0,
                     autoscroll: AutoScroll {
@@ -4733,6 +5064,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -4856,6 +5188,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -4923,7 +5256,7 @@ mod tests {
                 None,
                 [0.0, 0.0, 80.0, 320.0],
             ));
-            assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
             let at_lift = hover_index.peek();
             assert!(tick(40.0, 176.0, &hits, [800.0, 600.0]));
             let at_half = hover_index.peek();
@@ -4976,6 +5309,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -5041,7 +5375,7 @@ mod tests {
                 None,
                 [0.0, 0.0, 80.0, 320.0],
             ));
-            assert!(tick(40.0, 16.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 16.0, &hits, [800.0, 600.0]));
             let at_lift = hover_index.peek();
             assert!(tick(40.0, 90.0, &hits, [800.0, 600.0]));
             let at_earth = hover_index.peek();
@@ -5096,6 +5430,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -5165,7 +5500,7 @@ mod tests {
                 None,
                 [0.0, 0.0, 80.0, 176.0],
             ));
-            assert!(tick(40.0, 416.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 416.0, &hits, [800.0, 600.0]));
             let at_lift = hover_index.peek();
             assert!(tick(40.0, 480.0, &hits, [800.0, 600.0]));
             let at_move = hover_index.peek();
@@ -5213,6 +5548,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -5309,7 +5645,7 @@ mod tests {
                     [0.0, 400.0, 80.0, 320.0],
                 ),
             ];
-            assert!(tick(40.0, 416.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 416.0, &hits, [800.0, 600.0]));
             let at_lift = (hover_list.peek(), hover_index.peek());
             assert!(tick(40.0, 496.0, &hits, [800.0, 600.0]));
             let at_earth = (hover_list.peek(), hover_index.peek());
@@ -5365,6 +5701,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6016,6 +6353,84 @@ mod tests {
         );
     }
 
+    /// Activate snapshots Inbox Alpha→Beta stride (item+gap). A one-item Later
+    /// has no neighbour stride, so live `slot_extent(Gamma)` is chip-only and
+    /// the dimmed body sits flush on Gamma (Gallery: Beta 移到 Gamma 之下).
+    #[test]
+    fn nested_cross_list_append_under_gamma_keeps_packed_gap() {
+        let hits = nest_folder_file_hits();
+        let chip = 24.0;
+        let source_pitch = row_pitch_along(&hits, Some("tree-inbox"), Axis::Y, chip);
+        assert!(
+            (source_pitch - 28.0).abs() < 0.5,
+            "Inbox Alpha→Beta pitch is item+gap; got {source_pitch}"
+        );
+        DRAG_PACK_PITCH.set(source_pitch);
+        DRAG_PACK_GAP.set(4.0);
+        let src = source_translate_to_insert_hole(
+            &hits,
+            "tree-inbox",
+            1,
+            "tree-later",
+            Some(1),
+            Axis::Y,
+        );
+        let hole = insert_hole_origin(&hits, "tree-later", Some(1), Axis::Y, chip).unwrap();
+        DRAG_PACK_PITCH.set(0.0);
+        DRAG_PACK_GAP.set(0.0);
+        assert_eq!(
+            src,
+            [0.0, 108.0],
+            "append under Gamma must be origin + packed pitch (28), not chip (24); got {src:?}"
+        );
+        let gamma = hits.iter().find(|h| h.id == "tree-later:Gamma").unwrap();
+        let gap = hole[1] - (gamma.rect.y + gamma.rect.height);
+        assert!(
+            (gap - 4.0).abs() < 0.5,
+            "dimmed Beta must keep author gap under Gamma; gap={gap} hole={hole:?} gamma={:?}",
+            gamma.rect
+        );
+    }
+
+    /// After the origin list shrinks, live hits may drop the absolute source.
+    /// The target hole origin is still well-defined from the destination list.
+    #[test]
+    fn cross_list_hole_origin_without_src_hit() {
+        let hits = nest_folder_file_hits()
+            .into_iter()
+            .filter(|h| h.list_id.as_deref() != Some("tree-inbox") || h.index.is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            hits.iter()
+                .all(|h| !(h.list_id.as_deref() == Some("tree-inbox") && h.index == Some(1))),
+            "precondition: Beta hit is gone"
+        );
+        DRAG_PACK_PITCH.set(28.0);
+        DRAG_PACK_GAP.set(4.0);
+        let origin = [8.0, 34.0];
+        let hole = insert_hole_origin(&hits, "tree-later", Some(1), Axis::Y, 24.0).unwrap();
+        let got = source_translate_to_insert_hole_at(
+            &hits,
+            "tree-inbox",
+            1,
+            "tree-later",
+            Some(1),
+            Axis::Y,
+            Some(origin),
+        );
+        DRAG_PACK_PITCH.set(0.0);
+        DRAG_PACK_GAP.set(0.0);
+        assert_eq!(
+            got,
+            Some([hole[0] - origin[0], hole[1] - origin[1]]),
+            "missing src hit must not collapse to [0,0]; hole={hole:?} origin={origin:?}"
+        );
+        assert!(
+            got.unwrap()[1].abs() > 8.0,
+            "must still move the dimmed body into Later; got {got:?}"
+        );
+    }
+
     #[test]
     fn kanban_drag_last_item_below_rows_keeps_hover_index() {
         let (_o, (hover_list, hover_index)) = create_root(|| {
@@ -6039,6 +6454,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -6149,6 +6565,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -6208,7 +6625,7 @@ mod tests {
             review.is_draggable = true;
             draft.is_draggable = true;
             let hits = vec![draft, review];
-            assert!(tick(40.0, 82.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 82.0, &hits, [800.0, 600.0]));
             let idx = hover_index.peek();
             let _ = end(&hits);
             idx
@@ -6243,6 +6660,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: true,
                     source_opacity: 0.4,
                     autoscroll: AutoScroll {
@@ -6320,7 +6738,7 @@ mod tests {
                     [88.0, 0.0, 80.0, 88.0],
                 ),
             ];
-            assert!(tick(40.0, 56.0, &hits, [800.0, 600.0]));
+            assert!(tick(41.0, 56.0, &hits, [800.0, 600.0]));
             let list = hover_list.peek();
             let idx = hover_index.peek();
             let _ = end(&hits);
@@ -6361,6 +6779,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6454,6 +6873,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6565,6 +6985,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6754,6 +7175,76 @@ mod tests {
         );
     }
 
+    /// Later is a singleton, so activate snapshots chip-only. Inbox already
+    /// has Alpha→Beta author gap — the hole must use that stride, not 32.
+    #[test]
+    fn cross_list_occupied_target_uses_its_own_packed_row() {
+        let mut alpha = hit("tree-inbox:Alpha", [8.0, 40.0, 160.0, 32.0], true);
+        alpha.index = Some(0);
+        alpha.list_id = Some("tree-inbox".into());
+        let mut beta = hit("tree-inbox:Beta", [8.0, 78.0, 160.0, 32.0], true);
+        beta.index = Some(1);
+        beta.list_id = Some("tree-inbox".into());
+        let mut gamma = hit("tree-later:Gamma", [8.0, 200.0, 160.0, 32.0], true);
+        gamma.index = Some(0);
+        gamma.list_id = Some("tree-later".into());
+        let hits = vec![alpha, beta, gamma];
+        LAST_HITS.with(|h| *h.borrow_mut() = hits.clone());
+        DRAG_PACK_PITCH.set(32.0);
+        DRAG_PACK_GAP.set(0.0);
+        let above_alpha = pack_item_translate(
+            &hits,
+            Some("tree-inbox"),
+            Some(0),
+            Some("tree-later"),
+            Some(0),
+            Some("tree-inbox"),
+            Some(0),
+            Axis::Y,
+        );
+        let above_beta = pack_item_translate(
+            &hits,
+            Some("tree-inbox"),
+            Some(1),
+            Some("tree-later"),
+            Some(0),
+            Some("tree-inbox"),
+            Some(1),
+            Axis::Y,
+        );
+        let alpha_stays = pack_item_translate(
+            &hits,
+            Some("tree-inbox"),
+            Some(0),
+            Some("tree-later"),
+            Some(0),
+            Some("tree-inbox"),
+            Some(1),
+            Axis::Y,
+        );
+        assert!(!list_is_append_hover("tree-inbox", Some(0)));
+        assert!(!list_is_append_hover("tree-inbox", Some(1)));
+        assert!(list_is_append_hover("tree-inbox", Some(2)));
+        DRAG_PACK_PITCH.set(0.0);
+        DRAG_PACK_GAP.set(0.0);
+        LAST_HITS.with(|h| h.borrow_mut().clear());
+        assert!(
+            (above_alpha[1] - 38.0).abs() < 0.5,
+            "insert above Alpha must open Inbox pitch (32+6), not Later chip; got {}",
+            above_alpha[1]
+        );
+        assert!(
+            (above_beta[1] - 38.0).abs() < 0.5,
+            "insert above Beta must open Inbox pitch; got {}",
+            above_beta[1]
+        );
+        assert_eq!(
+            alpha_stays,
+            [0.0, 0.0],
+            "Alpha stays when the hole is below it; got {alpha_stays:?}"
+        );
+    }
+
     #[test]
     fn folder_drag_over_inner_files_stays_on_outer_list() {
         let (_o, hover) = create_root(|| {
@@ -6777,6 +7268,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6883,6 +7375,7 @@ mod tests {
                     restrict_end_only: false,
                     restrict_anchor: RestrictAnchor::FULL,
                     snap: None,
+                    restrict_overflow: RestrictOverflow::Visible,
                     overlay_registered: false,
                     source_opacity: 1.0,
                     autoscroll: AutoScroll {
@@ -6973,6 +7466,7 @@ mod tests {
                 restrict_end_only: false,
                 restrict_anchor: RestrictAnchor::FULL,
                 snap: None,
+                restrict_overflow: RestrictOverflow::Visible,
                 overlay_registered: false,
                 source_opacity: 1.0,
                 autoscroll: AutoScroll {
@@ -7099,6 +7593,7 @@ mod tests {
             restrict_end_only: false,
             restrict_anchor: RestrictAnchor::FULL,
             snap: None,
+            restrict_overflow: RestrictOverflow::Visible,
             overlay_registered: true,
             source_opacity: 1.0,
             autoscroll: AutoScroll {
@@ -7298,7 +7793,15 @@ mod tests {
             assert!(!tick(10.0, 10.0, &drops, [400.0, 300.0]));
             assert!(!is_active());
             std::thread::sleep(std::time::Duration::from_millis(12));
-            assert!(tick(10.0, 10.0, &drops, [400.0, 300.0]));
+            assert!(
+                !tick(10.0, 10.0, &drops, [400.0, 300.0]),
+                "delay without movement is still a press — do not raise/dim the source"
+            );
+            assert!(!is_active());
+            assert!(
+                tick(11.0, 10.0, &drops, [400.0, 300.0]),
+                "Or + delay already met: first movement must activate immediately"
+            );
             assert!(is_active());
             let _ = end(&drops);
         });

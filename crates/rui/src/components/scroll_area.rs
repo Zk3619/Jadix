@@ -362,7 +362,7 @@ impl ScrollAreaBuilder {
         self
     }
 
-    pub fn bg(mut self, bg: [f32; 4]) -> Self {
+    pub fn bg(mut self, bg: impl crate::style::IntoPaintColor) -> Self {
         self.base = self.base.bg(bg);
         self
     }

@@ -12,14 +12,15 @@ use crate::components::{
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::primitives::{hstack, r#box, vstack};
-use crate::style::{parse_color, parse_text_color};
+use crate::style::{collect_matching_rules, parse_color, parse_text_color};
 use crate::utils::text_field::{focus_id_for_text_edit, input_value_signal_key};
 use crate::utils::{build_icon_text_node, lucide_glyph};
 
 use super::overlay::{box_model_diagram, highlight_slot};
 use super::reactivity_panel::build_reactivity_panel;
 use super::snapshot::{
-    cssom_text_from_style, find_element_by_template_mut, node_label, snapshot_hover_anchor,
+    cssom_text_from_style, find_element_by_path, find_element_by_template_mut, node_label,
+    snapshot_hover_anchor,
     snapshot_subtree, snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot,
 };
 use super::state::{DevToolsState, DevToolsTab};
@@ -518,6 +519,31 @@ fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Ele
         })
         .unwrap_or_else(|| cssom_text_from_style(st));
     fields.push(cssom_editor(path, cssom_seed));
+
+    fields.push(section("Stylesheet"));
+    if let Some(el) = find_element_by_path(root, &node.path) {
+        let hits = collect_matching_rules(el);
+        if hits.is_empty() {
+            fields.push(kv("sheet", "no matching rules"));
+        } else {
+            for (i, hit) in hits.iter().enumerate() {
+                let src = hit
+                    .source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "—".into());
+                fields.push(kv(
+                    &format!("rule-{i}"),
+                    &format!(
+                        "{} → {} (p={}, {src})",
+                        hit.selector, hit.classes, hit.priority
+                    ),
+                ));
+            }
+        }
+    } else {
+        fields.push(kv("sheet", "—"));
+    }
 
     Element::from(vstack().w("100%").children(fields))
 }

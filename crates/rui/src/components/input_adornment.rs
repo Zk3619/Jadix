@@ -53,6 +53,7 @@ use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_color, focus_ring_destructive_color, parse_color,
     parse_text_color, with_class_list,
 };
+use crate::tokens;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -312,7 +313,7 @@ fn build_input_adornment(id: &str, class: Option<String>, children: Vec<Element>
         };
         apply_focus_ring_shadow_color(&mut shell, true, false, ring);
     } else {
-        shell = shell.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
+        shell = shell.shadow(tokens::shadow_rgba(tokens::Elevation::Xs), 1.0);
     }
 
     shell = shell.child(body);
@@ -383,7 +384,7 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
             });
         }
     } else {
-        let want_color = [0.0, 0.0, 0.0, 0.06];
+        let want_color = tokens::shadow_rgba(tokens::Elevation::Xs);
         let want_blur = 1.0;
         let geom_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01
             && el.style.shadow_spread.abs() <= 0.01

@@ -4,7 +4,7 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 关于。
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 主题 · 关于。
 //! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
 //!
 //! 应用结构（与前端「入口 + 页面」相同）：[`main`] 只做启动；壳在 [`app`]；分区页面在 [`pages`]。
@@ -13,9 +13,21 @@ mod app;
 mod imports;
 mod pages;
 mod shared;
+mod styles;
+
+use std::path::PathBuf;
 
 use app::build_gallery_app;
 use shared::checker_rgba_texture;
+
+fn install_gallery_theme() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let theme = root.join("theme.toml");
+    if let Err(e) = rui::prelude::load_and_install_theme_overrides(&theme) {
+        eprintln!("gallery: theme.toml: {e}");
+    }
+    rui::prelude::watch_stylesheets([theme, root.join("styles.toml")]);
+}
 
 fn main() {
     #[cfg(feature = "runtime-logging")]
@@ -23,6 +35,7 @@ fn main() {
         default_filter:
             "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
+    install_gallery_theme();
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
 

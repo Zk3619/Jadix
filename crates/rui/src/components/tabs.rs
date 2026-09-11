@@ -67,6 +67,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{is_variant_style_overridden, LineStyle, VariantStyleField, WhiteSpace};
+use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
 use crate::utils::take_packed;
@@ -87,7 +88,7 @@ const SLOT_LIST: &str = "tabs-list";
 const SLOT_TRIGGER: &str = "tabs-trigger";
 const SLOT_CONTENT: &str = "tabs-content";
 
-const SHADOW_SM: ([f32; 4], f32) = ([0.0, 0.0, 0.0, 0.05], 2.0);
+const SHADOW_SM: ([f32; 4], f32) = (tokens::shadow_ink(0.05), 2.0);
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -218,7 +219,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     let (want_shadow, want_blur) = if selected && !line {
         SHADOW_SM
     } else {
-        ([0.0, 0.0, 0.0, 0.0], 0.0)
+        (crate::style::TRANSPARENT, 0.0)
     };
     let mut paint = false;
     let mut layout = false;

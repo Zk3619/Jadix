@@ -9,8 +9,19 @@ readme = "../../README.md"
 keywords = ["gui", "ui", "wgpu", "reactive", "desktop"]
 categories = ["gui"]
 
+# Ship workspace LICENSE + bundled-asset attributions with the crate tarball.
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/NOTICE",
+  "/src/**/*",
+  "/assets/**/*",
+  "/benches/**/*",
+  "/tests/**/*",
+]
+
 [features]
-# Lean by default: no resvg / serde. Opt into boundaries below.
+# Lean by default: no resvg. Theme/stylesheet files are always TOML (`toml` crate).
 default = []
 # Dev-time TCP hot reload (`rui_hot_reload_cli`). Requires debug build.
 hot-reload = []

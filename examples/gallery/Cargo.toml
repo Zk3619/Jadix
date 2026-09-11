@@ -2,6 +2,8 @@
 name = "gallery"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+publish = false
 
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.

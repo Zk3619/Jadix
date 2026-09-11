@@ -66,10 +66,6 @@ use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -88,12 +84,12 @@ use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::activate_registry;
-use crate::utils::lucide_glyph;
-use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating, mark_floating_at_point, mark_floating_with_gap,
-    mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
-    ATTR_FLOATING_TRIGGER, FLOATING_TRIGGER_GAP,
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
 };
+use crate::utils::lucide_glyph;
+use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{roving_edge, roving_move};
 use crate::utils::take_packed;
@@ -275,6 +271,7 @@ pub fn context_menu_scope(
     });
     let cursor = use_signal(format!("{id}__ctx_cursor").as_str(), || [-1.0_f32, -1.0]);
     let mut root = with_child_owner(|| {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             context_menu_context(),
             ContextMenuCtx {
@@ -579,35 +576,18 @@ pub fn context_menu_content(
 ) -> Element {
     let ctx = require_context_menu("ContextMenuContent");
     let open = ctx.open;
-    let id = ctx.id.clone();
-    let trigger_fid = ctx.trigger_fid;
+    let menu_id = ctx.id.clone();
     let cursor = ctx.cursor;
-    let menu_id = id.clone();
     let _ = ctx.active;
-    let _placement = if opts.placement.trim().is_empty() {
-        ctx.placement
-    } else {
-        PopupPlacement::from_attr(&opts.placement)
-    };
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let view_id = format!("{id}__ctx_view");
-    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
-
-    reactive_anchor(view_id.clone(), move || {
-        // Do not subscribe to `active` — highlight is paint-synced (hover must not rebuild).
-        let _ = cursor.get();
-        let Some((phase, oz)) = floating_portal_phase(
-            &id,
-            open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            if !open.peek() {
-                close_open_subs(&menu_id);
-            }
-            return Element::new().w(0.0).h(0.0);
-        };
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::Point { pos: cursor, gap: 2.0 }),
+        kind: OverlayKind::Menu,
+        motion: FloatingMotionKind::Fade,
+        mode: OverlayMode::Stacked,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         if !open.peek() {
             close_open_subs(&menu_id);
         }
@@ -651,41 +631,12 @@ pub fn context_menu_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
             .absolute();
         panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
-        panel = panel.accesskit_role("menu");
-        let anchor = trigger_fid.peek();
-        let pt = cursor.peek();
-        if pt[0] >= 0.0 && pt[1] >= 0.0 {
-            // 贴鼠标右下展开；gap≈2 避免压住光标热点。
-            mark_floating_at_point(&mut panel, &id, &anchor, pt[0], pt[1], 2.0);
-            // Cursor-anchored: clicking the original trigger must still dismiss (not
-            // treated as "on floating trigger").
-            panel.attrs.remove(ATTR_FLOATING_TRIGGER);
-        } else {
-            mark_floating(&mut panel, &id, &anchor, _placement);
-        }
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
-        apply_stored_floating_place(&mut panel, &id);
-        if apply_floating_panel_motion(
-            &id,
-            &mut panel,
-            FloatingMotionKind::Fade,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel.accesskit_role("menu")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1112,6 +1063,7 @@ pub fn context_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> E
         format!("{sid}__trigger")
     });
     let kids = with_child_owner(|| {
+        provide_anchored_overlay_context(open, sid.clone(), trigger_fid);
         provide_context(
             context_menu_sub_context(),
             ContextMenuSubCtx {
@@ -1253,10 +1205,19 @@ pub fn context_menu_sub_content(
     let trigger_fid = sub.trigger_fid;
     let cursor = parent.cursor;
     let class = class.filter(|s| !s.trim().is_empty());
-    let view_id = format!("{sid}__view");
-    let presence = use_floating_presence(&sid, FloatingMotionKind::Fade);
-
-    reactive_anchor(view_id.clone(), move || {
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            PopupPlacement::RightStart,
+            SUBMENU_VISUAL_GAP_PX,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion: FloatingMotionKind::Fade,
+        mode: OverlayMode::Stacked,
+        ..Default::default()
+    };
+    anchored_overlay_content(ao_opts, move || {
         let parent_is_open = parent_open.get();
         // Remount bump from SubTrigger (same-value open would not re-run).
         let _ = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
@@ -1267,26 +1228,8 @@ pub fn context_menu_sub_content(
             // Clear sticky submenu highlight when the root menu closes.
             use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
-            let _ = floating_portal_phase(
-                &sid,
-                sub_open,
-                &presence,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
             return Element::new().w(0.0).h(0.0);
         }
-        let Some((phase, oz)) = floating_portal_phase(
-            &sid,
-            sub_open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE)
-                .set_silent(ACTIVE_NONE);
-            return Element::new().w(0.0).h(0.0);
-        };
 
         let kids = with_child_owner(|| {
             let sub_active = use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE);
@@ -1327,40 +1270,14 @@ pub fn context_menu_sub_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
             .absolute();
         if let Some(ref c) = class {
             panel = with_class_list(panel, c);
         }
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
-        panel = panel.accesskit_role("menu");
-        let fid = trigger_fid.peek();
-        mark_floating_with_gap(
-            &mut panel,
-            &sid,
-            fid.as_str(),
-            PopupPlacement::RightStart,
-            SUBMENU_VISUAL_GAP_PX,
-        );
-        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
-        apply_stored_floating_place(&mut panel, &sid);
-        if apply_floating_panel_motion(
-            &sid,
-            &mut panel,
-            FloatingMotionKind::Fade,
-            phase,
-            &presence,
-            sub_open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        mount_anchored_overlay(panel, oz.panel)
-    });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        panel.accesskit_role("menu")
+    })
 }
 
 /// 每帧按 `{id}__ctx_active` 写回高亮（`peek`，不订阅根 effect）。

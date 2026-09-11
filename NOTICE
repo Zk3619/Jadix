@@ -1,0 +1,62 @@
+RUI — Third-Party Notices
+=========================
+
+The RUI source code is licensed under the MIT License (see LICENSE).
+
+This file lists bundled assets and other third-party material shipped inside
+the `rui` crate (optional features may omit some entries). Rust crate
+dependencies retain their own licenses; run `cargo deny check licenses` or
+`cargo license -p rui` for the full dependency graph.
+
+Bundled fonts (optional `bundled-*` / `fonts-*` features)
+---------------------------------------------------------
+
+Google Noto fonts in `crates/rui/assets/`:
+
+- NotoSansCJK.ttc
+- NotoSerifCJK.ttc
+- NotoColorEmoji.ttf
+- NotoColorEmoji_WindowsCompatible.ttf
+- NotoSansMath-Regular.ttf
+- NotoSansSymbols-wght.ttf
+- NotoSansSymbols2-Regular.ttf
+- NotoMusic-Regular.ttf
+
+  License: SIL Open Font License 1.1 (OFL-1.1)
+  Copyright: The Noto Project Authors (Google LLC and contributors)
+  https://fonts.google.com/noto/specimen/Noto+Sans
+
+Lucide icon font in `crates/rui/assets/lucide.ttf`:
+
+  License: ISC License
+  Copyright: Lucide Contributors
+  https://github.com/lucide-icons/lucide
+
+Bundled icon data
+-----------------
+
+Lucide name → codepoint maps in `crates/rui/assets/lucide.json` and
+`lucide_paths.json`:
+
+  License: ISC License
+  Copyright: Lucide Contributors
+  https://github.com/lucide-icons/lucide
+
+Animated icon recipes in `crates/rui/assets/lucide_animated.json`
+(optional `lucide-animated` feature; extracted offline from pqoqubbw/icons):
+
+  License: MIT License
+  Copyright: pqoqubbw and contributors
+  https://github.com/pqoqubbw/icons
+
+Design alignment (not shipped as third-party source)
+----------------------------------------------------
+
+Component naming and token semantics align with shadcn/ui and Tailwind CSS
+v4 conventions. RUI reimplements these APIs in Rust; upstream React/TS source
+is not vendored into this repository.
+
+Local reference snapshots under `Reference/` (when present on a developer
+machine) are for comparison only and are not included in published crates.
+
+The crate-local copy for crates.io is [`crates/rui/NOTICE`](crates/rui/NOTICE).

@@ -18,9 +18,13 @@ pub enum VariantSelector {
     Active,
     Disabled,
     Dark,
-    /// Responsive `sm:` / `md:` / … — matches when viewport width ≥ `min_width`.
+    /// Responsive `sm:` / `md:` / `min-[800px]:` — matches when viewport width ≥ `min_width`.
     Breakpoint {
         min_width: u32,
+    },
+    /// `max-sm:` / `max-[599px]:` — matches when viewport width ≤ `max_width`.
+    MaxBreakpoint {
+        max_width: u32,
     },
     /// `group-hover` / `group-hover/name` — ancestor with matching `group` is hovered.
     GroupHover {
@@ -35,6 +39,10 @@ pub enum VariantSelector {
         key: String,
         value: String,
     },
+    /// `motion-reduce:` — `prefers-reduced-motion` is on.
+    MotionReduce,
+    /// `motion-safe:` — reduced motion is off.
+    MotionSafe,
 }
 
 impl VariantSelector {
@@ -46,6 +54,8 @@ impl VariantSelector {
             "active" => Some(Self::Active),
             "disabled" => Some(Self::Disabled),
             "dark" => Some(Self::Dark),
+            "motion-reduce" => Some(Self::MotionReduce),
+            "motion-safe" => Some(Self::MotionSafe),
             "sm" => Some(Self::Breakpoint {
                 min_width: BREAKPOINT_SM,
             }),
@@ -61,40 +71,73 @@ impl VariantSelector {
             "2xl" => Some(Self::Breakpoint {
                 min_width: BREAKPOINT_2XL,
             }),
+            "max-sm" => Some(Self::MaxBreakpoint {
+                max_width: BREAKPOINT_SM.saturating_sub(1),
+            }),
+            "max-md" => Some(Self::MaxBreakpoint {
+                max_width: BREAKPOINT_MD.saturating_sub(1),
+            }),
+            "max-lg" => Some(Self::MaxBreakpoint {
+                max_width: BREAKPOINT_LG.saturating_sub(1),
+            }),
+            "max-xl" => Some(Self::MaxBreakpoint {
+                max_width: BREAKPOINT_XL.saturating_sub(1),
+            }),
+            "max-2xl" => Some(Self::MaxBreakpoint {
+                max_width: BREAKPOINT_2XL.saturating_sub(1),
+            }),
             "group-hover" => Some(Self::GroupHover { name: None }),
             "peer-hover" => Some(Self::PeerHover { name: None }),
-            _ => {
-                if let Some(name) = prefix.strip_prefix("group-hover/") {
-                    let name = name.trim();
-                    if !name.is_empty() {
-                        return Some(Self::GroupHover {
-                            name: Some(name.to_string()),
-                        });
-                    }
-                }
-                if let Some(name) = prefix.strip_prefix("peer-hover/") {
-                    let name = name.trim();
-                    if !name.is_empty() {
-                        return Some(Self::PeerHover {
-                            name: Some(name.to_string()),
-                        });
-                    }
-                }
-                // data-[state=open] or data-[open] (boolean attr style → value "true")
-                let rest = prefix.strip_prefix("data-[")?.strip_suffix(']')?;
-                if let Some((k, v)) = rest.split_once('=') {
-                    Some(Self::Data {
-                        key: k.trim().to_string(),
-                        value: v.trim().trim_matches('"').trim_matches('\'').to_string(),
-                    })
-                } else {
-                    Some(Self::Data {
-                        key: rest.trim().to_string(),
-                        value: "true".to_string(),
-                    })
-                }
-            }
+            _ => parse_bracket_or_named_group(prefix),
         }
+    }
+}
+
+fn parse_breakpoint_px(inner: &str) -> Option<u32> {
+    let s = inner.trim();
+    let s = s.strip_suffix("px").unwrap_or(s).trim();
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn parse_bracket_or_named_group(prefix: &str) -> Option<VariantSelector> {
+    if let Some(name) = prefix.strip_prefix("group-hover/") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Some(VariantSelector::GroupHover {
+                name: Some(name.to_string()),
+            });
+        }
+    }
+    if let Some(name) = prefix.strip_prefix("peer-hover/") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Some(VariantSelector::PeerHover {
+                name: Some(name.to_string()),
+            });
+        }
+    }
+    if let Some(inner) = prefix.strip_prefix("min-[") {
+        let px = parse_breakpoint_px(inner.strip_suffix(']')?)?;
+        return Some(VariantSelector::Breakpoint { min_width: px });
+    }
+    if let Some(inner) = prefix.strip_prefix("max-[") {
+        let px = parse_breakpoint_px(inner.strip_suffix(']')?)?;
+        return Some(VariantSelector::MaxBreakpoint { max_width: px });
+    }
+    let rest = prefix.strip_prefix("data-[")?.strip_suffix(']')?;
+    if let Some((k, v)) = rest.split_once('=') {
+        Some(VariantSelector::Data {
+            key: k.trim().to_string(),
+            value: v.trim().trim_matches('"').trim_matches('\'').to_string(),
+        })
+    } else {
+        Some(VariantSelector::Data {
+            key: rest.trim().to_string(),
+            value: "true".to_string(),
+        })
     }
 }
 
@@ -253,5 +296,49 @@ mod tests {
             }]
         );
         assert_eq!(named.utility, "border-primary");
+    }
+
+    #[test]
+    fn motion_reduce_and_safe() {
+        let t = parse_class_token("motion-reduce:opacity-0");
+        assert_eq!(t.variants, vec![VariantSelector::MotionReduce]);
+        assert_eq!(t.utility, "opacity-0");
+        let s = parse_class_token("motion-safe:hover:scale-105");
+        assert_eq!(
+            s.variants,
+            vec![VariantSelector::MotionSafe, VariantSelector::Hover]
+        );
+        assert_eq!(s.utility, "scale-105");
+    }
+
+    #[test]
+    fn arbitrary_min_max_breakpoints() {
+        let t = parse_class_token("min-[800px]:px-8");
+        assert_eq!(
+            t.variants,
+            vec![VariantSelector::Breakpoint { min_width: 800 }]
+        );
+        assert_eq!(t.utility, "px-8");
+        let m = parse_class_token("max-[599px]:flex-col");
+        assert_eq!(
+            m.variants,
+            vec![VariantSelector::MaxBreakpoint { max_width: 599 }]
+        );
+        assert_eq!(m.utility, "flex-col");
+        let range = parse_class_token("min-[800px]:max-[1199px]:gap-4");
+        assert_eq!(
+            range.variants,
+            vec![
+                VariantSelector::Breakpoint { min_width: 800 },
+                VariantSelector::MaxBreakpoint { max_width: 1199 }
+            ]
+        );
+        assert_eq!(range.utility, "gap-4");
+        let named_max = parse_class_token("max-sm:flex-col");
+        assert_eq!(
+            named_max.variants,
+            vec![VariantSelector::MaxBreakpoint { max_width: 639 }]
+        );
+        assert!(parse_class_token("min-[50rem]:p-2").variants.is_empty());
     }
 }

@@ -11,7 +11,7 @@
 //! └── DialogFooter // Also available Button + open.set(false)
 //! ```
 //!
-//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
+//! Modal-shell overlay / Portal z: see [`crate::utils::modal_shell`];
 //! 面板表面在本模块内实现。确认框直接组合 Header/Footer，
 //! Confirmation flows use [`crate::components::alert_dialog`]. `<Dialog>` / `<DialogContent>` in `ui!` are expanded by macros.
 //!
@@ -44,12 +44,9 @@ use std::sync::OnceLock;
 use crate::app::reactive::reactive_view;
 use crate::components::base::{SlotChrome, SlotStyleFn};
 use crate::components::button::button;
-use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
-    ModalPresenceHandle, ModalSurfaceMotion,
-};
-use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+use crate::utils::modal_shell::ShellOverlayOpts;
+use crate::utils::viewport_modal::{
+    viewport_modal_layer, ViewportModalLayerOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -61,12 +58,12 @@ use crate::impl_content_opts_chrome;
 use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP;
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{r#box, vstack};
+use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
 use crate::style::{apply_semantic_chrome_respecting_overrides, parse_text_color, SemanticChrome};
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
@@ -181,7 +178,7 @@ fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Modal shell（面板表面；overlay / z 见 internal::modal_shell）
+// Modal shell（面板表面；overlay / z 见 utils::modal_shell）
 // ---------------------------------------------------------------------------
 
 fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element {
@@ -191,7 +188,7 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Xl), 16.0)
         .max_h("85dvh");
     if hug_content {
         // CommandDialog：`p-0`，无 footer。卡片只负责圆角裁剪；高度上限在 hug
@@ -226,7 +223,7 @@ fn apply_semantic_dialog_shell_surface(
     apply_semantic_chrome_respecting_overrides(&mut panel, chrome);
     panel = panel.rounded("0.5rem").max_h("85dvh");
     if chrome.shadow.is_none() {
-        panel = panel.shadow([0.0, 0.0, 0.0, 0.16], 16.0);
+        panel = panel.shadow(tokens::shadow_rgba(tokens::Elevation::Xl), 16.0);
     }
     if hug_content {
         panel = panel
@@ -249,17 +246,12 @@ fn apply_semantic_dialog_shell_surface(
     panel
 }
 
-/// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
-pub(crate) fn dialog_shell_frame(
+/// Chromed motion panel (no portal / presence). Shell mounts via [`viewport_modal_layer`].
+pub(crate) fn dialog_shell_panel(
     modal_id: &str,
-    open: Signal<bool>,
-    zs: &ModalShellZs,
     inner: Element,
-    overlay_opts: &ShellOverlayOpts,
     chrome_close: Option<Element>,
     hug_content: bool,
-    presence: &ModalPresenceHandle,
-    phase: PresencePhase,
     panel_width: Option<&str>,
     content_slot: Option<&str>,
     content_size: Option<&str>,
@@ -267,7 +259,6 @@ pub(crate) fn dialog_shell_frame(
     panel_chrome: SlotChrome,
 ) -> Element {
     let panel_w = panel_width.unwrap_or("32rem");
-    let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     let zoom_body: Element = if hug_content {
         // min_h:0 + shrink: CommandList (not the input) must absorb card `max_h: 85dvh`.
@@ -317,7 +308,7 @@ pub(crate) fn dialog_shell_frame(
     // stage stays `box-none` outside the dialog (underlay close + centered layout).
     card = swallow_clicks(card);
 
-    let mut panel: Element = if hug_content {
+    let panel: Element = if hug_content {
         // Stage is definite (100% viewport). Panel `max_h` makes the used height
         // `min(content, 85dvh)` so the list — not a fake footer — absorbs leftover space.
         vstack()
@@ -339,31 +330,43 @@ pub(crate) fn dialog_shell_frame(
             .into()
     };
 
-    if apply_modal_shell_motion(
+    panel
+}
+
+/// Test / Alert helper: chrome panel + [`viewport_modal_layer`].
+#[cfg(test)]
+pub(crate) fn dialog_shell_frame(
+    modal_id: &str,
+    open: Signal<bool>,
+    inner: Element,
+    overlay_opts: &ShellOverlayOpts,
+    chrome_close: Option<Element>,
+    hug_content: bool,
+    panel_width: Option<&str>,
+    content_slot: Option<&str>,
+    content_size: Option<&str>,
+    semantic_shell: Option<&SemanticChrome>,
+    panel_chrome: SlotChrome,
+) -> Element {
+    viewport_modal_layer(
         modal_id,
-        &mut overlay_el,
-        &mut panel,
-        ModalSurfaceMotion::DialogFade,
-        phase,
-        presence,
-        [0.0, 0.0],
-        false,
-        0.0,
-    ) {
-        crate::app::runtime::request_redraw();
-    }
-
-    let mut stage: Element = r#box()
-        .inset(0.0)
-        .w("100%")
-        .h("100%")
-        .items_center()
-        .justify_center()
-        .child(panel)
-        .into();
-    stage = mount_viewport_portal_stage(stage, zs.panel);
-
-    mount_modal_layer(overlay_el, stage)
+        open,
+        overlay_opts,
+        ViewportModalLayerOpts::dialog_fade(),
+        |_| {
+            Some(dialog_shell_panel(
+                modal_id,
+                inner,
+                chrome_close,
+                hug_content,
+                panel_width,
+                content_slot,
+                content_size,
+                semantic_shell,
+                panel_chrome,
+            ))
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -457,75 +460,69 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
     let show_close = opts.show_close;
     let hug_content = opts.hug_content;
     let panel_chrome = SlotChrome::from_opts(opts.class, opts.style);
-    let presence = use_modal_presence(&id);
-    let mounted = mounted_signal(&presence);
 
     reactive_view(view_id, move || {
-        let want = open.get();
-        let phase = sync_modal_presence(&presence, want);
         let owner = format!("dialog:{id}");
-        if !mounted.get() {
-            let _ = modal_sync(&id, mounted);
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        }
-        let Some(zs) = modal_sync(&id, mounted) else {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        };
-
-        let mut inner = body();
-        inner = if hug_content {
-            inner.w("100%").min_h(0.0).flex_shrink(1.0)
-        } else {
-            inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem")
-        };
-        // Chrome close is absolute on the panel shell only — never inject padding
-        // into Header / Body / Footer (those parts own their own layout).
-        let chrome_close = if show_close {
-            let o = open;
-            let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-            let icon = build_named_icon_text_node("x", glyph).text_size(16.0);
-            Some(
-                button(format!("{id}:chrome_close"))
-                    .variant("ghost")
-                    .size("icon-sm")
-                    .on_click(move || o.set(false))
-                    .child(icon)
-                    .into(),
-            )
-        } else {
-            None
-        };
-        let mut ring = Vec::new();
-        collect_dialog_focus_ids(&inner, &mut ring);
-        if show_close {
-            ring.push(format!("{id}:chrome_close"));
-        }
-        if phase != PresencePhase::Present || ring.is_empty() {
-            sync_focus_trap(&owner, false, "");
-            let focus = use_signal("__rui_button_focus_id", String::new);
-            if focus.peek().starts_with(&format!("{id}:")) {
-                focus.set(String::new());
-            }
-        } else {
-            sync_focus_trap(&owner, true, ring.join(","));
-        }
-        dialog_shell_frame(
+        viewport_modal_layer(
             &id,
             open,
-            &zs,
-            inner,
             &overlay,
-            chrome_close,
-            hug_content,
-            &presence,
-            phase,
-            None,
-            None,
-            None,
-            None,
-            panel_chrome.clone(),
+            ViewportModalLayerOpts::dialog_fade(),
+            |phase| {
+                let Some(phase) = phase else {
+                    sync_focus_trap(&owner, false, "");
+                    return None;
+                };
+
+                let mut inner = body();
+                inner = if hug_content {
+                    inner.w("100%").min_h(0.0).flex_shrink(1.0)
+                } else {
+                    inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem")
+                };
+                // Chrome close is absolute on the panel shell only — never inject padding
+                // into Header / Body / Footer (those parts own their own layout).
+                let chrome_close = if show_close {
+                    let o = open;
+                    let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
+                    let icon = build_named_icon_text_node("x", glyph).text_size(16.0);
+                    Some(
+                        button(format!("{id}:chrome_close"))
+                            .variant("ghost")
+                            .size("icon-sm")
+                            .on_click(move || o.set(false))
+                            .child(icon)
+                            .into(),
+                    )
+                } else {
+                    None
+                };
+                let mut ring = Vec::new();
+                collect_dialog_focus_ids(&inner, &mut ring);
+                if show_close {
+                    ring.push(format!("{id}:chrome_close"));
+                }
+                if phase != PresencePhase::Present || ring.is_empty() {
+                    sync_focus_trap(&owner, false, "");
+                    let focus = use_signal("__rui_button_focus_id", String::new);
+                    if focus.peek().starts_with(&format!("{id}:")) {
+                        focus.set(String::new());
+                    }
+                } else {
+                    sync_focus_trap(&owner, true, ring.join(","));
+                }
+                Some(dialog_shell_panel(
+                    &id,
+                    inner,
+                    chrome_close,
+                    hug_content,
+                    None,
+                    None,
+                    None,
+                    None,
+                    panel_chrome.clone(),
+                ))
+            },
         )
     })
 }
@@ -739,15 +736,23 @@ impl DialogContentSlotBuilder {
 mod tests {
     use super::*;
     use crate::app::portal_overlay::clear_overlay_stack;
-    use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
-    use crate::components::internal::modal_shell::{
-        default_modal_overlay_color, modal_sync, ShellOverlayOpts, DEFAULT_MODAL_OVERLAY_BLUR,
+    use crate::utils::modal_shell::{
+        default_modal_overlay_color, ShellOverlayOpts, DEFAULT_MODAL_OVERLAY_BLUR,
         DEFAULT_MODAL_OVERLAY_OPACITY,
     };
     use crate::core::reactivity::Signal;
     use crate::core::tree::PointerEvents;
     use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
-    use crate::utils::presence::PresencePhase;
+
+    #[test]
+    fn dialog_shell_shadow_matches_elevation_xl() {
+        let el = apply_dialog_shell_surface(Element::new(), false);
+        assert_eq!(
+            el.style.shadow_color,
+            crate::tokens::shadow_rgba(crate::tokens::Elevation::Xl)
+        );
+        assert!((el.style.shadow_blur - 16.0).abs() < 0.01);
+    }
 
     #[test]
     fn dialog_default_overlay_matches_modal_shell() {
@@ -773,12 +778,6 @@ mod tests {
 
         clear_overlay_stack();
         let open = Signal::new(true);
-        let handle = use_modal_presence("dlg-center");
-        sync_modal_presence(&handle, true);
-        let Some(zs) = modal_sync("dlg-center", open) else {
-            panic!("modal_sync");
-        };
-
         let overlay_opts = ShellOverlayOpts {
             color: default_modal_overlay_color(None, Some(0.5)),
             close_on_click: true,
@@ -788,13 +787,10 @@ mod tests {
         let shell = dialog_shell_frame(
             "dlg-center",
             open,
-            &zs,
             inner,
             &overlay_opts,
             None,
             false,
-            &handle,
-            PresencePhase::Present,
             None,
             None,
             None,
@@ -863,7 +859,7 @@ mod tests {
 
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
-        use crate::components::internal::modal_motion::{
+        use crate::utils::modal_motion::{
             any_modal_css_needs_frame, set_modal_css_needs_frame_for_test,
         };
         use crate::core::reactivity::{create_root, use_signal};
@@ -937,7 +933,7 @@ mod tests {
 
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
-        use crate::components::internal::modal_motion::{
+        use crate::utils::modal_motion::{
             flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };
         use crate::core::reactivity::{create_root, use_signal};

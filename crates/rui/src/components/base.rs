@@ -23,7 +23,9 @@ use std::rc::Rc;
 
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
 use crate::style::{
-    is_variant_style_overridden, mark_variant_style_override, with_class_list, VariantStyleField,
+    is_variant_style_overridden, mark_variant_style_override, overflow_as_str, with_class_list,
+    IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor,
+    IntoTextColor, VariantStyleField,
 };
 
 /// Same layout/paint surface as RSX `base` props (`w` / `h` / `text_size` / …).
@@ -61,6 +63,7 @@ impl SlotChrome {
 
     /// Apply after the slot component builds (same order as RSX `class` chrome_binds + `base`).
     pub fn apply(&self, mut el: Element) -> Element {
+        el = crate::style::apply_stylesheet_rules(el);
         if !self.class.trim().is_empty() {
             el = with_class_list(el, self.class.trim());
         }
@@ -89,10 +92,17 @@ impl SlotChrome {
     }
 }
 
+/// Cover `data-slot` then match stylesheets. Call **after** AND hooks (`data-variant`, …)
+/// and **before** caller `class`.
+pub fn stamp_slot(mut el: Element, slot: &str) -> Element {
+    el.set_attr("data-slot", slot);
+    crate::style::apply_stylesheet_rules(el)
+}
+
 /// Stamp `data-slot` then apply chrome. Closed builders call this (or [`SlotMap::paint`])
 /// instead of growing per-slot `*_with` methods.
 pub fn paint_slot(mut el: Element, slot: &str, chrome: &SlotChrome) -> Element {
-    el.set_attr("data-slot", slot);
+    el = stamp_slot(el, slot);
     chrome.apply(el)
 }
 
@@ -494,6 +504,7 @@ macro_rules! impl_simple_slot_builder {
                     base: None,
                     ..Default::default()
                 });
+                let el = $crate::style::apply_stylesheet_rules(el);
                 builder.chrome.apply(el)
             }
         }
@@ -668,7 +679,7 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn bg(mut self, bg: [f32; 4]) -> Self {
+    pub fn bg(mut self, bg: impl IntoPaintColor) -> Self {
         self.el = self.el.bg(bg);
         mark_variant_style_override(&mut self.el, VariantStyleField::Bg);
         self
@@ -738,11 +749,11 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
+    pub fn border_style(mut self, style: impl Into<crate::style::LineStyle>) -> Self {
         self.el = self.el.border_style(style);
         self
     }
-    pub fn border_color(mut self, color: [f32; 4]) -> Self {
+    pub fn border_color(mut self, color: impl IntoPaintColor) -> Self {
         self.el = self.el.border_color(color);
         mark_variant_style_override(&mut self.el, VariantStyleField::Border);
         self
@@ -874,11 +885,11 @@ impl BaseComponentBuilder {
         }
         self
     }
-    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+    pub fn pointer_events(mut self, mode: impl Into<crate::core::tree::PointerEvents>) -> Self {
         self.el = self.el.pointer_events(mode);
         self
     }
-    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+    pub fn cursor(mut self, value: impl IntoCursor) -> Self {
         self.el = self.el.cursor(value);
         self
     }
@@ -995,7 +1006,7 @@ impl BaseComponentBuilder {
         self.el = self.el.text_line_height(px);
         self
     }
-    pub fn text_color(mut self, color: [u8; 4]) -> Self {
+    pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
         self.el = self.el.text_color(color);
         mark_variant_style_override(&mut self.el, VariantStyleField::Fg);
         self
@@ -1028,7 +1039,7 @@ impl BaseComponentBuilder {
         self.el = self.el.text_underline_offset(o);
         self
     }
-    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+    pub fn text_align(mut self, align: impl Into<crate::style::TextAlignDeclaration>) -> Self {
         self.el = self.el.text_align(align);
         self
     }
@@ -1037,20 +1048,17 @@ impl BaseComponentBuilder {
     }
 
     // Layout
-    pub fn items(mut self, align: impl Into<String>) -> Self {
-        let s = align.into();
-        self.el = self.el.flex_items(&s);
+    pub fn items(mut self, align: impl IntoAlignItems) -> Self {
+        self.el = self.el.flex_items(align);
         self
     }
-    pub fn wrap(mut self, w: impl Into<String>) -> Self {
-        let s = w.into();
-        self.el = self.el.flex_wrap_kw(&s);
+    pub fn wrap(mut self, w: impl IntoFlexWrap) -> Self {
+        self.el = self.el.flex_wrap_kw(w);
         self
     }
 
-    pub fn justify(mut self, keyword: impl Into<String>) -> Self {
-        let s = keyword.into();
-        self.el = self.el.justify(&s);
+    pub fn justify(mut self, keyword: impl IntoJustifyContent) -> Self {
+        self.el = self.el.justify(keyword);
         self
     }
     pub fn gap(mut self, g: impl IntoCssDim) -> Self {
@@ -1148,27 +1156,39 @@ impl BaseComponentBuilder {
         self.el.set_attr("scrollbar_x_side", s.into());
         self
     }
-    pub fn overflow_x(mut self, o: impl Into<String>) -> Self {
-        let o = o.into();
-        self.el = self.el.overflow_x(o.as_str());
-        self.el.set_attr("overflow_x", o);
+    pub fn overflow_x(mut self, o: impl IntoOverflow) -> Self {
+        let ov = o.into_overflow();
+        self.el = self.el.overflow_x(ov);
+        self.el.set_attr("overflow_x", overflow_as_str(ov));
         self
     }
-    pub fn overflow_y(mut self, o: impl Into<String>) -> Self {
-        let o = o.into();
-        self.el = self.el.overflow_y(o.as_str());
-        self.el.set_attr("overflow_y", o);
+    pub fn overflow_y(mut self, o: impl IntoOverflow) -> Self {
+        let ov = o.into_overflow();
+        self.el = self.el.overflow_y(ov);
+        self.el.set_attr("overflow_y", overflow_as_str(ov));
         self
     }
-    pub fn overflow(mut self, o: impl Into<String>) -> Self {
-        let o = o.into();
-        self.el = self.el.overflow(o.as_str());
-        self.el.set_attr("overflow_x", o.clone());
-        self.el.set_attr("overflow_y", o);
+    pub fn overflow(mut self, o: impl IntoOverflow) -> Self {
+        let ov = o.into_overflow();
+        self.el = self.el.overflow(ov);
+        let s = overflow_as_str(ov);
+        self.el.set_attr("overflow_x", s);
+        self.el.set_attr("overflow_y", s);
         self
     }
     pub fn scrollbar_variant(mut self, v: impl Into<String>) -> Self {
         self.el.set_attr("scrollbar_variant", v.into());
         self
+    }
+
+    /// Finish layout chrome, then match stylesheet rules (before caller takes `.el` as RSX class).
+    pub fn finish(self) -> Element {
+        crate::style::apply_stylesheet_rules(self.el)
+    }
+}
+
+impl From<BaseComponentBuilder> for Element {
+    fn from(builder: BaseComponentBuilder) -> Self {
+        builder.finish()
     }
 }

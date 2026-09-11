@@ -220,6 +220,36 @@ impl From<String> for TextAlign {
     }
 }
 
+impl From<&String> for TextAlign {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<TextAlign> for TextAlignDeclaration {
+    fn from(v: TextAlign) -> Self {
+        Self::Value(v)
+    }
+}
+
+impl From<&str> for TextAlignDeclaration {
+    fn from(s: &str) -> Self {
+        TextAlign::parse_declaration(s)
+    }
+}
+
+impl From<String> for TextAlignDeclaration {
+    fn from(s: String) -> Self {
+        TextAlign::parse_declaration(&s)
+    }
+}
+
+impl From<&String> for TextAlignDeclaration {
+    fn from(s: &String) -> Self {
+        TextAlign::parse_declaration(s)
+    }
+}
+
 /// Rich-inline span kind. Chip / Mention are atomic measure/break units.
 ///
 /// Cosmic-text `Attrs::metadata` convention (`rui_chip`): for Chip/Mention spans,
@@ -426,7 +456,10 @@ pub struct TextStyle {
     /// Paragraph direction (Auto / LTR / RTL).
     pub direction: TextDirection,
     /// Letter spacing in logical px (hair-space approx on cosmic-text 0.12).
+    /// Unspecified (`letter_spacing_specified = false`) inherits from the parent.
     pub letter_spacing: f32,
+    /// When false, [`letter_spacing`] is inherited (CSS `letter-spacing`).
+    pub letter_spacing_specified: bool,
     /// Optional caret drawn in prepare_text.
     pub input_caret: Option<InputCaretDraw>,
     /// Horizontal pan (logical px) for [`TextOverflow::Hidden`] single-line fields.
@@ -462,6 +495,7 @@ impl Default for TextStyle {
             selectable: false,
             direction: TextDirection::Auto,
             letter_spacing: 0.0,
+            letter_spacing_specified: false,
             input_caret: None,
             scroll_x: 0.0,
             line_height_specified: false,
@@ -566,6 +600,9 @@ impl TextStyle {
         if !self.line_height_specified {
             out.line_height_px = parent.line_height_px;
             out.line_height_scale = parent.line_height_scale;
+        }
+        if !self.letter_spacing_specified {
+            out.letter_spacing = parent.letter_spacing;
         }
         out
     }
@@ -844,5 +881,49 @@ mod tests {
         approx_eq(offset[0], 4.0);
         approx_eq(offset[1], 8.0);
         approx_eq(blur, 4.0);
+    }
+
+    #[test]
+    fn letter_spacing_inherits_when_unspecified() {
+        let parent = TextStyle {
+            letter_spacing: 0.4,
+            letter_spacing_specified: true,
+            ..Default::default()
+        };
+        let child = TextStyle::default();
+        let out = child.effective_ancestry(&parent);
+        assert!((out.letter_spacing - 0.4).abs() < f32::EPSILON);
+        assert!(!out.letter_spacing_specified);
+    }
+
+    #[test]
+    fn letter_spacing_specified_zero_does_not_inherit() {
+        let parent = TextStyle {
+            letter_spacing: 0.4,
+            letter_spacing_specified: true,
+            ..Default::default()
+        };
+        let child = TextStyle {
+            letter_spacing: 0.0,
+            letter_spacing_specified: true,
+            ..Default::default()
+        };
+        let out = child.effective_ancestry(&parent);
+        assert!(out.letter_spacing.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn letter_spacing_cascades_to_unspecified_child() {
+        let child = crate::core::tree::Element::new().text("x");
+        let mut root = crate::core::tree::Element::new()
+            .letter_spacing(0.4)
+            .child(child);
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
+        assert!(
+            (root.children[0].text_style.letter_spacing - 0.4).abs() < 1e-4,
+            "got {}",
+            root.children[0].text_style.letter_spacing
+        );
+        assert!(!root.children[0].text_style.letter_spacing_specified);
     }
 }

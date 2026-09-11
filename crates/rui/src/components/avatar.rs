@@ -82,12 +82,8 @@ use crate::app::pending_images::{
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::apply_bound_size;
 use crate::app::reactive::bind_attr;
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::badge::{apply_badge_variant_paint, BadgeVariant};
 use crate::components::base::{BaseComponentBuilder, SlotChrome};
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
@@ -98,12 +94,16 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
+};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
+    mark_floating_with_gap, PopupPlacement, ATTR_FLOATING_EXPAND_CLIP_X,
+    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
@@ -213,6 +213,12 @@ impl From<String> for AvatarSize {
     }
 }
 
+impl From<&String> for AvatarSize {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 impl std::str::FromStr for AvatarSize {
     type Err = ();
 
@@ -268,6 +274,12 @@ impl From<&str> for AvatarShape {
 impl From<String> for AvatarShape {
     fn from(s: String) -> Self {
         Self::parse(&s)
+    }
+}
+
+impl From<&String> for AvatarShape {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -614,7 +626,8 @@ fn build_avatar_fallback(
 fn apply_avatar_badge_ring(el: &mut Element) {
     let key = el
         .attrs
-        .get("rui_badge_variant")
+        .get("data-variant")
+        .or_else(|| el.attrs.get("rui_badge_variant"))
         .map(|s| s.as_str())
         .unwrap_or("default");
     if key == "outline" {
@@ -764,7 +777,7 @@ fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> 
         .border_style("solid")
         .border_width(EXPAND_CHROME_BORDER)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.12], 10.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 10.0)
         .children(faces)
         .into();
     if let Some(c) = expand_class.map(str::trim).filter(|s| !s.is_empty()) {
@@ -1461,80 +1474,74 @@ fn build_avatar_group(
         build_avatar_group_row_element(&group_id, &faces, rendered_visible, count_size)
     };
 
-    let view_id = format!("{group_id}__expand_view");
     let portal_id = group_id.clone();
-    let presence = use_floating_presence(&group_id, FloatingMotionKind::Expand);
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &portal_id,
-            expanded,
-            &presence,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-        ) else {
-            return Element::new().w(0.0).h(0.0);
-        };
-        let (faces, fid, placement, expand_class, visible_n, has_count) = AVATAR_GROUPS.with(|m| {
-            let map = m.borrow();
-            match map.get(&portal_id) {
-                Some(e) => (
-                    e.faces.clone(),
-                    e.focus_id.clone(),
-                    e.placement.get(),
-                    e.expand_class.clone(),
-                    e.visible_n,
-                    e.has_count,
-                ),
-                None => (
-                    Vec::new(),
-                    String::new(),
-                    PopupPlacement::BottomStart,
-                    String::new(),
-                    0,
-                    false,
-                ),
-            }
-        });
-        let trigger_h = faces
-            .first()
-            .map(|f| IntoF32::into_f32(f.size.box_dim()))
-            .unwrap_or(32.0);
-        let mut panel = build_avatar_group_expand_panel(
-            &portal_id,
-            &fid,
-            placement,
-            &faces,
-            Some(expand_class.as_str()).filter(|s| !s.is_empty()),
-            trigger_h,
-            visible_n,
-            has_count,
-        );
-        apply_stored_floating_place(&mut panel, &portal_id);
-        panel = panel.w("auto");
-        if apply_floating_panel_motion(
-            &portal_id,
-            &mut panel,
-            FloatingMotionKind::Expand,
-            phase,
-            &presence,
-            expanded,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        let hover_id = portal_id.clone();
-        panel = interactive(panel)
-            .focus_id(format!("{hover_id}__panel"))
-            .on_hover(move |h| note_avatar_group_hover(&hover_id, true, h))
-            .into();
-        mount_anchored_overlay(panel, oz.panel)
-    });
+    let trigger_fid = use_signal(
+        format!("{group_id}__ao_trigger_fid").as_str(),
+        || focus_id.clone(),
+    );
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            focus_id.clone(),
+            expand_placement,
+            expand_cover_gap_for_group(face_size),
+            FloatingStrategy::Fixed,
+        )),
+        kind: OverlayKind::Popover,
+        motion: FloatingMotionKind::Expand,
+        mode: OverlayMode::Stacked,
+        width: Some("auto".into()),
+        ..Default::default()
+    };
     // Keep the 0×0 reactive anchor *inside* the group shell (BubbleReactions), not as a
     // fragment sibling / extra portal. Hoisting the placeholder broke expand rebuild and
     // made the overlay origin the group box instead of the faces.
-    let placeholder = reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none();
+    let placeholder = with_child_owner(|| {
+        provide_anchored_overlay_context(expanded, group_id.clone(), trigger_fid);
+        anchored_overlay_content(ao_opts, move || {
+            let (faces, fid, placement, expand_class, visible_n, has_count) =
+                AVATAR_GROUPS.with(|m| {
+                    let map = m.borrow();
+                    match map.get(&portal_id) {
+                        Some(e) => (
+                            e.faces.clone(),
+                            e.focus_id.clone(),
+                            e.placement.get(),
+                            e.expand_class.clone(),
+                            e.visible_n,
+                            e.has_count,
+                        ),
+                        None => (
+                            Vec::new(),
+                            String::new(),
+                            PopupPlacement::BottomStart,
+                            String::new(),
+                            0,
+                            false,
+                        ),
+                    }
+                });
+            let trigger_h = faces
+                .first()
+                .map(|f| IntoF32::into_f32(f.size.box_dim()))
+                .unwrap_or(32.0);
+            let mut panel = build_avatar_group_expand_panel(
+                &portal_id,
+                &fid,
+                placement,
+                &faces,
+                Some(expand_class.as_str()).filter(|s| !s.is_empty()),
+                trigger_h,
+                visible_n,
+                has_count,
+            );
+            panel = panel.w("auto");
+            let hover_id = portal_id.clone();
+            interactive(panel)
+                .focus_id(format!("{hover_id}__panel"))
+                .on_hover(move |h| note_avatar_group_hover(&hover_id, true, h))
+                .into()
+        })
+    });
 
     let hover_id = group_id.clone();
     let shell: Element = vstack()
@@ -1814,13 +1821,13 @@ impl AvatarBuilder {
         self
     }
 
-    pub fn size(mut self, s: impl AsRef<str>) -> Self {
-        self.size = AvatarSize::parse(s.as_ref());
+    pub fn size(mut self, s: impl Into<AvatarSize>) -> Self {
+        self.size = s.into();
         self
     }
 
-    pub fn shape(mut self, s: impl AsRef<str>) -> Self {
-        self.shape = AvatarShape::parse(s.as_ref());
+    pub fn shape(mut self, s: impl Into<AvatarShape>) -> Self {
+        self.shape = s.into();
         self
     }
 

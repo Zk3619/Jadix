@@ -119,6 +119,18 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
+                            id="gal-nav-theme"
+                            isActive={section.get() == "theme"}
+                            on_click={move || section.set("theme".into())}
+                        >
+                            <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
+                                <Icon name="sun" size="16px" color="sidebar-foreground" pointer_events="none" />
+                                <Label grow="1" min_w="0" text_size="0.875rem" color="sidebar-foreground">"主题"</Label>
+                            </HStack>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                        <SidebarMenuButton
                             id="gal-nav-about"
                             isActive={section.get() == "about"}
                             on_click={move || section.set("about".into())}
@@ -181,6 +193,7 @@ pub(crate) fn GallerySectionOverlays() -> Element {
                     <ViewportModalShowcase />
                     <LocalOverlayShowcase />
                     <AnchoredOverlayShowcase />
+                    <PresenceShowcase />
                     <DragShowcase />
                     <OverlayFeedbackShowcase />
                     <PrimitivesShowcase />
@@ -363,6 +376,11 @@ pub(crate) fn GallerySectionBasics() -> Element {
 }
 
 pub(crate) fn build_gallery_app() -> Element {
+    let gallery_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    rui::style::watch_stylesheets([
+        gallery_dir.join("theme.toml"),
+        gallery_dir.join("styles.toml"),
+    ]);
     let section = use_signal("gal_nav_section", || {
         std::env::var("RUI_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
     });
@@ -442,6 +460,9 @@ pub(crate) fn build_gallery_app() -> Element {
                                 <When when={section.get() == "text"}>
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"文本"</Label>
                                 </When>
+                                <When when={section.get() == "theme"}>
+                                    <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"主题"</Label>
+                                </When>
                                 <When when={section.get() == "about"}>
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"关于"</Label>
                                 </When>
@@ -458,6 +479,11 @@ pub(crate) fn build_gallery_app() -> Element {
                                 <When when={section.get() == "draw"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
                                         "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · lucide-animated。"
+                                    </Label>
+                                </When>
+                                <When when={section.get() == "theme"}>
+                                    <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
+                                        "theme.toml 覆盖 destructive · styles.toml 按 data-slot 统一 Bubble · 不实现 CSSOM"
                                     </Label>
                                 </When>
                                 <When when={section.get() == "basics"}>
@@ -493,6 +519,9 @@ pub(crate) fn build_gallery_app() -> Element {
                             </When>
                             <When when={section.get() == "text"}>
                                 <GallerySectionText />
+                            </When>
+                            <When when={section.get() == "theme"}>
+                                <GallerySectionTheme />
                             </When>
                             <When when={section.get() == "about"}>
                                 <GallerySectionAbout />

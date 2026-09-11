@@ -334,7 +334,7 @@ pub fn semantic_shadow(tone: SemanticTone) -> SemanticShadow {
         c[3] = SHADOW_ALPHA;
         c
     } else {
-        [0.0, 0.0, 0.0, SHADOW_ALPHA]
+        crate::tokens::shadow_rgba(crate::tokens::Elevation::Md)
     };
     SemanticShadow {
         color,

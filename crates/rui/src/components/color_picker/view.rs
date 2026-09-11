@@ -271,7 +271,10 @@ pub(super) fn picker_trigger(id: &str, leading: Element, main: Element, disabled
         .items_center()
         .bg(bg)
         .border(border, 1.0)
-        .shadow([0.0, 0.0, 0.0, 0.06], 1.0)
+        .shadow(
+            crate::tokens::shadow_rgba(crate::tokens::Elevation::Xs),
+            1.0,
+        )
         .into();
     row = row.child(leading).child(Element::from(
         hstack()
@@ -1137,7 +1140,10 @@ pub(super) fn panel_shell(width: &str, body: Element) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.12], 8.0);
+        .shadow(
+            crate::tokens::shadow_rgba(crate::tokens::Elevation::Md),
+            8.0,
+        );
     panel.set_attr(ATTR_CP_SLOT, "color-picker-content");
     panel
 }
@@ -1364,26 +1370,48 @@ pub(super) fn build_color_picker_view(
     if disabled {
         return with_trigger_preview_sync(view, id, rgba, fmt_sig);
     }
-    if let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked) {
-        if open.peek() {
-            let mut panel = build_panel(
-                &id, variant, rgba, hue, sat, val, fmt_sig, fmt_str, show_alpha, disabled, out,
-                open, slots,
-            );
-            panel = panel.absolute();
-            mark_floating(
-                &mut panel,
-                &id,
-                &trigger_focus_id(&id),
+    let overlay_id = id.clone();
+    let panel_slots = slots.clone();
+    let trigger_fid = use_signal(
+        format!("{overlay_id}__cp_trigger_fid").as_str(),
+        || trigger_focus_id(&overlay_id),
+    );
+    let panel_slot = with_child_owner(move || {
+        provide_anchored_overlay_context(open, overlay_id.clone(), trigger_fid);
+        let panel_width = variant.panel_width();
+        let ao_opts = AnchoredOverlayContentOpts {
+            placement: Some(Placement::trigger(
+                trigger_focus_id(&overlay_id),
                 PopupPlacement::BottomStart,
+                4.0,
+                FloatingStrategy::Fixed,
+            )),
+            kind: OverlayKind::Popover,
+            motion: FloatingMotionKind::Fade,
+            mode: OverlayMode::Stacked,
+            width: Some(panel_width.to_string()),
+            ..Default::default()
+        };
+        anchored_overlay_content(ao_opts, move || {
+            let mut panel = build_panel(
+                &overlay_id,
+                variant,
+                rgba,
+                hue,
+                sat,
+                val,
+                fmt_sig,
+                fmt_str,
+                show_alpha,
+                disabled,
+                out,
+                open,
+                &panel_slots,
             );
             panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-            panel.set_attr(ATTR_FLOATING_W, variant.panel_width());
-            panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-            apply_stored_floating_place(&mut panel, &id);
-            panel = mount_anchored_overlay(panel, oz.panel);
-            view = view.child(panel);
-        }
-    }
+            panel
+        })
+    });
+    view = view.child(panel_slot);
     with_trigger_preview_sync(view, id, rgba, fmt_sig)
 }

@@ -346,6 +346,12 @@ impl LineStyle {
     }
 }
 
+impl<T: AsRef<str>> From<T> for LineStyle {
+    fn from(s: T) -> Self {
+        Self::from_css_keyword(s.as_ref())
+    }
+}
+
 /// Deferred CSS unit slot (vw/vh/em/calc) applied in [`Style::to_taffy_style`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnitSlot {

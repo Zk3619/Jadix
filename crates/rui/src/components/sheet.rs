@@ -13,7 +13,7 @@
 //!     └── SheetClose         // 任意子节点点击关闭
 //! ```
 //!
-//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
+//! Modal-shell overlay / Portal z: see [`crate::utils::modal_shell`];
 //! 贴边面板表面在本模块内实现。`ui!` 中 `<Sheet>` /
 //! `<SheetContent>` 由宏展开。
 //!
@@ -56,12 +56,9 @@ use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
-use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
-    ModalPresenceHandle, ModalSurfaceMotion,
-};
-use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+use crate::utils::modal_shell::ShellOverlayOpts;
+use crate::utils::viewport_modal::{
+    viewport_modal_layer, ModalSurfaceMotion, ViewportModalLayerOpts,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -71,12 +68,12 @@ use crate::core::reactivity::{
 use crate::core::tree::Element;
 use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{r#box, vstack};
+use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
@@ -104,6 +101,15 @@ impl SheetSide {
             Self::Right => "right",
             Self::Bottom => "bottom",
             Self::Left => "left",
+        }
+    }
+
+    pub(crate) fn to_surface_motion(self) -> ModalSurfaceMotion {
+        match self {
+            Self::Top => ModalSurfaceMotion::SlideFromTop,
+            Self::Right => ModalSurfaceMotion::SlideFromRight,
+            Self::Bottom => ModalSurfaceMotion::SlideFromBottom,
+            Self::Left => ModalSurfaceMotion::SlideFromLeft,
         }
     }
 }
@@ -316,7 +322,7 @@ fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Modal shell（贴边面板表面；overlay / z 见 internal::modal_shell）
+// Modal shell（贴边面板表面；overlay / z 见 utils::modal_shell）
 // ---------------------------------------------------------------------------
 
 /// 对齐 new-york-v4 `SheetContent` 表面：gap-4、bg、shadow、贴边单侧边框。
@@ -329,7 +335,7 @@ fn apply_sheet_shell_surface(
     let border = tokens::border();
     panel = panel
         .bg(tokens::background())
-        .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+        .shadow(tokens::shadow_rgba(tokens::Elevation::Xl), 16.0)
         .gap("1rem");
 
     match side {
@@ -385,23 +391,15 @@ fn apply_sheet_shell_surface(
     panel
 }
 
-/// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
-fn sheet_shell_frame(
-    modal_id: &str,
-    open: Signal<bool>,
-    zs: &ModalShellZs,
+/// Chromed motion panel (no portal / presence).
+fn sheet_shell_panel(
     inner: Element,
-    overlay_opts: &ShellOverlayOpts,
     side: SheetSide,
     width: Option<&str>,
     height: Option<&str>,
     chrome_close: Option<Element>,
-    presence: &ModalPresenceHandle,
-    phase: PresencePhase,
     panel_chrome: crate::components::base::SlotChrome,
 ) -> Element {
-    let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
-
     // Swallow clicks only — nesting `panel_block_clicks` under stage nests `rui_portal`.
     let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
     panel = apply_sheet_shell_surface(panel, side, width, height);
@@ -414,30 +412,7 @@ fn sheet_shell_frame(
         close = close.absolute().top("1rem").right("1rem").z_index(1);
         panel = panel.child(close);
     }
-
-    let (vw, vh) = crate::components::drawer::drawer_viewport_size();
-    let slide_axis = match side {
-        SheetSide::Top | SheetSide::Bottom => vh,
-        SheetSide::Left | SheetSide::Right => vw,
-    };
-
-    if apply_modal_shell_motion(
-        modal_id,
-        &mut overlay_el,
-        &mut panel,
-        ModalSurfaceMotion::from_sheet_side(side),
-        phase,
-        presence,
-        [0.0, 0.0],
-        false,
-        slide_axis,
-    ) {
-        crate::app::runtime::request_redraw();
-    }
-
-    let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
-    let stage = mount_viewport_portal_stage(stage, zs.panel);
-    mount_modal_layer(overlay_el, stage)
+    panel
 }
 
 // ---------------------------------------------------------------------------
@@ -510,11 +485,11 @@ pub struct SheetContentOpts {
     pub show_close: bool,
     /// Overlay color (semantic token / hex); `None` → theme `background` RGB + modal default alpha.
     pub overlay_color: Option<String>,
-    /// Overlay opacity 0…1; `None` → modal default ([`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`], `0.6`).
+    /// Overlay opacity 0…1; `None` → modal default ([`crate::utils::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`], `0.6`).
     pub overlay_opacity: Option<f32>,
     /// Whether clicking the overlay closes; default `true`.
     pub close_on_overlay_click: bool,
-    /// Overlay backdrop blur radius (logical px); `None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`] (`4`).
+    /// Overlay backdrop blur radius (logical px); `None` → [`crate::utils::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`] (`4`).
     pub overlay_blur: Option<f32>,
     /// 左右侧宽；`None` → `75%`（`max-w: 24rem`）。
     pub width: Option<String>,
@@ -565,66 +540,65 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     let width = opts.width;
     let height = opts.height;
     let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let presence = use_modal_presence(&id);
-    let mounted = mounted_signal(&presence);
 
     reactive_view(view_id, move || {
-        let want = open.get();
-        let phase = sync_modal_presence(&presence, want);
         let owner = format!("sheet:{id}");
-        if !mounted.get() {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        }
-        let Some(zs) = modal_sync(&id, mounted) else {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
+        let (vw, vh) = crate::utils::modal_surface::modal_viewport_size();
+        let slide_axis = match side {
+            SheetSide::Top | SheetSide::Bottom => vh,
+            SheetSide::Left | SheetSide::Right => vw,
         };
-
-        let mut inner = body();
-        // Vertical stack: Header / Body / Footer；中间区 flex-grow 把 Footer 顶到底。
-        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("0");
-
-        let chrome_close = if show_close {
-            let o = open;
-            let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-            let icon = build_icon_text_node(glyph).text_size(16.0);
-            Some(
-                button(format!("{id}:chrome_close"))
-                    .variant("ghost")
-                    .size("icon-sm")
-                    .on_click(move || o.set(false))
-                    .child(icon)
-                    .into(),
-            )
-        } else {
-            None
-        };
-
-        let mut ring = Vec::new();
-        collect_sheet_focus_ids(&inner, &mut ring);
-        if show_close {
-            ring.push(format!("{id}:chrome_close"));
-        }
-        if phase != PresencePhase::Present || ring.is_empty() {
-            sync_focus_trap(&owner, false, "");
-        } else {
-            sync_focus_trap(&owner, true, ring.join(","));
-        }
-
-        sheet_shell_frame(
+        viewport_modal_layer(
             &id,
             open,
-            &zs,
-            inner,
             &overlay,
-            side,
-            width.as_deref(),
-            height.as_deref(),
-            chrome_close,
-            &presence,
-            phase,
-            panel_chrome.clone(),
+            ViewportModalLayerOpts::slide(side.to_surface_motion(), slide_axis),
+            |phase| {
+                let Some(phase) = phase else {
+                    sync_focus_trap(&owner, false, "");
+                    return None;
+                };
+
+                let mut inner = body();
+                // Vertical stack: Header / Body / Footer；中间区 flex-grow 把 Footer 顶到底。
+                inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("0");
+
+                let chrome_close = if show_close {
+                    let o = open;
+                    let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
+                    let icon = build_icon_text_node(glyph).text_size(16.0);
+                    Some(
+                        button(format!("{id}:chrome_close"))
+                            .variant("ghost")
+                            .size("icon-sm")
+                            .on_click(move || o.set(false))
+                            .child(icon)
+                            .into(),
+                    )
+                } else {
+                    None
+                };
+
+                let mut ring = Vec::new();
+                collect_sheet_focus_ids(&inner, &mut ring);
+                if show_close {
+                    ring.push(format!("{id}:chrome_close"));
+                }
+                if phase != PresencePhase::Present || ring.is_empty() {
+                    sync_focus_trap(&owner, false, "");
+                } else {
+                    sync_focus_trap(&owner, true, ring.join(","));
+                }
+
+                Some(sheet_shell_panel(
+                    inner,
+                    side,
+                    width.as_deref(),
+                    height.as_deref(),
+                    chrome_close,
+                    panel_chrome.clone(),
+                ))
+            },
         )
     })
 }

@@ -41,13 +41,10 @@
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use rui_macros::component;
-use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
+use taffy::style::{AlignItems, Display, FlexDirection, JustifyContent};
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::base::{ensure_data_slot, overlay_root_author_text, SlotStyleFn};
@@ -61,12 +58,14 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
+    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
-use crate::utils::motion::{clear_motion, ensure_motion_transitions};
-use crate::utils::presence::{ExitGate, PresencePhase};
+use crate::utils::collapse_panel::{
+    apply_collapse_motion, sync_collapse_panel_presence, use_collapse_panel_presence,
+    CollapseKeyframes, CollapsePanelPresence,
+};
+use crate::utils::motion::ensure_motion_transitions;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
 use crate::utils::text_node::{build_lucide_icon_text_node, build_text_node, TextNodeConfig};
@@ -84,9 +83,6 @@ const CHEVRON_PX: f32 = 16.0;
 const CHEVRON_OPEN_DEG: f32 = 180.0;
 const TRIGGER_WEIGHT: u16 = 500;
 const CONTENT_WEIGHT: u16 = 400;
-
-const COLLAPSIBLE_DOWN: &str = "collapsible-down";
-const COLLAPSIBLE_UP: &str = "collapsible-up";
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -112,159 +108,12 @@ fn require_collapsible(part: &str) -> CollapsibleCtx {
     })
 }
 
-// ── Panel presence（对位 Accordion 面板进出场）────────────────────────────────
-
-thread_local! {
-    static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<CollapsePanelPresenceCell>>>> =
-        const { RefCell::new(Vec::new()) };
-    static PENDING_COLLAPSE_UNMOUNTS: RefCell<Vec<Signal<bool>>> = const { RefCell::new(Vec::new()) };
-}
-
-const PANEL_EXIT: Duration = Duration::from_millis(COLLAPSE_MS as u64);
-
-#[derive(Clone)]
-struct CollapsePanelPresenceHandle {
-    cell: Rc<RefCell<CollapsePanelPresenceCell>>,
-}
-
-struct CollapsePanelPresenceCell {
-    mounted: Signal<bool>,
-    gate: ExitGate,
-    needs_enter: bool,
-    enter_active: bool,
-    exit_armed: bool,
-    initialized: bool,
-    needs_exit_anim: bool,
-}
-
-fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresenceHandle {
-    let cell_key = format!("__rui_collapsible_panel:{key}");
-    let mounted_key = format!("__rui_collapsible_mounted:{key}");
-    let cell = use_signal(cell_key.as_str(), || {
-        let mounted = use_signal(mounted_key.as_str(), || false);
-        let rc = Rc::new(RefCell::new(CollapsePanelPresenceCell {
-            mounted,
-            gate: ExitGate::new(false, PANEL_EXIT),
-            needs_enter: false,
-            enter_active: false,
-            exit_armed: false,
-            initialized: false,
-            needs_exit_anim: false,
-        }));
-        PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
-        let rc_cleanup = Rc::clone(&rc);
-        on_cleanup(move || {
-            PANEL_PRESENCE_REGISTRY.with(|r| {
-                r.borrow_mut().retain(|c| !Rc::ptr_eq(c, &rc_cleanup));
-            });
-        });
-        rc
-    });
-    CollapsePanelPresenceHandle {
-        cell: cell.try_peek().expect("collapsible panel presence cell"),
-    }
-}
-
-fn collapse_panel_mounted_signal(handle: &CollapsePanelPresenceHandle) -> Signal<bool> {
-    handle.cell.borrow().mounted
-}
-
-fn sync_collapse_panel_presence(handle: &CollapsePanelPresenceHandle, want: bool) -> PresencePhase {
-    let mounted_sig = collapse_panel_mounted_signal(handle);
-    let (phase, mounted, set_mounted) = {
-        let mut c = handle.cell.borrow_mut();
-        let was = c.gate.phase();
-        let changed = c.gate.set_present(want, Instant::now());
-        let phase = c.gate.phase();
-        let mounted = c.gate.is_mounted();
-        if want
-            && matches!(phase, PresencePhase::Present)
-            && (changed || was == PresencePhase::Absent)
-        {
-            if !c.initialized {
-                c.needs_enter = false;
-                c.enter_active = false;
-            } else if changed && was != PresencePhase::Present {
-                c.needs_enter = true;
-                c.enter_active = false;
-            }
-            c.exit_armed = false;
-            c.needs_exit_anim = false;
-        }
-        c.initialized = true;
-        if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
-            c.exit_armed = true;
-            c.needs_enter = false;
-            c.enter_active = false;
-            c.needs_exit_anim = true;
-        }
-        let set_mounted = if c.mounted.is_alive() {
-            c.mounted
-                .try_peek()
-                .map(|was| was != mounted)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        (phase, mounted, set_mounted)
-    };
-    if set_mounted {
-        mounted_sig.set(mounted);
-    }
-    phase
-}
-
-/// 事件循环推进退场；CSS 退场完成在 drain 卸树。
-pub(crate) fn tick_collapsible_panel_presence() -> bool {
-    drain_pending_collapse_unmounts();
-    let now = Instant::now();
-    let mut needs_frame = false;
-    let mut unmount: Vec<Signal<bool>> = Vec::new();
-    PANEL_PRESENCE_REGISTRY.with(|reg| {
-        for cell in reg.borrow().iter() {
-            let maybe_unmount = {
-                let mut c = cell.borrow_mut();
-                if c.gate.phase() == PresencePhase::Exiting {
-                    if c.exit_armed {
-                        needs_frame = true;
-                        None
-                    } else if c.gate.tick(now) {
-                        c.needs_enter = false;
-                        c.enter_active = false;
-                        c.exit_armed = false;
-                        c.needs_exit_anim = false;
-                        Some(c.mounted)
-                    } else {
-                        needs_frame = true;
-                        None
-                    }
-                } else if c.enter_active && c.gate.phase() == PresencePhase::Present {
-                    needs_frame = true;
-                    None
-                } else {
-                    None
-                }
-            };
-            if let Some(sig) = maybe_unmount {
-                unmount.push(sig);
-            }
-        }
-    });
-    for sig in unmount {
-        if sig.is_alive() {
-            sig.set(false);
-        }
-    }
-    needs_frame
-}
-
-fn drain_pending_collapse_unmounts() {
-    let pending = PENDING_COLLAPSE_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    for sig in pending {
-        if sig.is_alive() {
-            sig.set(false);
-        }
-    }
+fn apply_collapse_panel_motion(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    presence: &CollapsePanelPresence,
+) -> LayoutStatus {
+    apply_collapse_motion(el, layout_tree, presence, CollapseKeyframes::COLLAPSIBLE)
 }
 
 fn chevron_transition_entries() -> [TransitionEntry; 1] {
@@ -274,66 +123,6 @@ fn chevron_transition_entries() -> [TransitionEntry; 1] {
         delay_ms: 0.0,
         timing: TimingFunction::EaseOut,
     }]
-}
-
-fn panel_content_height(el: &Element) -> f32 {
-    el.used_layout.anim_height().max(el.layout_bounds[3])
-}
-
-fn collapse_has_exit_anim(el: &Element) -> bool {
-    el.style.animations.iter().any(|a| a.name == COLLAPSIBLE_UP)
-}
-
-fn reset_collapse_anim_snapshot(el: &mut Element) {
-    el.animation_snapshot = Default::default();
-}
-
-fn seed_collapse_enter_anim(el: &mut Element) {
-    clear_motion(el);
-    el.style.max_size.height = Dimension::auto();
-    el.style.animations = vec![keyframes_anim_entry(
-        COLLAPSIBLE_DOWN,
-        COLLAPSE_MS,
-        TimingFunction::EaseOut,
-        AnimationFillMode::Both,
-    )];
-    reset_collapse_anim_snapshot(el);
-}
-
-fn seed_collapse_exit_anim(el: &mut Element) {
-    clear_motion(el);
-    el.style.max_size.height = Dimension::auto();
-    el.style.animations = vec![keyframes_anim_entry(
-        COLLAPSIBLE_UP,
-        COLLAPSE_MS,
-        TimingFunction::EaseIn,
-        AnimationFillMode::Both,
-    )];
-    reset_collapse_anim_snapshot(el);
-}
-
-fn finish_collapse_panel_exit(presence: &CollapsePanelPresenceHandle) {
-    let mounted_sig = collapse_panel_mounted_signal(presence);
-    {
-        let mut c = presence.cell.borrow_mut();
-        c.gate.force_absent();
-        c.exit_armed = false;
-        c.needs_exit_anim = false;
-        c.enter_active = false;
-    }
-    PENDING_COLLAPSE_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
-    crate::app::runtime::request_redraw();
-}
-
-fn collapse_panel_phase(presence: &CollapsePanelPresenceHandle) -> PresencePhase {
-    presence.cell.borrow().gate.phase()
-}
-
-fn max_height_is_auto(el: &Element) -> bool {
-    matches!(
-        crate::layout::dim_kind(el.style.max_size.height),
-        crate::layout::DimKind::Auto
-    )
 }
 
 fn stamp_content_text_weight(el: &mut Element) {
@@ -416,7 +205,7 @@ fn bind_collapsible_exclusive(id: String, group: String, open: Signal<bool>) {
     });
 }
 
-fn sync_collapse_panel_open(open_sig: Signal<bool>, presence: &CollapsePanelPresenceHandle) {
+fn sync_collapse_panel_open(open_sig: Signal<bool>, presence: &CollapsePanelPresence) {
     let want = open_sig.try_peek().unwrap_or(false);
     sync_collapse_panel_presence(presence, want);
 }
@@ -465,154 +254,6 @@ fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
         handler();
     });
     el
-}
-
-fn apply_collapse_panel_motion(
-    el: &mut Element,
-    layout_tree: &mut LayoutTree,
-    presence: &CollapsePanelPresenceHandle,
-) -> LayoutStatus {
-    let phase = collapse_panel_phase(presence);
-    if !phase.is_mounted() {
-        let mut layout = false;
-        if el.style.display != Display::None {
-            el.style.display = Display::None;
-            layout = true;
-        }
-        if layout && el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        return LayoutStatus::Clean;
-    }
-
-    let exiting = phase == PresencePhase::Exiting;
-    let open_visual = phase == PresencePhase::Present && !exiting;
-    let mut layout = false;
-
-    let measuring_enter = open_visual && presence.cell.borrow().needs_enter;
-
-    if el.style.display != Display::Flex {
-        el.style.display = Display::Flex;
-        layout = true;
-    }
-    if el.style.overflow.y != Overflow::Hidden {
-        el.style.overflow.y = Overflow::Hidden;
-        layout = true;
-    }
-    if !measuring_enter && (el.style.opacity - 1.0).abs() > 0.001 {
-        el.style.opacity = 1.0;
-    }
-    if el.style.scale != [1.0, 1.0] {
-        el.style.scale = [1.0, 1.0];
-    }
-
-    let w = crate::layout::dim_kind(el.style.size.width);
-    if !matches!(w, crate::layout::DimKind::Percent(_)) {
-        el.style.size.width = Dimension::percent(1.0);
-        layout = true;
-    }
-    if !matches!(
-        crate::layout::dim_kind(el.style.size.height),
-        crate::layout::DimKind::Auto
-    ) {
-        el.style.size.height = Dimension::auto();
-        layout = true;
-    }
-
-    let (needs_enter, needs_exit_anim) = {
-        let mut c = presence.cell.borrow_mut();
-        let needs_enter = c.needs_enter;
-        let needs_exit_anim = c.needs_exit_anim;
-        if needs_enter && open_visual {
-            c.enter_active = true;
-        }
-        if needs_exit_anim && exiting {
-            c.needs_exit_anim = false;
-        }
-        (needs_enter, needs_exit_anim)
-    };
-
-    let exit_armed = presence.cell.borrow().exit_armed;
-    if exiting && (needs_exit_anim || (!collapse_has_exit_anim(el) && exit_armed)) {
-        seed_collapse_exit_anim(el);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if exiting {
-        if animation_run_active(&el.style, &el.animation_snapshot) {
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        el.style.animations.clear();
-        el.style.max_size.height = Dimension::length(0.0);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        finish_collapse_panel_exit(presence);
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if open_visual && needs_enter {
-        if !max_height_is_auto(el) {
-            el.style.max_size.height = Dimension::auto();
-            layout = true;
-        }
-        let measured = panel_content_height(el);
-        if measured < 1.0 {
-            el.style.opacity = 0.0;
-            if layout && el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
-                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-                return LayoutStatus::LayoutChanged;
-            }
-            return if layout {
-                LayoutStatus::LayoutChanged
-            } else {
-                LayoutStatus::Clean
-            };
-        }
-        presence.cell.borrow_mut().needs_enter = false;
-        if (el.style.opacity - 1.0).abs() > 0.001 {
-            el.style.opacity = 1.0;
-        }
-        seed_collapse_enter_anim(el);
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    if open_visual {
-        if animation_run_active(&el.style, &el.animation_snapshot) {
-            if el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
-            }
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            return LayoutStatus::LayoutChanged;
-        }
-        el.style.animations.clear();
-        if el.style.max_size.height != Dimension::auto() {
-            el.style.max_size.height = Dimension::auto();
-            layout = true;
-        }
-        presence.cell.borrow_mut().enter_active = false;
-    }
-
-    if layout && el.layout_node.is_some() {
-        layout_tree.update_taffy_node_style(el);
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        return LayoutStatus::LayoutChanged;
-    }
-
-    LayoutStatus::Clean
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -669,7 +310,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
     let effect_anchor = anchor.clone();
     let presence = use_collapse_panel_presence(&format!("{menu_id}:presence"));
     let sync_presence = presence.clone();
-    let mounted = collapse_panel_mounted_signal(&presence);
+    let mounted = presence.mounted();
     sync_collapse_panel_open(open_sig, &presence);
 
     reactive_anchor(effect_anchor, move || {
@@ -1257,30 +898,30 @@ mod tests {
             let p = use_collapse_panel_presence("col_enter_measure");
             sync_collapse_panel_presence(&p, false);
             sync_collapse_panel_presence(&p, true);
-            assert!(p.cell.borrow().needs_enter);
+            assert!(p.needs_enter());
             let mut el = Element::new();
             el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
             let mut tree = LayoutTree::new();
             let _ = apply_collapse_panel_motion(&mut el, &mut tree, &p);
             assert!(
-                p.cell.borrow().needs_enter,
+                p.needs_enter(),
                 "must keep needs_enter until height is known"
             );
             assert!(
                 !el.style
                     .animations
                     .iter()
-                    .any(|a| a.name == COLLAPSIBLE_DOWN),
+                    .any(|a| a.name == CollapseKeyframes::COLLAPSIBLE.down),
                 "must not seed down with 0 height"
             );
             el.layout_bounds = [0.0, 0.0, 100.0, 64.0];
             let _ = apply_collapse_panel_motion(&mut el, &mut tree, &p);
-            assert!(!p.cell.borrow().needs_enter);
+            assert!(!p.needs_enter());
             assert!(
                 el.style
                     .animations
                     .iter()
-                    .any(|a| a.name == COLLAPSIBLE_DOWN),
+                    .any(|a| a.name == CollapseKeyframes::COLLAPSIBLE.down),
                 "first real expand must run collapsible-down"
             );
         });

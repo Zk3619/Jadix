@@ -15,8 +15,9 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
     focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
-    focus_ring_style, InputCaretDraw,
+    focus_ring_style, InputCaretDraw, TRANSPARENT,
 };
+use crate::tokens;
 use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit,
     input_scroll_x_signal_key, pull_controlled_into_store, textarea_wrap_width_signal_key,
@@ -250,9 +251,9 @@ fn sync_one_text_edit_paint(
         }
     } else {
         let (want_color, want_blur, want_spread) = if !desc.disabled {
-            ([0.0, 0.0, 0.0, 0.06], 1.0, 0.0)
+            (tokens::shadow_rgba(tokens::Elevation::Xs), 1.0, 0.0)
         } else {
-            ([0.0, 0.0, 0.0, 0.0], 0.0, 0.0)
+            (TRANSPARENT, 0.0, 0.0)
         };
         let geom_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01
             && (el.style.shadow_spread - want_spread).abs() <= 0.01

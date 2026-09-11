@@ -1,0 +1,11 @@
+# Gallery demo — no RSX class on BubbleContent; rules stamp utilities.
+# Variants stay on class_set and resolve at runtime (not @media / :hover selectors).
+
+[[rule]]
+selectors = ["[data-slot=bubble-content]"]
+classes = "rounded-2xl px-2 sm:px-3 dark:ring-1 hover:ring-1"
+
+[[rule]]
+selectors = ["[data-variant=destructive][data-slot=bubble-content]"]
+classes = "ring-2"
+priority = 10

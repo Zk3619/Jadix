@@ -591,13 +591,27 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
-        // HoverCard openDelay / closeDelay（Solid 式 UI 线程定时器）。
-        if crate::components::hover_card::tick_hover_card() {
+        // HoverCard / Tooltip openDelay / closeDelay（Solid 式 UI 线程定时器）。
+        if crate::utils::hover_intent::tick_hover_intent() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
         }
-        if let Some(wake) = crate::components::hover_card::hover_card_next_wake_at() {
+        if let Some(wake) = crate::utils::hover_intent::hover_intent_next_wake_at() {
+            if wake <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+        if crate::utils::presence::tick_generic_presence() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+        if let Some(wake) = crate::utils::presence::generic_presence_next_wake_at() {
             if wake <= now {
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();
@@ -611,8 +625,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // is coalesced on Windows. Opening arms a one-shot `Poll` so caret/long-press
         // `WaitUntil` (~500ms) cannot be the next wake.
         let force_immediate =
-            crate::components::internal::modal_motion::take_modal_force_immediate_wake();
-        if force_immediate || crate::components::internal::modal_motion::any_modal_css_needs_frame()
+            crate::utils::modal_motion::take_modal_force_immediate_wake();
+        if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame()
         {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();

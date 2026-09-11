@@ -1909,4 +1909,32 @@ mod tests {
         });
         assert_eq!(el.attrs.get("rui_table").map(|s| s.as_str()), Some("1"));
     }
+
+    #[test]
+    fn table_cell_picks_up_stylesheet_slot_rule() {
+        use crate::style::{clear_stylesheets, parse_stylesheet, register_stylesheet};
+        clear_stylesheets();
+        let sheet = parse_stylesheet(
+            r#"
+[[rule]]
+selectors = ["[data-slot=table-cell]"]
+classes = "underline"
+"#,
+        )
+        .unwrap();
+        register_stylesheet(sheet).unwrap();
+        let cell = TableCell(TableCellProps {
+            w: None,
+            align: None,
+            children: Some(Element::from(text("INV001"))),
+            ..Default::default()
+        });
+        let cs = cell.class_set.as_ref().expect("class_set");
+        assert!(
+            cs.base.iter().any(|c| c == "underline"),
+            "TableCell must bind [data-slot=table-cell]; got {:?}",
+            cs.base
+        );
+        clear_stylesheets();
+    }
 }

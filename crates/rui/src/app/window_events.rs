@@ -205,8 +205,8 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
         crate::app::reactive::drain_deferred_view_remounts();
-        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
-        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
+        crate::utils::modal_motion::drain_pending_modal_unmounts();
+        crate::utils::floating_motion::drain_pending_floating_unmounts();
         if crate::components::bubble::flush_reaction_hover_dismiss() {
             window.request_redraw();
         }
@@ -1329,10 +1329,10 @@ impl super::App {
             || drag_scrolled
             || drag_coasting
             || drawer_dragging
-            || crate::components::internal::modal_motion::tick_modal_presence()
-            || crate::components::internal::floating_motion::tick_floating_presence()
-            || crate::components::accordion::tick_accordion_panel_presence()
-            || crate::components::collapsible::tick_collapsible_panel_presence()
+            || crate::utils::modal_motion::tick_modal_presence()
+            || crate::utils::floating_motion::tick_floating_presence()
+            || crate::utils::tick_collapse_panel_presence()
+            || crate::utils::presence::tick_generic_presence()
             || crate::primitives::canvas::take_canvas_wants_redraw()
         {
             window.request_redraw();
@@ -1463,8 +1463,8 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
         crate::app::reactive::drain_deferred_view_remounts();
-        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
-        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
+        crate::utils::modal_motion::drain_pending_modal_unmounts();
+        crate::utils::floating_motion::drain_pending_floating_unmounts();
         if crate::components::bubble::flush_reaction_hover_dismiss() {
             window.request_redraw();
         }
@@ -1972,6 +1972,27 @@ impl super::App {
                 super::pointer_events::PointerKind::Down,
             );
             self.click_press_path = Some(path.clone());
+            // Overlay / on_drag_start wait for `tick`. Press-only stays Pending
+            // (do not dim/raise the source). A same-point tick is still required
+            // so delay clocks and sensors see the hold.
+            if crate::utils::drag::is_dragging() {
+                let (hits, viewport) = if let Some(st) = (*self.state.borrow()).as_ref() {
+                    let size = st.window.inner_size();
+                    let scale = st.window.scale_factor() as f32;
+                    (
+                        crate::utils::drag::collect_hits(&st.root_element),
+                        [
+                            size.width as f32 / scale.max(1.0),
+                            size.height as f32 / scale.max(1.0),
+                        ],
+                    )
+                } else {
+                    (Vec::new(), [0.0_f32, 0.0])
+                };
+                if crate::utils::drag::tick(x, y, &hits, viewport) {
+                    need_paint_sync_redraw = true;
+                }
+            }
             // Slider / other controls that stop_propagation must not also pan the scroll parent.
             if pev.is_consumed() {
                 self.content_scroll_drag = None;
@@ -2659,8 +2680,8 @@ impl super::App {
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();
-        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
-        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
+        crate::utils::modal_motion::drain_pending_modal_unmounts();
+        crate::utils::floating_motion::drain_pending_floating_unmounts();
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -2681,11 +2702,28 @@ impl super::App {
                 let mut requested_redraw = assets_reloaded;
                 let file = super::hmr_log::display_path(&hot_reload.last_patch_file);
 
-                if hot_reload.force_reload {
+                if !hot_reload.stylesheet_paths.is_empty() {
+                    let paths: Vec<std::path::PathBuf> = hot_reload
+                        .stylesheet_paths
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect();
+                    match crate::style::apply_style_file_batch(&paths) {
+                        Ok(()) => {
+                            requested_redraw = true;
+                            super::hmr_log::update("stylesheet");
+                        }
+                        Err(err) => log::warn!("stylesheet HMR: {err}"),
+                    }
+                }
+
+                if hot_reload.force_reload || !hot_reload.stylesheet_paths.is_empty() {
                     let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
-                    super::hmr_log::update("full reload");
+                    if hot_reload.force_reload {
+                        super::hmr_log::update("full reload");
+                    }
                 } else if has_templates {
                     // Store even when the patched `ui!` is not in the live tree
                     // (unvisited Gallery section). Skip used to drop the patch,
@@ -2718,6 +2756,12 @@ impl super::App {
                     self.force_redraw_count = self.force_redraw_count.max(2);
                 }
             }
+        }
+        if crate::style::take_style_hot_rebuild() {
+            let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
+            state.rebuild_ui(new_root);
+            state.window.request_redraw();
+            self.force_redraw_count = self.force_redraw_count.max(2);
         }
 
         let inner_sz = state.window.inner_size();
@@ -3751,7 +3795,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // pump `any_ui_animation_active` here or it stalls on frame 0.
                 let ui_anim_active = crate::style::any_ui_animation_active();
                 let modal_css_active =
-                    crate::components::internal::modal_motion::any_modal_css_needs_frame();
+                    crate::utils::modal_motion::any_modal_css_needs_frame();
                 // `request_frame` sets WANT_REDRAW during collect (inside `render` above).
                 // Taking the flag *before* render drops the pulse and the clock freezes
                 // until the next pointer move.
@@ -3790,8 +3834,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     (*cb.borrow_mut())(is_hover);
                 }
                 crate::app::reactive::drain_deferred_view_remounts();
-                crate::components::internal::modal_motion::drain_pending_modal_unmounts();
-                crate::components::internal::floating_motion::drain_pending_floating_unmounts();
+                crate::utils::modal_motion::drain_pending_modal_unmounts();
+                crate::utils::floating_motion::drain_pending_floating_unmounts();
                 if crate::components::bubble::flush_reaction_hover_dismiss() {
                     window.request_redraw();
                 }

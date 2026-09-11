@@ -82,6 +82,14 @@ const TEXT_SIZE_PX: f32 = 14.0;
 const TEXT_WEIGHT: u16 = 400;
 const HEADER_WEIGHT: u16 = 500;
 
+fn apply_user_class(mut el: Element, class: Option<String>) -> Element {
+    el = crate::style::apply_stylesheet_rules(el);
+    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+        el = with_class_list(el, &c);
+    }
+    el
+}
+
 // ---------------------------------------------------------------------------
 // Context (default marker + decimal index)
 // ---------------------------------------------------------------------------
@@ -293,10 +301,7 @@ fn build_list_item_shell(
     el.set_attr(ATTR_SLOT, SLOT_ITEM);
     el.set_attr(ATTR_MARKER, marker.as_str());
     el.set_attr("role", "listitem");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
-    el
+    apply_user_class(el, class)
 }
 
 // ---------------------------------------------------------------------------
@@ -334,9 +339,7 @@ pub fn List(
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el.set_attr(ATTR_MARKER, default_marker.as_str());
     el.set_attr("role", "list");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
+    el = apply_user_class(el, class);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -361,9 +364,7 @@ pub fn ListHeader(
         .children(kids)
         .into();
     el.set_attr(ATTR_SLOT, SLOT_HEADER);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
+    el = apply_user_class(el, class);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -383,9 +384,7 @@ pub fn ListDescription(
     let kids = caption_from_children(children, &cfg);
     let mut el: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
+    el = apply_user_class(el, class);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;

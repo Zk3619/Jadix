@@ -153,7 +153,9 @@ pub fn lerp_display_srgb_linear(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 }
 
 /// 在线性光下对 **预乘 alpha** 的 RGBA 做 lerp，再还原为直通道 display sRGB。
-/// 透明与实色之间过渡时，与「透明叠在背景上」一致；用于 ghost 等从全透明到 accent 的 hover。
+///
+/// 当 rest 端点 α≈0 时，中间态会折叠为黑（见 `docs/engine/color.md` §B.2）。
+/// Ghost Button 等「透明→有色」路径须保留 rest RGB、勿用本函数。
 pub fn lerp_premultiplied_display_srgba(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let t = t.clamp(0.0, 1.0);
     let la = linearize_display_srgb([a[0], a[1], a[2]]);

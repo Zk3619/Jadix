@@ -134,6 +134,16 @@ fn cache_clear() {
     });
 }
 
+#[cfg(test)]
+static CACHE_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn cache_test_serial() -> std::sync::MutexGuard<'static, ()> {
+    CACHE_TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Logical padding so swash ink (ascent / bearing) is not clipped at the bake edge.
 pub fn text_xform_pad_px(font_size_px: f32) -> f32 {
     (font_size_px * 0.22).max(2.0)
@@ -1755,6 +1765,7 @@ mod tests {
 
     #[test]
     fn text_xform_cpu_cache_lru_keeps_hot_drops_cold() {
+        let _serial = cache_test_serial();
         cache_clear();
         let _ = crate::app::pending_images::take_pending();
         let px = vec![255u8, 0, 0, 255];
@@ -1780,6 +1791,7 @@ mod tests {
 
     #[test]
     fn text_xform_flush_requeues_only_needed_missing_from_gpu() {
+        let _serial = cache_test_serial();
         cache_clear();
         let _ = crate::app::pending_images::take_pending();
         let px = vec![0u8, 255, 0, 255];
@@ -1802,6 +1814,7 @@ mod tests {
 
     #[test]
     fn text_xform_cpu_cache_byte_budget_evicts() {
+        let _serial = cache_test_serial();
         cache_clear();
         let _ = crate::app::pending_images::take_pending();
         // 4 MiB × 5 > 16 MiB cap.

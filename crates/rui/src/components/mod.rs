@@ -211,7 +211,7 @@ pub use bubble::{
 };
 pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,
-    ButtonProps,
+    ButtonProps, ButtonSize, ButtonVariant,
 };
 pub use button_group::{
     button_group, button_group_separator, button_group_text, ButtonGroup, ButtonGroupBuilder,
@@ -526,6 +526,7 @@ pub use scroll_viewport::{
 };
 pub use scrollbar::{
     scrollbar, scrollbarbuilder, Scrollbar, ScrollbarBuilder, ScrollbarOrientation, ScrollbarProps,
+    ScrollbarVariant, ScrollbarVisibility,
 };
 pub use select::{
     select, select_content, select_content_slot, select_group, select_item, select_scope,
@@ -612,7 +613,7 @@ pub use toast::{
     toast_set_limit, toast_set_overflow, toast_set_position, ToastBuilder, ToastItem, ToastLayout,
     ToastOverflow, ToastPosition, ToastTone,
 };
-pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
+pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps, ToggleSize, ToggleVariant};
 pub use toggle_group::{
     parse_toggle_group_spacing, toggle_group, toggle_group_item, toggle_group_scope, toggle_option,
     use_toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupCtx, ToggleGroupItem,

@@ -95,6 +95,13 @@ impl HotReloadState {
                         }
                     }
                 }
+                HotReloadCommand::StylesheetReload(paths) => {
+                    for p in paths {
+                        if !batch.stylesheet_paths.iter().any(|x| x == &p) {
+                            batch.stylesheet_paths.push(p);
+                        }
+                    }
+                }
             }
         }
         batch.merged_templates = by_template_id.into_values().collect();
@@ -134,6 +141,7 @@ pub(super) struct HotReloadBatch {
     pub(super) force_reload: bool,
     pub(super) merged_templates: Vec<TemplateFragment>,
     pub(super) asset_paths: Vec<String>,
+    pub(super) stylesheet_paths: Vec<String>,
 }
 
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
@@ -142,6 +150,7 @@ pub(super) enum HotReloadCommand {
     Reload,
     TemplatePatch(TemplatePatchMsg),
     AssetReload(Vec<String>),
+    StylesheetReload(Vec<String>),
 }
 
 #[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
@@ -205,6 +214,10 @@ enum IncomingMessage {
         #[serde(default)]
         paths: Vec<String>,
     },
+    StylesheetReload {
+        #[serde(default)]
+        paths: Vec<String>,
+    },
 }
 
 /// WP-R.6: `templates: []` means the file parsed but has no `ui!` blocks — must full-tree `rebuild_ui`,
@@ -246,6 +259,9 @@ fn parse_command(raw: &str) -> Option<HotReloadCommand> {
             }))
         }
         IncomingMessage::AssetReload { paths } => Some(HotReloadCommand::AssetReload(paths)),
+        IncomingMessage::StylesheetReload { paths } => {
+            Some(HotReloadCommand::StylesheetReload(paths))
+        }
     }
 }
 

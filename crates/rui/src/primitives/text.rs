@@ -1,4 +1,5 @@
 use crate::core::tree::{Element, IntoF32};
+use crate::style::{IntoTextColor, TextAlignDeclaration};
 
 pub struct TextBuilder {
     pub(crate) el: Element,
@@ -21,7 +22,7 @@ impl TextBuilder {
         self
     }
 
-    pub fn color(mut self, color: [u8; 4]) -> Self {
+    pub fn color(mut self, color: impl IntoTextColor) -> Self {
         self.el = self.el.text_color(color);
         self
     }
@@ -36,7 +37,7 @@ impl TextBuilder {
         self
     }
 
-    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+    pub fn text_align(mut self, align: impl Into<TextAlignDeclaration>) -> Self {
         self.el = self.el.text_align(align);
         self
     }

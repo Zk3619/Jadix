@@ -13,6 +13,7 @@ use crate::app::reactive::reactive_view;
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
+use crate::tokens;
 use crate::utils::popup::{panel_block_clicks, portal_panel};
 
 pub struct NavigationHostBuilder<R, F>
@@ -98,7 +99,7 @@ where
                     })
                     .into();
                 underlay = underlay.absolute().inset(0.0).w("100%").h("100%");
-                underlay = underlay.bg([0.0, 0.0, 0.0, 0.35 * frame.progress.max(0.15)]);
+                underlay = underlay.bg(tokens::overlay_scrim(0.35 * frame.progress.max(0.15)));
                 underlay = portal_panel(underlay, z);
 
                 let mut panel = page;

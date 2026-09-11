@@ -22,7 +22,7 @@ pub struct OverlayBuilder {
 pub fn overlay(z: i32) -> OverlayBuilder {
     OverlayBuilder {
         z,
-        color: [0.0, 0.0, 0.0, 0.0],
+        color: crate::style::TRANSPARENT,
         opacity: None,
         backdrop_blur: 0.0,
         close_on_click: None,
@@ -143,7 +143,7 @@ mod tests {
             let open = Signal::new(true);
             Element::from(
                 overlay(1200)
-                    .color([0.0, 0.0, 0.0, 0.5])
+                    .color(crate::tokens::overlay_scrim(0.5))
                     .backdrop_blur(12.0)
                     .close_on_click(open),
             )

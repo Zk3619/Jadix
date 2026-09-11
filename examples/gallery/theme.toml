@@ -1,0 +1,10 @@
+# Gallery demo — distinct destructive so Button / Badge / Bubble recolor without
+# touching component source. Edit this file and click「从磁盘重载」.
+
+[light]
+destructive = "oklch(0.55 0.22 300)"
+destructive-foreground = "oklch(0.98 0.01 300)"
+
+[dark]
+destructive = "oklch(0.72 0.18 300)"
+destructive-foreground = "oklch(0.2 0.04 300)"

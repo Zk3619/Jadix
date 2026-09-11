@@ -63,11 +63,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::base::SlotChrome;
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
@@ -78,11 +74,13 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::style::{is_dark_theme, with_class_list};
 use crate::tokens;
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
+};
 use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_STRATEGY,
+    PopupPlacement, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -93,7 +91,8 @@ const ATTR_ALIGN: &str = "data-align";
 const ATTR_ALIGN_INHERIT: &str = "data-align-inherit";
 const ATTR_SIDE: &str = "data-side";
 const ATTR_LAYOUT: &str = "data-layout";
-const ATTR_BUBBLE_VARIANT: &str = "rui_bubble_variant";
+const ATTR_BUBBLE_VARIANT: &str = "data-bubble-variant";
+const ATTR_BUBBLE_VARIANT_LEGACY: &str = "rui_bubble_variant";
 const SLOT_GROUP: &str = "bubble-group";
 const SLOT_BUBBLE: &str = "bubble";
 const SLOT_CONTENT: &str = "bubble-content";
@@ -176,6 +175,12 @@ impl From<String> for BubbleVariant {
     }
 }
 
+impl From<&String> for BubbleVariant {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 impl std::str::FromStr for BubbleVariant {
     type Err = ();
 
@@ -232,6 +237,12 @@ impl From<String> for BubbleAlign {
     }
 }
 
+impl From<&String> for BubbleAlign {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 impl std::str::FromStr for BubbleAlign {
     type Err = ();
 
@@ -273,6 +284,12 @@ impl From<&str> for BubbleReactionsSide {
 impl From<String> for BubbleReactionsSide {
     fn from(s: String) -> Self {
         Self::parse(&s)
+    }
+}
+
+impl From<&String> for BubbleReactionsSide {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -330,6 +347,12 @@ impl From<String> for BubbleReactionsAlign {
     }
 }
 
+impl From<&String> for BubbleReactionsAlign {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
+    }
+}
+
 impl std::str::FromStr for BubbleReactionsAlign {
     type Err = ();
 
@@ -372,6 +395,12 @@ impl From<&str> for BubbleReactionsLayout {
 impl From<String> for BubbleReactionsLayout {
     fn from(s: String) -> Self {
         Self::parse(&s)
+    }
+}
+
+impl From<&String> for BubbleReactionsLayout {
+    fn from(s: &String) -> Self {
+        Self::parse(s)
     }
 }
 
@@ -927,8 +956,8 @@ fn reaction_expand_cover_gap() -> f32 {
 }
 
 fn build_reaction_expand_panel(
-    floating_id: &str,
-    trigger_fid: &str,
+    _floating_id: &str,
+    _trigger_fid: &str,
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
     chips: Vec<Element>,
@@ -945,17 +974,8 @@ fn build_reaction_expand_panel(
     panel.set_attr(ATTR_FLOATING_EXPAND_FROM_W, format!("{from_w}"));
     panel.set_attr(ATTR_SIDE, side.as_str());
     panel.set_attr(ATTR_ALIGN, align.as_str());
-    mark_floating_with_gap(
-        &mut panel,
-        floating_id,
-        trigger_fid,
-        reaction_expand_placement(side),
-        reaction_expand_cover_gap(),
-    );
-    panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-    panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
     // wrap-reverse already packs the first line to the trigger edge; keep cross-start.
-    panel.align_content_kw("flex-start").absolute()
+    panel.align_content_kw("flex-start")
 }
 
 fn find_reactions_inner_mut(el: &mut Element) -> Option<&mut Element> {
@@ -1144,74 +1164,68 @@ fn build_bubble_reactions_element(
     .into();
     inner.set_attr(ATTR_REACTIONS_INNER, "1");
 
-    let view_id = format!("{reactions_id}__expand_view");
     let portal_id = reactions_id.clone();
-    let presence = use_floating_presence(&reactions_id, FloatingMotionKind::Expand);
-    reactive_anchor(view_id.clone(), move || {
-        let Some((phase, oz)) = floating_portal_phase(
-            &portal_id,
-            expanded,
-            &presence,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-        ) else {
-            return Element::new().w(0.0).h(0.0);
+    let trigger_fid = use_signal(
+        format!("{reactions_id}__ao_trigger_fid").as_str(),
+        || focus_id.clone(),
+    );
+    let expand_placeholder = with_child_owner(|| {
+        provide_anchored_overlay_context(expanded, reactions_id.clone(), trigger_fid);
+        let ao_opts = AnchoredOverlayContentOpts {
+            placement: Some(Placement::trigger(
+                focus_id.clone(),
+                reaction_expand_placement(side),
+                reaction_expand_cover_gap(),
+                FloatingStrategy::Fixed,
+            )),
+            kind: OverlayKind::Popover,
+            motion: FloatingMotionKind::Expand,
+            mode: OverlayMode::Stacked,
+            match_trigger_width: true,
+            ..Default::default()
         };
-        let (chips, side, align, fid, expand_class, visible) = BUBBLE_REACTIONS.with(|m| {
-            let map = m.borrow();
-            match map.get(&portal_id) {
-                Some(e) => (
-                    overlay_reaction_chips(&e.all_items),
-                    e.side.get(),
-                    e.align.get(),
-                    e.focus_id.clone(),
-                    e.expand_class.clone(),
-                    e.rendered_visible.get(),
-                ),
-                None => (
-                    Vec::new(),
-                    BubbleReactionsSide::Bottom,
-                    BubbleReactionsAlign::End,
-                    String::new(),
-                    String::new(),
-                    DEFAULT_MAX_VISIBLE_REACTIONS,
-                ),
-            }
-        });
-        let mut panel = build_reaction_expand_panel(
-            &portal_id,
-            &fid,
-            side,
-            align,
-            chips,
-            visible,
-            Some(expand_class.as_str()).filter(|s| !s.is_empty()),
-        );
-        apply_stored_floating_place(&mut panel, &portal_id);
-        // Don't seed the 160px floating default; width matches the trigger after sync.
-        panel = panel.w("auto");
-        if apply_floating_panel_motion(
-            &portal_id,
-            &mut panel,
-            FloatingMotionKind::Expand,
-            phase,
-            &presence,
-            expanded,
-            OverlayKind::Popover,
-            OverlayMode::Stacked,
-            None,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-        let hover_id = portal_id.clone();
-        let panel_fid = format!("{hover_id}__panel");
-        panel = interactive(panel)
-            .focus_id(panel_fid)
-            .on_hover(move |h| note_reactions_hover(&hover_id, HoverPart::Panel, h))
-            .into();
-        mount_anchored_overlay(panel, oz.panel)
+        anchored_overlay_content(ao_opts, move || {
+            let (chips, side, align, fid, expand_class, visible) = BUBBLE_REACTIONS.with(|m| {
+                let map = m.borrow();
+                match map.get(&portal_id) {
+                    Some(e) => (
+                        overlay_reaction_chips(&e.all_items),
+                        e.side.get(),
+                        e.align.get(),
+                        e.focus_id.clone(),
+                        e.expand_class.clone(),
+                        e.rendered_visible.get(),
+                    ),
+                    None => (
+                        Vec::new(),
+                        BubbleReactionsSide::Bottom,
+                        BubbleReactionsAlign::End,
+                        String::new(),
+                        String::new(),
+                        DEFAULT_MAX_VISIBLE_REACTIONS,
+                    ),
+                }
+            });
+            let mut panel = build_reaction_expand_panel(
+                &portal_id,
+                &fid,
+                side,
+                align,
+                chips,
+                visible,
+                Some(expand_class.as_str()).filter(|s| !s.is_empty()),
+            );
+            // Don't seed the 160px floating default; width matches the trigger after sync.
+            panel = panel.w("auto");
+            let hover_id = portal_id.clone();
+            let panel_fid = format!("{hover_id}__panel");
+            interactive(panel)
+                .focus_id(panel_fid)
+                .on_hover(move |h| note_reactions_hover(&hover_id, HoverPart::Panel, h))
+                .into()
+        })
     });
-    let placeholder = reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none();
+    let placeholder = expand_placeholder;
 
     let items = match align {
         BubbleReactionsAlign::Center => "center",
@@ -1283,7 +1297,10 @@ fn build_bubble_content_element(variant: BubbleVariant, kids: Vec<Element>) -> E
         el = el.border_style("solid").border_color(b).border_width(1.0);
     }
     el.set_attr(ATTR_SLOT, SLOT_CONTENT);
+    el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_BUBBLE_VARIANT, variant.as_str());
+    el.set_attr(ATTR_BUBBLE_VARIANT_LEGACY, variant.as_str());
+    el = crate::style::apply_stylesheet_rules(el);
     for child in &mut el.children {
         if let Some(text_content) = child.text.take() {
             *child = build_text_node(
@@ -1342,7 +1359,9 @@ fn apply_content_chrome(el: &mut Element, variant: BubbleVariant) {
         el.style.border_width = 0.0;
         el.style.border_color = [0.0, 0.0, 0.0, 0.0];
     }
+    el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_BUBBLE_VARIANT, variant.as_str());
+    el.set_attr(ATTR_BUBBLE_VARIANT_LEGACY, variant.as_str());
     paint_descendant_text(el, text_color);
 }
 
@@ -1416,7 +1435,8 @@ fn build_bubble_root(
     el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_ALIGN, align.as_str());
     el.set_attr(ATTR_BUBBLE_VARIANT, variant.as_str());
-    el
+    el.set_attr(ATTR_BUBBLE_VARIANT_LEGACY, variant.as_str());
+    crate::style::apply_stylesheet_rules(el)
 }
 
 /// 将 Bubble 变体 chroming 应用到根与其 [`BubbleContent`] 子树。
@@ -1432,6 +1452,7 @@ pub fn apply_bubble_variant_paint(el: &mut Element, variant: impl AsRef<str>) ->
     }
     el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_BUBBLE_VARIANT, variant.as_str());
+    el.set_attr(ATTR_BUBBLE_VARIANT_LEGACY, variant.as_str());
     if variant == BubbleVariant::Ghost {
         let taken = std::mem::replace(el, Element::new());
         *el = taken.max_w("100%");
@@ -1568,13 +1589,13 @@ pub fn bubble() -> BubbleBuilder {
 impl BubbleBuilder {
     crate::impl_slot_chrome_methods!();
 
-    pub fn variant(mut self, v: impl AsRef<str>) -> Self {
-        self.variant = BubbleVariant::from(v.as_ref());
+    pub fn variant(mut self, v: impl Into<BubbleVariant>) -> Self {
+        self.variant = v.into();
         self
     }
 
-    pub fn align(mut self, a: impl AsRef<str>) -> Self {
-        self.align = BubbleAlign::from(a.as_ref());
+    pub fn align(mut self, a: impl Into<BubbleAlign>) -> Self {
+        self.align = a.into();
         self
     }
 
@@ -1688,18 +1709,18 @@ pub fn bubble_reactions() -> BubbleReactionsBuilder {
 impl BubbleReactionsBuilder {
     crate::impl_slot_chrome_methods!();
 
-    pub fn side(mut self, s: impl AsRef<str>) -> Self {
-        self.side = BubbleReactionsSide::from(s.as_ref());
+    pub fn side(mut self, s: impl Into<BubbleReactionsSide>) -> Self {
+        self.side = s.into();
         self
     }
 
-    pub fn align(mut self, a: impl AsRef<str>) -> Self {
-        self.align = Some(BubbleReactionsAlign::from(a.as_ref()));
+    pub fn align(mut self, a: impl Into<BubbleReactionsAlign>) -> Self {
+        self.align = Some(a.into());
         self
     }
 
-    pub fn layout(mut self, v: impl AsRef<str>) -> Self {
-        self.layout = BubbleReactionsLayout::from(v.as_ref());
+    pub fn layout(mut self, v: impl Into<BubbleReactionsLayout>) -> Self {
+        self.layout = v.into();
         self
     }
 
@@ -1831,8 +1852,6 @@ mod tests {
     use crate::app::portal_overlay::{clear_overlay_stack, portal_sync, OverlayKind, OverlayMode};
     use crate::core::reactivity::{create_root, Signal};
     use crate::layout::layout_tree::LayoutTree;
-    use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_GAP};
-
     fn find_desc_attr<'a>(el: &'a Element, attr: &str) -> Option<&'a Element> {
         crate::core::tree::find_in_tree(el, |n| n.attrs.contains_key(attr))
     }
@@ -2633,11 +2652,6 @@ mod tests {
         );
         assert_eq!(overlay.children.len(), 5, "overlay shows all reactions");
         assert_eq!(
-            overlay.style.position,
-            taffy::style::Position::Absolute,
-            "expanded chips live in a floating overlay (out of flow)"
-        );
-        assert_eq!(
             overlay.style.flex_wrap,
             taffy::style::FlexWrap::Wrap,
             "bottom-side expand wraps extra chips downward"
@@ -2646,35 +2660,6 @@ mod tests {
             overlay.style.justify_content,
             Some(taffy::style::JustifyContent::FLEX_START),
             "expand chips pack from the start so left/right padding stays even"
-        );
-        assert_eq!(
-            overlay.attrs.get(ATTR_FLOATING).map(|s| s.as_str()),
-            Some(id.as_str()),
-            "expand panel must be a floating portal target"
-        );
-        assert_eq!(
-            overlay
-                .attrs
-                .get(ATTR_FLOATING_STRATEGY)
-                .map(|s| s.as_str()),
-            Some("fixed"),
-            "must not flip over the current bubble"
-        );
-        assert_eq!(
-            overlay
-                .attrs
-                .get(ATTR_FLOATING_MATCH_TRIGGER)
-                .map(|s| s.as_str()),
-            Some("1")
-        );
-        let gap: f32 = overlay
-            .attrs
-            .get(ATTR_FLOATING_GAP)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        assert!(
-            gap < -1.0,
-            "negative gap covers the collapsed bar in place, got {gap}"
         );
         assert_eq!(
             overlay
@@ -2720,7 +2705,6 @@ mod tests {
             DEFAULT_MAX_VISIBLE_REACTIONS,
             None,
         );
-        assert_eq!(overlay.style.position, taffy::style::Position::Absolute);
         assert_eq!(
             overlay.style.flex_wrap,
             taffy::style::FlexWrap::WrapReverse,
@@ -2730,21 +2714,6 @@ mod tests {
             overlay.style.justify_content,
             Some(taffy::style::JustifyContent::FLEX_START),
             "top-side expand also left-aligns wrapped rows"
-        );
-        assert_eq!(
-            overlay
-                .attrs
-                .get("rui_floating_placement")
-                .map(|s| s.as_str()),
-            Some("top-start"),
-            "top-side panel shares the bar origin (start); extra rows grow up via wrap-reverse"
-        );
-        assert_eq!(
-            overlay
-                .attrs
-                .get(ATTR_FLOATING_STRATEGY)
-                .map(|s| s.as_str()),
-            Some("fixed")
         );
         assert_eq!(
             overlay.style.overflow.y,

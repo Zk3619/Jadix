@@ -60,9 +60,6 @@ use crate::components::button::button;
 use crate::components::input::{
     input, input_adornment_button, input_value_signal_key, lucide_named,
 };
-use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -75,11 +72,14 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
+use crate::utils::anchored_overlay::{
+    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
+    FloatingMotionKind, FloatingStrategy, Placement,
+};
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, mount_anchored_overlay,
-    PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
-    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    disarm_underlay_close, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
 use crate::utils::take_packed;
 use crate::utils::text_field::{commit_value, commit_value_sig};
@@ -104,6 +104,8 @@ pub struct ComboboxVisibleItem {
 pub struct ComboboxCtx {
     pub id: String,
     pub open: Signal<bool>,
+    /// Trigger focus_id (Content anchor); written when Input mounts.
+    pub trigger_fid: Signal<String>,
     pub value: Signal<String>,
     pub active: Signal<usize>,
     pub placeholder: String,
@@ -207,6 +209,9 @@ pub fn combobox_scope(
         format!("{id}__combo_visible").as_str(),
         Vec::<ComboboxVisibleItem>::new,
     );
+    let trigger_fid = use_signal(format!("{id}__combo_trigger_fid").as_str(), || {
+        format!("input:{id}")
+    });
     // 输入 store：与 value 分离；若已有选中则灌入 label。
     let want = label_for_map(&labels.peek(), &value.peek());
     let input_store = use_signal(input_value_signal_key(&id).as_str(), || want.clone());
@@ -219,11 +224,13 @@ pub fn combobox_scope(
     let has_width = class_has_width_token(&trigger_class);
     // 实例 owner：context + Input + Content 同属这一 Combobox，下拉不是父级的。
     with_child_owner(move || {
+        provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
             combobox_context(),
             ComboboxCtx {
                 id: id.clone(),
                 open,
+                trigger_fid,
                 value,
                 active,
                 placeholder,
@@ -308,6 +315,8 @@ pub fn ComboboxInput(
     let _ = children;
     let ctx = require_combobox("ComboboxInput");
     let id = ctx.id.clone();
+    let trigger_id = format!("input:{id}");
+    ctx.trigger_fid.set(trigger_id);
     let open = ctx.open;
     let value = ctx.value;
     let active = ctx.active;
@@ -524,8 +533,6 @@ pub fn combobox_content(
     let labels = ctx.labels;
     let visible = ctx.visible;
     let id = ctx.id.clone();
-    let view_id = format!("{id}__combo_content");
-    let trigger_id = format!("input:{id}");
     let match_trigger = opts.match_trigger.unwrap_or(ctx.match_trigger);
     let menu_width = opts.menu_width.or(ctx.menu_width.clone());
     let menu_height = opts.menu_height.or(ctx.menu_height.clone());
@@ -549,25 +556,25 @@ pub fn combobox_content(
 
     let id_for_effect = id.clone();
     let input_store = use_signal(input_value_signal_key(&id).as_str(), String::new);
-    let presence = use_floating_presence(&id, FloatingMotionKind::Expand);
-    let max_h_cap = max_height.as_deref().and_then(parse_css_length_px);
-    let presence_for_cleanup = presence.clone();
-    reactive_anchor(view_id.clone(), move || {
+    let ao_opts = AnchoredOverlayContentOpts {
+        placement: Some(Placement::trigger(
+            String::new(),
+            placement,
+            0.0,
+            FloatingStrategy::Auto,
+        )),
+        kind: OverlayKind::Menu,
+        motion: FloatingMotionKind::Expand,
+        mode: OverlayMode::Stacked,
+        match_trigger_width: match_trigger,
+        max_h: max_height.clone(),
+        width: menu_width.clone(),
+        ..Default::default()
+    };
+    let content = anchored_overlay_content(ao_opts, move || {
         let _ = active.get();
         let _ = input_store.get();
         let _ = value.get();
-        let Some((phase, oz)) = floating_portal_phase(
-            &id_for_effect,
-            open,
-            &presence,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-        ) else {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-            return Element::new().w(0.0).h(0.0);
-        };
         if !open.peek() {
             crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
                 "{id_for_effect}:menu_scroll"
@@ -627,11 +634,8 @@ pub fn combobox_content(
             .bg(tokens::background())
             .rounded("0.5rem")
             .outline(ring, 1.0)
-            .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
-            .absolute();
+            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0);
 
-        mark_floating(&mut menu, &id_for_effect, &trigger_id, placement);
-        apply_stored_floating_place(&mut menu, &id_for_effect);
         menu.set_attr(
             ATTR_FLOATING_MATCH_TRIGGER,
             if match_trigger { "1" } else { "0" },
@@ -663,51 +667,17 @@ pub fn combobox_content(
             }
             .apply(menu);
         }
-        if apply_floating_panel_motion(
-            &id_for_effect,
-            &mut menu,
-            FloatingMotionKind::Expand,
-            phase,
-            &presence,
-            open,
-            OverlayKind::Menu,
-            OverlayMode::Stacked,
-            max_h_cap,
-        ) {
-            crate::app::runtime::request_redraw();
-        }
-
-        mount_anchored_overlay(menu, oz.panel)
+        menu
     });
     if crate::core::reactivity::is_tracking() {
         let open_reset = open;
-        let id_reset = id.clone();
-        let presence_reset = presence_for_cleanup.clone();
         crate::core::reactivity::on_cleanup(move || {
             if open_reset.peek() {
                 open_reset.set(false);
             }
-            let _ = floating_portal_phase(
-                &id_reset,
-                open_reset,
-                &presence_reset,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
         });
     }
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
-}
-
-fn parse_css_length_px(s: &str) -> Option<f32> {
-    let s = s.trim();
-    if let Some(n) = s.strip_suffix("rem") {
-        n.trim().parse::<f32>().ok().map(|v| v * 16.0)
-    } else if let Some(n) = s.strip_suffix("px") {
-        n.trim().parse().ok()
-    } else {
-        s.parse().ok()
-    }
+    content
 }
 
 // ---------------------------------------------------------------------------

@@ -45,6 +45,14 @@ pub struct OverlayZ {
     pub panel: i32,
 }
 
+/// Pinned portal z (DragOverlay host). Always-mounted; not on the Esc stack.
+pub fn pinned_overlay_z() -> OverlayZ {
+    OverlayZ {
+        underlay: PINNED_Z_UNDERLAY,
+        panel: PINNED_Z_UNDERLAY + 1,
+    }
+}
+
 struct OverlayLayer {
     id: String,
     /// Logical open — Esc / outside-press set this `false` to start exit.

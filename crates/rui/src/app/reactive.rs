@@ -30,7 +30,7 @@
 //! effect so the same id can register again on remount.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -56,6 +56,33 @@ thread_local! {
     /// Cap deferred remounts per sub id so a permanently missing anchor cannot pump forever.
     static DEFERRED_VIEW_RETRY_COUNTS: RefCell<HashMap<String, u8>> =
         RefCell::new(HashMap::new());
+    /// Overlay ghost clone re-runs author bodies during paint (`reactive_sync`),
+    /// which is not a tracked effect. Islands must inline `render()` instead of
+    /// returning an empty placeholder (same contract as drag's `assemble_*`).
+    static INLINE_ISLAND_RENDER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// See [`INLINE_ISLAND_RENDER`]. Entered by drag overlay source-preview clone.
+pub(crate) struct InlineIslandGuard(bool);
+
+impl InlineIslandGuard {
+    pub fn enter() -> Self {
+        INLINE_ISLAND_RENDER.with(|c| {
+            let prev = c.get();
+            c.set(true);
+            Self(prev)
+        })
+    }
+}
+
+impl Drop for InlineIslandGuard {
+    fn drop(&mut self) {
+        INLINE_ISLAND_RENDER.with(|c| c.set(self.0));
+    }
+}
+
+fn is_inline_island_render() -> bool {
+    INLINE_ISLAND_RENDER.with(|c| c.get())
 }
 
 pub(crate) const REACTIVE_PLACEHOLDER_HASH: &str = "__rui_reactive_placeholder_v1";
@@ -437,10 +464,13 @@ where
 /// Stateful components can return this directly when signal changes must mount/unmount descendants.
 /// For style/layout-only changes prefer [`crate::core::tree::ReactiveSync`], which avoids subtree
 /// reconstruction entirely.
-pub fn reactive_view<F>(anchor_id: impl Into<String>, render: F) -> Element
+pub fn reactive_view<F>(anchor_id: impl Into<String>, mut render: F) -> Element
 where
     F: FnMut() -> Element + 'static,
 {
+    if is_inline_island_render() {
+        return render();
+    }
     let id = anchor_id.into();
     reactive_anchor(id.clone(), render);
     reactive_placeholder(id)
@@ -451,11 +481,14 @@ pub fn reactive_view_sized<F>(
     anchor_id: impl Into<String>,
     width: impl crate::core::tree::IntoCssDim,
     height: impl crate::core::tree::IntoCssDim,
-    render: F,
+    mut render: F,
 ) -> Element
 where
     F: FnMut() -> Element + 'static,
 {
+    if is_inline_island_render() {
+        return render();
+    }
     let id = anchor_id.into();
     reactive_anchor(id.clone(), render);
     reactive_placeholder_sized(id, width, height)
@@ -471,6 +504,9 @@ where
     P: Clone + PartialEq + 'static,
     F: FnMut(P) -> Element + 'static,
 {
+    if is_inline_island_render() {
+        return render(props);
+    }
     let id = anchor_id.into();
     let registry_key = window_scoped_registry_key(&id);
     let gen_key = format!("{registry_key}__component_gen");
@@ -557,6 +593,9 @@ where
     P: Clone + PartialEq + 'static,
     F: FnMut(P) -> Element + 'static,
 {
+    if is_inline_island_render() {
+        return render(props);
+    }
     let id = anchor_id.into();
     let registry_key = window_scoped_registry_key(&id);
     let gen_key = format!("{registry_key}__component_gen");

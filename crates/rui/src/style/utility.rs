@@ -181,7 +181,10 @@ impl VariantContext<'_> {
             VariantSelector::Active => self.active,
             VariantSelector::Disabled => self.disabled,
             VariantSelector::Dark => self.dark,
+            VariantSelector::MotionReduce => crate::style::prefers_reduced_motion(),
+            VariantSelector::MotionSafe => !crate::style::prefers_reduced_motion(),
             VariantSelector::Breakpoint { min_width } => self.viewport_w >= *min_width as f32,
+            VariantSelector::MaxBreakpoint { max_width } => self.viewport_w <= *max_width as f32,
             VariantSelector::GroupHover { name } => self.group_matches(name),
             VariantSelector::PeerHover { name } => self.peer_matches(name),
             VariantSelector::Data { key, value } => {
@@ -413,6 +416,10 @@ fn variant_ctx_fingerprint(
     mix_fp(&mut h, focused as u64 + 2);
     mix_fp(&mut h, disabled as u64 + 4);
     mix_fp(&mut h, dark as u64 + 8);
+    mix_fp(
+        &mut h,
+        crate::style::prefers_reduced_motion() as u64 + 16,
+    );
     mix_fp(&mut h, viewport_w.to_bits() as u64);
     for g in group_hovered {
         mix_fp(&mut h, 0x11);
@@ -535,10 +542,10 @@ pub fn tick_active_css_transitions_subtree(
         if offscreen && !(has_spin || has_css_anim || has_active_css || force_leave) {
             continue;
         }
-        let defer_shell_css = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+        let defer_shell_css = crate::utils::modal_motion::modal_shell_defer_css_tick(
             el.template_id.as_deref(),
         )
-            || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+            || crate::utils::floating_motion::floating_panel_defer_css_tick(
                 el.template_id.as_deref(),
             );
 
@@ -1021,9 +1028,9 @@ fn sync_class_variants_subtree_inner(
                     let local = resolve_class_variants(el, &ctx);
                     let spun = tick_animate_spin(el);
                     let defer_shell_css =
-                crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+                crate::utils::modal_motion::modal_shell_defer_css_tick(
                     el.template_id.as_deref(),
-                ) || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+                ) || crate::utils::floating_motion::floating_panel_defer_css_tick(
                     el.template_id.as_deref(),
                 );
                     let css_anim = if !defer_shell_css {
@@ -1861,6 +1868,7 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             LayoutStatus::StyleChanged
         }
         KnownUtility::LetterSpacing(px) => {
+            el.text_style.letter_spacing_specified = true;
             if (el.text_style.letter_spacing - px).abs() > f32::EPSILON {
                 el.text_style.letter_spacing = px;
                 LayoutStatus::LayoutChanged
@@ -2277,6 +2285,27 @@ mod tests {
             },
         );
         assert_ne!(el.style.bg_color, base_bg);
+    }
+
+    #[test]
+    fn resolve_motion_reduce_prefix() {
+        crate::style::set_prefers_reduced_motion(Some(true));
+        let mut el = Element::new();
+        apply_class_list(&mut el, "opacity-100 motion-reduce:opacity-0");
+        let _ = resolve_class_variants(&mut el, &VariantContext::default());
+        assert!(
+            (el.style.opacity - 0.0).abs() < 0.01,
+            "motion-reduce: must apply when prefers_reduced_motion; got {}",
+            el.style.opacity
+        );
+        crate::style::set_prefers_reduced_motion(Some(false));
+        let _ = resolve_class_variants(&mut el, &VariantContext::default());
+        assert!(
+            (el.style.opacity - 1.0).abs() < 0.01,
+            "base opacity restored when motion-reduce is off; got {}",
+            el.style.opacity
+        );
+        crate::style::set_prefers_reduced_motion(None);
     }
 
     #[test]
@@ -3309,6 +3338,77 @@ mod p1_utility_tests {
             },
         );
         assert_ne!(el.style.bg_color, base_bg);
+    }
+
+    #[test]
+    fn resolve_arbitrary_min_max_breakpoints() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "bg-transparent min-[800px]:bg-accent");
+        let base_bg = el.style.bg_color;
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 799.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.bg_color, base_bg);
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 800.0,
+                ..Default::default()
+            },
+        );
+        assert_ne!(el.style.bg_color, base_bg);
+
+        let mut narrow = Element::new();
+        apply_class_list(&mut narrow, "bg-transparent max-[599px]:bg-accent");
+        let base_bg = narrow.style.bg_color;
+        let _ = resolve_class_variants(
+            &mut narrow,
+            &VariantContext {
+                viewport_w: 600.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(narrow.style.bg_color, base_bg);
+        let _ = resolve_class_variants(
+            &mut narrow,
+            &VariantContext {
+                viewport_w: 599.0,
+                ..Default::default()
+            },
+        );
+        assert_ne!(narrow.style.bg_color, base_bg);
+
+        let mut band = Element::new();
+        apply_class_list(&mut band, "bg-transparent min-[800px]:max-[1199px]:bg-accent");
+        let base_bg = band.style.bg_color;
+        let _ = resolve_class_variants(
+            &mut band,
+            &VariantContext {
+                viewport_w: 799.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(band.style.bg_color, base_bg);
+        let _ = resolve_class_variants(
+            &mut band,
+            &VariantContext {
+                viewport_w: 1000.0,
+                ..Default::default()
+            },
+        );
+        assert_ne!(band.style.bg_color, base_bg);
+        let _ = resolve_class_variants(
+            &mut band,
+            &VariantContext {
+                viewport_w: 1200.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(band.style.bg_color, base_bg);
     }
 
     #[test]

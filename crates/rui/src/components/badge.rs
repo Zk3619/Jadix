@@ -47,7 +47,8 @@ use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_BADGE: &str = "badge";
-const ATTR_VARIANT: &str = "rui_badge_variant";
+const ATTR_VARIANT: &str = "data-variant";
+const ATTR_VARIANT_LEGACY: &str = "rui_badge_variant";
 /// Badge `variant`: ShadCN baseline + semantic color (success/warning) + `error`≡destructive.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum BadgeVariant {
@@ -70,6 +71,12 @@ impl From<&str> for BadgeVariant {
 
 impl From<String> for BadgeVariant {
     fn from(s: String) -> Self {
+        s.parse().unwrap_or(Self::Default)
+    }
+}
+
+impl From<&String> for BadgeVariant {
+    fn from(s: &String) -> Self {
         s.parse().unwrap_or(Self::Default)
     }
 }
@@ -154,6 +161,7 @@ fn apply_chrome(el: &mut Element, variant: &str) {
         }
     }
     el.set_attr(ATTR_VARIANT, variant);
+    el.set_attr(ATTR_VARIANT_LEGACY, variant);
 }
 
 /// 将 Badge 变体 chroming 应用到任意子树（[`AvatarBadge`] 圆点复用）。
@@ -235,7 +243,7 @@ pub fn Badge(
     chrome: Option<bool>,
     children: Option<Element>,
 ) -> Element {
-    let mut builder = badge().variant(variant.as_paint_key());
+    let mut builder = badge().variant(variant);
     if let Some(enabled) = chrome {
         builder = builder.chrome(enabled);
     }
@@ -256,8 +264,8 @@ impl BadgeBuilder {
         self
     }
 
-    pub fn variant(mut self, v: impl AsRef<str>) -> Self {
-        self.variant = v.as_ref().parse().unwrap_or(BadgeVariant::Default);
+    pub fn variant(mut self, v: impl Into<BadgeVariant>) -> Self {
+        self.variant = v.into();
         self
     }
 
@@ -329,6 +337,7 @@ impl From<BadgeBuilder> for Element {
         el.attrs
             .insert(ATTR_SLOT.to_string(), SLOT_BADGE.to_string());
         el.set_attr(ATTR_VARIANT, variant);
+        el.set_attr(ATTR_VARIANT_LEGACY, variant);
         if !builder.id.trim().is_empty() {
             el.template_id = Some(builder.id.clone());
         }

@@ -68,13 +68,9 @@ use std::sync::OnceLock;
 use crate::app::reactive::reactive_view;
 use crate::components::alert::AlertVariant;
 use crate::components::button::button;
-use crate::components::dialog::dialog_shell_frame;
-use crate::components::internal::modal_motion::{
-    mounted_signal, sync_modal_presence, use_modal_presence,
-};
-use crate::components::internal::modal_shell::{
-    modal_sync, sync_modal_overlay_scrim, ShellOverlayOpts,
-};
+use crate::components::dialog::dialog_shell_panel;
+use crate::utils::modal_shell::{sync_modal_overlay_scrim, ShellOverlayOpts};
+use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -669,29 +665,13 @@ pub fn alert_dialog_content(
     let chrome_enabled = opts.chrome;
     let chrome_signal = opts.chrome_signal;
     let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
-    let presence = use_modal_presence(&id);
-    let mounted = mounted_signal(&presence);
     let body = std::sync::Arc::new(body);
 
     reactive_view(view_id, move || {
-        let want = open.get();
-        let phase = sync_modal_presence(&presence, want);
         let owner = format!("alert-dialog:{id}");
-        if !mounted.get() {
-            let _ = modal_sync(&id, mounted);
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        }
-        let Some(zs) = modal_sync(&id, mounted) else {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        };
-
         let active_variant = variant_signal
             .map(|s| AlertDialogVariant::from(s.get().as_str()))
             .unwrap_or(variant);
-        let active_chrome = chrome_signal.map(|s| s.get()).unwrap_or(chrome_enabled);
-
         let overlay = alert_shell_overlay_opts(
             &AlertDialogContentOpts {
                 overlay_color: overlay_color.clone(),
@@ -702,46 +682,53 @@ pub fn alert_dialog_content(
             },
             active_variant,
         );
-
-        let mut inner = build_alert_dialog_body(open, &id, body.as_ref());
-        if active_chrome {
-            let chrome = alert_dialog_chrome(active_variant, filled);
-            paint_alert_dialog_tree(&mut inner, &chrome);
-        }
-        // 与 DialogContent 相同：Header / Body / Footer 并列，单层 shell 负责 bg/border/p。
-        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
-
-        let mut ring = Vec::new();
-        collect_focus_ids(&inner, &mut ring);
-        if phase != PresencePhase::Present || ring.is_empty() {
-            sync_focus_trap(&owner, false, "");
-        } else {
-            sync_focus_trap(&owner, true, ring.join(","));
-        }
-
-        let shell_chrome = if active_chrome {
-            Some(alert_dialog_chrome(active_variant, filled))
-        } else {
-            None
-        };
-
-        let mut root = dialog_shell_frame(
+        let mut root = viewport_modal_layer(
             &id,
             open,
-            &zs,
-            inner,
             &overlay,
-            None,
-            false,
-            &presence,
-            phase,
-            Some(size.width()),
-            Some(SLOT_CONTENT),
-            Some(size.as_str()),
-            shell_chrome.as_ref(),
-            panel_chrome.clone(),
+            ViewportModalLayerOpts::dialog_fade(),
+            |phase| {
+                let Some(phase) = phase else {
+                    sync_focus_trap(&owner, false, "");
+                    return None;
+                };
+                let active_chrome = chrome_signal.map(|s| s.get()).unwrap_or(chrome_enabled);
+
+                let mut inner = build_alert_dialog_body(open, &id, body.as_ref());
+                if active_chrome {
+                    let chrome = alert_dialog_chrome(active_variant, filled);
+                    paint_alert_dialog_tree(&mut inner, &chrome);
+                }
+                inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
+
+                let mut ring = Vec::new();
+                collect_focus_ids(&inner, &mut ring);
+                if phase != PresencePhase::Present || ring.is_empty() {
+                    sync_focus_trap(&owner, false, "");
+                } else {
+                    sync_focus_trap(&owner, true, ring.join(","));
+                }
+
+                let shell_chrome = if active_chrome {
+                    Some(alert_dialog_chrome(active_variant, filled))
+                } else {
+                    None
+                };
+                Some(dialog_shell_panel(
+                    &id,
+                    inner,
+                    None,
+                    false,
+                    Some(size.width()),
+                    Some(SLOT_CONTENT),
+                    Some(size.as_str()),
+                    shell_chrome.as_ref(),
+                    panel_chrome.clone(),
+                ))
+            },
         );
         if let Some(shell) = find_alert_dialog_content_by_template(&mut root, &id) {
+            let active_chrome = chrome_signal.map(|s| s.get()).unwrap_or(chrome_enabled);
             stamp_alert_dialog_shell_meta(
                 shell,
                 &id,
@@ -1023,7 +1010,7 @@ impl AlertDialogContentSlotBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::internal::modal_shell::{
+    use crate::utils::modal_shell::{
         default_modal_overlay_color, DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
     };
 
