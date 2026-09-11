@@ -2039,38 +2039,59 @@ pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
 }
 
 /// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
-/// GPU PartialLoad 默认关（见 docs/engine/damage.md / 计划 B8）。计数用快照，勿每帧 ReactiveSync。
+/// 计数在动作的 **下一帧 present 后** 写入，刷新快照会 suppress 自身那帧，避免 +1 污染。
 #[component]
 pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
+    use rui::core::tree::LayoutStatus;
+
     let count = use_signal("gal_wp22_count", || 0_u32);
     let show_extra = use_signal("gal_wp22_struct", || false);
     let partial_snap = use_signal("gal_wp22_partial_snap", || 0_u64);
     let full_snap = use_signal("gal_wp22_full_snap", || 0_u64);
+    let skip_snap = use_signal("gal_wp22_skip_snap", || 0_u64);
+    let patch_snap = use_signal("gal_wp22_patch_snap", || 0_u64);
     let base_partial = use_signal("gal_wp22_base_partial", || 0_u64);
     let base_full = use_signal("gal_wp22_base_full", || 0_u64);
+    let base_skip = use_signal("gal_wp22_base_skip", || 0_u64);
+    let base_patch = use_signal("gal_wp22_base_patch", || 0_u64);
+    let scene_line = use_signal("gal_wp22_scene", || String::new());
 
-    let snap_stats = move || {
-        partial_snap.set(rui::partial_load_frame_count());
-        full_snap.set(rui::full_clear_frame_count());
+    let apply_snap = move |s: rui::PolicySnapshot| {
+        partial_snap.set(s.partial_load);
+        full_snap.set(s.full_clear);
+        skip_snap.set(s.skipped_siblings);
+        patch_snap.set(s.patched_dl);
+        let b = rui::last_scene_batches();
+        scene_line.set(format!(
+            "scene batches: quad={} surface={} underline={} text={} shadow_tex={}",
+            b.quad, b.surface, b.underline, b.text, b.shadow_tex
+        ));
     };
 
-    ui! {
+    let mut root = ui! {
         <MyCard title="WP-2.2) 细粒度 damage（策略可测）">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对照 docs/engine/damage.md。快照为逻辑 Clear/Load 策略累计（默认 GPU 仍 FullClear）。勿每帧悬停读数。"
+                    "对照 docs/engine/damage.md。数字是上次动作 present 后的累计（不含本卡片改字那一帧）。paint-only 默认 GPU retain+裁剪；滚动失效视口层；结构仍 FullClear。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "勾选：① 重置→连点同宽+1→刷新：ΔPartialLoad↑、ΔFullClear≈0 ② 切换结构→刷新：ΔFullClear↑"
+                    "勾选：① 重置→连点同宽+1（不必再点刷新）：ΔPartialLoad↑、ΔFullClear≈0、Δskipped_siblings↑ ② 切换结构：ΔFullClear↑ 且不应整窗卡顿"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     { format!(
-                        "快照: PartialLoad={} (+{})  FullClear={} (+{})",
+                        "累计: PartialLoad={} (+{})  FullClear={} (+{})  skipped_siblings={} (+{})  patched_dl={} (+{})",
                         partial_snap.get(),
                         partial_snap.get().saturating_sub(base_partial.get()),
                         full_snap.get(),
-                        full_snap.get().saturating_sub(base_full.get())
+                        full_snap.get().saturating_sub(base_full.get()),
+                        skip_snap.get(),
+                        skip_snap.get().saturating_sub(base_skip.get()),
+                        patch_snap.get(),
+                        patch_snap.get().saturating_sub(base_patch.get())
                     ) }
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { scene_line.get() }
                 </Label>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
                     <Label text_size="1.5rem" font_weight="700" leading="none">
@@ -2078,26 +2099,34 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
                     </Label>
                     <Button variant="default" on_click={move || {
                         count.set(count.get().wrapping_add(1));
-                        // Present of this click runs after the handler; snap on next refresh.
+                        rui::arm_policy_snapshot();
                     }}>
                         "同宽 +1（00–99）"
                     </Button>
                     <Button variant="outline" on_click={move || {
                         show_extra.set(!show_extra.get());
+                        rui::arm_policy_snapshot();
                     }}>
                         "切换结构（Show）"
                     </Button>
                     <Button variant="outline" on_click={move || {
-                        snap_stats();
+                        rui::suppress_policy_counts(2);
+                        rui::arm_policy_snapshot();
                     }}>
                         "刷新快照"
                     </Button>
                     <Button variant="secondary" on_click={move || {
                         rui::reset_frame_policy_counters();
+                        rui::suppress_policy_counts(2);
                         partial_snap.set(0);
                         full_snap.set(0);
+                        skip_snap.set(0);
+                        patch_snap.set(0);
                         base_partial.set(0);
                         base_full.set(0);
+                        base_skip.set(0);
+                        base_patch.set(0);
+                        scene_line.set(String::new());
                     }}>
                         "重置计数"
                     </Button>
@@ -2105,13 +2134,23 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
                 <Show when={show_extra.get()}>
                     <Box bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         <Label text_size="0.875rem" leading="normal">
-                            "结构变更样例：挂载/卸载此块应走全帧 Clear（ΔFullClear↑）。"
+                            "结构变更样例：挂载/卸载此块应走全帧 Clear（ΔFullClear↑），但不应重建整页 Taffy。"
                         </Label>
                     </Box>
                 </Show>
             </VStack>
         </MyCard>
-    }
+    };
+    root = root.reactive_sync(move |_, _| {
+        if let Some(s) = rui::take_policy_snapshot() {
+            rui::suppress_policy_counts(1);
+            apply_snap(s);
+            LayoutStatus::StyleChanged
+        } else {
+            LayoutStatus::Clean
+        }
+    });
+    root
 }
 
 /// WP-2.4 Gallery 验收：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
