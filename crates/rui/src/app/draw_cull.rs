@@ -7,7 +7,9 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::layout::layout_tree::{NodePaint, TextLayoutInfo};
-use crate::renderer::{aabbs_disjoint, aabb_of_centered_transform, InstanceInput, ScaledTexturedDraw};
+use crate::renderer::{
+    aabb_of_centered_transform, aabbs_disjoint, InstanceInput, ScaledTexturedDraw,
+};
 use crate::style::transform::MAT2D_IDENTITY;
 
 use super::damage::{intersect_rects, PaintDirty, PaintDirtyKind};
@@ -67,8 +69,10 @@ pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
         bounds = aabb_of_centered_transform(bounds, &i.transform);
     }
     if i.clip_size[0] >= 0.0 && i.clip_size[1] >= 0.0 {
-        if let Some(hit) = intersect_rects(bounds, [i.clip_pos[0], i.clip_pos[1], i.clip_size[0], i.clip_size[1]])
-        {
+        if let Some(hit) = intersect_rects(
+            bounds,
+            [i.clip_pos[0], i.clip_pos[1], i.clip_size[0], i.clip_size[1]],
+        ) {
             bounds = hit;
         } else {
             return [0.0, 0.0, 0.0, 0.0];
@@ -280,9 +284,10 @@ pub(crate) fn page_stack_band_submit_text<'a>(
     let mut used = vec![false; prev.len()];
     let mut changed = Vec::new();
     for n in slice {
-        let found = prev.iter().enumerate().find(|(i, p)| {
-            *i < used.len() && !used[*i] && text_run_unchanged(p, n)
-        });
+        let found = prev
+            .iter()
+            .enumerate()
+            .find(|(i, p)| *i < used.len() && !used[*i] && text_run_unchanged(p, n));
         if let Some((i, _)) = found {
             used[i] = true;
         } else {
@@ -324,6 +329,13 @@ pub(crate) fn instance_fill_opaque(i: &InstanceInput) -> bool {
     i.color[3] > 0.95
 }
 
+/// Opaque fill, visible border, or drop-shadow — pixels dest-reset must erase.
+fn instance_has_dest_ink(i: &InstanceInput) -> bool {
+    instance_fill_opaque(i)
+        || (i.border_width > 0.0 && i.border_color[3] > 0.05)
+        || (i.shadow_blur > 0.0 && i.shadow_color[3] > 0.05)
+}
+
 /// Topmost opaque fill containing `x,y` (walk instances in reverse draw order).
 pub(crate) fn opaque_fill_color_at(
     instances: &[InstanceInput],
@@ -357,9 +369,26 @@ fn slot_matches_dirty(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
     p: &NodePaint,
+    paints: &[NodePaint],
 ) -> bool {
-    !p.overlay
-        && super::damage::paint_dirty_matches_slot(dirty_key, dirty_bounds, p.key, p.bounds)
+    if p.overlay {
+        return false;
+    }
+    let has_keyed = super::damage::paint_dirty_has_keyed_slot(
+        dirty_key,
+        dirty_bounds,
+        paints
+            .iter()
+            .filter(|q| !q.overlay)
+            .map(|q| (q.key, q.bounds)),
+    );
+    super::damage::paint_dirty_matches_present_slot(
+        dirty_key,
+        dirty_bounds,
+        p.key,
+        p.bounds,
+        has_keyed,
+    )
 }
 
 /// Card/page fill behind a dirty widget. Skips the widget's own instances
@@ -374,7 +403,9 @@ pub(crate) fn node_present_behind_color(
 ) -> Option<[f32; 4]> {
     opaque_fill_color_at_skipping(instances, x, y, |i| {
         node_paints.iter().any(|p| {
-            slot_matches_dirty(dirty_key, dirty_bounds, p) && i >= p.instance.0 && i < p.instance.1
+            slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints)
+                && i >= p.instance.0
+                && i < p.instance.1
         })
     })
 }
@@ -386,19 +417,44 @@ pub(crate) const NODE_PRESENT_RESET_PAD_PHYSICAL: f32 = 3.0;
 /// pad must not be used here — it overlaps `gap-2` siblings and stamps captions.
 pub(crate) const NODE_PRESENT_GLYPH_CLIP_PAD: f32 = 1.0;
 
-/// Tight AABB of this dirty node's instances (physical), plus `pad` for SDF AA / underline offset.
-/// Must not use the node scissor pad (8px) — that overlaps `gap-2` siblings.
+/// Tight AABB of this dirty node's **ink**, not the scissor-padded dirty box.
+///
+/// `PaintDirty.bounds` includes Input caret slack (+8px) and spin circumcircle
+/// chrome. Wiping the former punches InputAdornment border / ⌘K; those pixels
+/// belong to other collect slots. Dest-reset may only erase what this slot
+/// painted: opaque/border/shadow SDF, textured quads, or — for text-only
+/// `bind_text` — the unpadded collect box.
+///
+/// Spin leftover at identity angle is the previous frame's transformed AABB
+/// (`prev_bounds` / `last_present_node_bounds`), not this frame's dirty pad.
+///
+/// `prev_bounds` is the last presented **visual** slot for this key. Dest-reset of
+/// `now` only leaves a maximize/scroll ghost a few pixels away.
 pub(crate) fn node_present_reset_rect(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
     pad: f32,
+    ui_scale: f32,
+    prev_bounds: Option<[f32; 4]>,
 ) -> Option<[f32; 4]> {
-    let mut acc: Option<[f32; 4]> = None;
+    let s = ui_scale.max(0.0);
+    let mut ink: Option<[f32; 4]> = None;
+    let mut slot_visual: Option<[f32; 4]> = None;
+    let mut matched = false;
     for p in node_paints {
-        if !slot_matches_dirty(dirty_key, dirty_bounds, p) {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints) {
             continue;
+        }
+        matched = true;
+        if p.bounds[2] > 0.0 && p.bounds[3] > 0.0 {
+            let sb = scale_xywh(p.bounds, s);
+            slot_visual = Some(match slot_visual {
+                Some(prev) => union_xywh(prev, sb),
+                None => sb,
+            });
         }
         let lo = p.instance.0.min(instances.len());
         let hi = p.instance.1.min(instances.len());
@@ -407,40 +463,164 @@ pub(crate) fn node_present_reset_rect(
             if b[2] <= 0.0 || b[3] <= 0.0 {
                 continue;
             }
-            acc = Some(match acc {
+            if instance_has_dest_ink(inst) || !transform_is_identity(&inst.transform) {
+                ink = Some(match ink {
+                    Some(prev) => union_xywh(prev, b),
+                    None => b,
+                });
+            }
+        }
+        let tlo = p.textured.0.min(textured.len());
+        let thi = p.textured.1.min(textured.len());
+        for d in &textured[tlo..thi] {
+            let b = textured_paint_bounds(d);
+            if b[2] <= 0.0 || b[3] <= 0.0 {
+                continue;
+            }
+            ink = Some(match ink {
                 Some(prev) => union_xywh(prev, b),
                 None => b,
             });
         }
     }
-    acc.map(|r| padded_xywh(r, pad.max(0.0)))
+    if !matched {
+        return None;
+    }
+    let mut acc = ink.or(slot_visual);
+    if let Some(prev) = prev_bounds {
+        if prev[2] > 0.0 && prev[3] > 0.0 {
+            let pb = scale_xywh(prev, s);
+            acc = Some(match acc {
+                Some(now) => union_xywh(now, pb),
+                None => pb,
+            });
+        }
+    }
+    // SDF AA fringe around real ink. Transparent / text-only slots must not grow
+    // by RESET_PAD — that 3px eats a 1px parent border (Kbd InputAdornment).
+    let wipe_pad = if ink.is_some() { pad.max(0.0) } else { 0.0 };
+    acc.map(|r| padded_xywh(r, wipe_pad))
+}
+
+/// Collect-slot visual box plus this frame's transformed instance / texture ink.
+pub(crate) fn node_paint_visual_bounds(
+    p: &NodePaint,
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+) -> [f32; 4] {
+    let mut acc = if p.bounds[2] > 0.0 && p.bounds[3] > 0.0 {
+        Some(p.bounds)
+    } else {
+        None
+    };
+    let lo = p.instance.0.min(instances.len());
+    let hi = p.instance.1.min(instances.len());
+    for inst in &instances[lo..hi] {
+        let b = instance_paint_bounds(inst);
+        if b[2] <= 0.0 || b[3] <= 0.0 {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(prev) => union_xywh(prev, b),
+            None => b,
+        });
+    }
+    let tlo = p.textured.0.min(textured.len());
+    let thi = p.textured.1.min(textured.len());
+    for d in &textured[tlo..thi] {
+        let b = textured_paint_bounds(d);
+        if b[2] <= 0.0 || b[3] <= 0.0 {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(prev) => union_xywh(prev, b),
+            None => b,
+        });
+    }
+    acc.unwrap_or(p.bounds)
 }
 
 /// Axis-aligned dest wipe for node present: card fill behind this widget, never the widget itself.
+#[cfg(test)]
 pub(crate) fn node_present_dest_reset(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
 ) -> Option<([f32; 4], [f32; 4])> {
+    node_present_dest_reset_scaled(
+        dirty_key,
+        dirty_bounds,
+        node_paints,
+        instances,
+        &[],
+        1.0,
+        None,
+    )
+}
+
+/// [`node_present_dest_reset`] with `ui_scale` so a text-only dirty box maps into
+/// the scaled instance space used at present.
+pub(crate) fn node_present_dest_reset_scaled(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    ui_scale: f32,
+    prev_bounds: Option<[f32; 4]>,
+) -> Option<([f32; 4], [f32; 4])> {
     let rect = node_present_reset_rect(
         dirty_key,
         dirty_bounds,
         node_paints,
         instances,
+        textured,
         NODE_PRESENT_RESET_PAD_PHYSICAL,
+        ui_scale,
+        prev_bounds,
     )?;
-    let cx = rect[0] + rect[2] * 0.5;
-    let cy = rect[1] + rect[3] * 0.5;
-    let color = node_present_behind_color(
-        dirty_key,
-        dirty_bounds,
-        node_paints,
-        instances,
-        cx,
-        cy,
-    )?;
+    let color =
+        node_present_behind_color_for_rect(dirty_key, dirty_bounds, node_paints, instances, rect)?;
     Some((rect, color))
+}
+
+fn node_present_behind_color_for_rect(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    rect: [f32; 4],
+) -> Option<[f32; 4]> {
+    let skip = |i: usize| {
+        node_paints.iter().any(|p| {
+            slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints)
+                && i >= p.instance.0
+                && i < p.instance.1
+        })
+    };
+    let samples = [
+        [rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5],
+        [rect[0] + 1.0, rect[1] + 1.0],
+        [rect[0] + rect[2] - 1.0, rect[1] + 1.0],
+        [rect[0] + 1.0, rect[1] + rect[3] - 1.0],
+        [rect[0] + rect[2] - 1.0, rect[1] + rect[3] - 1.0],
+    ];
+    if let Some(c) = samples.iter().find_map(|p| {
+        node_present_behind_color(dirty_key, dirty_bounds, node_paints, instances, p[0], p[1])
+    }) {
+        return Some(c);
+    }
+    instances.iter().enumerate().rev().find_map(|(i, inst)| {
+        if skip(i) || !instance_fill_opaque(inst) {
+            return None;
+        }
+        let b = instance_paint_bounds(inst);
+        if b[2] <= 0.0 || b[3] <= 0.0 {
+            return None;
+        }
+        intersect_rects(b, rect).map(|_| inst.color)
+    })
 }
 
 /// Text indices owned by any page dirty node (restore hole or widget).
@@ -541,7 +721,10 @@ pub(crate) fn node_present_foreign_glyph_indices(
     capture: &BTreeSet<usize>,
     scissor_pad_logical: f32,
 ) -> Vec<usize> {
-    if !matches!(dirty.kind, PaintDirtyKind::Node | PaintDirtyKind::OverlayRestore) {
+    if !matches!(
+        dirty.kind,
+        PaintDirtyKind::Node | PaintDirtyKind::OverlayRestore
+    ) {
         return Vec::new();
     }
     let scissor = padded_xywh(dirty.bounds, scissor_pad_logical);
@@ -576,7 +759,7 @@ fn glyph_belongs_to_dirty(
             // whose ink sits in the padded dirty (Gallery sidebar 「布局」 sharing
             // a horizontal band with Kbd Search) and src-overs them into retain.
             node_paints.iter().any(|p| {
-                slot_matches_dirty(dirty.key, dirty.bounds, p) && {
+                slot_matches_dirty(dirty.key, dirty.bounds, p, node_paints) && {
                     let lo = p.text.0.min(page_text.len());
                     let hi = p.text.1.min(page_text.len());
                     i >= lo && i < hi
@@ -587,15 +770,49 @@ fn glyph_belongs_to_dirty(
     }
 }
 
-/// Dest-reset wipes retain glyphs; opaque chrome also covers them. Either needs glyphon.
+/// Matching collect slot owns glyphon (paint-only `bind_text` labels have no SDF fill).
+pub(crate) fn node_dirty_has_text(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+) -> bool {
+    node_paints
+        .iter()
+        .any(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints) && p.text.0 < p.text.1)
+}
+
+/// Dest-reset wipes retain glyphs; opaque chrome also covers them. Text-only
+/// `bind_text` slots have neither fill nor dest-reset instances — they still
+/// need the capture glyphon path or mousemove counters freeze in retain.
+#[cfg(test)]
 pub(crate) fn node_present_needs_glyphs(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
 ) -> bool {
-    node_present_dest_reset(dirty_key, dirty_bounds, node_paints, instances).is_some()
+    node_present_needs_glyphs_scaled(dirty_key, dirty_bounds, node_paints, instances, 1.0)
+}
+
+pub(crate) fn node_present_needs_glyphs_scaled(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    ui_scale: f32,
+) -> bool {
+    node_present_dest_reset_scaled(
+        dirty_key,
+        dirty_bounds,
+        node_paints,
+        instances,
+        &[],
+        ui_scale,
+        None,
+    )
+    .is_some()
         || node_dirty_has_opaque_fill(dirty_key, dirty_bounds, node_paints, instances)
+        || node_dirty_has_text(dirty_key, dirty_bounds, node_paints)
 }
 
 /// Hover chrome whose fill covers this dirty node's glyphs (primary vs link/ghost rest).
@@ -606,7 +823,7 @@ pub(crate) fn node_dirty_has_opaque_fill(
     instances: &[InstanceInput],
 ) -> bool {
     node_paints.iter().any(|p| {
-        if !slot_matches_dirty(dirty_key, dirty_bounds, p) {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints) {
             return false;
         }
         let lo = p.instance.0.min(instances.len());
@@ -650,6 +867,20 @@ mod tests {
         }
     }
 
+    fn blank_textured(x: f32, y: f32, w: f32, h: f32, transform: [f32; 6]) -> ScaledTexturedDraw {
+        ScaledTexturedDraw {
+            rect: [x, y, w, h],
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            texture_key: String::new(),
+            opacity: 1.0,
+            tint_rgb: [1.0, 1.0, 1.0],
+            transform,
+            clip_pos: [0.0, 0.0],
+            clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+        }
+    }
+
     #[test]
     fn far_sibling_instance_is_culled() {
         let a = blank_instance(0.0, 0.0, 20.0, 20.0);
@@ -682,7 +913,10 @@ mod tests {
             blank_instance(8.0, 0.0, 10.0, 10.0),
         ];
         let damage = [0.0, 0.0, 30.0, 30.0];
-        assert_eq!(visible_instance_runs(&inst, 0, 3, damage), vec![(0, 1), (2, 1)]);
+        assert_eq!(
+            visible_instance_runs(&inst, 0, 3, damage),
+            vec![(0, 1), (2, 1)]
+        );
     }
 
     fn sample_text(text: &str, x: f32) -> TextLayoutInfo {
@@ -766,7 +1000,8 @@ mod tests {
         y_band.y = 180.0;
         y_band.width = 48.0;
         y_band.height = 20.0;
-        let kept_ms = clip_text_nodes_to_rect(&[y_band], padded_xywh(ms, SCROLL_LAYER_TEXT_PAD_LOGICAL));
+        let kept_ms =
+            clip_text_nodes_to_rect(&[y_band], padded_xywh(ms, SCROLL_LAYER_TEXT_PAD_LOGICAL));
         assert!(
             kept_ms.is_empty(),
             "Y-overlapping rail caption must not follow the inner MessageScroller viewport"
@@ -828,14 +1063,20 @@ mod tests {
         assert!(
             submitted.iter().any(|n| n.text == "next"),
             "new bubble must be submitted, got {:?}",
-            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+            submitted
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
         );
         assert!(
             submitted
                 .iter()
                 .all(|n| n.text != "布局" && n.text != "Gallery" && n.text != "hello"),
             "unchanged rail/bubble runs must stay in retain, got {:?}",
-            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+            submitted
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
         );
         let full = page_stack_band_submit_text(&prev, &curr, 0, 4, None, false)
             .expect("FullClear still owns the whole band");
@@ -860,7 +1101,10 @@ mod tests {
                 .iter()
                 .all(|n| n.text != "布局" && n.text != "Gallery"),
             "index shift must not re-submit rail ink, got {:?}",
-            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+            submitted
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -879,8 +1123,14 @@ mod tests {
     #[test]
     fn node_dirty_owns_centered_label_not_sibling() {
         let dirty = [8.0, 8.0, 88.0, 36.0];
-        assert!(text_owned_by_node_dirty(&sample_text("Default", 24.0), dirty));
-        assert!(!text_owned_by_node_dirty(&sample_text("Outline", 104.0), dirty));
+        assert!(text_owned_by_node_dirty(
+            &sample_text("Default", 24.0),
+            dirty
+        ));
+        assert!(!text_owned_by_node_dirty(
+            &sample_text("Outline", 104.0),
+            dirty
+        ));
     }
 
     #[test]
@@ -982,6 +1232,115 @@ mod tests {
     }
 
     #[test]
+    fn dest_reset_covers_rotated_textured_spin_not_just_unrotated_fill() {
+        // Icon+spin is a lucide texture + transform. A same-slot unrotated fill
+        // used to win dest-reset; the previous 45° corners stayed in retain.
+        let mut card = blank_instance(0.0, 0.0, 80.0, 80.0);
+        card.color = [0.96, 0.96, 0.96, 1.0];
+        let mut fill = blank_instance(32.0, 32.0, 16.0, 16.0);
+        fill.color = [0.0, 0.0, 0.0, 0.0];
+        let deg45 = std::f32::consts::FRAC_PI_4;
+        let (s, c) = deg45.sin_cos();
+        let spin = blank_textured(32.0, 32.0, 16.0, 16.0, [c, s, -s, c, 0.0, 0.0]);
+        let p = NodePaint {
+            key: 11,
+            bounds: [32.0, 32.0, 16.0, 16.0],
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 1),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        };
+        let instances = [card, fill];
+        let (without_tex, _) =
+            node_present_dest_reset(11, p.bounds, &[p], &instances).expect("fill fallback");
+        let (with_tex, _) =
+            node_present_dest_reset_scaled(11, p.bounds, &[p], &instances, &[spin], 1.0, None)
+                .expect("spin behind card");
+        let spun = crate::renderer::aabb_of_centered_transform(
+            [32.0, 32.0, 16.0, 16.0],
+            &[c, s, -s, c, 0.0, 0.0],
+        );
+        assert!(
+            with_tex[0] <= spun[0] + 0.5,
+            "wipe must cover the rotated quad, not only the 16×16 fill\n\
+             fill_wipe={without_tex:?} spin_wipe={with_tex:?} spun={spun:?}"
+        );
+        assert!(with_tex[1] <= spun[1] + 0.5);
+        assert!(with_tex[0] + with_tex[2] >= spun[0] + spun[2] - 0.5);
+        assert!(with_tex[1] + with_tex[3] >= spun[1] + spun[3] - 0.5);
+        assert!(
+            with_tex[2] > without_tex[2] + 1.0 || with_tex[3] > without_tex[3] + 1.0,
+            "rotated ink must expand the dest-reset beyond the unrotated fill"
+        );
+    }
+
+    #[test]
+    fn dest_reset_spin_must_wipe_circumcircle_at_identity_angle() {
+        // 0° ink is the unrotated box. Leftover 45° coverage is last frame's
+        // transformed AABB (`prev_bounds`), not this frame's scissor-padded dirty.
+        let mut card = blank_instance(0.0, 0.0, 80.0, 80.0);
+        card.color = [0.96, 0.96, 0.96, 1.0];
+        let mut fill = blank_instance(32.0, 32.0, 16.0, 16.0);
+        fill.color = [0.0, 0.0, 0.0, 0.0];
+        let box16 = [32.0, 32.0, 16.0, 16.0];
+        let p = NodePaint {
+            key: 12,
+            bounds: box16,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        };
+        let deg45 = std::f32::consts::FRAC_PI_4;
+        let (s, c) = deg45.sin_cos();
+        let spun = crate::renderer::aabb_of_centered_transform(box16, &[c, s, -s, c, 0.0, 0.0]);
+        let (wipe, _) =
+            node_present_dest_reset_scaled(12, box16, &[p], &[card, fill], &[], 1.0, Some(spun))
+                .expect("card behind spin");
+        assert!(
+            wipe[0] <= spun[0] + 0.5
+                && wipe[1] <= spun[1] + 0.5
+                && wipe[0] + wipe[2] >= spun[0] + spun[2] - 0.5
+                && wipe[1] + wipe[3] >= spun[1] + spun[3] - 0.5,
+            "0° dest-reset must still cover the 45° circumcircle\n wipe={wipe:?} spun={spun:?}"
+        );
+        assert!(
+            wipe[2] < 80.0 && wipe[3] < 80.0,
+            "must not expand to the whole card, got {wipe:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_unions_previous_visual_slot() {
+        let mut card = blank_instance(0.0, 0.0, 200.0, 200.0);
+        card.color = [0.96, 0.96, 0.96, 1.0];
+        let mut icon = blank_instance(32.0, 32.0, 16.0, 16.0);
+        icon.color = [0.0, 0.0, 0.0, 0.0];
+        let p = NodePaint {
+            key: 4,
+            bounds: [32.0, 32.0, 16.0, 16.0],
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        };
+        let prev = [32.0, 112.0, 16.0, 16.0];
+        let (rect, _) =
+            node_present_dest_reset_scaled(4, p.bounds, &[p], &[card, icon], &[], 1.0, Some(prev))
+                .expect("card behind");
+        assert!(
+            rect[1] <= 32.0 && rect[1] + rect[3] >= 112.0 + 16.0,
+            "wipe must cover previous visual Y and now, got {rect:?}"
+        );
+    }
+
+    #[test]
     fn dest_reset_works_for_transparent_ghost_on_card() {
         let mut card = blank_instance(0.0, 0.0, 200.0, 80.0);
         card.color = [1.0, 1.0, 1.0, 1.0];
@@ -1003,6 +1362,51 @@ mod tests {
             node_present_dest_reset(8, p.bounds, &[p], &instances).expect("card behind ghost");
         assert_eq!(color, [1.0, 1.0, 1.0, 1.0]);
         assert!(node_present_needs_glyphs(8, p.bounds, &[p], &instances));
+    }
+
+    #[test]
+    fn dest_reset_and_glyphs_for_text_only_bind_label() {
+        // Gallery MouseEvent log: bind_text Label has glyphs, no SDF fill.
+        // Node-present used to skip capture (needs_glyphs false) so mousemove
+        // froze the retain buffer until a FullClear (click / focus).
+        let mut card = blank_instance(0.0, 0.0, 400.0, 160.0);
+        card.color = [0.94, 0.94, 0.95, 1.0];
+        let bounds = [12.0, 80.0, 376.0, 56.0];
+        let label = slot(9, bounds, (0, 1));
+        let instances = [card];
+        assert!(
+            node_dirty_has_text(9, bounds, &[label]),
+            "text-only slot must be recognized as having glyphs"
+        );
+        assert!(
+            node_present_needs_glyphs(9, bounds, &[label], &instances),
+            "bind_text label with no fill must still capture glyphs"
+        );
+        let (rect, color) = node_present_dest_reset(9, bounds, &[label], &instances)
+            .expect("must wipe the text box with the card behind it");
+        assert_eq!(color, [0.94, 0.94, 0.95, 1.0]);
+        assert!(rect[0] <= 12.0);
+        assert!(rect[1] <= 80.0);
+        assert!(rect[0] + rect[2] >= 388.0);
+        assert!(rect[1] + rect[3] >= 136.0);
+        assert!(rect[2] < 400.0, "must not expand to the whole card");
+
+        // Gallery bind_text used to key dirty by bounds hash, not Taffy id.
+        let bounds_keyed = PaintDirty {
+            key: 0xDEAD_BEEF,
+            bounds,
+            kind: PaintDirtyKind::Node,
+        };
+        let page = [sample_text("mousemove", 20.0)];
+        let owned = node_present_glyphs_for_dirty(&bounds_keyed, &page, &[label]);
+        assert!(
+            owned.contains(&0),
+            "same-box dirty must still own the label glyphs without a Taffy key match"
+        );
+        let (rect2, _) =
+            node_present_dest_reset(bounds_keyed.key, bounds_keyed.bounds, &[label], &instances)
+                .expect("same-box text-only dirty must dest-reset");
+        assert!((rect2[2] - rect[2]).abs() < 1.0);
     }
 
     #[test]
@@ -1036,16 +1440,14 @@ mod tests {
             "Input's own glyph set must not include NavLayout"
         );
 
-        let clipped =
-            node_present_clipped_capture_text(&[dirty_nav, dirty_input], &page, &paints);
+        let clipped = node_present_clipped_capture_text(&[dirty_nav, dirty_input], &page, &paints);
         let nav_clip = clipped
             .iter()
             .find(|n| n.text == "NavLayout")
             .and_then(|n| n.clip_bounds)
             .expect("NavLayout stays in the capture with an owner clip");
         assert!(
-            nav_clip[0] + nav_clip[2]
-                <= dirty_input.bounds[0] + NODE_PRESENT_GLYPH_CLIP_PAD + 1e-3,
+            nav_clip[0] + nav_clip[2] <= dirty_input.bounds[0] + NODE_PRESENT_GLYPH_CLIP_PAD + 1e-3,
             "NavLayout clip {nav_clip:?} must not extend into Input dirty {:?}",
             dirty_input.bounds
         );

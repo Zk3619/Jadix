@@ -297,6 +297,10 @@ fn zoom_layer_cache_id(
         t.text.hash(&mut hasher);
         t.width.to_bits().hash(&mut hasher);
         t.height.to_bits().hash(&mut hasher);
+        t.style.color.hash(&mut hasher);
+        t.style.size.map(|s| s.to_bits()).hash(&mut hasher);
+        t.style.weight.hash(&mut hasher);
+        t.style.font_family.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -348,5 +352,49 @@ mod tests {
         let _ = take_capture_jobs();
         assert!(a.starts_with("rui_zoom_cap:"));
         assert_eq!(a, b, "scroll/origin must not bust the zoom capture cache");
+    }
+
+    fn sample_zoom_text(color: Option<[u8; 4]>) -> crate::layout::layout_tree::TextLayoutInfo {
+        crate::layout::layout_tree::TextLayoutInfo {
+            text: "You can change this later in Settings.".into(),
+            shape_suffix: None,
+            spans: None,
+            template_id: None,
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 16.0,
+            clip_bounds: None,
+            style: crate::style::TextStyle {
+                color,
+                ..Default::default()
+            },
+            prepared: None,
+            glyph_fx: None,
+            shimmer: None,
+            paint_scale: 1.0,
+            paint_transform: crate::style::MAT2D_IDENTITY,
+            paint_origin: [0.0, 0.0],
+            glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
+        }
+    }
+
+    #[test]
+    fn queue_zoom_layer_wrap_includes_text_color() {
+        let _ = take_capture_jobs();
+        let bounds = [0.0, 0.0, 64.0, 32.0];
+        let a = queue_zoom_layer_wrap(bounds, Vec::new(), Vec::new(), vec![sample_zoom_text(None)]);
+        let _ = take_capture_jobs();
+        let b = queue_zoom_layer_wrap(
+            bounds,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_zoom_text(Some([34, 197, 94, 255]))],
+        );
+        let _ = take_capture_jobs();
+        assert_ne!(
+            a, b,
+            "variant description color must bust the zoom capture cache"
+        );
     }
 }

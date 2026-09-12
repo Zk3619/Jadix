@@ -116,8 +116,9 @@ pub(super) struct AppState {
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
     template_paths: HashMap<String, Vec<usize>>,
-    /// Taffy node ids that need `mark_dirty` + style/measure sync on the next LayoutChanged frame
-    /// (reconcile / bind paths). Cleared after apply. StructureChanged still does a full rebuild.
+    /// Taffy node ids that need `mark_dirty` + style/measure sync on the next LayoutChanged /
+    /// in-place StructureChanged frame (reconcile / bind paths). Cleared after apply.
+    /// Full Taffy rebuild is only cold start / portal hoist.
     pending_layout_dirty: Vec<taffy::prelude::NodeId>,
     pub(super) num_instances: u32,
     pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
@@ -198,6 +199,9 @@ pub(super) struct AppState {
     last_scroll_offsets: HashMap<String, [u32; 2]>,
     /// Scroll moved: PartialLoad the viewport layer (Clear scissor, then redraw).
     scroll_layer_clear: bool,
+    /// Last presented page-node boxes. Node-present dest-resets `now` only —
+    /// if a named dirty moved, Load keeps the previous pixels.
+    last_present_node_bounds: Vec<(u64, [f32; 4])>,
     /// Unpadded union of viewports whose offset changed this frame (text clip).
     scroll_text_clip: Option<[f32; 4]>,
     /// Overlay closed or shrank: Clear the leftover scissor then redraw page
@@ -276,10 +280,7 @@ fn draw_packed_textured_runs<'pass>(
         pass.set_vertex_buffer(1, instance_buffer.slice(..));
         pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..pipeline.num_indices, 0, ti as u32..(ti + run) as u32);
-        super::frame_stats::note_scene_batch(
-            super::frame_stats::SceneKind::Surface,
-            run as u32,
-        );
+        super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Surface, run as u32);
         ti += run;
     }
 }
@@ -482,11 +483,7 @@ fn draw_cpu_sdf_instances<'a>(
     });
     pass.set_vertex_buffer(1, buf.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-    pass.draw_indexed(
-        0..pipeline.num_indices,
-        0,
-        0..instances.len() as u32,
-    );
+    pass.draw_indexed(0..pipeline.num_indices, 0, 0..instances.len() as u32);
     super::frame_stats::note_scene_batch(
         super::frame_stats::SceneKind::Underline,
         instances.len() as u32,
@@ -505,12 +502,7 @@ fn draw_scissor_clear<'a>(
         rect_size: [rect[2], rect[3]],
         // Src-over with a=0 (compositor-alpha TRANSPARENT) is a no-op and leaves
         // overlay keyframes in retain. Always replace the hole, then restore page.
-        color: [
-            clear.r as f32,
-            clear.g as f32,
-            clear.b as f32,
-            1.0,
-        ],
+        color: [clear.r as f32, clear.g as f32, clear.b as f32, 1.0],
         border_color: [0.0; 4],
         radii: [0.0; 4],
         border_width: 0.0,
@@ -664,11 +656,7 @@ fn draw_page_stack_band_to_pass<'pass>(
             });
             pass.set_vertex_buffer(1, chrome_buffer.slice(..));
             pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(
-                0..pipeline.num_indices,
-                0,
-                0..chrome_slice.len() as u32,
-            );
+            pass.draw_indexed(0..pipeline.num_indices, 0, 0..chrome_slice.len() as u32);
             super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, 1);
         }
     }
@@ -882,6 +870,32 @@ fn band_instance_backdrop_blur(
         .fold(0.0_f32, f32::max)
 }
 
+/// Local `mount=` frost is independent of fullscreen modal frost.
+///
+/// Nested CSS `backdrop-filter` stacks: the modal samples the already-frosted
+/// page, it does not replace the local scrim. Skipping this when a ViewportModal
+/// is open was the "弹窗冲掉局部模糊" bug.
+fn should_capture_page_stack_local_backdrops(
+    allow_primitives: bool,
+    has_page_stack_bands: bool,
+) -> bool {
+    allow_primitives && has_page_stack_bands
+}
+
+fn page_stack_band_backdrop<'a>(
+    band_i: usize,
+    band_backdrop_idx: &[Option<usize>],
+    live_backdrops: &'a [wgpu::BindGroup],
+    dummy: &'a wgpu::BindGroup,
+) -> &'a wgpu::BindGroup {
+    band_backdrop_idx
+        .get(band_i)
+        .copied()
+        .flatten()
+        .and_then(|idx| live_backdrops.get(idx))
+        .unwrap_or(dummy)
+}
+
 /// Physical scissor for local `backdrop-filter` capture: the host overflow clip of
 /// blur instances in `band`. `instances` must already be in framebuffer pixels
 /// (the layout buffer is `take`n into `scaled_instances` before capture).
@@ -982,6 +996,16 @@ mod local_backdrop_capture_tests {
     }
 
     #[test]
+    fn local_frost_still_captures_when_modal_underlay_will_blur() {
+        assert!(
+            should_capture_page_stack_local_backdrops(true, true),
+            "page-stack frost must run even if a ViewportModal underlay will also blur"
+        );
+        assert!(!should_capture_page_stack_local_backdrops(false, true));
+        assert!(!should_capture_page_stack_local_backdrops(true, false));
+    }
+
+    #[test]
     fn host_scissor_uses_physical_clip_without_rescaling() {
         let mut inst = InstanceInput::zeroed();
         inst.backdrop_blur = 16.0;
@@ -1055,6 +1079,13 @@ impl AppState {
         })
     }
 
+    /// Maximize/restore plants `needs_text_settle` + `request_redraw` inside
+    /// `RedrawRequested`. Windows coalesces that redraw; without Poll the settle
+    /// frame never runs (fast-layout ghosts) and CSS clocks stop until the next wheel.
+    pub(super) fn needs_resize_followup(&self) -> bool {
+        self.last_resized_event.is_some() || self.needs_text_settle
+    }
+
     pub(super) fn note_winit_resized(&mut self, physical_size: PhysicalSize<u32>) {
         // Minimize reports 0×0. Pinning that (or keeping a stale maximized size)
         // makes `layout_fast` + `scroll_only` stick, and restore then never computes.
@@ -1065,6 +1096,9 @@ impl AppState {
         self.last_resized_event = Some(physical_size);
         // New resize aborts a pending settle; drag frames stay on the fast path.
         self.needs_text_settle = false;
+        // Cached DLs keep absolute glyph Y. Maximize can otherwise replay the
+        // pre-grow list (shimmer label ghosting onto the next section).
+        self.layout_tree.invalidate_collect_skip();
     }
 
     /// Pick the swapchain / layout size for this frame.
@@ -1412,6 +1446,7 @@ impl AppState {
             last_gpu_frame_fp: 0,
             last_scroll_offset_fp: 0,
             last_scroll_offsets: HashMap::new(),
+            last_present_node_bounds: Vec::new(),
             scroll_layer_clear: false,
             scroll_text_clip: None,
             overlay_restore_clear: false,
@@ -1444,10 +1479,7 @@ impl AppState {
                 if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                     map.insert(
                         rest.to_string(),
-                        [
-                            el.scroll_offset[0].to_bits(),
-                            el.scroll_offset[1].to_bits(),
-                        ],
+                        [el.scroll_offset[0].to_bits(), el.scroll_offset[1].to_bits()],
                     );
                 }
             }
@@ -1523,6 +1555,21 @@ impl AppState {
         self.damage_nodes.clear();
         self.scroll_text_clip = None;
         super::damage::clear_frame_paint_nodes();
+    }
+
+    fn note_fit_relayout_followup(&mut self, page_geometry: bool, scroll_paint_only: bool) {
+        if !crate::text::take_fit_needs_relayout() {
+            return;
+        }
+        if scroll_paint_only {
+            crate::text::note_fit_needs_relayout();
+            return;
+        }
+        self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+        if page_geometry {
+            self.page_geom_dirty = true;
+        }
+        self.window.request_redraw();
     }
 
     /// Portal layer gained/lost a surface. Overlay-local damage, not gallery FullClear.
@@ -1607,8 +1654,7 @@ impl AppState {
             }
         } else {
             self.overlay_restore_clear = false;
-            if !self.force_full_redraw && !self.scroll_layer_clear && (membership || prev != cur)
-            {
+            if !self.force_full_redraw && !self.scroll_layer_clear && (membership || prev != cur) {
                 for (i, b) in cur_boxes.iter().copied().enumerate() {
                     let bounds = match overlay_visual {
                         Some(v) => super::damage::union_rects(b, v),
@@ -1625,7 +1671,6 @@ impl AppState {
         self.last_overlay_boxes = cur_boxes;
         self.last_portal_layer_damage = cur;
         self.portal_membership_dirty = false;
-        self.page_geom_dirty = false;
     }
 
     /// Overlay instance/text AABB in logical px (physical collect coords ÷ `ui_scale`).
@@ -1696,9 +1741,7 @@ impl AppState {
             )
         };
         let mut scissor_physical = None;
-        if !node_present
-            && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad)
-        {
+        if !node_present && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad) {
             scissor_physical = self.damage_rect.and_then(|damage| {
                 super::damage::damage_to_scissor_physical(
                     damage,
@@ -1713,8 +1756,8 @@ impl AppState {
             }
         }
         let keep_retain = Self::gpu_partial_damage_enabled();
-        let want_gpu_partial = keep_retain
-            && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad);
+        let want_gpu_partial =
+            keep_retain && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad);
         let use_partial_damage = want_gpu_partial && self.present_retain.contents_valid();
         let warm_retain = keep_retain && !self.present_retain.contents_valid();
         let draw_to_retain = keep_retain;
@@ -1786,8 +1829,20 @@ impl AppState {
                 PaintDirtyKind::OverlayRestore => 2.0,
                 PaintDirtyKind::Node => 8.0,
             };
+            let prev_slot = if dirty.kind == PaintDirtyKind::Node {
+                self.last_present_node_bounds
+                    .iter()
+                    .find(|(k, _)| *k == dirty.key)
+                    .map(|(_, b)| *b)
+            } else {
+                None
+            };
+            let scissor_logical = match prev_slot {
+                Some(prev) => super::damage::union_rects(dirty.bounds, prev),
+                None => dirty.bounds,
+            };
             let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
-                dirty.bounds,
+                scissor_logical,
                 scissor_pad,
                 ui_scale,
                 self.config.width,
@@ -1797,7 +1852,7 @@ impl AppState {
             };
             render_pass.set_scissor_rect(x, y, w, h);
             let cull_phys = Some(super::draw_cull::damage_cull_rect_physical(
-                dirty.bounds,
+                scissor_logical,
                 scissor_pad,
                 ui_scale,
             ));
@@ -1887,10 +1942,8 @@ impl AppState {
                                 // Previous dirty node may have left glyphon's strip
                                 // pipeline bound; indexed SDF draws must rebind first.
                                 self.pipeline.bind_sdf(render_pass, true, dummy);
-                                render_pass.set_vertex_buffer(
-                                    0,
-                                    self.pipeline.vertex_buffer.slice(..),
-                                );
+                                render_pass
+                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                                 render_pass.set_index_buffer(
                                     self.pipeline.index_buffer.slice(..),
@@ -1924,36 +1977,61 @@ impl AppState {
                         for r in &self.overlay_band_text_renderers {
                             r.render(render_pass);
                         }
-                        super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
+                        super::frame_stats::note_scene_batch(
+                            super::frame_stats::SceneKind::Text,
+                            1,
+                        );
                     }
                 }
                 PaintDirtyKind::Node => {
                     if allow_primitives {
-                        let page = &scaled_instances
-                            [..overlay_inst_start.min(scaled_instances.len())];
+                        let page =
+                            &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
                         // Load + src-over of the same rounded SDF stacks AA (Default
                         // looks smaller / jittery). Ghost leave cannot erase an opaque
-                        // hover fill. Wipe the widget AABB with the card behind it —
-                        // never the widget's own fill, never window Clear / parent slot.
-                        if let Some((rect, color)) = super::draw_cull::node_present_dest_reset(
+                        // hover fill. Wipe this slot's ink with the card behind it —
+                        // never the scissor-padded dirty box (that punches parent
+                        // chrome), never the widget's own fill, never window Clear.
+                        // Nested Input inside a dirty Adornment: the shell already
+                        // dest-reset this box. A second wipe after the shell draw
+                        // leaves a nested fill (Gallery Kbd Search).
+                        if !super::damage::paint_dirty_nested_in_larger_node(
+                            dirty,
+                            &self.damage_nodes,
+                        ) {
+                            if let Some((rect, color)) =
+                                super::draw_cull::node_present_dest_reset_scaled(
+                                    dirty.key,
+                                    dirty.bounds,
+                                    node_paints,
+                                    page,
+                                    scaled_tex,
+                                    ui_scale,
+                                    prev_slot,
+                                )
+                            {
+                                draw_scissor_clear(
+                                    render_pass,
+                                    &self.pipeline,
+                                    &self.device,
+                                    rect,
+                                    wgpu::Color {
+                                        r: color[0] as f64,
+                                        g: color[1] as f64,
+                                        b: color[2] as f64,
+                                        a: 1.0,
+                                    },
+                                );
+                            }
+                        }
+                        let has_keyed = super::damage::paint_dirty_has_keyed_slot(
                             dirty.key,
                             dirty.bounds,
-                            node_paints,
-                            page,
-                        ) {
-                            draw_scissor_clear(
-                                render_pass,
-                                &self.pipeline,
-                                &self.device,
-                                rect,
-                                wgpu::Color {
-                                    r: color[0] as f64,
-                                    g: color[1] as f64,
-                                    b: color[2] as f64,
-                                    a: 1.0,
-                                },
-                            );
-                        }
+                            node_paints
+                                .iter()
+                                .filter(|p| !p.overlay)
+                                .map(|p| (p.key, p.bounds)),
+                        );
                         self.draw_matching_node_paints(
                             render_pass,
                             node_paints,
@@ -1963,11 +2041,12 @@ impl AppState {
                             dummy,
                             |p| {
                                 !p.overlay
-                                    && super::damage::paint_dirty_matches_slot(
+                                    && super::damage::paint_dirty_matches_present_slot(
                                         dirty.key,
                                         dirty.bounds,
                                         p.key,
                                         p.bounds,
+                                        has_keyed,
                                     )
                             },
                         );
@@ -2089,22 +2168,10 @@ impl AppState {
                     Some(out)
                 })
                 .collect();
-            draw_cpu_sdf_instances(
-                render_pass,
-                &self.pipeline,
-                &self.device,
-                dummy,
-                &erased,
-            );
+            draw_cpu_sdf_instances(render_pass, &self.pipeline, &self.device, dummy, &erased);
         }
         let now = owned(current);
-        draw_cpu_sdf_instances(
-            render_pass,
-            &self.pipeline,
-            &self.device,
-            dummy,
-            &now,
-        );
+        draw_cpu_sdf_instances(render_pass, &self.pipeline, &self.device, dummy, &now);
     }
 
     fn draw_matching_node_paints<'pass>(
@@ -2344,8 +2411,7 @@ impl AppState {
         let mut status = status;
         let mut portal_moves = 0usize;
         if needs_portal_hoist {
-            portal_moves =
-                hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
+            portal_moves = hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
             if portal_moves > 0 {
                 status = Self::merge_layout_status(status, LayoutStatus::StructureChanged);
             }
@@ -2535,21 +2601,21 @@ impl AppState {
             cursor = &mut cursor.children[index];
         }
         let status = patch(cursor);
-        let bounds = cursor.layout_bounds;
-        if matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) {
-            // Queue for render: mark_dirty + style/measure sync, then compute_layout from app root.
-            if let Some(n) = cursor.layout_node {
-                self.pending_layout_dirty.push(n);
-            }
-        }
+        // LayoutChanged: patched node only. StructureChanged: whole subtree —
+        // bind apply may flip child `display` / flex (Marker separator hairlines)
+        // and the fast path no longer rebuilds Taffy on StructureChanged.
+        crate::core::tree::collect_bind_layout_dirty(
+            cursor,
+            status,
+            &mut self.pending_layout_dirty,
+        );
         self.template_paths.insert(template_id.to_string(), path);
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
         if matches!(status, crate::core::tree::LayoutStatus::StyleChanged) {
-            // Paint-only (e.g. bind_text `"10"`→`"11"`): this node's box only.
-            // Do not `mark_full_redraw` — that forces a full Clear every counter tick.
-            if bounds[2] > 0.0 && bounds[3] > 0.0 {
-                super::damage::push_frame_paint_damage(bounds);
-            }
+            // Paint-only (e.g. bind_text `"10"`→`"11"`): this node's collect slot.
+            // Key by Taffy id so node-present dest-reset / glyph capture match
+            // even when the label has no SDF fill (gallery MouseEvent log).
+            super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
         }
         status
     }
@@ -2893,6 +2959,7 @@ impl AppState {
                 self.config.height,
             );
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+            self.page_geom_dirty = true;
             self.mark_full_redraw();
         }
     }
@@ -2956,16 +3023,24 @@ impl AppState {
             self.needs_text_settle = true;
         }
         let rail_anim = crate::components::sidebar::sidebar_rail_width_anim_active();
+        // Snapshot before `inner_size` may drop `last_resized_event` this frame.
+        let viewport_resizing = self.last_resized_event.is_some();
         let settling = self.needs_text_settle && self.last_resized_event.is_none() && !rail_anim;
         if settling {
             self.needs_text_settle = false;
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             // Geometry may match the last fast frame; force prepare so Exact/Bounds apply fit wrap.
             self.last_text_nodes_cache.clear();
+            // Fit remasure reflows the page. Named spin dirties must not keep PartialLoad.
+            self.page_geom_dirty = true;
         }
         // Sidebar width tweens reflow the app shell every frame — same wrap churn as live
         // window resize. Fast-path FIT_CACHE for the 200ms tween, then settle once.
         let layout_fast = self.last_resized_event.is_some() || rail_anim;
+        // `take_fit_needs_relayout` runs after `page_geom_dirty` is cleared this frame.
+        // Flag the next chrome so named spin cannot PartialLoad a page-wide Y shift.
+        let page_fit_relayout =
+            super::damage::fit_relayout_is_page_geometry(layout_fast, viewport_resizing, settling);
         crate::text::set_layout_text_fast_mode(layout_fast);
         let text_fast = text_force_fast_mode || layout_fast;
         let _text_backend = self.text_backend;
@@ -3217,7 +3292,8 @@ impl AppState {
 
         use crate::core::tree::LayoutStatus;
         // Merge local chrome dirty rects (button hover, etc.) before deciding Clear vs Load.
-        self.damage_nodes.extend(super::damage::take_frame_paint_nodes());
+        self.damage_nodes
+            .extend(super::damage::take_frame_paint_nodes());
         // Hoist before skip_full_clear: bubble +N Show-mounts the portal in-tree, then this
         // pass lifts it. Membership must be set before StructureChanged decides FullClear,
         // otherwise overlay-only frames still wipe the gallery.
@@ -3262,12 +3338,9 @@ impl AppState {
         // tick skips them via `modal_shell_defer_css_tick` so we do not double-step
         // (or step a stale un-hoisted copy).
         let modal_needs_frame =
-            crate::utils::modal_motion::flush_modal_shell_motion_subtree(
-                &mut self.root_element,
-            );
-        let modal_css_ticking = crate::utils::modal_motion::tick_hoisted_modal_css(
-            &mut self.root_element,
-        );
+            crate::utils::modal_motion::flush_modal_shell_motion_subtree(&mut self.root_element);
+        let modal_css_ticking =
+            crate::utils::modal_motion::tick_hoisted_modal_css(&mut self.root_element);
         // Floating Expand 依赖 layout_bounds 测高；Fade 也可在 layout 后 seed。
         // Do not flush immediately after hoist (the floating layer height is still 0 at this time, and reactive reconstruction will flush out mid).
         if modal_needs_frame || modal_css_ticking {
@@ -3307,31 +3380,31 @@ impl AppState {
                 scrollbar_update_resolved,
                 active_drag_rest,
             );
-            // Content scroll moves every pixel in the viewport. If we PartialLoad with a
-            // leftover hover/bind_text scissor, only that rect shows the new scroll offset
-            // (gallery: hover then wheel → corruption, then FullClear jump).
-            let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
-            let scroll_changed =
-                self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp;
-            let cur_offsets = Self::scroll_offsets_map(&self.root_element);
-            self.scroll_layer_clear = false;
-            self.scroll_text_clip = None;
-            if scroll_changed && !self.portal_membership_dirty {
-                // Pixels move inside the scroller: Clear that viewport layer, keep the rest
-                // of the retain buffer (sidebar / chrome). Whole-window FullClear is wrong here.
-                let prev_offsets = self.last_scroll_offsets.clone();
-                if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
-                    self.mark_full_redraw();
-                } else {
-                    self.scroll_layer_clear = true;
-                }
-            }
-            self.last_scroll_offset_fp = scroll_fp;
-            self.last_scroll_offsets = cur_offsets;
-            // Highlight geometry is restamped during layout collect from paint_visual_bounds.
-            // Do **not** refresh_highlight here: it raced collect (stale abs−scroll vs paint
-            // rect) and flickered the overlay during / after smooth scroll + pick hover.
         }
+        // Content scroll moves every pixel in the viewport. Named spin/shimmer dirties
+        // must not keep node-present PartialLoad — dest-reset of the current box leaves
+        // the previous offset in retain (stacked labels). Resize+StructureChanged may
+        // skip scrollbar geometry above; it must not skip this check.
+        let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
+        let scroll_changed = self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp;
+        let cur_offsets = Self::scroll_offsets_map(&self.root_element);
+        self.scroll_layer_clear = false;
+        self.scroll_text_clip = None;
+        if scroll_changed && !self.portal_membership_dirty {
+            // Pixels move inside the scroller: Clear that viewport layer, keep the rest
+            // of the retain buffer (sidebar / chrome). Whole-window FullClear is wrong here.
+            let prev_offsets = self.last_scroll_offsets.clone();
+            if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
+                self.mark_full_redraw();
+            } else {
+                self.scroll_layer_clear = true;
+            }
+        }
+        self.last_scroll_offset_fp = scroll_fp;
+        self.last_scroll_offsets = cur_offsets;
+        // Highlight geometry is restamped during layout collect from paint_visual_bounds.
+        // Do **not** refresh_highlight here: it raced collect (stale abs−scroll vs paint
+        // rect) and flickered the overlay during / after smooth scroll + pick hover.
         let pre_done = Instant::now();
         #[cfg(debug_assertions)]
         {
@@ -3453,28 +3526,30 @@ impl AppState {
         // keeps promoting `LayoutChanged` for several frames. Forcing full `compute_layout` on
         // every smooth-scroll frame janks the whole window (sidebar + scrollbar flash together).
         // Defer that remeasure until scroll settles (`take_fit_needs_relayout` re-arms below).
-        let scroll_only = (scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
-            && matches!(
-                layout_for_build,
-                crate::core::tree::LayoutStatus::Clean
-                    | crate::core::tree::LayoutStatus::StyleChanged
-            ))
-            || (scrollbar_skip_flex_layout
-                && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+        let geom_followup = viewport_resizing || settling || self.needs_text_settle;
+        let scroll_only = !geom_followup
+            && ((scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
                 && matches!(
                     layout_for_build,
                     crate::core::tree::LayoutStatus::Clean
                         | crate::core::tree::LayoutStatus::StyleChanged
                 ))
-            || (scroll_paint_only
-                && !matches!(
-                    layout_for_build,
-                    crate::core::tree::LayoutStatus::StructureChanged
-                )
-                && !matches!(
-                    pre_chrome_layout_status,
-                    crate::core::tree::LayoutStatus::StructureChanged
-                ));
+                || (scrollbar_skip_flex_layout
+                    && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                    && matches!(
+                        layout_for_build,
+                        crate::core::tree::LayoutStatus::Clean
+                            | crate::core::tree::LayoutStatus::StyleChanged
+                    ))
+                || (scroll_paint_only
+                    && !matches!(
+                        layout_for_build,
+                        crate::core::tree::LayoutStatus::StructureChanged
+                    )
+                    && !matches!(
+                        pre_chrome_layout_status,
+                        crate::core::tree::LayoutStatus::StructureChanged
+                    )));
         // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
         // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect with signal geometry,
         // Avoid just hovering the full color Taffy every frame.
@@ -3487,7 +3562,13 @@ impl AppState {
                 && scroll_only)
             || active_drag_rest.is_some();
         crate::style::set_gradient_raster_dpi(self.ui_scale());
-        let allow_collect_skip = !scroll_only && !use_full_taffy_rebuild;
+        let allow_collect_skip = crate::layout::collect_cache::collect_skip_allowed_for_frame(
+            layout_for_build,
+            scroll_paint_only,
+            use_full_taffy_rebuild,
+            viewport_resizing,
+            settling || self.needs_text_settle,
+        );
         self.layout_tree
             .set_collect_skip_allowed(allow_collect_skip);
         let mut layout_passes = 0u32;
@@ -3572,13 +3653,9 @@ impl AppState {
         }
         // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
         let floating_needs_frame =
-            crate::utils::floating_motion::flush_floating_motion_subtree(
-                &mut self.root_element,
-            );
+            crate::utils::floating_motion::flush_floating_motion_subtree(&mut self.root_element);
         let floating_css_ticking =
-            crate::utils::floating_motion::tick_hoisted_floating_css(
-                &mut self.root_element,
-            );
+            crate::utils::floating_motion::tick_hoisted_floating_css(&mut self.root_element);
         if floating_needs_frame || floating_css_ticking {
             // Expand 写入的 max-height keyframe 需再跑一趟 Taffy，本帧才能裁剪高度。
             crate::utils::floating_motion::mark_floating_panels_layout_dirty(
@@ -3876,6 +3953,23 @@ impl AppState {
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
+        // Consumed by `force_full_redraw_after_chrome` / scrollbar gates this frame.
+        // Clear here (not inside overlay occupancy) so `note_fit_relayout_followup`
+        // can still arm the *next* chrome after text prepare.
+        self.page_geom_dirty = false;
+        let present_slots: Vec<(u64, [f32; 4])> = render_result
+            .node_paints
+            .iter()
+            .filter(|p| !p.overlay)
+            .map(|p| (p.key, p.bounds))
+            .collect();
+        if super::damage::node_present_dirties_moved(
+            &self.damage_nodes,
+            &present_slots,
+            &self.last_present_node_bounds,
+        ) {
+            self.mark_full_redraw();
+        }
         let gpu_present = self.plan_gpu_present(ui_scale);
         let cull_phys = gpu_present.cull_phys;
         let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
@@ -3892,16 +3986,15 @@ impl AppState {
             )
             && (!has_dynamic_text || self.last_caret_blink_phase == caret_phase)
             && self.text_renderer.pending_warmup.is_empty();
-        let text_cache_valid = !has_page_stack_bands
-            && page_text_unchanged
-            && gpu_present.use_partial_damage;
+        let text_cache_valid =
+            !has_page_stack_bands && page_text_unchanged && gpu_present.use_partial_damage;
         // Never cull page glyphon except a real scroll-layer Clear. Never reuse a
         // page-stack buffer on FullClear — that drew empty captions over a wiped RT.
         // Glyph clip uses the unpadded scrolled viewport (1px AA), not the 16px SDF pad.
         let page_text_cull = if self.scroll_layer_clear && gpu_present.use_partial_damage {
-            self.scroll_text_clip
-                .or(self.damage_rect)
-                .map(|d| super::draw_cull::padded_xywh(d, super::draw_cull::SCROLL_LAYER_TEXT_PAD_LOGICAL))
+            self.scroll_text_clip.or(self.damage_rect).map(|d| {
+                super::draw_cull::padded_xywh(d, super::draw_cull::SCROLL_LAYER_TEXT_PAD_LOGICAL)
+            })
         } else {
             None
         };
@@ -3944,129 +4037,122 @@ impl AppState {
                     self.last_shadow_tex_draws.clone(),
                 )
             } else {
-            let mut caret_all = Vec::new();
-            let mut needs_warmup = false;
-            let mut culled_any = false;
-            let text_prepare_begin = Instant::now();
-            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
-                let text_lo = band.text.0.min(overlay_text_start);
-                let text_hi = band.text.1.min(overlay_text_start);
-                if text_lo >= text_hi {
-                    page_stack_skip_glyphon[band_i] = true;
-                    underlines.push(Vec::new());
-                    shadow_bands.push(Vec::new());
-                    continue;
-                }
-                let Some(band_text) = super::draw_cull::page_stack_band_submit_text(
-                    &self.last_text_nodes_cache,
-                    &self.text_nodes,
-                    text_lo,
-                    text_hi,
-                    page_text_cull,
-                    gpu_present.use_partial_damage,
-                ) else {
-                    // Unchanged runs (sidebar after Send) or outside the scrolled viewport.
-                    // Keep last glyphon GPU buffer; do not submit it on Load retain.
-                    page_stack_skip_glyphon[band_i] = true;
-                    underlines.push(Vec::new());
-                    shadow_bands.push(Vec::new());
-                    continue;
-                };
-                let prep_out = if band_i == 0 {
-                    prepare_text_frame(
-                        &mut self.text_renderer,
-                        &self.device,
-                        &self.queue,
-                        &self.config,
-                        &band_text,
-                        ui_scale,
-                        text_fast,
-                        &shadow_cached_keys,
-                        &self.shadow_rect_cache,
-                    )
-                } else {
-                    prepare_text_frame(
-                        &mut self.page_stack_band_text_renderers[band_i - 1],
-                        &self.device,
-                        &self.queue,
-                        &self.config,
-                        &band_text,
-                        ui_scale,
-                        text_fast,
-                        &shadow_cached_keys,
-                        &self.shadow_rect_cache,
-                    )
-                };
-                // A band whose glyphs are all clip-culled must not abort the rest of the page:
-                // instances for other bands were already uploaded at the new scroll offset.
-                // Breaking here leaves glyphon vertices on the previous frame (background
-                // scrolls, text does not follow). Clear this band's GPU vertices instead of
-                // keeping them: stale glyphs land in the local mask for one frame on scroll-up.
-                // Overlay/hover PartialLoad must NOT clear: that wiped gallery bubble captions.
-                if prep_out.culled_skip_prepare {
-                    culled_any = true;
-                    page_stack_skip_glyphon[band_i] = true;
-                    if self.scroll_layer_clear {
-                        self.clear_page_stack_band_glyphon(band_i);
+                let mut caret_all = Vec::new();
+                let mut needs_warmup = false;
+                let mut culled_any = false;
+                let text_prepare_begin = Instant::now();
+                for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                    let text_lo = band.text.0.min(overlay_text_start);
+                    let text_hi = band.text.1.min(overlay_text_start);
+                    if text_lo >= text_hi {
+                        page_stack_skip_glyphon[band_i] = true;
+                        underlines.push(Vec::new());
+                        shadow_bands.push(Vec::new());
+                        continue;
                     }
-                    underlines.push(Vec::new());
-                    shadow_bands.push(Vec::new());
-                    continue;
+                    let Some(band_text) = super::draw_cull::page_stack_band_submit_text(
+                        &self.last_text_nodes_cache,
+                        &self.text_nodes,
+                        text_lo,
+                        text_hi,
+                        page_text_cull,
+                        gpu_present.use_partial_damage,
+                    ) else {
+                        // Unchanged runs (sidebar after Send) or outside the scrolled viewport.
+                        // Keep last glyphon GPU buffer; do not submit it on Load retain.
+                        page_stack_skip_glyphon[band_i] = true;
+                        underlines.push(Vec::new());
+                        shadow_bands.push(Vec::new());
+                        continue;
+                    };
+                    let prep_out = if band_i == 0 {
+                        prepare_text_frame(
+                            &mut self.text_renderer,
+                            &self.device,
+                            &self.queue,
+                            &self.config,
+                            &band_text,
+                            ui_scale,
+                            text_fast,
+                            &shadow_cached_keys,
+                            &self.shadow_rect_cache,
+                        )
+                    } else {
+                        prepare_text_frame(
+                            &mut self.page_stack_band_text_renderers[band_i - 1],
+                            &self.device,
+                            &self.queue,
+                            &self.config,
+                            &band_text,
+                            ui_scale,
+                            text_fast,
+                            &shadow_cached_keys,
+                            &self.shadow_rect_cache,
+                        )
+                    };
+                    // A band whose glyphs are all clip-culled must not abort the rest of the page:
+                    // instances for other bands were already uploaded at the new scroll offset.
+                    // Breaking here leaves glyphon vertices on the previous frame (background
+                    // scrolls, text does not follow). Clear this band's GPU vertices instead of
+                    // keeping them: stale glyphs land in the local mask for one frame on scroll-up.
+                    // Overlay/hover PartialLoad must NOT clear: that wiped gallery bubble captions.
+                    if prep_out.culled_skip_prepare {
+                        culled_any = true;
+                        page_stack_skip_glyphon[band_i] = true;
+                        if self.scroll_layer_clear {
+                            self.clear_page_stack_band_glyphon(band_i);
+                        }
+                        underlines.push(Vec::new());
+                        shadow_bands.push(Vec::new());
+                        continue;
+                    }
+                    for bm in &prep_out.shadow_new_bitmaps {
+                        let gpu = super::image_registry::upload_rgba8(
+                            &self.device,
+                            &self.queue,
+                            &self.textured_pipeline,
+                            &bm.rgba,
+                            bm.width,
+                            bm.height,
+                        );
+                        self.shadow_tex_cache.insert(bm.cache_key, gpu);
+                        self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
+                    }
+                    if prep_out.needs_warmup {
+                        needs_warmup = true;
+                    }
+                    underlines.push(prep_out.underline_instances);
+                    caret_all.extend(prep_out.caret_instances);
+                    shadow_bands.push(prep_out.shadow_tex_draws);
                 }
-                for bm in &prep_out.shadow_new_bitmaps {
-                    let gpu = super::image_registry::upload_rgba8(
-                        &self.device,
-                        &self.queue,
-                        &self.textured_pipeline,
-                        &bm.rgba,
-                        bm.width,
-                        bm.height,
-                    );
-                    self.shadow_tex_cache.insert(bm.cache_key, gpu);
-                    self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
-                }
-                if prep_out.needs_warmup {
-                    needs_warmup = true;
-                }
-                underlines.push(prep_out.underline_instances);
-                caret_all.extend(prep_out.caret_instances);
-                shadow_bands.push(prep_out.shadow_tex_draws);
-            }
-            if culled_any {
-                self.window.request_redraw();
-            }
-            {
-                let shadow_all: Vec<_> = shadow_bands.iter().flatten().cloned().collect();
-                // Always keep the CPU cache aligned so the next Send can skip
-                // unchanged runs even when this frame submitted a later bubble.
-                self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
-                self.last_text_ui_scale = ui_scale;
-                self.last_text_surface_size = [self.config.width, self.config.height];
-                self.last_underline_instances.clear();
-                self.last_caret_instances = caret_all.clone();
-                self.last_shadow_tex_draws = shadow_all.clone();
-                self.last_caret_blink_phase = caret_phase;
-                if self.text_backend == TextRendererBackend::CpuTextHybrid {
-                    self.cpu_text_profiler.record(
-                        (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
-                        overlay_text_start,
-                    );
-                }
-                if needs_warmup {
+                if culled_any {
                     self.window.request_redraw();
                 }
-                if crate::text::take_fit_needs_relayout() {
-                    if scroll_paint_only {
-                        crate::text::note_fit_needs_relayout();
-                    } else {
-                        self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                {
+                    let shadow_all: Vec<_> = shadow_bands.iter().flatten().cloned().collect();
+                    // Always keep the CPU cache aligned so the next Send can skip
+                    // unchanged runs even when this frame submitted a later bubble.
+                    self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
+                    self.last_text_ui_scale = ui_scale;
+                    self.last_text_surface_size = [self.config.width, self.config.height];
+                    self.last_underline_instances.clear();
+                    self.last_caret_instances = caret_all.clone();
+                    self.last_shadow_tex_draws = shadow_all.clone();
+                    self.last_caret_blink_phase = caret_phase;
+                    if self.text_backend == TextRendererBackend::CpuTextHybrid {
+                        self.cpu_text_profiler.record(
+                            (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
+                            overlay_text_start,
+                        );
+                    }
+                    if needs_warmup {
                         self.window.request_redraw();
                     }
+                    self.note_fit_relayout_followup(page_fit_relayout, scroll_paint_only);
+                    page_stack_band_underlines = underlines;
+                    page_stack_band_shadows = shadow_bands;
+                    (Vec::new(), caret_all, shadow_all)
                 }
-                page_stack_band_underlines = underlines;
-                page_stack_band_shadows = shadow_bands;
-                (Vec::new(), caret_all, shadow_all)
-            }
             }
         } else if text_cache_valid {
             skip_page_glyphon = true;
@@ -4148,14 +4234,7 @@ impl AppState {
                         if prep_out.needs_warmup {
                             self.window.request_redraw();
                         }
-                        if crate::text::take_fit_needs_relayout() {
-                            if scroll_paint_only {
-                                crate::text::note_fit_needs_relayout();
-                            } else {
-                                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
-                                self.window.request_redraw();
-                            }
-                        }
+                        self.note_fit_relayout_followup(page_fit_relayout, scroll_paint_only);
                         (
                             prep_out.underline_instances,
                             prep_out.caret_instances,
@@ -4192,8 +4271,7 @@ impl AppState {
             }
             let shadow_cached_keys: std::collections::HashSet<u64> =
                 self.shadow_tex_cache.keys().copied().collect();
-            let overlay_text =
-                text_nodes_for_prepare(&self.text_nodes, text_lo, text_hi, None);
+            let overlay_text = text_nodes_for_prepare(&self.text_nodes, text_lo, text_hi, None);
             let overlay_prep = if band_i == 0 {
                 prepare_text_frame(
                     &mut self.overlay_text_renderer,
@@ -4240,29 +4318,20 @@ impl AppState {
         if overlay_needs_warmup {
             self.window.request_redraw();
         }
-        if crate::text::take_fit_needs_relayout() {
-            if scroll_paint_only {
-                crate::text::note_fit_needs_relayout();
-            } else {
-                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
-                self.window.request_redraw();
-            }
-        }
+        self.note_fit_relayout_followup(page_fit_relayout, scroll_paint_only);
         let capture_text_ready = if gpu_present.use_node_present
-            && self.damage_nodes.iter().any(|d| {
-                match d.kind {
-                    super::damage::PaintDirtyKind::OverlayRestore => true,
-                    super::damage::PaintDirtyKind::Node => {
-                        super::draw_cull::node_present_needs_glyphs(
-                            d.key,
-                            d.bounds,
-                            &render_result.node_paints,
-                            &scaled_instances
-                                [..overlay_inst_start.min(scaled_instances.len())],
-                        )
-                    }
-                    super::damage::PaintDirtyKind::Overlay => false,
+            && self.damage_nodes.iter().any(|d| match d.kind {
+                super::damage::PaintDirtyKind::OverlayRestore => true,
+                super::damage::PaintDirtyKind::Node => {
+                    super::draw_cull::node_present_needs_glyphs_scaled(
+                        d.key,
+                        d.bounds,
+                        &render_result.node_paints,
+                        &scaled_instances[..overlay_inst_start.min(scaled_instances.len())],
+                        ui_scale,
+                    )
                 }
+                super::damage::PaintDirtyKind::Overlay => false,
             }) {
             let page_text = &self.text_nodes[..overlay_text_start];
             let page_inst = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
@@ -4273,11 +4342,12 @@ impl AppState {
                 .filter(|d| match d.kind {
                     super::damage::PaintDirtyKind::OverlayRestore => true,
                     super::damage::PaintDirtyKind::Node => {
-                        super::draw_cull::node_present_needs_glyphs(
+                        super::draw_cull::node_present_needs_glyphs_scaled(
                             d.key,
                             d.bounds,
                             &render_result.node_paints,
                             page_inst,
+                            ui_scale,
                         )
                     }
                     super::damage::PaintDirtyKind::Overlay => false,
@@ -4385,6 +4455,12 @@ impl AppState {
                     .underline_offset_resolved()
                     .to_bits()
                     .hash(&mut hasher);
+                n.paint_scale.to_bits().hash(&mut hasher);
+                for v in n.paint_transform {
+                    v.to_bits().hash(&mut hasher);
+                }
+                n.paint_origin[0].to_bits().hash(&mut hasher);
+                n.paint_origin[1].to_bits().hash(&mut hasher);
                 // Caret index / selection must affect present even when underline instance
                 // bytes happen to collide (e.g. empty selection vs no caret).
                 match &n.style.input_caret {
@@ -4520,6 +4596,59 @@ impl AppState {
         if !use_partial_damage {
             scissor_physical = None;
         }
+
+        let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
+        let mut band_backdrop_idx: Vec<Option<usize>> = vec![None; page_stack_band_ranges.len()];
+        // Capture submits its own encoder (like subtree `render_capture`) so prefix
+        // glyphon is flushed to the scene RT before this frame encoder reuses the
+        // same vertex buffers. Must run **before** modal frost: the modal scene pass
+        // samples these bind groups so local + modal blurs stack.
+        if should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands) {
+            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                // `render_result.instances` was `take`n into `scaled_instances` (physical).
+                // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
+                let local_blur = band_instance_backdrop_blur(&scaled_instances, band);
+                if local_blur <= 0.5 {
+                    continue;
+                }
+                capture_page_stack_local_backdrop(
+                    &mut self.backdrop_blur,
+                    &self.device,
+                    &self.queue,
+                    self.config.width,
+                    self.config.height,
+                    self.config.format,
+                    band,
+                    &page_stack_band_ranges,
+                    band_i,
+                    local_blur * ui_scale,
+                    clear_color,
+                    &render_result.paint_ops,
+                    &self.pipeline,
+                    &self.instance_buffer,
+                    &self.textured_pipeline,
+                    &self.textured_instance_buffer,
+                    &self.image_textures,
+                    &scaled_tex,
+                    &scaled_input_chrome,
+                    &page_stack_band_underlines,
+                    &page_stack_band_shadows,
+                    &self.shadow_tex_cache,
+                    &self.text_renderer,
+                    &self.page_stack_band_text_renderers,
+                );
+                if let Some(view) = self.backdrop_blur.blurred_view() {
+                    let idx = live_backdrops.len();
+                    live_backdrops.push(self.pipeline.make_backdrop_bind_group(
+                        &self.device,
+                        view,
+                        self.backdrop_blur.sampler(),
+                    ));
+                    band_backdrop_idx[band_i] = Some(idx);
+                }
+            }
+        }
+
         if use_backdrop_blur {
             self.backdrop_blur.ensure_size(
                 &self.device,
@@ -4555,7 +4684,14 @@ impl AppState {
                         wgpu::IndexFormat::Uint16,
                     );
                     if has_page_stack_bands {
+                        let dummy = self.pipeline.dummy_backdrop();
                         for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                            let band_backdrop = page_stack_band_backdrop(
+                                band_i,
+                                &band_backdrop_idx,
+                                &live_backdrops,
+                                dummy,
+                            );
                             if band.paint_ops.0 < band.paint_ops.1 {
                                 draw_paint_ops(
                                     &mut page_pass,
@@ -4568,7 +4704,7 @@ impl AppState {
                                     &self.textured_instance_buffer,
                                     &self.image_textures,
                                     &scaled_tex,
-                                    self.pipeline.dummy_backdrop(),
+                                    band_backdrop,
                                     &[],
                                     None,
                                 );
@@ -4579,7 +4715,7 @@ impl AppState {
                                     &self.pipeline.bind_group_clip_poly,
                                     &[],
                                 );
-                                page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                                page_pass.set_bind_group(1, band_backdrop, &[]);
                                 page_pass
                                     .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -4674,7 +4810,10 @@ impl AppState {
                                 );
                             }
                             if band.text.0 < band.text.1
-                                && !page_stack_skip_glyphon.get(band_i).copied().unwrap_or(false)
+                                && !page_stack_skip_glyphon
+                                    .get(band_i)
+                                    .copied()
+                                    .unwrap_or(false)
                             {
                                 if band_i == 0 {
                                     self.text_renderer.render(&mut page_pass);
@@ -4803,57 +4942,6 @@ impl AppState {
             color_load
         };
 
-        let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
-        let mut band_backdrop_idx: Vec<Option<usize>> = vec![None; page_stack_band_ranges.len()];
-        // Capture submits its own encoder (like subtree `render_capture`) so prefix
-        // glyphon is flushed to the scene RT before this frame encoder reuses the
-        // same vertex buffers on the swapchain.
-        if allow_primitives && !use_backdrop_blur && has_page_stack_bands {
-            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
-                // `render_result.instances` was `take`n into `scaled_instances` (physical).
-                // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
-                let local_blur = band_instance_backdrop_blur(&scaled_instances, band);
-                if local_blur <= 0.5 {
-                    continue;
-                }
-                capture_page_stack_local_backdrop(
-                    &mut self.backdrop_blur,
-                    &self.device,
-                    &self.queue,
-                    self.config.width,
-                    self.config.height,
-                    self.config.format,
-                    band,
-                    &page_stack_band_ranges,
-                    band_i,
-                    local_blur * ui_scale,
-                    clear_color,
-                    &render_result.paint_ops,
-                    &self.pipeline,
-                    &self.instance_buffer,
-                    &self.textured_pipeline,
-                    &self.textured_instance_buffer,
-                    &self.image_textures,
-                    &scaled_tex,
-                    &scaled_input_chrome,
-                    &page_stack_band_underlines,
-                    &page_stack_band_shadows,
-                    &self.shadow_tex_cache,
-                    &self.text_renderer,
-                    &self.page_stack_band_text_renderers,
-                );
-                if let Some(view) = self.backdrop_blur.blurred_view() {
-                    let idx = live_backdrops.len();
-                    live_backdrops.push(self.pipeline.make_backdrop_bind_group(
-                        &self.device,
-                        view,
-                        self.backdrop_blur.sampler(),
-                    ));
-                    band_backdrop_idx[band_i] = Some(idx);
-                }
-            }
-        }
-
         {
             debug_assert!(
                 !matches!(color_load, wgpu::LoadOp::Load) || draw_to_retain,
@@ -4962,7 +5050,10 @@ impl AppState {
                             cull_phys,
                         );
                         if band.text.0 < band.text.1
-                            && !page_stack_skip_glyphon.get(band_i).copied().unwrap_or(false)
+                            && !page_stack_skip_glyphon
+                                .get(band_i)
+                                .copied()
+                                .unwrap_or(false)
                         {
                             if band_i == 0 {
                                 self.text_renderer.render(&mut render_pass);
@@ -5016,7 +5107,11 @@ impl AppState {
                 }
             }
 
-            if !use_backdrop_blur && !has_page_stack_bands && !retain_page_pixels && !gpu_present.use_node_present {
+            if !use_backdrop_blur
+                && !has_page_stack_bands
+                && !retain_page_pixels
+                && !gpu_present.use_node_present
+            {
                 draw_shadow_tex_draws(
                     &mut render_pass,
                     &shadow_tex_draws,
@@ -5027,7 +5122,12 @@ impl AppState {
                 );
             }
 
-            if !has_page_stack_bands && !underline_instances.is_empty() && !use_backdrop_blur && !retain_page_pixels && !gpu_present.use_node_present {
+            if !has_page_stack_bands
+                && !underline_instances.is_empty()
+                && !use_backdrop_blur
+                && !retain_page_pixels
+                && !gpu_present.use_node_present
+            {
                 let underline_instances = instances_for_upload(&underline_instances, cull_phys);
                 if !underline_instances.is_empty() {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
@@ -5054,7 +5154,12 @@ impl AppState {
                 }
             }
 
-            if !has_page_stack_bands && !use_backdrop_blur && !retain_page_pixels && !gpu_present.use_node_present && !skip_page_glyphon {
+            if !has_page_stack_bands
+                && !use_backdrop_blur
+                && !retain_page_pixels
+                && !gpu_present.use_node_present
+                && !skip_page_glyphon
+            {
                 self.text_renderer.render(&mut render_pass);
                 super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
             }
@@ -5126,91 +5231,29 @@ impl AppState {
             // Portal overlay: per-band `rects → text` so stacked panels occlude correctly
             // (still one Clear pass — no GLES LoadOp::Load).
             if !gpu_present.use_node_present {
-            for (band_i, band) in overlay_band_ranges.iter().enumerate() {
-                if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
-                    draw_paint_ops(
-                        &mut render_pass,
-                        &render_result.paint_ops,
-                        band.paint_ops.0,
-                        band.paint_ops.1,
-                        &self.pipeline,
-                        &self.instance_buffer,
-                        &self.textured_pipeline,
-                        &self.textured_instance_buffer,
-                        &self.image_textures,
-                        &scaled_tex,
-                        self.pipeline.dummy_backdrop(),
-                        &scaled_instances,
-                        None,
-                    );
-                } else if allow_primitives && band.instance.0 < band.instance.1 {
-                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
-                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
-                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                    render_pass.set_index_buffer(
-                        self.pipeline.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    render_pass.draw_indexed(
-                        0..self.pipeline.num_indices,
-                        0,
-                        band.instance.0 as u32..band.instance.1 as u32,
-                    );
-                    if band.textured.0 < band.textured.1 {
-                        draw_packed_textured_runs(
+                for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+                    if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
+                        draw_paint_ops(
                             &mut render_pass,
+                            &render_result.paint_ops,
+                            band.paint_ops.0,
+                            band.paint_ops.1,
+                            &self.pipeline,
+                            &self.instance_buffer,
                             &self.textured_pipeline,
                             &self.textured_instance_buffer,
                             &self.image_textures,
                             &scaled_tex,
-                            band.textured.0,
-                            band.textured.1,
+                            self.pipeline.dummy_backdrop(),
+                            &scaled_instances,
                             None,
                         );
-                    }
-                }
-
-                if allow_primitives && band.chrome.0 < band.chrome.1 {
-                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
-                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
-                    let chrome_buffer =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("Overlay Input Chrome Buffer"),
-                                contents: bytemuck::cast_slice(chrome_slice),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            });
-                    render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-                    render_pass.set_index_buffer(
-                        self.pipeline.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    render_pass.draw_indexed(
-                        0..self.pipeline.num_indices,
-                        0,
-                        0..chrome_slice.len() as u32,
-                    );
-                }
-
-                if let Some(ul) = overlay_band_underlines.get(band_i) {
-                    if !ul.is_empty() {
+                    } else if allow_primitives && band.instance.0 < band.instance.1 {
                         render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
                         render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                         render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                        let underline_buffer =
-                            self.device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Overlay Underline Buffer"),
-                                    contents: bytemuck::cast_slice(ul),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                });
-                        render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                         render_pass.set_index_buffer(
                             self.pipeline.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint16,
@@ -5218,31 +5261,96 @@ impl AppState {
                         render_pass.draw_indexed(
                             0..self.pipeline.num_indices,
                             0,
-                            0..ul.len() as u32,
+                            band.instance.0 as u32..band.instance.1 as u32,
+                        );
+                        if band.textured.0 < band.textured.1 {
+                            draw_packed_textured_runs(
+                                &mut render_pass,
+                                &self.textured_pipeline,
+                                &self.textured_instance_buffer,
+                                &self.image_textures,
+                                &scaled_tex,
+                                band.textured.0,
+                                band.textured.1,
+                                None,
+                            );
+                        }
+                    }
+
+                    if allow_primitives && band.chrome.0 < band.chrome.1 {
+                        render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                        render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                        let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                        let chrome_buffer =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Overlay Input Chrome Buffer"),
+                                    contents: bytemuck::cast_slice(chrome_slice),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            self.pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        render_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..chrome_slice.len() as u32,
+                        );
+                    }
+
+                    if let Some(ul) = overlay_band_underlines.get(band_i) {
+                        if !ul.is_empty() {
+                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                            let underline_buffer =
+                                self.device
+                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("Overlay Underline Buffer"),
+                                        contents: bytemuck::cast_slice(ul),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    });
+                            render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                self.pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(
+                                0..self.pipeline.num_indices,
+                                0,
+                                0..ul.len() as u32,
+                            );
+                        }
+                    }
+
+                    if let Some(sds) = overlay_band_shadows.get(band_i) {
+                        draw_shadow_tex_draws(
+                            &mut render_pass,
+                            sds,
+                            &self.shadow_tex_cache,
+                            &self.textured_pipeline,
+                            &self.device,
+                            None,
+                        );
+                    }
+
+                    if band.text.0 < band.text.1 {
+                        if band_i == 0 {
+                            self.overlay_text_renderer.render(&mut render_pass);
+                        } else {
+                            self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
+                        }
+                        super::frame_stats::note_scene_batch(
+                            super::frame_stats::SceneKind::Text,
+                            1,
                         );
                     }
                 }
-
-                if let Some(sds) = overlay_band_shadows.get(band_i) {
-                    draw_shadow_tex_draws(
-                        &mut render_pass,
-                        sds,
-                        &self.shadow_tex_cache,
-                        &self.textured_pipeline,
-                        &self.device,
-                        None,
-                    );
-                }
-
-                if band.text.0 < band.text.1 {
-                    if band_i == 0 {
-                        self.overlay_text_renderer.render(&mut render_pass);
-                    } else {
-                        self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
-                    }
-                    super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
-                }
-            }
             }
         }
         if draw_to_retain {
@@ -5268,6 +5376,22 @@ impl AppState {
         self.damage_rect = None;
         self.damage_nodes.clear();
         self.force_full_redraw = false;
+        let tex_logical = scale_textured_draws(&render_result.textured_draws, 1.0);
+        self.last_present_node_bounds = render_result
+            .node_paints
+            .iter()
+            .filter(|p| !p.overlay)
+            .map(|p| {
+                (
+                    p.key,
+                    super::draw_cull::node_paint_visual_bounds(
+                        p,
+                        &render_result.instances,
+                        &tex_logical,
+                    ),
+                )
+            })
+            .collect();
         self.has_presented_frame = true;
         {
             let draw_done = Instant::now();

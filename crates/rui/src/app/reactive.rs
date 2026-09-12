@@ -690,6 +690,18 @@ pub(crate) fn apply_bound_text_value(el: &mut Element, next: String) -> LayoutSt
 
 /// Whether a `bind_text` string change must reflow (vs paint-only).
 pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str) -> bool {
+    if !plain_text_leaf(el) {
+        return true;
+    }
+    // Specified width (px / %): the used box does not shrink-wrap glyphs.
+    // Equal-length, equal-newline replacements (padded mouse-log coords, digit
+    // counters) cannot change wrap; skip cosmic `prepare` on the pointer path.
+    if bind_text_width_is_specified(el)
+        && old.len() == next.len()
+        && newline_bytes(old) == newline_bytes(next)
+    {
+        return false;
+    }
     let before_w = text_intrinsic_width(el, old);
     let after_w = text_intrinsic_width(el, next);
     let box_w = el.layout_bounds[2];
@@ -713,6 +725,19 @@ pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str)
         _ => true,
     };
     width_changed || height_changed
+}
+
+fn newline_bytes(s: &str) -> usize {
+    s.as_bytes().iter().filter(|&&b| b == b'\n').count()
+}
+
+fn bind_text_width_is_specified(el: &Element) -> bool {
+    if !el.style.size.width.is_auto() {
+        return true;
+    }
+    el.style.unit_specs.iter().any(|(slot, dim)| {
+        matches!(*slot, UnitSlot::Width | UnitSlot::InlineSize) && dim.has_percent()
+    })
 }
 
 fn plain_text_leaf(el: &Element) -> bool {
@@ -1324,6 +1349,78 @@ mod intrinsic_width_tests {
             !bind_text_metric_needs_layout(&same, "10", "11"),
             "equal-metric digit counters stay paint-only"
         );
+    }
+
+    #[test]
+    fn padded_mouse_log_coord_tick_layout_status() {
+        // Gallery MouseEvent readout: fixed 7 padded rows, stretch width.
+        fn log_at(x: f32, y: f32) -> String {
+            format!(
+                "{:<10} detail={:<2} button={} buttons={:<3} which={}\n\
+client=({:>7.1},{:>7.1})  offset=({:>7.1},{:>7.1})\n\
+page=({:>7.1},{:>7.1})    screen=({:>7.1},{:>7.1})\n\
+movement=({:>7.1},{:>7.1})\n\
+Alt={:<5} Ctrl={:<5} Shift={:<5} Meta={:<5} Accel={}\n\
+region={}  related={}\n\
+phase={:<8}  stop={}  prevent={}",
+                "mousemove",
+                0,
+                0,
+                0,
+                1,
+                x,
+                y,
+                x,
+                y,
+                x,
+                y,
+                x,
+                y,
+                1.7,
+                0.9,
+                false,
+                false,
+                false,
+                false,
+                false,
+                format!("{:<18}", "-"),
+                format!("{:<18}", "gal-mouse-pad"),
+                "Target",
+                false,
+                false,
+            )
+        }
+        let mut el = label("").w("100%");
+        el.text_style.size = Some(12.0);
+        el.text_style.line_height_scale = Some(1.5);
+        el.layout_bounds = [12.0, 80.0, 400.0, 126.0];
+        let a = log_at(410.0, 82.0);
+        let b = log_at(411.7, 82.9);
+        assert_eq!(a.len(), b.len(), "padded fields must keep byte length");
+        let t0 = std::time::Instant::now();
+        let mut needs_any = false;
+        for i in 0..80 {
+            let x = 410.0 + i as f32 * 1.7;
+            let y = 82.0 + i as f32 * 0.9;
+            needs_any |=
+                bind_text_metric_needs_layout(&el, &log_at(x, y), &log_at(x + 1.7, y + 0.9));
+        }
+        let metric_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        assert!(
+            !needs_any,
+            "definite-width padded coords must stay paint-only"
+        );
+        assert!(
+            metric_ms < 5.0,
+            "pointer path must not cosmic-prepare every mousemove ({metric_ms:.2}ms / 80 ticks)"
+        );
+        let mut node = label("").w("100%");
+        node.text_style.size = Some(12.0);
+        node.text_style.line_height_scale = Some(1.5);
+        node.layout_bounds = el.layout_bounds;
+        node.text = Some(a);
+        let status = apply_bound_text_value(&mut node, b);
+        assert_eq!(status, LayoutStatus::StyleChanged);
     }
 
     #[test]

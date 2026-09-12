@@ -664,6 +664,41 @@ mod tests {
     }
 
     #[test]
+    fn stop_propagation_on_child_skips_parent_bubble_when_parent_ignores_capture() {
+        let parent_bubble = Rc::new(Cell::new(0u32));
+        let p = parent_bubble.clone();
+
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [2.0, 2.0, 8.0, 8.0];
+        leaf.focus_id = Some("child".into());
+        leaf.on_mousedown = Some(Rc::new(RefCell::new(move |e: &PointerEvent| {
+            e.stop_propagation();
+        })));
+
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        root.focus_id = Some("parent".into());
+        root.on_mousedown = Some(Rc::new(RefCell::new(move |e: &PointerEvent| {
+            if e.phase == EventPhase::Capture {
+                return;
+            }
+            p.set(p.get() + 1);
+        })));
+        root.children.push(leaf);
+
+        let path = hit_path(&root, 5.0, 5.0);
+        assert!(path.iter().any(|e| e.focus_id.as_deref() == Some("child")));
+        assert!(path.iter().any(|e| e.focus_id.as_deref() == Some("parent")));
+        let mut ev = PointerEvent::new(5.0, 5.0, MouseButton::Left, 1);
+        dispatch_pointer(&path, &mut ev, PointerKind::Down);
+        assert_eq!(
+            parent_bubble.get(),
+            0,
+            "child stopPropagation must not let a bubble-only parent handler run"
+        );
+    }
+
+    #[test]
     fn hit_path_bounds_are_visual_under_scroll() {
         let mut leaf = Element::new();
         leaf.layout_bounds = [0.0, 200.0, 80.0, 80.0];

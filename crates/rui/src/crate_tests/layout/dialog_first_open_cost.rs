@@ -8,15 +8,13 @@ use std::time::Instant;
 use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
 use crate::components::dialog::{dialog, dialog_content, DialogContentOpts};
-use crate::utils::modal_motion::{
-    flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
-};
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::core::tree::{Element, LayoutTree};
 use crate::layout::layout_tree::hoist_portal_subtrees;
 use crate::renderer::font_loader::{
     apply_default_families, create_font_system, ensure_coverage_for_text,
 };
+use crate::utils::modal_motion::{flush_modal_shell_motion_subtree, tick_hoisted_modal_css};
 
 fn has_tid(el: &Element, id: &str) -> bool {
     if el.template_id.as_deref() == Some(id) {

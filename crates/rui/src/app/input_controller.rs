@@ -741,22 +741,19 @@ impl super::App {
                         let caret = caret_sig.get().unwrap_or(s.len()).min(s.len());
                         let caret = s.floor_char_boundary(caret);
                         let shift = self.modifiers.shift_key();
-                        let soft_visual_model = if needs_visual
-                            && multiline
-                            && wrap_w > 1.0
-                            && nav_wrap.soft_wrap()
-                        {
-                            Some(crate::text::build_visual_lines(
-                                &s,
-                                nav_size,
-                                nav_weight,
-                                nav_lh,
-                                wrap_w,
-                                nav_wrap.to_line_break_source(),
-                            ))
-                        } else {
-                            None
-                        };
+                        let soft_visual_model =
+                            if needs_visual && multiline && wrap_w > 1.0 && nav_wrap.soft_wrap() {
+                                Some(crate::text::build_visual_lines(
+                                    &s,
+                                    nav_size,
+                                    nav_weight,
+                                    nav_lh,
+                                    wrap_w,
+                                    nav_wrap.to_line_break_source(),
+                                ))
+                            } else {
+                                None
+                            };
                         let visual_ranges = soft_visual_model.as_ref().map(|m| m.ranges.as_slice());
                         let lines_per_page = if multiline {
                             let ta_rest = crate::utils::text_field::textarea_scroll_rest(rest);

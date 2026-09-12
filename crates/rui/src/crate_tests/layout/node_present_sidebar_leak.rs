@@ -5,11 +5,12 @@
 //! an inset shell so Input's dirty AABB never swallows the rail captions.
 
 use crate::app::damage::{
-    force_full_redraw_after_chrome, push_frame_paint_damage, take_frame_paint_nodes, PaintDirtyKind,
+    force_full_redraw_after_chrome, paint_element_key, push_frame_paint_damage,
+    take_frame_paint_nodes, PaintDirty, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
-    node_present_capture_text_indices, node_present_dest_reset,
-    node_present_foreign_glyph_indices, text_paint_bounds,
+    node_present_capture_text_indices, node_present_dest_reset, node_present_foreign_glyph_indices,
+    text_paint_bounds,
 };
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
@@ -20,7 +21,7 @@ use crate::components::sidebar::{
 };
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    Element, LayoutStatus, LayoutTree, ReactiveSyncCollect, sync_reactive_elements_subtree_ex,
+    sync_reactive_elements_subtree_ex, Element, LayoutStatus, LayoutTree, ReactiveSyncCollect,
 };
 use crate::layout::layout_tree::RenderResult;
 use crate::primitives::r#box::{hstack, vstack};
@@ -65,11 +66,7 @@ fn leak_shell() -> Element {
             .child(Element::new().w(88.0).h(32.0))
             .child(
                 input_adornment()
-                    .child(
-                        input(INPUT_ID)
-                            .placeholder("Search…")
-                            .plain_chrome(true),
-                    )
+                    .child(input(INPUT_ID).placeholder("Search…").plain_chrome(true))
                     .addon("inline-end", Element::new().text("⌘K")),
             );
         let inset_body = vstack()
@@ -122,16 +119,7 @@ fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
 fn sync_like_app(root: &mut Element, tree: &mut LayoutTree, impact: &mut LayoutStatus) {
     crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(root, tree, impact);
     sync_focus_ring_subtree(root, tree, impact);
-    sync_class_variants_subtree(
-        root,
-        [0.0, 0.0],
-        "",
-        false,
-        1280.0,
-        800.0,
-        tree,
-        impact,
-    );
+    sync_class_variants_subtree(root, [0.0, 0.0], "", false, 1280.0, 800.0, tree, impact);
     sync_text_edit_paint_subtree_in_viewport(root, tree, impact, 1280.0, 800.0, [0.0, 0.0]);
 }
 
@@ -139,7 +127,9 @@ fn fmt_rect(r: [f32; 4]) -> String {
     format!("[{:.1},{:.1} {:.1}x{:.1}]", r[0], r[1], r[2], r[3])
 }
 
-fn sidebar_captions<'a>(result: &'a RenderResult) -> Vec<&'a crate::layout::layout_tree::TextLayoutInfo> {
+fn sidebar_captions<'a>(
+    result: &'a RenderResult,
+) -> Vec<&'a crate::layout::layout_tree::TextLayoutInfo> {
     result
         .text_nodes
         .iter()
@@ -257,7 +247,8 @@ fn input_partial_load_must_not_capture_sidebar_captions() {
         }
     }
 
-    let capture = node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
+    let capture =
+        node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
 
     let captured_sidebar: Vec<String> = capture
         .iter()
@@ -487,7 +478,8 @@ fn kbd_adornment_typing_must_not_capture_sidebar_or_wipe_spin() {
             .collect::<Vec<_>>()
     );
 
-    let capture = node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
+    let capture =
+        node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
     let captured_sidebar: Vec<String> = capture
         .iter()
         .filter_map(|&i| result.text_nodes.get(i))
@@ -555,4 +547,70 @@ fn kbd_adornment_typing_must_not_capture_sidebar_or_wipe_spin() {
             );
         }
     }
+}
+
+#[test]
+fn kbd_input_dest_reset_must_not_wipe_adornment_chrome() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let input_el = find_input(&root).expect("Search Input");
+    let addon_el = find_slot(&root, "input-adornment-addon").expect("⌘K addon");
+    let input_box = input_el.layout_bounds;
+    let addon_box = addon_el.layout_bounds;
+    let pad = input_el.style.shadow_blur + input_el.style.shadow_spread.abs() + 8.0;
+    let input_dirty = [
+        input_box[0] - pad,
+        input_box[1] - pad,
+        input_box[2] + pad * 2.0,
+        input_box[3] + pad * 2.0,
+    ];
+    let input_only = PaintDirty {
+        key: paint_element_key(input_el),
+        bounds: input_dirty,
+        kind: PaintDirtyKind::Node,
+    };
+    let page = &result.instances;
+    let Some((reset, _)) =
+        node_present_dest_reset(input_only.key, input_only.bounds, &result.node_paints, page)
+    else {
+        panic!(
+            "transparent Kbd Input must dest-reset its own box; input={}",
+            fmt_rect(input_box)
+        );
+    };
+    assert!(
+        reset[2] < input_dirty[2] - 4.0 && reset[3] < input_dirty[3] - 4.0,
+        "dest-reset must not follow the +8px caret scissor pad\n reset={} dirty={} input={}",
+        fmt_rect(reset),
+        fmt_rect(input_dirty),
+        fmt_rect(input_box)
+    );
+    let addon_cx = addon_box[0] + addon_box[2] * 0.5;
+    let addon_cy = addon_box[1] + addon_box[3] * 0.5;
+    let reset_covers_addon = addon_cx >= reset[0]
+        && addon_cy >= reset[1]
+        && addon_cx < reset[0] + reset[2]
+        && addon_cy < reset[1] + reset[3];
+    assert!(
+        !reset_covers_addon,
+        "Input dest-reset {} must not erase ⌘K addon {}",
+        fmt_rect(reset),
+        fmt_rect(addon_box)
+    );
 }

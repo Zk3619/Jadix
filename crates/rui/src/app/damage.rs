@@ -64,10 +64,7 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
     }
     FRAME_PAINT_NODES.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if let Some(existing) = slot
-            .iter_mut()
-            .find(|d| d.key == key && d.kind == kind)
-        {
+        if let Some(existing) = slot.iter_mut().find(|d| d.key == key && d.kind == kind) {
             existing.bounds = union_rects(existing.bounds, bounds);
         } else {
             slot.push(PaintDirty { key, bounds, kind });
@@ -75,9 +72,14 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
     });
 }
 
-/// Record this element's visual box as its own dirty node (no cross-node union).
-pub fn push_frame_paint_element(el: &Element) {
-    let b = crate::core::tree::visual_paint_aabb(el, [0.0, 0.0]);
+/// Record this element's **visual** box as its own dirty node (no cross-node union).
+///
+/// `scroll_acc` must be the same accumulation collect uses when emitting instances
+/// (`layout_bounds − scroll + sticky + translate`). Hardcoding `[0, 0]` puts the
+/// scissor in document space while ink is in visual space — dest-reset misses,
+/// PartialLoad stacks the previous offset (Marker labels after scroll).
+pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
+    let b = crate::core::tree::visual_paint_aabb(el, scroll_acc);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
@@ -94,8 +96,25 @@ pub fn push_frame_paint_element(el: &Element) {
     push_paint_dirty(
         paint_element_key(el),
         [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
-        PaintDirtyKind::Node,
+        paint_kind_for_element(el),
     );
+}
+
+/// Hoisted modal/popover chrome must not dest-reset as a page `Node`.
+pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
+    if el.attrs.get("rui_hoisted_portal").map(String::as_str) == Some("1") {
+        return PaintDirtyKind::Overlay;
+    }
+    match el.template_id.as_deref() {
+        Some(t)
+            if t.ends_with("__modal_overlay")
+                || t.ends_with("__modal_panel")
+                || t.ends_with("__modal_zoom") =>
+        {
+            PaintDirtyKind::Overlay
+        }
+        _ => PaintDirtyKind::Node,
+    }
 }
 
 /// Record a local paint dirty **node**. Disjoint calls stay separate nodes.
@@ -115,7 +134,11 @@ pub fn push_frame_overlay_damage(key: u64, bounds: [f32; 4]) {
 
 /// Overlay closed/shrunk: clear this box, restore intersecting page nodes.
 pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
-    push_paint_dirty(bounds_key(bounds) ^ 1, bounds, PaintDirtyKind::OverlayRestore);
+    push_paint_dirty(
+        bounds_key(bounds) ^ 1,
+        bounds,
+        PaintDirtyKind::OverlayRestore,
+    );
 }
 
 /// Take this frame's dirty nodes (order: restore, page, overlay).
@@ -208,7 +231,10 @@ pub fn take_policy_snapshot() -> Option<PolicySnapshot> {
 fn stash_policy_snapshot() {
     SNAP_PARTIAL.store(partial_load_frame_count(), Ordering::Relaxed);
     SNAP_FULL.store(full_clear_frame_count(), Ordering::Relaxed);
-    SNAP_SKIP.store(super::frame_stats::skipped_siblings_count(), Ordering::Relaxed);
+    SNAP_SKIP.store(
+        super::frame_stats::skipped_siblings_count(),
+        Ordering::Relaxed,
+    );
     SNAP_PATCH.store(super::frame_stats::patched_dl_count(), Ordering::Relaxed);
     SNAPSHOT_READY.store(true, Ordering::Relaxed);
 }
@@ -295,10 +321,7 @@ pub fn overlay_pixels_need_full_clear(
 /// Clear the occupancy hole, restore page slots, then draw the current overlay.
 /// Grow does not need Clear: new pixels were page and the overlay covers them.
 #[inline]
-pub fn overlay_restore_needed(
-    occupied: Option<[f32; 4]>,
-    current: Option<[f32; 4]>,
-) -> bool {
+pub fn overlay_restore_needed(occupied: Option<[f32; 4]>, current: Option<[f32; 4]>) -> bool {
     match (occupied, current) {
         (Some(_), None) => true,
         (Some(occ), Some(cur)) => overlay_box_extends_beyond(occ, cur, 2.0),
@@ -318,10 +341,7 @@ pub fn overlay_box_extends_beyond(outer: [f32; 4], inner: [f32; 4], slack: f32) 
 
 /// Overlay leftover pixels need a scissor Clear when occupancy is gone or shrank.
 #[inline]
-pub fn overlay_scissor_needs_clear(
-    prev: Option<[f32; 4]>,
-    cur: Option<[f32; 4]>,
-) -> bool {
+pub fn overlay_scissor_needs_clear(prev: Option<[f32; 4]>, cur: Option<[f32; 4]>) -> bool {
     overlay_restore_needed(prev, cur)
 }
 
@@ -335,8 +355,20 @@ pub fn overlay_scissor_needs_clear(
 /// Do **not** use AABB intersect / ancestor containment for *different* keys: a
 /// popover box intersects the bubble underneath, and a page root contains every
 /// widget — both would stamp foreign chrome/glyphs into the dirty scissor.
+///
+/// `same_box` across *different* keys is the bounds-key fallback. Nested
+/// same-size wrappers (MarkerIcon `size-4` around Icon `size-4`) also share
+/// that box, and the parent's collect range includes the child's textured
+/// quad. Present must use [`paint_dirty_matches_present_slot`]: when a keyed
+/// slot exists, skip the wrapper or PartialLoad src-overs the spinner twice
+/// (idle looks thicker than a FullClear scroll frame).
 #[inline]
-pub fn paint_dirty_matches_slot(dirty_key: u64, dirty_bounds: [f32; 4], slot_key: u64, slot_bounds: [f32; 4]) -> bool {
+pub fn paint_dirty_matches_slot(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    slot_key: u64,
+    slot_bounds: [f32; 4],
+) -> bool {
     const SLACK: f32 = 8.0;
     let same_box = (dirty_bounds[0] - slot_bounds[0]).abs() <= SLACK
         && (dirty_bounds[1] - slot_bounds[1]).abs() <= SLACK
@@ -358,6 +390,52 @@ pub fn paint_dirty_matches_slot(dirty_key: u64, dirty_bounds: [f32; 4], slot_key
         (dirty_bounds[3] + REUSE_PAD * 2.0).max(0.0),
     ];
     intersect_rects(padded, slot_bounds).is_some()
+}
+
+/// True when some collect slot shares `dirty_key` and still occupies this box.
+#[inline]
+pub fn paint_dirty_has_keyed_slot(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    slots: impl IntoIterator<Item = (u64, [f32; 4])>,
+) -> bool {
+    slots
+        .into_iter()
+        .any(|(k, b)| k == dirty_key && paint_dirty_matches_slot(dirty_key, dirty_bounds, k, b))
+}
+
+/// Node-present slot filter. Prefer the keyed widget; `same_box` is only the
+/// fallback when chrome recorded a bounds-key and no Taffy slot owns that key.
+#[inline]
+pub fn paint_dirty_matches_present_slot(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    slot_key: u64,
+    slot_bounds: [f32; 4],
+    has_keyed_slot: bool,
+) -> bool {
+    if has_keyed_slot && slot_key != dirty_key {
+        return false;
+    }
+    paint_dirty_matches_slot(dirty_key, dirty_bounds, slot_key, slot_bounds)
+}
+
+/// Inner widget whose dest-reset would punch a hole in a larger dirty ancestor
+/// already being presented (Kbd Search Input inside InputAdornment). Skip the
+/// inner wipe; the ancestor slot redraws the fill, then the inner slot paints
+/// caret chrome on top.
+#[inline]
+pub fn paint_dirty_nested_in_larger_node(dirty: &PaintDirty, nodes: &[PaintDirty]) -> bool {
+    if dirty.kind != PaintDirtyKind::Node {
+        return false;
+    }
+    let area = dirty.bounds[2] * dirty.bounds[3];
+    nodes.iter().any(|o| {
+        o.kind == PaintDirtyKind::Node
+            && o.key != dirty.key
+            && intersect_rects(o.bounds, dirty.bounds).is_some()
+            && o.bounds[2] * o.bounds[3] > area + 1.0
+    })
 }
 
 /// Overlay close: redraw this collect slot into the cleared hole.
@@ -411,10 +489,7 @@ pub fn text_center_in_dirty(text: [f32; 4], dirty: [f32; 4]) -> bool {
     }
     let cx = text[0] + text[2] * 0.5;
     let cy = text[1] + text[3] * 0.5;
-    cx >= dirty[0]
-        && cy >= dirty[1]
-        && cx <= dirty[0] + dirty[2]
-        && cy <= dirty[1] + dirty[3]
+    cx >= dirty[0] && cy >= dirty[1] && cx <= dirty[0] + dirty[2] && cy <= dirty[1] + dirty[3]
 }
 
 /// True when `outer` fully covers `inner` (`[x,y,w,h]`, 0.5px layout slack).
@@ -517,6 +592,12 @@ pub fn frame_clear_policy(
 /// box) must not FullClear — that wipes CSS spin dirties and Load-stamps
 /// leftover glyphs on the next PartialLoad. `pre_chrome` LayoutChanged is the
 /// same gate as `sync_impact`; it must not undo a named-node PartialLoad.
+///
+/// Viewport grow / `layout_fast` then `glyphon_fit` is **not** that local case:
+/// boxes below the reflow move. Node-present dest-resets the *new* box only, so
+/// pixels at the previous Y stay (Marker `shimmer-box` ghosting onto the next
+/// section). Callers must pass `page_geometry_changed` when
+/// [`fit_relayout_is_page_geometry`].
 pub fn force_full_redraw_after_chrome(
     pre_chrome: LayoutStatus,
     sync_impact: LayoutStatus,
@@ -543,6 +624,64 @@ pub fn force_full_redraw_after_chrome(
     page_geometry_changed || !has_named_damage
 }
 
+/// Dest-reset wipes `now` only. If the last presented box is not that box,
+/// Load keeps the old pixels (duplicate spin / stacked labels).
+pub fn node_present_slot_moved(prev: [f32; 4], now: [f32; 4]) -> bool {
+    // Sub-pixel layout noise stays paint-in-place. Smooth scroll of 1px+ is a
+    // page translation: dest-reset of the named spin cannot wipe sibling labels.
+    const SLACK: f32 = 0.5;
+    (prev[0] - now[0]).abs() > SLACK
+        || (prev[1] - now[1]).abs() > SLACK
+        || (prev[2] - now[2]).abs() > SLACK * 2.0
+        || (prev[3] - now[3]).abs() > SLACK * 2.0
+}
+
+/// Named dirties license paint-in-place, not a page translation.
+///
+/// `NodePaint.bounds` and chrome dirties are **visual** (abs − scroll). Scroll,
+/// maximize, and `glyphon_fit` all move that box. Dest-reset of *now* only leaves
+/// the previous visual Y in retain — this gate FullClears when the last presented
+/// visual slot is not the current one.
+pub fn node_present_dirties_moved(
+    dirties: &[PaintDirty],
+    current_slots: &[(u64, [f32; 4])],
+    previous_slots: &[(u64, [f32; 4])],
+) -> bool {
+    if previous_slots.is_empty() {
+        return false;
+    }
+    dirties.iter().any(|d| {
+        if d.kind != PaintDirtyKind::Node {
+            return false;
+        }
+        let Some(now) = current_slots
+            .iter()
+            .find(|(k, b)| paint_dirty_matches_slot(d.key, d.bounds, *k, *b))
+            .map(|(_, b)| *b)
+        else {
+            return false;
+        };
+        let Some(prev) = previous_slots
+            .iter()
+            .find(|(k, _)| *k == d.key)
+            .map(|(_, b)| *b)
+        else {
+            return false;
+        };
+        node_present_slot_moved(prev, now)
+    })
+}
+
+/// `glyphon_fit` after a live-resize / fast-measure frame reflows **page** Y.
+/// Local Input fit in a stable viewport is not this — that box does not move siblings.
+pub fn fit_relayout_is_page_geometry(
+    layout_fast: bool,
+    viewport_resizing: bool,
+    text_settling: bool,
+) -> bool {
+    layout_fast || viewport_resizing || text_settling
+}
+
 /// Paint-node present: PartialLoad unless a **single** node covers the viewport.
 /// The union of many local nodes must not FullClear (mass hover-leave).
 pub fn frame_clear_policy_for_nodes(
@@ -557,10 +696,7 @@ pub fn frame_clear_policy_for_nodes(
     if nodes.is_empty() {
         return FrameClearPolicy::FullClear;
     }
-    if nodes
-        .iter()
-        .any(|n| damage_covers_full(viewport, n.bounds))
-    {
+    if nodes.iter().any(|n| damage_covers_full(viewport, n.bounds)) {
         return FrameClearPolicy::FullClear;
     }
     if nodes
@@ -670,6 +806,78 @@ pub fn damage_covers_full(viewport: [f32; 4], damage: [f32; 4]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_kind_for_modal_chrome_is_overlay() {
+        let mut overlay = Element::new();
+        overlay.template_id = Some("dlg__modal_overlay".into());
+        assert_eq!(paint_kind_for_element(&overlay), PaintDirtyKind::Overlay);
+        let mut hoisted = Element::new();
+        hoisted.set_attr("rui_hoisted_portal", "1");
+        assert_eq!(paint_kind_for_element(&hoisted), PaintDirtyKind::Overlay);
+        assert_eq!(
+            paint_kind_for_element(&Element::new()),
+            PaintDirtyKind::Node
+        );
+    }
+
+    #[test]
+    fn nested_input_dirty_skips_dest_reset_inside_adornment() {
+        let shell = PaintDirty {
+            key: 1,
+            bounds: [10.0, 10.0, 320.0, 40.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let input = PaintDirty {
+            key: 2,
+            bounds: [12.0, 12.0, 260.0, 36.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(paint_dirty_nested_in_larger_node(&input, &[shell, input]));
+        assert!(!paint_dirty_nested_in_larger_node(&shell, &[shell, input]));
+        assert!(!paint_dirty_nested_in_larger_node(&input, &[input]));
+    }
+
+    #[test]
+    fn bind_text_dirty_must_use_visual_scroll_not_document() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new().w(400.0).h(20.0);
+        el.layout_node = Some(taffy::prelude::NodeId::from(42u64));
+        el.layout_bounds = [16.0, 800.0, 400.0, 18.0];
+        el.paint_scroll_acc = [0.0, 600.0];
+        let visual = crate::core::tree::visual_paint_aabb(&el, el.paint_scroll_acc);
+        assert!(
+            (visual[1] - 200.0).abs() < 0.5,
+            "visual y must be document y minus scroll, got {}",
+            visual[1]
+        );
+
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        let document_dirty = take_frame_paint_nodes();
+        assert_eq!(document_dirty.len(), 1);
+        assert!(
+            !paint_dirty_matches_slot(
+                document_dirty[0].key,
+                document_dirty[0].bounds,
+                paint_element_key(&el),
+                visual,
+            ),
+            "document-space bind_text dirty must not match the scrolled collect slot (gallery click caption freeze / wipe)"
+        );
+
+        push_frame_paint_element(&el, el.paint_scroll_acc);
+        let visual_dirty = take_frame_paint_nodes();
+        assert_eq!(visual_dirty.len(), 1);
+        assert!(
+            paint_dirty_matches_slot(
+                visual_dirty[0].key,
+                visual_dirty[0].bounds,
+                paint_element_key(&el),
+                visual,
+            ),
+            "bind_text StyleChanged must dest-reset the visual box collect actually painted"
+        );
+    }
 
     #[test]
     fn union_disjoint_rects() {
@@ -894,7 +1102,73 @@ mod tests {
         );
         assert!(
             force_full_redraw_after_chrome(LayoutChanged, StyleChanged, true, false, true),
-            "page geometry still FullClears"
+            "page geometry (window resize / text-fit settle) FullClears even with named spin"
+        );
+        assert!(
+            fit_relayout_is_page_geometry(true, false, false),
+            "maximize layout_fast then glyphon_fit is page geometry"
+        );
+        assert!(
+            !fit_relayout_is_page_geometry(false, false, false),
+            "stable-viewport Input fit is not page geometry"
+        );
+        assert!(
+            force_full_redraw_after_chrome(
+                LayoutChanged,
+                StyleChanged,
+                fit_relayout_is_page_geometry(true, false, false),
+                false,
+                true
+            ),
+            "named spin must not keep PartialLoad after maximize fit reflow — dest-reset of the new box leaves the old Y"
+        );
+        assert!(
+            node_present_dirties_moved(
+                &[PaintDirty {
+                    key: 7,
+                    bounds: [10.0, 90.0, 16.0, 16.0],
+                    kind: PaintDirtyKind::Node,
+                }],
+                &[(7, [10.0, 90.0, 16.0, 16.0])],
+                &[(7, [10.0, 10.0, 16.0, 16.0])],
+            ),
+            "named spin after a page Y shift cannot dest-reset the previous pixels"
+        );
+        assert!(
+            !node_present_dirties_moved(
+                &[PaintDirty {
+                    key: 7,
+                    bounds: [10.0, 10.0, 16.0, 16.0],
+                    kind: PaintDirtyKind::Node,
+                }],
+                &[(7, [10.0, 10.0, 16.0, 16.0])],
+                &[(7, [10.0, 10.0, 16.0, 16.0])],
+            ),
+            "idle spin at a stable box stays paint-in-place"
+        );
+        assert!(
+            node_present_dirties_moved(
+                &[PaintDirty {
+                    key: 7,
+                    bounds: [10.0, 12.0, 16.0, 16.0],
+                    kind: PaintDirtyKind::Node,
+                }],
+                &[(7, [10.0, 12.0, 16.0, 16.0])],
+                &[(7, [10.0, 10.0, 16.0, 16.0])],
+            ),
+            "smooth-scroll 2px is still a visual translation — 8px slack left stacked labels"
+        );
+        assert!(
+            !node_present_dirties_moved(
+                &[PaintDirty {
+                    key: 7,
+                    bounds: [10.0, 10.0, 16.0, 16.0],
+                    kind: PaintDirtyKind::Node,
+                }],
+                &[(7, [10.0, 10.0, 16.0, 16.0])],
+                &[],
+            ),
+            "first present has no previous pixels to leave behind"
         );
         assert!(
             force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, false),
@@ -1065,6 +1339,46 @@ mod tests {
         assert!(
             !paint_dirty_matches_slot(1, chip, 3, title),
             "nearby caption must not paint into a chip scissor"
+        );
+    }
+
+    #[test]
+    fn keyed_spin_must_not_also_match_same_box_parent() {
+        // MarkerIcon `size-4` wraps Icon `size-4`. `same_box` matches both;
+        // the parent's textured range includes the lucide quad. Drawing both
+        // src-overs the spinner twice on PartialLoad (idle thicker than scroll).
+        let icon = [8.0, 8.0, 16.0, 16.0];
+        let parent = [8.0, 8.0, 16.0, 16.0];
+        let rot_pad = (16.0f32.hypot(16.0) - 16.0).max(0.0) * 0.5;
+        let pad = 2.0 + rot_pad;
+        let dirty = [
+            icon[0] - pad,
+            icon[1] - pad,
+            icon[2] + pad * 2.0,
+            icon[3] + pad * 2.0,
+        ];
+        let icon_key = 10u64;
+        let parent_key = 9u64;
+        let slots = [(icon_key, icon), (parent_key, parent)];
+        assert!(
+            paint_dirty_matches_slot(icon_key, dirty, parent_key, parent),
+            "raw same_box still matches the wrapper — present must not use that"
+        );
+        let has_keyed = paint_dirty_has_keyed_slot(icon_key, dirty, slots);
+        assert!(has_keyed, "Icon layout_node must win over the wrapper");
+        assert!(paint_dirty_matches_present_slot(
+            icon_key, dirty, icon_key, icon, has_keyed
+        ));
+        assert!(
+            !paint_dirty_matches_present_slot(icon_key, dirty, parent_key, parent, has_keyed),
+            "wrapper collect range must not redraw the child's spinner a second time"
+        );
+        let bounds_key = 99u64;
+        let has_keyed = paint_dirty_has_keyed_slot(bounds_key, dirty, slots);
+        assert!(!has_keyed);
+        assert!(
+            paint_dirty_matches_present_slot(bounds_key, dirty, icon_key, icon, has_keyed),
+            "bounds-key chrome with no Taffy slot still uses same_box"
         );
     }
 

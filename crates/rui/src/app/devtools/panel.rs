@@ -20,8 +20,8 @@ use super::overlay::{box_model_diagram, highlight_slot};
 use super::reactivity_panel::build_reactivity_panel;
 use super::snapshot::{
     cssom_text_from_style, find_element_by_path, find_element_by_template_mut, node_label,
-    snapshot_hover_anchor,
-    snapshot_subtree, snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot,
+    snapshot_hover_anchor, snapshot_subtree, snapshot_tree, source_location_from_template_id,
+    InspectorNodeSnapshot,
 };
 use super::state::{DevToolsState, DevToolsTab};
 

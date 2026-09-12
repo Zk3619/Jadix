@@ -2,7 +2,7 @@
 //! tail from `min-h-full` / inflated `content_h`.
 
 use crate::app::draw_cull::{
-    clip_text_nodes_to_rect, page_stack_band_submit_text, padded_xywh, DAMAGE_CULL_PAD_LOGICAL,
+    clip_text_nodes_to_rect, padded_xywh, page_stack_band_submit_text, DAMAGE_CULL_PAD_LOGICAL,
     SCROLL_LAYER_TEXT_PAD_LOGICAL,
 };
 use crate::app::reactive::{reactive_view_sized, reset_registered_anchors};
@@ -1403,13 +1403,7 @@ fn rail_captions_in_submit(
             submitted
                 .iter()
                 .filter(|n| n.text == "布局" || n.text == "Gallery" || n.text == "文本")
-                .map(|n| {
-                    format!(
-                        "{}@{}",
-                        n.text,
-                        fmt_rect([n.x, n.y, n.width, n.height])
-                    )
-                }),
+                .map(|n| format!("{}@{}", n.text, fmt_rect([n.x, n.y, n.width, n.height]))),
         );
     };
     if ranges.is_empty() {
@@ -1643,7 +1637,9 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
         let before_ranges = result.overlay_split.page_stack_band_ranges();
         let content = find_slot_ms_mut(&mut root, "message-scroller-content")
             .expect("message-scroller-content");
-        content.children.push(bubble_turn(GAL_MS_TEXTS.len(), "send-follow-up"));
+        content
+            .children
+            .push(bubble_turn(GAL_MS_TEXTS.len(), "send-follow-up"));
         message_scroller_stick_to_end("gal-ms-showcase");
         sync_message_scroller_follow_after_layout(&mut root, &mut tree);
         let after = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
@@ -1669,12 +1665,8 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
                 })
                 .collect()
         };
-        let stolen_plain = rail_captions_in_submit(
-            &before_nodes,
-            &after.text_nodes,
-            &after_ranges,
-            None,
-        );
+        let stolen_plain =
+            rail_captions_in_submit(&before_nodes, &after.text_nodes, &after_ranges, None);
         let stolen_clip = rail_captions_in_submit(
             &before_nodes,
             &after.text_nodes,
@@ -1690,10 +1682,7 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
              ms={} after_ms={}",
             dump_rail(&before_nodes),
             dump_rail(&after.text_nodes),
-            before_ranges
-                .iter()
-                .map(|b| b.text)
-                .collect::<Vec<_>>(),
+            before_ranges.iter().map(|b| b.text).collect::<Vec<_>>(),
             after_ranges.iter().map(|b| b.text).collect::<Vec<_>>(),
             fmt_rect(ms_bounds),
             fmt_rect(after_ms)
@@ -1865,9 +1854,10 @@ fn gallery_send_must_not_lift_sidebar_footer() {
                     .child(
                         message_scroller()
                             .h("100%")
-                            .child(message_scroller_viewport().child(
-                                message_scroller_content().child(rows),
-                            ))
+                            .child(
+                                message_scroller_viewport()
+                                    .child(message_scroller_content().child(rows)),
+                            )
                             .child(message_scroller_button().direction("end")),
                     )
                     .into();
@@ -2016,14 +2006,8 @@ fn gallery_send_must_not_lift_sidebar_footer() {
         // AppState maximize uses the fast collect-skip path (not full Taffy rebuild).
         tree.set_collect_skip_allowed(true);
         let _ = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
-        let maxed_result = tree.build_and_layout_fast(
-            &mut root,
-            1280.0,
-            1200.0,
-            [-1.0, -1.0],
-            false,
-            false,
-        );
+        let maxed_result =
+            tree.build_and_layout_fast(&mut root, 1280.0, 1200.0, [-1.0, -1.0], false, false);
         let maxed = footer_snap(&root, &tree, &maxed_result);
         assert!(
             maxed.bounds[1] > before.bounds[1] + 80.0,
@@ -2057,14 +2041,8 @@ fn gallery_send_must_not_lift_sidebar_footer() {
             [0.0, 0.0],
         );
         sync_message_scroller_follow_after_layout(&mut root, &mut tree);
-        let after_result = tree.build_and_layout_fast(
-            &mut root,
-            1280.0,
-            1200.0,
-            [-1.0, -1.0],
-            false,
-            false,
-        );
+        let after_result =
+            tree.build_and_layout_fast(&mut root, 1280.0, 1200.0, [-1.0, -1.0], false, false);
         let after = footer_snap(&root, &tree, &after_result);
         let dump = format!(
             "before={}\nafter={}",
@@ -2078,10 +2056,7 @@ fn gallery_send_must_not_lift_sidebar_footer() {
             .find(|(id, ..)| id.contains("gal-ms-showcase"))
             .map(|(_, b, _, _)| *b)
             .expect("MessageScroller viewport");
-        let footer_key = footer_el
-            .layout_node
-            .map(u64::from)
-            .unwrap_or(0);
+        let footer_key = footer_el.layout_node.map(u64::from).unwrap_or(0);
         assert!(
             !crate::app::damage::paint_dirty_matches_slot(
                 footer_key,
@@ -2159,14 +2134,8 @@ fn gallery_send_must_not_lift_sidebar_footer() {
         );
 
         // AppState restore/minimize is Clean + scroll_only; Footer must follow the rail.
-        let restored_result = tree.build_and_layout_fast(
-            &mut root,
-            1280.0,
-            800.0,
-            [-1.0, -1.0],
-            true,
-            false,
-        );
+        let restored_result =
+            tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], true, false);
         let restored = footer_snap(&root, &tree, &restored_result);
         assert!(
             (restored.bounds[1] + restored.bounds[3] - restored.inner_bottom).abs() < 8.0,
@@ -2233,11 +2202,8 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
             let live = Rc::clone(&live);
             move || {
                 let thread = thread;
-                let rows = reactive_view_sized(
-                    "gal-ms-sb-max-rows",
-                    "100%",
-                    "max-content",
-                    move || {
+                let rows =
+                    reactive_view_sized("gal-ms-sb-max-rows", "100%", "max-content", move || {
                         let mut col = crate::primitives::r#box::vstack()
                             .w("100%")
                             .min_w(0.0)
@@ -2247,8 +2213,7 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                             col = col.child(bubble_turn(i, text));
                         }
                         col.into()
-                    },
-                );
+                    });
                 let rows = children_none_if_vacuous(Some(rows))
                     .expect("rows placeholder must survive ui! vacuous filter");
                 let chat: Element = message_scroller_provider()
@@ -2258,9 +2223,10 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                     .child(
                         message_scroller()
                             .h("100%")
-                            .child(message_scroller_viewport().child(
-                                message_scroller_content().child(rows),
-                            ))
+                            .child(
+                                message_scroller_viewport()
+                                    .child(message_scroller_content().child(rows)),
+                            )
                             .child(message_scroller_button().direction("end")),
                     )
                     .into();
@@ -2400,8 +2366,8 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
         let short = tree.build_and_layout(&mut root, 1280.0, 360.0, [-1.0, -1.0]);
         publish_scroll_metrics(&short.scroll_metrics);
 
-        let short_sb = scroll_metric(&short.scroll_metrics, SIDEBAR_REST)
-            .expect("sidebar metrics at 360h");
+        let short_sb =
+            scroll_metric(&short.scroll_metrics, SIDEBAR_REST).expect("sidebar metrics at 360h");
         let short_ms = scroll_metric(&short.scroll_metrics, MS_REST).expect("ms metrics at 360h");
         assert!(
             short_sb.2[1] > 8.0,
@@ -2417,16 +2383,9 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
         );
 
         tree.set_collect_skip_allowed(true);
-        let maxed = tree.build_and_layout_fast(
-            &mut root,
-            1280.0,
-            1200.0,
-            [-1.0, -1.0],
-            true,
-            true,
-        );
-        let maxed_sb = scroll_metric(&maxed.scroll_metrics, SIDEBAR_REST)
-            .expect("sidebar metrics at 1200h");
+        let maxed = tree.build_and_layout_fast(&mut root, 1280.0, 1200.0, [-1.0, -1.0], true, true);
+        let maxed_sb =
+            scroll_metric(&maxed.scroll_metrics, SIDEBAR_REST).expect("sidebar metrics at 1200h");
         let maxed_ms = scroll_metric(&maxed.scroll_metrics, MS_REST).expect("ms metrics at 1200h");
         let page = scroll_metric(&maxed.scroll_metrics, "scroll-basics");
         let dump = format!(
@@ -2464,9 +2423,7 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
         let thin_bars: Vec<_> = maxed
             .instances
             .iter()
-            .filter(|i| {
-                i.rect_size[0] > 4.0 && i.rect_size[0] < 28.0 && i.rect_size[1] > 80.0
-            })
+            .filter(|i| i.rect_size[0] > 4.0 && i.rect_size[0] < 28.0 && i.rect_size[1] > 80.0)
             .map(|i| {
                 (
                     i.rect_pos[0],

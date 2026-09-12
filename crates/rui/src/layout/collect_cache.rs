@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 
 use taffy::prelude::NodeId;
 
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::{PaintOp, TextLayoutInfo, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID};
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::GpuClipPoly;
@@ -67,7 +67,15 @@ impl GeomKey {
         scale: [f32; 2],
     ) -> Self {
         let (has_clip, clip_bits) = match clip {
-            Some(c) => (true, [c[0].to_bits(), c[1].to_bits(), c[2].to_bits(), c[3].to_bits()]),
+            Some(c) => (
+                true,
+                [
+                    c[0].to_bits(),
+                    c[1].to_bits(),
+                    c[2].to_bits(),
+                    c[3].to_bits(),
+                ],
+            ),
             None => (false, [0; 4]),
         };
         Self {
@@ -145,8 +153,10 @@ impl CollectSkipState {
                 self.prev.insert(k, v);
             }
         } else {
-            // Scroll / FullClear: do not clone the whole DL into `prev`.
+            // Layout / scroll / resize: absolute DLs are stale. Keeping `prev` across
+            // a skip-off frame is what let maximize replay the pre-grow list.
             self.next.clear();
+            self.prev.clear();
         }
     }
 
@@ -172,7 +182,9 @@ impl CollectSkipState {
             }
             return None;
         }
-        splice_cached(cached, instances, textured, text, chrome, clip_polys, paint_ops);
+        splice_cached(
+            cached, instances, textured, text, chrome, clip_polys, paint_ops,
+        );
         self.skipped = self.skipped.saturating_add(1);
         Some(cached.extent)
     }
@@ -239,26 +251,66 @@ pub(crate) fn geom_key(
     GeomKey::new(abs, size, scroll, clip, opacity, scale)
 }
 
+/// Collect walk has side channels (portal `overlay_split`, drag overlay) that are
+/// not stored in the fingerprint DL. Skipping an **ancestor** splices rects/glyphs
+/// but never marks those cursors.
+fn node_has_collect_side_channel(el: &Element) -> bool {
+    el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+        || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+        || el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+        || el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
+}
+
 fn subtree_is_skippable(el: &Element) -> bool {
     if el.children.is_empty() {
         return false;
     }
-    if el.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+    if el.collect_skip_live {
         return false;
     }
-    if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1") {
-        return false;
-    }
-    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
-        return false;
-    }
-    if el
-        .attrs
-        .contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
-    {
+    if node_has_collect_side_channel(el) {
         return false;
     }
     true
+}
+
+fn node_collect_is_live(el: &Element) -> bool {
+    // Caret on/off is a global clock, not a hash field. Skip would freeze the
+    // last hairline (solid or hidden) until the next typed character.
+    if el.text_style.input_caret.is_some() {
+        return true;
+    }
+    if el.attrs.get("rui_animate").is_some_and(|v| {
+        matches!(
+            v.as_str(),
+            "spin" | "ping" | "pulse" | "bounce" | "tw-shimmer"
+        )
+    }) {
+        return true;
+    }
+    if el
+        .attrs
+        .get(crate::renderer::ATTR_SHIMMER_BOX)
+        .map(String::as_str)
+        == Some("1")
+    {
+        return true;
+    }
+    if el
+        .attrs
+        .get(crate::renderer::ATTR_GLYPH_FX)
+        .map(String::as_str)
+        == Some("shimmer")
+    {
+        return true;
+    }
+    if el.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+        return true;
+    }
+    if crate::style::css_animation_needs_frame(&el.style, &el.animation_snapshot) {
+        return true;
+    }
+    el.transition_snapshot.has_active_tweens()
 }
 
 /// Bottom-up paint hash so a dirty leaf invalidates ancestors but not siblings.
@@ -266,11 +318,16 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element) {
     fn rec(el: &mut Element) -> u64 {
         let mut h = DefaultHasher::new();
         hash_paint_self(el, &mut h);
+        // Side-channel nodes stamp `live` so ancestors walk into them. Skipping the
+        // root while a portal layer sits underneath parks `overlay_split` at `len`.
+        let mut live = node_collect_is_live(el) || node_has_collect_side_channel(el);
         for child in &mut el.children {
             rec(child).hash(&mut h);
+            live |= child.collect_skip_live;
         }
         let hash = h.finish();
         el.collect_paint_hash = hash;
+        el.collect_skip_live = live;
         hash
     }
     rec(root);
@@ -295,6 +352,10 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     el.style.shadow_spread.to_bits().hash(h);
     el.style.shadow_inset.hash(h);
     hash_f32s(h, &el.style.translate);
+    // Independent transform props are sampled every CSS tick. Paint-only skip
+    // must bust when they change or idle spin replays the rest-pose DL.
+    hash_f32s(h, &el.style.scale);
+    el.style.rotate_deg.to_bits().hash(h);
     crate::layout::lpa_length_px(el.style.inset.left)
         .unwrap_or(0.0)
         .to_bits()
@@ -306,17 +367,84 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     el.style.z_index.hash(h);
     el.style.extra_shadows.len().hash(h);
     el.style.bg_gradient.is_some().hash(h);
-    el.style.transform.is_some().hash(h);
-    el.style.filter.is_some().hash(h);
+    match el.style.transform.as_ref() {
+        Some(list) => {
+            true.hash(h);
+            list.len().hash(h);
+            for f in list {
+                std::mem::discriminant(f).hash(h);
+            }
+        }
+        None => false.hash(h),
+    }
+    // CSS `animate-spin` writes the angle into the transform list, not `rotate_deg`.
+    // Discriminant-only hashing above would keep the rest-pose fingerprint after maximize.
+    let xf = crate::style::compute_combined_transform(
+        &el.style.translate,
+        el.style.rotate_deg,
+        &el.style.scale,
+        el.style.transform.as_ref(),
+        &el.style.transform_origin,
+        el.layout_bounds[2],
+        el.layout_bounds[3],
+    );
+    for v in xf {
+        v.to_bits().hash(h);
+    }
+    match el.style.filter.as_ref() {
+        Some(list) => {
+            true.hash(h);
+            list.len().hash(h);
+            for f in list {
+                std::mem::discriminant(f).hash(h);
+            }
+        }
+        None => false.hash(h),
+    }
+    if let Some(v) = el.attrs.get("rui_animate") {
+        v.hash(h);
+    }
     el.text_style.color.hash(h);
-    el.text_style
-        .size
-        .map(|s| s.to_bits())
-        .hash(h);
+    el.text_style.size.map(|s| s.to_bits()).hash(h);
     el.text_style.weight.hash(h);
+    // Focus / caret / selection are paint-only. Omitting them lets a parent
+    // replay the unfocused DL: dest-reset wipes the field and the hairline
+    // never comes back (Gallery Kbd Search).
+    match el.text_style.input_caret.as_ref() {
+        Some(c) => {
+            true.hash(h);
+            c.caret_byte_index.hash(h);
+            c.selection.hash(h);
+            c.overwrite_highlight.hash(h);
+            c.preedit_underline.hash(h);
+            c.drop_caret.hash(h);
+        }
+        None => false.hash(h),
+    }
+    el.text_style.scroll_x.to_bits().hash(h);
     if let Some(class) = el.attrs.get("class").or_else(|| el.attrs.get("className")) {
         class.hash(h);
     }
+}
+
+/// Fingerprint skip is a **paint-only** cache of absolute display-list ops.
+///
+/// `Clean` / `StyleChanged`: geometry matches the previous frame; replay is valid
+/// for subtrees that are not live. `LayoutChanged` / `StructureChanged` (maximize,
+/// text-fit settle, wrap) move flex boxes — replaying pre-reflow ops ghosts glyphs
+/// and freezes time-sampled paint. Smooth scroll and live resize are the same class.
+pub(crate) fn collect_skip_allowed_for_frame(
+    layout: LayoutStatus,
+    scroll_paint_only: bool,
+    full_rebuild: bool,
+    viewport_resizing: bool,
+    text_settling: bool,
+) -> bool {
+    matches!(layout, LayoutStatus::Clean | LayoutStatus::StyleChanged)
+        && !scroll_paint_only
+        && !full_rebuild
+        && !viewport_resizing
+        && !text_settling
 }
 
 fn hash_f32s(h: &mut impl Hasher, xs: &[f32]) {

@@ -3803,27 +3803,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Switch chrome only sets its tween in this render/sync (after the prior tick);
                 // pump `any_ui_animation_active` here or it stalls on frame 0.
                 let ui_anim_active = crate::style::any_ui_animation_active();
-                let modal_css_active =
-                    crate::utils::modal_motion::any_modal_css_needs_frame();
+                let modal_css_active = crate::utils::modal_motion::any_modal_css_needs_frame();
+                let page_css_active = crate::style::any_page_css_needs_frame();
                 // `request_frame` sets WANT_REDRAW during collect (inside `render` above).
                 // Taking the flag *before* render drops the pulse and the clock freezes
                 // until the next pointer move.
                 let canvas_after_paint = crate::primitives::canvas::take_canvas_wants_redraw();
-                if smooth_scroll_animating
+                self.paint_clock_active = smooth_scroll_animating
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
                     || crate::app::pending_images::any_gif_playing()
                     || canvas_after_paint
                     || super::scroll_support::has_pending_scroll_item_align()
-                    // Dialog/Sheet/Drawer `@keyframes` are not cubic tweens; without this
-                    // the post-RedrawRequested pump drops them and `about_to_wait` sleeps.
                     || modal_css_active
-                    // `any_ui_animation_active()` is a post-tick safety net for late-set tweens.
-                    // Gate it with `force_redraw_count` to avoid long-running stale animation
-                    // flags keeping an idle redraw pump alive indefinitely.
-                    || (ui_anim_active && self.force_redraw_count > 0)
-                {
+                    || page_css_active
+                    || (ui_anim_active && self.force_redraw_count > 0);
+                if self.paint_clock_active {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
                     let earliest = self
@@ -3992,14 +3988,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if has_input_caret {
                     let wake = crate::renderer::caret_blink_next_toggle_at();
                     self.caret_wake_at = Some(wake);
-                    let anim_pump = smooth_scroll_animating
-                        || scrollbar_fade_animating
-                        || svg_smil_active
-                        || anim_icon_active
-                        || canvas_after_paint
-                        || modal_css_active
-                        || (ui_anim_active && self.force_redraw_count > 0)
-                        || self.force_redraw_count > 0;
+                    let anim_pump = self.paint_clock_active || self.force_redraw_count > 0;
                     if !anim_pump {
                         event_loop
                             .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));

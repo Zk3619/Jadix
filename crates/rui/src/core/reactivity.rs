@@ -45,9 +45,7 @@ const WINDOW_LOCAL_SIGNAL_KEYS: &[&str] = &[
 /// Uses `try_with` so TLS destructors (Owner / overlay Drop) cannot panic-abort
 /// when `SIGNAL_KEY_SCOPE` is already torn down.
 pub(crate) fn set_signal_key_scope(scope: u64) -> u64 {
-    SIGNAL_KEY_SCOPE
-        .try_with(|c| c.replace(scope))
-        .unwrap_or(0)
+    SIGNAL_KEY_SCOPE.try_with(|c| c.replace(scope)).unwrap_or(0)
 }
 
 /// Current window signal-key suffix (`0` = primary).

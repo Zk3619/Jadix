@@ -566,7 +566,11 @@ fn portal_hoist_rebuilds_but_keeps_page_text_boxes() {
         tree.full_rebuilds > rebuilds_after_cold,
         "portal membership must rebuild Taffy so overlay_split stays a suffix"
     );
-    assert_eq!(count_in_layer(&root), 1, "panel must land on the portal layer");
+    assert_eq!(
+        count_in_layer(&root),
+        1,
+        "panel must land on the portal layer"
+    );
     let panel = find_by_tid(&root, "dlg-panel").expect("hoisted panel");
     assert!(
         panel.layout_bounds[2] > 0.0 && panel.layout_bounds[3] > 0.0,
@@ -617,7 +621,8 @@ fn anchored_overlay_hoist_emits_overlay_instances() {
         .expect("island");
     island.children.push(anchor);
 
-    let out = tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    let out =
+        tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
     assert_eq!(count_in_layer(&root), 1);
     assert!(
         out.overlay_split.instance_start < out.instances.len(),

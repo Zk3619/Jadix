@@ -124,19 +124,14 @@ fn portal_structure_changed_does_not_set_page_layout_flag() {
         crate::layout::layout_tree::ATTR_PORTAL_KEY,
         "bubble_rx_test",
     );
-    pop = pop.reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| {
-        LayoutStatus::StructureChanged
-    });
+    pop =
+        pop.reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| LayoutStatus::StructureChanged);
     let page_text = Element::new()
         .text("gallery bubble caption")
         .text_size(14.0)
         .w(200.0)
         .template_id("page-text");
-    let mut root = Element::new()
-        .w(800.0)
-        .h(600.0)
-        .child(page_text)
-        .child(pop);
+    let mut root = Element::new().w(800.0).h(600.0).child(page_text).child(pop);
 
     tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
     let mut impact = LayoutStatus::Clean;
@@ -172,13 +167,9 @@ fn scroller_structure_changed_does_not_set_page_layout_flag() {
 
     let _ = crate::app::damage::take_frame_paint_nodes();
     let mut tree = LayoutTree::new();
-    let mut rows = Element::new()
-        .w(200.0)
-        .h(80.0)
-        .template_id("ms-send-rows");
-    rows = rows.reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| {
-        LayoutStatus::StructureChanged
-    });
+    let mut rows = Element::new().w(200.0).h(80.0).template_id("ms-send-rows");
+    rows = rows
+        .reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| LayoutStatus::StructureChanged);
     let mut viewport = Element::new()
         .w(200.0)
         .h(200.0)

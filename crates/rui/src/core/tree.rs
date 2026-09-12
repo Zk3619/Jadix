@@ -579,6 +579,38 @@ impl LayoutStatus {
     }
 }
 
+/// Queue Taffy nodes after an in-place bind `apply`.
+///
+/// Primary window no longer full-rebuilds Taffy on [`LayoutStatus::StructureChanged`]
+/// (only cold start / portal hoist). Bind patches that restyle children in place
+/// (Marker separator hairlines: `Display::None` ↔ flex) must dirty the whole
+/// patched subtree so `mark_dirty` pushes current Element styles into Taffy.
+/// [`LayoutStatus::LayoutChanged`] still dirties only the patched node.
+pub(crate) fn collect_bind_layout_dirty(
+    el: &Element,
+    status: LayoutStatus,
+    out: &mut Vec<taffy::prelude::NodeId>,
+) {
+    match status {
+        LayoutStatus::LayoutChanged => {
+            if let Some(n) = el.layout_node {
+                out.push(n);
+            }
+        }
+        LayoutStatus::StructureChanged => collect_subtree_layout_nodes(el, out),
+        LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+    }
+}
+
+fn collect_subtree_layout_nodes(el: &Element, out: &mut Vec<taffy::prelude::NodeId>) {
+    if let Some(n) = el.layout_node {
+        out.push(n);
+    }
+    for child in &el.children {
+        collect_subtree_layout_nodes(child, out);
+    }
+}
+
 /// 挂在 [`Element::on_unmount`]：最后一个 `Rc` 释放时执行一次（树节点丢弃即卸载）。
 pub struct UnmountHook {
     f: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
@@ -917,8 +949,13 @@ pub struct ElementInner {
     pub(crate) collect_extent_valid: bool,
     /// Bottom-up paint fingerprint for collect skip ([`crate::layout::collect_cache`]).
     pub(crate) collect_paint_hash: u64,
+    /// Some descendant (or self) must recollect every frame (spin / shimmer / CSS).
+    pub(crate) collect_skip_live: bool,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
+    /// Ancestor scroll passed to collect when this node last painted.
+    /// `bind_text` StyleChanged must dest-reset in this space, not document `[0,0]`.
+    pub(crate) paint_scroll_acc: [f32; 2],
     /// Last collect `render_rect` (paint space). DevTools highlight prefers this over abs−scroll.
     #[cfg(feature = "devtools")]
     pub(crate) paint_visual_bounds: [f32; 4],
@@ -1028,7 +1065,9 @@ fn blank_inner() -> ElementInner {
         collect_extent: [0.0, 0.0],
         collect_extent_valid: false,
         collect_paint_hash: 0,
+        collect_skip_live: false,
         sticky_visual_offset: [0.0, 0.0],
+        paint_scroll_acc: [0.0, 0.0],
         #[cfg(feature = "devtools")]
         paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
         #[cfg(feature = "devtools")]
@@ -2093,19 +2132,23 @@ impl Element {
         self
     }
     pub fn border_top_color(mut self, color: impl IntoPaintColor) -> Self {
-        self.style.set_border_side_color(0, color.into_paint_color());
+        self.style
+            .set_border_side_color(0, color.into_paint_color());
         self
     }
     pub fn border_right_color(mut self, color: impl IntoPaintColor) -> Self {
-        self.style.set_border_side_color(1, color.into_paint_color());
+        self.style
+            .set_border_side_color(1, color.into_paint_color());
         self
     }
     pub fn border_bottom_color(mut self, color: impl IntoPaintColor) -> Self {
-        self.style.set_border_side_color(2, color.into_paint_color());
+        self.style
+            .set_border_side_color(2, color.into_paint_color());
         self
     }
     pub fn border_left_color(mut self, color: impl IntoPaintColor) -> Self {
-        self.style.set_border_side_color(3, color.into_paint_color());
+        self.style
+            .set_border_side_color(3, color.into_paint_color());
         self
     }
     pub fn border_top(self, color: impl IntoPaintColor, width: impl IntoF32) -> Self {
@@ -3612,10 +3655,7 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
 
 /// Clip box of the nearest overflow/scroll ancestor of `target` (or `target` itself).
 /// `None` when the island sits in unclipped page space (route Show → page FullClear).
-pub(crate) fn overflow_clip_bounds_for(
-    root: &Element,
-    target: *const Element,
-) -> Option<[f32; 4]> {
+pub(crate) fn overflow_clip_bounds_for(root: &Element, target: *const Element) -> Option<[f32; 4]> {
     fn rec(
         el: &Element,
         clip: Option<[f32; 4]>,
@@ -3738,15 +3778,16 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                     // Nested For inside a scroll/overflow clip (MessageScroller Send) is
                     // island-local: do not mark page geometry or the sidebar Footer is
                     // on the FullClear present path.
-                    let portalish = in_portal
-                        || crate::layout::layout_tree::subtree_declares_portal(element);
+                    let portalish =
+                        in_portal || crate::layout::layout_tree::subtree_declares_portal(element);
                     if portalish {
                         collect.portal_layout_changed = true;
                         crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
                             element, before,
                         ));
                     } else if in_clip {
-                        let d = clip_bounds.unwrap_or_else(|| estimate_geom_damage(element, before));
+                        let d =
+                            clip_bounds.unwrap_or_else(|| estimate_geom_damage(element, before));
                         if d[2] > 0.0 && d[3] > 0.0 {
                             crate::app::damage::push_frame_paint_damage(d);
                         }

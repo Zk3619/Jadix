@@ -634,10 +634,17 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // Hold-repeat typing uses the same Poll: otherwise caret WaitUntil lets the OS
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
-        let force_immediate =
-            crate::utils::modal_motion::take_modal_force_immediate_wake() || text_edit_pump;
-        if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame()
-        {
+        let page_css_needs = crate::style::any_page_css_needs_frame();
+        let resize_followup = (*self.state.borrow())
+            .as_ref()
+            .is_some_and(|s| s.needs_resize_followup());
+        let force_immediate = crate::utils::modal_motion::take_modal_force_immediate_wake()
+            || text_edit_pump
+            || page_css_needs
+            || self.paint_clock_active
+            || self.force_redraw_count > 0
+            || resize_followup;
+        if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
@@ -1066,6 +1073,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),
         is_suspended: false,
         force_redraw_count: 0,
+        paint_clock_active: false,
         app_builder: std::rc::Rc::new(std::cell::RefCell::new(app_builder)),
         cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
         cursor_inside_window: false,
@@ -1134,6 +1142,31 @@ mod idle_control_flow_tests {
     use super::idle_control_flow;
     use std::time::{Duration, Instant};
     use winit::event_loop::ControlFlow;
+
+    #[test]
+    fn page_css_does_not_sleep_on_scrollbar_wait_until() {
+        let scrollbar_hide = Instant::now() + Duration::from_millis(1500);
+        assert_eq!(
+            idle_control_flow(Some(scrollbar_hide), true),
+            ControlFlow::Poll,
+            "spin / shimmer after scroll stop must Poll, not WaitUntil scrollbar hide"
+        );
+    }
+
+    #[test]
+    fn resize_settle_does_not_sleep_after_maximize() {
+        let scrollbar_hide = Instant::now() + Duration::from_millis(1500);
+        assert_eq!(
+            idle_control_flow(Some(scrollbar_hide), true),
+            ControlFlow::Poll,
+            "needs_text_settle / force_redraw_count after maximize must Poll; coalesced request_redraw cannot be the only wake"
+        );
+        assert_eq!(
+            idle_control_flow(None, true),
+            ControlFlow::Poll,
+            "maximize without a wheel still Polls — no scrollbar deadline to hide behind"
+        );
+    }
 
     #[test]
     fn modal_open_does_not_sleep_on_caret_wait_until() {

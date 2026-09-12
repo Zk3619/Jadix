@@ -144,6 +144,11 @@ struct App {
     state: std::rc::Rc<std::cell::RefCell<Option<AppState>>>,
     is_suspended: bool,
     force_redraw_count: u32,
+    /// Latched in `RedrawRequested` when a vsync clock is still sampling (CSS / SMIL /
+    /// gif / lucide). `about_to_wait` must Poll on it: `request_redraw` inside
+    /// `RedrawRequested` is coalesced on Windows, and a scrollbar/caret `WaitUntil`
+    /// planted in that same handler would otherwise sleep every CSS clock.
+    paint_clock_active: bool,
     app_builder: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Element>>,
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
     /// False after `CursorLeft` until the next `CursorMoved` / enter.

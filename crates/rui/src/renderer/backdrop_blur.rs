@@ -1,8 +1,9 @@
 ﻿//! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
 //!
-//! Modal underlays: capture the page → `blur()` → [`Self::blit_to`] the full surface.
-//! Local `mount=` scrims: the same capture + `blur()`, then the scrim's SDF instance
-//! samples the result in `rounded_rect.wgsl` (border-box + radii + overflow clip).
+//! Local `mount=` scrims: capture prefix → `blur()` → the scrim SDF samples it.
+//! Modal underlays: capture the **already-frosted** page → `blur()` → [`Self::blit_to`].
+//! The two filters stack (CSS nested `backdrop-filter`); the modal blit must not
+//! skip local capture and replace it with a dummy-backdrop page.
 //!
 //! Uniforms use a dynamic-offset ring so each pass in one encoder keeps its own
 //! σ / direction (a single shared write was overwriting prior passes and left only
