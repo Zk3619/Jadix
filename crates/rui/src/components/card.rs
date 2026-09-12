@@ -569,9 +569,7 @@ mod tests {
 
     #[test]
     fn card_title_picks_up_stylesheet_slot_rule() {
-        use crate::style::{
-            clear_stylesheets, parse_stylesheet, register_stylesheet,
-        };
+        use crate::style::{clear_stylesheets, parse_stylesheet, register_stylesheet};
         clear_stylesheets();
         let sheet = parse_stylesheet(
             r#"
@@ -592,7 +590,10 @@ classes = "italic"
             "#[component] exit must bind [data-slot=card-title]; got {:?}",
             cs.base
         );
-        assert_eq!(el.attrs.get("data-rui-sheet").map(String::as_str), Some("1"));
+        assert_eq!(
+            el.attrs.get("data-rui-sheet").map(String::as_str),
+            Some("1")
+        );
         clear_stylesheets();
     }
 

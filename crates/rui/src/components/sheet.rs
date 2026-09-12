@@ -56,10 +56,6 @@ use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
-use crate::utils::modal_shell::ShellOverlayOpts;
-use crate::utils::viewport_modal::{
-    viewport_modal_layer, ModalSurfaceMotion, ViewportModalLayerOpts,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -73,11 +69,15 @@ use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::lucide_glyph;
+use crate::utils::modal_shell::ShellOverlayOpts;
 use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::viewport_modal::{
+    viewport_modal_layer, ModalSurfaceMotion, ViewportModalLayerOpts,
+};
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------

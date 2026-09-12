@@ -398,7 +398,7 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
         }
     }
     if status != LayoutStatus::Clean {
-        crate::app::damage::push_frame_paint_element(el);
+        crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
     }
     status
 }

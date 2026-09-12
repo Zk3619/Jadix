@@ -52,6 +52,42 @@ fn product_component_multi_child_packs_as_fragment_not_vstack() {
 }
 
 #[test]
+fn rsx_anonymous_button_keeps_id_across_rebuild() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use rui::core::reactivity::{create_effect, create_root, use_signal};
+    use rui::prelude::*;
+
+    let (_owner, ids) = create_root(|| {
+        let tick = use_signal("anon-btn-tick", || 0u32);
+        let ids = Rc::new(RefCell::new(Vec::<Option<String>>::new()));
+        let ids_eff = Rc::clone(&ids);
+        create_effect(move || {
+            let _ = tick.get();
+            let el = ui! {
+                <Button>"Allow"</Button>
+            };
+            ids_eff.borrow_mut().push(el.template_id.clone());
+        });
+        tick.set(1);
+        ids
+    });
+    let ids = ids.borrow();
+    assert_eq!(ids.len(), 2, "effect must run twice");
+    let first = ids[0].as_deref().expect("first template_id");
+    let second = ids[1].as_deref().expect("second template_id");
+    assert!(
+        first.starts_with("__rui_button_auto_"),
+        "omitted Button id must be a compile-time auto key, got {first}"
+    );
+    assert_eq!(
+        first, second,
+        "rebuild must keep the same Button instance key"
+    );
+}
+
+#[test]
 fn into_element_list_flattens_fragment() {
     use rui::core::tree::IntoElementList;
 

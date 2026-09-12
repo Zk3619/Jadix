@@ -1372,10 +1372,9 @@ pub(super) fn build_color_picker_view(
     }
     let overlay_id = id.clone();
     let panel_slots = slots.clone();
-    let trigger_fid = use_signal(
-        format!("{overlay_id}__cp_trigger_fid").as_str(),
-        || trigger_focus_id(&overlay_id),
-    );
+    let trigger_fid = use_signal(format!("{overlay_id}__cp_trigger_fid").as_str(), || {
+        trigger_focus_id(&overlay_id)
+    });
     let panel_slot = with_child_owner(move || {
         provide_anchored_overlay_context(open, overlay_id.clone(), trigger_fid);
         let panel_width = variant.panel_width();

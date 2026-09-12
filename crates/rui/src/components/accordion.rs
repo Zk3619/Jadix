@@ -75,7 +75,8 @@ use crate::layout::{first_track_fr, set_first_track_fr};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry, TransitionProperty,
+    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry,
+    TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::collapse_panel::{
@@ -1384,14 +1385,20 @@ mod tests {
                 "must keep needs_enter until height is known"
             );
             assert!(
-                !el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
+                !el.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "must not seed down with 0 height"
             );
             el.layout_bounds = [0.0, 0.0, 100.0, 64.0];
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
             assert!(!p.needs_enter());
             assert!(
-                el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
+                el.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "first real expand must run accordion-down"
             );
         });
@@ -1417,12 +1424,12 @@ mod tests {
             el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
             let mut tree = LayoutTree::new();
             let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
+            assert!(!p.needs_enter(), "grid-fr must not wait for used height");
             assert!(
-                !p.needs_enter(),
-                "grid-fr must not wait for used height"
-            );
-            assert!(
-                !el.style.animations.iter().any(|a| a.name == CollapseKeyframes::ACCORDION.down),
+                !el.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == CollapseKeyframes::ACCORDION.down),
                 "grid-fr path must not seed accordion-down"
             );
             assert_eq!(el.style.display, Display::Grid);

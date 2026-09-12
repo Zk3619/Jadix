@@ -58,7 +58,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry, TransitionProperty,
+    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry,
+    TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::collapse_panel::{

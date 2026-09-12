@@ -16,7 +16,9 @@
 //! - **Alignment ShadCN/solid-ui**: Normal copy default `whitespace-nowrap` + `flex-shrink: 0`
 //!  (Base class `inline-flex shrink-0 … whitespace-nowrap`), when the dynamic copy becomes wider, the button will be widened instead of wrapping internally.
 //!  Lucide 图标叶不加 nowrap，避免方按钮内图标偏右。
-//! - **`id` is optional**: can be omitted when there is no stable focus/testing requirements; empty `id` → automatic `btn-N` (incremented within the session, **not** guaranteed to rebuild the same logical instance across rebuilds).
+//! - **`id` is optional**: RSX `<Button>` without `id` gets a compile-time
+//!   `__rui_button_auto_N` (same contract as Input/Checkbox/Switch). Builder
+//!   `button("")` still allocates a session `btn-N` (not stable across rebuilds).
 //! - Multi-instance uncontrolled, stable focus, smoke selectors: please explicitly stabilize the `id` (see `docs/COMPONENT_LIBRARY.md` §4.2).
 //! - Hover / focus using `peek` + paint sync per frame; hover color walking CSS `transition-colors` (~150ms).
 //! - Child nodes can be text or icons; Lucide icons retain their own `text_size`.
@@ -1258,7 +1260,7 @@ fn push_button_paint_damage(el: &Element) {
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
-    crate::app::damage::push_frame_paint_element(el);
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
 }
 
 fn sync_button_focus_ring_shadow(
@@ -1585,15 +1587,17 @@ mod chrome_tests {
     #[test]
     fn success_and_warning_soft_tint_match_toast_accents() {
         set_theme_mode(ThemeMode::Light);
-        let green = parse_color("green-600");
-        let orange = parse_color("orange-600");
+        let green = parse_color("success");
+        let orange = parse_color("warning");
         let (s_rest, s_fg, _) = button_chrome_for_variant("success", 0.0);
         let (s_hover, _, _) = button_chrome_for_variant("success", 1.0);
+        assert_eq!(s_fg, parse_text_color("success"));
         assert_eq!(s_fg, parse_text_color("green-600"));
         assert_eq!(hex(s_rest), hex(color_mix_over_background(green, 0.1)));
         assert_eq!(hex(s_hover), hex(color_mix_over_background(green, 0.2)));
         let (w_rest, w_fg, _) = button_chrome_for_variant("warning", 0.0);
         let (w_hover, _, _) = button_chrome_for_variant("warning", 1.0);
+        assert_eq!(w_fg, parse_text_color("warning"));
         assert_eq!(w_fg, parse_text_color("orange-600"));
         assert_eq!(hex(w_rest), hex(color_mix_over_background(orange, 0.1)));
         assert_eq!(hex(w_hover), hex(color_mix_over_background(orange, 0.2)));

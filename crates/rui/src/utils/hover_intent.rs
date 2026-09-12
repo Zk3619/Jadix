@@ -73,7 +73,9 @@ fn settle_close(open: Signal<bool>, trigger_hovered: Signal<bool>, content_hover
 fn arm(id: &str, delay_ms: u64, kind: TimerKind, intent: HoverIntent) {
     if delay_ms == 0 {
         match kind {
-            TimerKind::Open => settle_open(intent.open, intent.trigger_hovered, intent.content_hovered),
+            TimerKind::Open => {
+                settle_open(intent.open, intent.trigger_hovered, intent.content_hovered)
+            }
             TimerKind::Close => {
                 settle_close(intent.open, intent.trigger_hovered, intent.content_hovered)
             }
@@ -99,22 +101,12 @@ fn arm(id: &str, delay_ms: u64, kind: TimerKind, intent: HoverIntent) {
 
 /// Schedule open after `open_delay_ms` (0 = immediate when still hovered).
 pub fn arm_open(id: &str, intent: HoverIntent) {
-    arm(
-        id,
-        intent.open_delay_ms.peek(),
-        TimerKind::Open,
-        intent,
-    );
+    arm(id, intent.open_delay_ms.peek(), TimerKind::Open, intent);
 }
 
 /// Schedule close after `close_delay_ms` (0 = immediate when neither region hovered).
 pub fn arm_close(id: &str, intent: HoverIntent) {
-    arm(
-        id,
-        intent.close_delay_ms.peek(),
-        TimerKind::Close,
-        intent,
-    );
+    arm(id, intent.close_delay_ms.peek(), TimerKind::Close, intent);
 }
 
 /// Solid-style effect: watch hover intent and arm open/close timers.

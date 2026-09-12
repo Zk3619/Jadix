@@ -44,10 +44,6 @@ use std::sync::OnceLock;
 use crate::app::reactive::reactive_view;
 use crate::components::base::{SlotChrome, SlotStyleFn};
 use crate::components::button::button;
-use crate::utils::modal_shell::ShellOverlayOpts;
-use crate::utils::viewport_modal::{
-    viewport_modal_layer, ViewportModalLayerOpts,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -63,11 +59,13 @@ use crate::primitives::text::text;
 use crate::style::{apply_semantic_chrome_respecting_overrides, parse_text_color, SemanticChrome};
 use crate::tokens;
 use crate::utils::lucide_glyph;
+use crate::utils::modal_shell::ShellOverlayOpts;
 use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
+use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -736,13 +734,13 @@ impl DialogContentSlotBuilder {
 mod tests {
     use super::*;
     use crate::app::portal_overlay::clear_overlay_stack;
+    use crate::core::reactivity::Signal;
+    use crate::core::tree::PointerEvents;
+    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
     use crate::utils::modal_shell::{
         default_modal_overlay_color, ShellOverlayOpts, DEFAULT_MODAL_OVERLAY_BLUR,
         DEFAULT_MODAL_OVERLAY_OPACITY,
     };
-    use crate::core::reactivity::Signal;
-    use crate::core::tree::PointerEvents;
-    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
 
     #[test]
     fn dialog_shell_shadow_matches_elevation_xl() {
@@ -859,10 +857,10 @@ mod tests {
 
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_root, use_signal};
         use crate::utils::modal_motion::{
             any_modal_css_needs_frame, set_modal_css_needs_frame_for_test,
         };
-        use crate::core::reactivity::{create_root, use_signal};
 
         clear_overlay_stack();
         reset_registered_anchors();
@@ -933,10 +931,10 @@ mod tests {
 
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_root, use_signal};
         use crate::utils::modal_motion::{
             flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };
-        use crate::core::reactivity::{create_root, use_signal};
 
         clear_overlay_stack();
         reset_registered_anchors();

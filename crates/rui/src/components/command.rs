@@ -78,11 +78,6 @@ use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, Dialog
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
-use crate::utils::modal_shell::ShellOverlayOpts;
-use crate::utils::viewport_modal::{
-    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
-    ViewportModalLayerOpts,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -99,10 +94,15 @@ use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::activate_registry;
+use crate::utils::modal_shell::ShellOverlayOpts;
 use crate::utils::popup::swallow_clicks;
 use crate::utils::take_packed;
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::viewport_modal::{
+    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
+    ViewportModalLayerOpts,
+};
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
@@ -1621,8 +1621,7 @@ mod tests {
 
     fn command_overlay_frame_open(overlay_id: &str, inner: Element) -> Element {
         let open = Signal::new(true);
-        let overlay_opts =
-            ShellOverlayOpts::from_content_parts(None, Some(0.0), true, Some(0.0));
+        let overlay_opts = ShellOverlayOpts::from_content_parts(None, Some(0.0), true, Some(0.0));
         viewport_modal_layer(
             overlay_id,
             open,
@@ -1757,10 +1756,8 @@ mod tests {
         use crate::components::toast::toast_push;
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
-            let frame = command_overlay_frame_open(
-                "cmd-overlay-toast-t",
-                Element::new().w(200.0).h(48.0),
-            );
+            let frame =
+                command_overlay_frame_open("cmd-overlay-toast-t", Element::new().w(200.0).h(48.0));
             Element::new()
                 .w(800.0)
                 .h(600.0)
@@ -2099,17 +2096,11 @@ mod tests {
                 .set("query".into());
             active.set(2);
 
-            assert_eq!(
-                viewport_modal_phase(id, open),
-                Some(PresencePhase::Present)
-            );
+            assert_eq!(viewport_modal_phase(id, open), Some(PresencePhase::Present));
             assert!(viewport_modal_is_mounted(id, open));
 
             open.set(false);
-            assert_eq!(
-                viewport_modal_phase(id, open),
-                Some(PresencePhase::Exiting)
-            );
+            assert_eq!(viewport_modal_phase(id, open), Some(PresencePhase::Exiting));
             assert!(
                 viewport_modal_is_mounted(id, open),
                 "dialog must stay mounted during exit animation"
@@ -2585,9 +2576,7 @@ mod tests {
     fn layout_command_dialog_host(modal_id: &str, body: Rc<dyn Fn() -> Element>) -> Element {
         use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
-        use crate::utils::modal_shell::{
-            default_modal_overlay_color, ShellOverlayOpts,
-        };
+        use crate::utils::modal_shell::{default_modal_overlay_color, ShellOverlayOpts};
 
         let open = Signal::new(true);
         let overlay_opts = ShellOverlayOpts {
@@ -2697,8 +2686,8 @@ mod tests {
         use crate::utils::modal_motion::{
             flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };
-        use crate::utils::viewport_modal::viewport_modal_motion_busy;
         use crate::utils::text_field::input_focus_id;
+        use crate::utils::viewport_modal::viewport_modal_motion_busy;
 
         crate::style::utility::set_frame_dt(1.0 / 60.0);
         clear_overlay_stack();
@@ -2795,9 +2784,7 @@ mod tests {
     fn command_dialog_list_max_scroll_reveals_last_item() {
         use crate::components::base::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
-        use crate::utils::modal_shell::{
-            default_modal_overlay_color, ShellOverlayOpts,
-        };
+        use crate::utils::modal_shell::{default_modal_overlay_color, ShellOverlayOpts};
 
         clear_overlay_stack();
         let modal_id = "cmd-dlg-scroll-end";

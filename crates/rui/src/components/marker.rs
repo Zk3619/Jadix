@@ -298,6 +298,9 @@ fn paint_rule(el: &mut Element, variant: MarkerVariant) {
         .unwrap_or_else(|| EDGE_START.to_string());
     let mut painted = if variant == MarkerVariant::Separator {
         let mut node = std::mem::take(el)
+            // Hidden path sets `w(0)`. Clear it: leftover definite width plus
+            // flex-grow cannot paint a hairline after default/border → separator.
+            .w("auto")
             .h(RULE_H)
             .min_h(RULE_H)
             .min_w(RULE_MIN_W)
@@ -474,7 +477,8 @@ pub fn apply_marker_paint(el: &mut Element, variant: MarkerVariant) -> LayoutSta
     if prev == variant {
         LayoutStatus::StyleChanged
     } else {
-        // Child `display` / flex-grow flips (separator hairlines). Root-only
+        // Child `display` / flex-grow flips (separator hairlines). Bind
+        // `collect_bind_layout_dirty` must dirty this subtree: root-only
         // LayoutChanged leaves Taffy children on the previous Display::None.
         LayoutStatus::StructureChanged
     }
@@ -989,10 +993,122 @@ mod tests {
         assert!(rules_of(&el)
             .iter()
             .all(|r| r.style.display != Display::None));
+        for rule in rules_of(&el) {
+            assert!(
+                crate::layout::dim_length_px(rule.style.size.width).is_none(),
+                "separator bind must clear hidden w(0), got {:?}",
+                rule.style.size.width
+            );
+            assert!(rule.style.flex_grow > 0.0);
+        }
         assert_eq!(
             apply_bound_marker_variant(&mut el, "separator"),
             LayoutStatus::Clean
         );
+    }
+
+    fn layout_marker_hairlines(
+        marker_el: Element,
+    ) -> (Element, crate::layout::layout_tree::RenderResult) {
+        let mut root = Element::new().w(320.0).h(64.0).child(marker_el);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
+        (root, result)
+    }
+
+    fn assert_visible_hairlines(root: &Element, result: &crate::layout::layout_tree::RenderResult) {
+        let marker = root
+            .children
+            .iter()
+            .find(|c| slot_of(c) == Some(SLOT_ROOT))
+            .expect("marker root");
+        let rules: Vec<&Element> = marker
+            .children
+            .iter()
+            .filter(|c| slot_of(c) == Some(SLOT_RULE))
+            .collect();
+        assert_eq!(rules.len(), 2);
+        let card = tokens::card();
+        for rule in &rules {
+            let [_, _, w, h] = rule.layout_bounds;
+            assert!(
+                w > 24.0,
+                "separator hairline should take leftover width, got w={w} bounds={:?}",
+                rule.layout_bounds
+            );
+            assert!(
+                h >= 1.5 && h <= 4.0,
+                "separator hairline should survive SDF AA, got h={h}"
+            );
+            assert!(
+                (rule.style.bg_color[3] - 1.0).abs() < 0.01,
+                "separator hairline must be opaque, bg={:?}",
+                rule.style.bg_color
+            );
+            assert!(
+                (luma(rule.style.bg_color) - luma(card)).abs() > 0.2,
+                "hairline contrast vs card too low: {:?} card={:?}",
+                rule.style.bg_color,
+                card
+            );
+        }
+        let hairlines = result
+            .instances
+            .iter()
+            .filter(|i| i.rect_size[1] <= 4.0 && i.rect_size[0] > 24.0 && i.color[3] > 0.5)
+            .count();
+        assert!(
+            hairlines >= 2,
+            "expected painted hairline instances, got {hairlines} (instances={})",
+            result.instances.len()
+        );
+    }
+
+    #[test]
+    fn bound_variant_default_to_separator_keeps_hairline_geometry() {
+        let mut marker_el: Element = marker().content("Today").into();
+        assert_eq!(
+            apply_bound_marker_variant(&mut marker_el, "separator"),
+            LayoutStatus::StructureChanged
+        );
+        let (root, result) = layout_marker_hairlines(marker_el);
+        assert_visible_hairlines(&root, &result);
+    }
+
+    #[test]
+    fn bound_variant_separator_hairlines_survive_incremental_layout() {
+        let marker_el: Element = marker().content("Today").into();
+        let mut root = Element::new().w(320.0).h(64.0).child(marker_el);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
+
+        let mut dirty = Vec::new();
+        {
+            let marker = root
+                .children
+                .iter_mut()
+                .find(|c| slot_of(c) == Some(SLOT_ROOT))
+                .expect("marker root");
+            assert_eq!(
+                apply_bound_marker_variant(marker, "separator"),
+                LayoutStatus::StructureChanged
+            );
+            crate::core::tree::collect_bind_layout_dirty(
+                marker,
+                LayoutStatus::StructureChanged,
+                &mut dirty,
+            );
+        }
+        assert!(
+            dirty.len() >= 3,
+            "separator bind must dirty rule children, got {}",
+            dirty.len()
+        );
+        let dirty_set: std::collections::HashSet<_> = dirty.into_iter().collect();
+        tree.mark_dirty_nodes_in_tree(&root, &dirty_set);
+        let result =
+            tree.build_and_layout_fast_ex(&mut root, 320.0, 64.0, [-1.0, -1.0], false, false, None);
+        assert_visible_hairlines(&root, &result);
     }
 
     #[test]

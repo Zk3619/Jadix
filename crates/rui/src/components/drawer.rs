@@ -60,11 +60,6 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
-use crate::utils::modal_shell::ShellOverlayOpts;
-use crate::utils::viewport_modal::{
-    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
-    ModalSurfaceMotion, ViewportModalLayerOpts,
-};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -78,11 +73,16 @@ use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::lucide_glyph;
+use crate::utils::modal_shell::ShellOverlayOpts;
 use crate::utils::popup::swallow_clicks;
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::viewport_modal::{
+    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
+    ModalSurfaceMotion, ViewportModalLayerOpts,
+};
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -950,43 +950,43 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
             }
             had_mounted.set(m);
 
-        let mut inner = body();
-        inner = inner
-            .w("100%")
-            .h("100%")
-            .min_h("0")
-            .flex_col()
-            .flex_grow(1.0)
-            .flex_shrink(1.0)
-            .overflow_y("hidden")
-            .gap("0");
+            let mut inner = body();
+            inner = inner
+                .w("100%")
+                .h("100%")
+                .min_h("0")
+                .flex_col()
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .overflow_y("hidden")
+                .gap("0");
 
-        let chrome_close = if show_close {
-            let o = open;
-            let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-            let icon = build_icon_text_node(glyph).text_size(16.0);
-            Some(
-                button(format!("{id}:chrome_close"))
-                    .variant("ghost")
-                    .size("icon-sm")
-                    .on_click(move || o.set(false))
-                    .child(icon)
-                    .into(),
-            )
-        } else {
-            None
-        };
+            let chrome_close = if show_close {
+                let o = open;
+                let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
+                let icon = build_icon_text_node(glyph).text_size(16.0);
+                Some(
+                    button(format!("{id}:chrome_close"))
+                        .variant("ghost")
+                        .size("icon-sm")
+                        .on_click(move || o.set(false))
+                        .child(icon)
+                        .into(),
+                )
+            } else {
+                None
+            };
 
-        let mut ring = Vec::new();
-        collect_drawer_focus_ids(&inner, &mut ring);
-        if show_close {
-            ring.push(format!("{id}:chrome_close"));
-        }
-        if phase != PresencePhase::Present || ring.is_empty() {
-            sync_focus_trap(&owner, false, "");
-        } else {
-            sync_focus_trap(&owner, true, ring.join(","));
-        }
+            let mut ring = Vec::new();
+            collect_drawer_focus_ids(&inner, &mut ring);
+            if show_close {
+                ring.push(format!("{id}:chrome_close"));
+            }
+            if phase != PresencePhase::Present || ring.is_empty() {
+                sync_focus_trap(&owner, false, "");
+            } else {
+                sync_focus_trap(&owner, true, ring.join(","));
+            }
 
             Some(drawer_shell_panel(
                 &id,
@@ -1571,12 +1571,7 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
     if drag.direction.is_vertical() {
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id,
-            [0.0, 0.0],
-            true,
-            next,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, [0.0, 0.0], true, next);
         crate::utils::modal_motion::patch_modal_overlay_opacity(
             root,
             &drag.id,
@@ -1586,12 +1581,8 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
         request_redraw();
     } else {
         let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id, extra, true, next,
-        );
-        crate::utils::modal_motion::patch_modal_panel_transform(
-            root, &drag.id, extra,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, true, next);
+        crate::utils::modal_motion::patch_modal_panel_transform(root, &drag.id, extra);
         crate::utils::modal_motion::patch_modal_overlay_opacity(
             root,
             &drag.id,
@@ -1621,9 +1612,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
         } else {
             drawer_drag_translate(drag.direction, rest, drag.axis_px)
         };
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id, extra, false, rest,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, false, rest);
         request_redraw();
         return;
     }
@@ -1632,9 +1621,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
     let dismiss = should_dismiss_drawer(frac, drag.velocity, lowest);
     if dismiss {
         let extra = drawer_drag_translate(drag.direction, frac, drag.axis_px);
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id, extra, false, frac,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, false, frac);
         drag.open.set(false);
         request_redraw();
         return;
@@ -1647,19 +1634,12 @@ pub(crate) fn clear_drawer_drag_if_any() {
     };
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
     if drag.direction.is_vertical() {
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id,
-            [0.0, 0.0],
-            false,
-            target,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, [0.0, 0.0], false, target);
         bump_drawer_shell_layout(&drag.id);
     } else {
         let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
         let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
-        crate::utils::modal_motion::note_modal_shell_drag(
-            &drag.id, to, false, target,
-        );
+        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, to, false, target);
         crate::utils::modal_motion::arm_modal_slide_settle(&drag.id, from);
     }
     if target < DRAWER_CLOSE_THRESHOLD {

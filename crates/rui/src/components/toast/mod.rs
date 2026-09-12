@@ -2097,13 +2097,13 @@ mod tests {
         assert_eq!(ToastTone::parse("warn"), ToastTone::Warning);
         let (bg, fg, border, icon) = toast_tone_palette(ToastTone::Success);
         assert_eq!(bg, tokens::popover());
-        assert_eq!(border, parse_color("green-300"));
-        assert_eq!(fg, parse_text_color("green-600"));
+        assert_eq!(border, parse_color("success/50"));
+        assert_eq!(fg, parse_text_color("success"));
         assert_eq!(icon, Some("circle-check"));
         let (_, _, _, info_icon) = toast_tone_palette(ToastTone::Info);
         assert_eq!(info_icon, Some("info"));
         let (_, _, wborder, wicon) = toast_tone_palette(ToastTone::Warning);
-        assert_eq!(wborder, parse_color("orange-300"));
+        assert_eq!(wborder, parse_color("warning/50"));
         assert_eq!(wicon, Some("circle-alert"));
         let (_, _, _, xicon) = toast_tone_palette(ToastTone::Destructive);
         assert_eq!(xicon, Some("circle-x"));

@@ -15,7 +15,7 @@
 //!     ├── AlertDialogBody?        // 可选滚动区（同 DialogBody）
 //!     └── AlertDialogFooter
 //!         ├── AlertDialogCancel   // outline · closes on click
-//!         └── AlertDialogAction   // primary action slot
+//!         └── AlertDialogAction   // primary · closes on click (Radix Action)
 //! ```
 //!
 //! ## Usage (dual style · ADR-9)
@@ -37,9 +37,7 @@
 //!             <AlertDialogFooter>
 //!                 <AlertDialogCancel>"Cancel"</AlertDialogCancel>
 //!                 <AlertDialogAction>
-//!                     <Button variant="destructive" on_click={move || open.set(false)}>
-//!                         "Continue"
-//!                     </Button>
+//!                     <Button variant="destructive">"Continue"</Button>
 //!                 </AlertDialogAction>
 //!             </AlertDialogFooter>
 //!         </AlertDialogContent>
@@ -61,7 +59,7 @@
 //! - `<AlertDialogContent variant={sig.get()}>` binds via [`apply_bound_alert_dialog_variant`] (same as [`Alert`]).
 //! - 语义变体 `default` / `destructive` / `info` / `success` / `warning`；`filled` / `chrome` 同 Alert。
 //! - 语义变体时 Portal 遮罩随 [`semantic_modal_overlay_scrim`] 染色（显式 `overlay_color` 仍可覆盖）。
-//! - 模态确认框：遮罩点击默认不关闭；Cancel 自动 `open.set(false)`；Action 由应用侧决定何时关闭。
+//! - 模态确认框：遮罩点击默认不关闭；Cancel / Action 都链式 `open.set(false)`（与 Radix 一致）。应用 `on_click` 先跑。
 
 use std::sync::OnceLock;
 
@@ -69,8 +67,6 @@ use crate::app::reactive::reactive_view;
 use crate::components::alert::AlertVariant;
 use crate::components::button::button;
 use crate::components::dialog::dialog_shell_panel;
-use crate::utils::modal_shell::{sync_modal_overlay_scrim, ShellOverlayOpts};
-use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -86,10 +82,12 @@ use crate::style::{
     variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
     SemanticSurface, VariantStyleField,
 };
+use crate::utils::modal_shell::{sync_modal_overlay_scrim, ShellOverlayOpts};
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -359,13 +357,17 @@ pub fn apply_alert_dialog_variant_paint(
         .get(ATTR_ALERT_DIALOG_VARIANT)
         .map(|s| s.as_str())
         .unwrap_or("default");
-    if prev == variant.as_str() {
-        return LayoutStatus::Clean;
-    }
+    let same = prev == variant.as_str();
     el.set_attr(ATTR_VARIANT, variant.as_str());
     el.set_attr(ATTR_ALERT_DIALOG_VARIANT, variant.as_str());
+    // Always repaint slots: Action/Cancel `open.set(false)` rebuilds the island with the
+    // same variant, but title/description leaves can land unpainted (cascade `foreground`).
     sync_alert_dialog_variant_chrome(el, variant);
-    LayoutStatus::StyleChanged.merge(overlay_scrim_from_shell_attrs(el, variant))
+    if same {
+        LayoutStatus::Clean
+    } else {
+        LayoutStatus::StyleChanged.merge(overlay_scrim_from_shell_attrs(el, variant))
+    }
 }
 
 /// Solid-style in-place bind for `<AlertDialogContent chrome={sig.get()}>`.
@@ -418,6 +420,15 @@ pub struct AlertDialogCtx {
 fn alert_dialog_context() -> Context<AlertDialogCtx> {
     static CTX: OnceLock<Context<AlertDialogCtx>> = OnceLock::new();
     *CTX.get_or_init(create_context::<AlertDialogCtx>)
+}
+
+fn alert_dialog_chrome_context() -> Context<SemanticChrome> {
+    static CTX: OnceLock<Context<SemanticChrome>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<SemanticChrome>)
+}
+
+fn peek_alert_dialog_chrome() -> Option<SemanticChrome> {
+    use_context(alert_dialog_chrome_context())
 }
 
 /// Read the most recent [`AlertDialog`] context.
@@ -637,11 +648,25 @@ fn collect_focus_ids(el: &Element, out: &mut Vec<String>) {
 }
 
 /// Portal subtree runs in a reactive island — re-provide dialog ctx so Cancel/Action see the right `open`.
-fn build_alert_dialog_body(open: Signal<bool>, id: &str, body: &dyn Fn() -> Element) -> Element {
+fn build_alert_dialog_body(
+    open: Signal<bool>,
+    id: &str,
+    chrome: Option<SemanticChrome>,
+    body: &dyn Fn() -> Element,
+) -> Element {
     let id = id.to_string();
     component_root(|| {
         provide_context(alert_dialog_context(), AlertDialogCtx { open, id });
-        body()
+        if let Some(c) = chrome {
+            provide_context(alert_dialog_chrome_context(), c);
+        }
+        let mut inner = body();
+        // Paint inside the island so Cancel/Action `open.set(false)` rebuilds keep
+        // title/description variant color for the exit zoom capture.
+        if let Some(c) = chrome {
+            paint_alert_dialog_tree(&mut inner, &c);
+        }
+        inner
     })
 }
 
@@ -693,27 +718,31 @@ pub fn alert_dialog_content(
                     return None;
                 };
                 let active_chrome = chrome_signal.map(|s| s.get()).unwrap_or(chrome_enabled);
+                let chrome = if active_chrome {
+                    Some(alert_dialog_chrome(active_variant, filled))
+                } else {
+                    None
+                };
 
-                let mut inner = build_alert_dialog_body(open, &id, body.as_ref());
-                if active_chrome {
-                    let chrome = alert_dialog_chrome(active_variant, filled);
-                    paint_alert_dialog_tree(&mut inner, &chrome);
-                }
+                let mut inner = build_alert_dialog_body(open, &id, chrome, body.as_ref());
                 inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
 
                 let mut ring = Vec::new();
                 collect_focus_ids(&inner, &mut ring);
                 if phase != PresencePhase::Present || ring.is_empty() {
                     sync_focus_trap(&owner, false, "");
+                    let focus = use_signal("__rui_button_focus_id", String::new);
+                    let cur = focus.peek();
+                    if ring.iter().any(|fid| fid == cur.as_str())
+                        || cur.starts_with(&format!("{id}:"))
+                        || cur.starts_with(&format!("{id}__"))
+                    {
+                        focus.set(String::new());
+                    }
                 } else {
                     sync_focus_trap(&owner, true, ring.join(","));
                 }
 
-                let shell_chrome = if active_chrome {
-                    Some(alert_dialog_chrome(active_variant, filled))
-                } else {
-                    None
-                };
                 Some(dialog_shell_panel(
                     &id,
                     inner,
@@ -722,7 +751,7 @@ pub fn alert_dialog_content(
                     Some(size.width()),
                     Some(SLOT_CONTENT),
                     Some(size.as_str()),
-                    shell_chrome.as_ref(),
+                    chrome.as_ref(),
                     panel_chrome.clone(),
                 ))
             },
@@ -815,8 +844,19 @@ pub fn AlertDialogMedia(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn AlertDialogTitle(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
+    let fg = peek_alert_dialog_chrome().map(|c| c.fg);
+    let kids = if let Some(fg) = fg {
+        kids.into_iter()
+            .map(|c| paint_title_node(c, fg))
+            .collect::<Vec<_>>()
+    } else {
+        kids
+    };
     let mut el: Element = vstack().w("100%").min_w("0").children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_TITLE);
+    if let Some(fg) = fg {
+        paint_title_node_on_place(&mut el, fg);
+    }
     el
 }
 
@@ -825,6 +865,14 @@ pub fn AlertDialogTitle(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn AlertDialogDescription(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
+    let muted = peek_alert_dialog_chrome().map(|c| c.muted_fg);
+    let kids = if let Some(fg) = muted {
+        kids.into_iter()
+            .map(|c| paint_description_node(c, fg))
+            .collect::<Vec<_>>()
+    } else {
+        kids
+    };
     let mut el: Element = r#box()
         .w("100%")
         .min_w("0")
@@ -832,6 +880,10 @@ pub fn AlertDialogDescription(children: Option<Element>) -> Element {
         .children(kids)
         .into();
     el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
+    if let Some(fg) = muted {
+        el.text_style.color = Some(fg);
+        paint_description_node_on_place(&mut el, fg);
+    }
     el
 }
 
@@ -874,17 +926,51 @@ pub fn AlertDialogFooter(children: Option<Element>) -> Element {
     el
 }
 
-/// Primary action slot (wrap a [`Button`] or custom control).
+/// Primary action — chains `open.set(false)` on click (Radix `AlertDialog.Action`).
+/// Wrap a [`Button`] or custom control; the child's `on_click` runs first.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AlertDialogAction(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = hstack()
-        .items_center()
-        .gap("0.5rem")
-        .flex_shrink(0.0)
-        .children(kids)
-        .into();
+    let children = crate::utils::children_none_if_vacuous(children);
+    let ctx = require_alert_dialog("AlertDialogAction");
+    let open = ctx.open;
+    let btn_id = format!("{}__action", ctx.id);
+
+    let mut el = match children {
+        None => button(btn_id.as_str())
+            .text("Continue")
+            .on_click(move || open.set(false))
+            .into(),
+        Some(c) if is_text_leaf(&c) => {
+            let t = c.text.clone().unwrap_or_default();
+            button(btn_id.as_str())
+                .text(t)
+                .on_click(move || open.set(false))
+                .into()
+        }
+        Some(c) => {
+            let mut kids = take_packed(c);
+            if kids.len() == 1 {
+                chain_click(kids.remove(0), move || open.set(false))
+            } else {
+                let kids: Vec<Element> = kids
+                    .into_iter()
+                    .map(|kid| {
+                        chain_click(kid, {
+                            let open = open;
+                            move || open.set(false)
+                        })
+                    })
+                    .collect();
+                hstack()
+                    .items_center()
+                    .gap("0.5rem")
+                    .flex_shrink(0.0)
+                    .children(kids)
+                    .into()
+            }
+        }
+    };
     el.set_attr(ATTR_SLOT, SLOT_ACTION);
     el
 }
@@ -1110,7 +1196,7 @@ mod tests {
                 .map(String::as_str),
             Some("destructive")
         );
-        assert_eq!(shell.style.border_color, parse_color("red-300"));
+        assert_eq!(shell.style.border_color, parse_color("destructive/50"));
         let mut title_ok = false;
         let mut desc_ok = false;
         fn walk(
@@ -1176,5 +1262,295 @@ mod tests {
     #[test]
     fn dual_surface_compiles_shape() {
         let _b: Element = alert_dialog("x").child(|| Element::new()).into();
+    }
+
+    fn find_tid_mut<'a>(el: &'a mut Element, tid: &str) -> Option<&'a mut Element> {
+        if el.template_id.as_deref() == Some(tid) {
+            return Some(el);
+        }
+        el.children.iter_mut().find_map(|c| find_tid_mut(c, tid))
+    }
+
+    #[test]
+    fn alert_dialog_action_click_closes_open() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, (open, mut action)) = create_root(|| {
+            let open = use_signal("ad-act-open", || true);
+            let action = alert_dialog_scope("ad-act", Some(open), || {
+                let btn: Element = button("ad-act-allow").text("Allow").into();
+                AlertDialogAction(AlertDialogActionProps {
+                    children: Some(btn),
+                    base: None,
+                    ..Default::default()
+                })
+            });
+            (open, action)
+        });
+        let allow = find_tid_mut(&mut action, "ad-act-allow").expect("Allow button");
+        allow.on_click.as_ref().expect("chained close").borrow_mut()();
+        assert!(
+            !open.get(),
+            "AlertDialogAction must chain open.set(false) like Cancel"
+        );
+    }
+
+    #[test]
+    fn alert_dialog_action_preserves_child_button_template_id() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, action) = create_root(|| {
+            alert_dialog_scope("ad-stab", None, || {
+                let btn: Element = button("ad-stab-allow").text("Allow").into();
+                AlertDialogAction(AlertDialogActionProps {
+                    children: Some(btn),
+                    base: None,
+                    ..Default::default()
+                })
+            })
+        });
+        assert!(
+            find_tid(&action, "ad-stab-allow").is_some(),
+            "Action must wrap the child Button without rewriting its template_id"
+        );
+    }
+
+    fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+        if el.template_id.as_deref() == Some(tid) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_tid(c, tid))
+    }
+
+    fn overlay_opacity(el: &Element, tid: &str) -> Option<f32> {
+        if el.template_id.as_deref() == Some(tid) {
+            return Some(el.style.opacity);
+        }
+        el.children.iter().find_map(|c| overlay_opacity(c, tid))
+    }
+
+    fn overlay_has_fade_out(el: &Element, tid: &str) -> bool {
+        if el.template_id.as_deref() == Some(tid) {
+            return el.style.animations.iter().any(|a| a.name == "fade-out-0");
+        }
+        el.children.iter().any(|c| overlay_has_fade_out(c, tid))
+    }
+
+    fn find_text_color(el: &Element, needle: &str) -> Option<[u8; 4]> {
+        if el.text.as_deref() == Some(needle) {
+            return el.text_style.color;
+        }
+        el.children.iter().find_map(|c| find_text_color(c, needle))
+    }
+
+    #[test]
+    fn alert_dialog_action_click_keeps_exit_fade_after_rebuild() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::hoist_portal_subtrees;
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_allow_exit__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_allow_exit").open(open).child(move || {
+                    alert_dialog_content(AlertDialogContentOpts::default(), || {
+                        AlertDialogAction(AlertDialogActionProps {
+                            children: Some(button("ad_allow_exit__allow").text("Allow").into()),
+                            base: None,
+                            ..Default::default()
+                        })
+                    })
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            for _ in 0..20 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+        }
+
+        let click = {
+            let mut tree = live.borrow_mut();
+            let allow = find_tid_mut(&mut tree, "ad_allow_exit__allow").expect("Allow");
+            allow.on_click.as_ref().expect("close").clone()
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(
+                flush_modal_shell_motion_subtree(&mut tree),
+                "close rebuild must seed exit"
+            );
+            let _ = tick_hoisted_modal_css(&mut tree);
+            let tid = "ad_allow_exit__modal_overlay";
+            let opacity = overlay_opacity(&tree, tid).expect("overlay after Allow click");
+            assert!(
+                opacity > 0.7,
+                "Allow close must not skip fade-out, overlay opacity={opacity}"
+            );
+            assert!(
+                overlay_has_fade_out(&tree, tid),
+                "fade-out-0 must still be playing after Allow click"
+            );
+        }
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn alert_dialog_action_click_keeps_description_variant_color() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::renderer::take_capture_jobs;
+        use crate::style::parse_text_color;
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        const DESC: &str = "You can change this later in Settings.";
+        let want = alert_dialog_chrome(AlertDialogVariant::Success, false).muted_fg;
+        let muted_token = parse_text_color("muted-foreground");
+        let fg_token = parse_text_color("foreground");
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_desc_exit__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_desc_exit").open(open).child(move || {
+                    alert_dialog_content(
+                        AlertDialogContentOpts {
+                            variant: AlertDialogVariant::Success,
+                            ..Default::default()
+                        },
+                        || {
+                            vstack()
+                                .child(AlertDialogDescription(AlertDialogDescriptionProps {
+                                    children: Some(Element::new().text(DESC)),
+                                    base: None,
+                                }))
+                                .child(AlertDialogAction(AlertDialogActionProps {
+                                    children: Some(
+                                        button("ad_desc_exit__allow").text("Allow").into(),
+                                    ),
+                                    base: None,
+                                    ..Default::default()
+                                }))
+                                .into()
+                        },
+                    )
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            for _ in 0..20 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+            let got = find_text_color(&tree, DESC).expect("description while open");
+            assert_eq!(got, want, "open description must keep success muted");
+        }
+
+        let click = {
+            let mut tree = live.borrow_mut();
+            let allow = find_tid_mut(&mut tree, "ad_desc_exit__allow").expect("Allow");
+            allow.on_click.as_ref().expect("close").clone()
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            let _ = tick_hoisted_modal_css(&mut tree);
+            let got = find_text_color(&tree, DESC).expect("description after Allow");
+            assert_ne!(
+                got, muted_token,
+                "close must not fall back to muted-foreground"
+            );
+            assert_ne!(
+                got, fg_token,
+                "close must not fall back to default foreground"
+            );
+            assert_eq!(got, want, "exit description must keep success muted");
+
+            let _ = take_capture_jobs();
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [-1.0, -1.0]);
+            let jobs = take_capture_jobs();
+            let job = jobs
+                .iter()
+                .find(|j| j.text_nodes.iter().any(|n| n.text == DESC))
+                .expect("zoom capture after Allow must include description");
+            let node = job
+                .text_nodes
+                .iter()
+                .find(|n| n.text == DESC)
+                .expect("capture description");
+            assert_eq!(
+                node.style.color_resolved(),
+                want,
+                "zoom capture after Allow must keep success muted"
+            );
+        }
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

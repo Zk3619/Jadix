@@ -6,27 +6,25 @@
 use std::sync::OnceLock;
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::utils::modal_motion::{
-    apply_modal_shell_motion, default_slide_axis_px, mounted_signal, sync_modal_presence,
-    use_modal_presence, ModalPresenceHandle,
-};
-use crate::utils::modal_shell::{
-    build_modal_overlay, modal_sync_presence, ShellOverlayOpts as ModalOverlayOpts,
-};
 use crate::core::reactivity::{
     create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
 };
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
+use crate::utils::modal_motion::{
+    apply_modal_shell_motion, default_slide_axis_px, mounted_signal, sync_modal_presence,
+    use_modal_presence, ModalPresenceHandle,
+};
+use crate::utils::modal_shell::ModalShellZs;
+use crate::utils::modal_shell::{
+    build_modal_overlay, modal_sync_presence, ShellOverlayOpts as ModalOverlayOpts,
+};
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::presence::PresencePhase;
-use crate::utils::modal_shell::ModalShellZs;
 
 pub use crate::utils::modal_motion::ModalSurfaceMotion;
-pub use crate::utils::modal_shell::{
-    DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
-};
+pub use crate::utils::modal_shell::{DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY};
 
 // ---------------------------------------------------------------------------
 // Overlay opts (author-facing; converts to internal ShellOverlayOpts)
@@ -547,7 +545,7 @@ mod tests {
     use super::*;
     use crate::app::portal_overlay::clear_overlay_stack;
     use crate::core::reactivity::create_root;
-    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+    use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
 
     fn is_zero_len(el: &Element) -> bool {
         crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
@@ -658,7 +656,10 @@ mod tests {
                     Some(Element::new().text("card").w("16rem").h("8rem"))
                 },
             );
-            assert!(saw_phase, "open layer must pass PresencePhase, not a handle");
+            assert!(
+                saw_phase,
+                "open layer must pass PresencePhase, not a handle"
+            );
             assert!(has_portal(&mounted), "layer must portal overlay + stage");
             assert!(!portal_nests_portal(&mounted));
         });
@@ -785,8 +786,8 @@ mod tests {
 
     #[test]
     fn slide_exit_seeds_before_and_after_portal_hoist() {
-        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         use crate::layout::layout_tree::{hoist_portal_subtrees, PORTAL_LAYER_ID};
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         clear_overlay_stack();
         create_root(|| {
             let open = Signal::new(true);
@@ -872,5 +873,298 @@ mod tests {
             parse_modal_motion("sheet-slide"),
             ModalSurfaceMotion::SlideFromRight
         );
+    }
+
+    #[test]
+    fn open_dialog_fade_keeps_page_glyphs_under_overlay_chrome() {
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let overlay = ShellOverlayOpts {
+                opacity: Some(0.28),
+                ..Default::default()
+            };
+            let presence = use_modal_presence("gal-vm-dlg-rsx");
+            let panel = Element::new()
+                .w(320.0)
+                .h(160.0)
+                .bg(crate::tokens::card())
+                .rounded(12.0)
+                .child(Element::new().text("ViewportModal · RSX"));
+            let mounted = assemble_modal(
+                "gal-vm-dlg-rsx",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default().motion(ModalSurfaceMotion::DialogFade),
+                panel,
+            );
+            Element::new()
+                .w(1280.0)
+                .h(800.0)
+                .bg([0.96, 0.96, 0.96, 1.0])
+                .child(Element::new().text("before"))
+                .child(mounted)
+                .child(Element::new().text("SheetSlide · Builder"))
+        });
+
+        assert!(
+            hoist_portal_subtrees(&mut root) >= 1,
+            "underlay + stage must hoist onto the portal layer"
+        );
+        assert!(flush_modal_shell_motion_subtree(&mut root));
+        for _ in 0..30 {
+            let _ = tick_hoisted_modal_css(&mut root);
+        }
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.instance_start < result.instances.len(),
+            "open ViewportModal must collect overlay rects after the page split"
+        );
+
+        let split_t = result.overlay_split.text_start.min(result.text_nodes.len());
+        let split_i = result
+            .overlay_split
+            .instance_start
+            .min(result.instances.len());
+        let split_tex = result
+            .overlay_split
+            .textured_start
+            .min(result.textured_draws.len());
+        let texts: Vec<&str> = result.text_nodes.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            result.text_nodes[..split_t]
+                .iter()
+                .any(|t| t.text.contains("SheetSlide")),
+            "page label after the modal must collect before the overlay split (otherwise it paints on the dialog); split={split_t} texts={texts:?}"
+        );
+
+        let overlay_inst = &result.instances[split_i..];
+        let sizes: Vec<([f32; 2], f32)> = overlay_inst
+            .iter()
+            .map(|i| (i.rect_size, i.color[3]))
+            .collect();
+        let overlay_tex: Vec<&str> = result.textured_draws[split_tex..]
+            .iter()
+            .map(|d| d.texture_key.as_str())
+            .collect();
+        let title_in_overlay_text = result.text_nodes[split_t..]
+            .iter()
+            .any(|t| t.text.contains("ViewportModal"));
+        let title_in_zoom_blit = overlay_tex.iter().any(|k| k.starts_with("rui_zoom_cap:"));
+        assert!(
+            title_in_overlay_text || title_in_zoom_blit,
+            "dialog title must be overlay text or a zoom blit; split_t={split_t} texts={texts:?} overlay_tex={overlay_tex:?}"
+        );
+        assert!(
+            overlay_inst
+                .iter()
+                .any(|i| i.rect_size[0] > 1000.0 && i.color[3] > 0.05),
+            "fullscreen scrim missing or alpha≈0; overlay instances={sizes:?}"
+        );
+        assert!(
+            overlay_inst
+                .iter()
+                .any(|i| { i.rect_size[0] > 200.0 && i.rect_size[0] < 400.0 && i.color[3] > 0.5 }),
+            "opaque panel fill missing in overlay suffix; overlay instances={sizes:?}"
+        );
+        let overlay_i0 = split_i as u32;
+        for op in &result.paint_ops[..result.overlay_split.paint_op_start] {
+            if let crate::layout::layout_tree::PaintOp::Rects { start, count } = *op {
+                assert!(
+                    start + count <= overlay_i0,
+                    "page Rects swallowed overlay panel fills (page glyphs would paint on the dialog); op={start}+{count} overlay_i0={overlay_i0}"
+                );
+            }
+        }
+
+        let panel_idx = overlay_inst
+            .iter()
+            .position(|i| i.rect_size[0] > 200.0 && i.rect_size[0] < 400.0 && i.color[3] > 0.5);
+        let panel_i = (split_i + panel_idx.expect("panel fill idx")) as u32;
+        let overlay_ops = &result.paint_ops[result.overlay_split.paint_op_start..];
+        let panel_in_ops = overlay_ops.iter().any(|op| match *op {
+            crate::layout::layout_tree::PaintOp::Rects { start, count } => {
+                start <= panel_i && panel_i < start + count
+            }
+            _ => false,
+        });
+        assert!(
+            panel_in_ops,
+            "panel fill is in overlay instances but dropped from overlay paint_ops (node-present Overlay draws ops only); ops={overlay_ops:?} panel_i={panel_i}"
+        );
+
+        let boxes = crate::layout::layout_tree::hoisted_portal_boxes(&root);
+        let vp = [0.0_f32, 0.0, 1280.0, 800.0];
+        assert!(
+            boxes
+                .iter()
+                .any(|b| crate::app::damage::damage_covers_full(vp, *b)),
+            "modal underlay/stage must cover the viewport so present FullClears and can frost; boxes={boxes:?}"
+        );
+        let bands = result.overlay_split.band_ranges(
+            result.instances.len(),
+            result.textured_draws.len(),
+            result.text_nodes.len(),
+            result.input_chrome_instances.len(),
+            result.paint_ops.len(),
+        );
+        assert!(
+            bands.iter().any(|b| b.backdrop_blur > 0.5),
+            "underlay band must stamp backdrop_blur or FullClear frost is skipped; bands blur={:?}",
+            bands.iter().map(|b| b.backdrop_blur).collect::<Vec<_>>()
+        );
+        let overlay_nodes: Vec<_> = boxes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, bounds)| crate::app::damage::PaintDirty {
+                key: 0xE0E0_0000 | i as u64,
+                bounds,
+                kind: crate::app::damage::PaintDirtyKind::Overlay,
+            })
+            .collect();
+        assert_eq!(
+            crate::app::damage::frame_clear_policy_for_nodes(true, false, &overlay_nodes, vp),
+            crate::app::damage::FrameClearPolicy::FullClear,
+            "open ViewportModal must FullClear so backdrop-blur frost runs; PartialLoad leaves a white wash and sharp page glyphs"
+        );
+
+        tree.set_collect_skip_allowed(true);
+        let _ = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [0.0, 0.0], false, false);
+        let skipped = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [0.0, 0.0], false, false);
+        assert!(
+            skipped.overlay_split.instance_start > 0
+                && skipped.overlay_split.instance_start < skipped.instances.len(),
+            "idle paint-only collect must keep overlay_split after the page; start={} n={}",
+            skipped.overlay_split.instance_start,
+            skipped.instances.len()
+        );
+        let split_i = skipped
+            .overlay_split
+            .instance_start
+            .min(skipped.instances.len());
+        let overlay_inst = &skipped.instances[split_i..];
+        assert!(
+            overlay_inst
+                .iter()
+                .any(|i| i.rect_size[0] > 1000.0 && i.color[3] > 0.05),
+            "skip replay must keep the fullscreen scrim in the overlay suffix"
+        );
+        assert!(
+            overlay_inst
+                .iter()
+                .any(|i| i.rect_size[0] > 200.0 && i.rect_size[0] < 400.0 && i.color[3] > 0.5),
+            "skip replay must keep the opaque panel fill in the overlay suffix"
+        );
+        let bands = skipped.overlay_split.band_ranges(
+            skipped.instances.len(),
+            skipped.textured_draws.len(),
+            skipped.text_nodes.len(),
+            skipped.input_chrome_instances.len(),
+            skipped.paint_ops.len(),
+        );
+        assert!(
+            bands.iter().any(|b| b.backdrop_blur > 0.5),
+            "skip replay must restamp underlay backdrop_blur; bands blur={:?}",
+            bands.iter().map(|b| b.backdrop_blur).collect::<Vec<_>>()
+        );
+
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn open_dialog_keeps_local_scrim_instance_blur() {
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        let (_owner, mut root) = create_root(|| {
+            let mut local = Element::new()
+                .w(200.0)
+                .h(120.0)
+                .bg([1.0, 1.0, 1.0, 0.55])
+                .backdrop_blur(16.0);
+            local.set_attr("rui_portal", "1");
+            local.set_attr(ATTR_PORTAL_MOUNT, "local-host");
+            local.set_attr(ATTR_PORTAL_KEY, "local-scrim");
+            let host = Element::new()
+                .relative()
+                .w(220.0)
+                .h(140.0)
+                .overflow_x("hidden")
+                .overflow_y("hidden")
+                .bg([0.15, 0.39, 0.92, 1.0])
+                .template_id("local-host")
+                .child(Element::new().text("YELLOW 高对比 BLUR"))
+                .child(local);
+            let open = Signal::new(true);
+            let overlay = ShellOverlayOpts {
+                opacity: Some(0.28),
+                ..Default::default()
+            };
+            let presence = use_modal_presence("vm-over-local");
+            let panel = Element::new()
+                .w(320.0)
+                .h(160.0)
+                .bg(crate::tokens::card())
+                .child(Element::new().text("ViewportModal · RSX"));
+            let mounted = assemble_modal(
+                "vm-over-local",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default().motion(ModalSurfaceMotion::DialogFade),
+                panel,
+            );
+            Element::new()
+                .w(1280.0)
+                .h(800.0)
+                .child(host)
+                .child(mounted)
+        });
+
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        assert!(flush_modal_shell_motion_subtree(&mut root));
+        for _ in 0..30 {
+            let _ = tick_hoisted_modal_css(&mut root);
+        }
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [0.0, 0.0]);
+        let split_i = result
+            .overlay_split
+            .instance_start
+            .min(result.instances.len());
+        assert!(
+            result.instances[..split_i]
+                .iter()
+                .any(|i| i.backdrop_blur > 0.5),
+            "local mount scrim must still stamp instance backdrop_blur under an open modal"
+        );
+        let bands = result.overlay_split.band_ranges(
+            result.instances.len(),
+            result.textured_draws.len(),
+            result.text_nodes.len(),
+            result.input_chrome_instances.len(),
+            result.paint_ops.len(),
+        );
+        assert!(
+            bands.iter().any(|b| b.backdrop_blur > 0.5),
+            "modal underlay must still stamp overlay-band blur so frost stacks on the local scrim; bands={:?}",
+            bands.iter().map(|b| b.backdrop_blur).collect::<Vec<_>>()
+        );
+        clear_overlay_stack();
     }
 }

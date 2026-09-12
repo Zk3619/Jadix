@@ -581,7 +581,10 @@ pub fn context_menu_content(
     let _ = ctx.active;
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let ao_opts = AnchoredOverlayContentOpts {
-        placement: Some(Placement::Point { pos: cursor, gap: 2.0 }),
+        placement: Some(Placement::Point {
+            pos: cursor,
+            gap: 2.0,
+        }),
         kind: OverlayKind::Menu,
         motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,

@@ -639,10 +639,9 @@ fn build_date_picker_view(
             .child(reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none());
     }
 
-    let trigger_fid = use_signal(
-        format!("{id}__dp_trigger_fid").as_str(),
-        || trigger_focus_id(&id),
-    );
+    let trigger_fid = use_signal(format!("{id}__dp_trigger_fid").as_str(), || {
+        trigger_focus_id(&id)
+    });
     let panel_slot = with_child_owner(|| {
         provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         let ao_opts = AnchoredOverlayContentOpts {
@@ -677,16 +676,7 @@ fn build_date_picker_view(
             // isolate_reads：is_tracking 仍为 true，Calendar/Combobox 才能注册 anchor。
             isolate_reads(|| {
                 let mut panel = build_date_picker_panel_content(
-                    &id,
-                    kind,
-                    caption,
-                    open,
-                    val,
-                    year,
-                    month,
-                    hour,
-                    minute,
-                    second,
+                    &id, kind, caption, open, val, year, month, hour, minute, second,
                 );
                 panel = content_chrome.apply(panel);
                 panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");

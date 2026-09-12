@@ -561,7 +561,12 @@ impl From<PopoverPanelBuilder> for Element {
                 .placement(Placement::Unanchored)
                 .kind(OverlayKind::Popover)
                 .width("18rem")
-                .child(move || popover_surface(build(), None).fixed().top("1rem").right("1rem"))
+                .child(move || {
+                    popover_surface(build(), None)
+                        .fixed()
+                        .top("1rem")
+                        .right("1rem")
+                })
                 .into()
         }
     }

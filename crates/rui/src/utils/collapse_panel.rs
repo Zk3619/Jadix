@@ -93,7 +93,13 @@ pub fn tick_collapse_panel_presence() -> bool {
     drain_pending_unmounts();
     let now = Instant::now();
     let outcome = PANEL_PRESENCE_REGISTRY.with(|reg| {
-        tick_panel_cells(reg.borrow().as_slice(), now, |c| c.exit_armed, |_| {}, false)
+        tick_panel_cells(
+            reg.borrow().as_slice(),
+            now,
+            |c| c.exit_armed,
+            |_| {},
+            false,
+        )
     });
     for sig in outcome.unmount {
         if sig.is_alive() {
@@ -341,7 +347,9 @@ pub fn apply_collapse_motion(
             crate::app::damage::push_frame_paint_damage(el.layout_bounds);
             LayoutStatus::LayoutChanged
         }
-        CollapseHeightEffect::Measuring | CollapseHeightEffect::Idle | CollapseHeightEffect::Hidden => {
+        CollapseHeightEffect::Measuring
+        | CollapseHeightEffect::Idle
+        | CollapseHeightEffect::Hidden => {
             if layout && el.layout_node.is_some() {
                 return mark_layout(el, layout_tree);
             }

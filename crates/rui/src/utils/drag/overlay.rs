@@ -14,8 +14,8 @@ use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, Ove
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{isolate_reads, with_child_owner, Signal};
 use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutStatus, UnitSlot};
-use crate::layout::{dim_kind, dim_length_px, DimKind};
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
+use crate::layout::{dim_kind, dim_length_px, DimKind};
 use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{
@@ -141,9 +141,7 @@ pub(crate) fn adjust_overlay_collect_origin(
     el: &mut Element,
     measured: [f32; 2],
 ) -> Option<[f32; 2]> {
-    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none()
-        || el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some()
-    {
+    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none() || el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
         return None;
     }
     let scope = el
@@ -548,12 +546,7 @@ impl From<DragOverlayBuilder> for Element {
                 OverlayKind::Popover,
                 OverlayMode::Pinned,
             );
-            let mut panel = place_drag_ghost(
-                Element::new(),
-                ghost_id.as_str(),
-                pos.peek(),
-                None,
-            );
+            let mut panel = place_drag_ghost(Element::new(), ghost_id.as_str(), pos.peek(), None);
             panel = sync_drag_overlay_ghost(
                 panel,
                 open,
@@ -676,12 +669,9 @@ mod tests {
                     .item_type("chip")
                     .source_opacity(0.0)
                     .child(|| Element::new().text("src").w(80.0).h(32.0));
-                let zone = droppable("inbox").accept("chip").child(|| {
-                    Element::new()
-                        .w(120.0)
-                        .h(48.0)
-                        .text("drop")
-                });
+                let zone = droppable("inbox")
+                    .accept("chip")
+                    .child(|| Element::new().w(120.0).h(48.0).text("drop"));
                 let overlay: Element = drag_overlay().source_opacity(0.0).into();
                 Element::from(vstack().children([chip, zone, overlay]))
             })
@@ -753,9 +743,7 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-press-custom").threshold(0.0).child(move || {
@@ -832,9 +820,7 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-miss").threshold(0.0).child(move || {
@@ -898,9 +884,7 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-gallery-chip").threshold(0.0).child(move || {
@@ -1002,11 +986,15 @@ mod tests {
         }
 
         let (_o, live) = mount_scope_tree(move || {
-            drag_scope("ov-gallery-card-chip").threshold(0.0).child(move || {
-                let chip = draggable("chip").item_type("chip").child(|| card_chip("可拖卡片"));
-                let overlay: Element = drag_overlay().into();
-                Element::from(vstack().children([chip, overlay]))
-            })
+            drag_scope("ov-gallery-card-chip")
+                .threshold(0.0)
+                .child(move || {
+                    let chip = draggable("chip")
+                        .item_type("chip")
+                        .child(|| card_chip("可拖卡片"));
+                    let overlay: Element = drag_overlay().into();
+                    Element::from(vstack().children([chip, overlay]))
+                })
         });
         {
             let mut tree = live.borrow_mut();
@@ -1090,11 +1078,15 @@ mod tests {
         }
 
         let (_o, live) = mount_scope_tree(move || {
-            drag_scope("ov-gallery-fast-chip").threshold(0.0).child(move || {
-                let chip = draggable("chip").item_type("chip").child(|| card_chip("可拖卡片"));
-                let overlay: Element = drag_overlay().into();
-                Element::from(vstack().children([chip, overlay]))
-            })
+            drag_scope("ov-gallery-fast-chip")
+                .threshold(0.0)
+                .child(move || {
+                    let chip = draggable("chip")
+                        .item_type("chip")
+                        .child(|| card_chip("可拖卡片"));
+                    let overlay: Element = drag_overlay().into();
+                    Element::from(vstack().children([chip, overlay]))
+                })
         });
         let mut lt = crate::layout::LayoutTree::new();
         {
@@ -1173,21 +1165,22 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-close-shell").threshold(0.0).child(move || {
-                let chip = draggable("chip").item_type("chip").source_opacity(0.0).child(|| {
-                    Element::new()
-                        .text("src")
-                        .w(80.0)
-                        .h(32.0)
-                        .border_style("solid")
-                        .border_width(1.0)
-                        .rounded(8.0)
-                });
+                let chip = draggable("chip")
+                    .item_type("chip")
+                    .source_opacity(0.0)
+                    .child(|| {
+                        Element::new()
+                            .text("src")
+                            .w(80.0)
+                            .h(32.0)
+                            .border_style("solid")
+                            .border_width(1.0)
+                            .rounded(8.0)
+                    });
                 let overlay: Element = drag_overlay().source_opacity(0.0).into();
                 Element::from(vstack().children([chip, overlay]))
             })
@@ -1334,9 +1327,7 @@ mod tests {
                                             .min_h(80.0)
                                             .gap(6.0)
                                             .child(Element::new().text(title).h(20.0))
-                                            .child(
-                                                vstack().w("100%").min_h(0.0).children(rows),
-                                            ),
+                                            .child(vstack().w("100%").min_h(0.0).children(rows)),
                                     )
                                 })
                         };
@@ -1355,10 +1346,7 @@ mod tests {
         }
 
         let hits0 = collect_hits(&live.borrow());
-        let src = hits0
-            .iter()
-            .find(|h| h.id == "open:Move me")
-            .expect("src");
+        let src = hits0.iter().find(|h| h.id == "open:Move me").expect("src");
         let pointer = [
             src.rect.x + src.rect.width * 0.5,
             src.rect.y + src.rect.height * 0.5,
@@ -1464,7 +1452,10 @@ mod tests {
                     n += 1;
                 }
             });
-            assert_eq!(n, 1, "must not leak a second frozen ghost on the portal layer");
+            assert_eq!(
+                n, 1,
+                "must not leak a second frozen ghost on the portal layer"
+            );
         }
 
         let hits2 = collect_hits(&live.borrow());
@@ -1530,20 +1521,20 @@ mod tests {
         use crate::app::reactive::{reactive_view, reset_registered_anchors};
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(move || {
-            drag_scope("ov-inline-island").threshold(0.0).child(move || {
-                let chip = draggable("chip").item_type("chip").child(|| {
-                    reactive_view("ov-inline-island__lbl", || {
-                        Element::new().text("岛内文案").w(80.0).h(32.0)
-                    })
-                });
-                let overlay: Element = drag_overlay().into();
-                Element::from(vstack().children([chip, overlay]))
-            })
+            drag_scope("ov-inline-island")
+                .threshold(0.0)
+                .child(move || {
+                    let chip = draggable("chip").item_type("chip").child(|| {
+                        reactive_view("ov-inline-island__lbl", || {
+                            Element::new().text("岛内文案").w(80.0).h(32.0)
+                        })
+                    });
+                    let overlay: Element = drag_overlay().into();
+                    Element::from(vstack().children([chip, overlay]))
+                })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
         begin(BeginDrag {
@@ -1598,9 +1589,9 @@ mod tests {
                 let chip = draggable("chip")
                     .item_type("chip")
                     .child(|| Element::new().text("src").w(80.0).h(32.0));
-                let zone = droppable("inbox").accept("chip").child(|| {
-                    Element::new().w(200.0).h(80.0).text("drop")
-                });
+                let zone = droppable("inbox")
+                    .accept("chip")
+                    .child(|| Element::new().w(200.0).h(80.0).text("drop"));
                 let overlay: Element = drag_overlay().into();
                 Element::from(vstack().children([chip, zone, overlay]))
             })
@@ -1712,7 +1703,13 @@ mod tests {
             }
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 80.0, 32.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2470,7 +2467,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 200.0, 40.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 200.0, 40.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2596,7 +2599,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 80.0, 32.0],
+        );
         {
             let mut tree = live.borrow_mut();
             let mut lt = crate::layout::LayoutTree::new();
@@ -2635,9 +2644,7 @@ mod tests {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
-        use crate::utils::drag::{
-            begin, drag_overlay, drag_scope, draggable, tick, BeginDrag,
-        };
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, draggable, tick, BeginDrag};
 
         let (_o, live) = mount_scope_tree(|| {
             drag_scope("ov-snap-undim").threshold(0.0).child(|| {
@@ -2704,7 +2711,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 80.0, 32.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2748,7 +2761,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 80.0, 32.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2812,7 +2831,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 48.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [24.0, 16.0, 420.0, 48.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2857,7 +2882,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [24.0, 16.0, 420.0, 72.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [24.0, 16.0, 420.0, 72.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -2901,7 +2932,13 @@ mod tests {
             })
         });
         let sid = find_scope_id(&live.borrow()).expect("scope");
-        activate_chip(&live, &sid, [40.0, 16.0], [10.0, 8.0], [30.0, 8.0, 80.0, 32.0]);
+        activate_chip(
+            &live,
+            &sid,
+            [40.0, 16.0],
+            [10.0, 8.0],
+            [30.0, 8.0, 80.0, 32.0],
+        );
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout(&mut tree);
@@ -3747,9 +3784,10 @@ mod tests {
 
     fn width_spec_is_percent(el: &Element) -> bool {
         use crate::style::UnitSlot;
-        el.style.unit_specs.iter().any(|(s, d)| {
-            matches!(*s, UnitSlot::Width | UnitSlot::InlineSize) && d.has_percent()
-        })
+        el.style
+            .unit_specs
+            .iter()
+            .any(|(s, d)| matches!(*s, UnitSlot::Width | UnitSlot::InlineSize) && d.has_percent())
     }
 
     /// Gallery kanban `list_chip` is `w=100%` inside a padded, bordered column.
@@ -3919,14 +3957,15 @@ mod tests {
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-kanban-w").threshold(0.0).child(move || {
                 let overlay: Element = drag_overlay().into();
-                let item = |id: &'static str, list: &'static str, idx: usize, label: &'static str| {
-                    sortable_item(id)
-                        .item_type("task")
-                        .group("board")
-                        .list(list)
-                        .index(idx)
-                        .child(move || chip(label))
-                };
+                let item =
+                    |id: &'static str, list: &'static str, idx: usize, label: &'static str| {
+                        sortable_item(id)
+                            .item_type("task")
+                            .group("board")
+                            .list(list)
+                            .index(idx)
+                            .child(move || chip(label))
+                    };
                 let todo = droppable("todo")
                     .list("todo")
                     .group("board")
@@ -3939,12 +3978,12 @@ mod tests {
                                 .border_style("solid")
                                 .border_width(1.0)
                                 .child(Element::new().text("todo").h(16.0))
-                                .child(
-                                    vstack()
-                                        .w("100%")
-                                        .gap("0.375rem")
-                                        .child(item("src", "todo", 0, "Draft RFC")),
-                                ),
+                                .child(vstack().w("100%").gap("0.375rem").child(item(
+                                    "src",
+                                    "todo",
+                                    0,
+                                    "Draft RFC",
+                                ))),
                         )
                     });
                 let doing = droppable("doing")
@@ -3959,12 +3998,12 @@ mod tests {
                                 .border_style("solid")
                                 .border_width(1.0)
                                 .child(Element::new().text("doing").h(16.0))
-                                .child(
-                                    vstack()
-                                        .w("100%")
-                                        .gap("0.375rem")
-                                        .child(item("dst", "doing", 0, "Write tests")),
-                                ),
+                                .child(vstack().w("100%").gap("0.375rem").child(item(
+                                    "dst",
+                                    "doing",
+                                    0,
+                                    "Write tests",
+                                ))),
                         )
                     });
                 Element::from(hstack().gap(40.0).children([todo, doing, overlay]))
@@ -4283,20 +4322,15 @@ mod tests {
                         .accept("veto")
                         .child(move || {
                             Element::from(
-                                vstack()
-                                    .w(200.0)
-                                    .p(8.0)
-                                    .child(
-                                        sortable_item("open:Locked")
-                                            .item_type("veto")
-                                            .group("veto")
-                                            .list("open")
-                                            .index(0)
-                                            .source_opacity(0.4)
-                                            .child(|| {
-                                                Element::new().text("Locked").w("100%").h(32.0)
-                                            }),
-                                    ),
+                                vstack().w(200.0).p(8.0).child(
+                                    sortable_item("open:Locked")
+                                        .item_type("veto")
+                                        .group("veto")
+                                        .list("open")
+                                        .index(0)
+                                        .source_opacity(0.4)
+                                        .child(|| Element::new().text("Locked").w("100%").h(32.0)),
+                                ),
                             )
                         });
                     let empty = droppable("empty")
@@ -4322,7 +4356,10 @@ mod tests {
         }
 
         let hits0 = collect_hits(&live.borrow());
-        let src = hits0.iter().find(|h| h.id == "open:Locked").expect("locked");
+        let src = hits0
+            .iter()
+            .find(|h| h.id == "open:Locked")
+            .expect("locked");
         let pointer = [
             src.rect.x + src.rect.width * 0.5,
             src.rect.y + src.rect.height * 0.5,

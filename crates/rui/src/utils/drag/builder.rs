@@ -43,7 +43,8 @@ use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HANDLE, ATTR_DRAG_HOLE_PREVIEW, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX,
     ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST, ATTR_DRAG_OVER, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE,
-    ATTR_DRAG_SELECTED, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_SWAP, ATTR_DRAG_TYPE,
+    ATTR_DRAG_SELECTED, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_SWAP,
+    ATTR_DRAG_TYPE,
 };
 use crate::utils::pointer_action::InertiaOpts;
 
@@ -1033,8 +1034,7 @@ fn hole_preview_slot_extent(list_el: &Element, list: &str, drag_extent: [f32; 2]
     let [_, border_r, _, border_l] = list_el.style.resolved_border_widths();
     let pad_l = crate::layout::lp_length_px(list_el.style.padding.left).unwrap_or(0.0);
     let pad_r = crate::layout::lp_length_px(list_el.style.padding.right).unwrap_or(0.0);
-    let content_w =
-        (list_el.layout_bounds[2] - pad_l - pad_r - border_l - border_r).max(0.0);
+    let content_w = (list_el.layout_bounds[2] - pad_l - pad_r - border_l - border_r).max(0.0);
     let mut w = sibling_w
         .or_else(|| (drag_extent[0] > 1.0).then_some(drag_extent[0]))
         .filter(|x| *x > 1.0)
@@ -1050,8 +1050,8 @@ fn hole_preview_slot_extent(list_el: &Element, list: &str, drag_extent: [f32; 2]
 fn pin_percent_size_to_slot(el: &mut Element, slot: [f32; 2]) -> bool {
     let mut changed = false;
     let hole = el.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW);
-    let spec_w_pct = slot_has_percent(el, UnitSlot::Width)
-        || slot_has_percent(el, UnitSlot::InlineSize);
+    let spec_w_pct =
+        slot_has_percent(el, UnitSlot::Width) || slot_has_percent(el, UnitSlot::InlineSize);
     let pin_w = slot[0] > 0.0
         && (spec_w_pct
             || matches!(dim_kind(el.style.size.width), DimKind::Percent(_))
@@ -1063,8 +1063,8 @@ fn pin_percent_size_to_slot(el: &mut Element, slot: [f32; 2]) -> bool {
             changed = true;
         }
     }
-    let spec_h_pct = slot_has_percent(el, UnitSlot::Height)
-        || slot_has_percent(el, UnitSlot::BlockSize);
+    let spec_h_pct =
+        slot_has_percent(el, UnitSlot::Height) || slot_has_percent(el, UnitSlot::BlockSize);
     if slot[1] > 0.0
         && (spec_h_pct || matches!(dim_kind(el.style.size.height), DimKind::Percent(_)))
     {
@@ -1211,10 +1211,7 @@ fn sync_cross_list_hole_preview(
         .map(|h| [h.rect.x, h.rect.y])
         .unwrap_or([el.layout_bounds[0], el.layout_bounds[1]]);
     let local = if !has_items {
-        empty_list_hole_local(el).unwrap_or([
-            hole[0] - list_origin[0],
-            hole[1] - list_origin[1],
-        ])
+        empty_list_hole_local(el).unwrap_or([hole[0] - list_origin[0], hole[1] - list_origin[1]])
     } else {
         [hole[0] - list_origin[0], hole[1] - list_origin[1]]
     };

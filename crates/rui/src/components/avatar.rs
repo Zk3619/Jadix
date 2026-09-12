@@ -1475,10 +1475,9 @@ fn build_avatar_group(
     };
 
     let portal_id = group_id.clone();
-    let trigger_fid = use_signal(
-        format!("{group_id}__ao_trigger_fid").as_str(),
-        || focus_id.clone(),
-    );
+    let trigger_fid = use_signal(format!("{group_id}__ao_trigger_fid").as_str(), || {
+        focus_id.clone()
+    });
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
             focus_id.clone(),

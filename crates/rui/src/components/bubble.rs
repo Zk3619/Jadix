@@ -1165,10 +1165,9 @@ fn build_bubble_reactions_element(
     inner.set_attr(ATTR_REACTIONS_INNER, "1");
 
     let portal_id = reactions_id.clone();
-    let trigger_fid = use_signal(
-        format!("{reactions_id}__ao_trigger_fid").as_str(),
-        || focus_id.clone(),
-    );
+    let trigger_fid = use_signal(format!("{reactions_id}__ao_trigger_fid").as_str(), || {
+        focus_id.clone()
+    });
     let expand_placeholder = with_child_owner(|| {
         provide_anchored_overlay_context(expanded, reactions_id.clone(), trigger_fid);
         let ao_opts = AnchoredOverlayContentOpts {

@@ -105,8 +105,7 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                 if now.duration_since(last_sent) < Duration::from_millis(DEBOUNCE_MS) {
                     continue;
                 }
-                let (rust_files, wgsl_files, style_files) =
-                    partition_tracked(&changed, watch_path);
+                let (rust_files, wgsl_files, style_files) = partition_tracked(&changed, watch_path);
                 if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
                     continue;
                 }
@@ -156,8 +155,7 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                 if changed.is_empty() {
                     continue;
                 }
-                let (rust_files, wgsl_files, style_files) =
-                    partition_tracked(&changed, watch_path);
+                let (rust_files, wgsl_files, style_files) = partition_tracked(&changed, watch_path);
                 if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
                     continue;
                 }
@@ -336,10 +334,7 @@ fn is_tracked_project_file(path: &Path, root: &Path) -> bool {
         || is_tracked_stylesheet(path, root)
 }
 
-fn partition_tracked(
-    paths: &[PathBuf],
-    root: &Path,
-) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+fn partition_tracked(paths: &[PathBuf], root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     let mut rust = Vec::new();
     let mut wgsl = Vec::new();
     let mut style = Vec::new();

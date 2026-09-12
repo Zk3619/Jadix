@@ -594,8 +594,8 @@ mod tests {
         use crate::style::{set_theme_mode, ThemeMode};
         set_theme_mode(ThemeMode::Light);
         for (name, accent_token, text_token) in [
-            ("success", "green-600", "green-600"),
-            ("warning", "orange-600", "orange-600"),
+            ("success", "success", "success"),
+            ("warning", "warning", "warning"),
             ("destructive", "destructive", "destructive"),
         ] {
             let el: Element = badge().variant(name).text(name).into();

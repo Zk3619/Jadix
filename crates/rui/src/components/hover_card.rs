@@ -60,7 +60,7 @@ use crate::utils::floating_motion::FloatingMotionKind;
 use crate::utils::hover_intent::{
     bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
 };
-use crate::utils::popup::{ATTR_FLOATING_W};
+use crate::utils::popup::ATTR_FLOATING_W;
 use rui_macros::component;
 
 /// Default open delay (ms); demos often use `delay={10}` — product default stays snappy.

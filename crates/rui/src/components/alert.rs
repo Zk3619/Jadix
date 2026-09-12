@@ -800,7 +800,7 @@ mod tests {
         let el = build_alert_root(AlertVariant::Destructive, false, true, vec![]);
         assert_eq!(el.style.bg_color, parse_color("card"));
         let border = el.style.border_color;
-        assert_eq!(border, parse_color("red-300"));
+        assert_eq!(border, parse_color("destructive/50"));
         assert_eq!(
             el.attrs.get(ATTR_ALERT_VARIANT).map(String::as_str),
             Some("destructive")
@@ -817,7 +817,7 @@ mod tests {
     fn alert_info_unfilled_uses_semantic_border() {
         let el = build_alert_root(AlertVariant::Info, false, true, vec![]);
         assert_eq!(el.style.bg_color, parse_color("card"));
-        assert_eq!(el.style.border_color, parse_color("blue-300"));
+        assert_eq!(el.style.border_color, parse_color("info/50"));
         assert!(el.style.border_width > 0.5);
     }
 

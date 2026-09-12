@@ -639,13 +639,6 @@ fn settle_modal_enter_if_ready(
     !settled
 }
 
-fn dialog_has_exit_anim(el: &Element) -> bool {
-    el.style
-        .animations
-        .iter()
-        .any(|a| a.name == "fade-out-0" || a.name == "zoom-out-90" || a.name == "zoom-out-95")
-}
-
 fn reset_dialog_css_anim_snapshots(overlay: &mut Element, zoom: &mut Element) {
     overlay.animation_snapshot = Default::default();
     zoom.animation_snapshot = Default::default();
@@ -708,19 +701,17 @@ fn ensure_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
     }
 }
 
-fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
-    clear_motion(overlay);
-    clear_motion(zoom);
-    overlay.style.opacity = 1.0;
-    zoom.style.opacity = 1.0;
-    zoom.style.scale = [1.0, 1.0];
-    overlay.style.animations = vec![keyframes_anim_entry(
+fn dialog_exit_overlay_anim() -> Vec<crate::style::AnimationEntry> {
+    vec![keyframes_anim_entry(
         "fade-out-0",
         DIALOG_EXIT_ANIM_MS,
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
-    )];
-    zoom.style.animations = vec![
+    )]
+}
+
+fn dialog_exit_zoom_anim() -> Vec<crate::style::AnimationEntry> {
+    vec![
         keyframes_anim_entry(
             "fade-out-0",
             DIALOG_EXIT_ANIM_MS,
@@ -733,7 +724,17 @@ fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
             TimingFunction::EaseIn,
             AnimationFillMode::Both,
         ),
-    ];
+    ]
+}
+
+fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
+    clear_motion(overlay);
+    clear_motion(zoom);
+    overlay.style.opacity = 1.0;
+    zoom.style.opacity = 1.0;
+    zoom.style.scale = [1.0, 1.0];
+    overlay.style.animations = dialog_exit_overlay_anim();
+    zoom.style.animations = dialog_exit_zoom_anim();
     reset_dialog_css_anim_snapshots(overlay, zoom);
 }
 
@@ -909,14 +910,18 @@ fn apply_dialog_css_keyframe_motion(
             c.enter_active = true;
             c.enter_started = Some(Instant::now());
         }
-        if needs_exit_anim && exiting {
-            c.needs_exit_anim = false;
+        if exiting {
+            if needs_exit_anim {
+                c.needs_exit_anim = false;
+            }
+            // Do not let enter catch-up seek a leftover `enter_started` on the
+            // first exit tick (rebuilds can drop snapshots → hold_seed).
             c.enter_started = None;
         }
         (needs_enter, needs_exit_anim, c.enter_active)
     };
 
-    if exiting && (needs_exit_anim || !dialog_has_exit_anim(overlay)) {
+    if exiting && needs_exit_anim {
         seed_dialog_exit_anim(overlay, zoom);
         return true;
     }
@@ -1480,8 +1485,16 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
             // layout at opacity 0 → extra vsync before any pixels.
             let hold_seed = overlay.animation_snapshot.runs.is_empty()
                 && motion_el.animation_snapshot.runs.is_empty();
+            let exiting = shell.phase == PresencePhase::Exiting;
+            // Catch-up is enter-only. Exit rebuilds (AlertDialog Action click) often
+            // drop snapshots; seeking `enter_started` (seconds ago) would consume the
+            // whole 200ms fade/zoom in one tick and skip the exit animation.
             let step = if hold_seed {
-                if shell.motion == ModalSurfaceMotion::DialogFade {
+                if shell.motion != ModalSurfaceMotion::DialogFade {
+                    0.0
+                } else if exiting {
+                    dt
+                } else {
                     match enter_started {
                         Some(t) => {
                             let elapsed = t.elapsed().as_secs_f32();
@@ -1493,8 +1506,6 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                         }
                         None => dt,
                     }
-                } else {
-                    0.0
                 }
             } else {
                 dt
@@ -2343,6 +2354,72 @@ mod tests {
             // Exit starts from the settled pose; the keyframes take it down from here.
             assert!((zoom.style.scale[0] - 1.0).abs() < 0.01);
             assert!((zoom.style.opacity - 1.0).abs() < 0.01);
+        });
+    }
+
+    #[test]
+    fn dialog_exit_hold_seed_does_not_seek_stale_enter_elapsed() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-exit-seek", &mut panel);
+            let handle = use_modal_presence("exit-seek");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-exit-seek",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+
+            sync_modal_presence(&handle, false);
+            {
+                let mut c = handle.cell.borrow_mut();
+                if let Some(shell) = c.shell.as_mut() {
+                    shell.phase = PresencePhase::Exiting;
+                }
+            }
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            // Action-click rebuild: snapshots dropped while `enter_started` still
+            // points at open time (hundreds of ms ago).
+            {
+                let mut c = handle.cell.borrow_mut();
+                c.enter_started = Some(Instant::now() - Duration::from_millis(800));
+            }
+            let o_ptr = find_template_id_mut(&mut root, "dlg-exit-seek__modal_overlay").unwrap()
+                as *mut Element;
+            let z_ptr = find_template_id_mut(&mut root, "dlg-exit-seek__modal_zoom").unwrap()
+                as *mut Element;
+            {
+                let (overlay, zoom) = unsafe { (&mut *o_ptr, &mut *z_ptr) };
+                overlay.animation_snapshot = Default::default();
+                zoom.animation_snapshot = Default::default();
+            }
+            let _ = tick_hoisted_modal_css(&mut root);
+            let overlay = unsafe { &*o_ptr };
+            assert!(
+                overlay.style.opacity > 0.7,
+                "exit hold_seed must not seek enter elapsed (would finish fade in one tick), got {}",
+                overlay.style.opacity
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0"),
+                "exit keyframes must still be playing"
+            );
         });
     }
 

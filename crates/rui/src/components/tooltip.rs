@@ -44,7 +44,9 @@ use crate::utils::anchored_overlay::{
     FloatingStrategy, Placement,
 };
 use crate::utils::floating_motion::FloatingMotionKind;
-use crate::utils::hover_intent::{bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent};
+use crate::utils::hover_intent::{
+    bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
+};
 use crate::utils::popup::PopupPlacement;
 use rui_macros::component;
 
@@ -280,7 +282,12 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
     let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
     let placement = tooltip_side_to_placement(&opts.side);
     let ao_opts = AnchoredOverlayContentOpts {
-        placement: Some(Placement::trigger("", placement, 4.0, FloatingStrategy::Auto)),
+        placement: Some(Placement::trigger(
+            "",
+            placement,
+            4.0,
+            FloatingStrategy::Auto,
+        )),
         kind: OverlayKind::Tooltip,
         motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Pinned,

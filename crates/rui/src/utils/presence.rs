@@ -288,10 +288,7 @@ mod tests {
             let show = use_signal("gp-test-show", || true);
             let _el = presence("gp-demo", show, 50, || Element::new().text("hi"));
             let handle = use_generic_presence("gp-demo", 50);
-            assert_eq!(
-                sync_generic_presence(&handle, true),
-                PresencePhase::Present
-            );
+            assert_eq!(sync_generic_presence(&handle, true), PresencePhase::Present);
             assert_eq!(
                 sync_generic_presence(&handle, false),
                 PresencePhase::Exiting

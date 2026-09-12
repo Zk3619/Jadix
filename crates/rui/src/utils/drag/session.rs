@@ -16,21 +16,20 @@ use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
 
 use super::autoscroll::AutoScroll;
 use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
+#[cfg(test)]
+use super::geometry::SnapGrid;
 use super::geometry::{
     Activation, Axis, OverlayAlign, Rect, Restrict, RestrictAnchor, RestrictOverflow, Snap,
     SortMode,
 };
-#[cfg(test)]
-use super::geometry::SnapGrid;
 use super::modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
     ATTR_DRAG_GROUP, ATTR_DRAG_HOLE_PREVIEW, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
-    ATTR_DRAG_OVERLAY,
-    ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW, ATTR_DRAG_SKIP_SHIFT,
-    ATTR_DRAG_TYPE,
+    ATTR_DRAG_OVERLAY, ATTR_DRAG_PULL_CLONE, ATTR_DRAG_SCOPE, ATTR_DRAG_SKIP_FOLLOW,
+    ATTR_DRAG_SKIP_SHIFT, ATTR_DRAG_TYPE,
 };
 use crate::utils::edge_scroll::pump_at;
 
@@ -348,10 +347,7 @@ fn resolved_overlay_ghost_size(sess: &DragSession) -> [f32; 2] {
                     .filter(|e| e[0] > 0.0 && e[1] > 0.0)
             })
         })
-        .unwrap_or([
-            sess.start_bounds[2].max(1.0),
-            sess.start_bounds[3].max(1.0),
-        ])
+        .unwrap_or([sess.start_bounds[2].max(1.0), sess.start_bounds[3].max(1.0)])
 }
 
 /// Recompute the Center ghost origin after Taffy (or a style measure) knows
@@ -393,10 +389,7 @@ pub(crate) fn overlay_center_origin_now(scope: &str) -> Option<[f32; 2]> {
 
 /// Remember a measured ghost size, then pin origin to the live pointer.
 /// Center align recomputes from the chip size; Grab uses `overlay_pos`.
-pub(crate) fn overlay_origin_after_ghost_measure(
-    scope: &str,
-    size: [f32; 2],
-) -> Option<[f32; 2]> {
+pub(crate) fn overlay_origin_after_ghost_measure(scope: &str, size: [f32; 2]) -> Option<[f32; 2]> {
     remember_overlay_ghost_extent(scope, size);
     overlay_center_origin_now(scope).or_else(|| peek_overlay_pos(scope))
 }
@@ -909,12 +902,7 @@ fn list_passes_can_drop(
         .find(|h| h.list_id.as_deref() == Some(list) && h.index.is_none())
         .or_else(|| hits.iter().find(|h| h.list_id.as_deref() == Some(list)));
     match hit {
-        Some(h) => pred(&event_from(
-            sess,
-            Some(h),
-            Some(list.to_string()),
-            h.index,
-        )),
+        Some(h) => pred(&event_from(sess, Some(h), Some(list.to_string()), h.index)),
         None => true,
     }
 }
@@ -1986,8 +1974,15 @@ fn activate_scope(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) {
             )
         })
     });
-    if let Some((active, from_list, from_index, drag_extent, overlay_pos, overlay_open, registered)) =
-        ui
+    if let Some((
+        active,
+        from_list,
+        from_index,
+        drag_extent,
+        overlay_pos,
+        overlay_open,
+        registered,
+    )) = ui
     {
         // One flush, same as [`reset_scope_ui`]. Sequential `.set` remounted the
         // overlay while `open` was still false (empty 0×0), then again when
@@ -6416,14 +6411,8 @@ mod tests {
         );
         DRAG_PACK_PITCH.set(source_pitch);
         DRAG_PACK_GAP.set(4.0);
-        let src = source_translate_to_insert_hole(
-            &hits,
-            "tree-inbox",
-            1,
-            "tree-later",
-            Some(1),
-            Axis::Y,
-        );
+        let src =
+            source_translate_to_insert_hole(&hits, "tree-inbox", 1, "tree-later", Some(1), Axis::Y);
         let hole = insert_hole_origin(&hits, "tree-later", Some(1), Axis::Y, chip).unwrap();
         DRAG_PACK_PITCH.set(0.0);
         DRAG_PACK_GAP.set(0.0);

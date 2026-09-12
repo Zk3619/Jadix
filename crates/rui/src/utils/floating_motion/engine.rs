@@ -274,21 +274,19 @@ pub(crate) fn sync_floating_presence(
     handle: &FloatingPresenceHandle,
     want_open: bool,
 ) -> PresencePhase {
-    sync_panel_presence(handle, want_open, SyncPolicy::FLOATING, |ev, c| {
-        match ev {
-            SyncEvent::Enter => {
-                c.clip_height = None;
-                c.clip_width = None;
-                c.measuring = false;
-            }
-            SyncEvent::MutexAbsent => {
-                c.shell = None;
-                c.clip_height = None;
-                c.clip_width = None;
-                c.measuring = false;
-            }
-            SyncEvent::ExitArm => {}
+    sync_panel_presence(handle, want_open, SyncPolicy::FLOATING, |ev, c| match ev {
+        SyncEvent::Enter => {
+            c.clip_height = None;
+            c.clip_width = None;
+            c.measuring = false;
         }
+        SyncEvent::MutexAbsent => {
+            c.shell = None;
+            c.clip_height = None;
+            c.clip_width = None;
+            c.measuring = false;
+        }
+        SyncEvent::ExitArm => {}
     })
 }
 

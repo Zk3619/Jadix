@@ -180,9 +180,7 @@ pub fn apply_swap_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &Drag
                 from.swap(fi, ti);
             }
         }
-        Some(_)
-            if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() =>
-        {
+        Some(_) if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() => {
             if fi < from.len() && ti < from.len() && fi != ti {
                 from.swap(fi, ti);
             }
@@ -252,9 +250,7 @@ pub fn apply_clone_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, e
         None => {
             from.insert(to_index.min(from.len()), item);
         }
-        Some(_)
-            if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() =>
-        {
+        Some(_) if ev.from_list.as_deref() == ev.to_list.as_deref() && ev.from_list.is_some() => {
             from.insert(to_index.min(from.len()), item);
         }
         Some(dest) => {

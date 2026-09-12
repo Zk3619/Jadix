@@ -15,13 +15,13 @@ use crate::utils::floating_motion::{
     FloatingPresenceHandle,
 };
 
-#[cfg(test)]
-use crate::utils::floating_motion::floating_mounted_signal;
 use crate::core::reactivity::{
     create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
 };
 use crate::core::tree::Element;
+#[cfg(test)]
+use crate::utils::floating_motion::floating_mounted_signal;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating_at_point, mark_floating_with_gap,
     mount_anchored_overlay, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER,
@@ -508,9 +508,7 @@ fn assemble_panel(
     opts: &AnchoredOverlayContentOpts,
     mut panel: Element,
 ) -> Element {
-    let Some((phase, oz)) =
-        floating_portal_phase(id, open, presence, opts.kind, opts.mode)
-    else {
+    let Some((phase, oz)) = floating_portal_phase(id, open, presence, opts.kind, opts.mode) else {
         return Element::new().w(0.0).h(0.0);
     };
 
@@ -868,10 +866,7 @@ mod tests {
                 None,
                 Some("auto"),
             );
-            assert_eq!(
-                find_attr(&panel, ATTR_FLOATING_MATCH_TRIGGER),
-                Some("0")
-            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_MATCH_TRIGGER), Some("0"));
             assert!(
                 find_attr(&panel, ATTR_FLOATING_W).is_none(),
                 "width=auto must not write rui_floating_w (sync would parse it as trigger px)"

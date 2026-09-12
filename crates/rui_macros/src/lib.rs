@@ -12,6 +12,9 @@ static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 static CHECKBOX_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// 同 Checkbox：省略 `id` 的 `<Switch>` 生成唯一实例键。
 static SWITCH_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
+/// 同 Input：省略 `id` 的 `<Button>` 生成稳定实例键（focus / hover / template_id）。
+/// Runtime `btn-N` 每次 rebuild 递增，会拆掉 AlertDialog 退场快照。
+static BUTTON_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn expr_as_u16(value: &Expr) -> Option<u16> {
     match value {
@@ -7628,6 +7631,14 @@ fn expand_node(
                     prop_names.push(syn::Ident::new("id", name_ident.span()));
                     prop_values.push(quote! {
                         format!("__rui_switch_auto_{}", #seq)
+                    });
+                }
+
+                if name_str == "Button" && !prop_names.iter().any(|p| *p == "id") {
+                    let seq = BUTTON_RSX_ANON_SEQ.fetch_add(1, Ordering::Relaxed);
+                    prop_names.push(syn::Ident::new("id", name_ident.span()));
+                    prop_values.push(quote! {
+                        format!("__rui_button_auto_{}", #seq)
                     });
                 }
 
