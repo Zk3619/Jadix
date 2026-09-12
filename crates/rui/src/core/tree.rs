@@ -3610,6 +3610,40 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
     next
 }
 
+/// Clip box of the nearest overflow/scroll ancestor of `target` (or `target` itself).
+/// `None` when the island sits in unclipped page space (route Show → page FullClear).
+pub(crate) fn overflow_clip_bounds_for(
+    root: &Element,
+    target: *const Element,
+) -> Option<[f32; 4]> {
+    fn rec(
+        el: &Element,
+        clip: Option<[f32; 4]>,
+        target: *const Element,
+    ) -> Option<Option<[f32; 4]>> {
+        let clip = if element_clips_overflow(el) {
+            let b = el.layout_bounds;
+            if b[2] > 0.0 && b[3] > 0.0 {
+                Some(b)
+            } else {
+                clip
+            }
+        } else {
+            clip
+        };
+        if std::ptr::eq(el as *const Element, target) {
+            return Some(clip);
+        }
+        for child in &el.children {
+            if let Some(found) = rec(child, clip, target) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    rec(root, None, target).flatten()
+}
+
 /// Scratch filled by [`sync_reactive_elements_subtree_ex`] so the frame path can
 /// mark specific Taffy nodes dirty (instead of remasuring every text leaf) and
 /// distinguish portal-local geometry from page layout.
@@ -3661,9 +3695,9 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
     in_portal: bool,
     collect: &mut ReactiveSyncCollect,
 ) {
-    let mut stack: Vec<(*mut Element, [f32; 2], bool)> =
-        vec![(element as *mut Element, scroll_acc, in_portal)];
-    while let Some((ptr, scroll_acc, in_portal)) = stack.pop() {
+    let mut stack: Vec<(*mut Element, [f32; 2], bool, Option<[f32; 4]>)> =
+        vec![(element as *mut Element, scroll_acc, in_portal, None)];
+    while let Some((ptr, scroll_acc, in_portal, clip_bounds)) = stack.pop() {
         // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
         let element = unsafe { &mut *ptr };
         if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
@@ -3671,6 +3705,17 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
         }
         let in_portal = in_portal
             || element.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        let in_clip = clip_bounds.is_some() || element_clips_overflow(element);
+        let clip_bounds = if element_clips_overflow(element) {
+            let b = element.layout_bounds;
+            if b[2] > 0.0 && b[3] > 0.0 {
+                Some(b)
+            } else {
+                clip_bounds
+            }
+        } else {
+            clip_bounds
+        };
         // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
         if let Some(sync) = element.reactive_sync.clone() {
             let before = element.layout_bounds;
@@ -3688,8 +3733,11 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                     }
                 }
                 LayoutStatus::StructureChanged => {
-                    // Page remount (route / Show / For) → FullClear. Overlay Show-mount
+                    // Page remount (route / Show) → FullClear. Overlay Show-mount
                     // (bubble +N / popover) is portal membership — scissor to the hoisted box.
+                    // Nested For inside a scroll/overflow clip (MessageScroller Send) is
+                    // island-local: do not mark page geometry or the sidebar Footer is
+                    // on the FullClear present path.
                     let portalish = in_portal
                         || crate::layout::layout_tree::subtree_declares_portal(element);
                     if portalish {
@@ -3697,6 +3745,11 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
                             element, before,
                         ));
+                    } else if in_clip {
+                        let d = clip_bounds.unwrap_or_else(|| estimate_geom_damage(element, before));
+                        if d[2] > 0.0 && d[3] > 0.0 {
+                            crate::app::damage::push_frame_paint_damage(d);
+                        }
                     } else {
                         collect.page_layout_changed = true;
                     }
@@ -3713,6 +3766,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                 std::ptr::addr_of_mut!(element.children[i]),
                 child_acc,
                 in_portal,
+                clip_bounds,
             ));
         }
     }

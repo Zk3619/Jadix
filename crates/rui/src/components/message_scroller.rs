@@ -952,7 +952,7 @@ pub fn MessageScrollerViewport(
         // opts the wrapper into `page_stack_bands` and desyncs glyphon from bubble rects
         // when this scroller is nested in a page ScrollArea. Later-sibling tree order
         // already stacks the overlay bar; keep z-index 0.
-        // .z_index(0)
+        .z_index(0)
         .into();
 
     vstack()

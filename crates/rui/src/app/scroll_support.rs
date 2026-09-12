@@ -488,8 +488,13 @@ pub(crate) fn is_stale_zero_max_sample(
     // down to vh). Stretching with the viewport (`fresh >= prev`) is still a grow.
     let content_kept_y = fresh_content[1] + EPS >= prev_content[1];
     let content_kept_x = fresh_content[0] + EPS >= prev_content[0];
-    if (y_was_scrollable && grew_h && content_kept_y)
-        || (x_was_scrollable && grew_w && content_kept_x)
+    // Maximize/`scroll_only` can also collapse content_h to the new vh. If last
+    // frame's content already fits the grown viewport, accept max=0 so a nested
+    // MessageScroller leftover cannot keep the sidebar overlay lit.
+    let old_y_fits = prev_content[1] <= fresh_bounds[3] + EPS;
+    let old_x_fits = prev_content[0] <= fresh_bounds[2] + EPS;
+    if (y_was_scrollable && grew_h && (content_kept_y || old_y_fits))
+        || (x_was_scrollable && grew_w && (content_kept_x || old_x_fits))
     {
         return false;
     }
@@ -1003,6 +1008,21 @@ mod scroll_metrics_merge_tests {
                 Some(&prev),
             ),
             "grown viewport that covers previous content must clamp, not keep the short-screen max"
+        );
+    }
+
+    #[test]
+    fn expand_viewport_collapsed_content_is_not_stale_zero() {
+        // Maximize + scroll_only can publish content_h == new vh (looks like a cull).
+        let prev = ([0.0, 48.0, 208.0, 300.0], [0.0, 200.0], [208.0, 500.0]);
+        assert!(
+            !is_stale_zero_max_sample(
+                [0.0, 0.0],
+                [0.0, 48.0, 208.0, 600.0],
+                [208.0, 600.0],
+                Some(&prev),
+            ),
+            "grown viewport whose previous content now fits must not keep short-screen overflow"
         );
     }
 

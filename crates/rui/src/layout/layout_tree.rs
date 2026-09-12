@@ -1369,46 +1369,69 @@ struct ScrollAreaSignalsCached {
     scrollbar_vis_y: String,
 }
 
+fn peek_scroll_area_meta(rest: &str) -> ScrollAreaSignalsCached {
+    // Raw metrics only: half-pixel snapping vw/vh/cw/ch independently can erase a tiny
+    // (ch - vh), making max_scroll 0 and snapping the thumb to the track start after idle.
+    // Post-render already gates signal writes with a 0.1px threshold (window_events).
+    ScrollAreaSignalsCached {
+        vw: use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).peek(),
+        vh: use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).peek(),
+        cw: use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).peek(),
+        ch: use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek(),
+        sx: use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek(),
+        sy: use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek(),
+        overflow_x: use_signal(&scroll_overflow_x_signal_key(rest), || "auto".to_string()).peek(),
+        overflow_y: use_signal(&scroll_overflow_y_signal_key(rest), || "auto".to_string()).peek(),
+        scrollbar_vis_x: use_signal(&scrollbar_visibility_signal_key(rest, "x"), || {
+            "auto".to_string()
+        })
+        .peek(),
+        scrollbar_vis_y: use_signal(&scrollbar_visibility_signal_key(rest, "y"), || {
+            "auto".to_string()
+        })
+        .peek(),
+    }
+}
+
 fn scroll_area_signals_cached<'a>(
     rest: &str,
     cache: &'a mut HashMap<String, ScrollAreaSignalsCached>,
 ) -> &'a ScrollAreaSignalsCached {
     match cache.entry(rest.to_string()) {
         Entry::Occupied(o) => o.into_mut(),
+        Entry::Vacant(v) => v.insert(peek_scroll_area_meta(rest)),
+    }
+}
+
+/// Viewport collect runs before its overlay-track sibling. Write this frame's Taffy
+/// metrics so overlay `can_scroll` does not keep last-frame overflow (short sidebar
+/// + maximize, or a nested MessageScroller leftover) and paint a tall rail track.
+fn seed_scroll_signals_from_collect(
+    cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+    rest: &str,
+    vw: f32,
+    vh: f32,
+    cw: f32,
+    ch: f32,
+) {
+    let Some(cache) = cache.as_mut() else {
+        return;
+    };
+    match cache.entry(rest.to_string()) {
+        Entry::Occupied(mut o) => {
+            let e = o.get_mut();
+            e.vw = vw;
+            e.vh = vh;
+            e.cw = cw;
+            e.ch = ch;
+        }
         Entry::Vacant(v) => {
-            // Raw metrics only: half-pixel snapping vw/vh/cw/ch independently can erase a tiny
-            // (ch - vh), making max_scroll 0 and snapping the thumb to the track start after idle.
-            // Post-render already gates signal writes with a 0.1px threshold (window_events).
-            let vw = use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).peek();
-            let vh = use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).peek();
-            let cw = use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).peek();
-            let ch = use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek();
-            let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
-            let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
-            let overflow_x =
-                use_signal(&scroll_overflow_x_signal_key(rest), || "auto".to_string()).peek();
-            let overflow_y =
-                use_signal(&scroll_overflow_y_signal_key(rest), || "auto".to_string()).peek();
-            let scrollbar_vis_x = use_signal(&scrollbar_visibility_signal_key(rest, "x"), || {
-                "auto".to_string()
-            })
-            .peek();
-            let scrollbar_vis_y = use_signal(&scrollbar_visibility_signal_key(rest, "y"), || {
-                "auto".to_string()
-            })
-            .peek();
-            v.insert(ScrollAreaSignalsCached {
-                vw,
-                vh,
-                cw,
-                ch,
-                sx,
-                sy,
-                overflow_x,
-                overflow_y,
-                scrollbar_vis_x,
-                scrollbar_vis_y,
-            })
+            let mut sig = peek_scroll_area_meta(rest);
+            sig.vw = vw;
+            sig.vh = vh;
+            sig.cw = cw;
+            sig.ch = ch;
+            v.insert(sig);
         }
     }
 }
@@ -3279,7 +3302,10 @@ impl LayoutTree {
             self.sync_taffy_children_from_elements(root);
         }
 
-        let taffy_compute_ms = if !scroll_only {
+        // Live maximize/minimize is often `Clean` + `scroll_only` (ViewportsOnly prepass).
+        // Skipping compute here leaves Taffy at the pre-resize locations: a flex Footer
+        // stays at the old Y while the swapchain already matches the new window.
+        let taffy_compute_ms = if !scroll_only || viewport_changed {
             let (compute_node, available_space) = if let Some(sub) = subtree_root {
                 if let Ok(layout) = self.taffy.layout(sub) {
                     (
@@ -3887,13 +3913,25 @@ impl LayoutTree {
         &self,
         frame: &CollectFrame,
     ) -> crate::layout::collect_cache::GeomKey {
-        let size = self
+        // Paint origin is `abs_offset + taffy.location` (see collect_paint_node).
+        // Keying only parent origin + size let a flex Footer replay at the pre-maximize
+        // Y: the box is still 48px tall, the parent still sits at (0,0), but location.y
+        // moved with the column.
+        let (origin, size) = self
             .taffy
             .layout(frame.node)
-            .map(|cl| [cl.size.width, cl.size.height])
-            .unwrap_or([0.0, 0.0]);
+            .map(|cl| {
+                (
+                    [
+                        frame.abs_offset[0] + cl.location.x,
+                        frame.abs_offset[1] + cl.location.y,
+                    ],
+                    [cl.size.width, cl.size.height],
+                )
+            })
+            .unwrap_or((frame.abs_offset, [0.0, 0.0]));
         crate::layout::collect_cache::geom_key(
-            frame.abs_offset,
+            origin,
             size,
             frame.scroll_acc,
             frame.parent_clip,
@@ -3994,10 +4032,14 @@ impl LayoutTree {
                             overlay_split.marked,
                         );
                         if let Ok(cl) = self.taffy.layout(frame.node) {
+                            let paint_abs = [
+                                frame.abs_offset[0] + cl.location.x,
+                                frame.abs_offset[1] + cl.location.y,
+                            ];
                             self.stamp_skipped_sibling_hit_bounds(
                                 element,
                                 frame.node,
-                                frame.abs_offset,
+                                paint_abs,
                                 [cl.size.width, cl.size.height],
                             );
                         }
@@ -4175,6 +4217,7 @@ impl LayoutTree {
                     overlay_split,
                     paint_rec,
                     clip_polys,
+                    scroll_signals_cache,
                     walk,
                 );
                 skip.store(
@@ -4569,6 +4612,14 @@ impl LayoutTree {
                             ],
                             content,
                         ));
+                        seed_scroll_signals_from_collect(
+                            scroll_signals_cache,
+                            rest,
+                            layout.size.width,
+                            layout.size.height,
+                            content[0],
+                            content[1],
+                        );
                     }
                 }
                 let own = [abs_x + lay_w, abs_y + lay_h];
@@ -5114,6 +5165,7 @@ impl LayoutTree {
             }
         }
 
+        let mut pending_caret_scroll: Option<(f32, Option<String>)> = None;
         if let Some(text) = &element.text {
             let mut text_style = element.text_style.as_ref().clone();
             if opacity < 1.0 - f32::EPSILON {
@@ -5169,7 +5221,7 @@ impl LayoutTree {
             // subtract `text_style.scroll_x` (single-line Hidden input only).
             let viewport_nowrap_edit = text_style.white_space == crate::style::WhiteSpace::Nowrap
                 && !text_style.overflow.allows_caret_scroll();
-            let text_x = if viewport_nowrap_edit {
+            let mut text_x = if viewport_nowrap_edit {
                 text_x0
             } else {
                 text_x0 - text_style.scroll_x.max(0.0) * text_scale
@@ -5560,6 +5612,25 @@ impl LayoutTree {
                                 ))
                             }
                         };
+                        if !viewport_nowrap_edit && text_style.overflow.allows_caret_scroll() {
+                            if let Some(p) = prepared.as_ref() {
+                                let content_w = crate::text::intrinsic_width(p);
+                                let sx = crate::utils::text_field::clamp_caret_scroll_x(
+                                    content_w,
+                                    text_w,
+                                    text_style.scroll_x,
+                                );
+                                if (sx - text_style.scroll_x).abs() > 0.05 {
+                                    text_style.scroll_x = sx;
+                                    let rest = element.template_id.as_deref().and_then(
+                                        crate::utils::text_field::input_rest_from_text_template_id,
+                                    );
+                                    pending_caret_scroll =
+                                        Some((sx, rest.map(str::to_string)));
+                                }
+                                text_x = text_x0 - sx.max(0.0) * text_scale;
+                            }
+                        }
                         text_nodes.push(TextLayoutInfo {
                             text: text.clone(),
                             shape_suffix: element.text_shape_suffix.clone(),
@@ -5621,6 +5692,17 @@ impl LayoutTree {
                     } // !text_baked
                 } // !lucide_static_textured
             } // else !icon_spin_paint
+        }
+
+        if let Some((sx, rest)) = pending_caret_scroll {
+            element.text_style.scroll_x = sx;
+            if let Some(rest) = rest {
+                crate::core::reactivity::use_signal(
+                    &crate::utils::text_field::input_scroll_x_signal_key(&rest),
+                    || 0.0_f32,
+                )
+                .set_silent(sx);
+            }
         }
 
         stamp_clip_polys(clip_polys, instances.len(), own_clip_poly);
@@ -6119,6 +6201,7 @@ impl LayoutTree {
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
         clip_polys: &mut Vec<crate::style::GpuClipPoly>,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
         walk: CollectWalk,
     ) -> [f32; 2] {
         let CollectWalk {
@@ -6300,6 +6383,14 @@ impl LayoutTree {
                     ],
                     [content_w, content_h],
                 ));
+                seed_scroll_signals_from_collect(
+                    scroll_signals_cache,
+                    rest,
+                    layout_size.width,
+                    layout_size.height,
+                    content_w,
+                    content_h,
+                );
             }
         }
 
@@ -6365,8 +6456,22 @@ fn scrollbar_track_overlay_abs(
     let allow_y = !sig.overflow_y.eq_ignore_ascii_case("hidden")
         && !sig.overflow_y.eq_ignore_ascii_case("clip")
         && !sig.overflow_y.eq_ignore_ascii_case("visible");
-    let can_scroll_x = allow_x && cw > vw + 0.5;
-    let can_scroll_y = allow_y && ch > vh + 0.5;
+    // Overlay Taffy box tracks the live viewport (absolute top/bottom). Maximize
+    // frames still peek last-frame signals; a rail that now covers its content
+    // must not keep painting from those leftovers (nested MessageScroller
+    // overflow must not light the sidebar track).
+    let along_live = if axis == "x" { layout_w } else { layout_h };
+    let (vw_vis, vh_vis) = if along_live > 1.0 {
+        if axis == "x" {
+            (along_live, vh)
+        } else {
+            (vw, along_live)
+        }
+    } else {
+        (vw, vh)
+    };
+    let can_scroll_x = allow_x && cw > vw_vis + 0.5;
+    let can_scroll_y = allow_y && ch > vh_vis + 0.5;
     let allow_axis = if axis == "x" { allow_x } else { allow_y };
     let scrollable = if axis == "x" {
         can_scroll_x

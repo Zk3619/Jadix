@@ -598,6 +598,12 @@ pub fn tick_active_css_transitions_subtree(
             if spun || css_anim || css_trans || el.style != before || local != LayoutStatus::Clean {
                 *impact = impact.merge(local.merge(LayoutStatus::StyleChanged));
                 mark_hover_paint_dirty();
+                if spun || css_anim || css_trans {
+                    // Paint-only motion must be a node-present dirty. StyleChanged with an
+                    // empty damage list FullClears; a sibling Input PartialLoad would skip
+                    // this icon and the retain angle jumps on the next Clear.
+                    crate::app::damage::push_frame_paint_element(el);
+                }
                 // Padding/margin/size tweens must request flex recompute. StyleChanged alone
                 // is treated as scroll-only paint and leaves geometry stuck at the hover size.
                 let need_taffy = matches!(
@@ -1084,6 +1090,9 @@ fn sync_class_variants_subtree_inner(
                             local
                         });
                         mark_hover_paint_dirty();
+                        if spun || css_anim || css_trans {
+                            crate::app::damage::push_frame_paint_element(el);
+                        }
                         // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
                         // transition frame dirties flex geometry and can make sidebar hit-test flicker.
                         let need_taffy = matches!(

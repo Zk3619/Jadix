@@ -223,6 +223,11 @@ fn geom_eq(a: &GeomKey, b: &GeomKey) -> bool {
         && a.scale == b.scale
 }
 
+/// Fingerprint of a subtree's **paint** geometry.
+///
+/// `abs` is the paint origin (`parent abs_offset + taffy.location`), not the
+/// parent origin alone — a flex Footer keeps the same size while `location.y`
+/// moves on maximize.
 pub(crate) fn geom_key(
     abs: [f32; 2],
     size: [f32; 2],

@@ -3,14 +3,22 @@
 //! Only valid with retain `LoadOp::Load` + scissor: FullClear to a discarded
 //! swapchain would leave holes. Scroll / structure still FullClear (caller).
 
+use std::borrow::Cow;
+use std::collections::BTreeSet;
+
 use crate::layout::layout_tree::{NodePaint, TextLayoutInfo};
 use crate::renderer::{aabbs_disjoint, aabb_of_centered_transform, InstanceInput, ScaledTexturedDraw};
 use crate::style::transform::MAT2D_IDENTITY;
 
-use super::damage::intersect_rects;
+use super::damage::{intersect_rects, PaintDirty, PaintDirtyKind};
 
 /// Same pad as scissor (`AppState::DAMAGE_SCISSOR_PAD_LOGICAL`) so cull ≥ clip.
 pub(crate) const DAMAGE_CULL_PAD_LOGICAL: f32 = 16.0;
+
+/// Glyph clip on a scroll-layer Clear. `DAMAGE_CULL_PAD_LOGICAL` is for SDF
+/// shadows / scissor; using it on text reaches from the inset column into the
+/// gallery rail and src-overs 「布局」/Gallery captions onto retain.
+pub(crate) const SCROLL_LAYER_TEXT_PAD_LOGICAL: f32 = 1.0;
 
 pub(crate) fn padded_xywh(rect: [f32; 4], pad: f32) -> [f32; 4] {
     let pad = pad.max(0.0);
@@ -133,8 +141,10 @@ pub(crate) fn text_hits_damage(n: &TextLayoutInfo, damage_logical: [f32; 4]) -> 
 
 /// Label belongs to a hover-dirty widget when its **center** is inside the dirty box.
 ///
-/// AABB intersect is too wide: gallery Button Variants sits labels a few px apart, so
-/// "Default" would stamp into the hovered sibling's scissor (the FullClear-era flash).
+/// AABB intersect is too wide: gallery Button Variants sits labels a few px apart.
+/// Capture **must not** use this — padded Input dirty covers sidebar captions in the
+/// same horizontal band (`glyph_belongs_to_dirty` is collect-slot only).
+#[allow(dead_code)]
 pub(crate) fn text_owned_by_node_dirty(n: &TextLayoutInfo, dirty_logical: [f32; 4]) -> bool {
     super::damage::text_center_in_dirty([n.x, n.y, n.width, n.height], dirty_logical)
 }
@@ -176,6 +186,125 @@ pub(crate) fn filter_text_nodes(
         .filter(|n| text_hits_damage(n, damage_logical))
         .cloned()
         .collect()
+}
+
+/// Scroll-layer glyphon: drop nodes outside `clip`, and intersect `clip_bounds`
+/// so a false-positive AABB cannot stamp rail captions (glyphon does not always
+/// honor the wgpu scissor used for the viewport Clear).
+pub(crate) fn clip_text_nodes_to_rect(
+    nodes: &[TextLayoutInfo],
+    clip: [f32; 4],
+) -> Vec<TextLayoutInfo> {
+    if clip[2] <= 0.0 || clip[3] <= 0.0 {
+        return Vec::new();
+    }
+    nodes
+        .iter()
+        .filter_map(|n| {
+            if !text_hits_damage(n, clip) {
+                return None;
+            }
+            let hit = match n.clip_bounds {
+                Some(existing) => intersect_rects(existing, clip)?,
+                None => clip,
+            };
+            if hit[2] <= 0.0 || hit[3] <= 0.0 {
+                return None;
+            }
+            let ink = [n.x, n.y, n.width.max(0.0), n.height.max(0.0)];
+            if aabbs_disjoint(ink, hit) {
+                return None;
+            }
+            let mut cloned = n.clone();
+            cloned.clip_bounds = Some(hit);
+            Some(cloned)
+        })
+        .collect()
+}
+
+fn approx_f32(a: f32, b: f32, eps: f32) -> bool {
+    (a - b).abs() <= eps
+}
+
+fn text_run_unchanged(a: &TextLayoutInfo, b: &TextLayoutInfo) -> bool {
+    const POS: f32 = 0.02;
+    const SIZE: f32 = 0.5;
+    // Collect clip_bounds is rebuilt every layout (scroll parent, inset). A clip-only
+    // delta is not new ink — re-preparing that run on Load src-overs the caption.
+    a.text == b.text
+        && a.shape_suffix == b.shape_suffix
+        && a.template_id == b.template_id
+        && a.style == b.style
+        && approx_f32(a.x, b.x, POS)
+        && approx_f32(a.y, b.y, POS)
+        && approx_f32(a.width, b.width, SIZE)
+        && approx_f32(a.height, b.height, SIZE)
+}
+
+/// Glyphon payload for one page-stack band.
+///
+/// `None` = keep last GPU buffer and **do not** `render()` (Load retain already
+/// has those pixels). `Some` = prepare/submit exactly these runs.
+///
+/// Send used to treat the whole page as one dirty text buffer, rebuild every
+/// band (or the mixed sidebar+messages band in full), and `render()` stamped
+/// rail captions into retain. Unchanged runs stay in retain; only new/moved
+/// runs are submitted.
+pub(crate) fn page_stack_band_submit_text<'a>(
+    prev: &[TextLayoutInfo],
+    curr: &'a [TextLayoutInfo],
+    lo: usize,
+    hi: usize,
+    scroll_clip: Option<[f32; 4]>,
+    partial_load: bool,
+) -> Option<Cow<'a, [TextLayoutInfo]>> {
+    let hi = hi.min(curr.len());
+    let lo = lo.min(hi);
+    if lo >= hi {
+        return None;
+    }
+    let slice = &curr[lo..hi];
+    if !partial_load {
+        return Some(Cow::Borrowed(slice));
+    }
+    if let Some(clip) = scroll_clip {
+        let clipped = clip_text_nodes_to_rect(slice, clip);
+        return if clipped.is_empty() {
+            None
+        } else {
+            Some(Cow::Owned(clipped))
+        };
+    }
+    // Match by ink identity, not collect index. Send inserts a bubble in the
+    // middle of the band; shifting later slots used to mark 布局 as "new".
+    let mut used = vec![false; prev.len()];
+    let mut changed = Vec::new();
+    for n in slice {
+        let found = prev.iter().enumerate().find(|(i, p)| {
+            *i < used.len() && !used[*i] && text_run_unchanged(p, n)
+        });
+        if let Some((i, _)) = found {
+            used[i] = true;
+        } else {
+            changed.push(n.clone());
+        }
+    }
+    if changed.is_empty() {
+        None
+    } else {
+        Some(Cow::Owned(changed))
+    }
+}
+
+pub(crate) fn page_stack_band_needs_glyphon(
+    prev: &[TextLayoutInfo],
+    curr: &[TextLayoutInfo],
+    lo: usize,
+    hi: usize,
+    scroll_clip: Option<[f32; 4]>,
+    partial_load: bool,
+) -> bool {
+    page_stack_band_submit_text(prev, curr, lo, hi, scroll_clip, partial_load).is_some()
 }
 
 /// Compact chrome / underline / caret uploads to hits only.
@@ -253,6 +382,10 @@ pub(crate) fn node_present_behind_color(
 /// Shader vertex AA pad is +2px; keep this below gallery `gap-2` (8 logical px).
 pub(crate) const NODE_PRESENT_RESET_PAD_PHYSICAL: f32 = 3.0;
 
+/// Owner clip on capture glyphs. 1px covers coverage AA; the 8px node scissor
+/// pad must not be used here — it overlaps `gap-2` siblings and stamps captions.
+pub(crate) const NODE_PRESENT_GLYPH_CLIP_PAD: f32 = 1.0;
+
 /// Tight AABB of this dirty node's instances (physical), plus `pad` for SDF AA / underline offset.
 /// Must not use the node scissor pad (8px) — that overlaps `gap-2` siblings.
 pub(crate) fn node_present_reset_rect(
@@ -308,6 +441,150 @@ pub(crate) fn node_present_dest_reset(
         cy,
     )?;
     Some((rect, color))
+}
+
+/// Text indices owned by any page dirty node (restore hole or widget).
+///
+/// Encode prepares this set **once** with per-glyph owner clips, then draws it
+/// **once** after every dest-reset. Drawing the union under each node's scissor
+/// stamps neighbor captions into retain (`Load` + glyph alpha).
+pub(crate) fn node_present_capture_text_indices(
+    dirty_nodes: &[PaintDirty],
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+) -> BTreeSet<usize> {
+    let mut idx = BTreeSet::new();
+    for dirty in dirty_nodes {
+        idx.extend(node_present_glyphs_for_dirty(dirty, page_text, node_paints));
+    }
+    idx
+}
+
+/// Glyphs that belong to this dirty node (not the padded-scissor union).
+pub(crate) fn node_present_glyphs_for_dirty(
+    dirty: &PaintDirty,
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+) -> BTreeSet<usize> {
+    let mut idx = BTreeSet::new();
+    match dirty.kind {
+        PaintDirtyKind::OverlayRestore => {
+            for (i, n) in page_text.iter().enumerate() {
+                if text_hits_damage(n, dirty.bounds) {
+                    idx.insert(i);
+                }
+            }
+        }
+        PaintDirtyKind::Node => {
+            for (i, n) in page_text.iter().enumerate() {
+                if glyph_belongs_to_dirty(i, n, dirty, page_text, node_paints) {
+                    idx.insert(i);
+                }
+            }
+        }
+        PaintDirtyKind::Overlay => {}
+    }
+    idx
+}
+
+/// Capture copies with `clip_bounds` intersected to the owning dirty box.
+///
+/// Neighbor captions stay in the buffer for a single present, but cannot paint
+/// inside another widget's dest-reset hole.
+pub(crate) fn node_present_clipped_capture_text(
+    dirty_nodes: &[PaintDirty],
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+) -> Vec<TextLayoutInfo> {
+    node_present_capture_text_indices(dirty_nodes, page_text, node_paints)
+        .into_iter()
+        .filter_map(|i| {
+            let n = page_text.get(i)?;
+            let owner = owner_clip_for_glyph(i, n, dirty_nodes, page_text, node_paints)?;
+            let clip = match n.clip_bounds {
+                Some(existing) => intersect_rects(existing, owner)?,
+                None => owner,
+            };
+            let mut cloned = n.clone();
+            cloned.clip_bounds = Some(clip);
+            Some(cloned)
+        })
+        .collect()
+}
+
+fn owner_clip_for_glyph(
+    i: usize,
+    n: &TextLayoutInfo,
+    dirty_nodes: &[PaintDirty],
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+) -> Option<[f32; 4]> {
+    let mut acc: Option<[f32; 4]> = None;
+    for dirty in dirty_nodes {
+        if glyph_belongs_to_dirty(i, n, dirty, page_text, node_paints) {
+            let owner = padded_xywh(dirty.bounds, NODE_PRESENT_GLYPH_CLIP_PAD);
+            acc = Some(match acc {
+                Some(prev) => union_xywh(prev, owner),
+                None => owner,
+            });
+        }
+    }
+    acc
+}
+
+/// Capture glyphs that `capture_text_renderer.render()` would stamp into `dirty`'s
+/// scissor even though they are not owned by that dirty node.
+pub(crate) fn node_present_foreign_glyph_indices(
+    dirty: &PaintDirty,
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+    capture: &BTreeSet<usize>,
+    scissor_pad_logical: f32,
+) -> Vec<usize> {
+    if !matches!(dirty.kind, PaintDirtyKind::Node | PaintDirtyKind::OverlayRestore) {
+        return Vec::new();
+    }
+    let scissor = padded_xywh(dirty.bounds, scissor_pad_logical);
+    capture
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let Some(n) = page_text.get(i) else {
+                return false;
+            };
+            if !text_hits_damage(n, scissor) {
+                return false;
+            }
+            glyph_belongs_to_dirty(i, n, dirty, page_text, node_paints)
+                .then_some(())
+                .is_none()
+        })
+        .collect()
+}
+
+fn glyph_belongs_to_dirty(
+    i: usize,
+    n: &TextLayoutInfo,
+    dirty: &PaintDirty,
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+) -> bool {
+    match dirty.kind {
+        PaintDirtyKind::OverlayRestore => text_hits_damage(n, dirty.bounds),
+        PaintDirtyKind::Node => {
+            // Collect-slot membership only. Center-in-box steals neighbor captions
+            // whose ink sits in the padded dirty (Gallery sidebar 「布局」 sharing
+            // a horizontal band with Kbd Search) and src-overs them into retain.
+            node_paints.iter().any(|p| {
+                slot_matches_dirty(dirty.key, dirty.bounds, p) && {
+                    let lo = p.text.0.min(page_text.len());
+                    let hi = p.text.1.min(page_text.len());
+                    i >= lo && i < hi
+                }
+            })
+        }
+        PaintDirtyKind::Overlay => false,
+    }
 }
 
 /// Dest-reset wipes retain glyphs; opaque chrome also covers them. Either needs glyphon.
@@ -430,6 +707,19 @@ mod tests {
         }
     }
 
+    fn slot(key: u64, bounds: [f32; 4], text: (usize, usize)) -> NodePaint {
+        NodePaint {
+            key,
+            bounds,
+            overlay: false,
+            instance: (0, 0),
+            textured: (0, 0),
+            text,
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+        }
+    }
+
     #[test]
     fn text_outside_damage_filtered() {
         let kept = filter_text_nodes(
@@ -438,6 +728,152 @@ mod tests {
         );
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].text, "in");
+    }
+
+    #[test]
+    fn scroll_layer_text_clip_drops_rail_captions_in_the_same_y_band() {
+        // Gallery MessageScroller: inset column starts ~216px, 16px instance pad
+        // grazes a full-width sidebar label. Glyphs must follow the unpadded viewport.
+        let mut rail = sample_text("布局", 8.0);
+        rail.y = 200.0;
+        rail.width = 200.0;
+        rail.height = 20.0;
+        let mut msg = sample_text("hello", 260.0);
+        msg.y = 200.0;
+        msg.width = 80.0;
+        msg.height = 20.0;
+        let inset = [216.0, 8.0, 1056.0, 784.0];
+        let padded = padded_xywh(inset, DAMAGE_CULL_PAD_LOGICAL);
+        assert!(
+            text_hits_damage(&rail, padded),
+            "16px instance pad is what used to steal rail captions"
+        );
+        let tight = padded_xywh(inset, SCROLL_LAYER_TEXT_PAD_LOGICAL);
+        let kept = clip_text_nodes_to_rect(&[rail.clone(), msg.clone()], tight);
+        assert!(
+            kept.iter().all(|n| n.text != "布局"),
+            "scroll-layer glyphon must not prepare 布局, got {:?}",
+            kept.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            kept.iter().any(|n| n.text == "hello"),
+            "in-scroller glyphs must stay, got {:?}",
+            kept.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+
+        let ms = [240.0, 128.0, 400.0, 384.0];
+        let mut y_band = sample_text("Gallery", 8.0);
+        y_band.y = 180.0;
+        y_band.width = 48.0;
+        y_band.height = 20.0;
+        let kept_ms = clip_text_nodes_to_rect(&[y_band], padded_xywh(ms, SCROLL_LAYER_TEXT_PAD_LOGICAL));
+        assert!(
+            kept_ms.is_empty(),
+            "Y-overlapping rail caption must not follow the inner MessageScroller viewport"
+        );
+    }
+
+    #[test]
+    fn send_append_must_not_rebuild_sidebar_glyphon_band() {
+        // Gallery Send: new bubble is later in collect order. Band 0 is the rail.
+        let mut layout = sample_text("布局", 8.0);
+        layout.y = 200.0;
+        let mut gallery = sample_text("Gallery", 8.0);
+        gallery.y = 236.0;
+        let mut hello = sample_text("hello", 260.0);
+        hello.y = 200.0;
+        let mut next = sample_text("next", 260.0);
+        next.y = 240.0;
+        let prev = vec![layout.clone(), gallery.clone(), hello.clone()];
+        let curr = vec![layout, gallery, hello, next];
+        assert!(
+            !page_stack_band_needs_glyphon(&prev, &curr, 0, 2, None, true),
+            "sidebar band must reuse after Send"
+        );
+        assert!(
+            page_stack_band_needs_glyphon(&prev, &curr, 2, 4, None, true),
+            "message band must rebuild after Send"
+        );
+        assert!(
+            page_stack_band_needs_glyphon(&prev, &curr, 0, 2, None, false),
+            "FullClear still rebuilds the rail band"
+        );
+        let ms = [240.0, 128.0, 400.0, 384.0];
+        assert!(
+            !page_stack_band_needs_glyphon(&prev, &curr, 0, 2, Some(ms), true),
+            "inner follow Clear must not submit the rail band"
+        );
+        assert!(
+            page_stack_band_needs_glyphon(&prev, &curr, 2, 4, Some(ms), true),
+            "inner follow Clear must submit the message band"
+        );
+    }
+
+    #[test]
+    fn send_append_mixed_band_must_not_submit_sidebar_runs() {
+        // Production often keeps 布局 and the new bubble in one stacking band.
+        // PartialLoad must submit only the new run — not re-prepare the rail.
+        let mut layout = sample_text("布局", 8.0);
+        layout.y = 200.0;
+        let mut gallery = sample_text("Gallery", 8.0);
+        gallery.y = 236.0;
+        let mut hello = sample_text("hello", 260.0);
+        hello.y = 200.0;
+        let mut next = sample_text("next", 260.0);
+        next.y = 240.0;
+        let prev = vec![layout.clone(), gallery.clone(), hello.clone()];
+        let curr = vec![layout, gallery, hello, next];
+        let submitted = page_stack_band_submit_text(&prev, &curr, 0, 4, None, true)
+            .expect("Send must submit the new bubble");
+        assert!(
+            submitted.iter().any(|n| n.text == "next"),
+            "new bubble must be submitted, got {:?}",
+            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            submitted
+                .iter()
+                .all(|n| n.text != "布局" && n.text != "Gallery" && n.text != "hello"),
+            "unchanged rail/bubble runs must stay in retain, got {:?}",
+            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        let full = page_stack_band_submit_text(&prev, &curr, 0, 4, None, false)
+            .expect("FullClear still owns the whole band");
+        assert_eq!(full.len(), 4);
+    }
+
+    #[test]
+    fn send_insert_before_rail_must_not_submit_unchanged_captions() {
+        let mut layout = sample_text("布局", 8.0);
+        layout.y = 200.0;
+        let mut gallery = sample_text("Gallery", 8.0);
+        gallery.y = 236.0;
+        let mut next = sample_text("next", 260.0);
+        next.y = 200.0;
+        let prev = vec![layout.clone(), gallery.clone()];
+        let curr = vec![next.clone(), layout, gallery];
+        let submitted = page_stack_band_submit_text(&prev, &curr, 0, 3, None, true)
+            .expect("inserted bubble must submit");
+        assert!(submitted.iter().any(|n| n.text == "next"));
+        assert!(
+            submitted
+                .iter()
+                .all(|n| n.text != "布局" && n.text != "Gallery"),
+            "index shift must not re-submit rail ink, got {:?}",
+            submitted.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn clip_bounds_only_change_must_not_resubmit_rail() {
+        let mut prev = sample_text("布局", 8.0);
+        prev.y = 200.0;
+        let mut curr = prev.clone();
+        curr.clip_bounds = Some([0.0, 0.0, 208.0, 800.0]);
+        assert!(
+            page_stack_band_submit_text(&[prev], &[curr], 0, 1, None, true).is_none(),
+            "layout-rebuilt clip is not new ink"
+        );
     }
 
     #[test]
@@ -567,5 +1003,97 @@ mod tests {
             node_present_dest_reset(8, p.bounds, &[p], &instances).expect("card behind ghost");
         assert_eq!(color, [1.0, 1.0, 1.0, 1.0]);
         assert!(node_present_needs_glyphs(8, p.bounds, &[p], &instances));
+    }
+
+    #[test]
+    fn clipped_capture_keeps_neighbor_caption_out_of_input_dirty() {
+        let mut nav = sample_text("NavLayout", 170.0);
+        nav.width = 40.0;
+        let mut typed = sample_text("asdasd", 240.0);
+        typed.width = 80.0;
+        let page = [nav.clone(), typed.clone()];
+        let dirty_nav = PaintDirty {
+            key: 1,
+            bounds: [8.0, 0.0, 200.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let dirty_input = PaintDirty {
+            key: 2,
+            bounds: [208.0, 0.0, 400.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let paints = [
+            slot(1, dirty_nav.bounds, (0, 1)),
+            slot(2, dirty_input.bounds, (1, 2)),
+        ];
+        assert!(text_owned_by_node_dirty(&nav, dirty_nav.bounds));
+        assert!(!text_owned_by_node_dirty(&nav, dirty_input.bounds));
+
+        let input_owned = node_present_glyphs_for_dirty(&dirty_input, &page, &paints);
+        assert!(input_owned.contains(&1));
+        assert!(
+            !input_owned.contains(&0),
+            "Input's own glyph set must not include NavLayout"
+        );
+
+        let clipped =
+            node_present_clipped_capture_text(&[dirty_nav, dirty_input], &page, &paints);
+        let nav_clip = clipped
+            .iter()
+            .find(|n| n.text == "NavLayout")
+            .and_then(|n| n.clip_bounds)
+            .expect("NavLayout stays in the capture with an owner clip");
+        assert!(
+            nav_clip[0] + nav_clip[2]
+                <= dirty_input.bounds[0] + NODE_PRESENT_GLYPH_CLIP_PAD + 1e-3,
+            "NavLayout clip {nav_clip:?} must not extend into Input dirty {:?}",
+            dirty_input.bounds
+        );
+        let typed_clip = clipped
+            .iter()
+            .find(|n| n.text == "asdasd")
+            .and_then(|n| n.clip_bounds)
+            .expect("typed text stays in the capture with an owner clip");
+        assert!(
+            typed_clip[0] + 1e-3 >= dirty_input.bounds[0] - NODE_PRESENT_GLYPH_CLIP_PAD,
+            "typed clip {typed_clip:?} must stay in the Input dirty {:?}",
+            dirty_input.bounds
+        );
+    }
+
+    #[test]
+    fn node_dirty_owns_only_its_collect_slot_not_center_in_box() {
+        // Gallery: padded Input dirty can cover a sidebar caption's center
+        // (「布局」 sharing a horizontal band with Kbd Search) without that
+        // caption belonging to the Input collect slot.
+        let mut caption = sample_text("布局", 190.0);
+        caption.width = 40.0; // center x=210, inside Input dirty x=208
+        let mut typed = sample_text("asdasd", 240.0);
+        typed.width = 80.0;
+        let page = [caption, typed];
+        let dirty_input = PaintDirty {
+            key: 2,
+            bounds: [208.0, 0.0, 400.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let paints = [
+            slot(1, [8.0, 0.0, 200.0, 32.0], (0, 1)),
+            slot(2, [208.0, 0.0, 400.0, 32.0], (1, 2)),
+        ];
+        assert!(
+            text_owned_by_node_dirty(&page[0], dirty_input.bounds),
+            "precondition: caption center sits inside the padded Input dirty"
+        );
+        let owned = node_present_glyphs_for_dirty(&dirty_input, &page, &paints);
+        assert!(owned.contains(&1), "Input text must stay owned");
+        assert!(
+            !owned.contains(&0),
+            "sidebar caption must not ride along because its center sits in the Input pad"
+        );
+        let capture = node_present_capture_text_indices(&[dirty_input], &page, &paints);
+        assert!(
+            !capture.contains(&0),
+            "capture must not include 布局 when only Input is dirty"
+        );
     }
 }

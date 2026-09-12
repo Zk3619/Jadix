@@ -17,7 +17,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 
 /// How a paint-dirty item is submitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,11 +77,20 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
 
 /// Record this element's visual box as its own dirty node (no cross-node union).
 pub fn push_frame_paint_element(el: &Element) {
-    let b = el.layout_bounds;
+    let b = crate::core::tree::visual_paint_aabb(el, [0.0, 0.0]);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
-    let pad = (el.style.shadow_blur + el.style.shadow_spread.abs() + 2.0).max(2.0);
+    let spinning = el.attrs.get("rui_animate").map(|s| s.as_str()) == Some("spin")
+        || el.style.animations.iter().any(|a| a.name == "spin")
+        || el.style.rotate_deg.abs() > 0.01;
+    // Circumcircle of the box vs AABB — previous 45° frame sits outside the axis-aligned box.
+    let rot_pad = if spinning {
+        (b[2].hypot(b[3]) - b[2].min(b[3])).max(0.0) * 0.5
+    } else {
+        0.0
+    };
+    let pad = (el.style.shadow_blur + el.style.shadow_spread.abs() + 2.0 + rot_pad).max(2.0);
     push_paint_dirty(
         paint_element_key(el),
         [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
@@ -92,6 +101,11 @@ pub fn push_frame_paint_element(el: &Element) {
 /// Record a local paint dirty **node**. Disjoint calls stay separate nodes.
 pub fn push_frame_paint_damage(bounds: [f32; 4]) {
     push_paint_dirty(bounds_key(bounds), bounds, PaintDirtyKind::Node);
+}
+
+/// Same as [`push_frame_paint_damage`] but keyed to a collect slot (`paint_element_key`).
+pub fn push_frame_paint_key(key: u64, bounds: [f32; 4]) {
+    push_paint_dirty(key, bounds, PaintDirtyKind::Node);
 }
 
 /// Overlay panel: own node, never merged with page hover.
@@ -115,6 +129,12 @@ pub fn take_frame_paint_nodes() -> Vec<PaintDirty> {
         });
         nodes
     })
+}
+
+/// Drop queued paint nodes (page StructureChanged FullClear). Stale Taffy keys
+/// from the pre-rebuild tree must not dest-reset the sidebar footer after Send.
+pub fn clear_frame_paint_nodes() {
+    FRAME_PAINT_NODES.with(|slot| slot.borrow_mut().clear());
 }
 
 /// Legacy: first dirty node's bounds only. Prefer [`take_frame_paint_nodes`].
@@ -305,22 +325,39 @@ pub fn overlay_scissor_needs_clear(
     overlay_restore_needed(prev, cur)
 }
 
-/// Dirty node vs collect slot: same Taffy key, or the same visual box (padded
-/// `push_frame_paint_damage` vs unpadded `layout_bounds`).
+/// Dirty node vs collect slot: same Taffy key **and** overlapping box, or the
+/// same visual box (padded `push_frame_paint_damage` vs unpadded `layout_bounds`).
 ///
-/// Do **not** use AABB intersect / ancestor containment: a popover box intersects
-/// the bubble underneath, and a page root contains every widget — both would
-/// stamp foreign chrome/glyphs into the dirty scissor.
+/// Taffy `NodeId` is recycled on StructureChanged. A key-only hit would treat
+/// the Gallery sidebar footer as the MessageScroller island, dest-reset the
+/// rail bottom, and src-over 「布局」/Gallery/文本 into retain.
+///
+/// Do **not** use AABB intersect / ancestor containment for *different* keys: a
+/// popover box intersects the bubble underneath, and a page root contains every
+/// widget — both would stamp foreign chrome/glyphs into the dirty scissor.
 #[inline]
 pub fn paint_dirty_matches_slot(dirty_key: u64, dirty_bounds: [f32; 4], slot_key: u64, slot_bounds: [f32; 4]) -> bool {
-    if slot_key == dirty_key {
-        return true;
-    }
     const SLACK: f32 = 8.0;
-    (dirty_bounds[0] - slot_bounds[0]).abs() <= SLACK
+    let same_box = (dirty_bounds[0] - slot_bounds[0]).abs() <= SLACK
         && (dirty_bounds[1] - slot_bounds[1]).abs() <= SLACK
         && (dirty_bounds[2] - slot_bounds[2]).abs() <= SLACK * 2.0
-        && (dirty_bounds[3] - slot_bounds[3]).abs() <= SLACK * 2.0
+        && (dirty_bounds[3] - slot_bounds[3]).abs() <= SLACK * 2.0;
+    if same_box {
+        return true;
+    }
+    if slot_key != dirty_key {
+        return false;
+    }
+    // Same NodeId after a rebuild: only trust it when the boxes still share space
+    // (hover/caret of that widget). 32px covers a 1-line reflow, not rail ↔ inset.
+    const REUSE_PAD: f32 = 32.0;
+    let padded = [
+        dirty_bounds[0] - REUSE_PAD,
+        dirty_bounds[1] - REUSE_PAD,
+        (dirty_bounds[2] + REUSE_PAD * 2.0).max(0.0),
+        (dirty_bounds[3] + REUSE_PAD * 2.0).max(0.0),
+    ];
+    intersect_rects(padded, slot_bounds).is_some()
 }
 
 /// Overlay close: redraw this collect slot into the cleared hole.
@@ -467,6 +504,43 @@ pub fn frame_clear_policy(
         }
         _ => FrameClearPolicy::FullClear,
     }
+}
+
+/// After chrome sync: FullClear only when the **page** structure/geometry moved,
+/// or nobody named a dirty node (fallback).
+///
+/// Nested island `StructureChanged` (MessageScroller Send / For inside a clip)
+/// names a local box and must stay PartialLoad — FullClear is what kept the
+/// sidebar Footer on the Send present path.
+///
+/// Widget-local `LayoutChanged` (InputAdornment ring, fit-relayout of a fixed
+/// box) must not FullClear — that wipes CSS spin dirties and Load-stamps
+/// leftover glyphs on the next PartialLoad. `pre_chrome` LayoutChanged is the
+/// same gate as `sync_impact`; it must not undo a named-node PartialLoad.
+pub fn force_full_redraw_after_chrome(
+    pre_chrome: LayoutStatus,
+    sync_impact: LayoutStatus,
+    page_geometry_changed: bool,
+    portal_structure_skip: bool,
+    has_named_damage: bool,
+) -> bool {
+    if portal_structure_skip {
+        return false;
+    }
+    let structure = matches!(pre_chrome, LayoutStatus::StructureChanged)
+        || matches!(sync_impact, LayoutStatus::StructureChanged);
+    if structure {
+        // Nested island StructureChanged (MessageScroller Send / For) names its clip
+        // box and must not FullClear the sidebar Footer. Page geometry (route Show)
+        // still Clears. No named box → fallback Clear.
+        return page_geometry_changed || !has_named_damage;
+    }
+    let layout = matches!(pre_chrome, LayoutStatus::LayoutChanged)
+        || matches!(sync_impact, LayoutStatus::LayoutChanged);
+    if !layout {
+        return false;
+    }
+    page_geometry_changed || !has_named_damage
 }
 
 /// Paint-node present: PartialLoad unless a **single** node covers the viewport.
@@ -806,6 +880,45 @@ mod tests {
     }
 
     #[test]
+    fn force_full_redraw_keeps_partial_load_for_named_nodes_without_page_geom() {
+        use crate::core::tree::LayoutStatus::*;
+        // Typing / caret / spin: pre_chrome may still be LayoutChanged from
+        // fit-relayout of a fixed Input box. Named dirties must PartialLoad.
+        assert!(
+            !force_full_redraw_after_chrome(LayoutChanged, StyleChanged, false, false, true),
+            "pre_chrome LayoutChanged must not undo Input+spin PartialLoad"
+        );
+        assert!(
+            !force_full_redraw_after_chrome(Clean, LayoutChanged, false, false, true),
+            "chrome LayoutChanged with named dirties stays PartialLoad"
+        );
+        assert!(
+            force_full_redraw_after_chrome(LayoutChanged, StyleChanged, true, false, true),
+            "page geometry still FullClears"
+        );
+        assert!(
+            force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, false),
+            "nobody named a dirty box → FullClear fallback"
+        );
+        assert!(
+            !force_full_redraw_after_chrome(StructureChanged, Clean, false, false, true),
+            "island StructureChanged with named damage stays PartialLoad (Send must not wipe Footer)"
+        );
+        assert!(
+            force_full_redraw_after_chrome(StructureChanged, Clean, true, false, true),
+            "page geometry StructureChanged FullClears"
+        );
+        assert!(
+            force_full_redraw_after_chrome(StructureChanged, Clean, false, false, false),
+            "StructureChanged with no named box → FullClear fallback"
+        );
+        assert!(
+            !force_full_redraw_after_chrome(StructureChanged, Clean, false, true, true),
+            "portal-only structure skip"
+        );
+    }
+
+    #[test]
     fn overlay_membership_drops_viewport_hover_union() {
         let vp = [0.0, 0.0, 800.0, 600.0];
         let overlay = [90.0, 190.0, 160.0, 48.0];
@@ -952,6 +1065,21 @@ mod tests {
         assert!(
             !paint_dirty_matches_slot(1, chip, 3, title),
             "nearby caption must not paint into a chip scissor"
+        );
+    }
+
+    #[test]
+    fn recycled_taffy_key_must_not_match_disjoint_sidebar_footer() {
+        let footer = [0.0, 752.0, 207.0, 48.0];
+        let chat = [420.0, 180.0, 384.0, 384.0];
+        assert!(
+            !paint_dirty_matches_slot(42, chat, 42, footer),
+            "NodeId reuse after Send must not treat SidebarFooter as the MessageScroller island"
+        );
+        let hover = [8.0, 760.0, 190.0, 36.0];
+        assert!(
+            paint_dirty_matches_slot(42, hover, 42, footer),
+            "same-widget hover still matches the footer slot"
         );
     }
 
