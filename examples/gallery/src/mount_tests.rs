@@ -101,6 +101,233 @@ fn mouse_event_log_line_count_stable_from_idle_to_move() {
     );
 }
 
+fn find_mouse_log_node(el: &rui::core::tree::Element) -> Option<&rui::core::tree::Element> {
+    let mut stack = vec![el];
+    while let Some(el) = stack.pop() {
+        if el
+            .text
+            .as_deref()
+            .is_some_and(|t| t.contains("client=") && t.contains("movement="))
+        {
+            return Some(el);
+        }
+        stack.extend(el.children.iter().rev());
+    }
+    None
+}
+
+fn gallery_find_by_focus_id<'a>(
+    el: &'a rui::core::tree::Element,
+    want: &str,
+) -> Option<&'a rui::core::tree::Element> {
+    let mut stack = vec![el];
+    while let Some(el) = stack.pop() {
+        if el.focus_id.as_deref() == Some(want) {
+            return Some(el);
+        }
+        stack.extend(el.children.iter().rev());
+    }
+    None
+}
+
+fn rgb_dist(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let d0 = a[0] - b[0];
+    let d1 = a[1] - b[1];
+    let d2 = a[2] - b[2];
+    (d0 * d0 + d1 * d1 + d2 * d2).sqrt()
+}
+
+fn color_close(inst: [f32; 4], token: [f32; 4]) -> bool {
+    inst[3] > 0.5 && rgb_dist(inst, token) < 0.08
+}
+
+fn subtree_has_bg(el: &rui::core::tree::Element, token: [f32; 4]) -> bool {
+    color_close(el.style.bg_color, token) || el.children.iter().any(|c| subtree_has_bg(c, token))
+}
+
+fn find_lca_click_caption(el: &rui::core::tree::Element) -> Option<&rui::core::tree::Element> {
+    let mut stack = vec![el];
+    while let Some(el) = stack.pop() {
+        if el
+            .text
+            .as_deref()
+            .is_some_and(|t| t.contains("目标 click=") && t.contains("拖进蓝色块"))
+        {
+            return Some(el);
+        }
+        stack.extend(el.children.iter().rev());
+    }
+    None
+}
+
+#[test]
+fn mouse_event_lca_target_is_info_blue_on_muted_pad() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        rui::style::set_theme_mode(rui::style::ThemeMode::Light);
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let outer =
+                    gallery_find_by_tid(&tree, "gal-mouse-lca-outer").expect("gal-mouse-lca-outer");
+                let inner = gallery_find_by_focus_id(&tree, "gal-mouse-lca-target")
+                    .expect("gal-mouse-lca-target");
+                let muted = rui::style::parse_color("muted");
+                let info = rui::style::parse_color("info");
+                let primary = rui::style::parse_color("primary");
+                assert!(
+                    info[2] > info[0] + 0.15,
+                    "info must be theme blue, got {info:?}"
+                );
+                assert!(
+                    primary[0] + primary[1] + primary[2] < 0.2,
+                    "light primary is black — must not be the LCA target fill"
+                );
+                assert!(
+                    rgb_dist(muted, info) > 0.12,
+                    "copy says gray pad vs blue target; muted vs info must be distinct"
+                );
+                assert!(
+                    color_close(outer.style.bg_color, muted),
+                    "LCA pad must be muted gray, got {:?}",
+                    outer.style.bg_color
+                );
+                assert!(
+                    subtree_has_bg(inner, info),
+                    "LCA target must paint info (theme blue), not primary/secondary"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn mouse_event_lca_click_caption_is_plain_definite_width_leaf() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        rui::style::set_theme_mode(rui::style::ThemeMode::Light);
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let caption = find_lca_click_caption(&tree).expect("lca click caption");
+                assert!(
+                    !caption.style.size.width.is_auto(),
+                    "w=100% caption must not shrink-wrap, or every click cosmic-prepares"
+                );
+                assert!(
+                    caption.children.is_empty() && caption.text_spans.is_none(),
+                    "caption must be a plain text leaf so bind_text can stay paint-only"
+                );
+                assert!(
+                    caption.layout_bounds[2] > 100.0,
+                    "caption must already have a definite used box, got {:?}",
+                    caption.layout_bounds
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn mouse_event_swallow_hit_path_excludes_pad() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let swallow = gallery_find_by_focus_id(&tree, "gal-mouse-swallow")
+                    .expect("gal-mouse-swallow");
+                let parent = gallery_find_by_focus_id(&tree, "gal-mouse-swallow-parent")
+                    .expect("gal-mouse-swallow-parent");
+                assert!(
+                    swallow.on_mousedown.is_some() && swallow.on_mousemove.is_none(),
+                    "inner block must stop mousedown only — not rewrite the hit-pad log"
+                );
+                assert!(
+                    parent.on_mousedown.is_some(),
+                    "stopPropagation demo needs a real parent listener"
+                );
+                let b = swallow.layout_bounds;
+                assert!(
+                    b[2] > 8.0 && b[3] > 8.0,
+                    "swallow must have a hittable box, got {b:?}"
+                );
+                let path =
+                    rui::app::pointer_events::hit_path(&tree, b[0] + b[2] * 0.5, b[1] + b[3] * 0.5);
+                let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
+                assert!(
+                    ids.contains(&"gal-mouse-swallow"),
+                    "hit path must include swallow, got {ids:?}"
+                );
+                assert!(
+                    ids.contains(&"gal-mouse-swallow-parent"),
+                    "hit path must include swallow parent, got {ids:?}"
+                );
+                assert!(
+                    !ids.contains(&"gal-mouse-pad"),
+                    "swallow is not a child of the hit pad; writing the pad log from here dest-resets the readout: {ids:?}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn mouse_event_log_is_plain_definite_width_leaf() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let log = find_mouse_log_node(&tree).expect("mouse log text node");
+                assert!(
+                    !log.style.size.width.is_auto(),
+                    "w=100% log must not shrink-wrap, or every mousemove cosmic-prepares"
+                );
+                assert!(
+                    log.children.is_empty() && log.text_spans.is_none(),
+                    "log must be a plain text leaf so bind_text can stay paint-only"
+                );
+                assert!(
+                    log.layout_bounds[2] > 100.0 && log.layout_bounds[3] > 50.0,
+                    "log must already have a definite used box, got {:?}",
+                    log.layout_bounds
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
 #[test]
 fn mouse_event_log_panel_reserves_height_before_first_move() {
     run_on_gallery_build_stack(|| {
@@ -1148,13 +1375,11 @@ fn theme_section_mounts_controls() {
         rui::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("theme"));
         assert!(
-            find_tid(&tree, "gal-theme-apply")
-                || gallery_find_attr(&tree, "id", "gal-theme-apply"),
+            find_tid(&tree, "gal-theme-apply") || gallery_find_attr(&tree, "id", "gal-theme-apply"),
             "theme section must mount apply theme.toml"
         );
         assert!(
-            find_tid(&tree, "gal-theme-sheet")
-                || gallery_find_attr(&tree, "id", "gal-theme-sheet"),
+            find_tid(&tree, "gal-theme-sheet") || gallery_find_attr(&tree, "id", "gal-theme-sheet"),
             "theme section must mount apply styles.toml"
         );
         rui::app::reactive::reset_registered_anchors();

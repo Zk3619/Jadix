@@ -69,7 +69,7 @@ pub(crate) fn checker_rgba_texture() -> (Vec<u8>, u32, u32) {
 }
 
 pub(crate) fn increment_count(count: rui::core::reactivity::Signal<i32>) {
-    count.set(count.get() + 1);
+    count.set(count.peek() + 1);
 }
 
 pub(crate) fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str) {

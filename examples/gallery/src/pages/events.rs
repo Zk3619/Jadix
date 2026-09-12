@@ -10,6 +10,13 @@ pub(crate) const MOUSE_LOG_LINES: usize = 7;
 /// 7×12px×leading-normal(1.5) + 0.75rem×2 padding; keep in sync with mouse log row count.
 pub(crate) const MOUSE_LOG_PANEL_H: f32 = 152.0;
 
+pub(crate) fn format_lca_click_caption(n: i32) -> String {
+    format!(
+        "目标 click={} — 在灰色空白处按下，拖进蓝色块再松开，计数不应增加",
+        n
+    )
+}
+
 pub(crate) fn clip_mouse_debug(s: Option<&str>) -> String {
     let t = s.unwrap_or("-");
     let n = t.chars().count();
@@ -140,6 +147,7 @@ pub(crate) fn MouseEventShowcase() -> Element {
     let dbls = use_signal("gal_mouse_dbls", || 0i32);
     let overs = use_signal("gal_mouse_overs", || 0i32);
     let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
+    let swallow_parent_downs = use_signal("gal_mouse_swallow_parent_downs", || 0i32);
 
     let write = {
         let log = log;
@@ -196,11 +204,13 @@ pub(crate) fn MouseEventShowcase() -> Element {
         r#box()
             .p("0.75rem")
             .rounded(8.0)
-            .bg(parse_color("secondary"))
+            // Light `primary` ≡ foreground (black). Copy says 蓝色块 — theme `info` is blue-600.
+            .bg(parse_color("info"))
             .child(Element::from(
                 label("gal-mouse-lca-inner")
                     .text("目标：必须在此按下并在此松开")
-                    .size(13.0),
+                    .size(13.0)
+                    .color(parse_text_color("white")),
             ))
             .into(),
     )
@@ -208,38 +218,58 @@ pub(crate) fn MouseEventShowcase() -> Element {
     .on_click(move || increment_count(lca))
     .into();
 
-    let lca_outer: Element = r#box()
-        .w("100%")
-        .min_h(120.0)
-        .p("1.25rem")
-        .rounded(8.0)
-        .bg(parse_color("muted"))
-        .items("center")
-        .justify("center")
-        .child(lca_inner)
-        .into();
+    let lca_outer: Element = Element::from(
+        r#box()
+            .w("100%")
+            .min_h(120.0)
+            .p("1.25rem")
+            .rounded(8.0)
+            .bg(parse_color("muted"))
+            .items("center")
+            .justify("center")
+            .child(lca_inner),
+    )
+    .template_id("gal-mouse-lca-outer");
 
-    let swallow: Element = {
-        let w = write.clone();
-        interactive(
-            r#box()
-                .p("0.75rem")
-                .rounded(8.0)
-                .bg(parse_color("secondary"))
-                .child(Element::from(
-                    label("gal-mouse-swallow")
-                        .text("mousedown stopPropagation（父级不应再收到 down）")
-                        .size(12.0),
-                ))
-                .into(),
-        )
-        .focus_id("gal-mouse-swallow")
-        .on_mousedown(move |e| {
-            e.stop_propagation();
-            w(e);
-        })
-        .into()
-    };
+    // Child of a real parent listener — not a sibling of the hit pad.
+    // Writing the pad log from here dest-resets the readout at the top of the
+    // scroll view and looks like the pad itself handled the click.
+    let swallow_child: Element = interactive(
+        r#box()
+            .p("0.75rem")
+            .rounded(8.0)
+            .bg(parse_color("secondary"))
+            .child(Element::from(
+                label("gal-mouse-swallow")
+                    .text("内块：mousedown stopPropagation")
+                    .size(12.0),
+            ))
+            .into(),
+    )
+    .focus_id("gal-mouse-swallow")
+    .on_mousedown(move |e| {
+        e.stop_propagation();
+    })
+    .into();
+
+    let swallow_parent: Element = interactive(
+        r#box()
+            .w("100%")
+            .p("1.25rem")
+            .rounded(8.0)
+            .bg(parse_color("muted"))
+            .child(swallow_child)
+            .into(),
+    )
+    .focus_id("gal-mouse-swallow-parent")
+    .on_mousedown(move |e| {
+        // DOM default listeners are bubble; Rui still walks ancestors in capture.
+        if e.phase == rui::EventPhase::Capture {
+            return;
+        }
+        increment_count(swallow_parent_downs);
+    })
+    .into();
 
     ui! {
         <MyCard title="MouseEvent（pointer_events）">
@@ -269,12 +299,21 @@ pub(crate) fn MouseEventShowcase() -> Element {
                     </Label>
                 </Box>
                 <Label w="100%" font_weight="700" text_size="0.875rem">"click LCA"</Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    { format!("目标 click={} — 在灰色空白处按下，拖进蓝色块再松开，计数不应增加", lca.get()) }
+                <Label
+                    id="gal-mouse-lca-count"
+                    w="100%"
+                    text_size="0.75rem"
+                    color="muted-foreground"
+                    leading="normal"
+                >
+                    { format_lca_click_caption(lca.get()) }
                 </Label>
                 { lca_outer }
                 <Label w="100%" font_weight="700" text_size="0.875rem">"stopPropagation"</Label>
-                { swallow }
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { format!("父级 mousedown={} — 点灰色父级应 +1；点内块不应 +1，也不应改写上方命中区日志", swallow_parent_downs.get()) }
+                </Label>
+                { swallow_parent }
             </VStack>
         </MyCard>
     }

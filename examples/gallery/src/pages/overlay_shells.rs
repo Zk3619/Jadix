@@ -647,41 +647,31 @@ pub(crate) fn PresenceShowcase() -> Element {
         }
     };
 
-    let presence_rsx = presence(
-        "gal-pres-exit-rsx",
-        presence_open,
-        320,
-        move || {
-            let exiting = !presence_open.peek();
+    let presence_rsx = presence("gal-pres-exit-rsx", presence_open, 320, move || {
+        let exiting = !presence_open.peek();
+        let mut card = presence_demo_card(
+            "presence() · RSX",
+            "仍挂载至 exit_ms；作者用 opacity 播退场。",
+        );
+        card = card
+            .opacity(if exiting { 0.0 } else { 1.0 })
+            .transition("opacity 320ms ease");
+        card
+    });
+
+    let presence_b = {
+        let open = presence_open;
+        let panel = presence("gal-pres-exit-b", open, 320, move || {
+            let exiting = !open.peek();
             let mut card = presence_demo_card(
-                "presence() · RSX",
-                "仍挂载至 exit_ms；作者用 opacity 播退场。",
+                "presence() · Builder",
+                "open=false 后仍挂载 320ms；opacity 过渡模拟退场。",
             );
             card = card
                 .opacity(if exiting { 0.0 } else { 1.0 })
                 .transition("opacity 320ms ease");
             card
-        },
-    );
-
-    let presence_b = {
-        let open = presence_open;
-        let panel = presence(
-            "gal-pres-exit-b",
-            open,
-            320,
-            move || {
-                let exiting = !open.peek();
-                let mut card = presence_demo_card(
-                    "presence() · Builder",
-                    "open=false 后仍挂载 320ms；opacity 过渡模拟退场。",
-                );
-                card = card
-                    .opacity(if exiting { 0.0 } else { 1.0 })
-                    .transition("opacity 320ms ease");
-                card
-            },
-        );
+        });
         ui! {
             <HStack gap="0.5rem" items="center" wrap="wrap">
                 <Button
