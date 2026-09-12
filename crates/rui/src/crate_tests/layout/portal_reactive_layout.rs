@@ -165,3 +165,72 @@ fn portal_structure_changed_does_not_set_page_layout_flag() {
         collect.page_layout_changed,
     ));
 }
+
+#[test]
+fn scroller_structure_changed_does_not_set_page_layout_flag() {
+    use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
+
+    let _ = crate::app::damage::take_frame_paint_nodes();
+    let mut tree = LayoutTree::new();
+    let mut rows = Element::new()
+        .w(200.0)
+        .h(80.0)
+        .template_id("ms-send-rows");
+    rows = rows.reactive_sync(|_el: &mut Element, _lt: &mut LayoutTree| {
+        LayoutStatus::StructureChanged
+    });
+    let mut viewport = Element::new()
+        .w(200.0)
+        .h(200.0)
+        .template_id("ms-viewport")
+        .child(rows);
+    viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}ms-send"));
+    let page_text = Element::new()
+        .text("sidebar footer Gallery")
+        .text_size(14.0)
+        .w(200.0)
+        .template_id("sidebar-footer");
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .child(page_text)
+        .child(viewport);
+
+    tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let mut impact = LayoutStatus::Clean;
+    let mut collect = ReactiveSyncCollect::default();
+    crate::core::tree::sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        800.0,
+        600.0,
+        [0.0, 0.0],
+        false,
+        &mut collect,
+    );
+    assert_eq!(impact, LayoutStatus::StructureChanged);
+    assert!(
+        !collect.page_layout_changed,
+        "Send inside a scroll viewport must not mark page geometry (sidebar Footer FullClear)"
+    );
+    assert!(
+        !collect.portal_layout_changed,
+        "scroller For is page-tree island, not portal"
+    );
+    let dirty = crate::app::damage::take_frame_paint_nodes();
+    assert!(
+        !dirty.is_empty(),
+        "island StructureChanged must name a local damage box"
+    );
+    assert!(
+        !crate::app::damage::force_full_redraw_after_chrome(
+            LayoutStatus::StructureChanged,
+            LayoutStatus::Clean,
+            collect.page_layout_changed,
+            false,
+            !dirty.is_empty(),
+        ),
+        "Send must stay PartialLoad so Footer is not on the present path"
+    );
+}

@@ -1,6 +1,10 @@
 //! MessageScroller: `defaultScrollPosition=end` must paint the live edge, not an empty
 //! tail from `min-h-full` / inflated `content_h`.
 
+use crate::app::draw_cull::{
+    clip_text_nodes_to_rect, page_stack_band_submit_text, padded_xywh, DAMAGE_CULL_PAD_LOGICAL,
+    SCROLL_LAYER_TEXT_PAD_LOGICAL,
+};
 use crate::app::reactive::{reactive_view_sized, reset_registered_anchors};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
 use crate::components::bubble::bubble;
@@ -11,11 +15,23 @@ use crate::components::message_scroller::{
     sync_message_scroller_follow_after_layout,
 };
 use crate::components::scroll_area::scroll_area;
+use crate::components::sidebar::{
+    sidebar, sidebar_group, sidebar_group_content, sidebar_group_label, sidebar_menu,
+    sidebar_provider_scope, Sidebar, SidebarContent, SidebarContentProps, SidebarFooter,
+    SidebarFooterProps, SidebarHeader, SidebarHeaderProps, SidebarInset, SidebarInsetProps,
+    SidebarMenuButton, SidebarMenuButtonProps, SidebarProps, SidebarSeparator,
+    SidebarSeparatorProps,
+};
 use crate::core::reactivity::{
     create_effect, create_root, mark_next_effect_as_ui_root, use_signal,
 };
-use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+use crate::core::scroll_viewport::{
+    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_y_signal_key,
+    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+};
 use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
+use crate::renderer::font_loader;
+use crate::text::install_shared_font_system;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -1334,6 +1350,1143 @@ fn message_scroller_stick_to_end_jumps_from_mid_list() {
                 .iter()
                 .any(|t| t.text.contains("turn anchoring") && t.y + t.height > 0.0 && t.y < 384.0),
             "Send stick-to-end must paint the new turn this frame (sy={sy} max={max_y})"
+        );
+    }
+
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+}
+
+fn ms_nav_btn(id: &str, label: &str) -> Element {
+    SidebarMenuButton(SidebarMenuButtonProps {
+        id: id.into(),
+        is_active: None,
+        variant: None,
+        size: None,
+        class: None,
+        on_click: None,
+        children: Some(Element::from(label)),
+        base: None,
+    })
+}
+
+fn fmt_rect(r: [f32; 4]) -> String {
+    format!("[{:.1},{:.1} {:.1}x{:.1}]", r[0], r[1], r[2], r[3])
+}
+
+fn find_slot_ms<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+    if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_slot_ms(c, slot))
+}
+
+fn find_slot_ms_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
+    if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+        return Some(el);
+    }
+    el.children
+        .iter_mut()
+        .find_map(|c| find_slot_ms_mut(c, slot))
+}
+
+fn rail_captions_in_submit(
+    prev: &[crate::layout::layout_tree::TextLayoutInfo],
+    curr: &[crate::layout::layout_tree::TextLayoutInfo],
+    ranges: &[crate::layout::layout_tree::OverlayBandRange],
+    scroll_clip: Option<[f32; 4]>,
+) -> Vec<String> {
+    let mut stolen = Vec::new();
+    let push_hit = |stolen: &mut Vec<String>,
+                    submitted: &[crate::layout::layout_tree::TextLayoutInfo]| {
+        stolen.extend(
+            submitted
+                .iter()
+                .filter(|n| n.text == "布局" || n.text == "Gallery" || n.text == "文本")
+                .map(|n| {
+                    format!(
+                        "{}@{}",
+                        n.text,
+                        fmt_rect([n.x, n.y, n.width, n.height])
+                    )
+                }),
+        );
+    };
+    if ranges.is_empty() {
+        if let Some(submitted) =
+            page_stack_band_submit_text(prev, curr, 0, curr.len(), scroll_clip, true)
+        {
+            push_hit(&mut stolen, &submitted);
+        }
+        return stolen;
+    }
+    for (i, band) in ranges.iter().enumerate() {
+        let hi = if i + 1 == ranges.len() {
+            curr.len()
+        } else {
+            band.text.1
+        };
+        if let Some(submitted) =
+            page_stack_band_submit_text(prev, curr, band.text.0, hi, scroll_clip, true)
+        {
+            push_hit(&mut stolen, &submitted);
+        }
+    }
+    stolen
+}
+
+/// Gallery: inset shell + page ScrollArea + MessageScroller. Auto-scroll /
+/// stick-to-end PartialLoad must not src-over sidebar captions into retain.
+#[test]
+fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let (_handle, _) = create_root(|| {
+        let mut content = message_scroller_content();
+        for (i, text) in GAL_MS_TEXTS.iter().enumerate() {
+            content = content.child(bubble_turn(i, text));
+        }
+        let chat: Element = message_scroller_provider()
+            .id("gal-ms-showcase")
+            .auto_scroll(true)
+            .default_scroll_position("end")
+            .child(
+                message_scroller()
+                    .h("100%")
+                    .child(message_scroller_viewport().child(content))
+                    .child(message_scroller_button().direction("end")),
+            )
+            .into();
+
+        let inset_body = crate::primitives::r#box::vstack()
+            .w("100%")
+            .min_w(0.0)
+            .min_h(0.0)
+            .flex_grow(1.0)
+            .child(
+                scroll_area("scroll-basics")
+                    .flex_grow(1.0)
+                    .min_h(0.0)
+                    .overflow_y("auto")
+                    .child(
+                        crate::primitives::r#box::vstack()
+                            .w("100%")
+                            .gap("1rem")
+                            .p("1.5rem")
+                            .child(Element::new().h(80.0).w("100%"))
+                            .child(
+                                Element::new()
+                                    .w("100%")
+                                    .h(384.0)
+                                    .overflow("hidden")
+                                    .child(chat),
+                            ),
+                    ),
+            );
+
+        let mut root = sidebar_provider_scope("gal-shell", None, true, Some("inset"), None, || {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                sidebar("gal-sidebar")
+                    .variant("inset")
+                    .w("13rem")
+                    .item(ms_nav_btn("nav-basics", "基础"))
+                    .item(ms_nav_btn("nav-pointer", "指针事件"))
+                    .item(ms_nav_btn("nav-form", "表单"))
+                    .item(ms_nav_btn("nav-overlay", "浮层/反馈"))
+                    .item(ms_nav_btn("nav-data", "数据"))
+                    .item(ms_nav_btn("nav-draw", "绘制"))
+                    .item(ms_nav_btn("nav-nav", "导航"))
+                    .item(ms_nav_btn("nav-layout", "布局"))
+                    .item(ms_nav_btn("nav-gallery", "Gallery"))
+                    .item(ms_nav_btn("nav-text", "文本"))
+                    .into(),
+                SidebarInset(SidebarInsetProps {
+                    variant: Some("inset".into()),
+                    class: None,
+                    children: Some(inset_body.into()),
+                    base: None,
+                }),
+            ])
+        });
+
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+        for _ in 0..4 {
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                1280.0,
+                800.0,
+                [0.0, 0.0],
+            );
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+        }
+        message_scroller_stick_to_end("gal-ms-showcase");
+        sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            1280.0,
+            800.0,
+            [0.0, 0.0],
+        );
+        sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+        let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+
+        let rail = find_slot_ms(&root, "sidebar-inner")
+            .or_else(|| find_slot_ms(&root, "sidebar"))
+            .expect("sidebar rail");
+        let rail_bounds = rail.layout_bounds;
+        let rail_right = rail_bounds[0] + rail_bounds[2];
+
+        let captions: Vec<_> = result
+            .text_nodes
+            .iter()
+            .filter(|n| n.text == "布局" || n.text == "Gallery" || n.text == "文本")
+            .collect();
+        assert_eq!(
+            captions.len(),
+            3,
+            "expected 布局/Gallery/文本, got {:?}",
+            result
+                .text_nodes
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        let metrics_dump: Vec<String> = result
+            .scroll_metrics
+            .iter()
+            .map(|(id, b, max, ch)| {
+                format!(
+                    "{id} bounds={} max_y={:.1} ch={:.1}",
+                    fmt_rect(*b),
+                    max[1],
+                    ch[1]
+                )
+            })
+            .collect();
+
+        let ms_bounds = result
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id.contains("gal-ms-showcase"))
+            .map(|(_, b, _, _)| *b)
+            .expect("MessageScroller viewport metrics");
+
+        assert!(
+            ms_bounds[0] >= rail_right - 1.0,
+            "MessageScroller viewport must sit to the right of the rail\n\
+             ms={} rail={}\n metrics={metrics_dump:?}",
+            fmt_rect(ms_bounds),
+            fmt_rect(rail_bounds)
+        );
+
+        for (id, bounds, _, _) in &result.scroll_metrics {
+            let cx = bounds[0] + bounds[2] * 0.5;
+            if cx < rail_right {
+                // Sidebar's own ScrollArea is allowed to include rail captions.
+                continue;
+            }
+            let cull = padded_xywh(*bounds, SCROLL_LAYER_TEXT_PAD_LOGICAL);
+            let stolen: Vec<String> = captions
+                .iter()
+                .filter(|n| crate::app::draw_cull::text_hits_damage(n, cull))
+                .map(|n| format!("{}@{}", n.text, fmt_rect([n.x, n.y, n.width, n.height])))
+                .collect();
+            assert!(
+                stolen.is_empty(),
+                "scroll-layer text clip for `{id}` includes sidebar captions {stolen:?}\n\
+                 viewport={} cull={}\n rail={}\n metrics={metrics_dump:?}",
+                fmt_rect(*bounds),
+                fmt_rect(cull),
+                fmt_rect(rail_bounds)
+            );
+        }
+
+        let padded_inset = result
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id.contains("scroll-basics"))
+            .map(|(_, b, _, _)| padded_xywh(*b, DAMAGE_CULL_PAD_LOGICAL));
+        let culled = clip_text_nodes_to_rect(
+            &result.text_nodes,
+            padded_xywh(ms_bounds, SCROLL_LAYER_TEXT_PAD_LOGICAL),
+        );
+        let stolen: Vec<String> = culled
+            .iter()
+            .filter(|n| {
+                n.x + n.width * 0.5 < rail_right - 1.0
+                    && (n.text == "布局" || n.text == "Gallery" || n.text == "文本")
+            })
+            .map(|n| format!("{}@{}", n.text, fmt_rect([n.x, n.y, n.width, n.height])))
+            .collect();
+        assert!(
+            stolen.is_empty(),
+            "MessageScroller follow/stick PartialLoad would prepare sidebar captions {stolen:?}\n\
+             ms={} rail={}\n padded_inset={padded_inset:?}\n metrics={metrics_dump:?}",
+            fmt_rect(ms_bounds),
+            fmt_rect(rail_bounds)
+        );
+
+        // Real Send: insert a turn inside MessageScrollerContent (middle of collect
+        // order), then stick-to-end. Index-stable fake push at the vec tail hid this.
+        let before_nodes = result.text_nodes.clone();
+        let before_ranges = result.overlay_split.page_stack_band_ranges();
+        let content = find_slot_ms_mut(&mut root, "message-scroller-content")
+            .expect("message-scroller-content");
+        content.children.push(bubble_turn(GAL_MS_TEXTS.len(), "send-follow-up"));
+        message_scroller_stick_to_end("gal-ms-showcase");
+        sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+        let after = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+        let after_ms = after
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id.contains("gal-ms-showcase"))
+            .map(|(_, b, _, _)| *b)
+            .unwrap_or(ms_bounds);
+        let after_ranges = after.overlay_split.page_stack_band_ranges();
+        let dump_rail = |nodes: &[crate::layout::layout_tree::TextLayoutInfo]| -> Vec<String> {
+            nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.text == "布局" || n.text == "Gallery" || n.text == "文本")
+                .map(|(i, n)| {
+                    format!(
+                        "#{i} {}@{} clip={:?}",
+                        n.text,
+                        fmt_rect([n.x, n.y, n.width, n.height]),
+                        n.clip_bounds
+                    )
+                })
+                .collect()
+        };
+        let stolen_plain = rail_captions_in_submit(
+            &before_nodes,
+            &after.text_nodes,
+            &after_ranges,
+            None,
+        );
+        let stolen_clip = rail_captions_in_submit(
+            &before_nodes,
+            &after.text_nodes,
+            &after_ranges,
+            Some(padded_xywh(after_ms, SCROLL_LAYER_TEXT_PAD_LOGICAL)),
+        );
+        assert!(
+            stolen_plain.is_empty() && stolen_clip.is_empty(),
+            "Gallery Send PartialLoad must not submit sidebar captions\n\
+             plain={stolen_plain:?}\n clip={stolen_clip:?}\n\
+             before_rail={:?}\n after_rail={:?}\n\
+             before_bands={:?} after_bands={:?}\n\
+             ms={} after_ms={}",
+            dump_rail(&before_nodes),
+            dump_rail(&after.text_nodes),
+            before_ranges
+                .iter()
+                .map(|b| b.text)
+                .collect::<Vec<_>>(),
+            after_ranges.iter().map(|b| b.text).collect::<Vec<_>>(),
+            fmt_rect(ms_bounds),
+            fmt_rect(after_ms)
+        );
+    });
+}
+
+fn pack_ms_frag(kids: Vec<Element>) -> Element {
+    let mut frag = Element::new();
+    frag.set_attr("rui_fragment", "1");
+    frag.children(kids)
+}
+
+struct FooterSnap {
+    bounds: [f32; 4],
+    inner_bottom: f32,
+    host_h: f32,
+    host_grow: f32,
+    text_y: f32,
+    layout_y: f32,
+    nav_text_y: f32,
+    sidebar_sy: f32,
+    ms_sy: f32,
+    chrome_y: f32,
+}
+
+fn footer_snap(
+    root: &Element,
+    tree: &LayoutTree,
+    result: &crate::layout::layout_tree::RenderResult,
+) -> FooterSnap {
+    let inner = find_slot_ms(root, "sidebar-inner").expect("sidebar-inner");
+    let host = find_slot_ms(root, "sidebar-content-host").expect("sidebar-content-host");
+    let footer = find_slot_ms(root, "sidebar-footer").expect("sidebar-footer");
+    let inner_b = inner.layout_bounds;
+    let host_b = host.layout_bounds;
+    let footer_b = footer.layout_bounds;
+    let taffy_y = footer
+        .layout_node
+        .and_then(|nid| tree.taffy.layout(nid).ok().map(|l| l.location.y))
+        .unwrap_or(-1.0);
+    let footer_text = result
+        .text_nodes
+        .iter()
+        .filter(|n| n.text == "Gallery")
+        .filter(|n| {
+            n.x + n.width * 0.5 >= footer_b[0] - 1.0
+                && n.x + n.width * 0.5 <= footer_b[0] + footer_b[2] + 1.0
+                && n.y + n.height * 0.5 >= footer_b[1] - 8.0
+                && n.y + n.height * 0.5 <= footer_b[1] + footer_b[3] + 8.0
+        })
+        .min_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+    let nav_gallery = result
+        .text_nodes
+        .iter()
+        .filter(|n| n.text == "Gallery")
+        .filter(|n| {
+            footer_text
+                .map(|f| (n.y - f.y).abs() > 0.5 || (n.x - f.x).abs() > 0.5)
+                .unwrap_or(true)
+        })
+        .min_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+    let chrome_y = result
+        .instances
+        .iter()
+        .filter(|i| {
+            i.rect_size[0] > 8.0
+                && i.rect_size[1] > 8.0
+                && i.rect_pos[0] + i.rect_size[0] * 0.5 >= footer_b[0]
+                && i.rect_pos[0] + i.rect_size[0] * 0.5 <= footer_b[0] + footer_b[2]
+                && i.rect_pos[1] + i.rect_size[1] * 0.5 >= footer_b[1] - 4.0
+                && i.rect_pos[1] + i.rect_size[1] * 0.5 <= footer_b[1] + footer_b[3] + 4.0
+        })
+        .map(|i| i.rect_pos[1])
+        .fold(f32::INFINITY, f32::min);
+    FooterSnap {
+        bounds: footer_b,
+        inner_bottom: inner_b[1] + inner_b[3],
+        host_h: host_b[3],
+        host_grow: host.style.flex_grow,
+        text_y: footer_text.map(|n| n.y).unwrap_or(-1.0),
+        layout_y: taffy_y,
+        nav_text_y: nav_gallery.map(|n| n.y).unwrap_or(-1.0),
+        sidebar_sy: use_signal(
+            &scroll_offset_y_signal_key("gal-shell__sidebar-content"),
+            || 0.0_f32,
+        )
+        .peek(),
+        ms_sy: use_signal(
+            &scroll_offset_y_signal_key("gal-ms-showcase:viewport"),
+            || 0.0_f32,
+        )
+        .peek(),
+        chrome_y,
+    }
+}
+
+fn fmt_footer_snap(s: &FooterSnap) -> String {
+    format!(
+        "footer={} taffy_y={:.1} text_y={:.1} chrome_y={:.1} inner_bottom={:.1} host_h={:.1} grow={:.1} nav_gallery_y={:.1} sidebar_sy={:.1} ms_sy={:.1}",
+        fmt_rect(s.bounds),
+        s.layout_y,
+        s.text_y,
+        s.chrome_y,
+        s.inner_bottom,
+        s.host_h,
+        s.host_grow,
+        s.nav_text_y,
+        s.sidebar_sy,
+        s.ms_sy,
+    )
+}
+
+/// Gallery Send must not lift SidebarFooter (chrome + "Gallery" label) onto 布局/Gallery/文本.
+///
+/// Footer sits *outside* SidebarContent's scroll viewport. Stick-to-end on MessageScroller
+/// used to apply that scroll to the rail and pack the user row over the last nav items,
+/// leaving the footer slot empty.
+#[test]
+fn gallery_send_must_not_lift_sidebar_footer() {
+    use crate::utils::children_none_if_vacuous;
+
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let live_check = Rc::clone(&live);
+
+    let thread = use_signal("gal-ms-footer-lift-thread", || {
+        GAL_MS_TEXTS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
+    });
+
+    mark_next_effect_as_ui_root();
+    let (_owner, _) = create_root(|| {
+        create_effect({
+            let live = Rc::clone(&live);
+            move || {
+                let thread = thread;
+                let rows = reactive_view_sized(
+                    "gal-ms-footer-lift-rows",
+                    "100%",
+                    "max-content",
+                    move || {
+                        let mut col = crate::primitives::r#box::vstack()
+                            .w("100%")
+                            .min_w(0.0)
+                            .h("max-content")
+                            .gap("1.5rem");
+                        for (i, text) in thread.get().iter().enumerate() {
+                            col = col.child(bubble_turn(i, text));
+                        }
+                        col.into()
+                    },
+                );
+                let rows = children_none_if_vacuous(Some(rows))
+                    .expect("rows placeholder must survive ui! vacuous filter");
+                let chat: Element = message_scroller_provider()
+                    .id("gal-ms-showcase")
+                    .auto_scroll(true)
+                    .default_scroll_position("end")
+                    .child(
+                        message_scroller()
+                            .h("100%")
+                            .child(message_scroller_viewport().child(
+                                message_scroller_content().child(rows),
+                            ))
+                            .child(message_scroller_button().direction("end")),
+                    )
+                    .into();
+                let inset_body = crate::primitives::r#box::vstack()
+                    .w("100%")
+                    .min_w(0.0)
+                    .min_h(0.0)
+                    .flex_grow(1.0)
+                    .child(
+                        scroll_area("scroll-basics")
+                            .flex_grow(1.0)
+                            .min_h(0.0)
+                            .overflow_y("auto")
+                            .child(
+                                crate::primitives::r#box::vstack()
+                                    .w("100%")
+                                    .gap("1rem")
+                                    .p("1.5rem")
+                                    .child(Element::new().h(80.0).w("100%"))
+                                    .child(
+                                        Element::new()
+                                            .w("100%")
+                                            .h(384.0)
+                                            .overflow("hidden")
+                                            .child(chat),
+                                    ),
+                            ),
+                    );
+                let nav = pack_ms_frag(vec![
+                    ms_nav_btn("nav-basics", "基础"),
+                    ms_nav_btn("nav-pointer", "指针事件"),
+                    ms_nav_btn("nav-form", "表单"),
+                    ms_nav_btn("nav-overlay", "浮层/反馈"),
+                    ms_nav_btn("nav-data", "数据"),
+                    ms_nav_btn("nav-draw", "绘制"),
+                    ms_nav_btn("nav-nav", "导航"),
+                    ms_nav_btn("nav-layout", "布局"),
+                    ms_nav_btn("nav-gallery", "Gallery"),
+                    ms_nav_btn("nav-text", "文本"),
+                    ms_nav_btn("nav-theme", "主题"),
+                    ms_nav_btn("nav-about", "关于"),
+                ]);
+                let body = sidebar_provider_scope(
+                    "gal-shell",
+                    None,
+                    true,
+                    Some("inset"),
+                    None,
+                    move || {
+                        pack_ms_frag(vec![
+                            Sidebar(SidebarProps {
+                                id: "gal-sidebar".into(),
+                                w: Some("13rem".into()),
+                                side: None,
+                                variant: Some("inset".into()),
+                                collapsible: Some("icon".into()),
+                                class: None,
+                                children: Some(pack_ms_frag(vec![
+                                    SidebarHeader(SidebarHeaderProps {
+                                        class: None,
+                                        children: Some(ms_nav_btn("gal-workspace", "RUI Gallery")),
+                                        base: None,
+                                    }),
+                                    SidebarSeparator(SidebarSeparatorProps {
+                                        class: None,
+                                        children: None,
+                                        base: None,
+                                    }),
+                                    SidebarContent(SidebarContentProps {
+                                        class: None,
+                                        children: Some(nav),
+                                        base: None,
+                                    }),
+                                    SidebarSeparator(SidebarSeparatorProps {
+                                        class: None,
+                                        children: None,
+                                        base: None,
+                                    }),
+                                    SidebarFooter(SidebarFooterProps {
+                                        class: None,
+                                        children: Some(ms_nav_btn("gal-user", "Gallery")),
+                                        base: None,
+                                    }),
+                                ])),
+                                base: None,
+                            }),
+                            SidebarInset(SidebarInsetProps {
+                                variant: Some("inset".into()),
+                                class: None,
+                                children: Some(inset_body.into()),
+                                base: None,
+                            }),
+                        ])
+                    },
+                );
+                *live.borrow_mut() = body;
+            }
+        });
+    });
+
+    let mut tree = LayoutTree::new();
+    let mut before;
+    {
+        let mut root = live_check.borrow_mut();
+        let mut impact = LayoutStatus::Clean;
+        for _ in 0..4 {
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                1280.0,
+                800.0,
+                [0.0, 0.0],
+            );
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+        }
+        message_scroller_stick_to_end("gal-ms-showcase");
+        sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            1280.0,
+            800.0,
+            [0.0, 0.0],
+        );
+        sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+        let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+        before = footer_snap(&root, &tree, &result);
+        assert!(
+            before.bounds[3] > 8.0,
+            "footer must have height before send\n{}",
+            fmt_footer_snap(&before)
+        );
+        assert!(
+            (before.bounds[1] + before.bounds[3] - before.inner_bottom).abs() < 8.0,
+            "footer must sit on the rail bottom before send\n{}",
+            fmt_footer_snap(&before)
+        );
+        assert!(
+            before.bounds[1] > before.nav_text_y + 8.0,
+            "footer must sit below nav Gallery before send\n{}",
+            fmt_footer_snap(&before)
+        );
+
+        // AppState maximize uses the fast collect-skip path (not full Taffy rebuild).
+        tree.set_collect_skip_allowed(true);
+        let _ = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+        let maxed_result = tree.build_and_layout_fast(
+            &mut root,
+            1280.0,
+            1200.0,
+            [-1.0, -1.0],
+            false,
+            false,
+        );
+        let maxed = footer_snap(&root, &tree, &maxed_result);
+        assert!(
+            maxed.bounds[1] > before.bounds[1] + 80.0,
+            "maximize must move Footer down with the rail, not keep the 800h Y\n\
+             before={}\nmaxed={}",
+            fmt_footer_snap(&before),
+            fmt_footer_snap(&maxed)
+        );
+        assert!(
+            (maxed.bounds[1] + maxed.bounds[3] - maxed.inner_bottom).abs() < 8.0,
+            "footer must sit on the maximized rail bottom\n{}",
+            fmt_footer_snap(&maxed)
+        );
+        before = maxed;
+    }
+
+    let mut next = thread.get();
+    next.push("send-follow-up that must not lift the sidebar footer".into());
+    thread.set(next);
+    message_scroller_stick_to_end("gal-ms-showcase");
+
+    {
+        let mut root = live_check.borrow_mut();
+        let mut impact = LayoutStatus::Clean;
+        sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            1280.0,
+            1200.0,
+            [0.0, 0.0],
+        );
+        sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+        let after_result = tree.build_and_layout_fast(
+            &mut root,
+            1280.0,
+            1200.0,
+            [-1.0, -1.0],
+            false,
+            false,
+        );
+        let after = footer_snap(&root, &tree, &after_result);
+        let dump = format!(
+            "before={}\nafter={}",
+            fmt_footer_snap(&before),
+            fmt_footer_snap(&after)
+        );
+        let footer_el = find_slot_ms(&root, "sidebar-footer").expect("sidebar-footer");
+        let ms_bounds = after_result
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id.contains("gal-ms-showcase"))
+            .map(|(_, b, _, _)| *b)
+            .expect("MessageScroller viewport");
+        let footer_key = footer_el
+            .layout_node
+            .map(u64::from)
+            .unwrap_or(0);
+        assert!(
+            !crate::app::damage::paint_dirty_matches_slot(
+                footer_key,
+                ms_bounds,
+                footer_key,
+                after.bounds,
+            ),
+            "recycled Taffy key must not pair the chat island with SidebarFooter\n{dump}"
+        );
+        let collision = crate::app::damage::PaintDirty {
+            key: footer_key,
+            bounds: ms_bounds,
+            kind: crate::app::damage::PaintDirtyKind::Node,
+        };
+        if let Some((rect, _)) = crate::app::draw_cull::node_present_dest_reset(
+            collision.key,
+            collision.bounds,
+            &after_result.node_paints,
+            &after_result.instances,
+        ) {
+            assert!(
+                crate::app::damage::intersect_rects(rect, after.bounds).is_none(),
+                "Send node-present dest-reset wiped SidebarFooter {}\n{dump}",
+                fmt_rect(rect)
+            );
+        }
+        let captured = crate::app::draw_cull::node_present_capture_text_indices(
+            &[collision],
+            &after_result.text_nodes,
+            &after_result.node_paints,
+        );
+        let stolen: Vec<&str> = captured
+            .iter()
+            .filter_map(|&i| after_result.text_nodes.get(i))
+            .filter(|n| n.text == "布局" || n.text == "Gallery" || n.text == "文本")
+            .map(|n| n.text.as_str())
+            .collect();
+        assert!(
+            stolen.is_empty(),
+            "Send node-present must not capture rail captions {stolen:?}\n{dump}"
+        );
+        assert!(
+            after.bounds[1] >= before.bounds[1] - 2.0,
+            "Send/stick-to-end lifted SidebarFooter layout_bounds up\n{dump}"
+        );
+        assert!(
+            after.text_y < 0.0 || after.text_y >= before.text_y - 2.0,
+            "Send/stick-to-end lifted SidebarFooter glyphs up\n{dump}"
+        );
+        assert!(
+            after.chrome_y.is_infinite() || after.chrome_y >= before.chrome_y - 2.0,
+            "Send/stick-to-end lifted SidebarFooter chrome up\n{dump}"
+        );
+        assert!(
+            (after.bounds[1] + after.bounds[3] - after.inner_bottom).abs() < 8.0,
+            "footer left the rail bottom after send (empty footer slot)\n{dump}"
+        );
+        assert!(
+            after.bounds[1] > after.nav_text_y + 8.0,
+            "footer overlapped nav Gallery / 布局 / 文本 after send\n{dump}"
+        );
+        assert!(
+            after.sidebar_sy.abs() < 1.0,
+            "sidebar content picked up MessageScroller scroll\n{dump}"
+        );
+        assert!(
+            (after.host_h - before.host_h).abs() < 2.0,
+            "SidebarContent host height collapsed and packed footer up\n{dump}"
+        );
+        let (skipped, patched) = tree.last_collect_skip_counts();
+        assert!(
+            skipped >= 1,
+            "Send must replay the clean sidebar/footer subtree, not recollect it\n\
+             skipped={skipped} patched={patched}\n{dump}"
+        );
+
+        // AppState restore/minimize is Clean + scroll_only; Footer must follow the rail.
+        let restored_result = tree.build_and_layout_fast(
+            &mut root,
+            1280.0,
+            800.0,
+            [-1.0, -1.0],
+            true,
+            false,
+        );
+        let restored = footer_snap(&root, &tree, &restored_result);
+        assert!(
+            (restored.bounds[1] + restored.bounds[3] - restored.inner_bottom).abs() < 8.0,
+            "restore/minimize must sit Footer on the short rail bottom\n{}",
+            fmt_footer_snap(&restored)
+        );
+        assert!(
+            restored.bounds[1] + 80.0 < before.bounds[1],
+            "restore/minimize must move Footer up with the rail, not keep the 1200h Y\n\
+             maxed={}\nrestored={}",
+            fmt_footer_snap(&before),
+            fmt_footer_snap(&restored)
+        );
+    }
+
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+}
+
+fn publish_scroll_metrics(metrics: &[(String, [f32; 4], [f32; 2], [f32; 2])]) {
+    for (rest, bounds, _max, content) in metrics {
+        use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).set_silent(bounds[2]);
+        use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).set_silent(bounds[3]);
+        use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).set_silent(content[0]);
+        use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).set_silent(content[1]);
+    }
+}
+
+fn scroll_metric<'a>(
+    metrics: &'a [(String, [f32; 4], [f32; 2], [f32; 2])],
+    needle: &str,
+) -> Option<&'a (String, [f32; 4], [f32; 2], [f32; 2])> {
+    metrics.iter().find(|(id, ..)| id.contains(needle))
+}
+
+/// AppState maximize is Clean + scroll_only + overlay collect. Last-frame sidebar
+/// signals still say "overflow" from the short window; MessageScroller follow must
+/// not keep that overlay track painted on the tall rail.
+#[test]
+fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
+    use crate::utils::children_none_if_vacuous;
+
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let live_check = Rc::clone(&live);
+
+    let thread = use_signal("gal-ms-sb-max-thread", || {
+        GAL_MS_TEXTS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
+    });
+
+    mark_next_effect_as_ui_root();
+    let (_owner, _) = create_root(|| {
+        create_effect({
+            let live = Rc::clone(&live);
+            move || {
+                let thread = thread;
+                let rows = reactive_view_sized(
+                    "gal-ms-sb-max-rows",
+                    "100%",
+                    "max-content",
+                    move || {
+                        let mut col = crate::primitives::r#box::vstack()
+                            .w("100%")
+                            .min_w(0.0)
+                            .h("max-content")
+                            .gap("1.5rem");
+                        for (i, text) in thread.get().iter().enumerate() {
+                            col = col.child(bubble_turn(i, text));
+                        }
+                        col.into()
+                    },
+                );
+                let rows = children_none_if_vacuous(Some(rows))
+                    .expect("rows placeholder must survive ui! vacuous filter");
+                let chat: Element = message_scroller_provider()
+                    .id("gal-ms-showcase")
+                    .auto_scroll(true)
+                    .default_scroll_position("end")
+                    .child(
+                        message_scroller()
+                            .h("100%")
+                            .child(message_scroller_viewport().child(
+                                message_scroller_content().child(rows),
+                            ))
+                            .child(message_scroller_button().direction("end")),
+                    )
+                    .into();
+                let inset_body = crate::primitives::r#box::vstack()
+                    .w("100%")
+                    .min_w(0.0)
+                    .min_h(0.0)
+                    .flex_grow(1.0)
+                    .child(
+                        scroll_area("scroll-basics")
+                            .flex_grow(1.0)
+                            .min_h(0.0)
+                            .overflow_y("auto")
+                            .child(
+                                crate::primitives::r#box::vstack()
+                                    .w("100%")
+                                    .gap("1rem")
+                                    .p("1.5rem")
+                                    .child(Element::new().h(80.0).w("100%"))
+                                    .child(
+                                        Element::new()
+                                            .w("100%")
+                                            .h(384.0)
+                                            .overflow("hidden")
+                                            .child(chat),
+                                    )
+                                    .child(Element::new().h(2000.0).w("100%")),
+                            ),
+                    );
+                let nav_items = pack_ms_frag(vec![
+                    ms_nav_btn("nav-basics", "基础"),
+                    ms_nav_btn("nav-pointer", "指针事件"),
+                    ms_nav_btn("nav-form", "表单"),
+                    ms_nav_btn("nav-overlay", "浮层/反馈"),
+                    ms_nav_btn("nav-data", "数据"),
+                    ms_nav_btn("nav-draw", "绘制"),
+                    ms_nav_btn("nav-nav", "导航"),
+                    ms_nav_btn("nav-layout", "布局"),
+                    ms_nav_btn("nav-gallery", "Gallery"),
+                    ms_nav_btn("nav-text", "文本"),
+                    ms_nav_btn("nav-theme", "主题"),
+                    ms_nav_btn("nav-about", "关于"),
+                    ms_nav_btn("nav-extra-a", "额外甲"),
+                    ms_nav_btn("nav-extra-b", "额外乙"),
+                    ms_nav_btn("nav-extra-c", "额外丙"),
+                ]);
+                let nav: Element = sidebar_group()
+                    .child(sidebar_group_label().text("导航"))
+                    .child(sidebar_group_content().child(sidebar_menu().child(nav_items)))
+                    .into();
+                let body = sidebar_provider_scope(
+                    "gal-shell",
+                    None,
+                    true,
+                    Some("inset"),
+                    None,
+                    move || {
+                        pack_ms_frag(vec![
+                            Sidebar(SidebarProps {
+                                id: "gal-sidebar".into(),
+                                w: Some("13rem".into()),
+                                side: None,
+                                variant: Some("inset".into()),
+                                collapsible: Some("icon".into()),
+                                class: None,
+                                children: Some(pack_ms_frag(vec![
+                                    SidebarHeader(SidebarHeaderProps {
+                                        class: None,
+                                        children: Some(ms_nav_btn("gal-workspace", "RUI Gallery")),
+                                        base: None,
+                                    }),
+                                    SidebarSeparator(SidebarSeparatorProps {
+                                        class: None,
+                                        children: None,
+                                        base: None,
+                                    }),
+                                    SidebarContent(SidebarContentProps {
+                                        class: None,
+                                        children: Some(nav),
+                                        base: None,
+                                    }),
+                                    SidebarSeparator(SidebarSeparatorProps {
+                                        class: None,
+                                        children: None,
+                                        base: None,
+                                    }),
+                                    SidebarFooter(SidebarFooterProps {
+                                        class: None,
+                                        children: Some(ms_nav_btn("gal-user", "Gallery")),
+                                        base: None,
+                                    }),
+                                ])),
+                                base: None,
+                            }),
+                            SidebarInset(SidebarInsetProps {
+                                variant: Some("inset".into()),
+                                class: None,
+                                children: Some(inset_body.into()),
+                                base: None,
+                            }),
+                        ])
+                    },
+                );
+                *live.borrow_mut() = body;
+            }
+        });
+    });
+
+    let mut tree = LayoutTree::new();
+    const SIDEBAR_REST: &str = "gal-shell__sidebar-content";
+    const MS_REST: &str = "gal-ms-showcase:viewport";
+    {
+        let mut root = live_check.borrow_mut();
+        let mut impact = LayoutStatus::Clean;
+        for _ in 0..3 {
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                1280.0,
+                360.0,
+                [0.0, 0.0],
+            );
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _ = tree.build_and_layout(&mut root, 1280.0, 360.0, [-1.0, -1.0]);
+        }
+        message_scroller_stick_to_end("gal-ms-showcase");
+        sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            1280.0,
+            360.0,
+            [0.0, 0.0],
+        );
+        sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+        let short = tree.build_and_layout(&mut root, 1280.0, 360.0, [-1.0, -1.0]);
+        publish_scroll_metrics(&short.scroll_metrics);
+
+        let short_sb = scroll_metric(&short.scroll_metrics, SIDEBAR_REST)
+            .expect("sidebar metrics at 360h");
+        let short_ms = scroll_metric(&short.scroll_metrics, MS_REST).expect("ms metrics at 360h");
+        assert!(
+            short_sb.2[1] > 8.0,
+            "short window must overflow SidebarContent so maximize can inherit stale overlay signals, max={:?} vh={} ch={}",
+            short_sb.2,
+            short_sb.1[3],
+            short_sb.3[1]
+        );
+        assert!(
+            short_ms.2[1] > 8.0,
+            "MessageScroller must stay independently scrollable, max={:?}",
+            short_ms.2
+        );
+
+        tree.set_collect_skip_allowed(true);
+        let maxed = tree.build_and_layout_fast(
+            &mut root,
+            1280.0,
+            1200.0,
+            [-1.0, -1.0],
+            true,
+            true,
+        );
+        let maxed_sb = scroll_metric(&maxed.scroll_metrics, SIDEBAR_REST)
+            .expect("sidebar metrics at 1200h");
+        let maxed_ms = scroll_metric(&maxed.scroll_metrics, MS_REST).expect("ms metrics at 1200h");
+        let page = scroll_metric(&maxed.scroll_metrics, "scroll-basics");
+        let dump = format!(
+            "short_sb=bounds={:?} max={:?} content={:?}\n\
+             maxed_sb=bounds={:?} max={:?} content={:?}\n\
+             short_ms=max={:?} content={:?}\n\
+             maxed_ms=max={:?} content={:?}\n\
+             page={:?}",
+            short_sb.1,
+            short_sb.2,
+            short_sb.3,
+            maxed_sb.1,
+            maxed_sb.2,
+            maxed_sb.3,
+            short_ms.2,
+            short_ms.3,
+            maxed_ms.2,
+            maxed_ms.3,
+            page.map(|p| (p.1, p.2, p.3)),
+        );
+        assert!(
+            maxed_sb.2[1] < 0.5,
+            "maximized rail must not stay scrollable\n{dump}"
+        );
+        assert!(
+            maxed_ms.2[1] > 8.0,
+            "MessageScroller overflow must not be folded into the sidebar\n{dump}"
+        );
+        assert!(
+            (maxed_sb.3[1] - maxed_ms.3[1]).abs() > 40.0,
+            "sidebar content_h must not copy MessageScroller content_h\n{dump}"
+        );
+
+        let rail_right = maxed_sb.1[0] + maxed_sb.1[2];
+        let thin_bars: Vec<_> = maxed
+            .instances
+            .iter()
+            .filter(|i| {
+                i.rect_size[0] > 4.0 && i.rect_size[0] < 28.0 && i.rect_size[1] > 80.0
+            })
+            .map(|i| {
+                (
+                    i.rect_pos[0],
+                    i.rect_pos[1],
+                    i.rect_size[0],
+                    i.rect_size[1],
+                    i.color[3],
+                )
+            })
+            .collect();
+        let rail_bars: Vec<_> = thin_bars
+            .iter()
+            .filter(|b| b.0 < rail_right + 16.0)
+            .cloned()
+            .collect();
+        assert!(
+            rail_bars.is_empty(),
+            "maximize painted a scrollbar on the sidebar edge (MessageScroller must not \
+             trigger the rail overlay)\nrail_right={rail_right:.1} bars={rail_bars:?}\n\
+             all_thin={thin_bars:?}\n{dump}"
         );
     }
 

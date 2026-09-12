@@ -4,12 +4,14 @@ mod box_model_gallery_colors;
 mod canvas_scene;
 mod collect_clip_cull;
 mod collect_skip;
+mod css_anim_node_present;
 mod css_filter_overflow;
 mod dialog_first_open_cost;
 mod gallery_inset_overflow;
 mod headless_smoke;
 mod keyed_reorder;
 mod local_scrim_contrast;
+mod node_present_sidebar_leak;
 
 mod message_scroller_scroll;
 mod path_batch;
