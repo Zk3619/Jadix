@@ -20,7 +20,13 @@ pub(super) fn tick_input_drag_select_at(
     rest: &str,
     anchor: usize,
 ) -> bool {
+    let dt = crate::utils::text_field::take_text_drag_scroll_dt(dt);
     let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, y, dt);
+    let hscroll = if matches!(hscroll, super::tree_hit::TextDragHScrollTick::Idle) {
+        super::tree_hit::nudge_input_hscroll_for_drag(root, rest, x, dt)
+    } else {
+        hscroll
+    };
     let vscroll = super::tree_hit::nudge_textarea_vscroll_for_drag(root, rest, y, dt);
     let scrolled = matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
         || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
@@ -339,6 +345,7 @@ impl super::App {
 
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         super::window_scope::force_secondary_id(id);
+        super::input_controller::clear_text_edit_frame_mutated();
         let suspended = self.is_suspended;
         let (has_caret, render_ok) = {
             let owner_slot = &mut self.ime_owner_window;
@@ -346,6 +353,7 @@ impl super::App {
             let Some(sec) = secs.get_mut(&id) else {
                 return;
             };
+            super::input_controller::clear_text_edit_frame_mutated();
             let inner = sec.window.inner_size();
             if suspended || inner.width == 0 || inner.height == 0 {
                 if !suspended && (inner.width == 0 || inner.height == 0) {
@@ -2687,6 +2695,7 @@ impl super::App {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
+        super::input_controller::clear_text_edit_frame_mutated();
         #[cfg(debug_assertions)]
         {
             let hot_reload = self.hot_reload.drain_pending();

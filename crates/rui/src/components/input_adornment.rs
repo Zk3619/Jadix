@@ -338,7 +338,7 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
     use crate::core::tree::LayoutStatus;
     use crate::style::{
         apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_destructive_color,
-        focus_ring_params, focus_ring_shadow_matches_color, focus_ring_style, parse_color,
+        focus_ring_shadow_matches_color, parse_color,
     };
 
     let fid = el
@@ -371,17 +371,11 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
             focus_ring_color()
         };
         if !focus_ring_shadow_matches_color(el, true, ring) {
-            let (blur, spread) = focus_ring_params(focus_ring_style());
-            let geom_same = (el.style.shadow_blur - blur).abs() <= 0.01
-                && (el.style.shadow_spread - spread).abs() <= 0.01
-                && el.style.shadow_offset == [0.0, 0.0]
-                && !el.style.shadow_inset;
             apply_focus_ring_shadow_color(el, true, false, ring);
-            status = status.merge(if geom_same {
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::LayoutChanged
-            });
+            // Outset ring is paint chrome. LayoutChanged here sets
+            // `page_layout_changed` → window FullClear (Gallery Kbd Search
+            // leftover glyphs + Marker spin jump).
+            status = status.merge(LayoutStatus::StyleChanged);
         }
     } else {
         let want_color = tokens::shadow_rgba(tokens::Elevation::Xs);
@@ -400,12 +394,11 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
             el.style.shadow_offset = [0.0, 0.0];
             el.style.shadow_spread = 0.0;
             el.style.shadow_inset = false;
-            status = status.merge(if geom_ok {
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::LayoutChanged
-            });
+            status = status.merge(LayoutStatus::StyleChanged);
         }
+    }
+    if status != LayoutStatus::Clean {
+        crate::app::damage::push_frame_paint_element(el);
     }
     status
 }

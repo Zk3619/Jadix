@@ -631,8 +631,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // Dialog/Sheet/Drawer: `request_redraw` inside RedrawRequested / about_to_wait
         // is coalesced on Windows. Opening arms a one-shot `Poll` so caret/long-press
         // `WaitUntil` (~500ms) cannot be the next wake.
+        // Hold-repeat typing uses the same Poll: otherwise caret WaitUntil lets the OS
+        // queue many KeyDowns and they all land in one paint (batched glyphs).
+        let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         let force_immediate =
-            crate::utils::modal_motion::take_modal_force_immediate_wake();
+            crate::utils::modal_motion::take_modal_force_immediate_wake() || text_edit_pump;
         if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame()
         {
             if let Some(state) = (*self.state.borrow()).as_ref() {

@@ -9,6 +9,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::core::reactivity::{use_signal, Signal};
 
@@ -466,6 +467,24 @@ pub fn ensure_caret_visible_scroll_y_at_line(
     }
 }
 
+/// Max `scroll_x` that keeps `content_w` (+ caret pad) inside `viewport_w`.
+pub fn max_caret_scroll_x(content_w: f32, viewport_w: f32) -> f32 {
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return 0.0;
+    }
+    (content_w + TEXT_EDIT_CARET_W - viewport_w).max(0.0)
+}
+
+/// Drop leftover pan when the clip grows (window resize) without moving the caret.
+pub fn clamp_caret_scroll_x(content_w: f32, viewport_w: f32, scroll_x: f32) -> f32 {
+    let max_sx = max_caret_scroll_x(content_w, viewport_w);
+    if max_sx < 0.5 {
+        0.0
+    } else {
+        scroll_x.clamp(0.0, max_sx)
+    }
+}
+
 /// Keep `anchor_x` (caret / selection end) inside the viewport along X.
 ///
 /// `anchor_x` and `content_w` share a coordinate space whose origin is the scroll
@@ -481,8 +500,7 @@ pub fn ensure_caret_visible_scroll_x(
     scroll_x: f32,
 ) -> f32 {
     let pad = TEXT_EDIT_CARET_W;
-    // Extra `pad` so a caret sitting on `content_w` is fully inside the clip.
-    let max_sx = (content_w + pad - viewport_w).max(0.0);
+    let max_sx = max_caret_scroll_x(content_w, viewport_w);
     if !viewport_w.is_finite() || viewport_w < 4.0 {
         return if scroll_x > 0.5 {
             0.0
@@ -565,6 +583,10 @@ pub fn input_caret_preferred_x_signal_key(id: &str) -> String {
 pub(crate) fn input_text_template_id(id: &str) -> String {
     format!("__rui_input:{id}:text")
 }
+
+pub(crate) fn input_rest_from_text_template_id(tid: &str) -> Option<&str> {
+    tid.strip_prefix("__rui_input:")?.strip_suffix(":text")
+}
 pub(crate) fn input_clear_template_id(id: &str) -> String {
     format!("__rui_input:{id}:clear")
 }
@@ -586,11 +608,31 @@ thread_local! {
     /// True while an input/textarea text drag-select is active. Paint must not run
     /// `ensure_caret_visible_scroll_x` in this window — it fights edge auto-scroll.
     static TEXT_DRAG_SELECT: Cell<bool> = const { Cell::new(false) };
+    /// Last edge-scroll tick. Shared so CursorMoved + Wait + Redraw do not
+    /// each apply a full-frame `dt` in the same instant (that flattened the curve).
+    static TEXT_DRAG_SCROLL_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 /// Mark / clear text drag-select (window mouse down/up on input caret drag).
 pub(crate) fn set_text_drag_select_active(active: bool) {
     TEXT_DRAG_SELECT.with(|c| c.set(active));
+    TEXT_DRAG_SCROLL_AT.with(|c| c.set(None));
+}
+
+/// Consume elapsed time since the last edge-scroll tick. First tick of a drag
+/// uses `suggested` (usually the frame `dt`). Later calls in the same instant
+/// return ~0 so mouse-move storms cannot stack full-frame steps.
+pub(crate) fn take_text_drag_scroll_dt(suggested: f32) -> f32 {
+    let now = Instant::now();
+    let dt = TEXT_DRAG_SCROLL_AT.with(|c| {
+        let prev = c.get();
+        c.set(Some(now));
+        match prev {
+            Some(t) => now.duration_since(t).as_secs_f32(),
+            None => suggested.max(0.0),
+        }
+    });
+    dt.min(0.05)
 }
 
 pub(crate) fn text_drag_select_active() -> bool {
@@ -1022,5 +1064,19 @@ mod tests {
             hard_line_body_at_y("short\nlong line here", 25.0, 21.0),
             "long line here"
         );
+    }
+
+    #[test]
+    fn clamp_caret_scroll_x_drops_pan_when_viewport_grows() {
+        assert_eq!(
+            clamp_caret_scroll_x(400.0, 80.0, 322.0),
+            max_caret_scroll_x(400.0, 80.0)
+        );
+        let after_grow = clamp_caret_scroll_x(400.0, 320.0, 322.0);
+        assert!(
+            after_grow < 90.0,
+            "widening the clip must drop leftover pan, got {after_grow}"
+        );
+        assert_eq!(clamp_caret_scroll_x(400.0, 420.0, 322.0), 0.0);
     }
 }

@@ -19,6 +19,44 @@ use crate::utils::keyboard::{
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
+use std::cell::Cell;
+
+thread_local! {
+    /// Hold-repeat (`event.repeat`) coalescing: winit delivers every queued KeyDown
+    /// before `RedrawRequested`, so applying all of them makes N glyphs appear at once.
+    static TEXT_EDIT_FRAME_MUTATED: Cell<bool> = const { Cell::new(false) };
+    /// One-shot `Poll` so caret `WaitUntil` (~520ms) cannot delay the paint after a mutation.
+    static TEXT_EDIT_FORCE_IMMEDIATE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn mark_text_edit_frame_mutated() {
+    TEXT_EDIT_FRAME_MUTATED.with(|c| c.set(true));
+    TEXT_EDIT_FORCE_IMMEDIATE.with(|c| c.set(true));
+}
+
+pub(super) fn take_text_edit_force_immediate() -> bool {
+    TEXT_EDIT_FORCE_IMMEDIATE.with(|c| c.replace(false))
+}
+
+pub(super) fn clear_text_edit_frame_mutated() {
+    TEXT_EDIT_FRAME_MUTATED.with(|c| c.set(false));
+}
+
+/// Printable insert / Backspace / Delete — OS key-repeat of these must be 1-per-frame.
+fn is_text_hold_mutation_key(key: &Key) -> bool {
+    match key {
+        Key::Named(NamedKey::Backspace | NamedKey::Delete | NamedKey::Space | NamedKey::Enter) => {
+            true
+        }
+        Key::Character(s) => !s.is_empty() && s.chars().any(|c| !c.is_control()),
+        _ => false,
+    }
+}
+
+/// `false` → consume the OS repeat without mutating (paint the previous mutation first).
+fn text_edit_repeat_allow(repeat: bool, is_mutation_key: bool, already_mutated: bool) -> bool {
+    !(repeat && is_mutation_key && already_mutated)
+}
 
 fn input_type_for(rest: &str) -> InputType {
     let key = input_type_signal_key(rest);
@@ -46,6 +84,7 @@ fn commit_user_edit(
     crate::utils::text_field::commit_value_sig(rest, val_sig, new_value);
     text_sel_sig.set(None);
     caret_sig.set(Some(new_caret));
+    mark_text_edit_frame_mutated();
     #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::note_field_after_edit(rest);
     #[cfg(not(feature = "text-undo"))]
@@ -55,6 +94,29 @@ fn commit_user_edit(
 fn is_tab_key(key: &Key) -> bool {
     matches!(key, Key::Named(NamedKey::Tab))
         || matches!(key, Key::Character(s) if s.as_str() == "\t")
+}
+
+/// Arrow / Home / End / Page: need visual-line metrics. Insert / Backspace / Delete do not.
+fn text_edit_key_needs_visual_metrics(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::Named(
+            NamedKey::ArrowLeft
+                | NamedKey::ArrowRight
+                | NamedKey::ArrowUp
+                | NamedKey::ArrowDown
+                | NamedKey::Home
+                | NamedKey::End
+                | NamedKey::PageUp
+                | NamedKey::PageDown
+        )
+    )
+}
+
+/// Caret move, Delete, or Insert — not printable typing / Backspace (those have their own path).
+fn text_edit_key_is_caret_or_delete(key: &Key) -> bool {
+    text_edit_key_needs_visual_metrics(key)
+        || matches!(key, Key::Named(NamedKey::Delete | NamedKey::Insert))
 }
 
 /// Platforms such as Windows come with `event.text` (Esc → U+001B) for Named keys such as Esc / F keys.
@@ -459,6 +521,15 @@ impl super::App {
                             .map(|r| (r, true))
                     });
                 if let Some((rest, multiline)) = edit_target {
+                    if event.state == ElementState::Pressed
+                        && !text_edit_repeat_allow(
+                            event.repeat,
+                            is_text_hold_mutation_key(&event.logical_key),
+                            TEXT_EDIT_FRAME_MUTATED.with(|c| c.get()),
+                        )
+                    {
+                        return true;
+                    }
                     let value_key = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&value_key, String::new);
                     let pk = crate::components::input::input_preedit_signal_key(rest);
@@ -468,57 +539,6 @@ impl super::App {
                     let tsk = crate::components::input::input_selection_signal_key(rest);
                     let text_sel_sig =
                         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
-                    let wrap_w = if multiline {
-                        crate::core::reactivity::use_signal(
-                            &crate::utils::text_field::textarea_wrap_width_signal_key(rest),
-                            || 0.0_f32,
-                        )
-                        .peek()
-                    } else {
-                        0.0
-                    };
-                    // Live leaf metrics (avoid hardcoded 0.875×16).
-                    let (nav_size, nav_weight, nav_lh, nav_wrap) = if allow_primary_tree {
-                        (*self.state.borrow()).as_ref().map_or(
-                            (14.0_f32, 400_u16, 21.0_f32, crate::text::WrapMode::Word),
-                            |st| {
-                                super::tree_hit::find_input_text_leaf_for_rest(
-                                    &st.root_element,
-                                    None,
-                                    rest,
-                                )
-                                .map(|(_, _, style, _)| {
-                                    let sz = style.size_resolved().max(1.0);
-                                    let w = style.weight_resolved().max(100);
-                                    let lh = style
-                                        .line_height_px
-                                        .unwrap_or_else(|| {
-                                            crate::utils::text_field::text_edit_line_box_px(
-                                                sz, None, None,
-                                            )
-                                        })
-                                        .max(1.0);
-                                    let wrap = if style.white_space
-                                        == crate::style::WhiteSpace::Nowrap
-                                    {
-                                        crate::text::WrapMode::None
-                                    } else {
-                                        crate::core::reactivity::use_signal(
-                                            &crate::utils::text_field::textarea_wrap_mode_signal_key(
-                                                rest,
-                                            ),
-                                            || crate::text::WrapMode::Word,
-                                        )
-                                        .peek()
-                                    };
-                                    (sz, w, lh, wrap)
-                                })
-                                .unwrap_or((14.0, 400, 21.0, crate::text::WrapMode::Word))
-                            },
-                        )
-                    } else {
-                        (14.0, 400, 21.0, crate::text::WrapMode::Word)
-                    };
                     let pref_x_key =
                         crate::utils::text_field::input_caret_preferred_x_signal_key(rest);
                     let pref_x_sig =
@@ -660,12 +680,71 @@ impl super::App {
                             }
                         }
                     }
-                    if !composing {
+                    if !composing && text_edit_key_is_caret_or_delete(&event.logical_key) {
+                        let needs_visual = text_edit_key_needs_visual_metrics(&event.logical_key);
+                        let wrap_w = if needs_visual && multiline {
+                            crate::core::reactivity::use_signal(
+                                &crate::utils::text_field::textarea_wrap_width_signal_key(rest),
+                                || 0.0_f32,
+                            )
+                            .peek()
+                        } else {
+                            0.0
+                        };
+                        // Live leaf metrics (avoid hardcoded 0.875×16). Skip the tree walk
+                        // on insert / Backspace / Delete hold-repeat — those keys never
+                        // consume nav_size / visual lines.
+                        let (nav_size, nav_weight, nav_lh, nav_wrap) = if needs_visual
+                            && allow_primary_tree
+                        {
+                            (*self.state.borrow()).as_ref().map_or(
+                                (14.0_f32, 400_u16, 21.0_f32, crate::text::WrapMode::Word),
+                                |st| {
+                                    super::tree_hit::find_input_text_leaf_for_rest(
+                                        &st.root_element,
+                                        None,
+                                        rest,
+                                    )
+                                    .map(|(_, _, style, _)| {
+                                        let sz = style.size_resolved().max(1.0);
+                                        let w = style.weight_resolved().max(100);
+                                        let lh = style
+                                            .line_height_px
+                                            .unwrap_or_else(|| {
+                                                crate::utils::text_field::text_edit_line_box_px(
+                                                    sz, None, None,
+                                                )
+                                            })
+                                            .max(1.0);
+                                        let wrap = if style.white_space
+                                            == crate::style::WhiteSpace::Nowrap
+                                        {
+                                            crate::text::WrapMode::None
+                                        } else {
+                                            crate::core::reactivity::use_signal(
+                                                &crate::utils::text_field::textarea_wrap_mode_signal_key(
+                                                    rest,
+                                                ),
+                                                || crate::text::WrapMode::Word,
+                                            )
+                                            .peek()
+                                        };
+                                        (sz, w, lh, wrap)
+                                    })
+                                    .unwrap_or((14.0, 400, 21.0, crate::text::WrapMode::Word))
+                                },
+                            )
+                        } else {
+                            (14.0, 400, 21.0, crate::text::WrapMode::Word)
+                        };
                         let s = val_sig.get();
                         let caret = caret_sig.get().unwrap_or(s.len()).min(s.len());
                         let caret = s.floor_char_boundary(caret);
                         let shift = self.modifiers.shift_key();
-                        let soft_visual_model = if multiline && wrap_w > 1.0 && nav_wrap.soft_wrap()
+                        let soft_visual_model = if needs_visual
+                            && multiline
+                            && wrap_w > 1.0
+                            && nav_wrap.soft_wrap()
                         {
                             Some(crate::text::build_visual_lines(
                                 &s,
@@ -1302,5 +1381,95 @@ mod tests {
         assert!(!named_key_blocks_text_insert(&Key::Character(
             "\u{1b}".into()
         )));
+    }
+
+    #[test]
+    fn hold_repeat_insert_and_delete_skip_visual_metrics() {
+        assert!(!text_edit_key_needs_visual_metrics(&Key::Character(
+            "a".into()
+        )));
+        assert!(!text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::Backspace
+        )));
+        assert!(!text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::Delete
+        )));
+        assert!(!text_edit_key_is_caret_or_delete(&Key::Character(
+            "a".into()
+        )));
+        assert!(!text_edit_key_is_caret_or_delete(&Key::Named(
+            NamedKey::Backspace
+        )));
+        assert!(text_edit_key_is_caret_or_delete(&Key::Named(
+            NamedKey::Delete
+        )));
+        assert!(text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::ArrowLeft
+        )));
+        assert!(text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::ArrowDown
+        )));
+        assert!(text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::Home
+        )));
+        assert!(text_edit_key_needs_visual_metrics(&Key::Named(
+            NamedKey::PageUp
+        )));
+    }
+
+    #[test]
+    fn hold_repeat_coalesces_to_one_mutation_per_frame() {
+        clear_text_edit_frame_mutated();
+        let insert = Key::Character("a".into());
+        let backspace = Key::Named(NamedKey::Backspace);
+        assert!(is_text_hold_mutation_key(&insert));
+        assert!(is_text_hold_mutation_key(&backspace));
+        assert!(!is_text_hold_mutation_key(&Key::Named(NamedKey::ArrowLeft)));
+
+        assert!(
+            text_edit_repeat_allow(false, true, false),
+            "first keydown (repeat=false) always applies"
+        );
+        mark_text_edit_frame_mutated();
+        let already = TEXT_EDIT_FRAME_MUTATED.with(|c| c.get());
+        assert!(already);
+        assert!(
+            !text_edit_repeat_allow(true, true, already),
+            "queued OS repeats in the same pump must not mutate"
+        );
+        assert!(!text_edit_repeat_allow(true, true, already));
+        assert!(
+            text_edit_repeat_allow(true, false, already),
+            "arrow repeats are not hold-insert mutations"
+        );
+        clear_text_edit_frame_mutated();
+        assert!(
+            text_edit_repeat_allow(true, true, TEXT_EDIT_FRAME_MUTATED.with(|c| c.get())),
+            "after redraw, the next repeat applies once"
+        );
+        let _ = take_text_edit_force_immediate();
+    }
+
+    #[test]
+    fn hold_repeat_burst_applies_once_until_redraw() {
+        clear_text_edit_frame_mutated();
+        let _ = take_text_edit_force_immediate();
+        let mut applied = 0_u32;
+        for i in 0..12 {
+            let repeat = i > 0;
+            let already = TEXT_EDIT_FRAME_MUTATED.with(|c| c.get());
+            if text_edit_repeat_allow(repeat, true, already) {
+                mark_text_edit_frame_mutated();
+                applied += 1;
+            }
+        }
+        assert_eq!(
+            applied, 1,
+            "12 OS repeats in one pump must show as one glyph, not a batch"
+        );
+        assert!(take_text_edit_force_immediate());
+        clear_text_edit_frame_mutated();
+        let already = TEXT_EDIT_FRAME_MUTATED.with(|c| c.get());
+        assert!(text_edit_repeat_allow(true, true, already));
     }
 }

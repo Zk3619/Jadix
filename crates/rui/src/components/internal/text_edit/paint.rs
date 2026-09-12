@@ -307,7 +307,9 @@ fn sync_one_text_edit_paint(
     {
         if text_el.text.as_deref() != Some(display_text.as_str()) {
             text_el.text = Some(display_text.clone());
-            text_layout = true;
+            // Display string is paint-only for a fixed Input box (overflow + caret
+            // scroll). Promoting this to LayoutChanged FullClears the gallery.
+            text_style = true;
         }
         let want_suffix = None;
         if text_el.text_shape_suffix != want_suffix {
@@ -442,6 +444,10 @@ fn sync_one_text_edit_paint(
                     sx_sig.set(0.0);
                 }
                 0.0
+            } else if crate::utils::text_field::text_drag_select_active() {
+                // Drag-select edge auto-scroll owns `sx`. `ensure_caret_visible_scroll_x`
+                // would jump to the line head/tail as soon as the hit lands on the first/last glyph.
+                current
             } else {
                 #[cfg(test)]
                 INPUT_SCROLL_PREPARE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
@@ -451,6 +457,9 @@ fn sync_one_text_edit_paint(
                     desc.line_height_px,
                     desc.leading_scale,
                 );
+                // One shape of the live string. Hold-key typing parks the caret at the
+                // end — prefix width == content width, so a second `prepare(prefix)`
+                // was a full reshape (cache miss) of the same text every repeat.
                 let prepared =
                     crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, lh);
                 let content_w = crate::text::intrinsic_width(&prepared);
@@ -461,15 +470,14 @@ fn sync_one_text_edit_paint(
                     raw_anchor.min(display_text.len())
                 };
                 anchor_byte = display_text.floor_char_boundary(anchor_byte.min(display_text.len()));
-                #[cfg(test)]
-                INPUT_SCROLL_PREPARE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
-                let prefix = crate::text::prepare(
-                    &display_text[..anchor_byte.min(display_text.len())],
+                let anchor_x = caret_scroll_anchor_x(
+                    &display_text,
+                    anchor_byte,
+                    content_w,
                     desc.text_size_px,
                     desc.font_weight,
                     lh,
                 );
-                let anchor_x = crate::text::intrinsic_width(&prefix);
                 let next = ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current);
                 if (next - current).abs() > 0.05 {
                     sx_sig.set(next);
@@ -859,20 +867,58 @@ fn sync_one_text_edit_paint(
     let style_hit = !layout_hit && (container_style || text_style || adorn_style);
     if layout_hit {
         *impact = impact.merge(LayoutStatus::LayoutChanged);
+        push_text_edit_paint_dirty(el);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
-        // Local dirty for invalid/focus border paint (WP-2.2 PartialLoad).
-        let b = el.layout_bounds;
-        if b[2] > 0.0 && b[3] > 0.0 {
-            let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
-            crate::app::damage::push_frame_paint_damage([
-                b[0] - pad,
-                b[1] - pad,
-                b[2] + pad * 2.0,
-                b[3] + pad * 2.0,
-            ]);
-        }
+        push_text_edit_paint_dirty(el);
     }
+}
+
+/// Caret-x for single-line overflow pan. End/start skip a second full reshape;
+/// mid-string uses prefix advance (not `prepare`, which would cache-miss every length).
+fn caret_scroll_anchor_x(
+    display_text: &str,
+    anchor_byte: usize,
+    content_w: f32,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+) -> f32 {
+    let end = display_text.floor_char_boundary(anchor_byte.min(display_text.len()));
+    if end == 0 {
+        0.0
+    } else if end >= display_text.len() {
+        content_w
+    } else {
+        crate::text::measure_prefix_advance(&display_text[..end], size, weight, line_height)
+    }
+}
+
+fn push_text_edit_paint_dirty(el: &Element) {
+    let b = el.layout_bounds;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return;
+    }
+    let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
+    crate::app::damage::push_frame_paint_key(
+        crate::app::damage::paint_element_key(el),
+        [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
+    );
+}
+
+/// Caret on/off is paint-only. Do not `mark_full_redraw` — that clears every other
+/// node's dirty list (spin, hover) and FullClears the gallery.
+pub(crate) fn push_focused_text_edit_caret_damage(el: &Element) {
+    if el.input_paint_sync.is_some() && subtree_has_input_caret(el) {
+        push_text_edit_paint_dirty(el);
+    }
+    for child in &el.children {
+        push_focused_text_edit_caret_damage(child);
+    }
+}
+
+fn subtree_has_input_caret(el: &Element) -> bool {
+    el.text_style.input_caret.is_some() || el.children.iter().any(subtree_has_input_caret)
 }
 
 fn find_descendant_by_template_id_mut<'a>(

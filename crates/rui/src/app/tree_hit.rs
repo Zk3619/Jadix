@@ -1272,6 +1272,54 @@ pub(super) enum TextDragHScrollTick {
     AtLimit,
 }
 
+/// Thin inner belt (px): start a crawl before the pointer fully leaves the clip.
+const TEXT_DRAG_EDGE_SLOP: f32 = 2.0;
+/// Past this many px outside the clip, one frame pans to the start/end.
+const TEXT_DRAG_JUMP_OVERSHOOT: f32 = 100.0;
+/// Near-edge crawl: characters (or line-boxes, vertically) per second.
+const TEXT_DRAG_NEAR_UNITS_PER_SEC: f32 = 8.0;
+
+/// Distance past the **clip edge** (not the inner belt). `None` = not in the autoscroll zone.
+/// `toward_max` is true when scrolling toward higher offset (right / bottom).
+fn text_drag_edge_overshoot(pointer: f32, min: f32, max: f32) -> Option<(bool, f32)> {
+    if pointer > max - TEXT_DRAG_EDGE_SLOP {
+        Some((true, (pointer - max).max(0.0)))
+    } else if pointer < min + TEXT_DRAG_EDGE_SLOP {
+        Some((false, (min - pointer).max(0.0)))
+    } else {
+        None
+    }
+}
+
+/// Browser-like `<input>` drag-select: ~1 glyph/line at the edge, jump to the end when far.
+///
+/// `unit_px` is one character (horizontal) or one line box (vertical).
+pub(super) fn text_drag_edge_scroll_step(
+    overshoot_px: f32,
+    unit_px: f32,
+    remaining: f32,
+    dt: f32,
+) -> f32 {
+    let remaining = remaining.max(0.0);
+    if remaining < 0.05 {
+        return 0.0;
+    }
+    let over = overshoot_px.max(0.0);
+    if over >= TEXT_DRAG_JUMP_OVERSHOOT {
+        return remaining;
+    }
+    let dt = dt.max(0.0).min(0.05);
+    if dt < 1.0e-6 {
+        return 0.0;
+    }
+    let unit = unit_px.clamp(6.0, 32.0);
+    let t = (over / TEXT_DRAG_JUMP_OVERSHOOT).clamp(0.0, 1.0);
+    // Quadratic: stays near `NEAR` for the first ~20px, then sprints into the jump.
+    let units_per_sec = TEXT_DRAG_NEAR_UNITS_PER_SEC + 200.0 * t * t;
+    let step = units_per_sec * unit * dt;
+    step.min(remaining)
+}
+
 /// Visual clip of a textarea scrollport: `[x, y, w, h]` in logical screen space.
 ///
 /// Used to clamp drag-select hit-testing to the visible edge (avoids selection
@@ -1364,7 +1412,11 @@ fn input_text_edit_pointer_space_impl(
         }
     }
 
-    let mx = if style.overflow.allows_caret_scroll() || style.white_space == WhiteSpace::Nowrap {
+    let mx = if style.overflow.allows_caret_scroll() {
+        // Native `<input>`: hit-test stays on the visible clip so drag-select can
+        // edge-scroll instead of jumping to the first/last glyph.
+        mx_base.clamp(leaf_bounds[0], leaf_bounds[0] + leaf_bounds[2])
+    } else if style.white_space == WhiteSpace::Nowrap {
         mx_base
     } else {
         mx_base.clamp(leaf_bounds[0], leaf_bounds[0] + leaf_bounds[2])
@@ -1447,12 +1499,6 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
         leaf_bounds[2]
     };
 
-    // Inner hot-zone: paint ensure is skipped during text drag, so this no longer
-    // fights `ensure_caret_visible_scroll_x` (that pair caused bounce before).
-    const EDGE_SLOP: f32 = 16.0;
-    let outside_right = pointer_x > right - EDGE_SLOP;
-    let outside_left = pointer_x < left + EDGE_SLOP;
-
     let sx_key = scroll_offset_x_signal_key(&scroll_rest);
     let sy_key = scroll_offset_y_signal_key(&scroll_rest);
     let vw_key = scroll_viewport_w_signal_key(&scroll_rest);
@@ -1476,21 +1522,16 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     if max_sx < 0.5 {
         return TextDragHScrollTick::AtLimit;
     }
-    if !outside_left && !outside_right {
+    // Paint ensure is skipped during text drag (that pair caused bounce before).
+    let Some((toward_max, over)) = text_drag_edge_overshoot(pointer_x, left, right) else {
         return TextDragHScrollTick::Idle;
-    }
+    };
 
     let sx = sx_raw.clamp(0.0, max_sx);
-    let dt = dt.clamp(1.0 / 240.0, 0.05);
-    // px/s — base rate + boost by how far past the edge the pointer is.
-    let over = if outside_right {
-        (pointer_x - (right - EDGE_SLOP)).max(0.0)
-    } else {
-        ((left + EDGE_SLOP) - pointer_x).max(0.0)
-    };
-    let speed = (280.0 + over * 14.0).min(900.0);
-    let step = speed * dt;
-    let next = if outside_right {
+    let remaining = if toward_max { max_sx - sx } else { sx };
+    let unit = style.size_resolved().max(1.0) * 0.55;
+    let step = text_drag_edge_scroll_step(over, unit, remaining, dt);
+    let next = if toward_max {
         (sx + step).min(max_sx)
     } else {
         (sx - step).max(0.0)
@@ -1504,6 +1545,87 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
         vp.scroll_offset[0] = next;
     }
     TextDragHScrollTick::Scrolled
+}
+
+/// Single-line Input (`text-overflow: hidden` + caret pan): edge auto-scroll while drag-selecting.
+///
+/// Unlike wrap=off textarea this uses [`crate::utils::text_field::input_scroll_x_signal_key`]
+/// (leaf `text_style.scroll_x`), not a scroll viewport.
+pub(super) fn nudge_input_hscroll_for_drag(
+    root: &mut Element,
+    field_id: &str,
+    pointer_x: f32,
+    dt: f32,
+) -> TextDragHScrollTick {
+    use crate::core::reactivity::use_signal;
+    use crate::utils::text_field::{
+        clamp_caret_scroll_x, input_scroll_x_signal_key, max_caret_scroll_x, text_edit_line_box_px,
+    };
+
+    let Some((leaf_bounds, display, style, _)) =
+        find_input_text_leaf_for_rest(root, None, field_id)
+    else {
+        return TextDragHScrollTick::Idle;
+    };
+    if !style.overflow.allows_caret_scroll() {
+        return TextDragHScrollTick::Idle;
+    }
+
+    let left = leaf_bounds[0];
+    let right = left + leaf_bounds[2];
+    let vw = leaf_bounds[2].max(1.0);
+
+    let lh = text_edit_line_box_px(
+        style.size_resolved(),
+        style.line_height_px,
+        style.line_height_scale,
+    );
+    let content_w = crate::text::measure_prefix_advance(
+        &display,
+        style.size_resolved(),
+        style.weight_resolved(),
+        lh,
+    )
+    .max(vw);
+    let max_sx = max_caret_scroll_x(content_w, vw);
+    let sx_sig = use_signal(&input_scroll_x_signal_key(field_id), || 0.0_f32);
+    let sx_raw = sx_sig.peek().max(0.0);
+    if sx_raw > max_sx + 0.05 {
+        let next = clamp_caret_scroll_x(content_w, vw, sx_raw);
+        sx_sig.set_silent(next);
+        write_input_leaf_scroll_x(root, field_id, next);
+        return TextDragHScrollTick::Scrolled;
+    }
+    if max_sx < 0.5 {
+        return TextDragHScrollTick::AtLimit;
+    }
+    let Some((toward_max, over)) = text_drag_edge_overshoot(pointer_x, left, right) else {
+        return TextDragHScrollTick::Idle;
+    };
+
+    let sx = sx_raw.clamp(0.0, max_sx);
+    let remaining = if toward_max { max_sx - sx } else { sx };
+    let unit = style.size_resolved().max(1.0) * 0.55;
+    let step = text_drag_edge_scroll_step(over, unit, remaining, dt);
+    let next = if toward_max {
+        (sx + step).min(max_sx)
+    } else {
+        (sx - step).max(0.0)
+    };
+    if (next - sx).abs() < 0.05 {
+        return TextDragHScrollTick::AtLimit;
+    }
+    sx_sig.set_silent(next);
+    write_input_leaf_scroll_x(root, field_id, next);
+    TextDragHScrollTick::Scrolled
+}
+
+fn write_input_leaf_scroll_x(root: &mut Element, field_id: &str, sx: f32) {
+    let tid = crate::utils::text_field::input_text_template_id(field_id);
+    if let Some(leaf) = find_in_tree_mut(root, |el| el.template_id.as_deref() == Some(tid.as_str()))
+    {
+        leaf.text_style.scroll_x = sx;
+    }
 }
 
 /// Vertical edge auto-scroll while drag-selecting soft-wrapped textarea text.
@@ -1525,11 +1647,17 @@ pub(super) fn nudge_textarea_vscroll_for_drag(
         focus_id_for_scroll_viewport, scroll_content_h_signal_key, scroll_offset_x_signal_key,
         scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
     };
-    use crate::utils::text_field::textarea_scroll_rest;
+    use crate::utils::text_field::{text_edit_line_box_px, textarea_scroll_rest};
 
-    let Some((_, _, _style, _)) = find_input_text_leaf_for_rest(root, None, field_id) else {
+    let Some((_, _, style, _)) = find_input_text_leaf_for_rest(root, None, field_id) else {
         return TextDragVScrollTick::Idle;
     };
+    let line_unit = text_edit_line_box_px(
+        style.size_resolved(),
+        style.line_height_px,
+        style.line_height_scale,
+    )
+    .max(12.0);
 
     let scroll_rest = textarea_scroll_rest(field_id);
     let vp_fid = focus_id_for_scroll_viewport(&scroll_rest);
@@ -1540,13 +1668,10 @@ pub(super) fn nudge_textarea_vscroll_for_drag(
     let bottom = top + vp_layout[3];
     let vh_layout = vp_layout[3].max(1.0);
 
-    // Match horizontal drag: inner hot-zone (paint ensure skipped during text drag).
-    const EDGE_SLOP: f32 = 16.0;
-    let outside_bottom = pointer_y > bottom - EDGE_SLOP;
-    let outside_top = pointer_y < top + EDGE_SLOP;
-    if !outside_top && !outside_bottom {
+    // Match horizontal drag: thin inner belt (paint ensure skipped during text drag).
+    let Some((toward_max, over)) = text_drag_edge_overshoot(pointer_y, top, bottom) else {
         return TextDragVScrollTick::Idle;
-    }
+    };
 
     let sx_key = scroll_offset_x_signal_key(&scroll_rest);
     let sy_key = scroll_offset_y_signal_key(&scroll_rest);
@@ -1565,15 +1690,10 @@ pub(super) fn nudge_textarea_vscroll_for_drag(
     }
 
     let sy = sy_sig.peek().clamp(0.0, max_sy);
-    let dt = dt.clamp(1.0 / 240.0, 0.05);
-    let over = if outside_bottom {
-        (pointer_y - (bottom - EDGE_SLOP)).max(0.0)
-    } else {
-        ((top + EDGE_SLOP) - pointer_y).max(0.0)
-    };
-    let speed = (280.0 + over * 14.0).min(900.0);
-    let step = speed * dt;
-    let next = if outside_bottom {
+    let remaining = if toward_max { max_sy - sy } else { sy };
+    let unit = line_unit;
+    let step = text_drag_edge_scroll_step(over, unit, remaining, dt);
+    let next = if toward_max {
         (sy + step).min(max_sy)
     } else {
         (sy - step).max(0.0)
@@ -2535,11 +2655,11 @@ mod drag_select_bounds_tests {
             viewport.scroll_offset = [0.0, 0.0];
             viewport = viewport.child(leaf);
 
-            // Pointer inside clip but within 16px of the right edge.
-            let tick = nudge_textarea_hscroll_for_drag(&mut viewport, id, 190.0, 20.0, 1.0 / 60.0);
+            // Pointer inside clip but within the thin inner belt of the right edge.
+            let tick = nudge_textarea_hscroll_for_drag(&mut viewport, id, 199.0, 20.0, 1.0 / 60.0);
             assert_eq!(tick, TextDragHScrollTick::Scrolled);
             let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
-            assert!(sx > 0.5, "inner edge hot-zone must advance sx, got {sx}");
+            assert!(sx > 0.05, "inner edge hot-zone must advance sx, got {sx}");
         });
     }
 
@@ -2599,6 +2719,104 @@ mod drag_select_bounds_tests {
                 "content x must match panned leaf origin at clip edge, got {content_x}"
             );
         });
+    }
+
+    #[test]
+    fn text_drag_edge_speed_grows_with_overshoot() {
+        let char_w = 8.0;
+        let remaining = 400.0;
+        let dt = 1.0 / 60.0;
+        let near = text_drag_edge_scroll_step(4.0, char_w, remaining, dt);
+        let mid = text_drag_edge_scroll_step(40.0, char_w, remaining, dt);
+        let jump = text_drag_edge_scroll_step(200.0, char_w, remaining, dt);
+        assert!(
+            near > 0.2 && near <= char_w,
+            "near-edge must crawl ≤1 glyph/frame, got {near}"
+        );
+        assert!(
+            mid > near * 1.5,
+            "mid overshoot must be clearly faster than near: near={near} mid={mid}"
+        );
+        assert!(
+            (jump - remaining).abs() < 0.01,
+            "far overshoot must jump remaining, got {jump}"
+        );
+        assert_eq!(
+            text_drag_edge_scroll_step(4.0, char_w, remaining, 0.0),
+            0.0,
+            "zero dt must not crawl"
+        );
+    }
+
+    #[test]
+    fn input_hscroll_nudge_is_slower_near_edge_than_far() {
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::style::TextOverflow;
+        use crate::utils::text_field::{input_scroll_x_signal_key, input_text_template_id};
+
+        create_root(|| {
+            let mut fs = crate::renderer::font_loader::create_font_system();
+            crate::renderer::font_loader::apply_default_families(fs.db_mut());
+            crate::text::install_shared_font_system(&mut fs);
+
+            let id = "in-hscroll-edge";
+            use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).set_silent(0.0);
+
+            let mut leaf = Element::new();
+            leaf.layout_bounds = [10.0, 10.0, 120.0, 24.0];
+            leaf.text = Some("abcdefghijklmnopqrstuvwxyz0123456789".repeat(6));
+            leaf.text_style.overflow = TextOverflow::Hidden;
+            leaf.text_style.size = Some(14.0);
+            leaf.text_style.line_height_px = Some(21.0);
+            leaf.focus_id = Some(format!("input:{id}"));
+            leaf.template_id = Some(input_text_template_id(id));
+
+            let tick_near =
+                nudge_input_hscroll_for_drag(&mut leaf, id, 10.0 + 120.0 + 2.0, 1.0 / 60.0);
+            assert_eq!(tick_near, TextDragHScrollTick::Scrolled);
+            let sx_near = use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).peek();
+            assert!(sx_near > 0.05, "near-edge must advance, got {sx_near}");
+            assert!(
+                sx_near <= 14.0,
+                "near-edge must crawl (~1 glyph/frame), got {sx_near}"
+            );
+
+            use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).set_silent(0.0);
+            leaf.text_style.scroll_x = 0.0;
+            let tick_far =
+                nudge_input_hscroll_for_drag(&mut leaf, id, 10.0 + 120.0 + 200.0, 1.0 / 60.0);
+            assert_eq!(tick_far, TextDragHScrollTick::Scrolled);
+            let sx_far = use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).peek();
+            assert!(
+                sx_far > sx_near + 40.0,
+                "far from the clip must jump toward the line end: near={sx_near} far={sx_far}"
+            );
+        });
+    }
+
+    #[test]
+    fn input_drag_select_hit_space_clamps_to_leaf_clip() {
+        use crate::style::TextOverflow;
+
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [20.0, 10.0, 100.0, 24.0];
+        leaf.text = Some("overflowing single line text".into());
+        leaf.text_style.overflow = TextOverflow::Hidden;
+        leaf.focus_id = Some("input:in-hit-clamp".into());
+        let style = leaf.text_style.as_ref().clone();
+        let (mx, _, _, _) = input_drag_select_hit_space(
+            &leaf,
+            "in-hit-clamp",
+            500.0,
+            20.0,
+            [20.0, 10.0, 100.0, 24.0],
+            &style,
+            [0.0, 0.0],
+        );
+        assert!(
+            (mx - 120.0).abs() < 0.5,
+            "pointer past the clip must stay on the visible right edge, got {mx}"
+        );
     }
 }
 
