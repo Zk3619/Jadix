@@ -416,10 +416,7 @@ fn variant_ctx_fingerprint(
     mix_fp(&mut h, focused as u64 + 2);
     mix_fp(&mut h, disabled as u64 + 4);
     mix_fp(&mut h, dark as u64 + 8);
-    mix_fp(
-        &mut h,
-        crate::style::prefers_reduced_motion() as u64 + 16,
-    );
+    mix_fp(&mut h, crate::style::prefers_reduced_motion() as u64 + 16);
     mix_fp(&mut h, viewport_w.to_bits() as u64);
     for g in group_hovered {
         mix_fp(&mut h, 0x11);
@@ -458,6 +455,7 @@ pub fn sync_class_variants_subtree(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
+    super::animation::begin_page_css_frame();
     sync_class_variants_subtree_inner(
         el,
         mouse_pos,
@@ -502,6 +500,7 @@ pub fn tick_active_css_transitions_subtree(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
+    super::animation::begin_page_css_frame();
     struct Frame {
         ptr: *mut Element,
         scroll_acc: [f32; 2],
@@ -538,16 +537,22 @@ pub fn tick_active_css_transitions_subtree(
         // Culled nodes still advance in-flight tweens. Spring has duration_ms=0 so the
         // duration clock cannot "catch up" after a skip — it looks like a forced pause.
         // Settled `:hover` (no active tween) must still leave when the pointer is gone.
-        // Do not walk children (keep the gallery offscreen cull); do not seed via css_needs.
-        if offscreen && !(has_spin || has_css_anim || has_active_css || force_leave) {
+        // `collect_skip_live` means a descendant is spin/shimmer/keyframes: do not
+        // `continue` the parent or idle chrome never notes `page_css` (maximize /
+        // stop-scroll then WaitUntil).
+        if offscreen
+            && !(has_spin || has_css_anim || has_active_css || force_leave || el.collect_skip_live)
+        {
             continue;
         }
-        let defer_shell_css = crate::utils::modal_motion::modal_shell_defer_css_tick(
-            el.template_id.as_deref(),
-        )
-            || crate::utils::floating_motion::floating_panel_defer_css_tick(
-                el.template_id.as_deref(),
-            );
+        if has_spin || has_css_anim || has_active_css || css_needs || el.collect_skip_live {
+            super::animation::note_page_css_needs_frame();
+        }
+        let defer_shell_css =
+            crate::utils::modal_motion::modal_shell_defer_css_tick(el.template_id.as_deref())
+                || crate::utils::floating_motion::floating_panel_defer_css_tick(
+                    el.template_id.as_deref(),
+                );
 
         let mut named = frame.named.clone();
         super::scroll_timeline::push_named_timelines(el, &mut named, scroll_acc, viewport_h);
@@ -602,7 +607,7 @@ pub fn tick_active_css_transitions_subtree(
                     // Paint-only motion must be a node-present dirty. StyleChanged with an
                     // empty damage list FullClears; a sibling Input PartialLoad would skip
                     // this icon and the retain angle jumps on the next Clear.
-                    crate::app::damage::push_frame_paint_element(el);
+                    crate::app::damage::push_frame_paint_element(el, scroll_acc);
                 }
                 // Padding/margin/size tweens must request flex recompute. StyleChanged alone
                 // is treated as scroll-only paint and leaves geometry stuck at the hover size.
@@ -949,8 +954,34 @@ fn sync_class_variants_subtree_inner(
                 (frame.scroll_acc, frame.clip, frame.clip_round)
             };
 
-            if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+            let offscreen =
+                crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h);
+            let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
+            // Only wake the per-frame resolve/tick path while a tween is actually running,
+            // variants may match, or spin / CSS animation needs a tick.
+            // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
+            // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
+            let has_css_anim = !el.style.animations.is_empty()
+                || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
+            let has_active_css = el.transition_snapshot.has_active_tweens();
+            let css_needs =
+                super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+            // Scroll frames (`tick_active_css_transitions_subtree`) still tick `has_spin`
+            // when offscreen. Idle sync matches that: the node itself advances, children
+            // of a truly offscreen parent stay culled — unless the parent is live
+            // (`collect_skip_live`: descendant spin / shimmer). Otherwise maximize /
+            // stop-scroll never notes `page_css` and `about_to_wait` sleeps.
+            if offscreen
+                && !has_spin
+                && !has_css_anim
+                && !has_active_css
+                && !css_needs
+                && !el.collect_skip_live
+            {
                 continue;
+            }
+            if has_spin || has_css_anim || has_active_css || css_needs || el.collect_skip_live {
+                super::animation::note_page_css_needs_frame();
             }
 
             let b = el.layout_bounds;
@@ -977,16 +1008,6 @@ fn sync_class_variants_subtree_inner(
                 .class_set
                 .as_ref()
                 .is_some_and(|cs| !cs.variants.is_empty());
-            let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
-            // Only wake the per-frame resolve/tick path while a tween is actually running,
-            // variants may match, or spin / CSS animation needs a tick.
-            // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
-            // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
-            let has_css_anim = !el.style.animations.is_empty()
-                || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
-            let has_active_css = el.transition_snapshot.has_active_tweens();
-            let css_needs =
-                super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
             if has_variants || has_spin || has_css_anim || has_active_css || css_needs {
                 let hovered = inside;
                 if has_variants {
@@ -1033,12 +1054,12 @@ fn sync_class_variants_subtree_inner(
                     let before_text = el.text_style.clone();
                     let local = resolve_class_variants(el, &ctx);
                     let spun = tick_animate_spin(el);
-                    let defer_shell_css =
-                crate::utils::modal_motion::modal_shell_defer_css_tick(
-                    el.template_id.as_deref(),
-                ) || crate::utils::floating_motion::floating_panel_defer_css_tick(
-                    el.template_id.as_deref(),
-                );
+                    let defer_shell_css = crate::utils::modal_motion::modal_shell_defer_css_tick(
+                        el.template_id.as_deref(),
+                    )
+                        || crate::utils::floating_motion::floating_panel_defer_css_tick(
+                            el.template_id.as_deref(),
+                        );
                     let css_anim = if !defer_shell_css {
                         crate::style::ensure_used_layout_from_bounds(el);
                         let mut named = frame.named.clone();
@@ -1091,7 +1112,7 @@ fn sync_class_variants_subtree_inner(
                         });
                         mark_hover_paint_dirty();
                         if spun || css_anim || css_trans {
-                            crate::app::damage::push_frame_paint_element(el);
+                            crate::app::damage::push_frame_paint_element(el, scroll_acc);
                         }
                         // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
                         // transition frame dirties flex geometry and can make sidebar hit-test flicker.
@@ -3392,7 +3413,10 @@ mod p1_utility_tests {
         assert_ne!(narrow.style.bg_color, base_bg);
 
         let mut band = Element::new();
-        apply_class_list(&mut band, "bg-transparent min-[800px]:max-[1199px]:bg-accent");
+        apply_class_list(
+            &mut band,
+            "bg-transparent min-[800px]:max-[1199px]:bg-accent",
+        );
         let base_bg = band.style.bg_color;
         let _ = resolve_class_variants(
             &mut band,

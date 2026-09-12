@@ -100,7 +100,12 @@ impl IntoOverflow for Overflow {
     }
 }
 
-impl_strish!(IntoOverflow, into_overflow, Overflow, parse_overflow_keyword);
+impl_strish!(
+    IntoOverflow,
+    into_overflow,
+    Overflow,
+    parse_overflow_keyword
+);
 
 pub fn parse_overflow_keyword(mode: &str) -> Overflow {
     match mode.trim().to_ascii_lowercase().as_str() {
@@ -165,7 +170,12 @@ impl IntoAlignItems for AlignItems {
     }
 }
 
-impl_strish!(IntoAlignItems, into_align_items, AlignItems, parse_align_items);
+impl_strish!(
+    IntoAlignItems,
+    into_align_items,
+    AlignItems,
+    parse_align_items
+);
 
 pub fn parse_align_items(keyword: &str) -> AlignItems {
     match keyword.trim().to_ascii_lowercase().as_str() {
@@ -227,7 +237,12 @@ impl IntoCursor for Option<CursorValue> {
     }
 }
 
-impl_strish!(IntoCursor, into_cursor, Option<CursorValue>, CursorValue::parse_css);
+impl_strish!(
+    IntoCursor,
+    into_cursor,
+    Option<CursorValue>,
+    CursorValue::parse_css
+);
 
 #[cfg(test)]
 mod tests {

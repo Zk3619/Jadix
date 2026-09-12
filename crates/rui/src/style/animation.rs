@@ -174,6 +174,26 @@ pub fn any_ui_animation_active() -> bool {
     }) || super::timeline::any_timeline_playing()
 }
 
+thread_local! {
+    /// Set during chrome when `@keyframes` / `animate-spin` / shimmer still need vsync.
+    /// `any_ui_animation_active` is cubic tweens only; without this, `about_to_wait`
+    /// `WaitUntil` (scrollbar hide after a wheel) sleeps and every CSS clock stops.
+    static PAGE_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn begin_page_css_frame() {
+    PAGE_CSS_NEEDS_FRAME.with(|c| c.set(false));
+}
+
+pub(crate) fn note_page_css_needs_frame() {
+    PAGE_CSS_NEEDS_FRAME.with(|c| c.set(true));
+}
+
+/// Infinite CSS / spin / shimmer still sampling. Same role as [`crate::utils::modal_motion::any_modal_css_needs_frame`].
+pub fn any_page_css_needs_frame() -> bool {
+    PAGE_CSS_NEEDS_FRAME.with(|c| c.get())
+}
+
 // ─── CSS Transition engine ───────────────────────────────────────────────
 //
 // CSS-like model: progress = (timeline_now − start) / duration.

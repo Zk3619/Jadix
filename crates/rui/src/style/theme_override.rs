@@ -45,6 +45,10 @@ pub struct DesignTokensPatch {
     pub destructive: Option<String>,
     #[serde(alias = "destructive-foreground")]
     pub destructive_foreground: Option<String>,
+    pub info: Option<String>,
+    pub success: Option<String>,
+    #[serde(alias = "warn")]
+    pub warning: Option<String>,
     pub border: Option<String>,
     pub input: Option<String>,
     pub ring: Option<String>,
@@ -236,6 +240,9 @@ fn apply_design_tokens_patch(
     apply_color!(accent_foreground, "accent-foreground");
     apply_color!(destructive, "destructive");
     apply_color!(destructive_foreground, "destructive-foreground");
+    apply_color!(info, "info");
+    apply_color!(success, "success");
+    apply_color!(warning, "warning");
     apply_color!(border, "border");
     apply_color!(input, "input");
     apply_color!(ring, "ring");
@@ -307,7 +314,9 @@ impl std::fmt::Display for ThemeOverrideError {
         match self {
             Self::Io(e) => write!(f, "read theme file: {e}"),
             Self::Toml(e) => write!(f, "parse theme TOML: {e}"),
-            Self::UnsupportedExtension(ext) => write!(f, "unsupported theme extension: {ext} (use .toml)"),
+            Self::UnsupportedExtension(ext) => {
+                write!(f, "unsupported theme extension: {ext} (use .toml)")
+            }
             Self::UnknownColor { field, value } => {
                 write!(f, "unknown color for {field}: {value}")
             }
@@ -330,12 +339,14 @@ mod tests {
             [light]
             primary-foreground = "oklch(0.985 0 0)"
             destructive = "oklch(0.577 0.245 27.325)"
+            warn = "oklch(0.75 0.15 70)"
             [dark]
             primary = "oklch(0.922 0 0)"
         "#;
         let patch = parse_theme_overrides_str(raw).expect("toml");
         assert!(patch.light.primary_foreground.is_some());
         assert!(patch.light.destructive.is_some());
+        assert!(patch.light.warning.is_some());
         assert!(patch.dark.primary.is_some());
     }
 

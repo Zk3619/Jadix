@@ -18,7 +18,10 @@ fn element_chain_accepts_string_and_typed_values() {
     assert_eq!(a.style.bg_color, parse_color("primary"));
     assert_eq!(a.pointer_events_mode(), PointerEvents::None);
     assert_eq!(a.style.overflow.x, Overflow::Hidden);
-    assert_eq!(a.style.justify_content, Some(taffy::prelude::JustifyContent::CENTER));
+    assert_eq!(
+        a.style.justify_content,
+        Some(taffy::prelude::JustifyContent::CENTER)
+    );
     assert_eq!(a.text_style.align, Some(TextAlign::Right));
     assert_eq!(a.style.border_style, LineStyle::Dashed);
     assert_eq!(a.text_style.overflow, TextOverflow::Ellipsis);
@@ -107,7 +110,10 @@ fn component_variant_size_dual_accept() {
 
     let _ = toast("ok").variant("success");
     let _ = toast("ok").variant(ToastTone::Success);
-    let _ = toaster().variant("list").position("top-right").overflow("wait");
+    let _ = toaster()
+        .variant("list")
+        .position("top-right")
+        .overflow("wait");
     let _ = toaster()
         .variant(ToastLayout::List)
         .position(ToastPosition::TopRight)

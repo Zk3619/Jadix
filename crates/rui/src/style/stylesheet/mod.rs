@@ -15,12 +15,10 @@ use std::path::Path;
 pub use error::{parse_selector, StylesheetError};
 pub use ir::{MatchedStyleRule, Selector, StyleRule, Stylesheet};
 pub use load_file::parse_stylesheet;
-pub use match_sel::{
-    apply_stylesheet_rules, apply_stylesheet_rules_tree, collect_matching_rules,
-};
+pub use match_sel::{apply_stylesheet_rules, apply_stylesheet_rules_tree, collect_matching_rules};
 pub use registry::{clear_stylesheets, register_stylesheet, stylesheet_count};
-pub use watch::{is_theme_override_file, watch_stylesheets};
 pub(crate) use watch::take_style_hot_rebuild;
+pub use watch::{is_theme_override_file, watch_stylesheets};
 
 use error::with_path;
 
@@ -300,7 +298,10 @@ classes = "px-3"
             .filter(|c| *c == "px-3")
             .count();
         assert_eq!(px, 1, "second apply must no-op via data-rui-sheet");
-        assert_eq!(el.attrs.get("data-rui-sheet").map(String::as_str), Some("1"));
+        assert_eq!(
+            el.attrs.get("data-rui-sheet").map(String::as_str),
+            Some("1")
+        );
         reset();
     }
 
@@ -363,10 +364,6 @@ classes = "px-2 sm:px-4 dark:text-muted-foreground"
     #[test]
     fn reject_non_toml_extension() {
         let err = load_stylesheet("styles.css").unwrap_err();
-        assert!(
-            err.to_string().contains("unsupported"),
-            "{}",
-            err
-        );
+        assert!(err.to_string().contains("unsupported"), "{}", err);
     }
 }

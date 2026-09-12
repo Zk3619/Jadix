@@ -7,8 +7,11 @@
 //! 边框、阴影仅在 [`SemanticChromeDecor`] 启用时写入 [`SemanticChrome`]；组件侧对 `Option` 再落盒模型。
 //! 别名：`error`≡`destructive` · `warn`≡`warning` · 未知→[`SemanticTone::Default`].
 
+use super::color::{f32_to_u8, rgba_u8_to_f32};
 use crate::core::tree::Element;
-use crate::style::{is_dark_theme, parse_color, parse_text_color, LineStyle};
+use crate::style::{
+    color_mix_over_surface, is_dark_theme, parse_color, parse_text_color, LineStyle,
+};
 
 /// 语义语气（非 Button `outline`/`ghost` 等产品 variant）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -42,35 +45,42 @@ impl SemanticTone {
     }
 
     /// 前景 / soft fill 用的 accent 令牌（与 Badge / Button 语义色同源）。
+    ///
+    /// 最深一档（Tailwind `*-600`）占据令牌本身：`info` / `success` / `warning` /
+    /// `destructive`。浅一档不要换 `*-500` / `*-300`，用透明度：阴影 [`Self::accent_shadow_token`]
+    /// 的 `/90`，描边 [`Self::accent_border_token`] 的 `/50`，软底 `/10` `/20`。
     pub fn accent_fg_token(self) -> &'static str {
         match self {
             Self::Default => "foreground",
-            Self::Info => "blue-600",
-            Self::Success => "green-600",
-            Self::Warning => "orange-600",
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
             Self::Destructive => "destructive",
         }
     }
 
-    /// 不填充背景时使用的语义边框色（与 Toast `tone_colors` 同源）。
+    /// 不填充背景时的描边：Tailwind `border-destructive/50` 同源（叠在 `background` 上）。
+    ///
+    /// 不是 `red-300` / `blue-300`——那些是另一套色阶，改 `theme.toml` 的语义令牌带不动。
     pub fn accent_border_token(self) -> &'static str {
         match self {
             Self::Default => "border",
-            Self::Info => "blue-300",
-            Self::Success => "green-300",
-            Self::Warning => "orange-300",
-            Self::Destructive => "red-300",
+            Self::Info => "info/50",
+            Self::Success => "success/50",
+            Self::Warning => "warning/50",
+            Self::Destructive => "destructive/50",
         }
     }
 
-    /// Toast 等浮层语义阴影色相（强度由 [`semantic_shadow`] 统一）。
+    /// 浮层阴影色相：比 caption 浅一档（原 `*-500`），`token/90` 叠底；盒阴影 alpha 仍由
+    /// [`semantic_shadow`] 写入，不要把 `/90` 当成 box-shadow 透明度。
     pub fn accent_shadow_token(self) -> &'static str {
         match self {
             Self::Default => "foreground",
-            Self::Info => "blue-500",
-            Self::Success => "green-500",
-            Self::Warning => "orange-500",
-            Self::Destructive => "red-500",
+            Self::Info => "info/90",
+            Self::Success => "success/90",
+            Self::Warning => "warning/90",
+            Self::Destructive => "destructive/90",
         }
     }
 
@@ -300,16 +310,20 @@ pub fn button_soft_semantic_chrome(
     (c.bg, c.fg, c.border)
 }
 
-/// 语义副文案色：与 Toast 描述一致，accent 前景降 alpha（非主题 `muted-foreground`）。
+/// 语义副文案色：与 Toast 描述一致，accent 按此比例叠在 `card` 上（非主题 `muted-foreground`）。
 const SEMANTIC_DESC_FG_ALPHA: f32 = 0.78;
 
-/// 语义副文案色：accent 前景降 alpha（Alert / Toast 描述共用）。
+/// 语义副文案色：accent 按 [`SEMANTIC_DESC_FG_ALPHA`] 叠在 `card` 上的**不透明**结果。
+///
+/// 不能只降 glyph alpha：Dialog / AlertDialog 入场走 `__modal_zoom` 透明 RT 捕获，
+/// 半透明字在透明底上合成会看起来像主题 `muted-foreground`，直到 settle 后 live Coverage
+/// 才叠在卡片上显出变体色。
 pub fn muted_from_accent(fg: [u8; 4]) -> [u8; 4] {
-    let mut c = fg;
-    if c[3] > 0 {
-        c[3] = (c[3] as f32 * SEMANTIC_DESC_FG_ALPHA) as u8;
-    }
-    c
+    f32_to_u8(color_mix_over_surface(
+        rgba_u8_to_f32(fg),
+        parse_color("card"),
+        SEMANTIC_DESC_FG_ALPHA,
+    ))
 }
 
 const SHADOW_BLUR: f32 = 10.0;
@@ -525,10 +539,35 @@ mod tests {
     #[test]
     fn semantic_palette_resolves_tone_tokens() {
         let p = semantic_palette(SemanticTone::Success);
-        assert_eq!(p.accent, parse_color("green-600"));
-        assert_eq!(p.fg, parse_text_color("green-600"));
-        assert_eq!(p.border, parse_color("green-300"));
-        assert_eq!(p.shadow, parse_color("green-500"));
+        assert_eq!(p.accent, parse_color("success"));
+        assert_eq!(
+            p.accent,
+            parse_color("green-600"),
+            "default success aligns with Tailwind green-600"
+        );
+        assert_eq!(p.fg, parse_text_color("success"));
+        assert_eq!(p.border, parse_color("success/50"));
+        assert_ne!(
+            p.border,
+            parse_color("green-300"),
+            "lighter chrome is success/50, not a green-300 shade"
+        );
+        assert_ne!(
+            p.border,
+            parse_color("success"),
+            "border is mixed /50, not solid success"
+        );
+        assert_eq!(p.shadow, parse_color("success/90"));
+        assert_ne!(
+            p.shadow,
+            parse_color("success"),
+            "shadow is success/90 (500-step), not solid 600-step success"
+        );
+        assert_ne!(
+            p.shadow,
+            parse_color("green-500"),
+            "shadow is not a Tailwind green-500 shade"
+        );
     }
 
     #[test]
@@ -536,6 +575,7 @@ mod tests {
         let tone = SemanticTone::Warning;
         let (bg, fg, border) = button_soft_semantic_chrome(tone, 0.0);
         assert_eq!(bg, soft_semantic_fill(semantic_palette(tone).accent));
+        assert_eq!(fg, parse_text_color("warning"));
         assert_eq!(fg, parse_text_color("orange-600"));
         assert!(border.is_none());
     }
@@ -567,6 +607,56 @@ mod tests {
         });
         assert_ne!(c.muted_fg, parse_text_color("muted-foreground"));
         assert_eq!(c.muted_fg, muted_from_accent(c.fg));
+        assert_eq!(
+            c.muted_fg[3], 255,
+            "muted description must be opaque so __modal_zoom capture keeps the variant hue"
+        );
+    }
+
+    #[test]
+    fn destructive_shadow_uses_destructive_opacity_not_red_500() {
+        let s = semantic_shadow(SemanticTone::Destructive);
+        let mixed = parse_color("destructive/90");
+        assert!(
+            (s.color[0] - mixed[0]).abs() < 1e-5
+                && (s.color[1] - mixed[1]).abs() < 1e-5
+                && (s.color[2] - mixed[2]).abs() < 1e-5,
+            "destructive shadow hue must track destructive/90, got {:?} vs {:?}",
+            s.color,
+            mixed
+        );
+        let solid = parse_color("destructive");
+        assert!(
+            (s.color[0] - solid[0]).abs() > 1e-4
+                || (s.color[1] - solid[1]).abs() > 1e-4
+                || (s.color[2] - solid[2]).abs() > 1e-4,
+            "shadow is /90 (500-step), not solid destructive (600-step)"
+        );
+        assert!((s.color[3] - SHADOW_ALPHA).abs() < 0.001);
+        let red = parse_color("red-500");
+        assert!(
+            (s.color[0] - red[0]).abs() > 0.01
+                || (s.color[1] - red[1]).abs() > 0.01
+                || (s.color[2] - red[2]).abs() > 0.01
+                || (solid[0] - red[0]).abs() < 1e-5,
+            "when destructive ≠ red-500, shadow must not stay on red-500"
+        );
+    }
+
+    #[test]
+    fn destructive_border_uses_opacity_mix_not_solid_or_red_300() {
+        let p = semantic_palette(SemanticTone::Destructive);
+        assert_eq!(p.border, parse_color("destructive/50"));
+        assert_ne!(
+            p.border,
+            parse_color("destructive"),
+            "border is destructive/50 over background, not solid destructive"
+        );
+        assert_ne!(
+            p.border,
+            parse_color("red-300"),
+            "border is not a Tailwind red-300 shade"
+        );
     }
 
     #[test]
@@ -579,7 +669,7 @@ mod tests {
         });
         assert_eq!(c.bg, parse_color("card"));
         let border = c.border.expect("border configured");
-        assert_eq!(border.color, parse_color("blue-300"));
+        assert_eq!(border.color, parse_color("info/50"));
         assert!(c.shadow.is_none());
     }
 
@@ -591,7 +681,7 @@ mod tests {
             surface: SemanticSurface::Card,
             decor: SemanticChromeDecor::NONE,
         });
-        assert_eq!(c.bg, soft_semantic_fill(parse_color("green-600")));
+        assert_eq!(c.bg, soft_semantic_fill(parse_color("success")));
         assert!(c.border.is_none());
         assert!(c.shadow.is_none());
     }
@@ -606,7 +696,7 @@ mod tests {
         });
         assert_eq!(c.bg, parse_color("popover"));
         let border = c.border.expect("border");
-        assert_eq!(border.color, parse_color("green-300"));
+        assert_eq!(border.color, parse_color("success/50"));
         let shadow = c.shadow.expect("shadow");
         assert!((shadow.color[3] - SHADOW_ALPHA).abs() < 0.001);
         assert!(shadow.color[1] > shadow.color[0]);

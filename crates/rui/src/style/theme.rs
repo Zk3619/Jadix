@@ -47,6 +47,12 @@ pub struct DesignTokens {
     pub accent_foreground: [f32; 4],
     pub destructive: [f32; 4],
     pub destructive_foreground: [f32; 4],
+    /// Caption / fill seed; default Tailwind `blue-600`. Lighter chrome is `info/10` not `blue-300`.
+    pub info: [f32; 4],
+    /// Caption / fill seed; default Tailwind `green-600`. Lighter chrome is `success/10` not `green-300`.
+    pub success: [f32; 4],
+    /// Caption / fill seed; default Tailwind `orange-600`. `warn` parses here. Lighter chrome is `warning/10`.
+    pub warning: [f32; 4],
     pub border: [f32; 4],
     pub input: [f32; 4],
     /// `ring-ring/50` 色（几何由 [`FocusRingStyle`] 决定）。
@@ -82,6 +88,11 @@ pub struct DesignTokens {
     pub scrollbar_thumb_border: [f32; 4],
     /// `--radius: 0.625rem`
     pub radius: f32,
+}
+
+/// Tailwind v3 `*-600` as display sRGB (variant caption seed).
+fn tw_600(r: u8, g: u8, b: u8) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
 
 /// Tailwind v4 default palette — `theme.css` `--color-blue-*`（chart-1..5 引用）。
@@ -143,6 +154,9 @@ impl Theme {
                 accent_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
                 destructive: oklch_to_display_srgba(0.577, 0.245, 27.325, 1.0),
                 destructive_foreground: oklch_to_display_srgba(0.97, 0.01, 17.0, 1.0),
+                info: tw_600(37, 99, 235),
+                success: tw_600(22, 163, 74),
+                warning: tw_600(234, 88, 12),
                 border: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 input: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 ring: oklch_to_display_srgba(0.708, 0.0, 0.0, 0.5),
@@ -203,6 +217,9 @@ impl Theme {
                 accent_foreground: foreground,
                 destructive: oklch_to_display_srgba(0.704, 0.191, 22.216, 1.0),
                 destructive_foreground: oklch_to_display_srgba(0.58, 0.22, 27.0, 1.0),
+                info: tw_600(37, 99, 235),
+                success: tw_600(22, 163, 74),
+                warning: tw_600(234, 88, 12),
                 border: oklch_to_display_srgba(1.0, 0.0, 0.0, 0.1),
                 input: oklch_to_display_srgba(1.0, 0.0, 0.0, 0.15),
                 ring: oklch_to_display_srgba(0.556, 0.0, 0.0, 0.5),

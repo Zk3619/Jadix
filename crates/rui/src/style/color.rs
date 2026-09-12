@@ -994,6 +994,9 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
         "accent-foreground" => colors.accent_foreground,
         "destructive" => colors.destructive,
         "destructive-foreground" => colors.destructive_foreground,
+        "info" => colors.info,
+        "success" => colors.success,
+        "warning" | "warn" => colors.warning,
         "border" => colors.border,
         "input" => colors.input,
         "ring" => colors.ring,
@@ -1063,6 +1066,27 @@ mod tests {
         );
         let p80 = try_parse_color("primary/80").unwrap();
         assert!(p80[0] < destructive[0] || p80[0] > 0.1);
+    }
+
+    #[test]
+    fn parses_info_success_warning_tokens_aligned_to_tw_600() {
+        assert_eq!(try_parse_color("info"), try_parse_color("blue-600"));
+        assert_eq!(try_parse_color("success"), try_parse_color("green-600"));
+        assert_eq!(try_parse_color("warning"), try_parse_color("orange-600"));
+        assert_eq!(try_parse_color("warn"), try_parse_color("warning"));
+        let info = try_parse_color("info").unwrap();
+        let i10 = try_parse_color("info/10").unwrap();
+        let bg = try_parse_color("background").unwrap();
+        let want = [
+            info[0] * 0.1 + bg[0] * 0.9,
+            info[1] * 0.1 + bg[1] * 0.9,
+            info[2] * 0.1 + bg[2] * 0.9,
+            1.0,
+        ];
+        assert!(
+            (0..4).all(|i| (i10[i] - want[i]).abs() < 1e-4),
+            "info/10 should mix over background"
+        );
     }
 
     #[test]
