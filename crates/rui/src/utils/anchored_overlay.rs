@@ -1018,4 +1018,180 @@ mod tests {
         });
         clear_overlay_stack();
     }
+
+    fn has_portal(el: &Element) -> bool {
+        el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+            || el.children.iter().any(has_portal)
+    }
+
+    fn find_view(el: &Element, suffix: &str) -> bool {
+        el.template_id
+            .as_deref()
+            .is_some_and(|t| t.ends_with(suffix))
+            || el.children.iter().any(|c| find_view(c, suffix))
+    }
+
+    #[test]
+    fn wave2_canary_open_island_does_not_subscribe_ui_root() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::core::reactivity::{
+            clear_ui_root_effect, create_effect, dispose_effect, mark_next_effect_as_ui_root,
+            ui_root_effect_dep_count,
+        };
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        reset_registered_anchors();
+        clear_overlay_stack();
+        clear_ui_root_effect();
+        let open = Signal::new(false);
+        let runs = Rc::new(Cell::new(0));
+        let kept = Rc::new(RefCell::new(None::<Element>));
+        let runs_e = Rc::clone(&runs);
+        let kept_e = Rc::clone(&kept);
+
+        mark_next_effect_as_ui_root();
+        let root = create_effect(move || {
+            runs_e.set(runs_e.get() + 1);
+            let el = anchored_overlay("ao-w2-root")
+                .open(open)
+                .placement(Placement::Unanchored)
+                .child(|| Element::new().text("x").w(160.0).h(80.0));
+            *kept_e.borrow_mut() = Some(el);
+        });
+
+        assert_eq!(runs.get(), 1);
+        assert_eq!(
+            ui_root_effect_dep_count(),
+            0,
+            "open must subscribe the structure island, not the UI root"
+        );
+        {
+            let mounted = kept.borrow();
+            let el = mounted.as_ref().expect("mounted");
+            assert!(find_view(el, "__view"));
+        }
+
+        open.set(true);
+        assert_eq!(runs.get(), 1, "open must not rebuild the UI root");
+        assert_eq!(ui_root_effect_dep_count(), 0);
+
+        drop(kept.borrow_mut().take());
+        dispose_effect(root);
+        clear_ui_root_effect();
+        reset_registered_anchors();
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn wave2_canary_close_keeps_portal_while_exiting() {
+        use crate::utils::presence::PresencePhase;
+
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let presence = use_floating_presence("ao-w2-exit", FloatingMotionKind::Fade);
+            let opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover);
+            let trigger = Signal::new("hud-btn".into());
+            let panel = || Element::new().text("hud").w(200.0).h(80.0);
+            let mounted = assemble_panel("ao-w2-exit", open, trigger, &presence, &opts, panel());
+            assert!(has_portal(&mounted), "open must portal the panel");
+            assert_eq!(
+                anchored_overlay_phase("ao-w2-exit", open, &opts),
+                Some(PresencePhase::Present)
+            );
+
+            open.set(false);
+            assert_eq!(
+                anchored_overlay_phase("ao-w2-exit", open, &opts),
+                Some(PresencePhase::Exiting)
+            );
+            assert!(anchored_overlay_is_mounted("ao-w2-exit", &opts));
+            let exiting = assemble_panel("ao-w2-exit", open, trigger, &presence, &opts, panel());
+            assert!(
+                has_portal(&exiting),
+                "exit must keep the portal until the gate completes"
+            );
+
+            presence.force_absent_flags();
+            floating_mounted_signal(&presence).set(false);
+            assert!(!anchored_overlay_is_mounted("ao-w2-exit", &opts));
+            let gone = assemble_panel("ao-w2-exit", open, trigger, &presence, &opts, panel());
+            assert!(
+                !has_portal(&gone),
+                "Absent must drop the portal after exit completes"
+            );
+        });
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn wave2_canary_first_open_layouts_portal_panel() {
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+        };
+
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let presence = use_floating_presence("ao-w2-first", FloatingMotionKind::Fade);
+            let opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover);
+            let mounted = assemble_panel(
+                "ao-w2-first",
+                open,
+                Signal::new("hud-btn".into()),
+                &presence,
+                &opts,
+                Element::new()
+                    .text("wave2-ao")
+                    .w(200.0)
+                    .h(80.0)
+                    .bg([1.0, 1.0, 1.0, 1.0])
+                    .fixed()
+                    .top("1rem")
+                    .right("1rem"),
+            );
+            Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(Element::new().text("page"))
+                .child(mounted)
+        });
+
+        assert!(
+            hoist_portal_subtrees(&mut root) >= 1,
+            "first open must hoist the shell onto the portal layer"
+        );
+        assert!(
+            root.children
+                .iter()
+                .any(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID)),
+            "portal layer must exist after hoist"
+        );
+        assert_eq!(find_attr(&root, ATTR_HOISTED_PORTAL), Some("1"));
+
+        let mut tree = LayoutTree::new();
+        let _result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        fn find_hoisted(el: &Element) -> Option<&Element> {
+            if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_hoisted)
+        }
+        let hoisted = find_hoisted(&root).expect("hoisted portal panel");
+        fn subtree_has_sized_box(el: &Element) -> bool {
+            (el.layout_bounds[2] > 1.0 && el.layout_bounds[3] > 1.0)
+                || el.children.iter().any(subtree_has_sized_box)
+        }
+        assert!(
+            subtree_has_sized_box(hoisted),
+            "first open must layout the portal panel, not skip as paint-only; hoisted bounds={:?}",
+            hoisted.layout_bounds
+        );
+        clear_overlay_stack();
+    }
 }

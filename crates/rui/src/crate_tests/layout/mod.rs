@@ -20,6 +20,7 @@ mod portal_hoist;
 mod portal_reactive_layout;
 mod portal_scroll_passthrough;
 mod progress_circle_gallery;
+mod rotate_paint_hit;
 mod scale_paint_hit;
 mod scroll_clip_border;
 mod scroll_content_shrink;

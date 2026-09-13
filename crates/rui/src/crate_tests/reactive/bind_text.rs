@@ -436,3 +436,45 @@ fn bind_prop_rebuild_does_not_seed_from_paint_when_effect_alive() {
     dispose_effect(root);
     reset_registered_anchors();
 }
+
+#[test]
+fn bind_miss_warns_when_unmounted() {
+    use crate::app::reactive::{bind_miss_count, reset_bind_miss_count};
+    use crate::app::test_support::resolve_bind_template_id;
+
+    reset_bind_miss_count();
+    let root = Element::new();
+    assert!(
+        !resolve_bind_template_id(&root, "unmounted"),
+        "absent template_id is a miss"
+    );
+    assert!(
+        bind_miss_count() >= 1,
+        "miss must increment bind_miss_count (was silent Clean)"
+    );
+}
+
+#[test]
+fn bind_miss_hit_does_not_count() {
+    use crate::app::reactive::{bind_miss_count, reset_bind_miss_count};
+    use crate::app::test_support::resolve_bind_template_id;
+
+    reset_bind_miss_count();
+    let root = Element::new().child(Element::new().template_id("alive"));
+    assert!(resolve_bind_template_id(&root, "alive"));
+    assert_eq!(bind_miss_count(), 0);
+}
+
+#[test]
+fn leaf_bind_structure_changed_coerces_to_layout() {
+    use crate::app::reactive::sanitize_leaf_bind_status;
+
+    assert_eq!(
+        sanitize_leaf_bind_status(LayoutStatus::StructureChanged),
+        LayoutStatus::LayoutChanged
+    );
+    assert_eq!(
+        sanitize_leaf_bind_status(LayoutStatus::StyleChanged),
+        LayoutStatus::StyleChanged
+    );
+}

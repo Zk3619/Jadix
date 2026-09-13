@@ -178,8 +178,8 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// Install an in-memory tree so [`try_reconcile_subtree`] works without a live `AppState`
-/// (component overlay / menubar harnesses).
+/// Install an in-memory tree so [`try_reconcile_subtree`] / [`try_update_element_by_template_id`]
+/// work without a live `AppState` (component overlay / bind harnesses).
 #[cfg(test)]
 pub fn install_test_reconcile_root(root: std::rc::Rc<RefCell<Element>>) {
     TEST_RECONCILE_ROOT.with(|c| *c.borrow_mut() = Some(root));
@@ -339,6 +339,23 @@ pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&Window) -> R) -> Optio
     Some(f(&window))
 }
 
+#[cfg(test)]
+fn test_update_element_by_template_id<F>(
+    template_id: &str,
+    patch: F,
+) -> Option<crate::core::tree::LayoutStatus>
+where
+    F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
+{
+    TEST_RECONCILE_ROOT.with(|c| {
+        let root = c.borrow().as_ref()?.clone();
+        let mut root = root.borrow_mut();
+        let want = template_id.replace('\\', "/").to_ascii_lowercase();
+        let slot = find_template_id_mut(&mut root, &want)?;
+        Some(patch(slot))
+    })
+}
+
 pub fn try_update_element_by_template_id<F>(
     template_id: &str,
     patch: F,
@@ -346,11 +363,23 @@ pub fn try_update_element_by_template_id<F>(
 where
     F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
 {
-    APP_RUNTIME.with(|c| {
-        c.borrow()
-            .as_ref()
-            .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
-    })
+    let has_app = APP_RUNTIME.with(|c| c.borrow().is_some());
+    if has_app {
+        return APP_RUNTIME.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
+        });
+    }
+    #[cfg(test)]
+    {
+        return test_update_element_by_template_id(template_id, patch);
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (template_id, patch);
+        None
+    }
 }
 
 /// Read-only access to the primary window UI root (Inspector snapshots).

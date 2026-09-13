@@ -28,4 +28,6 @@ pub(crate) fn register_slide_settle_complete(f: fn(&str)) {
 }
 
 #[cfg(test)]
-pub(crate) use engine::{clear_pending_modal_enter, set_modal_css_needs_frame_for_test};
+pub(crate) use engine::{
+    clear_pending_modal_enter, finish_modal_exit_for_test, set_modal_css_needs_frame_for_test,
+};

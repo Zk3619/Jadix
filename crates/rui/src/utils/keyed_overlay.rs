@@ -7,6 +7,8 @@
 //!
 //! 底层 hoist 仍由 [`crate::layout::layout_tree::hoist_portal_subtrees`] 驱动；
 //! 本模块提供 **一等 API**，避免每个组件抄 toast 特例。
+//! 产品文件不要调用 [`crate::app::portal_overlay::portal_sync`]：Pinned 不进 Esc 栈，
+//! 开合走 `viewport_modal` / `anchored_overlay`。
 
 use std::collections::HashMap;
 use std::fmt::Display;

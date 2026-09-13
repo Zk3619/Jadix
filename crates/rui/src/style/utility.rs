@@ -506,12 +506,16 @@ pub fn tick_active_css_transitions_subtree(
         scroll_acc: [f32; 2],
         scroll_progress: f32,
         named: Vec<(String, f32)>,
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_scale: [f32; 2],
     }
     let mut stack = vec![Frame {
         ptr: el as *mut Element,
         scroll_acc,
         scroll_progress: 0.0,
         named: Vec::new(),
+        ancestor_linear: crate::style::MAT2D_IDENTITY,
+        ancestor_scale: [1.0, 1.0],
     }];
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive subtree walk of the `el` passed to this function.
@@ -533,7 +537,13 @@ pub fn tick_active_css_transitions_subtree(
         let has_active_css = el.transition_snapshot.has_active_tweens();
         let css_needs =
             super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-        let force_leave = class_hover_should_leave(el, mouse_pos, scroll_acc);
+        let force_leave = class_hover_should_leave(
+            el,
+            mouse_pos,
+            scroll_acc,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
         // Culled nodes still advance in-flight tweens. Spring has duration_ms=0 so the
         // duration clock cannot "catch up" after a skip — it looks like a forced pause.
         // Settled `:hover` (no active tween) must still leave when the pointer is gone.
@@ -634,6 +644,11 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             crate::core::tree::child_scroll_accumulation(el, scroll_acc)
         };
+        let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
+            el,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
         let n = el.children.len();
         for i in (0..n).rev() {
             stack.push(Frame {
@@ -641,6 +656,8 @@ pub fn tick_active_css_transitions_subtree(
                 scroll_acc: child_acc,
                 scroll_progress: child_progress,
                 named: named.clone(),
+                ancestor_linear: child_lin,
+                ancestor_scale: child_sc,
             });
         }
     }
@@ -666,12 +683,16 @@ fn class_variant_hover_needs_frame_inner(
         scroll_acc: [f32; 2],
         clip: Option<[f32; 4]>,
         clip_round: OverflowRoundClip,
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_scale: [f32; 2],
     }
     let mut stack = vec![Frame {
         el,
         scroll_acc,
         clip,
         clip_round: None,
+        ancestor_linear: crate::style::MAT2D_IDENTITY,
+        ancestor_scale: [1.0, 1.0],
     }];
     while let Some(frame) = stack.pop() {
         let el = frame.el;
@@ -684,11 +705,24 @@ fn class_variant_hover_needs_frame_inner(
         };
 
         let b = el.layout_bounds;
-        let lx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
-        let ly = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
+        let [lx, ly] = crate::app::tree_hit::visual_xy(el, scroll_acc);
         let layout_box = [lx, ly, b[2], b[3]];
-        let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-        let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip, clip_round);
+        let vis_box = crate::core::tree::visual_paint_aabb_with_ancestor(
+            el,
+            scroll_acc,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
+        let inside = pointer_inside_for_class_hover(
+            el,
+            mouse_pos,
+            vis_box,
+            clip,
+            clip_round,
+            scroll_acc,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
 
         if let Some(cs) = el.class_set.as_ref() {
             if !cs.variants.is_empty() {
@@ -714,12 +748,19 @@ fn class_variant_hover_needs_frame_inner(
         } else {
             crate::core::tree::child_scroll_accumulation(el, scroll_acc)
         };
+        let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
+            el,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
         for child in el.children.iter().rev() {
             stack.push(Frame {
                 el: child,
                 scroll_acc: child_scroll_acc,
                 clip: child_clip,
                 clip_round: child_clip_round,
+                ancestor_linear: child_lin,
+                ancestor_scale: child_sc,
             });
         }
     }
@@ -732,6 +773,9 @@ fn pointer_inside_for_class_hover(
     vis_box: [f32; 4],
     clip: Option<[f32; 4]>,
     clip_round: OverflowRoundClip,
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
 ) -> bool {
     let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
     let in_clip = clip.map_or(true, |c| {
@@ -745,21 +789,32 @@ fn pointer_inside_for_class_hover(
             return false;
         }
     }
-    if crate::core::tree::element_clips_overflow(el)
-        && !crate::core::tree::overflow_clip_contains_point(el, vis_box, mouse_pos)
-    {
+    if !crate::core::tree::overflow_clip_contains_pointer(
+        el,
+        mouse_pos,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    ) {
         return false;
     }
-    if !el.style.clip_path.is_none() && !el.style.clip_path.contains_point(vis_box, mouse_pos) {
+    if !crate::core::tree::clip_path_contains_pointer(
+        el,
+        mouse_pos,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    ) {
         return false;
     }
     if crate::primitives::path::element_has_path_geometry(&el.attrs) {
-        return crate::app::tree_hit::element_self_pointer_hit(
+        return crate::app::tree_hit::element_self_pointer_hit_with(
             el,
             mouse_pos[0],
             mouse_pos[1],
-            vis_box[0],
-            vis_box[1],
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
         );
     }
     true
@@ -767,15 +822,37 @@ fn pointer_inside_for_class_hover(
 
 /// Already-hovered class variants whose paint AABB no longer contains the pointer.
 /// Used on the scroll-freeze path so springs / padding can leave without entering new hovers.
-fn class_hover_should_leave(el: &Element, mouse_pos: [f32; 2], scroll_acc: [f32; 2]) -> bool {
+/// Ancestor cascade matches the live hover walks (a parent rotate this frame must leave/stay
+/// against the painted box, not last-collect stamps).
+fn class_hover_should_leave(
+    el: &Element,
+    mouse_pos: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> bool {
     let Some(cs) = el.class_set.as_ref() else {
         return false;
     };
     if cs.last_pointer_hover != Some(true) || cs.variants.is_empty() {
         return false;
     }
-    let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-    !pointer_inside_for_class_hover(el, mouse_pos, vis_box, None, None)
+    let vis_box = crate::core::tree::visual_paint_aabb_with_ancestor(
+        el,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    );
+    !pointer_inside_for_class_hover(
+        el,
+        mouse_pos,
+        vis_box,
+        None,
+        None,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    )
 }
 
 fn resolve_stale_class_hover_leave(
@@ -856,9 +933,16 @@ fn record_peer_hover(
     child_scroll_acc: [f32; 2],
     child_clip: Option<[f32; 4]>,
     child_clip_round: OverflowRoundClip,
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
 ) {
     prev_peer_owned.clear();
-    let child_paint = crate::core::tree::visual_paint_aabb(child, child_scroll_acc);
+    let child_paint = crate::core::tree::visual_paint_aabb_with_ancestor(
+        child,
+        child_scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    );
     let child_hovered = crate::core::tree::point_in_aabb(mouse_pos, child_paint)
         && child_clip.map_or(true, |c| {
             c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
@@ -897,6 +981,8 @@ fn sync_class_variants_subtree_inner(
         scroll_acc: [f32; 2],
         clip: Option<[f32; 4]>,
         clip_round: OverflowRoundClip,
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_scale: [f32; 2],
         ancestor_groups: Vec<Option<String>>,
         peer: Vec<Option<String>>,
         next_child: usize,
@@ -904,6 +990,8 @@ fn sync_class_variants_subtree_inner(
         child_scroll_acc: [f32; 2],
         child_clip: Option<[f32; 4]>,
         child_clip_round: OverflowRoundClip,
+        child_ancestor_linear: crate::style::Mat2d,
+        child_ancestor_scale: [f32; 2],
         group_for_children: Vec<Option<String>>,
         prev_peer_owned: Vec<Option<String>>,
         named: Vec<(String, f32)>,
@@ -916,6 +1004,8 @@ fn sync_class_variants_subtree_inner(
         scroll_acc,
         clip,
         clip_round: None,
+        ancestor_linear: crate::style::MAT2D_IDENTITY,
+        ancestor_scale: [1.0, 1.0],
         ancestor_groups: ancestor_group_hovered
             .iter()
             .map(|n| n.map(str::to_string))
@@ -926,6 +1016,8 @@ fn sync_class_variants_subtree_inner(
         child_scroll_acc: [0.0, 0.0],
         child_clip: None,
         child_clip_round: None,
+        child_ancestor_linear: crate::style::MAT2D_IDENTITY,
+        child_ancestor_scale: [1.0, 1.0],
         group_for_children: Vec::new(),
         prev_peer_owned: Vec::new(),
         named: Vec::new(),
@@ -985,15 +1077,28 @@ fn sync_class_variants_subtree_inner(
             }
 
             let b = el.layout_bounds;
-            let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
-            let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
+            let [vx, vy] = crate::app::tree_hit::visual_xy(el, scroll_acc);
             let layout_box = [vx, vy, b[2], b[3]];
-            let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+            let vis_box = crate::core::tree::visual_paint_aabb_with_ancestor(
+                el,
+                scroll_acc,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            );
             // Clip `:hover` to ancestor overflow / scroll viewports (layout border box).
             // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
             // while the pointer is on the scaled ink (not the unscaled Taffy box).
             // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
-            let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip, clip_round);
+            let inside = pointer_inside_for_class_hover(
+                el,
+                mouse_pos,
+                vis_box,
+                clip,
+                clip_round,
+                scroll_acc,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            );
 
             let child_clip = if is_portal {
                 None
@@ -1160,6 +1265,13 @@ fn sync_class_variants_subtree_inner(
             frame.child_scroll_acc = child_scroll_acc;
             frame.child_clip = child_clip;
             frame.child_clip_round = child_clip_round;
+            let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
+                el,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            );
+            frame.child_ancestor_linear = child_lin;
+            frame.child_ancestor_scale = child_sc;
             let mut child_named = frame.named.clone();
             super::scroll_timeline::push_named_timelines(
                 el,
@@ -1190,6 +1302,8 @@ fn sync_class_variants_subtree_inner(
                 frame.child_scroll_acc,
                 frame.child_clip,
                 frame.child_clip_round,
+                frame.child_ancestor_linear,
+                frame.child_ancestor_scale,
             );
         }
         let i = frame.next_child;
@@ -1203,6 +1317,8 @@ fn sync_class_variants_subtree_inner(
         let child_scroll_acc = frame.child_scroll_acc;
         let child_clip = frame.child_clip;
         let child_clip_round = frame.child_clip_round;
+        let child_lin = frame.child_ancestor_linear;
+        let child_sc = frame.child_ancestor_scale;
         let child_named = frame.child_named.clone();
         let child_scroll_progress = frame.child_scroll_progress;
         let child_ptr = std::ptr::addr_of_mut!(el.inner.children[i]);
@@ -1212,6 +1328,8 @@ fn sync_class_variants_subtree_inner(
             scroll_acc: child_scroll_acc,
             clip: child_clip,
             clip_round: child_clip_round,
+            ancestor_linear: child_lin,
+            ancestor_scale: child_sc,
             ancestor_groups,
             peer,
             next_child: 0,
@@ -1219,6 +1337,8 @@ fn sync_class_variants_subtree_inner(
             child_scroll_acc: [0.0, 0.0],
             child_clip: None,
             child_clip_round: None,
+            child_ancestor_linear: crate::style::MAT2D_IDENTITY,
+            child_ancestor_scale: [1.0, 1.0],
             group_for_children: Vec::new(),
             prev_peer_owned: Vec::new(),
             named: child_named,
@@ -3198,6 +3318,65 @@ mod p1_utility_tests {
     }
 
     #[test]
+    fn scroll_paint_freeze_leave_uses_live_parent_rotate() {
+        let mut child = Element::new();
+        apply_class_list(&mut child, "hover:scale-125");
+        child.layout_bounds = [60.0, 90.0, 80.0, 20.0];
+        child.paint_ancestor_linear = crate::style::MAT2D_IDENTITY;
+        child.paint_ancestor_scale = [1.0, 1.0];
+        {
+            let cs = child.class_set.as_mut().expect("hover:scale-125 variants");
+            assert!(!cs.variants.is_empty());
+            cs.last_pointer_hover = Some(true);
+        }
+        let mut parent = Element::new().w(200.0).h(200.0).child(child);
+        parent.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        parent.style.rotate_deg = 90.0;
+        parent.style.transform_origin = crate::style::parse_transform_origin("center");
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut parent,
+            [100.0, 130.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            parent.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "live parent rotate must keep hover on the painted child AABB (stamps were identity)"
+        );
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut parent,
+            [40.0, 100.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            parent.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "old layout overhang must still leave under live parent rotate"
+        );
+    }
+
+    #[test]
     fn idle_hover_scale_transition_settles() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -3261,6 +3440,106 @@ mod p1_utility_tests {
             (el.style.scale[0] - 1.5).abs() < 0.05,
             "pointer on painted scale overflow must keep hover:scale-x-150, scale={:?}",
             el.style.scale
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn hover_rotate_origin_left_keeps_pointer_on_painted_aabb() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut el = Element::new();
+        apply_class_list(&mut el, "rotate-0 transition-transform hover:rotate-90");
+        el.layout_bounds = [400.0, 200.0, 100.0, 100.0];
+        let origin = crate::style::parse_transform_origin("left top");
+        el.style.transform_origin = origin.clone();
+        if let Some(cs) = el.class_set.as_mut() {
+            if let Some(base) = cs.base_style.as_mut() {
+                base.transform_origin = origin;
+            }
+        }
+        el.style.rotate_deg = 90.0;
+        let paint = crate::core::tree::visual_paint_aabb(&el, [0.0, 0.0]);
+        assert!(
+            (paint[0] - 300.0).abs() < 0.5 && (paint[2] - 100.0).abs() < 0.5,
+            "left-top 90° AABB should sit at x=300, got {paint:?}"
+        );
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        for _ in 0..20 {
+            crate::style::advance_css_transition_timeline_ms(1000.0 / 60.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [350.0, 250.0],
+                "",
+                false,
+                1024.0,
+                800.0,
+                &mut tree,
+                &mut impact,
+            );
+        }
+        assert!(
+            (el.style.rotate_deg - 90.0).abs() < 0.5,
+            "pointer on painted origin-left rotate must keep hover:rotate-90, rotate={}",
+            el.style.rotate_deg
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn hover_rotate_origin_left_leaves_old_layout_center() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut el = Element::new();
+        apply_class_list(&mut el, "rotate-0 transition-transform hover:rotate-90");
+        el.layout_bounds = [400.0, 200.0, 100.0, 100.0];
+        let origin = crate::style::parse_transform_origin("left top");
+        el.style.transform_origin = origin.clone();
+        if let Some(cs) = el.class_set.as_mut() {
+            if let Some(base) = cs.base_style.as_mut() {
+                base.transform_origin = origin;
+            }
+        }
+        el.style.rotate_deg = 90.0;
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        for _ in 0..5 {
+            crate::style::advance_css_transition_timeline_ms(1000.0 / 60.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [350.0, 250.0],
+                "",
+                false,
+                1024.0,
+                800.0,
+                &mut tree,
+                &mut impact,
+            );
+        }
+        assert!(
+            (el.style.rotate_deg - 90.0).abs() < 0.5,
+            "expected hover held on painted AABB, got {}",
+            el.style.rotate_deg
+        );
+        for _ in 0..8 {
+            crate::style::advance_css_transition_timeline_ms(1000.0 / 60.0);
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut el,
+                [450.0, 250.0],
+                "",
+                false,
+                1024.0,
+                800.0,
+                &mut tree,
+                &mut impact,
+            );
+        }
+        assert!(
+            el.style.rotate_deg < 85.0,
+            "old layout center is outside the painted 90° AABB, so hover must start leaving (got {})",
+            el.style.rotate_deg
         );
         crate::style::set_css_transition_virtual_timeline(false);
     }

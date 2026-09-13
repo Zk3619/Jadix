@@ -64,8 +64,9 @@ pub struct InstanceInput {
     /// 2D affine transform `[a, b, c, d, tx, ty]`.
     /// Identity = `[1, 0, 0, 1, 0, 0]`.
     pub transform: [f32; 6],
-    /// Overflow clip in the same space as `rect_pos` (logical or physical after scale).
+    /// Overflow clip in `rect_pos` space. FS tests after undoing the instance affine.
     /// When `clip_size[0] < 0.0`, clipping is disabled.
+    /// Dest-reset / node-present scissors use `NodePaint.overflow_clip` (paint AABB).
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
     /// Packed border/corner data: `border_style + corner_shape * 16 + round(corner_param * 100) * 256`.

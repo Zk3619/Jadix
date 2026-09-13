@@ -30,7 +30,8 @@
 use crate::components::base::SlotChrome;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus,
+    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, IntoNodeBg,
+    IntoNodeSize, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
@@ -787,7 +788,8 @@ impl ButtonBuilder {
     }
 
     // Pass-through some layout methods
-    pub fn w(mut self, w: impl IntoCssDim) -> Self {
+    #[track_caller]
+    pub fn w(mut self, w: impl IntoNodeSize) -> Self {
         self.container = self.container.w(w);
         self
     }
@@ -799,7 +801,8 @@ impl ButtonBuilder {
         self.container = self.container.w("100%").min_w(0.0).max_w("100%");
         self
     }
-    pub fn h(mut self, h: impl IntoCssDim) -> Self {
+    #[track_caller]
+    pub fn h(mut self, h: impl IntoNodeSize) -> Self {
         self.container = self.container.h(h);
         self
     }
@@ -811,7 +814,8 @@ impl ButtonBuilder {
         self.container = self.container.gap(g);
         self
     }
-    pub fn bg(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+    #[track_caller]
+    pub fn bg(mut self, color: impl IntoNodeBg) -> Self {
         self.container = self.container.bg(color);
         self
     }

@@ -55,7 +55,7 @@
 //! - Trigger `focus_id = "{tabs_id}:{value}"`；方向键只移焦点环，点击 / Enter / Space 改选中。
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::base::SlotChrome;
 use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{
@@ -858,57 +858,53 @@ impl From<TabsHeadlessBuilder> for Element {
                 default_selected.min(count.saturating_sub(1))
             })
         });
-        let view_id = format!("{id}__tabs_view");
         let strip_id = id.clone();
-
-        let strip = reactive_view(view_id, move || {
-            let _ = sel.get();
-            let sel_k = sel;
-            let n = count;
-            let focus_id = format!("{TABSTRIP_FOCUS_PREFIX}{strip_id}");
-            let mut el: Element = interactive(Element::new())
-                .focus_id(focus_id)
-                .focusable(true)
-                .focus_ring(true)
-                .on_key_down(move |ev| {
-                    use winit::event::ElementState;
-                    use winit::keyboard::{Key, NamedKey};
-                    if ev.state != ElementState::Pressed || ev.repeat {
-                        return false;
+        // Keyboard handlers peek `sel` at event time — do not wrap the strip in
+        // `reactive_view` (WP-N.4: islands are for insert/delete, not selection chrome).
+        let sel_k = sel;
+        let n = count;
+        let focus_id = format!("{TABSTRIP_FOCUS_PREFIX}{strip_id}");
+        let mut strip: Element = interactive(Element::new())
+            .focus_id(focus_id)
+            .focusable(true)
+            .focus_ring(true)
+            .on_key_down(move |ev| {
+                use winit::event::ElementState;
+                use winit::keyboard::{Key, NamedKey};
+                if ev.state != ElementState::Pressed || ev.repeat {
+                    return false;
+                }
+                let i = sel_k.get();
+                match ev.logical_key {
+                    Key::Named(NamedKey::ArrowRight) => {
+                        if let Some(next) = roving_move(n, i, 1) {
+                            sel_k.set(next);
+                        }
+                        true
                     }
-                    let i = sel_k.get();
-                    match ev.logical_key {
-                        Key::Named(NamedKey::ArrowRight) => {
-                            if let Some(next) = roving_move(n, i, 1) {
-                                sel_k.set(next);
-                            }
-                            true
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        if let Some(next) = roving_move(n, i, -1) {
+                            sel_k.set(next);
                         }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            if let Some(next) = roving_move(n, i, -1) {
-                                sel_k.set(next);
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::Home) => {
-                            if let Some(next) = roving_edge(n, false) {
-                                sel_k.set(next);
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::End) => {
-                            if let Some(next) = roving_edge(n, true) {
-                                sel_k.set(next);
-                            }
-                            true
-                        }
-                        _ => false,
+                        true
                     }
-                })
-                .into();
-            el.template_id = Some(format!("{strip_id}:strip"));
-            el
-        });
+                    Key::Named(NamedKey::Home) => {
+                        if let Some(next) = roving_edge(n, false) {
+                            sel_k.set(next);
+                        }
+                        true
+                    }
+                    Key::Named(NamedKey::End) => {
+                        if let Some(next) = roving_edge(n, true) {
+                            sel_k.set(next);
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            })
+            .into();
+        strip.template_id = Some(format!("{strip_id}:strip"));
 
         let mut root = Element::new().child(strip);
         root = root.children(children);

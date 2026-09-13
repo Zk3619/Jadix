@@ -4,6 +4,8 @@
 //!   sibling compute (Solid proxy / Leptos `reactive_stores` idea; no JS Proxy in Element).
 //! - [`store_select`] + [`Store::produce`]: transitional whole-root path. Root `produce` still
 //!   re-runs every select closure; slice [`PartialEq`] gates downstream effects (WP-2.5).
+//!   **G.3**：业务代码用 [`Store::field`]；仓内零 `store_select` 调用（仅本模块测试 + 本 API）。
+//!   `produce` 是粗通知全部路径，保留。
 
 use std::cell::RefCell;
 use std::collections::HashMap;

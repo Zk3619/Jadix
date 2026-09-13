@@ -6,7 +6,14 @@
 //! next FullClear snaps. That is the jump; sidebar ghosts are the same present
 //! mode (Load without redrawing neighbors).
 
-use crate::app::damage::{intersect_rects, take_frame_paint_nodes, PaintDirtyKind};
+use crate::app::damage::{
+    intersect_rects, paint_dirty_has_keyed_slot, paint_dirty_matches_present_slot,
+    paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
+};
+use crate::app::draw_cull::{
+    node_paint_visual_bounds, node_present_clipped_capture_text, node_present_dest_reset_scaled,
+    node_present_scissor_logical,
+};
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{visual_paint_aabb, Element, LayoutStatus, LayoutTree};
@@ -465,4 +472,484 @@ fn node_present_spin_must_not_double_draw_same_box_parent() {
         ),
         "fixture: wrapper still same_box-matches (the bug this test locks)"
     );
+}
+
+/// Gallery Marker: `shimmer-box` dest-reset must stay in its column. Last-present
+/// of a parent slot used to union descendant overflow and wipe the next section.
+#[test]
+fn shimmer_box_dest_reset_must_not_wipe_sibling_column() {
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut box_el = Element::new()
+        .w(120.0)
+        .h(40.0)
+        .bg([0.90, 0.90, 0.92, 1.0])
+        .child(Element::new().text("shimmer-box overlay on container"));
+    apply_class_list(&mut box_el, "shimmer-box shimmer-duration-1000");
+    box_el.set_attr("data-slot", "shimmer-box");
+    box_el.set_attr(crate::renderer::ATTR_SHIMMER_EPOCH, "-0.5");
+
+    let mut sibling = Element::new().w(120.0).h(40.0).bg([0.20, 0.40, 0.80, 1.0]);
+    sibling.set_attr("data-slot", "sibling");
+
+    let mut root = Element::new()
+        .flex_row()
+        .w(240.0)
+        .h(40.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(box_el)
+        .child(sibling);
+    let mut tree = LayoutTree::new();
+    let collected = tree.build_and_layout(&mut root, 240.0, 40.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let mut impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        240.0,
+        40.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirty = take_frame_paint_nodes();
+    let box_el = find_slot(&root, "shimmer-box").expect("shimmer-box");
+    let sibling_el = find_slot(&root, "sibling").expect("sibling");
+    let key = paint_element_key(box_el);
+    let box_dirty = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == key)
+        .expect("shimmer-box must push a node-present dirty");
+    let prev = collected
+        .node_paints
+        .iter()
+        .find(|p| p.key == key)
+        .map(|p| {
+            node_paint_visual_bounds(
+                p,
+                &collected.instances,
+                &[],
+                &collected.text_nodes,
+                &collected.input_chrome_instances,
+            )
+        });
+    let (wipe, _) = node_present_dest_reset_scaled(
+        box_dirty.key,
+        box_dirty.bounds,
+        &collected.node_paints,
+        &collected.instances,
+        &[],
+        1.0,
+        prev,
+    )
+    .expect("card behind shimmer-box");
+    let sib = sibling_el.layout_bounds;
+    let cx = sib[0] + sib[2] * 0.5;
+    let cy = sib[1] + sib[3] * 0.5;
+    assert!(
+        cx < wipe[0] || cx > wipe[0] + wipe[2] || cy < wipe[1] || cy > wipe[1] + wipe[3],
+        "shimmer-box dest-reset must not punch the sibling column\n wipe={} sibling={} prev={prev:?}",
+        fmt_rect(wipe),
+        fmt_rect(sib)
+    );
+}
+
+/// Overflowing shimmer label dest-reset must not punch a disjoint header bar.
+#[test]
+fn overflowing_shimmer_label_dest_reset_must_not_wipe_header() {
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut header = Element::new()
+        .w(400.0)
+        .h(32.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(Element::new().text("基础"));
+    header.set_attr("data-slot", "header");
+
+    let mut label = Element::new()
+        .w(80.0)
+        .h(20.0)
+        .flex_shrink(0.0)
+        .text("Generating response…");
+    apply_class_list(&mut label, "shimmer shimmer-duration-1000");
+    label.set_attr("data-slot", "shimmer-label");
+    label.set_attr(crate::renderer::ATTR_SHIMMER_EPOCH, "-0.5");
+
+    let mut root = Element::new()
+        .flex_col()
+        .w(400.0)
+        .h(80.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(header)
+        .child(label);
+    let mut tree = LayoutTree::new();
+    let collected = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let mut impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        400.0,
+        80.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirty = take_frame_paint_nodes();
+    let label_el = find_slot(&root, "shimmer-label").expect("shimmer label");
+    let header_el = find_slot(&root, "header").expect("header");
+    let key = paint_element_key(label_el);
+    let label_dirty = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == key)
+        .expect("shimmer label must push a node-present dirty");
+    let prev = collected
+        .node_paints
+        .iter()
+        .find(|p| p.key == key)
+        .map(|p| {
+            node_paint_visual_bounds(
+                p,
+                &collected.instances,
+                &[],
+                &collected.text_nodes,
+                &collected.input_chrome_instances,
+            )
+        });
+    let (wipe, _) = node_present_dest_reset_scaled(
+        label_dirty.key,
+        label_dirty.bounds,
+        &collected.node_paints,
+        &collected.instances,
+        &[],
+        1.0,
+        prev,
+    )
+    .expect("page behind shimmer label");
+    let hb = header_el.layout_bounds;
+    let cx = hb[0] + hb[2] * 0.5;
+    let cy = hb[1] + hb[3] * 0.5;
+    assert!(
+        cx < wipe[0] || cx > wipe[0] + wipe[2] || cy < wipe[1] || cy > wipe[1] + wipe[3],
+        "overflowing shimmer dest-reset must not punch the header\n wipe={} header={} prev={prev:?}",
+        fmt_rect(wipe),
+        fmt_rect(hb)
+    );
+}
+
+fn union_xywh(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let x0 = a[0].min(b[0]);
+    let y0 = a[1].min(b[1]);
+    let x1 = (a[0] + a[2]).max(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).max(b[1] + b[3]);
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+fn rect_contains_point(r: [f32; 4], x: f32, y: f32) -> bool {
+    x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3]
+}
+
+/// Gallery 基础: title bar above a ScrollArea. Overflowing Marker shimmer and
+/// shimmer-box dest-reset / capture / scissor must not punch the title or the
+/// sibling column. Previous tests used a single-row tree without overflow clip.
+#[test]
+fn gallery_marker_like_dest_reset_must_not_punch_title_or_sibling() {
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut header = Element::new()
+        .w(400.0)
+        .h(48.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(Element::new().text("基础"));
+    header.set_attr("data-slot", "title");
+
+    let mut label = Element::new()
+        .w(160.0)
+        .h(20.0)
+        .flex_shrink(0.0)
+        .text("Generating response…");
+    apply_class_list(
+        &mut label,
+        "shimmer shimmer-duration-1000 whitespace-nowrap",
+    );
+    label.set_attr("data-slot", "shimmer-label");
+    label.set_attr(crate::renderer::ATTR_SHIMMER_EPOCH, "-0.5");
+
+    let mut box_el = Element::new()
+        .w("100%")
+        .h(40.0)
+        .bg([0.90, 0.90, 0.92, 1.0])
+        .child(Element::new().text("shimmer-box overlay on container"));
+    apply_class_list(&mut box_el, "shimmer-box shimmer-duration-1600");
+    box_el.set_attr("data-slot", "shimmer-box");
+    box_el.set_attr(crate::renderer::ATTR_SHIMMER_EPOCH, "-0.5");
+
+    let mut sibling = Element::new()
+        .w(180.0)
+        .h(80.0)
+        .flex_shrink(0.0)
+        .bg([0.20, 0.40, 0.80, 1.0])
+        .child(Element::new().text("Today"));
+    sibling.set_attr("data-slot", "sibling");
+
+    let left = Element::new()
+        .flex_col()
+        .w(180.0)
+        .min_w(0.0)
+        .gap(8.0)
+        .child(label)
+        .child(box_el);
+
+    let mut body = Element::new()
+        .flex_row()
+        .w(400.0)
+        .h(160.0)
+        .min_h(0.0)
+        .overflow_y("hidden")
+        .overflow_x("hidden")
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(left)
+        .child(sibling);
+    body.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}gal-basics"));
+    body.set_attr("data-slot", "scroll-body");
+
+    let mut root = Element::new()
+        .flex_col()
+        .w(400.0)
+        .h(208.0)
+        .bg([0.94, 0.94, 0.95, 1.0])
+        .child(header)
+        .child(body);
+
+    let mut tree = LayoutTree::new();
+    let _collected = tree.build_and_layout(&mut root, 400.0, 208.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let mut impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        400.0,
+        208.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirty = take_frame_paint_nodes();
+    let collected = tree.build_and_layout_fast(&mut root, 400.0, 208.0, [-1.0, -1.0], false, false);
+
+    let title = find_slot(&root, "title").expect("title");
+    let sibling_el = find_slot(&root, "sibling").expect("sibling");
+    let box_el = find_slot(&root, "shimmer-box").expect("shimmer-box");
+    let label_el = find_slot(&root, "shimmer-label").expect("shimmer-label");
+    let title_b = title.layout_bounds;
+    let sib_b = sibling_el.layout_bounds;
+    let box_b = box_el.layout_bounds;
+
+    let mut wipe_union: Option<[f32; 4]> = None;
+    let mut scissor_union: Option<[f32; 4]> = None;
+    let mut parent_matches = Vec::new();
+    for d in dirty.iter().filter(|d| d.kind == PaintDirtyKind::Node) {
+        let prev = collected
+            .node_paints
+            .iter()
+            .find(|p| p.key == d.key)
+            .map(|p| {
+                node_paint_visual_bounds(
+                    p,
+                    &collected.instances,
+                    &[],
+                    &collected.text_nodes,
+                    &collected.input_chrome_instances,
+                )
+            });
+        let slots: Vec<(u64, [f32; 4])> = prev.map(|b| (d.key, b)).into_iter().collect();
+        let scissor = node_present_scissor_logical(
+            d.kind,
+            d.key,
+            d.bounds,
+            &slots,
+            &collected.node_paints,
+            8.0,
+        );
+        scissor_union = Some(match scissor_union {
+            Some(prev) => union_xywh(prev, scissor),
+            None => scissor,
+        });
+        if let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &collected.node_paints,
+            &collected.instances,
+            &[],
+            1.0,
+            prev,
+        ) {
+            wipe_union = Some(match wipe_union {
+                Some(prev) => union_xywh(prev, wipe),
+                None => wipe,
+            });
+        }
+        let has_keyed = paint_dirty_has_keyed_slot(
+            d.key,
+            d.bounds,
+            collected
+                .node_paints
+                .iter()
+                .filter(|p| !p.overlay)
+                .map(|p| (p.key, p.bounds)),
+        );
+        for p in collected.node_paints.iter().filter(|p| !p.overlay) {
+            if paint_dirty_matches_present_slot(d.key, d.bounds, p.key, p.bounds, has_keyed)
+                && p.bounds[2] * p.bounds[3] > d.bounds[2] * d.bounds[3] * 2.0 + 1.0
+            {
+                parent_matches.push(format!(
+                    "dirty {} {} -> slot {} {}",
+                    d.key,
+                    fmt_rect(d.bounds),
+                    p.key,
+                    fmt_rect(p.bounds)
+                ));
+            }
+        }
+    }
+
+    let capture =
+        node_present_clipped_capture_text(&dirty, &collected.text_nodes, &collected.node_paints);
+    let title_cx = title_b[0] + title_b[2] * 0.5;
+    let title_cy = title_b[1] + title_b[3] * 0.5;
+    let sib_cx = sib_b[0] + sib_b[2] * 0.5;
+    let sib_cy = sib_b[1] + sib_b[3] * 0.5;
+
+    let dump = format!(
+        "title={} sibling={} box={} label_dirty={:?} box_dirty={:?}\n dirties={:?}\n wipe={:?} scissor={:?}\n parent_matches={:?}\n capture_clips={:?}\n text_clips={:?}",
+        fmt_rect(title_b),
+        fmt_rect(sib_b),
+        fmt_rect(box_b),
+        dirty.iter().find(|d| d.key == paint_element_key(label_el)).map(|d| fmt_rect(d.bounds)),
+        dirty.iter().find(|d| d.key == paint_element_key(box_el)).map(|d| fmt_rect(d.bounds)),
+        dirty.iter().map(|d| format!("{} {}", d.key, fmt_rect(d.bounds))).collect::<Vec<_>>(),
+        wipe_union.map(fmt_rect),
+        scissor_union.map(fmt_rect),
+        parent_matches,
+        capture.iter().map(|n| n.clip_bounds.map(fmt_rect)).collect::<Vec<_>>(),
+        collected.text_nodes.iter().map(|n| format!("{:?} clip={:?}", n.text, n.clip_bounds.map(fmt_rect))).collect::<Vec<_>>(),
+    );
+
+    if let Some(w) = wipe_union {
+        assert!(
+            !rect_contains_point(w, title_cx, title_cy),
+            "dest-reset union punches the title\n{dump}"
+        );
+        assert!(
+            !rect_contains_point(w, sib_cx, sib_cy),
+            "dest-reset union punches the sibling column\n{dump}"
+        );
+    }
+    if let Some(s) = scissor_union {
+        assert!(
+            !rect_contains_point(s, title_cx, title_cy),
+            "node-present scissor punches the title\n{dump}"
+        );
+        assert!(
+            !rect_contains_point(s, title_b[0] + 40.0, title_b[1] + title_b[3] - 4.0),
+            "node-present scissor pad leaks into the title bottom\n{dump}"
+        );
+    }
+    for n in &collected.text_nodes {
+        if n.text.contains('基') {
+            continue;
+        }
+        if let Some(c) = n.clip_bounds {
+            assert!(
+                !rect_contains_point(c, title_cx, title_cy),
+                "collect clip includes the title for {:?}\n{dump}",
+                n.text
+            );
+        } else if n.text.contains("Generating") {
+            panic!("overflowing shimmer label collect clip_bounds is None (full-surface glyphon)\n{dump}");
+        }
+    }
+    for n in &capture {
+        if let Some(c) = n.clip_bounds {
+            assert!(
+                !rect_contains_point(c, title_cx, title_cy),
+                "capture clip includes the title for {:?}\n{dump}",
+                n.text
+            );
+        }
+    }
+    assert!(
+        parent_matches.is_empty(),
+        "leaf dirties matched a much larger ancestor slot\n{dump}"
+    );
+    let box_dirty = dirty
+        .iter()
+        .find(|d| d.key == paint_element_key(box_el))
+        .expect("shimmer-box dirty");
+    assert!(
+        box_dirty.bounds[2] < 240.0,
+        "shimmer-box dirty is page-wide\n{dump}"
+    );
+
+    let huge_prev = [0.0, 0.0, 400.0, 208.0];
+    for d in dirty.iter().filter(|d| d.kind == PaintDirtyKind::Node) {
+        if let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &collected.node_paints,
+            &collected.instances,
+            &[],
+            1.0,
+            Some(huge_prev),
+        ) {
+            assert!(
+                !rect_contains_point(wipe, title_cx, title_cy),
+                "recycled last-present dest-reset punches the title\n wipe={} overflow={:?}\n{dump}",
+                fmt_rect(wipe),
+                collected
+                    .node_paints
+                    .iter()
+                    .filter(|p| p.key == d.key)
+                    .map(|p| p.overflow_clip.map(fmt_rect))
+                    .collect::<Vec<_>>(),
+            );
+            assert!(
+                !rect_contains_point(wipe, sib_cx, sib_cy),
+                "recycled last-present dest-reset punches the sibling\n wipe={}\n{dump}",
+                fmt_rect(wipe)
+            );
+        }
+        let scissor = node_present_scissor_logical(
+            d.kind,
+            d.key,
+            d.bounds,
+            &[(d.key, huge_prev)],
+            &collected.node_paints,
+            8.0,
+        );
+        assert!(
+            !rect_contains_point(scissor, title_cx, title_cy),
+            "recycled last-present scissor punches the title\n scissor={}\n{dump}",
+            fmt_rect(scissor)
+        );
+        assert!(
+            !rect_contains_point(scissor, title_b[0] + 40.0, title_b[1] + title_b[3] - 4.0),
+            "recycled last-present scissor pad leaks into the title bottom\n scissor={}\n{dump}",
+            fmt_rect(scissor)
+        );
+    }
 }

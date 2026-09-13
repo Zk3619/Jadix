@@ -1,8 +1,11 @@
 mod bind_text;
+mod builder_live;
 mod component_authoring;
 mod components_sync;
 mod effect_phase;
 mod for_index;
+mod graph_flush;
+mod isolated_discarded;
 mod props_helpers;
 mod registry_owner;
 mod registry_session;

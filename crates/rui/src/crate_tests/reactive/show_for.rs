@@ -1,6 +1,6 @@
 use crate::app::reactive::{
-    for_keyed, for_reactive, reactive_component, show, show_reactive, show_scoped,
-    ATTR_SOURCE_TEMPLATE_ID, REACTIVE_PLACEHOLDER_HASH,
+    bind_text, for_keyed, for_reactive, reactive_component, show, show_reactive, show_scoped,
+    static_template_clone_hit_count, ATTR_SOURCE_TEMPLATE_ID, REACTIVE_PLACEHOLDER_HASH,
 };
 use crate::app::reactive::{reactive_placeholder, reactive_view, reset_registered_anchors};
 use crate::app::test_support::{is_bootstrap_root, reconcile_elements, BOOTSTRAP_ROOT_ATTR};
@@ -542,5 +542,245 @@ fn reactive_component_props_refresh_reruns_effect() {
 
     drop(mounted.borrow_mut().take());
     dispose_effect(_root_effect);
+    reset_registered_anchors();
+}
+
+#[test]
+fn show_for_spot_check_button_toast_have_no_reactive_view() {
+    let button = include_str!("../../components/button.rs");
+    assert!(
+        !button.contains("reactive_view("),
+        "button must bind leaves, not wrap chrome in reactive_view"
+    );
+    let toast = include_str!("../../components/toast/mod.rs");
+    assert!(
+        !toast.contains("reactive_view("),
+        "toast must not use reactive_view for text/variant"
+    );
+}
+
+#[test]
+fn show_for_spot_check_dialog_island_is_viewport_modal() {
+    let dialog = include_str!("../../components/dialog.rs");
+    assert!(
+        dialog.contains("reactive_view("),
+        "Dialog open/close is a structure island"
+    );
+    assert!(
+        dialog.contains("viewport_modal_layer"),
+        "Dialog island must mount through the viewport_modal shell"
+    );
+}
+
+#[test]
+fn show_for_spot_check_tabs_strip_not_an_island() {
+    let tabs = include_str!("../../components/tabs.rs");
+    assert!(
+        !tabs.contains("reactive_view("),
+        "tabs strip must not rebuild interactive chrome on selection"
+    );
+    assert!(
+        tabs.contains("reactive_anchor("),
+        "selected panel remains a structure island"
+    );
+}
+
+#[test]
+fn show_for_spot_check_progress_track_not_an_island() {
+    let progress = include_str!("../../components/progress.rs");
+    assert!(
+        !progress.contains("reactive_view("),
+        "ProgressTrack fill is paint-only — bind_prop, not reactive_view"
+    );
+    assert!(
+        progress.contains("apply_bound_size"),
+        "fill size must patch via apply_bound_size"
+    );
+}
+
+#[test]
+fn show_for_spot_check_menubar_trigger_not_an_island() {
+    let menubar = include_str!("../../components/menubar.rs");
+    assert!(
+        !menubar.contains("reactive_view("),
+        "MenubarTrigger open accent is paint-only — bind_prop, not reactive_view"
+    );
+    assert!(
+        menubar.contains("bind_prop("),
+        "open chrome must patch via bind_prop"
+    );
+}
+
+#[test]
+fn unkeyed_for_warn_string_names_keyed_path() {
+    let src = include_str!("../../app/reactive.rs");
+    assert!(
+        src.contains("has no key; each list change rebuilds the whole table"),
+        "unkeyed For must debug-warn that it rebuilds the whole table"
+    );
+    assert!(
+        src.contains("for_keyed_reactive"),
+        "warn must point authors at for_keyed_reactive"
+    );
+}
+
+#[test]
+fn clone_static_skeleton_copies_text_not_layout_node() {
+    let mut src = Element::new()
+        .template_id("n6:leaf")
+        .template_hash("n6-hash");
+    src.text = Some("hello".to_string());
+    src.focus_ring = true;
+    src.layout_node = Some(taffy::prelude::NodeId::from(7u64));
+    src.focus_ring = true;
+    src.children.push({
+        let mut c = Element::new();
+        c.text = Some("kid".to_string());
+        c
+    });
+    let cloned = src.clone_static_skeleton();
+    assert_eq!(cloned.template_id.as_deref(), Some("n6:leaf"));
+    assert_eq!(cloned.template_hash.as_deref(), Some("n6-hash"));
+    assert_eq!(cloned.text.as_deref(), Some("hello"));
+    assert!(cloned.focus_ring);
+    assert!(
+        cloned.layout_node.is_none(),
+        "clone must not reuse taffy nodes"
+    );
+    assert!(cloned.focus_ring);
+    assert_eq!(cloned.children.len(), 1);
+    assert_eq!(cloned.children[0].text.as_deref(), Some("kid"));
+}
+
+#[test]
+fn show_reactive_static_remount_clones_interned_template() {
+    reset_registered_anchors();
+    let open = use_signal("wp_n6_static_open", || false);
+    open.set_silent(false);
+    let renders = Rc::new(Cell::new(0_u32));
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let renders_e = Rc::clone(&renders);
+    let mounted_a = Rc::clone(&mounted);
+
+    let root = create_effect(move || {
+        let renders_e = Rc::clone(&renders_e);
+        let view = show_reactive(
+            "wp_n6:static",
+            move || open.get(),
+            move || {
+                renders_e.set(renders_e.get() + 1);
+                let mut e = Element::new().template_id("wp_n6:panel");
+                e.text = Some("panel".to_string());
+                e
+            },
+        );
+        *mounted_a.borrow_mut() = Some(view);
+    });
+
+    open.set(true);
+    assert_eq!(renders.get(), 1, "first open builds the static body");
+    let hits_after_first = static_template_clone_hit_count();
+
+    open.set(false);
+    open.set(true);
+    assert_eq!(
+        renders.get(),
+        1,
+        "static Show remount must clone interned skeleton, not re-run render"
+    );
+    assert!(
+        static_template_clone_hit_count() > hits_after_first,
+        "remount must count as a clone hit"
+    );
+
+    drop(mounted.borrow_mut().take());
+    dispose_effect(root);
+    reset_registered_anchors();
+}
+
+#[test]
+fn show_reactive_bound_child_still_reruns_render() {
+    reset_registered_anchors();
+    let open = use_signal("wp_n6_bound_open", || false);
+    open.set_silent(false);
+    let n = use_signal("wp_n6_bound_n", || 1_i32);
+    n.set_silent(1);
+    let renders = Rc::new(Cell::new(0_u32));
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let renders_e = Rc::clone(&renders);
+    let mounted_a = Rc::clone(&mounted);
+
+    let root = create_effect(move || {
+        let renders_e = Rc::clone(&renders_e);
+        let view = show_reactive(
+            "wp_n6:bound",
+            move || open.get(),
+            move || {
+                renders_e.set(renders_e.get() + 1);
+                bind_text("wp_n6:bound:text", move || n.get().to_string())
+            },
+        );
+        *mounted_a.borrow_mut() = Some(view);
+    });
+
+    open.set(true);
+    assert_eq!(renders.get(), 1);
+    open.set(false);
+    open.set(true);
+    assert_eq!(
+        renders.get(),
+        2,
+        "Show body with bind_* must re-run render so effects re-register"
+    );
+
+    drop(mounted.borrow_mut().take());
+    dispose_effect(root);
+    reset_registered_anchors();
+}
+
+#[test]
+fn show_reactive_handler_body_still_reruns_render() {
+    reset_registered_anchors();
+    let open = use_signal("wp_n6_handler_open", || false);
+    open.set_silent(false);
+    let renders = Rc::new(Cell::new(0_u32));
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let renders_e = Rc::clone(&renders);
+    let mounted_a = Rc::clone(&mounted);
+
+    let root = create_effect(move || {
+        let renders_e = Rc::clone(&renders_e);
+        let view = show_reactive(
+            "wp_n6:handler",
+            move || open.get(),
+            move || {
+                renders_e.set(renders_e.get() + 1);
+                Element::new()
+                    .template_id("wp_n6:handler:btn")
+                    .text("click")
+                    .on_click(|| {})
+            },
+        );
+        *mounted_a.borrow_mut() = Some(view);
+    });
+
+    open.set(true);
+    assert_eq!(renders.get(), 1);
+    let hits_after_first = static_template_clone_hit_count();
+    open.set(false);
+    open.set(true);
+    assert_eq!(
+        renders.get(),
+        2,
+        "Show body with on_* must re-run render; interned clones must not share handlers"
+    );
+    assert_eq!(
+        static_template_clone_hit_count(),
+        hits_after_first,
+        "handler bodies must not count as static template clone hits"
+    );
+
+    drop(mounted.borrow_mut().take());
+    dispose_effect(root);
     reset_registered_anchors();
 }

@@ -361,7 +361,15 @@ pub fn click_dispatch_path(down: &[HitPathEntry], up: &[HitPathEntry]) -> Vec<Hi
 /// Collect the hit path from root to the deepest hit node (inclusive).
 pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
     let mut path = Vec::new();
-    hit_path_rec(el, x, y, [0.0, 0.0], &mut path);
+    hit_path_rec(
+        el,
+        x,
+        y,
+        [0.0, 0.0],
+        crate::style::MAT2D_IDENTITY,
+        [1.0, 1.0],
+        &mut path,
+    );
     path
 }
 
@@ -374,6 +382,8 @@ fn hit_path_rec(
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
     out: &mut Vec<HitPathEntry>,
 ) -> bool {
     if pointer_events_blocked(el) {
@@ -390,17 +400,26 @@ fn hit_path_rec(
         scroll_acc
     };
 
-    let b = el.layout_bounds;
-    let [vx, vy] = super::tree_hit::visual_xy(el, scroll_acc);
-
-    // Root portal layer must not reject hits via its own box when children extend
-    // visually (layer is a stacking shell; children carry geometry).
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     if !is_body_portal
-        && crate::core::tree::element_clips_overflow(el)
-        && !crate::core::tree::overflow_clip_contains_point(el, [vx, vy, b[2], b[3]], [x, y])
+        && !crate::core::tree::overflow_clip_contains_pointer(
+            el,
+            [x, y],
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
+        )
     {
+        return false;
+    }
+    if !crate::core::tree::clip_path_contains_pointer(
+        el,
+        [x, y],
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    ) {
         return false;
     }
 
@@ -412,7 +431,13 @@ fn hit_path_rec(
 
     // Record this node before descending (root → leaf order).
     let entry_index = out.len();
-    out.push(HitPathEntry::from_element(el, [vx, vy, b[2], b[3]]));
+    let paint_bounds = crate::core::tree::visual_paint_aabb_with_ancestor(
+        el,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    );
+    out.push(HitPathEntry::from_element(el, paint_bounds));
 
     let mut child_hit = false;
     let order = {
@@ -424,14 +449,23 @@ fn hit_path_rec(
         });
         order
     };
+    let (child_lin, child_sc) =
+        crate::core::tree::child_paint_ancestor(el, ancestor_linear, ancestor_scale);
     for i in order.into_iter().rev() {
-        if hit_path_rec(&el.children[i], x, y, next_acc, out) {
+        if hit_path_rec(&el.children[i], x, y, next_acc, child_lin, child_sc, out) {
             child_hit = true;
             break;
         }
     }
 
-    let self_hit = tree_hit::element_self_pointer_hit(el, x, y, vx, vy);
+    let self_hit = tree_hit::element_self_pointer_hit_with(
+        el,
+        x,
+        y,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    );
     let hit = child_hit || self_hit;
     if hit {
         true
@@ -724,6 +758,62 @@ mod tests {
         );
         assert!((leaf_e.bounds[0] - 0.0).abs() < 0.5);
         assert!((leaf_e.bounds[2] - 80.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn hit_path_bounds_follow_paint_aabb_after_rotate_90() {
+        let mut leaf = Element::new().on_click(|| {});
+        leaf.layout_bounds = [0.0, 0.0, 100.0, 20.0];
+        leaf.focus_id = Some("rot".into());
+        leaf.style.rotate_deg = 90.0;
+        let paint = crate::core::tree::visual_paint_aabb(&leaf, [0.0, 0.0]);
+        let world = crate::core::tree::layout_local_to_paint_world(
+            &leaf,
+            [90.0, 10.0],
+            [0.0, 0.0],
+            crate::style::MAT2D_IDENTITY,
+            [1.0, 1.0],
+        );
+        let path = hit_path(&leaf, world[0], world[1]);
+        let e = path
+            .iter()
+            .find(|e| e.focus_id.as_deref() == Some("rot"))
+            .expect("painted rotate leaf on path");
+        assert!(
+            (e.bounds[0] - paint[0]).abs() < 0.5
+                && (e.bounds[1] - paint[1]).abs() < 0.5
+                && (e.bounds[2] - paint[2]).abs() < 0.5
+                && (e.bounds[3] - paint[3]).abs() < 0.5,
+            "hit_path bounds must be paint AABB, got {:?} vs {paint:?}",
+            e.bounds
+        );
+        assert!(
+            hit_path(&leaf, 90.0, 10.0)
+                .iter()
+                .all(|e| e.focus_id.as_deref() != Some("rot")),
+            "old layout-box point must miss the rotated leaf"
+        );
+    }
+
+    #[test]
+    fn hit_path_clip_path_rotate_90_misses_layout_center() {
+        let mut el = Element::new().on_click(|| {});
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        el.focus_id = Some("clip".into());
+        el.style.rotate_deg = 90.0;
+        el.style.clip_path = crate::style::parse_clip_path("circle(25% at 75% 50%)").unwrap();
+        assert!(
+            hit_path(&el, 50.0, 75.0)
+                .iter()
+                .any(|e| e.focus_id.as_deref() == Some("clip")),
+            "painted clip-path ink must be on the hit path"
+        );
+        assert!(
+            hit_path(&el, 75.0, 50.0)
+                .iter()
+                .all(|e| e.focus_id.as_deref() != Some("clip")),
+            "old layout-space clip circle must miss after 90°"
+        );
     }
 
     #[test]

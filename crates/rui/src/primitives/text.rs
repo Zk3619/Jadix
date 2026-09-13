@@ -1,5 +1,5 @@
-use crate::core::tree::{Element, IntoF32};
-use crate::style::{IntoTextColor, TextAlignDeclaration};
+use crate::core::tree::{Element, IntoF32, IntoNodeFg, IntoNodeText};
+use crate::style::TextAlignDeclaration;
 
 pub struct TextBuilder {
     pub(crate) el: Element,
@@ -22,8 +22,9 @@ impl TextBuilder {
         self
     }
 
-    pub fn color(mut self, color: impl IntoTextColor) -> Self {
-        self.el = self.el.text_color(color);
+    #[track_caller]
+    pub fn color(mut self, color: impl IntoNodeFg) -> Self {
+        self.el = color.apply_node_fg(self.el);
         self
     }
 
@@ -63,7 +64,8 @@ impl TextBuilder {
         self
     }
 
-    pub fn text(mut self, text: impl crate::core::tree::IntoNodeText) -> Self {
+    #[track_caller]
+    pub fn text(mut self, text: impl IntoNodeText) -> Self {
         self.el = text.apply_node_text(self.el);
         self
     }

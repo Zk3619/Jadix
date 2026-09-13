@@ -146,7 +146,9 @@ fn vs_main(
     out.shadow_blur = shadow_blur;
     out.shadow_spread = shadow_spread;
     out.shadow_inset = shadow_inset;
-    out.clip_pos = instance.clip_pos;
+    // Overflow clip is the ancestor layout box in `rect_pos` space. FS tests `in.p`
+    // (already affine-inverted) against clip shifted to this instance's center.
+    out.clip_pos = instance.clip_pos - center;
     out.clip_size = instance.clip_size_and_extra.xy;
     out.frag_px = physical_pos;
     out.extra_and_id = vec3<f32>(
@@ -616,11 +618,11 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // CSS overflow clip
+    // CSS overflow clip: local border box (same space as SDF `in.p`), then VS.
     if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
         let c1 = in.clip_pos + in.clip_size;
-        if (in.frag_px.x < in.clip_pos.x || in.frag_px.x >= c1.x
-            || in.frag_px.y < in.clip_pos.y || in.frag_px.y >= c1.y) {
+        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
+            || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
             discard;
         }
     }

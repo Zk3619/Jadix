@@ -32,7 +32,7 @@
 //! Element::from(
 //!     combobox("city")
 //!         .value_signal(city)
-//! .placeholder("Search city...")
+//!         .placeholder("Search city...")
 //!         .clearable(true)
 //!         .group(
 //!             ComboboxGroupData::new("east")
@@ -47,14 +47,14 @@
 //! ## Behavioral points
 //! - **选中值**与**输入/过滤文案**分离：选中后框内显示完整 label，不是 value id。
 //! - 打开且输入文案仍等于当前 label 时列出全部项，便于切换；开始编辑后按 label 过滤。
-//! - 关闭时若输入为空则清空选中；否则把输入恢复为当前选中项的 label。
+//! - 关闭时若输入为空则清空选中；否则把输入恢复为当前选中项的 label（effect 写 store，**不**重建 Input）。
 //! - 打开时 ArrowUp/Down 走 [`crate::utils::roving`]。
+//! - 菜单走 [`crate::utils::anchored_overlay::anchored_overlay_content`]；触发器一次挂载（N.4：禁止用岛刷 Input 文案）。
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
 use crate::components::input::{
@@ -64,10 +64,10 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, provide_context, untrack, use_context, use_signal, with_child_owner, Context,
-    Signal,
+    create_context, create_effect, provide_context, untrack, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color, with_class_list};
@@ -327,162 +327,176 @@ pub fn ComboboxInput(
         .unwrap_or_else(|| ctx.placeholder.clone());
     let clearable = clearable.unwrap_or(ctx.clearable);
     let class = class.unwrap_or_else(|| ctx.trigger_class.clone());
-    let view_id = format!("{id}__combo_input");
     let input_store = use_signal(input_value_signal_key(&id).as_str(), String::new);
 
-    // 禁止 reactive_view 默认 100%×100% 占位（会把触发器/锚点 bound 撑满父级，菜单跟着越界）。
-    reactive_anchor(view_id.clone(), move || {
-        let selected = value.get();
-        let is_open = open.get();
-        let query = input_store.get();
-        let map = labels.get();
-        let selected_label = label_for_map(&map, &selected);
-
-        if !is_open {
+    {
+        let id = id.clone();
+        create_effect(move || {
+            if open.get() {
+                return;
+            }
+            let selected = value.get();
+            let query = input_store.get();
+            let map = labels.get();
+            let selected_label = label_for_map(&map, &selected);
             if selected.is_empty() {
                 if !query.is_empty() {
                     commit_value_sig(&id, input_store, String::new());
                 }
             } else if query != selected_label {
-                commit_value_sig(&id, input_store, selected_label.clone());
+                commit_value_sig(&id, input_store, selected_label);
             }
-        }
+        });
+    }
 
-        let o_focus = open;
-        let a_sig = active;
-        let val_sig = value;
-        let input_id = id.clone();
-        let vis = visible;
+    let o_focus = open;
+    let a_sig = active;
+    let val_sig = value;
+    let input_id = id.clone();
+    let vis = visible;
 
-        // Combobox trigger is a real Input: Hidden overflow (crop + caret pan), not ellipsis.
-        let mut trigger: Element = input(&id).placeholder(ph.as_str()).w("100%").into();
-        trigger = trigger
-            .accesskit_role("combobox")
-            .accesskit_name(ph.as_str());
+    // Combobox trigger is a real Input: Hidden overflow (crop + caret pan), not ellipsis.
+    // Mount once — do not wrap in reactive_anchor (that rebuilt the field on every keystroke).
+    let mut trigger: Element = input(&id).placeholder(ph.as_str()).w("100%").into();
+    trigger = trigger
+        .accesskit_role("combobox")
+        .accesskit_name(ph.as_str());
 
-        if clearable {
-            let clear_val = value;
-            let clear_open = open;
-            let clear_id = id.clone();
-            let show_clear = !query.is_empty() || !selected.is_empty();
-            let mut clear_btn = input_adornment_button(
-                format!("{id}__combo_clear"),
-                lucide_named("x"),
-                false,
-                move || {
-                    clear_val.set(String::new());
-                    commit_value(&clear_id, String::new());
-                    clear_open.set(false);
-                    use_signal("__rui_button_focus_id", String::new)
-                        .set(crate::utils::text_field::input_focus_id(&clear_id));
-                    use_signal("__rui_focus_visible", || false).set(true);
-                },
-            );
-            if !show_clear {
-                clear_btn = clear_btn.opacity(0.0).pointer_events_none();
-            }
-            trigger = trigger.gap("0.25rem").child(clear_btn);
-        }
-
-        let o_chev = open;
-        let a_chev = active;
-        let v_chev = value;
-        let vis_chev = visible;
-        let chev_id = id.clone();
-        let chevron = input_adornment_button(
-            format!("{id}__combo_chevron"),
-            lucide_named("chevron-down"),
+    if clearable {
+        let clear_val = value;
+        let clear_open = open;
+        let clear_id = id.clone();
+        let clear_store = input_store;
+        let mut clear_btn = input_adornment_button(
+            format!("{id}__combo_clear"),
+            lucide_named("x"),
             false,
             move || {
-                let next = !o_chev.peek();
-                if next {
-                    a_chev.set(active_index_for_value(&vis_chev.peek(), &v_chev.peek()));
-                    disarm_underlay_close();
-                }
-                o_chev.set(next);
+                clear_val.set(String::new());
+                commit_value(&clear_id, String::new());
+                clear_open.set(false);
                 use_signal("__rui_button_focus_id", String::new)
-                    .set(crate::utils::text_field::input_focus_id(&chev_id));
+                    .set(crate::utils::text_field::input_focus_id(&clear_id));
                 use_signal("__rui_focus_visible", || false).set(true);
             },
         );
-        trigger = trigger.gap("0.25rem").child(chevron);
+        clear_btn = clear_btn.reactive_sync(move |el, _| {
+            let show = !clear_store.peek().is_empty() || !clear_val.peek().is_empty();
+            let want_opacity = if show { 1.0 } else { 0.0 };
+            let want_pe = if show {
+                PointerEvents::Auto
+            } else {
+                PointerEvents::None
+            };
+            let opacity_same = (el.style.opacity - want_opacity).abs() < 0.001;
+            let pe_same = el.pointer_events_mode() == want_pe;
+            if opacity_same && pe_same {
+                return LayoutStatus::Clean;
+            }
+            el.style.opacity = want_opacity;
+            el.set_attr(ATTR_POINTER_EVENTS, want_pe.as_str());
+            LayoutStatus::StyleChanged
+        });
+        trigger = trigger.gap("0.25rem").child(clear_btn);
+    }
 
-        trigger = trigger
-            .on_click({
-                let a_sig = a_sig;
-                let val_sig = val_sig;
-                let vis = vis;
-                move || {
-                    a_sig.set(active_index_for_value(&vis.peek(), &val_sig.peek()));
-                    disarm_underlay_close();
-                    o_focus.set(true);
-                }
-            })
-            .on_key_down(move |ev| {
-                let list = vis.peek();
-                let n = list.len();
-                match &ev.logical_key {
-                    Key::Named(NamedKey::ArrowDown)
-                    | Key::Named(NamedKey::ArrowUp)
-                    | Key::Named(NamedKey::Home)
-                    | Key::Named(NamedKey::End)
-                        if o_focus.peek() =>
+    let o_chev = open;
+    let a_chev = active;
+    let v_chev = value;
+    let vis_chev = visible;
+    let chev_id = id.clone();
+    let chevron = input_adornment_button(
+        format!("{id}__combo_chevron"),
+        lucide_named("chevron-down"),
+        false,
+        move || {
+            let next = !o_chev.peek();
+            if next {
+                a_chev.set(active_index_for_value(&vis_chev.peek(), &v_chev.peek()));
+                disarm_underlay_close();
+            }
+            o_chev.set(next);
+            use_signal("__rui_button_focus_id", String::new)
+                .set(crate::utils::text_field::input_focus_id(&chev_id));
+            use_signal("__rui_focus_visible", || false).set(true);
+        },
+    );
+    trigger = trigger.gap("0.25rem").child(chevron);
+
+    trigger = trigger
+        .on_click({
+            let a_sig = a_sig;
+            let val_sig = val_sig;
+            let vis = vis;
+            move || {
+                a_sig.set(active_index_for_value(&vis.peek(), &val_sig.peek()));
+                disarm_underlay_close();
+                o_focus.set(true);
+            }
+        })
+        .on_key_down(move |ev| {
+            let list = vis.peek();
+            let n = list.len();
+            match &ev.logical_key {
+                Key::Named(NamedKey::ArrowDown)
+                | Key::Named(NamedKey::ArrowUp)
+                | Key::Named(NamedKey::Home)
+                | Key::Named(NamedKey::End)
+                    if o_focus.peek() =>
+                {
+                    if let Some(next) =
+                        crate::utils::list_nav::list_nav_move(&ev.logical_key, n, a_sig.peek())
                     {
-                        if let Some(next) =
-                            crate::utils::list_nav::list_nav_move(&ev.logical_key, n, a_sig.peek())
-                        {
-                            a_sig.set(next);
-                        }
-                        return true;
+                        a_sig.set(next);
                     }
-                    Key::Named(NamedKey::ArrowDown) => {
-                        if !o_focus.peek() {
-                            a_sig.set(active_index_for_value(&list, &val_sig.peek()));
-                            disarm_underlay_close();
-                            o_focus.set(true);
-                        }
-                        return true;
-                    }
-                    Key::Named(NamedKey::Enter) => {
-                        if !o_focus.peek() {
-                            a_sig.set(0);
-                            disarm_underlay_close();
-                            o_focus.set(true);
-                            return true;
-                        }
-                        if let Some(opt) = list.get(a_sig.peek()) {
-                            if !opt.disabled {
-                                val_sig.set(opt.value.clone());
-                                commit_value(&input_id, opt.label.clone());
-                                o_focus.set(false);
-                            }
-                            return true;
-                        }
-                    }
-                    Key::Named(NamedKey::Escape) => {
-                        o_focus.set(false);
-                        return true;
-                    }
-                    _ => {}
+                    return true;
                 }
-                false
-            });
+                Key::Named(NamedKey::ArrowDown) => {
+                    if !o_focus.peek() {
+                        a_sig.set(active_index_for_value(&list, &val_sig.peek()));
+                        disarm_underlay_close();
+                        o_focus.set(true);
+                    }
+                    return true;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if !o_focus.peek() {
+                        a_sig.set(0);
+                        disarm_underlay_close();
+                        o_focus.set(true);
+                        return true;
+                    }
+                    if let Some(opt) = list.get(a_sig.peek()) {
+                        if !opt.disabled {
+                            val_sig.set(opt.value.clone());
+                            commit_value(&input_id, opt.label.clone());
+                            o_focus.set(false);
+                        }
+                        return true;
+                    }
+                }
+                Key::Named(NamedKey::Escape) => {
+                    o_focus.set(false);
+                    return true;
+                }
+                _ => {}
+            }
+            false
+        });
 
-        // 宽度已由壳承担；这里只应用非宽度类（避免重复 w-*）。
-        let non_width: String = class
-            .split_whitespace()
-            .filter(|t| {
-                let t = t.trim_end_matches('!');
-                !(t.starts_with("w-") || t.starts_with("min-w-") || t.starts_with("max-w-"))
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        if !non_width.is_empty() {
-            trigger = with_class_list(trigger, &non_width);
-        }
-        trigger
-    });
-    reactive_placeholder_sized(view_id, "100%", "auto")
+    // 宽度已由壳承担；这里只应用非宽度类（避免重复 w-*）。
+    let non_width: String = class
+        .split_whitespace()
+        .filter(|t| {
+            let t = t.trim_end_matches('!');
+            !(t.starts_with("w-") || t.starts_with("min-w-") || t.starts_with("max-w-"))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !non_width.is_empty() {
+        trigger = with_class_list(trigger, &non_width);
+    }
+    trigger
 }
 
 // ---------------------------------------------------------------------------
@@ -1370,6 +1384,30 @@ mod tests {
         assert_eq!(active_index_for_value(&items, "00"), 0);
         assert_eq!(active_index_for_value(&[], "09"), 9);
         assert_eq!(active_index_for_value(&items, "xx"), 0);
+    }
+
+    #[test]
+    fn combobox_input_is_not_a_structure_island() {
+        let (_owner, el) = create_root(|| {
+            combobox("cb_n4")
+                .options([("a", "Alpha")])
+                .clearable(true)
+                .into()
+        });
+        fn find_tid_suffix(el: &Element, suffix: &str) -> bool {
+            el.template_id
+                .as_deref()
+                .is_some_and(|t| t.ends_with(suffix))
+                || el.children.iter().any(|c| find_tid_suffix(c, suffix))
+        }
+        assert!(
+            !find_tid_suffix(&el, "__combo_input"),
+            "ComboboxInput must mount the field once, not a reactive_anchor island"
+        );
+        assert!(
+            find_tid_suffix(&el, "__view"),
+            "ComboboxContent must still use the anchored overlay island"
+        );
     }
 
     #[test]

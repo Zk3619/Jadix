@@ -27,8 +27,8 @@
 //! `<SelectContent scrollSelected>`，取值 `none`（默认）| `start` | `center`。
 //!
 //! ## 浮层契约
-//! 菜单经 [`mark_floating`] + [`mount_anchored_overlay`] 提升到根 portal；
-//! 几何由 [`sync_floating_placement`] 写入。**禁止**自管 left/top 信号。
+//! 菜单走 [`crate::utils::anchored_overlay::anchored_overlay_content`]（Trigger 定位 + Expand）；
+//! 几何由壳写入。**禁止**自管 left/top 信号，也禁止用岛刷 Trigger 文案（[`SelectValue`] 走 `bind_text`）。
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

@@ -2,7 +2,6 @@
 
 use super::view::render_queue;
 use super::*;
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::utils::keyed_overlay::{mount_reactive_anchor, viewport_portal_stage};
 
 /// Builder：配置宿主布局/锚点/上限策略。
@@ -112,13 +111,8 @@ pub(crate) fn paint_toast_host() -> Element {
     let expanded = stack_expanded_now();
     let _ = overflow_signal().get();
     let _ = limit_signal().get();
-    // 与 Tooltip 相同：Pinned 登记，不进 Modal 栈。关 Command 不得把队列藏起来。
-    let _ = portal_sync(
-        "toast-host",
-        open,
-        OverlayKind::Tooltip,
-        OverlayMode::Pinned,
-    );
+    // Host is a keyed viewport stage, not a stacked overlay. `OverlayMode::Pinned`
+    // `portal_sync` is a no-op on the Esc stack — do not call it from product files.
     if q.is_empty() && toast_pending().peek().is_empty() {
         if expanded_signal().peek() {
             expanded_signal().set(false);

@@ -1,16 +1,18 @@
 //! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
 //!
-//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` 由宏映射到
+//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box`（别名 `div` / `Div`）由宏映射到
 //! 本 Builder；SVG 形状用小写/Pascal `<rect>` / `<Rect>`（见 `primitives::svg`）。
 //! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]（[`boxed`] 别名；`box` 为 Rust 关键字）。
 
 use crate::layout::GridTrack;
 
 use crate::core::scroll_viewport::maybe_activate_scroll_viewport;
-use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoF32};
+use crate::core::tree::{
+    Element, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoF32, IntoNodeBg, IntoNodeClass,
+    IntoNodeFg, IntoNodeOpacity, IntoNodeSize,
+};
 use crate::style::{
     IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor,
-    IntoTextColor,
 };
 
 pub struct BoxBuilder {
@@ -62,13 +64,19 @@ impl BoxBuilder {
         self
     }
 
-    pub fn w(mut self, w: impl IntoCssDim) -> Self {
-        self.el = self.el.w(w);
+    /// Static CSS dim, [`crate::core::reactivity::Signal`], or `|| dim` compute.
+    /// `w(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn w(mut self, w: impl IntoNodeSize) -> Self {
+        self.el = w.apply_node_size(self.el, "w");
         self
     }
 
-    pub fn h(mut self, h: impl IntoCssDim) -> Self {
-        self.el = self.el.h(h);
+    /// Static CSS dim, [`crate::core::reactivity::Signal`], or `|| dim` compute.
+    /// `h(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn h(mut self, h: impl IntoNodeSize) -> Self {
+        self.el = h.apply_node_size(self.el, "h");
         self
     }
 
@@ -262,8 +270,19 @@ impl BoxBuilder {
         self
     }
 
-    pub fn bg(mut self, color: impl IntoPaintColor) -> Self {
-        self.el = self.el.bg(color);
+    /// Static paint, [`crate::core::reactivity::Signal`], or `|| color` compute.
+    /// `bg(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn bg(mut self, color: impl IntoNodeBg) -> Self {
+        self.el = color.apply_node_bg(self.el);
+        self
+    }
+
+    /// Static opacity, [`crate::core::reactivity::Signal`], or `|| opacity` compute.
+    /// `opacity(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn opacity(mut self, o: impl IntoNodeOpacity) -> Self {
+        self.el = o.apply_node_opacity(self.el);
         self
     }
 
@@ -784,6 +803,15 @@ impl BoxBuilder {
         self
     }
 
+    /// Utility class string, [`crate::core::reactivity::Signal`], or `|| String` compute.
+    /// `class(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn class(mut self, classes: impl IntoNodeClass) -> Self {
+        self.el = classes.apply_node_class(self.el);
+        self
+    }
+
+    #[track_caller]
     pub fn text(mut self, text: impl crate::core::tree::IntoNodeText) -> Self {
         self.el = self.el.text(text);
         self
@@ -794,8 +822,11 @@ impl BoxBuilder {
         self
     }
 
-    pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
-        self.el = self.el.text_color(color);
+    /// Static color, [`crate::core::reactivity::Signal`], or `|| color` compute.
+    /// `text_color(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn text_color(mut self, color: impl IntoNodeFg) -> Self {
+        self.el = color.apply_node_fg(self.el);
         self
     }
 
@@ -944,7 +975,7 @@ pub fn r#box() -> BoxBuilder {
     BoxBuilder::new()
 }
 
-/// Callable alias of [`r#box`] (Rust reserves `box`; RSX still uses `<Box>`).
+/// Callable alias of [`r#box`] (Rust reserves `box`; RSX uses `<Box>` / `<div>`).
 #[inline]
 pub fn boxed() -> BoxBuilder {
     r#box()

@@ -263,7 +263,7 @@ fn sync_keyed_list<T, K, KF, RF>(
 /// the same key is intentionally out of scope (Solid keyed For identity = key).
 ///
 /// [`for_reactive`](super::reactive::for_reactive) + [`for_keyed`](super::reactive::for_keyed)
-/// remain the whole-list rebuild path (Element reconcile only).
+/// remain the **降级** whole-list rebuild path (Element reconcile only).
 pub fn for_keyed_reactive<T, K, LS, KF, RF>(
     anchor_id: impl Into<String>,
     list_source: LS,

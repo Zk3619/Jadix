@@ -3101,6 +3101,30 @@ mod tests {
     }
 
     #[test]
+    fn pointer_events_fill_hits_origin_left_rotate_90_painted_center() {
+        use crate::app::pointer_events::hit_path;
+
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("fill")
+            .child(circle().cx(50.0).cy(50.0).r(20.0).fill("#f00"))
+            .into();
+        el.layout_bounds = [400.0, 200.0, 100.0, 100.0];
+        el.style.rotate_deg = 90.0;
+        el.style.transform_origin = crate::style::parse_transform_origin("left top");
+        assert!(
+            !hit_path(&el, 350.0, 250.0).is_empty(),
+            "fill must hit the painted circle after origin-left 90°"
+        );
+        assert!(
+            hit_path(&el, 450.0, 250.0).is_empty(),
+            "old layout center must miss the rotated circle"
+        );
+    }
+
+    #[test]
     fn pointer_events_stroke_hits_perimeter_not_center() {
         use crate::app::pointer_events::hit_path;
 

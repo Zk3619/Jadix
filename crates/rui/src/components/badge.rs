@@ -34,7 +34,7 @@
 //! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
 use crate::components::base::SlotChrome;
-use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
+use crate::core::tree::{Element, IntoF32, IntoNodeSize, LayoutStatus};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
     apply_semantic_border, is_variant_style_overridden, parse_color, parse_text_color,
@@ -307,7 +307,8 @@ impl BadgeBuilder {
         self
     }
 
-    pub fn w(mut self, w: impl IntoCssDim) -> Self {
+    #[track_caller]
+    pub fn w(mut self, w: impl IntoNodeSize) -> Self {
         self.container = self.container.w(w);
         self
     }

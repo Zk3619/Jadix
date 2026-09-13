@@ -66,7 +66,7 @@ use rui_macros::component;
 use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
 
-use crate::app::reactive::reactive_view;
+use crate::app::reactive::bind_prop;
 use crate::components::base::SlotStyleFn;
 use crate::components::button::button;
 use crate::components::dropdown_menu::{
@@ -82,7 +82,7 @@ use crate::components::dropdown_menu::{
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
-use crate::core::tree::{Element, Handler};
+use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::primitives::r#box::hstack;
 use crate::style::{parse_color, parse_text_color, with_class_list};
@@ -243,6 +243,68 @@ fn chain_hover(mut el: Element, handler: impl FnMut(bool) + 'static) -> Element 
         handler(h);
     });
     el
+}
+
+/// Ghost rest chrome captured after the trigger button is built (closed).
+#[derive(Clone)]
+struct MenubarTriggerRestChrome {
+    hover: Option<ButtonHoverPaint>,
+    bg: [f32; 4],
+    parent_fg: Option<[u8; 4]>,
+    child_fg: Option<[u8; 4]>,
+}
+
+/// Open accent is paint-only: patch bg / label / `data-state` in place.
+/// Clear [`Element::button_hover_paint`] while open so frame sync cannot overwrite accent.
+fn apply_menubar_trigger_open_chrome(
+    el: &mut Element,
+    is_open: bool,
+    rest: &MenubarTriggerRestChrome,
+) -> LayoutStatus {
+    let want = if is_open { "open" } else { "closed" };
+    let mut impact = LayoutStatus::Clean;
+    if el.attrs.get("data-state").map(String::as_str) != Some(want) {
+        el.set_attr("data-state", want);
+        impact = impact.merge(LayoutStatus::StyleChanged);
+    }
+    if is_open {
+        let accent_bg = parse_color("accent");
+        let accent_fg = parse_text_color("accent-foreground");
+        el.button_hover_paint = None;
+        if el.style.bg_color != accent_bg {
+            el.style.bg_color = accent_bg;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if el.text_style.color != Some(accent_fg) {
+            el.text_style.color = Some(accent_fg);
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        for child in &mut el.children {
+            if child.text.is_some() && child.text_style.color != Some(accent_fg) {
+                child.text_style.color = Some(accent_fg);
+                impact = impact.merge(LayoutStatus::StyleChanged);
+            }
+        }
+    } else {
+        el.button_hover_paint = rest.hover.clone();
+        if el.style.bg_color != rest.bg {
+            el.style.bg_color = rest.bg;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if el.text_style.color != rest.parent_fg {
+            el.text_style.color = rest.parent_fg;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if let Some(fg) = rest.child_fg {
+            for child in &mut el.children {
+                if child.text.is_some() && child.text_style.color != Some(fg) {
+                    child.text_style.color = Some(fg);
+                    impact = impact.merge(LayoutStatus::StyleChanged);
+                }
+            }
+        }
+    }
+    impact
 }
 
 // ---------------------------------------------------------------------------
@@ -426,130 +488,128 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
     };
     let _ = children;
     let class = class.filter(|s| !s.trim().is_empty());
-    let view_id = format!("{trigger_id}__mb_trig_view");
     let trigger_fid_sig = ctx.trigger_fid;
     // Capture menu_id for live registry lookup (siblings may register after this Trigger).
     let menu_id_for_ix = menu_id.clone();
-
-    reactive_view(view_id, move || {
-        let is_open = open.get();
-        let open_t = open;
-        let active_t = active;
-        let menu_id_t = menu_id.clone();
-        let bar_id_t = bar_id.clone();
-        let class_k = class.clone();
-        let menu_id_ix = menu_id_for_ix.clone();
-        let toggle = {
-            let open_t = open_t;
-            let active_t = active_t;
-            move || {
-                active_t.set(usize::MAX);
-                let next = !open_t.peek();
-                if next {
-                    disarm_underlay_close();
-                }
-                open_t.set(next);
-            }
-        };
-
-        let mut trigger: Element = button(&trigger_id)
-            .variant("ghost")
-            .size("sm")
-            .on_click(toggle)
-            .text(label_text.clone())
-            .into();
-        // solid-ui: rounded-sm px-3 py-1.5; open → accent (disable button hover paint so sync won't overwrite).
-        trigger = trigger.px("0.75rem").py("0.375rem").rounded("0.125rem");
-        if is_open {
-            trigger.button_hover_paint = None;
-            trigger = trigger
-                .bg(parse_color("accent"))
-                .text_color(parse_text_color("accent-foreground"));
+    let open_t = open;
+    let active_t = active;
+    let toggle = move || {
+        active_t.set(usize::MAX);
+        let next = !open_t.peek();
+        if next {
+            disarm_underlay_close();
         }
+        open_t.set(next);
+    };
 
-        if let Some(ref c) = class_k {
-            trigger = with_class_list(trigger, c);
+    let mut trigger: Element = button(&trigger_id)
+        .variant("ghost")
+        .size("sm")
+        .on_click(toggle)
+        .text(label_text)
+        .into();
+    // solid-ui: rounded-sm px-3 py-1.5; open accent patches in place (WP-N.4).
+    trigger = trigger.px("0.75rem").py("0.375rem").rounded("0.125rem");
+    if let Some(ref c) = class {
+        trigger = with_class_list(trigger, c);
+    }
+
+    // Hover-open when another menu in this bar is already open.
+    // Chain — do not replace Button's hover handler (ghost accent paint).
+    let open_h = open;
+    let bar_h = bar_id.clone();
+    trigger = chain_hover(trigger, move |h| {
+        if !h || open_h.peek() {
+            return;
         }
-
-        // Hover-open when another menu in this bar is already open.
-        // Chain — do not replace Button's hover handler (ghost accent paint).
-        let open_h = open;
-        let bar_h = bar_id_t.clone();
-        trigger = chain_hover(trigger, move |h| {
-            if !h || open_h.peek() {
-                return;
-            }
-            if any_menu_open(&bar_h) {
-                // Peer switch: keep underlay armed (portal_sync also skips disarm).
-                open_h.set(true);
-            }
-        });
-
-        // Dropdown ↑↓ / Enter / submenu ←→ when open, then menubar peer ←→ / closed roving.
-        trigger = attach_dropdown_menu_trigger_keys(trigger, &ctx);
-        let open_keys = open;
-        let bar_keys = bar_id_t.clone();
-        let menu_id_keys = menu_id_t.clone();
-        let active_keys = ctx.active;
-        trigger = chain_key_down(trigger, move |ev| {
-            if ev.state != ElementState::Pressed || ev.repeat {
-                return false;
-            }
-            let menus = menus_of(&bar_keys);
-            let menu_ix = menus.iter().position(|m| m.id == menu_id_ix).unwrap_or(0);
-            let trigger_ids: Vec<String> = menus
-                .iter()
-                .map(|m| format!("{}__dd_trigger", m.id))
-                .collect();
-            let n_sec = menus.len();
-            if !open_keys.peek() {
-                return focus_roving_key(&ev, &trigger_ids, menu_ix, FocusRovingAxis::Horizontal);
-            }
-            match &ev.logical_key {
-                Key::Named(NamedKey::ArrowRight) if n_sec > 0 => {
-                    // Nested submenu open, or highlight on a SubTrigger → dropdown keys.
-                    if dropdown_menu_open_sub_id(&menu_id_keys).is_some()
-                        || dropdown_menu_active_is_sub_trigger(&menu_id_keys, active_keys.peek())
-                    {
-                        return false;
-                    }
-                    open_neighbor_menu(&bar_keys, menu_ix, 1);
-                    true
-                }
-                Key::Named(NamedKey::ArrowLeft) if n_sec > 0 => {
-                    if dropdown_menu_open_sub_id(&menu_id_keys).is_some() {
-                        return false;
-                    }
-                    open_neighbor_menu(&bar_keys, menu_ix, -1);
-                    true
-                }
-                Key::Named(NamedKey::Escape) => {
-                    open_keys.set(false);
-                    focus_by_id(format!("{}__dd_trigger", menu_id_keys));
-                    true
-                }
-                // Let attach_dropdown_menu_trigger_keys handle ↑↓ / Enter / Home / End / submenu.
-                _ => false,
-            }
-        });
-
-        if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
-            trigger.focusable = true;
-            trigger.focus_ring = true;
+        if any_menu_open(&bar_h) {
+            // Peer switch: keep underlay armed (portal_sync also skips disarm).
+            open_h.set(true);
         }
-        if trigger.focus_id.is_none() {
-            trigger = trigger.focus_id(trigger_id.as_str());
+    });
+
+    // Dropdown ↑↓ / Enter / submenu ←→ when open, then menubar peer ←→ / closed roving.
+    trigger = attach_dropdown_menu_trigger_keys(trigger, &ctx);
+    let open_keys = open;
+    let bar_keys = bar_id.clone();
+    let menu_id_keys = menu_id.clone();
+    let menu_id_ix = menu_id_for_ix;
+    let active_keys = ctx.active;
+    trigger = chain_key_down(trigger, move |ev| {
+        if ev.state != ElementState::Pressed || ev.repeat {
+            return false;
         }
-        trigger_fid_sig.set(
-            trigger
-                .focus_id
-                .clone()
-                .unwrap_or_else(|| trigger_id.clone()),
-        );
-        trigger.set_attr(ATTR_SLOT, SLOT_TRIGGER);
-        trigger.set_attr("data-state", if is_open { "open" } else { "closed" });
-        trigger.accesskit_role("menuitem")
-    })
+        let menus = menus_of(&bar_keys);
+        let menu_ix = menus.iter().position(|m| m.id == menu_id_ix).unwrap_or(0);
+        let trigger_ids: Vec<String> = menus
+            .iter()
+            .map(|m| format!("{}__dd_trigger", m.id))
+            .collect();
+        let n_sec = menus.len();
+        if !open_keys.peek() {
+            return focus_roving_key(&ev, &trigger_ids, menu_ix, FocusRovingAxis::Horizontal);
+        }
+        match &ev.logical_key {
+            Key::Named(NamedKey::ArrowRight) if n_sec > 0 => {
+                // Nested submenu open, or highlight on a SubTrigger → dropdown keys.
+                if dropdown_menu_open_sub_id(&menu_id_keys).is_some()
+                    || dropdown_menu_active_is_sub_trigger(&menu_id_keys, active_keys.peek())
+                {
+                    return false;
+                }
+                open_neighbor_menu(&bar_keys, menu_ix, 1);
+                true
+            }
+            Key::Named(NamedKey::ArrowLeft) if n_sec > 0 => {
+                if dropdown_menu_open_sub_id(&menu_id_keys).is_some() {
+                    return false;
+                }
+                open_neighbor_menu(&bar_keys, menu_ix, -1);
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                open_keys.set(false);
+                focus_by_id(format!("{}__dd_trigger", menu_id_keys));
+                true
+            }
+            // Let attach_dropdown_menu_trigger_keys handle ↑↓ / Enter / Home / End / submenu.
+            _ => false,
+        }
+    });
+
+    if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+        trigger.focusable = true;
+        trigger.focus_ring = true;
+    }
+    if trigger.focus_id.is_none() {
+        trigger = trigger.focus_id(trigger_id.as_str());
+    }
+    trigger_fid_sig.set(
+        trigger
+            .focus_id
+            .clone()
+            .unwrap_or_else(|| trigger_id.clone()),
+    );
+    trigger.set_attr(ATTR_SLOT, SLOT_TRIGGER);
+    trigger = trigger.accesskit_role("menuitem");
+
+    let rest = MenubarTriggerRestChrome {
+        hover: trigger.button_hover_paint.clone(),
+        bg: trigger.style.bg_color,
+        parent_fg: trigger.text_style.color,
+        child_fg: trigger
+            .children
+            .iter()
+            .find(|c| c.text.is_some())
+            .and_then(|c| c.text_style.color)
+            .or(trigger.text_style.color),
+    };
+    bind_prop(
+        trigger,
+        format!("{trigger_id}__open_chrome"),
+        move || open.get(),
+        move |el, is_open| apply_menubar_trigger_open_chrome(el, is_open, &rest),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -993,6 +1053,106 @@ mod tests {
             ))
             .into();
         assert!(el.template_id.as_deref().is_some());
+    }
+
+    fn has_mb_trig_view(el: &Element) -> bool {
+        el.template_id
+            .as_deref()
+            .is_some_and(|t| t.contains("__mb_trig_view"))
+            || el.children.iter().any(has_mb_trig_view)
+    }
+
+    fn find_menubar_trigger(el: &Element) -> Option<&Element> {
+        if el.attrs.get("data-slot").map(String::as_str) == Some(SLOT_TRIGGER) {
+            return Some(el);
+        }
+        el.children.iter().find_map(find_menubar_trigger)
+    }
+
+    #[test]
+    fn menubar_trigger_open_patches_chrome_without_island() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, take_flushed_effects};
+
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let tree: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&tree));
+
+        let (_owner, open) = create_root(|| {
+            let open = use_signal("mb_trig_chrome__file__dd_open", || false);
+            let tree = Rc::clone(&tree);
+            create_effect({
+                let open = open;
+                move || {
+                    let el = menubar_scope("mb_trig_chrome", || {
+                        menubar_menu(Some("file".into()), Some(open), || {
+                            let trigger = MenubarTrigger(MenubarTriggerProps {
+                                id: String::new(),
+                                class: None,
+                                children: Some(Element::new().text("File")),
+                                base: None,
+                            });
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag.children(vec![trigger])
+                        })
+                    });
+                    *tree.borrow_mut() = el;
+                }
+            });
+            open
+        });
+
+        assert!(
+            !has_mb_trig_view(&tree.borrow()),
+            "MenubarTrigger must not mount a reactive_view placeholder"
+        );
+        let tid = find_menubar_trigger(&tree.borrow())
+            .and_then(|t| t.template_id.clone())
+            .expect("trigger template_id");
+        assert_eq!(tid, "mb_trig_chrome__file__dd_trigger");
+        assert_eq!(
+            find_menubar_trigger(&tree.borrow())
+                .and_then(|t| t.attrs.get("data-state"))
+                .map(String::as_str),
+            Some("closed")
+        );
+
+        let _ = take_flushed_effects();
+        open.set(true);
+        let flushed = take_flushed_effects();
+        assert!(
+            flushed
+                .iter()
+                .any(|(_, phase)| *phase == crate::core::reactivity::EffectPhase::Render),
+            "open.set must run trigger chrome bind Render effects, got {flushed:?}"
+        );
+        assert!(
+            !has_mb_trig_view(&tree.borrow()),
+            "open.set must not grow a trigger island"
+        );
+        let (after_tid, after_state, after_bg, after_hover_none) = {
+            let tree = tree.borrow();
+            let after = find_menubar_trigger(&tree).expect("trigger after set");
+            (
+                after.template_id.clone(),
+                after.attrs.get("data-state").cloned(),
+                after.style.bg_color,
+                after.button_hover_paint.is_none(),
+            )
+        };
+        assert_eq!(after_tid.as_deref(), Some(tid.as_str()));
+        assert_eq!(after_state.as_deref(), Some("open"));
+        assert_eq!(after_bg, parse_color("accent"));
+        assert!(
+            after_hover_none,
+            "open chrome must disable hover paint so sync cannot overwrite accent"
+        );
     }
 
     /// Gallery symptom proxy: namespaced menubar parent open + sub_open must leave

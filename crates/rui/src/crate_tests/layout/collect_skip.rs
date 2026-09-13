@@ -8,7 +8,7 @@ use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
 use crate::layout::collect_cache::collect_skip_allowed_for_frame;
-use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+use crate::layout::layout_tree::{ATTR_PORTAL_KEY, PORTAL_LAYER_ID};
 use crate::primitives::r#box::hstack;
 use crate::renderer::font_loader;
 use crate::style::sync_class_variants_subtree;
@@ -388,6 +388,21 @@ fn spinner_instance_transform(result: &crate::layout::layout_tree::RenderResult)
         .expect("spinner instance")
 }
 
+fn spinner_fill(
+    result: &crate::layout::layout_tree::RenderResult,
+) -> &crate::renderer::InstanceInput {
+    result
+        .instances
+        .iter()
+        .find(|i| {
+            (i.color[0] - SPIN_BG[0]).abs() < 0.02
+                && (i.color[1] - SPIN_BG[1]).abs() < 0.02
+                && (i.color[2] - SPIN_BG[2]).abs() < 0.02
+                && i.rect_size[0] >= 8.0
+        })
+        .expect("spinner fill")
+}
+
 fn transform_is_identity(m: &[f32; 6]) -> bool {
     let id = crate::style::MAT2D_IDENTITY;
     m.iter()
@@ -437,6 +452,617 @@ fn collect_skip_must_not_replay_rotated_sibling() {
     assert!(
         !transform_is_identity(&xf),
         "paint-hash skip must bust when rotate_deg changes, got {xf:?}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_transform_origin() {
+    reset_collect_skip_counters();
+    let mut root = header_spinner_page();
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    root.children[0].children[0].style.rotate_deg = 90.0;
+    root.children[0].children[0].style.transform_origin =
+        crate::style::parse_transform_origin("center");
+    let center = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+    let center_xf = spinner_instance_transform(&center);
+    assert!(
+        center_xf[4].abs() < 0.05 && center_xf[5].abs() < 0.05,
+        "center origin 90° spinner must keep shader tx/ty at 0, got {center_xf:?}"
+    );
+
+    root.children[0].children[0].style.transform_origin =
+        crate::style::parse_transform_origin("left top");
+    let left_top = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+    let lt_xf = spinner_instance_transform(&left_top);
+    assert!(
+        (lt_xf[4] - center_xf[4]).abs() > 1.0 || (lt_xf[5] - center_xf[5]).abs() > 1.0,
+        "paint-only transform-origin must move the shader pivot, not replay center-pivot DL\n\
+         center={center_xf:?} left-top={lt_xf:?}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_scale_transform_origin() {
+    reset_collect_skip_counters();
+    let mut root = header_spinner_page();
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    root.children[0].children[0].style.scale = [2.0, 1.0];
+    root.children[0].children[0].style.transform_origin =
+        crate::style::parse_transform_origin("center");
+    let center = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+    let center_x = spinner_fill(&center).rect_pos[0];
+
+    root.children[0].children[0].style.transform_origin =
+        crate::style::parse_transform_origin("left top");
+    let left_top = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+    let lt_x = spinner_fill(&left_top).rect_pos[0];
+    assert!(
+        (lt_x - center_x).abs() > 1.0,
+        "paint-only origin must move scale bake vis_x, not replay center-inset DL\n\
+         center_x={center_x} left_top_x={lt_x}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_faded_sibling() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+
+    assert!(
+        first
+            .instances
+            .iter()
+            .any(|i| (i.color[0] - 1.0).abs() < 0.02 && i.color[3] > 0.9),
+        "warm collect paints an opaque left-column fill"
+    );
+
+    root.children[0].style.opacity = 0.4;
+    let faded = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        faded
+            .instances
+            .iter()
+            .any(|i| (i.color[0] - 1.0).abs() < 0.02 && (i.color[3] - 0.4).abs() < 0.05),
+        "paint-hash / geom skip must bust when opacity changes; got {:?}",
+        faded.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+    assert!(
+        !faded
+            .instances
+            .iter()
+            .any(|i| (i.color[0] - 1.0).abs() < 0.02 && i.color[3] > 0.9),
+        "must not replay the opaque left-column fill after a paint-only fade"
+    );
+}
+
+fn extra_shadow(color: [f32; 4]) -> crate::style::BoxShadow {
+    crate::style::BoxShadow {
+        color,
+        offset: [4.0, 4.0],
+        blur: 2.0,
+        spread: 0.0,
+        inset: false,
+    }
+}
+
+fn approx_shadow(c: [f32; 4], want: [f32; 4]) -> bool {
+    (0..4).all(|i| (c[i] - want[i]).abs() < 0.05)
+}
+
+#[test]
+fn collect_skip_must_not_replay_extra_shadow_color() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let red = [1.0, 0.0, 0.0, 0.8];
+    let green = [0.0, 1.0, 0.0, 0.8];
+    root.children[0].children[0]
+        .style
+        .extra_shadows
+        .push(extra_shadow(red));
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        warmed
+            .instances
+            .iter()
+            .any(|i| approx_shadow(i.shadow_color, red)),
+        "warm collect must emit the red extra shadow"
+    );
+
+    root.children[0].children[0].style.extra_shadows[0].color = green;
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        next.instances
+            .iter()
+            .any(|i| approx_shadow(i.shadow_color, green)),
+        "paint-hash skip must bust when extra_shadows color changes; got {:?}",
+        next.instances
+            .iter()
+            .map(|i| i.shadow_color)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !next
+            .instances
+            .iter()
+            .any(|i| approx_shadow(i.shadow_color, red)),
+        "must not replay the previous extra-shadow color"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_gradient_stops() {
+    use crate::style::{Gradient, LinearGradient};
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].children[0].style.bg_gradient = Some(Gradient::Linear(
+        LinearGradient::two_stop([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0], 90.0),
+    ));
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let old_keys: Vec<String> = warmed
+        .textured_draws
+        .iter()
+        .map(|d| d.texture_key.clone())
+        .collect();
+    assert!(
+        !old_keys.is_empty(),
+        "warm collect must emit a gradient texture draw"
+    );
+
+    if let Some(Gradient::Linear(g)) = root.children[0].children[0].style.bg_gradient.as_mut() {
+        g.stops[0].color = [0.0, 0.0, 1.0, 1.0];
+    }
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let new_keys: Vec<String> = next
+        .textured_draws
+        .iter()
+        .map(|d| d.texture_key.clone())
+        .collect();
+    assert!(
+        new_keys.iter().any(|k| !old_keys.contains(k)),
+        "paint-hash skip must bust when gradient stops change; old={old_keys:?} new={new_keys:?}"
+    );
+    for k in &old_keys {
+        assert!(
+            !new_keys.contains(k),
+            "must not replay the previous gradient texture key {k}"
+        );
+    }
+}
+
+#[test]
+fn collect_skip_must_not_replay_filter_blur() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].style.filter = crate::style::parse_filter("blur(4px)");
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let old_keys: Vec<String> = warmed
+        .textured_draws
+        .iter()
+        .filter(|d| d.texture_key.starts_with("rui_filter:"))
+        .map(|d| d.texture_key.clone())
+        .collect();
+    assert!(
+        !old_keys.is_empty(),
+        "warm collect must emit a CSS filter wrap; textured={:?}",
+        warmed
+            .textured_draws
+            .iter()
+            .map(|d| d.texture_key.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    root.children[0].style.filter = crate::style::parse_filter("blur(12px)");
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let new_keys: Vec<String> = next
+        .textured_draws
+        .iter()
+        .filter(|d| d.texture_key.starts_with("rui_filter:"))
+        .map(|d| d.texture_key.clone())
+        .collect();
+    assert!(
+        new_keys.iter().any(|k| !old_keys.contains(k)),
+        "paint-hash skip must bust when filter blur amount changes; old={old_keys:?} new={new_keys:?}"
+    );
+    for k in &old_keys {
+        assert!(
+            !new_keys.contains(k),
+            "must not replay the previous filter wrap key {k}"
+        );
+    }
+}
+
+fn first_active_clip(polys: &[crate::style::GpuClipPoly]) -> Option<(u32, [f32; 2])> {
+    polys
+        .iter()
+        .find(|p| p.is_active())
+        .map(|p| (p.count, p.pts[0]))
+}
+
+#[test]
+fn collect_skip_must_not_replay_clip_path() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].style.clip_path =
+        crate::style::parse_clip_path("circle(40% at 50% 50%)").unwrap();
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let old = first_active_clip(&warmed.clip_polys).expect("warm collect must emit clip-path poly");
+
+    root.children[0].style.clip_path =
+        crate::style::parse_clip_path("circle(20% at 50% 50%)").unwrap();
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let new = first_active_clip(&next.clip_polys).expect("recollect must emit clip-path poly");
+    assert_ne!(
+        old, new,
+        "paint-hash skip must bust when clip-path radius changes; old={old:?} new={new:?}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_outline_color() {
+    use crate::style::LineStyle;
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let fill = &mut root.children[0].children[0];
+    fill.style.outline_style = LineStyle::Solid;
+    fill.style.outline_width = 2.0;
+    fill.style.outline_color = [0.0, 0.0, 1.0, 1.0];
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        warmed
+            .instances
+            .iter()
+            .any(|i| i.border_width > 1.0 && (i.border_color[2] - 1.0).abs() < 0.05),
+        "warm collect must emit the blue outline"
+    );
+
+    root.children[0].children[0].style.outline_color = [0.0, 1.0, 0.0, 1.0];
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        next.instances
+            .iter()
+            .any(|i| i.border_width > 1.0 && (i.border_color[1] - 1.0).abs() < 0.05),
+        "paint-hash skip must bust when outline color changes; got {:?}",
+        next.instances
+            .iter()
+            .map(|i| (i.border_width, i.border_color))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !next.instances.iter().any(|i| i.border_width > 1.0
+            && (i.border_color[2] - 1.0).abs() < 0.05
+            && i.border_color[1] < 0.2),
+        "must not replay the previous outline color"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_per_side_border_color() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let fill = &mut root.children[0].children[0];
+    fill.style.set_uniform_border_width(4.0);
+    fill.style.border_style = crate::style::LineStyle::Solid;
+    fill.style.set_border_side_color(0, [0.0, 0.0, 1.0, 1.0]);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    // Per-side borders collect as fill strips (`instance.color`), not SDF `border_color`.
+    assert!(
+        warmed
+            .instances
+            .iter()
+            .any(|i| (i.color[2] - 1.0).abs() < 0.05 && i.color[0] < 0.2 && i.rect_size[1] <= 5.0),
+        "warm collect must emit the blue top-border strip"
+    );
+
+    root.children[0].children[0]
+        .style
+        .set_border_side_color(0, [0.0, 1.0, 0.0, 1.0]);
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        next.instances
+            .iter()
+            .any(|i| (i.color[1] - 1.0).abs() < 0.05 && i.color[0] < 0.2 && i.rect_size[1] <= 5.0),
+        "paint-hash skip must bust when a side border color changes; got {:?}",
+        next.instances
+            .iter()
+            .map(|i| (i.rect_size, i.color))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !next.instances.iter().any(|i| i.rect_size[1] <= 5.0
+            && (i.color[2] - 1.0).abs() < 0.05
+            && i.color[1] < 0.2
+            && i.color[0] < 0.2),
+        "must not replay the previous side-border strip color"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_letter_spacing() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].children[1].text_style.letter_spacing = 0.0;
+    root.children[0].children[1]
+        .text_style
+        .letter_spacing_specified = true;
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+
+    root.children[0].children[1].text_style.letter_spacing = 4.0;
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let left = next
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "left" || n.text == "LEFT")
+        .expect("left caption");
+    assert!(
+        (left.style.letter_spacing - 4.0).abs() < 0.01,
+        "paint-hash skip must bust when letter-spacing changes; got {}",
+        left.style.letter_spacing
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_text_align() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].children[1].text_style.align = Some(crate::style::TextAlign::Start);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+
+    root.children[0].children[1].text_style.align = Some(crate::style::TextAlign::Center);
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let left = next
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "left" || n.text == "LEFT")
+        .expect("left caption");
+    assert_eq!(
+        left.style.align,
+        Some(crate::style::TextAlign::Center),
+        "paint-hash skip must bust when text-align changes"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_font_family() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    root.children[0].children[1].text_style.font_family = Some("sans-serif".into());
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+
+    root.children[0].children[1].text_style.font_family = Some("monospace".into());
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let left = next
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "left" || n.text == "LEFT")
+        .expect("left caption");
+    assert_eq!(
+        left.style.font_family.as_deref(),
+        Some("monospace"),
+        "paint-hash skip must bust when font-family changes"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_overflow_hidden() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let mut spill = Element::new()
+        .w(80.0)
+        .h(200.0)
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .bg([0.0, 1.0, 0.0, 1.0]);
+    spill = spill.child(Element::new().w(1.0).h(1.0));
+    root.children[0].style.overflow.y = taffy::style::Overflow::Visible;
+    root.children[0].children.push(spill);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let spill_clip = |result: &crate::layout::layout_tree::RenderResult| {
+        result
+            .instances
+            .iter()
+            .find(|i| {
+                (i.color[1] - 1.0).abs() < 0.05 && i.color[0] < 0.1 && i.rect_size[1] >= 150.0
+            })
+            .map(|i| i.clip_size)
+    };
+    let warm_clip = spill_clip(&warmed).expect("warm collect must emit the overflowing fill");
+    assert!(
+        warm_clip[0] < 0.0,
+        "visible overflow must not clip the spill fill; clip={warm_clip:?}"
+    );
+
+    root.children[0].style.overflow.y = taffy::style::Overflow::Hidden;
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let hidden_clip = spill_clip(&next).expect("recollect must still emit the spill fill");
+    assert!(
+        hidden_clip[0] >= 0.0 && hidden_clip[1] > 0.0 && hidden_clip[1] <= 80.5,
+        "paint-hash skip must bust when overflow becomes hidden (layout clip, not rotated vis); \
+         clip={hidden_clip:?}"
+    );
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "right column must still fingerprint-replay"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_corner_shape() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let fill = &mut root.children[0].children[0];
+    fill.style.radii = [8.0, 8.0, 8.0, 8.0];
+    fill.style.corner_shape = crate::style::CornerShape::Round;
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let round_extra = warmed
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.radii[0] > 1.0)
+        .map(|i| i.border_extra)
+        .expect("warm collect must emit the rounded left fill");
+
+    root.children[0].children[0].style.corner_shape = crate::style::CornerShape::Notch;
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let notch_extra = next
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.radii[0] > 1.0)
+        .map(|i| i.border_extra)
+        .expect("left fill after corner-shape change");
+    assert_ne!(
+        round_extra, notch_extra,
+        "paint-hash skip must bust when corner-shape changes; still extra={round_extra}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_offset_distance() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let fill = &mut root.children[0].children[0];
+    fill.style.offset_path = crate::style::parse_offset_path(r#"path("M 0 0 L 40 0")"#).unwrap();
+    fill.style.offset_distance = 0.0;
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let rest_x = warmed
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.rect_size[0] > 40.0)
+        .map(|i| i.rect_pos[0])
+        .expect("warm collect must emit the left fill");
+
+    root.children[0].children[0].style.offset_distance = 1.0;
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let moved_x = next
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.rect_size[0] > 40.0)
+        .map(|i| i.rect_pos[0])
+        .expect("left fill after offset_distance change");
+    assert!(
+        (moved_x - rest_x - 40.0).abs() < 0.5,
+        "paint-hash skip must bust when offset_distance moves the fill; rest={rest_x} moved={moved_x}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_offset_rotate() {
+    reset_collect_skip_counters();
+    let mut root = two_column_page();
+    let fill = &mut root.children[0].children[0];
+    fill.style.offset_path = crate::style::parse_offset_path(r#"path("M 0 0 L 40 0")"#).unwrap();
+    fill.style.offset_distance = 0.0;
+    fill.style.offset_rotate_deg = Some(0.0);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let rest = warmed
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.rect_size[0] > 40.0)
+        .map(|i| i.transform)
+        .expect("warm collect must emit the left fill");
+
+    root.children[0].children[0].style.offset_rotate_deg = Some(90.0);
+    let next = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let spun = next
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.9 && i.rect_size[0] > 40.0)
+        .map(|i| i.transform)
+        .expect("left fill after offset_rotate change");
+    assert!(
+        (spun[1] - rest[1]).abs() > 0.5 || (spun[2] - rest[2]).abs() > 0.5,
+        "paint-hash skip must bust when offset_rotate_deg changes; rest={rest:?} spun={spun:?}"
+    );
+}
+
+#[test]
+fn collect_skip_must_not_replay_parent_rotate_on_centered_child() {
+    reset_collect_skip_counters();
+    let child: Element = crate::primitives::r#box::r#box()
+        .w(80.0)
+        .h(20.0)
+        .bg([1.0, 0.0, 0.0, 1.0])
+        .absolute(true)
+        .left(60.0)
+        .top(90.0)
+        .into();
+    let parent = Element::new().w(200.0).h(200.0).child(child);
+    let mut root = Element::new().w(200.0).h(200.0).child(parent);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+
+    root.children[0].style.rotate_deg = 90.0;
+    let spun = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], false, false);
+    let child_xf = spun
+        .instances
+        .iter()
+        .find(|i| i.color[0] > 0.5 && (i.rect_size[0] - 80.0).abs() < 1.0)
+        .map(|i| i.transform)
+        .expect("centered child fill");
+    assert!(
+        child_xf[1].abs() > 0.5 || child_xf[2].abs() > 0.5,
+        "parent rotate must recollect a centered child (origin unchanged); got {child_xf:?}"
     );
 }
 
@@ -799,6 +1425,15 @@ fn paint_only_skip_must_not_drop_portal_overlay_split() {
     let skipped = tree.build_and_layout_fast(&mut root, 400.0, 300.0, [-1.0, -1.0], false, false);
     assert_portal_overlay_split_keeps_chrome(&skipped);
     assert!(
+        skipped.overlay_split.is_marked(),
+        "production hoist parks the split on `__rui_portal_layer`; skip must not leave it unmarked"
+    );
+    assert_eq!(
+        root.children.last().and_then(|c| c.template_id.as_deref()),
+        Some(PORTAL_LAYER_ID),
+        "build_and_layout must hoist the overlay onto the body portal layer"
+    );
+    assert!(
         tree.last_collect_skip_counts().0 >= 1,
         "page sibling must still fingerprint-replay; only portal-containing ancestors stay live"
     );
@@ -811,5 +1446,296 @@ fn paint_only_skip_must_not_drop_portal_overlay_split() {
             .iter()
             .any(|t| t.text.contains("ViewportModal")),
         "dialog title must stay in the overlay text suffix after skip replay"
+    );
+}
+
+/// Portal-layer child bands (`overlay_split.bands`) are walk-time, like
+/// `overlay_split` itself. Skipping the layer would splice both panels' DLs as one
+/// blob and present would paint all overlay rects before all overlay glyphs.
+fn page_with_stacked_portals() -> Element {
+    let page = Element::new()
+        .w(200.0)
+        .h(80.0)
+        .bg([0.95, 0.95, 0.95, 1.0])
+        .child(Element::new().text("page"));
+    let mut lower = Element::new()
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .w(160.0)
+        .h(80.0)
+        .absolute()
+        .left(10.0)
+        .top(20.0)
+        .z_index(1000)
+        .child(Element::new().text("lower-glyph"));
+    lower.set_attr("rui_portal", "1");
+    lower.set_attr(ATTR_PORTAL_KEY, "panel:lower");
+    let mut upper = Element::new()
+        .bg([0.9, 0.9, 1.0, 1.0])
+        .w(160.0)
+        .h(80.0)
+        .absolute()
+        .left(40.0)
+        .top(40.0)
+        .z_index(1010)
+        .child(Element::new().text("upper-glyph"));
+    upper.set_attr("rui_portal", "1");
+    upper.set_attr(ATTR_PORTAL_KEY, "panel:upper");
+    Element::new()
+        .w(400.0)
+        .h(200.0)
+        .child(page)
+        .child(lower)
+        .child(upper)
+}
+
+fn assert_stacked_portal_bands(result: &crate::layout::layout_tree::RenderResult) {
+    assert!(
+        result.overlay_split.is_marked(),
+        "stacked portals must mark the overlay split"
+    );
+    assert!(
+        result.overlay_split.bands.len() >= 2,
+        "expected ≥2 portal bands after skip, got {}",
+        result.overlay_split.bands.len()
+    );
+    let ranges = result.overlay_split.band_ranges(
+        result.instances.len(),
+        result.textured_draws.len(),
+        result.text_nodes.len(),
+        result.input_chrome_instances.len(),
+        result.paint_ops.len(),
+    );
+    assert!(ranges.len() >= 2);
+    let a = ranges[ranges.len() - 2];
+    let b = ranges[ranges.len() - 1];
+    assert!(
+        result.text_nodes[a.text.0..a.text.1]
+            .iter()
+            .any(|t| t.text == "lower-glyph"),
+        "lower portal glyph must stay in its band; texts={:?}",
+        result
+            .text_nodes
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        result.text_nodes[b.text.0..b.text.1]
+            .iter()
+            .any(|t| t.text == "upper-glyph"),
+        "upper portal glyph must stay in the last band"
+    );
+}
+
+#[test]
+fn paint_only_skip_must_not_drop_stacked_portal_bands() {
+    reset_collect_skip_counters();
+    let mut root = page_with_stacked_portals();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+    assert_stacked_portal_bands(&first);
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    let skipped = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    assert_stacked_portal_bands(&skipped);
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "page sibling must still fingerprint-replay; portal layer stays live"
+    );
+}
+
+const DRAG_CHIP: [f32; 4] = [1.0, 0.45, 0.0, 1.0];
+
+fn page_with_drag_overlay() -> Element {
+    let page = Element::new()
+        .w(160.0)
+        .h(80.0)
+        .bg([0.2, 0.2, 0.8, 1.0])
+        .child(Element::new().text("page"));
+    let mut ghost = Element::new()
+        .w(40.0)
+        .h(24.0)
+        .bg(DRAG_CHIP)
+        .child(Element::new().w(1.0).h(1.0));
+    ghost.set_attr(crate::utils::drag::ATTR_DRAG_OVERLAY, "1");
+    Element::new().w(160.0).h(80.0).child(page).child(ghost)
+}
+
+fn drag_chip_instance(
+    result: &crate::layout::layout_tree::RenderResult,
+) -> &crate::renderer::InstanceInput {
+    result
+        .instances
+        .iter()
+        .find(|i| {
+            (i.color[0] - DRAG_CHIP[0]).abs() < 0.02
+                && (i.color[1] - DRAG_CHIP[1]).abs() < 0.05
+                && i.rect_size[0] >= 20.0
+        })
+        .expect("drag overlay chip")
+}
+
+/// Drag overlay is a collect side channel (not stored in the fingerprint DL).
+/// Skipping an ancestor freezes the ghost at last-frame `overlay_pos` / translate.
+#[test]
+fn paint_only_skip_must_not_freeze_drag_overlay() {
+    reset_collect_skip_counters();
+    let mut root = page_with_drag_overlay();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    let _ = drag_chip_instance(&first);
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    let skipped = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "page sibling must still fingerprint-replay; only the drag overlay stays live"
+    );
+    assert!(
+        root.children[1].collect_skip_live,
+        "drag overlay must stamp collect_skip_live so ancestors walk into it"
+    );
+    let _ = drag_chip_instance(&skipped);
+
+    root.children[1].style.bg_color = [0.1, 0.8, 0.2, 1.0];
+    let moved = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], false, false);
+    assert!(
+        moved
+            .instances
+            .iter()
+            .any(|i| (i.color[1] - 0.8).abs() < 0.08 && i.rect_size[0] >= 20.0),
+        "paint-only skip must recollect the drag ghost after a paint change"
+    );
+    assert!(
+        !moved.instances.iter().any(|i| {
+            (i.color[0] - DRAG_CHIP[0]).abs() < 0.02
+                && (i.color[1] - DRAG_CHIP[1]).abs() < 0.05
+                && i.rect_size[0] >= 20.0
+        }),
+        "must not replay the rest-pose drag chip color"
+    );
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "updating the ghost must not drop skip of the clean page sibling"
+    );
+}
+
+fn assert_page_stack_keeps_high_glyph(
+    result: &crate::layout::layout_tree::RenderResult,
+    high: &str,
+) {
+    assert!(
+        result.overlay_split.page_stack_bands.len() >= 2,
+        "page_stack_bands are a walk-time cursor; skip of the stacking parent parks them empty \
+         (all rects then all text → glyph bleed). got {}",
+        result.overlay_split.page_stack_bands.len()
+    );
+    let ranges = result.overlay_split.page_stack_band_ranges();
+    let last = ranges.last().expect("band ranges");
+    assert!(
+        result.text_nodes[last.text.0..last.text.1]
+            .iter()
+            .any(|t| t.text == high),
+        "higher z text must stay in the last page-stack band after skip; texts={:?}",
+        result
+            .text_nodes
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn page_beside_stacking_pile(attr: bool) -> Element {
+    let sibling = Element::new()
+        .w(80.0)
+        .h(80.0)
+        .bg([0.2, 0.8, 0.2, 1.0])
+        .child(Element::new().text("left"));
+    let lower = Element::new()
+        .bg([1.0, 0.0, 0.0, 1.0])
+        .w(120.0)
+        .h(80.0)
+        .absolute()
+        .left(10.0)
+        .top(10.0)
+        .z_index(1)
+        .child(Element::new().text("stack-low"));
+    let upper = Element::new()
+        .bg([0.0, 0.0, 1.0, 1.0])
+        .w(120.0)
+        .h(80.0)
+        .absolute()
+        .left(40.0)
+        .top(30.0)
+        .z_index(2)
+        .child(Element::new().text("stack-high"));
+    let mut pile = Element::new()
+        .w(200.0)
+        .h(120.0)
+        .relative()
+        .child(lower)
+        .child(upper);
+    if attr {
+        pile.attrs
+            .insert("data-stacking-context".to_string(), "1".to_string());
+    }
+    Element::new()
+        .flex_row()
+        .w(400.0)
+        .h(200.0)
+        .child(sibling)
+        .child(pile)
+}
+
+/// `page_stack_bands` are not in the fingerprint DL. Skipping a stacking-context
+/// parent splices rects/glyphs but leaves bands empty — present then paints every
+/// page glyph after every card fill (CarouselStack bleed).
+#[test]
+fn paint_only_skip_must_not_drop_page_stack_bands() {
+    reset_collect_skip_counters();
+    let mut root = page_beside_stacking_pile(true);
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+    assert_page_stack_keeps_high_glyph(&first, "stack-high");
+
+    tree.set_collect_skip_allowed(true);
+    let warmed = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    assert_page_stack_keeps_high_glyph(&warmed, "stack-high");
+
+    let skipped = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    assert_page_stack_keeps_high_glyph(&skipped, "stack-high");
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "left sibling must still fingerprint-replay; only the stacking parent stays live"
+    );
+    assert!(
+        root.children[1].collect_skip_live,
+        "data-stacking-context must stamp collect_skip_live so ancestors walk into the pile"
+    );
+}
+
+/// Toast-style pile: z-ordered cards, no `data-stacking-context`. Collect still
+/// auto-opens page_stack_bands; skip must not freeze that cursor.
+#[test]
+fn paint_only_skip_must_not_drop_z_index_page_stack_bands() {
+    reset_collect_skip_counters();
+    let mut root = page_beside_stacking_pile(false);
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+    assert_page_stack_keeps_high_glyph(&first, "stack-high");
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    let skipped = tree.build_and_layout_fast(&mut root, 400.0, 200.0, [0.0, 0.0], false, false);
+    assert_page_stack_keeps_high_glyph(&skipped, "stack-high");
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "left sibling must still fingerprint-replay; only the z-index parent stays live"
+    );
+    assert!(
+        root.children[1].collect_skip_live,
+        "direct z-index children must stamp collect_skip_live (toast pile without stacking attr)"
     );
 }

@@ -164,12 +164,14 @@ pub use timeline::{
 };
 pub use timing::{spring_step, Timing, TimingPhase, TimingProgress};
 pub use transform::{
-    compute_combined_transform, mat2d_inverse, mat2d_is_axis_aligned, mat2d_is_identity,
-    mat2d_linear, mat2d_multiply, mat2d_rotate, mat2d_transform_point, mat2d_transform_vec,
-    origin_frac, parse_transform, parse_transform_box, parse_transform_origin,
-    parse_transform_style, resolve_transform_matrix, set_origin_frac, Mat2d, TransformBox,
-    TransformFunction, TransformList, TransformOrigin, TransformOriginX, TransformOriginY,
-    TransformStyle, MAT2D_IDENTITY,
+    aabb_of_centered_transform, compute_combined_transform, mat2d_center_pivot_origin_tx_ty,
+    mat2d_inverse, mat2d_is_axis_aligned, mat2d_is_identity, mat2d_linear, mat2d_multiply,
+    mat2d_rotate, mat2d_set_translation, mat2d_transform_point, mat2d_transform_vec,
+    mat2d_world_center_pivot, mat2d_world_center_pivot_with_shift, origin_frac, origin_px,
+    parse_transform, parse_transform_box, parse_transform_origin, parse_transform_style,
+    resolve_transform_matrix, rotate_and_list_mat2d, scale_box_about_origin, set_origin_frac,
+    Mat2d, TransformBox, TransformFunction, TransformList, TransformOrigin, TransformOriginX,
+    TransformOriginY, TransformStyle, MAT2D_IDENTITY,
 };
 pub use used_layout::{ensure_used_layout_from_bounds, stamp_element_used_layout, UsedLayout};
 pub use utility::{

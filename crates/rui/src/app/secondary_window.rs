@@ -858,6 +858,7 @@ impl SecondaryWindowState {
             self.layout_status = self.layout_status.merge(status);
             status
         } else {
+            crate::app::reactive::note_bind_miss(template_id);
             LayoutStatus::Clean
         }
     }

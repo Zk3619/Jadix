@@ -1902,6 +1902,25 @@ pub struct NodePaint {
     pub text: (usize, usize),
     pub chrome: (usize, usize),
     pub paint_ops: (usize, usize),
+    /// Ancestor overflow clip in **paint** space (ScrollArea / `overflow:hidden`).
+    /// Identity overflow stays the layout border (Wave 18 title-bar leak).
+    /// Rotated overflow is the AABB of the transformed local box — dest-reset
+    /// and node-present scissor must cover diamond tips, not the unrotated AABB.
+    pub overflow_clip: Option<[f32; 4]>,
+}
+
+/// Dest-reset / scissor clip for this overflow box.
+/// GPU `clip_*` stay the layout border; this is the world AABB of painted pixels.
+fn overflow_dest_aabb(
+    layout_border: [f32; 4],
+    vis: [f32; 4],
+    transform: &crate::style::Mat2d,
+) -> [f32; 4] {
+    if crate::style::mat2d_is_identity(transform) {
+        layout_border
+    } else {
+        crate::style::aabb_of_centered_transform(vis, transform)
+    }
 }
 
 thread_local! {
@@ -1927,6 +1946,7 @@ fn record_node_paint(
     paint_ops: &[PaintOp],
     overlay: bool,
     scroll_acc: [f32; 2],
+    overflow_clip: Option<[f32; 4]>,
 ) {
     // Same space as collect instances / chrome dirties: visual, not Taffy document.
     let paint_scroll = if escapes_ancestor_overflow(el) {
@@ -1956,11 +1976,18 @@ fn record_node_paint(
             text: (start.text, end.text),
             chrome: (start.chrome, end.chrome),
             paint_ops: (start.paint_ops, end.paint_ops),
+            overflow_clip,
         });
     });
 }
 
 impl OverlayPaintSplit {
+    /// True once collect entered [`PORTAL_LAYER_ID`]. Fingerprint skip of an ancestor
+    /// must not leave this false while overlay rects still sit in the DL.
+    pub fn is_marked(&self) -> bool {
+        self.marked
+    }
+
     /// Expand [`Self::bands`] (or a single synthetic band) into end-exclusive ranges.
     pub fn band_ranges(
         &self,
@@ -2607,6 +2634,8 @@ struct CollectPainted {
     opacity: f32,
     clip: Option<[f32; 4]>,
     parent_clip: Option<[f32; 4]>,
+    /// Ancestor overflow in paint space (AABB of transformed local box).
+    dest_clip: Option<[f32; 4]>,
     clip_poly: crate::style::GpuClipPoly,
     render_rect: [f32; 4],
     visible_rect: [f32; 4],
@@ -2614,7 +2643,11 @@ struct CollectPainted {
     paint_sy: f32,
     world_linear: crate::style::Mat2d,
     local_linear: crate::style::Mat2d,
+    /// CSS `transform-origin` in layout-box px (from top-left). Child orbit uses this.
+    origin_layout: [f32; 2],
     transform: crate::style::Mat2d,
+    /// CSS `transform` list translation (not origin wrap). Child `parent_tl` adds this.
+    list_t: [f32; 2],
     filter_capture: bool,
     filter_cap_inst0: usize,
     filter_cap_tex0: usize,
@@ -2666,6 +2699,8 @@ struct CollectWalk {
     any_stacking: bool,
     opacity: f32,
     clip: Option<[f32; 4]>,
+    /// Dest-reset / scissor clip passed to children (paint AABB, not GPU layout).
+    dest_clip: Option<[f32; 4]>,
     /// Clip passed to children. CSS `filter` SourceGraphic must not inherit ancestor
     /// overflow — only this node's own overflow (if any).
     child_clip_poly: crate::style::GpuClipPoly,
@@ -2690,6 +2725,7 @@ struct CollectFrame {
     abs_offset: [f32; 2],
     scroll_acc: [f32; 2],
     parent_clip: Option<[f32; 4]>,
+    parent_dest_clip: Option<[f32; 4]>,
     parent_clip_poly: crate::style::GpuClipPoly,
     ancestor_scroll_viewport_rest: Option<String>,
     ancestor_opacity: f32,
@@ -2723,18 +2759,20 @@ impl CollectWalk {
         if !self.parent_scales && !self.parent_rotates {
             return self.parent_tl;
         }
-        let lay_w = self.painted.lay_w;
-        let lay_h = self.painted.lay_h;
-        let mut dx = (clx + cw * 0.5 - lay_w * 0.5) * self.painted.paint_sx;
-        let mut dy = (cly + ch * 0.5 - lay_h * 0.5) * self.painted.paint_sy;
+        // Scale and rotate share CSS origin (vis bake + VS txty). Center origin
+        // is the old "about layout center" path.
+        let ox = self.painted.origin_layout[0];
+        let oy = self.painted.origin_layout[1];
+        let mut dx = (clx + cw * 0.5 - ox) * self.painted.paint_sx;
+        let mut dy = (cly + ch * 0.5 - oy) * self.painted.paint_sy;
         if self.parent_rotates {
             let (rx, ry) = crate::style::mat2d_transform_vec(&self.painted.local_linear, dx, dy);
             dx = rx;
             dy = ry;
         }
-        let pcx = self.parent_tl[0] + lay_w * 0.5;
-        let pcy = self.parent_tl[1] + lay_h * 0.5;
-        [pcx + dx - cw * 0.5 - clx, pcy + dy - ch * 0.5 - cly]
+        let pox = self.parent_tl[0] + ox;
+        let poy = self.parent_tl[1] + oy;
+        [pox + dx - cw * 0.5 - clx, poy + dy - ch * 0.5 - cly]
     }
 }
 
@@ -3945,6 +3983,7 @@ impl LayoutTree {
             frame.parent_clip,
             frame.ancestor_opacity,
             frame.ancestor_scale,
+            frame.ancestor_linear,
         )
     }
 
@@ -3987,6 +4026,7 @@ impl LayoutTree {
             abs_offset,
             scroll_acc,
             parent_clip,
+            parent_dest_clip: None,
             parent_clip_poly: crate::style::GpuClipPoly::NONE,
             ancestor_scroll_viewport_rest: ancestor_scroll_viewport_rest.map(str::to_string),
             ancestor_opacity,
@@ -4039,6 +4079,7 @@ impl LayoutTree {
                         &paint_rec.ops,
                         overlay_split.marked,
                         frame.scroll_acc,
+                        frame.parent_dest_clip,
                     );
                     if let Ok(cl) = self.taffy.layout(frame.node) {
                         let paint_abs = [
@@ -4079,6 +4120,7 @@ impl LayoutTree {
                     frame.abs_offset,
                     frame.scroll_acc,
                     frame.parent_clip,
+                    frame.parent_dest_clip,
                     frame.parent_clip_poly,
                     frame.ancestor_scroll_viewport_rest.as_deref(),
                     mouse_pos,
@@ -4125,6 +4167,7 @@ impl LayoutTree {
                             &paint_rec.ops,
                             overlay_split.marked,
                             frame.scroll_acc,
+                            frame.parent_dest_clip,
                         );
                         collect_commit_extent(&mut stack, extent, &mut root_extent);
                         continue;
@@ -4166,6 +4209,7 @@ impl LayoutTree {
                                     &paint_rec.ops,
                                     overlay_split.marked,
                                     frame.scroll_acc,
+                                    frame.parent_dest_clip,
                                 );
                                 collect_commit_extent(&mut stack, extent, &mut root_extent);
                                 continue;
@@ -4200,6 +4244,7 @@ impl LayoutTree {
                     abs_offset: job.abs_offset,
                     scroll_acc: walk.next_scroll_acc,
                     parent_clip: walk.clip,
+                    parent_dest_clip: walk.dest_clip,
                     parent_clip_poly: walk.child_clip_poly,
                     ancestor_scroll_viewport_rest: walk.pass_to_children.clone(),
                     ancestor_opacity: walk.opacity,
@@ -4254,6 +4299,7 @@ impl LayoutTree {
                     &paint_rec.ops,
                     overlay_split.marked,
                     frame.scroll_acc,
+                    frame.parent_dest_clip,
                 );
                 collect_commit_extent(&mut stack, extent, &mut root_extent);
             }
@@ -4271,6 +4317,7 @@ impl LayoutTree {
         abs_offset: [f32; 2],
         scroll_acc: [f32; 2],
         parent_clip: Option<[f32; 4]>,
+        parent_dest_clip: Option<[f32; 4]>,
         parent_clip_poly: crate::style::GpuClipPoly,
         _ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
@@ -4303,10 +4350,10 @@ impl LayoutTree {
         // (Command overlay left edge was flush-cut by the gallery sidebar ScrollArea).
         let is_body_portal_layer = element.template_id.as_deref() == Some(PORTAL_LAYER_ID);
         let escape_overflow_clip = escapes_ancestor_overflow(element);
-        let (mut parent_clip, scroll_acc) = if escape_overflow_clip {
-            (None, [0.0_f32, 0.0_f32])
+        let (mut parent_clip, parent_dest_clip, scroll_acc) = if escape_overflow_clip {
+            (None, None, [0.0_f32, 0.0_f32])
         } else {
-            (parent_clip, scroll_acc)
+            (parent_clip, parent_dest_clip, scroll_acc)
         };
 
         if is_body_portal_layer && !overlay_split.marked {
@@ -4489,66 +4536,98 @@ impl LayoutTree {
         let chrome_y = render_y + paint_nudge[1];
         let chrome_w = (lay_w - paint_nudge[0]).max(0.0);
         let chrome_h = (lay_h - paint_nudge[1]).max(0.0);
-        // Bake CSS independent `scale` into the instance rect so placement matches
-        // `visual_paint_aabb` (hover / leave). The SDF shader also applies the affine
-        // **linear** part about the rect center — passing `style.scale` again made paint
-        // ~scale² while hit-testing stayed at scale¹ (gallery red `hover:scale-x-150`:
-        // pointer still on the painted overhang counted as leave).
+        // Bake CSS independent `scale` into the instance rect about `transform-origin`
+        // so placement matches `visual_paint_aabb` (hover / leave). Center origin is
+        // the old `(size-scaled)*0.5` inset. Passing `style.scale` again in the SDF
+        // affine painted ~scale² while hit-testing stayed at scale¹.
+        let origin_layout = crate::style::origin_px(&element.style.transform_origin, lay_w, lay_h);
         let (vis_w, vis_h, vis_x, vis_y) =
             if (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON {
-                let sw = lay_w * paint_sx;
-                let sh = lay_h * paint_sy;
-                (
-                    sw,
-                    sh,
-                    render_x + (lay_w - sw) * 0.5,
-                    render_y + (lay_h - sh) * 0.5,
-                )
+                let vis = crate::style::scale_box_about_origin(
+                    [render_x, render_y, lay_w, lay_h],
+                    origin_layout,
+                    [paint_sx, paint_sy],
+                );
+                (vis[2], vis[3], vis[0], vis[1])
             } else {
                 (chrome_w, chrome_h, chrome_x, chrome_y)
             };
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
         #[cfg(feature = "devtools")]
         crate::app::devtools::note_element_paint_visual(element, render_rect);
-        // `render_x/y`（及 vis_*）已含 CSS translate；rounded_rect.wgsl 在中心上再加
-        // transform 的 tx/ty。若矩阵再带 translate，不透明壳会双倍位移，而子树文字只经
-        // `parent_tl` 单倍位移 → Toast/堆叠「壳与文分离」。矩阵只保留 rotate + transform 列表
-        // （scale 已 bake 进 rect，传 [1,1]）。
-        let local_full = crate::style::compute_combined_transform(
-            &[0.0, 0.0],
+        // `render_x/y`（及 vis_*）已含 CSS translate。VS 绕 rect **中心** 再加 tx/ty。
+        // `compute_combined_transform` 的 origin wrap 是 top-left 空间，不能直接抄上实例
+        //（会绕角转、壳与文分离）。2×2 用 linear；tx/ty = (I-R)*(origin-center)，壳 / 贴图 /
+        // 子树 `child_pass_offset_for` 共用同一 origin。默认 center → tx/ty = 0。
+        let origin_in_vis = [
+            origin_layout[0] - (vis_x - render_x),
+            origin_layout[1] - (vis_y - render_y),
+        ];
+        let local_unwrapped = crate::style::rotate_and_list_mat2d(
             element.style.rotate_deg + offset_motion.rotate_deg,
-            &[1.0, 1.0],
             element.style.transform.as_ref(),
-            &element.style.transform_origin,
             vis_w,
             vis_h,
         );
-        let local_linear = crate::style::mat2d_linear(&local_full);
+        let local_linear = crate::style::mat2d_linear(&local_unwrapped);
+        let list_t = [local_unwrapped[4], local_unwrapped[5]];
         let world_linear = crate::style::mat2d_multiply(&ancestor_linear, &local_linear);
-        // Always paint with composed linear about rect center (tx/ty = 0). Origin-baked
-        // `local_full` tx/ty diverged from text's clean `center + R*(p-center)` and made
-        // shell/text look split under rotate.
-        let transform = world_linear;
+        let transform = crate::style::mat2d_world_center_pivot_with_shift(
+            &ancestor_linear,
+            &local_linear,
+            origin_in_vis,
+            [vis_w, vis_h],
+            list_t,
+        );
+        element.paint_ancestor_scale = ancestor_scale;
+        element.paint_ancestor_linear = ancestor_linear;
         let text_world_linear = world_linear;
         let self_inst0 = instances.len();
         let self_tex0 = textured_draws.len();
 
         // Clipping & Visibility
-        // Overflow clips the **layout** border box, not the scaled/rotated paint rect.
+        // Overflow clips the **layout** border box in `rect_pos` space; the GPU then
+        // tests after undoing the instance affine (CSS local clip, then VS).
         // Using `render_rect` (CSS scale/rotate visual) made gallery `hover:scale-*` /
         // `hover:rotate-*` tiles grow/shrink the scroll clip every tween frame, which
         // jittered hit-test and flashed sidebar hover while those tiles were on screen.
         let layout_border = [render_x, render_y, lay_w, lay_h];
         let mut clip = parent_clip;
+        let mut dest_clip = parent_dest_clip;
         let overflow_clips = element.style.overflow.x != taffy::style::Overflow::Visible
             || element.style.overflow.y != taffy::style::Overflow::Visible;
         if overflow_clips {
             clip = Some(intersect_rect(clip, layout_border));
+            dest_clip = Some(intersect_rect(
+                dest_clip,
+                overflow_dest_aabb(layout_border, render_rect, &transform),
+            ));
         }
         if !element.style.clip_path.is_none() {
-            if let Some(aabb) = element.style.clip_path.aabb(layout_border) {
+            let paint_clip = !crate::style::mat2d_is_identity(&transform);
+            if paint_clip {
+                let pts = element.style.clip_path.to_world_polygon(layout_border);
+                let painted: Vec<[f32; 2]> = pts
+                    .iter()
+                    .map(|p| {
+                        crate::core::tree::layout_local_to_paint_world(
+                            element,
+                            [p[0] - layout_border[0], p[1] - layout_border[1]],
+                            scroll_for_render,
+                            ancestor_linear,
+                            ancestor_scale,
+                        )
+                    })
+                    .collect();
+                if let Some(aabb) = aabb_from_points(&painted) {
+                    parent_clip = Some(intersect_rect(parent_clip, aabb));
+                    clip = Some(intersect_rect(clip, aabb));
+                    dest_clip = Some(intersect_rect(dest_clip, aabb));
+                }
+            } else if let Some(aabb) = element.style.clip_path.aabb(layout_border) {
                 parent_clip = Some(intersect_rect(parent_clip, aabb));
                 clip = Some(intersect_rect(clip, aabb));
+                dest_clip = Some(intersect_rect(dest_clip, aabb));
             }
         }
         if let Some(name) = element.style.clip_path_name.as_deref() {
@@ -4561,6 +4640,24 @@ impl LayoutTree {
         };
         let clip_path_poly = if element.style.clip_path.is_none() {
             crate::style::GpuClipPoly::NONE
+        } else if !crate::style::mat2d_is_identity(&transform) {
+            let pts = element.style.clip_path.to_world_polygon(layout_border);
+            let painted: Vec<[f32; 2]> = pts
+                .iter()
+                .map(|p| {
+                    crate::core::tree::layout_local_to_paint_world(
+                        element,
+                        [p[0] - layout_border[0], p[1] - layout_border[1]],
+                        scroll_for_render,
+                        ancestor_linear,
+                        ancestor_scale,
+                    )
+                })
+                .collect();
+            crate::style::GpuClipPoly::from_world_points(
+                &painted,
+                element.style.clip_path.fill_rule(),
+            )
         } else {
             element.style.clip_path.to_gpu(layout_border)
         };
@@ -4888,8 +4985,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
-                    textured_draws
-                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws.push(draw.with_transform(transform));
                     path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
@@ -4902,8 +4998,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
-                    textured_draws
-                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws.push(draw.with_transform(transform));
                     path_tex_drawn = true;
                 }
             } else if crate::renderer::gpu2d_enabled() {
@@ -4960,8 +5055,7 @@ impl LayoutTree {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                     {
-                        textured_draws
-                            .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                        textured_draws.push(draw.with_transform(transform));
                         path_tex_drawn = true;
                     }
                 } else if let Some((tex_key, dw, dh)) =
@@ -4974,8 +5068,7 @@ impl LayoutTree {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                     {
-                        textured_draws
-                            .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                        textured_draws.push(draw.with_transform(transform));
                         path_tex_drawn = true;
                     }
                 }
@@ -4985,8 +5078,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
-                    textured_draws
-                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws.push(draw.with_transform(transform));
                     path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
@@ -4999,8 +5091,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
                 {
-                    textured_draws
-                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws.push(draw.with_transform(transform));
                     path_tex_drawn = true;
                 }
             } else if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
@@ -5168,7 +5259,7 @@ impl LayoutTree {
                         opacity,
                     ) {
                         if element.attrs.contains_key(crate::utils::ATTR_ICON_SRC) {
-                            draw = draw.with_transform(crate::style::mat2d_linear(&transform));
+                            draw = draw.with_transform(transform);
                         }
                         textured_draws.push(draw);
                     }
@@ -5264,21 +5355,9 @@ impl LayoutTree {
                 let cx = vis_x + vis_w * 0.5;
                 let cy = vis_y + vis_h * 0.5;
                 let full = [cx - side * 0.5, cy - side * 0.5, side, side];
-                // Textured shader pivots about rect center (like SDF). Strip origin-baked
-                // tx/ty from `compute_combined_transform` — otherwise the icon orbits a corner.
-                let full_xf = crate::style::compute_combined_transform(
-                    &[0.0, 0.0],
-                    element.style.rotate_deg,
-                    &[1.0, 1.0],
-                    element.style.transform.as_ref(),
-                    &element.style.transform_origin,
-                    side,
-                    side,
-                );
-                let icon_xf = crate::style::mat2d_multiply(
-                    &ancestor_linear,
-                    &crate::style::mat2d_linear(&full_xf),
-                );
+                // Same VS affine as the SDF shell: linear about rect center + origin txty.
+                // Recomputing origin wrap on `side` and copying tx/ty made the icon orbit a corner.
+                let icon_xf = transform;
                 if element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
                     if let Some((tex_key, _)) =
                         crate::utils::lucide_animated::ensure_animated_icon_texture(
@@ -5367,7 +5446,7 @@ impl LayoutTree {
                                         texture_key: tex_key,
                                         opacity,
                                         tint_rgb: [1.0, 1.0, 1.0],
-                                        transform: text_world_linear,
+                                        transform,
                                         clip_pos: [0.0, 0.0],
                                         clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
                                     }
@@ -5537,7 +5616,11 @@ impl LayoutTree {
                             let full = crate::utils::text_texture::bake_draw_rect_for_layout(
                                 text_x, text_y0, draw_w, draw_h, bake_w, bake_h,
                             );
-                            let xform = crate::style::mat2d_linear(&text_paint_linear);
+                            let xform = crate::style::mat2d_set_translation(
+                                &text_paint_linear,
+                                transform[4],
+                                transform[5],
+                            );
                             let rotated =
                                 !crate::style::transform::mat2d_is_axis_aligned(&text_paint_linear);
                             // Rotated Bake (writing-mode / CSS rotate): the quad is the
@@ -5747,6 +5830,7 @@ impl LayoutTree {
             },
             clip,
             parent_clip,
+            dest_clip,
             clip_poly: gpu_poly,
             render_rect,
             visible_rect,
@@ -5754,7 +5838,9 @@ impl LayoutTree {
             paint_sy,
             world_linear,
             local_linear,
+            origin_layout,
             transform,
+            list_t,
             filter_capture,
             filter_cap_inst0,
             filter_cap_tex0,
@@ -5882,10 +5968,31 @@ impl LayoutTree {
             } else {
                 (painted.clip, painted.clip_poly)
             };
+        let dest_clip = if painted.filter_capture || painted.scale_layer.is_some() {
+            let overflow_clips = element.style.overflow.x != taffy::style::Overflow::Visible
+                || element.style.overflow.y != taffy::style::Overflow::Visible;
+            if overflow_clips {
+                Some(overflow_dest_aabb(
+                    painted.layout_border,
+                    painted.render_rect,
+                    &painted.transform,
+                ))
+            } else {
+                None
+            }
+        } else {
+            painted.dest_clip
+        };
 
         let parent_tl = [
-            abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
-            abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
+            abs_x
+                + element.style.translate[0]
+                + lay_w * element.style.translate_pct[0]
+                + painted.list_t[0],
+            abs_y
+                + element.style.translate[1]
+                + lay_h * element.style.translate_pct[1]
+                + painted.list_t[1],
         ];
         let parent_scales = painted.scale_layer.is_none()
             && ((painted.paint_sx - 1.0).abs() > 1e-4 || (painted.paint_sy - 1.0).abs() > 1e-4);
@@ -5895,6 +6002,8 @@ impl LayoutTree {
             || element.style.translate[1].abs() > 0.05
             || element.style.translate_pct[0].abs() > 0.001
             || element.style.translate_pct[1].abs() > 0.001
+            || painted.list_t[0].abs() > 0.05
+            || painted.list_t[1].abs() > 0.05
             || parent_scales
             || parent_rotates;
         let z_order = if any_z {
@@ -5922,6 +6031,7 @@ impl LayoutTree {
                 || crate::renderer::element_wants_sticky_xform(element),
             opacity: painted.opacity,
             clip: child_clip,
+            dest_clip,
             child_clip_poly,
             parent_tl,
             parent_scales,
@@ -6599,6 +6709,28 @@ fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {
         (rect[2] + dx * 2.0).max(0.0),
         (rect[3] + dy * 2.0).max(0.0),
     ]
+}
+
+fn aabb_from_points(pts: &[[f32; 2]]) -> Option<[f32; 4]> {
+    if pts.is_empty() {
+        return None;
+    }
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for [x, y] in pts {
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(*x);
+        max_y = max_y.max(*y);
+    }
+    Some([
+        min_x,
+        min_y,
+        (max_x - min_x).max(0.0),
+        (max_y - min_y).max(0.0),
+    ])
 }
 
 fn scale_rect_about(rect: [f32; 4], sx: f32, sy: f32, cx: f32, cy: f32) -> [f32; 4] {
@@ -8895,6 +9027,155 @@ mod portal_hoist_tests {
         assert!(
             tx.abs() < 0.01 && ty.abs() < 0.01,
             "transform tx/ty should be 0 when translate is baked into rect_pos, got [{tx}, {ty}]"
+        );
+    }
+
+    #[test]
+    fn rotate_origin_left_top_moves_shader_pivot() {
+        fn collect_shell(origin: &str) -> crate::style::Mat2d {
+            let mut shell = Element::new()
+                .bg([0.9, 0.1, 0.1, 1.0])
+                .w(100.0)
+                .h(100.0)
+                .absolute()
+                .left(0.0)
+                .top(0.0);
+            shell.style.rotate_deg = 90.0;
+            shell.style.transform_origin = crate::style::parse_transform_origin(origin);
+            let mut root = Element::new().w(200.0).h(200.0).child(shell);
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 200.0, 200.0, [0.0, 0.0]);
+            result
+                .instances
+                .iter()
+                .find(|i| i.color[0] > 0.8 && i.rect_size[0] > 80.0)
+                .map(|i| i.transform)
+                .expect("shell instance")
+        }
+        let center = collect_shell("center");
+        let left_top = collect_shell("left top");
+        assert!(
+            center[4].abs() < 0.05 && center[5].abs() < 0.05,
+            "default origin must keep shader tx/ty at 0, got {center:?}"
+        );
+        assert!(
+            (left_top[4] + 100.0).abs() < 1.0 && left_top[5].abs() < 1.0,
+            "left-top 90° on 100×100 must put origin into VS tx/ty (-100, 0), got {left_top:?}"
+        );
+        for i in 0..4 {
+            assert!(
+                (center[i] - left_top[i]).abs() < 1e-3,
+                "origin must not change the 2×2 linear part"
+            );
+        }
+    }
+
+    #[test]
+    fn rotate_origin_left_top_keeps_shell_and_child_text_together() {
+        fn collect(origin: &str) -> (crate::style::Mat2d, [f32; 4], crate::style::Mat2d) {
+            let mut shell = Element::new()
+                .bg([0.2, 0.4, 0.9, 1.0])
+                .w(120.0)
+                .h(48.0)
+                .absolute()
+                .left(40.0)
+                .top(40.0)
+                .child(Element::new().text("shell-label").w(100.0).h(24.0));
+            shell.style.rotate_deg = 45.0;
+            shell.style.transform_origin = crate::style::parse_transform_origin(origin);
+            let mut root = Element::new().w(400.0).h(300.0).child(shell);
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 400.0, 300.0, [0.0, 0.0]);
+            let xf = result
+                .instances
+                .iter()
+                .find(|i| i.color[0] > 0.15 && i.rect_size[1] > 40.0)
+                .map(|i| i.transform)
+                .expect("opaque shell");
+            let bake = result
+                .textured_draws
+                .iter()
+                .find(|d| {
+                    d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                        || d.texture_key
+                            .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+                })
+                .expect("baked child text");
+            (xf, bake.rect, bake.transform)
+        }
+        let (center_xf, center_rect, center_bake_xf) = collect("center");
+        let (lt_xf, lt_rect, lt_bake_xf) = collect("left top");
+        assert!(
+            center_xf[4].abs() < 0.05 && center_xf[5].abs() < 0.05,
+            "center origin shell txty must stay 0, got {center_xf:?}"
+        );
+        assert!(
+            lt_xf[4].abs() > 1.0 || lt_xf[5].abs() > 1.0,
+            "left-top origin must move the shell shader pivot, got {lt_xf:?}"
+        );
+        let dcx = (center_rect[0] + center_rect[2] * 0.5) - (lt_rect[0] + lt_rect[2] * 0.5);
+        let dcy = (center_rect[1] + center_rect[3] * 0.5) - (lt_rect[1] + lt_rect[3] * 0.5);
+        assert!(
+            dcx.abs() > 1.0 || dcy.abs() > 1.0,
+            "child bake must orbit CSS origin, not stay at the center-pivot rect; center={center_rect:?} left-top={lt_rect:?}"
+        );
+        // Child itself has default origin (center): its VS txty stays 0; orbit is rect_pos.
+        assert!(
+            center_bake_xf[4].abs() < 0.05 && center_bake_xf[5].abs() < 0.05,
+            "child bake txty at default origin must stay 0, got {center_bake_xf:?}"
+        );
+        assert!(
+            lt_bake_xf[4].abs() < 0.05 && lt_bake_xf[5].abs() < 0.05,
+            "child bake txty must stay 0 (orbit via rect); parent txty is on the shell, got {lt_bake_xf:?}"
+        );
+    }
+
+    #[test]
+    fn scale_origin_left_top_moves_child_rect() {
+        fn child_x(origin: &str) -> f32 {
+            let mut shell = Element::new()
+                .bg([0.2, 0.4, 0.9, 1.0])
+                .w(100.0)
+                .h(40.0)
+                .absolute()
+                .left(20.0)
+                .top(20.0)
+                .child(
+                    Element::new()
+                        .bg([0.9, 0.2, 0.2, 1.0])
+                        .w(20.0)
+                        .h(20.0)
+                        .absolute()
+                        .left(10.0)
+                        .top(10.0),
+                );
+            shell.style.scale = [2.0, 1.0];
+            shell.style.transform_origin = crate::style::parse_transform_origin(origin);
+            let mut root = Element::new().w(400.0).h(200.0).child(shell);
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+            result
+                .instances
+                .iter()
+                .find(|i| i.color[0] > 0.8 && i.color[1] < 0.35)
+                .map(|i| i.rect_pos[0])
+                .unwrap_or_else(|| {
+                    panic!(
+                        "child fill missing; instances={:?}",
+                        result
+                            .instances
+                            .iter()
+                            .map(|i| (i.color, i.rect_pos, i.rect_size))
+                            .collect::<Vec<_>>()
+                    )
+                })
+        }
+        let center = child_x("center");
+        let left_top = child_x("left top");
+        assert!(
+            (center - left_top).abs() > 1.0,
+            "child under scaled parent must follow origin, center_x={center} left_top_x={left_top}"
         );
     }
 

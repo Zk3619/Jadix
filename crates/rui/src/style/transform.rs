@@ -134,10 +134,71 @@ pub fn mat2d_rotate(rad: f32) -> Mat2d {
 
 /// Keep the 2×2 linear part; zero translation.
 ///
-/// SDF / textured shaders pivot about the instance rect center, so origin-baked
-/// `tx/ty` from [`compute_combined_transform`] must not be applied again.
+/// [`compute_combined_transform`] wraps CSS origin in **top-left** space. SDF /
+/// textured VS pivot about the instance **rect center**, so that wrap's `tx/ty`
+/// must not be copied onto the instance. Shader origin lives in
+/// [`mat2d_center_pivot_origin_tx_ty`].
 pub fn mat2d_linear(m: &Mat2d) -> Mat2d {
     [m[0], m[1], m[2], m[3], 0.0, 0.0]
+}
+
+/// Replace translation; keep the 2×2 linear part.
+pub fn mat2d_set_translation(m: &Mat2d, tx: f32, ty: f32) -> Mat2d {
+    [m[0], m[1], m[2], m[3], tx, ty]
+}
+
+/// Extra `tx/ty` so a **center-pivoted** VS (`center + R*local + txty`) matches
+/// CSS `transform-origin`: `origin + R*(p - origin)`.
+///
+/// `txty = (I - linear) * (origin - size/2)`. Center origin → `[0, 0]`.
+pub fn mat2d_center_pivot_origin_tx_ty(
+    linear: &Mat2d,
+    origin: [f32; 2],
+    box_wh: [f32; 2],
+) -> [f32; 2] {
+    let dx = origin[0] - box_wh[0] * 0.5;
+    let dy = origin[1] - box_wh[1] * 0.5;
+    let (rx, ry) = mat2d_transform_vec(linear, dx, dy);
+    [dx - rx, dy - ry]
+}
+
+/// World paint affine: ancestor×local 2×2, plus origin `tx/ty` transformed by
+/// the ancestor linear (same VS contract as [`mat2d_center_pivot_origin_tx_ty`]).
+pub fn mat2d_world_center_pivot(
+    ancestor_linear: &Mat2d,
+    local_linear: &Mat2d,
+    origin_in_box: [f32; 2],
+    box_wh: [f32; 2],
+) -> Mat2d {
+    mat2d_world_center_pivot_with_shift(
+        ancestor_linear,
+        local_linear,
+        origin_in_box,
+        box_wh,
+        [0.0, 0.0],
+    )
+}
+
+/// [`mat2d_world_center_pivot`] plus CSS `transform` list translation.
+///
+/// `compute_combined_transform` wraps origin in top-left space; [`mat2d_linear`]
+/// then drops **all** translation, including list `translate()`. VS `tx/ty` is
+/// origin correction **plus** that list shift, then transformed by the ancestor 2×2.
+pub fn mat2d_world_center_pivot_with_shift(
+    ancestor_linear: &Mat2d,
+    local_linear: &Mat2d,
+    origin_in_box: [f32; 2],
+    box_wh: [f32; 2],
+    list_t: [f32; 2],
+) -> Mat2d {
+    let world_linear = mat2d_multiply(ancestor_linear, local_linear);
+    let origin_txty = mat2d_center_pivot_origin_tx_ty(local_linear, origin_in_box, box_wh);
+    let (wtx, wty) = mat2d_transform_vec(
+        ancestor_linear,
+        origin_txty[0] + list_t[0],
+        origin_txty[1] + list_t[1],
+    );
+    mat2d_set_translation(&world_linear, wtx, wty)
 }
 
 /// True when the 2×2 part is (nearly) a positive axis-aligned scale — no rotate/skew.
@@ -268,6 +329,66 @@ fn func_to_mat2d(f: &TransformFunction, w: f32, h: f32) -> Mat2d {
 // Resolve origin to px
 // ---------------------------------------------------------------------------
 
+/// CSS `transform-origin` in box px from the top-left (keywords / % / length).
+pub fn origin_px(origin: &TransformOrigin, w: f32, h: f32) -> [f32; 2] {
+    [origin_x_px(&origin.x, w), origin_y_px(&origin.y, h)]
+}
+
+/// Scale a border box about a CSS origin (px from the box top-left).
+///
+/// Center origin matches the old `(size - scaled) * 0.5` inset used by collect
+/// vis-bake and [`crate::core::tree::visual_paint_aabb`].
+pub fn scale_box_about_origin(xywh: [f32; 4], origin: [f32; 2], scale: [f32; 2]) -> [f32; 4] {
+    let sx = if scale[0].is_finite() && scale[0] > 0.0 {
+        scale[0]
+    } else {
+        1.0
+    };
+    let sy = if scale[1].is_finite() && scale[1] > 0.0 {
+        scale[1]
+    } else {
+        1.0
+    };
+    [
+        xywh[0] + origin[0] * (1.0 - sx),
+        xywh[1] + origin[1] * (1.0 - sy),
+        xywh[2] * sx,
+        xywh[3] * sy,
+    ]
+}
+
+/// World AABB of a textured / SDF quad after the same center-pivot linear
+/// transform the VS uses: `center + R*local + txty`.
+pub fn aabb_of_centered_transform(rect: [f32; 4], m: &Mat2d) -> [f32; 4] {
+    let [x, y, w, h] = rect;
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    let corners = [
+        [-0.5 * w, -0.5 * h],
+        [0.5 * w, -0.5 * h],
+        [0.5 * w, 0.5 * h],
+        [-0.5 * w, 0.5 * h],
+    ];
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for [lx, ly] in corners {
+        let px = cx + m[0] * lx + m[2] * ly + m[4];
+        let py = cy + m[1] * lx + m[3] * ly + m[5];
+        min_x = min_x.min(px);
+        min_y = min_y.min(py);
+        max_x = max_x.max(px);
+        max_y = max_y.max(py);
+    }
+    [
+        min_x,
+        min_y,
+        (max_x - min_x).max(0.0),
+        (max_y - min_y).max(0.0),
+    ]
+}
+
 fn origin_x_px(ox: &TransformOriginX, w: f32) -> f32 {
     match ox {
         TransformOriginX::Left => 0.0,
@@ -347,6 +468,30 @@ pub fn resolve_transform_matrix(
     let pre = mat2d_translate(ox, oy);
     let post = mat2d_translate(-ox, -oy);
     mat2d_multiply(&pre, &mat2d_multiply(&product, &post))
+}
+
+/// Independent `rotate` plus the CSS `transform` list, **without** origin wrap,
+/// independent translate, or scale.
+///
+/// Collect / VS bake scale into the instance rect and independent translate into
+/// `render_x/y`. Origin lives in [`mat2d_center_pivot_origin_tx_ty`]. The remaining
+/// matrix translation is list `translate()` / `translateX/Y` the VS must keep.
+pub fn rotate_and_list_mat2d(
+    rotate_deg: f32,
+    transform_list: Option<&TransformList>,
+    box_w: f32,
+    box_h: f32,
+) -> Mat2d {
+    let mut m = MAT2D_IDENTITY;
+    if rotate_deg.abs() > 1e-6 {
+        m = mat2d_multiply(&m, &mat2d_rotate(rotate_deg * std::f32::consts::PI / 180.0));
+    }
+    if let Some(list) = transform_list {
+        for f in list {
+            m = mat2d_multiply(&m, &func_to_mat2d(f, box_w, box_h));
+        }
+    }
+    m
 }
 
 /// Combine the CSS independent transform properties (`translate`, `rotate`, `scale`)
@@ -849,6 +994,78 @@ mod tests {
     }
 
     #[test]
+    fn center_pivot_origin_tx_ty_is_zero_at_center() {
+        let r = mat2d_rotate(45.0f32.to_radians());
+        let txty = mat2d_center_pivot_origin_tx_ty(&r, [50.0, 50.0], [100.0, 100.0]);
+        assert!(
+            txty[0].abs() < 1e-4 && txty[1].abs() < 1e-4,
+            "center origin must not add shader translation, got {txty:?}"
+        );
+    }
+
+    #[test]
+    fn center_pivot_origin_tx_ty_left_top_rotate_90() {
+        // y-down rotate 90°: (x,y) → (-y, x). About top-left, box center (50,50)
+        // maps to (-50, 50). Shader: center + txty = (50,50)+txty must match.
+        let r = mat2d_rotate(90.0f32.to_radians());
+        let txty = mat2d_center_pivot_origin_tx_ty(&r, [0.0, 0.0], [100.0, 100.0]);
+        assert!(
+            (txty[0] + 100.0).abs() < 1e-3 && txty[1].abs() < 1e-3,
+            "left-top 90° on 100×100 → txty (-100, 0), got {txty:?}"
+        );
+        let world = mat2d_world_center_pivot(&MAT2D_IDENTITY, &r, [0.0, 0.0], [100.0, 100.0]);
+        assert!((world[4] + 100.0).abs() < 1e-3 && world[5].abs() < 1e-3);
+        let identity_txty =
+            mat2d_center_pivot_origin_tx_ty(&MAT2D_IDENTITY, [0.0, 0.0], [100.0, 100.0]);
+        assert!(
+            identity_txty[0].abs() < 1e-4 && identity_txty[1].abs() < 1e-4,
+            "identity linear must not shift a non-center origin, got {identity_txty:?}"
+        );
+    }
+
+    #[test]
+    fn scale_box_about_origin_center_matches_old_inset() {
+        let center = scale_box_about_origin([10.0, 20.0, 100.0, 40.0], [50.0, 20.0], [2.0, 2.0]);
+        assert!((center[0] - (10.0 - 50.0)).abs() < 1e-4);
+        assert!((center[1] - (20.0 - 20.0)).abs() < 1e-4);
+        assert!((center[2] - 200.0).abs() < 1e-4 && (center[3] - 80.0).abs() < 1e-4);
+        let left_top = scale_box_about_origin([10.0, 20.0, 100.0, 40.0], [0.0, 0.0], [2.0, 2.0]);
+        assert!(
+            (left_top[0] - 10.0).abs() < 1e-4 && (left_top[1] - 20.0).abs() < 1e-4,
+            "left-top origin must keep the top-left fixed, got {left_top:?}"
+        );
+        assert!((left_top[2] - 200.0).abs() < 1e-4);
+        assert!(
+            (left_top[0] - center[0]).abs() > 1.0,
+            "left-top and center scale must place the box differently"
+        );
+    }
+
+    #[test]
+    fn aabb_of_centered_transform_identity_keeps_rect() {
+        let r = [10.0, 20.0, 100.0, 40.0];
+        let out = aabb_of_centered_transform(r, &MAT2D_IDENTITY);
+        for i in 0..4 {
+            assert!(
+                (out[i] - r[i]).abs() < 1e-4,
+                "identity AABB {out:?} vs {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aabb_of_centered_transform_left_top_rotate_90() {
+        let r90 = mat2d_rotate(90.0f32.to_radians());
+        let m = mat2d_world_center_pivot(&MAT2D_IDENTITY, &r90, [0.0, 0.0], [100.0, 100.0]);
+        let aabb = aabb_of_centered_transform([0.0, 0.0, 100.0, 100.0], &m);
+        assert!(
+            (aabb[0] + 100.0).abs() < 1e-3 && aabb[1].abs() < 1e-3,
+            "left-top 90° AABB should sit at (-100, 0), got {aabb:?}"
+        );
+        assert!((aabb[2] - 100.0).abs() < 1e-3 && (aabb[3] - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn cascade_linear_multiply_composes_rotates() {
         let a = mat2d_rotate(45.0f32.to_radians());
         let b = mat2d_rotate(45.0f32.to_radians());
@@ -909,5 +1126,13 @@ mod tests {
         );
         // Should not be identity
         assert!(!mat2d_is_identity(&m));
+    }
+
+    #[test]
+    fn rotate_and_list_keeps_translate() {
+        let list = parse_transform("translate(40px, 10px)").unwrap();
+        let m = rotate_and_list_mat2d(0.0, Some(&list), 100.0, 80.0);
+        assert!((m[4] - 40.0).abs() < 1e-4 && (m[5] - 10.0).abs() < 1e-4);
+        assert!(mat2d_is_identity(&mat2d_linear(&m)));
     }
 }

@@ -685,6 +685,11 @@ impl BaseComponentBuilder {
         self
     }
 
+    pub fn opacity(mut self, o: impl crate::core::tree::IntoOpacity) -> Self {
+        self.el = self.el.opacity(o);
+        self
+    }
+
     pub fn box_shadow(mut self, spec: impl AsRef<str>) -> Self {
         self.el = self.el.box_shadow(spec);
         mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);

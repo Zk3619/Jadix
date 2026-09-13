@@ -24,7 +24,9 @@
 //! 关联时写入稳定 `accesskit_id`（`lbl:for:…`），桥侧给目标补 `labelled_by`。
 
 use crate::components::base::SlotChrome;
-use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
+use crate::core::tree::{
+    Element, IntoCssDim, IntoF32, IntoNodeBg, IntoNodeFg, IntoNodeSize, LayoutStatus,
+};
 use crate::primitives::text::TextBuilder;
 use crate::style::{parse_color, InputCaretDraw};
 use crate::utils::clipboard::set_text as clipboard_set_text;
@@ -249,6 +251,7 @@ pub fn text_node(id: impl Into<String>) -> LabelBuilder {
 impl LabelBuilder {
     crate::impl_slot_chrome_methods!();
 
+    #[track_caller]
     pub fn text(mut self, content: impl crate::core::tree::IntoNodeText) -> Self {
         self.inner = self.inner.text(content);
         self
@@ -274,13 +277,15 @@ impl LabelBuilder {
         self
     }
 
-    pub fn color(mut self, color: impl crate::style::IntoTextColor) -> Self {
-        self.inner = self.inner.color(color);
+    #[track_caller]
+    pub fn color(mut self, color: impl IntoNodeFg) -> Self {
+        self.inner.el = color.apply_node_fg(self.inner.el);
         self
     }
 
-    pub fn text_color(mut self, color: impl crate::style::IntoTextColor) -> Self {
-        self.inner = self.inner.color(color);
+    #[track_caller]
+    pub fn text_color(mut self, color: impl IntoNodeFg) -> Self {
+        self.inner.el = color.apply_node_fg(self.inner.el);
         self
     }
 
@@ -309,16 +314,19 @@ impl LabelBuilder {
     }
 
     // Pass-through some layout/base methods from Element
-    pub fn w(mut self, w: impl IntoCssDim) -> Self {
-        self.inner.el = self.inner.el.w(w);
+    #[track_caller]
+    pub fn w(mut self, w: impl IntoNodeSize) -> Self {
+        self.inner.el = w.apply_node_size(self.inner.el, "w");
         self
     }
-    pub fn h(mut self, h: impl IntoCssDim) -> Self {
-        self.inner.el = self.inner.el.h(h);
+    #[track_caller]
+    pub fn h(mut self, h: impl IntoNodeSize) -> Self {
+        self.inner.el = h.apply_node_size(self.inner.el, "h");
         self
     }
-    pub fn bg(mut self, bg: impl crate::style::IntoPaintColor) -> Self {
-        self.inner.el = self.inner.el.bg(bg);
+    #[track_caller]
+    pub fn bg(mut self, bg: impl IntoNodeBg) -> Self {
+        self.inner.el = bg.apply_node_bg(self.inner.el);
         self
     }
     pub fn p(mut self, p: impl IntoCssDim) -> Self {

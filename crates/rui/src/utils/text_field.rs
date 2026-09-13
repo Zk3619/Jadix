@@ -644,6 +644,8 @@ fn controlled_of(field_id: &str) -> Option<Signal<String>> {
 }
 
 /// 挂载时以外部 Signal 为准灌入 store，并登记对拍。
+///
+/// 之后的外部写入只在失焦且无 IME 未提交时经 [`pull_controlled_into_store`] 进入 store（N.7）。
 pub fn bind_controlled_value(field_id: &str, external: Signal<String>) {
     let store = use_signal(&input_value_signal_key(field_id), String::new);
     let ev = external.peek();
@@ -789,8 +791,9 @@ fn commit_value_sig_with_policy(
     let _ = policy;
 }
 
-/// Paint 路径专用：失焦时把外部值 **silent** 拉进 store；焦点内不写外部（由 [`commit_value`] 负责）。
+/// Paint 路径专用：失焦且无 IME 未提交时把外部值 **silent** 拉进 store。
 ///
+/// 焦点内 / 合成中不写 store（由 [`commit_value`] 负责），避免外部 `set` 抢光标或清选区（N.7）。
 /// 返回 store 被外部改写后的新 committed（供当帧绘制）。
 pub fn pull_controlled_into_store(
     field_id: &str,
@@ -798,6 +801,12 @@ pub fn pull_controlled_into_store(
     is_focused: bool,
 ) -> Option<String> {
     if is_focused {
+        return None;
+    }
+    let composing = !use_signal(&input_preedit_signal_key(field_id), String::new)
+        .peek()
+        .is_empty();
+    if composing {
         return None;
     }
     let ext = controlled_of(field_id)?;
@@ -886,6 +895,53 @@ mod tests {
                 "hello"
             );
             assert!(pull_controlled_into_store("tf_pull", "hello", true).is_none());
+        });
+    }
+
+    #[test]
+    fn composing_external_set_does_not_pull_even_when_unfocused() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_ime", || "seed".to_string());
+            bind_controlled_value("tf_ime", ext);
+            use_signal(&input_preedit_signal_key("tf_ime"), String::new).set("ni".into());
+            ext.set("hello".into());
+            assert!(
+                pull_controlled_into_store("tf_ime", "seed", false).is_none(),
+                "IME preedit must block external pull (do not steal caret)"
+            );
+            assert_eq!(
+                use_signal(&input_value_signal_key("tf_ime"), String::new).peek(),
+                "seed"
+            );
+        });
+    }
+
+    #[test]
+    fn focused_same_value_external_set_does_not_move_caret() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_caret", || "hello".to_string());
+            bind_controlled_value("tf_caret", ext);
+            use_signal(&input_caret_signal_key("tf_caret"), || None::<usize>).set(Some(2));
+            use_signal(&input_selection_signal_key("tf_caret"), || {
+                None::<(usize, usize)>
+            })
+            .set(Some((1, 4)));
+            ext.set("hello".into());
+            assert!(
+                pull_controlled_into_store("tf_caret", "hello", true).is_none(),
+                "focused same-value set must not pull"
+            );
+            assert_eq!(
+                use_signal(&input_caret_signal_key("tf_caret"), || None::<usize>).peek(),
+                Some(2)
+            );
+            assert_eq!(
+                use_signal(&input_selection_signal_key("tf_caret"), || {
+                    None::<(usize, usize)>
+                })
+                .peek(),
+                Some((1, 4))
+            );
         });
     }
 

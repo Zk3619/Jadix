@@ -5,12 +5,13 @@
 //! an inset shell so Input's dirty AABB never swallows the rail captions.
 
 use crate::app::damage::{
-    force_full_redraw_after_chrome, paint_element_key, push_frame_paint_damage,
-    take_frame_paint_nodes, PaintDirty, PaintDirtyKind,
+    force_full_redraw_after_chrome, paint_dirty_nested_in_larger_node, paint_element_key,
+    push_frame_paint_damage, take_frame_paint_nodes, PaintDirty, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
-    node_present_capture_text_indices, node_present_dest_reset, node_present_foreign_glyph_indices,
-    text_paint_bounds,
+    instance_paint_bounds, node_paint_visual_bounds, node_present_capture_text_indices,
+    node_present_dest_reset, node_present_dest_reset_scaled, node_present_foreign_glyph_indices,
+    node_present_glyphs_for_dirty, node_present_needs_glyphs, text_paint_bounds,
 };
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
@@ -612,5 +613,262 @@ fn kbd_input_dest_reset_must_not_wipe_adornment_chrome() {
         "Input dest-reset {} must not erase ⌘K addon {}",
         fmt_rect(reset),
         fmt_rect(addon_box)
+    );
+}
+
+fn forms_like_stack() -> Element {
+    Element::new()
+        .w(400.0)
+        .bg([0.94, 0.94, 0.95, 1.0])
+        .p(16.0)
+        .child(
+            vstack()
+                .w("100%")
+                .gap(8.0)
+                .child(
+                    input("gal-like-a")
+                        .placeholder("Placeholder…")
+                        .clearable(true),
+                )
+                .child(
+                    input("gal-like-b")
+                        .placeholder("Placeholder…")
+                        .clearable(true),
+                )
+                .child(input("gal-like-c").placeholder("email").clearable(true))
+                .child(
+                    input("gal-like-pw")
+                        .input_type("password")
+                        .password_toggle(true)
+                        .clearable(true),
+                ),
+        )
+}
+
+fn sync_forms(root: &mut Element, tree: &mut LayoutTree, impact: &mut LayoutStatus) {
+    sync_focus_ring_subtree(root, tree, impact);
+    sync_class_variants_subtree(root, [0.0, 0.0], "", false, 400.0, 240.0, tree, impact);
+    sync_text_edit_paint_subtree_in_viewport(root, tree, impact, 400.0, 240.0, [0.0, 0.0]);
+}
+
+fn find_input_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+    if el.template_id.as_deref() == Some(id) && el.input_paint_sync.is_some() {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_input_id(c, id))
+}
+
+/// Standalone Input Hard ring is blur=0 / spread=3. Dest-reset of the unfocused
+/// slot must still erase that outset, and must recapture the field's glyphs.
+#[test]
+fn standalone_input_unfocus_dest_reset_must_cover_hard_ring_and_glyphs() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "gal-like-b";
+    use_signal(&input_value_signal_key(ID), String::new).set("hello".into());
+
+    let mut root = forms_like_stack();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(ID));
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let input_el = find_input_id(&root, ID).expect("focused Input");
+    let key = paint_element_key(input_el);
+    let input_box = input_el.layout_bounds;
+    let focused_paint = focused
+        .node_paints
+        .iter()
+        .find(|p| p.key == key)
+        .copied()
+        .expect("focused Input collect slot");
+    let prev = node_paint_visual_bounds(
+        &focused_paint,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let lo = focused_paint.instance.0.min(focused.instances.len());
+    let hi = focused_paint.instance.1.min(focused.instances.len());
+    let ring = focused.instances[lo..hi]
+        .iter()
+        .filter(|i| i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05)
+        .map(instance_paint_bounds)
+        .reduce(|a, b| {
+            let x0 = a[0].min(b[0]);
+            let y0 = a[1].min(b[1]);
+            let x1 = (a[0] + a[2]).max(b[0] + b[2]);
+            let y1 = (a[1] + a[3]).max(b[1] + b[3]);
+            [x0, y0, x1 - x0, y1 - y0]
+        })
+        .expect("focused Input must emit a Hard-ring outset shadow");
+    assert!(
+        ring[0] <= input_box[0] - 2.0 && ring[0] + ring[2] >= input_box[0] + input_box[2] + 2.0,
+        "Hard ring AABB must sit outside the field\n ring={} input={}",
+        fmt_rect(ring),
+        fmt_rect(input_box)
+    );
+
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+    impact = LayoutStatus::Clean;
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let unfocused = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    let input_el = find_input_id(&root, ID).expect("unfocused Input");
+    let key = paint_element_key(input_el);
+    let pad = input_el.style.shadow_blur + input_el.style.shadow_spread.abs() + 8.0;
+    let b = input_el.layout_bounds;
+    let dirty = PaintDirty {
+        key,
+        bounds: [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
+        kind: PaintDirtyKind::Node,
+    };
+    let (wipe, _) = node_present_dest_reset_scaled(
+        dirty.key,
+        dirty.bounds,
+        &unfocused.node_paints,
+        &unfocused.instances,
+        &[],
+        1.0,
+        Some(prev),
+    )
+    .expect("card behind standalone Input");
+    assert!(
+        wipe[0] <= ring[0] + 0.5
+            && wipe[1] <= ring[1] + 0.5
+            && wipe[0] + wipe[2] >= ring[0] + ring[2] - 0.5
+            && wipe[1] + wipe[3] >= ring[1] + ring[3] - 0.5,
+        "unfocus dest-reset must erase the leftover Hard ring\n wipe={} ring={} prev={}",
+        fmt_rect(wipe),
+        fmt_rect(ring),
+        fmt_rect(prev)
+    );
+    assert!(
+        node_present_needs_glyphs(
+            dirty.key,
+            dirty.bounds,
+            &unfocused.node_paints,
+            &unfocused.instances
+        ),
+        "wiping the field must recapture its glyphs"
+    );
+    let owned =
+        node_present_glyphs_for_dirty(&dirty, &unfocused.text_nodes, &unfocused.node_paints);
+    assert!(
+        owned
+            .iter()
+            .any(|&i| unfocused.text_nodes[i].text.contains("hello")),
+        "Input dest-reset must own the typed glyphs, not leave a gray hole; owned={owned:?} texts={:?}",
+        unfocused
+            .text_nodes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn hard_ring_aabb(result: &RenderResult, key: u64) -> Option<[f32; 4]> {
+    let p = result.node_paints.iter().find(|p| p.key == key)?;
+    let lo = p.instance.0.min(result.instances.len());
+    let hi = p.instance.1.min(result.instances.len());
+    result.instances[lo..hi]
+        .iter()
+        .filter(|i| i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05)
+        .map(instance_paint_bounds)
+        .reduce(|a, b| {
+            let x0 = a[0].min(b[0]);
+            let y0 = a[1].min(b[1]);
+            let x1 = (a[0] + a[2]).max(b[0] + b[2]);
+            let y1 = (a[1] + a[3]).max(b[1] + b[3]);
+            [x0, y0, x1 - x0, y1 - y0]
+        })
+}
+
+fn input_dirty(el: &Element) -> PaintDirty {
+    let b = el.layout_bounds;
+    let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
+    PaintDirty {
+        key: paint_element_key(el),
+        bounds: [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
+        kind: PaintDirtyKind::Node,
+    }
+}
+
+/// Clicking Input B must dest-reset A. Sibling dirty pads overlap; treating that
+/// as nesting skipped A's wipe and src-over'd another Hard ring onto retain.
+#[test]
+fn switching_input_focus_must_dest_reset_the_leave_field() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    const LEAVE: &str = "gal-like-a";
+    const ENTER: &str = "gal-like-b";
+    use_signal(&input_value_signal_key(LEAVE), String::new).set("Placeholder…".into());
+    use_signal(&input_value_signal_key(ENTER), String::new).set("Invalid".into());
+
+    let mut root = forms_like_stack();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(LEAVE));
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let leave_el = find_input_id(&root, LEAVE).expect("leave Input");
+    let leave_key = paint_element_key(leave_el);
+    let ring = hard_ring_aabb(&focused, leave_key).expect("focused leave field emits Hard ring");
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(ENTER));
+    impact = LayoutStatus::Clean;
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let switched = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+
+    let leave_el = find_input_id(&root, LEAVE).expect("unfocused leave Input");
+    let enter_el = find_input_id(&root, ENTER).expect("focused enter Input");
+    let leave_dirty = input_dirty(leave_el);
+    let enter_dirty = input_dirty(enter_el);
+    assert!(
+        !paint_dirty_nested_in_larger_node(&leave_dirty, &[leave_dirty, enter_dirty]),
+        "leave Input dest-reset must not be skipped as nested in the newly focused sibling"
+    );
+    assert!(
+        hard_ring_aabb(&switched, paint_element_key(leave_el)).is_none(),
+        "leave Input collect must not still emit a Hard ring (that src-overs onto retain)"
+    );
+    assert!(
+        hard_ring_aabb(&switched, paint_element_key(enter_el)).is_some(),
+        "enter Input must emit the Hard ring"
+    );
+    let (wipe, _) = node_present_dest_reset_scaled(
+        leave_dirty.key,
+        leave_dirty.bounds,
+        &switched.node_paints,
+        &switched.instances,
+        &[],
+        1.0,
+        Some(ring),
+    )
+    .expect("card behind leave Input");
+    assert!(
+        wipe[0] <= ring[0] + 0.5
+            && wipe[1] <= ring[1] + 0.5
+            && wipe[0] + wipe[2] >= ring[0] + ring[2] - 0.5
+            && wipe[1] + wipe[3] >= ring[1] + ring[3] - 0.5,
+        "leave dest-reset must cover the previous Hard ring\n wipe={} ring={}",
+        fmt_rect(wipe),
+        fmt_rect(ring)
     );
 }

@@ -1040,7 +1040,8 @@ mod tests {
 
         tree.set_collect_skip_allowed(true);
         let _ = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [0.0, 0.0], false, false);
-        let skipped = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [0.0, 0.0], false, false);
+        let skipped =
+            tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [0.0, 0.0], false, false);
         assert!(
             skipped.overlay_split.instance_start > 0
                 && skipped.overlay_split.instance_start < skipped.instances.len(),
@@ -1128,11 +1129,7 @@ mod tests {
                 ViewportModalContentOpts::default().motion(ModalSurfaceMotion::DialogFade),
                 panel,
             );
-            Element::new()
-                .w(1280.0)
-                .h(800.0)
-                .child(host)
-                .child(mounted)
+            Element::new().w(1280.0).h(800.0).child(host).child(mounted)
         });
 
         assert!(hoist_portal_subtrees(&mut root) >= 1);
@@ -1164,6 +1161,175 @@ mod tests {
             bands.iter().any(|b| b.backdrop_blur > 0.5),
             "modal underlay must still stamp overlay-band blur so frost stacks on the local scrim; bands={:?}",
             bands.iter().map(|b| b.backdrop_blur).collect::<Vec<_>>()
+        );
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn wave2_canary_open_island_does_not_subscribe_ui_root() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::core::reactivity::{
+            clear_ui_root_effect, create_effect, dispose_effect, mark_next_effect_as_ui_root,
+            ui_root_effect_dep_count,
+        };
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        reset_registered_anchors();
+        clear_overlay_stack();
+        clear_ui_root_effect();
+        let open = Signal::new(false);
+        let runs = Rc::new(Cell::new(0));
+        let kept = Rc::new(RefCell::new(None::<Element>));
+        let runs_e = Rc::clone(&runs);
+        let kept_e = Rc::clone(&kept);
+
+        mark_next_effect_as_ui_root();
+        let root = create_effect(move || {
+            runs_e.set(runs_e.get() + 1);
+            let el = viewport_modal("vm-w2-root")
+                .open(open)
+                .child(|| Element::new().text("x").w(160.0).h(80.0));
+            *kept_e.borrow_mut() = Some(el);
+        });
+
+        assert_eq!(runs.get(), 1);
+        assert_eq!(
+            ui_root_effect_dep_count(),
+            0,
+            "open must subscribe the structure island, not the UI root"
+        );
+        {
+            let mounted = kept.borrow();
+            let el = mounted.as_ref().expect("mounted");
+            assert!(find_view(el, "__view"));
+        }
+
+        open.set(true);
+        assert_eq!(runs.get(), 1, "open must not rebuild the UI root");
+        assert_eq!(ui_root_effect_dep_count(), 0);
+
+        drop(kept.borrow_mut().take());
+        dispose_effect(root);
+        clear_ui_root_effect();
+        reset_registered_anchors();
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn wave2_canary_close_keeps_portal_while_exiting() {
+        use crate::utils::modal_motion::finish_modal_exit_for_test;
+
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let overlay = ShellOverlayOpts::default();
+            let presence = use_modal_presence("vm-w2-exit");
+            let panel = || Element::new().text("card").w(320.0).h(200.0);
+            let mounted = assemble_modal(
+                "vm-w2-exit",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default(),
+                panel(),
+            );
+            assert!(has_portal(&mounted), "open must portal overlay + stage");
+            assert_eq!(
+                viewport_modal_phase("vm-w2-exit", open),
+                Some(PresencePhase::Present)
+            );
+
+            open.set(false);
+            assert_eq!(
+                viewport_modal_phase("vm-w2-exit", open),
+                Some(PresencePhase::Exiting)
+            );
+            assert!(viewport_modal_is_mounted("vm-w2-exit", open));
+            let exiting = assemble_modal(
+                "vm-w2-exit",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default(),
+                panel(),
+            );
+            assert!(
+                has_portal(&exiting),
+                "exit must keep the portal until the gate completes"
+            );
+
+            finish_modal_exit_for_test(&presence);
+            assert!(!mounted_signal(&presence).get());
+            let gone = assemble_modal(
+                "vm-w2-exit",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default(),
+                panel(),
+            );
+            assert!(
+                !has_portal(&gone),
+                "Absent must drop the portal after exit completes"
+            );
+        });
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn wave2_canary_first_open_layouts_portal_panel() {
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+        };
+
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let overlay = ShellOverlayOpts::default();
+            let presence = use_modal_presence("vm-w2-first");
+            let mounted = assemble_modal(
+                "vm-w2-first",
+                open,
+                &presence,
+                &overlay,
+                ViewportModalContentOpts::default(),
+                Element::new().text("wave2-panel").w(320.0).h(200.0),
+            );
+            Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(Element::new().text("page"))
+                .child(mounted)
+        });
+
+        assert!(
+            hoist_portal_subtrees(&mut root) >= 1,
+            "first open must hoist the shell onto the portal layer"
+        );
+        assert!(
+            root.children
+                .iter()
+                .any(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID)),
+            "portal layer must exist after hoist"
+        );
+        assert_eq!(find_attr(&root, ATTR_HOISTED_PORTAL), Some("1"));
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.instance_start < result.instances.len(),
+            "first open must layout overlay rects, not skip as paint-only"
+        );
+        let split = result
+            .overlay_split
+            .instance_start
+            .min(result.instances.len());
+        assert!(
+            result.instances[split..]
+                .iter()
+                .any(|i| i.rect_size[0] > 1.0 && i.rect_size[1] > 1.0),
+            "portal panel must have non-zero laid-out bounds on first open"
         );
         clear_overlay_stack();
     }

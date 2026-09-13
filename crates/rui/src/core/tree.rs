@@ -537,6 +537,10 @@ pub type InputPaintSync = TextEditPaintSync;
 /// [`crate::app::reactive`]. The callback runs during the frame prepass and reports its layout
 /// impact. This is the reusable component-level reactive capability; structural changes such as
 /// mounting an overlay still use a reactive subtree boundary.
+///
+/// Hover, caret blink, invalid rings, and other high-frequency chrome belong here (or on
+/// [`TextEditPaintSync`]) with [`crate::core::reactivity::Signal::peek`] — not a new `bind_*`
+/// effect per frame (N.7).
 #[derive(Clone)]
 pub struct ReactiveSync {
     callback: std::rc::Rc<dyn Fn(&mut Element, &mut LayoutTree) -> LayoutStatus>,
@@ -956,6 +960,12 @@ pub struct ElementInner {
     /// Ancestor scroll passed to collect when this node last painted.
     /// `bind_text` StyleChanged must dest-reset in this space, not document `[0,0]`.
     pub(crate) paint_scroll_acc: [f32; 2],
+    /// Parent CSS `scale` product stamped at last collect (CarouselStack / nested scale).
+    /// [`visual_paint_aabb`] bakes this into the vis box the same way collect does.
+    pub(crate) paint_ancestor_scale: [f32; 2],
+    /// Parent 2×2 linear cascade stamped at last collect. Child hit AABB must rotate
+    /// with the VS `ancestor_linear` even when Taffy origin is unchanged (centered child).
+    pub(crate) paint_ancestor_linear: crate::style::Mat2d,
     /// Last collect `render_rect` (paint space). DevTools highlight prefers this over abs−scroll.
     #[cfg(feature = "devtools")]
     pub(crate) paint_visual_bounds: [f32; 4],
@@ -1068,6 +1078,8 @@ fn blank_inner() -> ElementInner {
         collect_skip_live: false,
         sticky_visual_offset: [0.0, 0.0],
         paint_scroll_acc: [0.0, 0.0],
+        paint_ancestor_scale: [1.0, 1.0],
+        paint_ancestor_linear: crate::style::MAT2D_IDENTITY,
         #[cfg(feature = "devtools")]
         paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
         #[cfg(feature = "devtools")]
@@ -1107,6 +1119,26 @@ fn blank_inner() -> ElementInner {
         layout_node: None,
         attrs: std::collections::HashMap::new(),
     }
+}
+
+fn clone_static_node_shallow(src: &Element) -> Element {
+    let mut dst = Element::new();
+    *dst.style = (*src.style).clone();
+    *dst.text_style = (*src.text_style).clone();
+    dst.text = src.text.clone();
+    dst.text_spans = src.text_spans.clone();
+    dst.text_shape_suffix = src.text_shape_suffix.clone();
+    dst.focus_id = src.focus_id.clone();
+    dst.focusable = src.focusable;
+    dst.cursor = src.cursor.clone();
+    dst.template_hash = src.template_hash.clone();
+    dst.template_id = src.template_id.clone();
+    dst.image_texture = src.image_texture.clone();
+    dst.class_set = src.class_set.clone();
+    dst.attrs = src.attrs.clone();
+    dst.focus_ring = src.focus_ring;
+    dst.specified_present = src.specified_present.clone();
+    dst
 }
 
 fn alloc_inner() -> Box<ElementInner> {
@@ -1459,6 +1491,227 @@ impl IntoNodeText for &String {
     }
 }
 
+/// Argument to [`Element::class`] / [`crate::primitives::BoxBuilder::class`]: a static
+/// utility-class string, or (via impls in `app/reactive`) a [`Signal`] / `FnMut() -> String`
+/// live binding.
+pub trait IntoNodeClass {
+    fn apply_node_class(self, el: Element) -> Element;
+}
+
+impl IntoNodeClass for String {
+    fn apply_node_class(self, el: Element) -> Element {
+        self.as_str().apply_node_class(el)
+    }
+}
+
+impl IntoNodeClass for &str {
+    fn apply_node_class(self, el: Element) -> Element {
+        let trimmed = self.trim();
+        if trimmed.is_empty() {
+            el
+        } else {
+            crate::style::with_class_list(el, trimmed)
+        }
+    }
+}
+
+impl IntoNodeClass for &String {
+    fn apply_node_class(self, el: Element) -> Element {
+        self.as_str().apply_node_class(el)
+    }
+}
+
+/// Argument to live [`crate::primitives::BoxBuilder::w`] / `h`: a static CSS dim, or
+/// (via impls in `app/reactive`) a [`Signal`] / `FnMut` binding.
+pub trait IntoNodeSize {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element;
+}
+
+fn apply_static_node_size(el: Element, axis: &'static str, dim: impl IntoCssDim) -> Element {
+    match axis {
+        "w" | "width" => el.w(dim),
+        "h" | "height" => el.h(dim),
+        _ => el,
+    }
+}
+
+impl IntoNodeSize for CssDim {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self)
+    }
+}
+
+impl IntoNodeSize for f32 {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self)
+    }
+}
+
+impl IntoNodeSize for i32 {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self)
+    }
+}
+
+impl IntoNodeSize for Dimension {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self)
+    }
+}
+
+impl IntoNodeSize for &str {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self)
+    }
+}
+
+impl IntoNodeSize for String {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self.as_str())
+    }
+}
+
+impl IntoNodeSize for &String {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        apply_static_node_size(el, axis, self.as_str())
+    }
+}
+
+/// Argument to live [`crate::primitives::BoxBuilder::bg`]: a static paint color, or
+/// (via impls in `app/reactive`) a [`Signal`] / `FnMut` binding.
+pub trait IntoNodeBg {
+    fn apply_node_bg(self, el: Element) -> Element;
+}
+
+impl IntoNodeBg for [f32; 4] {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(self)
+    }
+}
+
+impl IntoNodeBg for &[f32; 4] {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(*self)
+    }
+}
+
+impl IntoNodeBg for [u8; 4] {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(self)
+    }
+}
+
+impl IntoNodeBg for &str {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(self)
+    }
+}
+
+impl IntoNodeBg for String {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(self.as_str())
+    }
+}
+
+impl IntoNodeBg for &String {
+    fn apply_node_bg(self, el: Element) -> Element {
+        el.bg(self.as_str())
+    }
+}
+
+/// Argument to live [`Element::text_color`] / [`crate::primitives::BoxBuilder::text_color`]:
+/// a static color, or (via impls in `app/reactive`) a [`Signal`] / `FnMut` binding.
+pub trait IntoNodeFg {
+    fn apply_node_fg(self, el: Element) -> Element;
+}
+
+impl IntoNodeFg for [u8; 4] {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(self)
+    }
+}
+
+impl IntoNodeFg for &[u8; 4] {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(*self)
+    }
+}
+
+impl IntoNodeFg for [f32; 4] {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(self)
+    }
+}
+
+impl IntoNodeFg for &str {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(self)
+    }
+}
+
+impl IntoNodeFg for String {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(self.as_str())
+    }
+}
+
+impl IntoNodeFg for &String {
+    fn apply_node_fg(self, el: Element) -> Element {
+        el.text_color(self.as_str())
+    }
+}
+
+/// Argument to live [`crate::primitives::BoxBuilder::opacity`]: a static opacity, or
+/// (via impls in `app/reactive`) a [`Signal`] / `FnMut` binding.
+pub trait IntoNodeOpacity {
+    fn apply_node_opacity(self, el: Element) -> Element;
+}
+
+fn apply_static_node_opacity(el: Element, o: impl IntoOpacity) -> Element {
+    el.opacity(o)
+}
+
+impl IntoNodeOpacity for f32 {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        apply_static_node_opacity(el, self)
+    }
+}
+
+impl IntoNodeOpacity for f64 {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        apply_static_node_opacity(el, self)
+    }
+}
+
+impl IntoNodeOpacity for &str {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        apply_static_node_opacity(el, self)
+    }
+}
+
+impl IntoNodeOpacity for String {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        apply_static_node_opacity(el, self.as_str())
+    }
+}
+
+impl IntoNodeOpacity for &String {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        apply_static_node_opacity(el, self.as_str())
+    }
+}
+
+macro_rules! impl_into_node_opacity_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl IntoNodeOpacity for $t {
+            fn apply_node_opacity(self, el: Element) -> Element {
+                apply_static_node_opacity(el, self)
+            }
+        }
+    )+};
+}
+impl_into_node_opacity_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+
 impl Element {
     pub(crate) fn into_margin_auto(val: impl IntoDimension) -> LengthPercentageAuto {
         crate::layout::dimension_to_lpa(val.into_dimension())
@@ -1484,6 +1737,21 @@ impl Element {
         Self {
             inner: alloc_inner(),
         }
+    }
+
+    /// WP-N.6: copy static structure (style / text / attrs / class / specified
+    /// present / children) into a fresh [`ElementInner`] (Solid `_tmpl$.cloneNode`).
+    ///
+    /// Layout handles, paint snapshots, and instance hooks (`on_*` / unmount / paint
+    /// sync) are not copied — remount must re-run `render()` when those exist.
+    pub fn clone_static_skeleton(&self) -> Self {
+        let mut dst = clone_static_node_shallow(self);
+        dst.children = self
+            .children
+            .iter()
+            .map(Self::clone_static_skeleton)
+            .collect();
+        dst
     }
 }
 
@@ -1762,8 +2030,15 @@ impl Element {
     }
     /// Static string, [`crate::core::reactivity::Signal`], or `|| String` compute.
     /// `text(sig.get())` is still a snapshot — pass `sig` or `|| sig.get().to_string()`.
+    #[track_caller]
     pub fn text(self, text: impl IntoNodeText) -> Self {
         text.apply_node_text(self)
+    }
+    /// Utility class string, [`crate::core::reactivity::Signal`], or `|| String` compute.
+    /// `class(sig.get())` is still a snapshot — pass `sig` or `|| sig.get()`.
+    #[track_caller]
+    pub fn class(self, classes: impl IntoNodeClass) -> Self {
+        classes.apply_node_class(self)
     }
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
         self.text_style.font_family = Some(family.into());
@@ -1771,6 +2046,9 @@ impl Element {
             .insert("font_family".to_string(), "1".to_string());
         self
     }
+    /// Static color, [`crate::core::reactivity::Signal`], or `|| color` compute via
+    /// [`IntoNodeFg`] on builders. Direct [`IntoTextColor`] here is a snapshot:
+    /// `text_color(sig.get())` does not subscribe.
     pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
         self.text_style.color = Some(color.into_text_color());
         self
@@ -2090,6 +2368,9 @@ impl Element {
         self.attrs.insert("aria-labelledby".to_string(), ids.into());
         self
     }
+    /// Static paint, [`crate::core::reactivity::Signal`], or `|| color` compute via
+    /// [`IntoNodeBg`] on builders. Direct [`IntoPaintColor`] here is a snapshot:
+    /// `bg(sig.get())` does not subscribe.
     pub fn bg(mut self, color: impl IntoPaintColor) -> Self {
         self.style.bg_color = color.into_paint_color();
         self
@@ -2925,6 +3206,8 @@ impl Element {
         self.style.shadow_inset = inset;
         self
     }
+    /// Static opacity. `opacity(sig.get())` is a snapshot — pass `sig` to
+    /// [`crate::primitives::BoxBuilder::opacity`] for a live bind.
     pub fn opacity(mut self, o: impl IntoOpacity) -> Self {
         self.style.opacity = o.into_opacity();
         self
@@ -2939,12 +3222,16 @@ impl Element {
         self.style.translate_pct = [x, y];
         self
     }
+    /// Static CSS dim. `w(sig.get())` is a snapshot — pass `sig` to
+    /// [`crate::primitives::BoxBuilder::w`] for a live bind.
     pub fn w(self, width: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::Width, width)
     }
     pub fn inline_size(self, size: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::InlineSize, size)
     }
+    /// Static CSS dim. `h(sig.get())` is a snapshot — pass `sig` to
+    /// [`crate::primitives::BoxBuilder::h`] for a live bind.
     pub fn h(self, height: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::Height, height)
     }
@@ -3583,16 +3870,21 @@ pub(crate) fn point_in_aabb(pos: [f32; 2], rect: [f32; 4]) -> bool {
         && pos[1] < rect[1] + rect[3]
 }
 
-/// Paint-space border box after CSS `translate` + `scale` (center origin).
+/// Paint vis box + center-pivot affine (same contract as collect / VS).
 ///
-/// Matches layout collect / hit-test so `:hover` stays active on scaled ink.
-#[inline]
-pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
-    let b = el.layout_bounds;
-    let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0];
-    let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1];
-    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
-    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
+/// `ancestor_*` is either last-collect stamps or a live walk product. Hit
+/// testing prefers the walk so a parent rotate this frame is visible before collect.
+struct PaintVis {
+    vx: f32,
+    vy: f32,
+    vis: [f32; 4],
+    affine: crate::style::Mat2d,
+    paint_sx: f32,
+    paint_sy: f32,
+    origin: [f32; 2],
+}
+
+fn resolved_style_scale(el: &Element) -> [f32; 2] {
     let sx = if el.style.scale[0].is_finite() && el.style.scale[0] > 0.0 {
         el.style.scale[0]
     } else {
@@ -3603,12 +3895,293 @@ pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
     } else {
         1.0
     };
-    if (sx - 1.0).abs() <= f32::EPSILON && (sy - 1.0).abs() <= f32::EPSILON {
-        return [vx, vy, b[2], b[3]];
+    [sx, sy]
+}
+
+fn resolved_ancestor_scale(ancestor_scale: [f32; 2]) -> [f32; 2] {
+    let asx = if ancestor_scale[0].is_finite() && ancestor_scale[0] > 0.0 {
+        ancestor_scale[0]
+    } else {
+        1.0
+    };
+    let asy = if ancestor_scale[1].is_finite() && ancestor_scale[1] > 0.0 {
+        ancestor_scale[1]
+    } else {
+        1.0
+    };
+    [asx, asy]
+}
+
+#[inline]
+pub(crate) fn paint_scale_with_ancestor(el: &Element, ancestor_scale: [f32; 2]) -> [f32; 2] {
+    let s = resolved_style_scale(el);
+    let a = resolved_ancestor_scale(ancestor_scale);
+    [
+        (a[0] * s[0]).clamp(0.01, 8.0),
+        (a[1] * s[1]).clamp(0.01, 8.0),
+    ]
+}
+
+/// Parent → child paint cascade (same as collect `child_ancestor_linear/scale`).
+#[inline]
+pub(crate) fn child_paint_ancestor(
+    parent: &Element,
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> (crate::style::Mat2d, [f32; 2]) {
+    let paint_s = paint_scale_with_ancestor(parent, ancestor_scale);
+    let b = parent.layout_bounds;
+    let vis_wh = [b[2] * paint_s[0], b[3] * paint_s[1]];
+    let offset = crate::style::offset_path::sample(&parent.style, [b[2], b[3]]);
+    let local_unwrapped = crate::style::rotate_and_list_mat2d(
+        parent.style.rotate_deg + offset.rotate_deg,
+        parent.style.transform.as_ref(),
+        vis_wh[0],
+        vis_wh[1],
+    );
+    let local_linear = crate::style::mat2d_linear(&local_unwrapped);
+    (
+        crate::style::mat2d_multiply(&ancestor_linear, &local_linear),
+        paint_s,
+    )
+}
+
+fn paint_vis(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> PaintVis {
+    let b = el.layout_bounds;
+    let offset = crate::style::offset_path::sample(&el.style, [b[2], b[3]]);
+    let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0] + offset.translate[0];
+    let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1] + offset.translate[1];
+    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
+    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
+    let [paint_sx, paint_sy] = paint_scale_with_ancestor(el, ancestor_scale);
+    let rotate_deg = el.style.rotate_deg + offset.rotate_deg;
+    let has_scale = (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON;
+    let has_linear = rotate_deg.abs() > 1e-4
+        || el
+            .style
+            .transform
+            .as_ref()
+            .is_some_and(|list| !list.is_empty())
+        || !crate::style::mat2d_is_identity(&ancestor_linear);
+    let origin = crate::style::origin_px(&el.style.transform_origin, b[2], b[3]);
+    if !has_scale && !has_linear {
+        return PaintVis {
+            vx,
+            vy,
+            vis: [vx, vy, b[2], b[3]],
+            affine: crate::style::MAT2D_IDENTITY,
+            paint_sx,
+            paint_sy,
+            origin,
+        };
     }
-    let sw = b[2] * sx;
-    let sh = b[3] * sy;
-    [vx + (b[2] - sw) * 0.5, vy + (b[3] - sh) * 0.5, sw, sh]
+    let vis = if has_scale {
+        crate::style::scale_box_about_origin([vx, vy, b[2], b[3]], origin, [paint_sx, paint_sy])
+    } else {
+        [vx, vy, b[2], b[3]]
+    };
+    if !has_linear {
+        return PaintVis {
+            vx,
+            vy,
+            vis,
+            affine: crate::style::MAT2D_IDENTITY,
+            paint_sx,
+            paint_sy,
+            origin,
+        };
+    }
+    let origin_in_vis = [origin[0] - (vis[0] - vx), origin[1] - (vis[1] - vy)];
+    let local_unwrapped = crate::style::rotate_and_list_mat2d(
+        rotate_deg,
+        el.style.transform.as_ref(),
+        vis[2],
+        vis[3],
+    );
+    let local_linear = crate::style::mat2d_linear(&local_unwrapped);
+    let list_t = [local_unwrapped[4], local_unwrapped[5]];
+    let has_list_t = list_t[0].abs() > 1e-4 || list_t[1].abs() > 1e-4;
+    if crate::style::mat2d_is_identity(&local_linear)
+        && crate::style::mat2d_is_identity(&ancestor_linear)
+        && !has_list_t
+    {
+        return PaintVis {
+            vx,
+            vy,
+            vis,
+            affine: crate::style::MAT2D_IDENTITY,
+            paint_sx,
+            paint_sy,
+            origin,
+        };
+    }
+    let affine = crate::style::mat2d_world_center_pivot_with_shift(
+        &ancestor_linear,
+        &local_linear,
+        origin_in_vis,
+        [vis[2], vis[3]],
+        list_t,
+    );
+    PaintVis {
+        vx,
+        vy,
+        vis,
+        affine,
+        paint_sx,
+        paint_sy,
+        origin,
+    }
+}
+
+/// Paint-space border box after CSS `translate` + `scale` + rotate about origin.
+///
+/// Uses last-collect ancestor stamps. Pointer hit walks should call
+/// [`visual_paint_aabb_with_ancestor`] with a live cascade so a parent rotate
+/// this frame is visible before collect.
+#[inline]
+pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    visual_paint_aabb_with_ancestor(
+        el,
+        scroll_acc,
+        el.paint_ancestor_linear,
+        el.paint_ancestor_scale,
+    )
+}
+
+#[inline]
+pub(crate) fn visual_paint_aabb_with_ancestor(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> [f32; 4] {
+    let g = paint_vis(el, scroll_acc, ancestor_linear, ancestor_scale);
+    if crate::style::mat2d_is_identity(&g.affine) {
+        return g.vis;
+    }
+    crate::style::aabb_of_centered_transform(g.vis, &g.affine)
+}
+
+/// Map a world pointer into layout-local path space (`path_pointer_hit` / SVG fill).
+///
+/// Inverts the VS contract `center + R*local + txty`, then undoes origin scale
+/// bake. Identity transform → `(world - visual_xy)`.
+#[inline]
+pub(crate) fn pointer_to_layout_local(
+    el: &Element,
+    world: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> [f32; 2] {
+    let g = paint_vis(el, scroll_acc, ancestor_linear, ancestor_scale);
+    let vis = g.vis;
+    let cx = vis[0] + vis[2] * 0.5;
+    let cy = vis[1] + vis[3] * 0.5;
+    let dx = world[0] - cx - g.affine[4];
+    let dy = world[1] - cy - g.affine[5];
+    let inv = crate::style::mat2d_inverse(&crate::style::mat2d_linear(&g.affine));
+    let (lx, ly) = crate::style::mat2d_transform_vec(&inv, dx, dy);
+    let vis_pt = [cx + lx, cy + ly];
+    let origin_world = [g.vx + g.origin[0], g.vy + g.origin[1]];
+    let sx = if g.paint_sx.abs() > 1e-6 {
+        g.paint_sx
+    } else {
+        1.0
+    };
+    let sy = if g.paint_sy.abs() > 1e-6 {
+        g.paint_sy
+    } else {
+        1.0
+    };
+    let layout_x = origin_world[0] + (vis_pt[0] - origin_world[0]) / sx;
+    let layout_y = origin_world[1] + (vis_pt[1] - origin_world[1]) / sy;
+    [layout_x - g.vx, layout_y - g.vy]
+}
+
+/// Inverse of [`pointer_to_layout_local`]: layout-local → painted world (VS).
+#[inline]
+pub(crate) fn layout_local_to_paint_world(
+    el: &Element,
+    local: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> [f32; 2] {
+    let g = paint_vis(el, scroll_acc, ancestor_linear, ancestor_scale);
+    let vis = g.vis;
+    let cx = vis[0] + vis[2] * 0.5;
+    let cy = vis[1] + vis[3] * 0.5;
+    let origin_world = [g.vx + g.origin[0], g.vy + g.origin[1]];
+    let layout_world = [g.vx + local[0], g.vy + local[1]];
+    let vis_pt = [
+        origin_world[0] + (layout_world[0] - origin_world[0]) * g.paint_sx,
+        origin_world[1] + (layout_world[1] - origin_world[1]) * g.paint_sy,
+    ];
+    let dx = vis_pt[0] - cx;
+    let dy = vis_pt[1] - cy;
+    let lin = crate::style::mat2d_linear(&g.affine);
+    let (rx, ry) = crate::style::mat2d_transform_vec(&lin, dx, dy);
+    [cx + rx + g.affine[4], cy + ry + g.affine[5]]
+}
+
+/// `clip-path` is specified in the border box. Hit tests the painted clip by
+/// inverting the VS affine first.
+#[inline]
+pub(crate) fn clip_path_contains_pointer(
+    el: &Element,
+    world: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> bool {
+    if el.style.clip_path.is_none() {
+        return true;
+    }
+    let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
+    let b = el.layout_bounds;
+    el.style.clip_path.contains_local([b[2], b[3]], local)
+}
+
+/// Painted border box: coarse VS AABB, then layout-local inside `[0,w]×[0,h]`.
+#[inline]
+pub(crate) fn pointer_in_paint_border_box(
+    el: &Element,
+    world: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> bool {
+    let vis = visual_paint_aabb_with_ancestor(el, scroll_acc, ancestor_linear, ancestor_scale);
+    if !(world[0] >= vis[0]
+        && world[1] >= vis[1]
+        && world[0] <= vis[0] + vis[2]
+        && world[1] <= vis[1] + vis[3])
+    {
+        return false;
+    }
+    let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
+    let b = el.layout_bounds;
+    local[0] >= -0.5 && local[1] >= -0.5 && local[0] <= b[2] + 0.5 && local[1] <= b[3] + 0.5
+}
+
+/// World pointer as glyphon/layout-box `(vx+lx, vy+ly)` after inverting the VS affine.
+#[inline]
+pub(crate) fn pointer_as_layout_box_xy(
+    el: &Element,
+    world: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> [f32; 2] {
+    let g = paint_vis(el, scroll_acc, ancestor_linear, ancestor_scale);
+    let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
+    [g.vx + local[0], g.vy + local[1]]
 }
 
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
@@ -3625,7 +4198,31 @@ pub(crate) fn element_clips_overflow(el: &Element) -> bool {
         })
 }
 
+/// Overflow clip is the **local** border box (CSS), then the VS affine is applied.
+/// Hit inverts that affine first — same contract as [`clip_path_contains_pointer`].
+/// Dest-reset / node-present scissor / B8 pins are paint-space AABB unions of that
+/// transformed box, not this local test and not an OBB GPU scissor.
+#[inline]
+pub(crate) fn overflow_clip_contains_pointer(
+    el: &Element,
+    world: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+) -> bool {
+    if !element_clips_overflow(el) {
+        return true;
+    }
+    let b = el.layout_bounds;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return false;
+    }
+    let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
+    overflow_clip_contains_point(el, [0.0, 0.0, b[2], b[3]], local)
+}
+
 /// Overflow clip hit: border-box AABB, then `border-radius` if any corner is rounded.
+/// Prefer [`overflow_clip_contains_pointer`] at pointer enter (local + VS inverse).
 #[inline]
 pub(crate) fn overflow_clip_contains_point(
     el: &Element,
@@ -3654,15 +4251,20 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
 }
 
 /// Clip box of the nearest overflow/scroll ancestor of `target` (or `target` itself).
+/// Identity overflow stays the layout border (Wave 18). Rotated overflow is the
+/// AABB of the transformed local box so island FullClear covers painted pixels.
 /// `None` when the island sits in unclipped page space (route Show → page FullClear).
 pub(crate) fn overflow_clip_bounds_for(root: &Element, target: *const Element) -> Option<[f32; 4]> {
     fn rec(
         el: &Element,
         clip: Option<[f32; 4]>,
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_scale: [f32; 2],
         target: *const Element,
     ) -> Option<Option<[f32; 4]>> {
         let clip = if element_clips_overflow(el) {
-            let b = el.layout_bounds;
+            let b =
+                visual_paint_aabb_with_ancestor(el, [0.0, 0.0], ancestor_linear, ancestor_scale);
             if b[2] > 0.0 && b[3] > 0.0 {
                 Some(b)
             } else {
@@ -3674,14 +4276,15 @@ pub(crate) fn overflow_clip_bounds_for(root: &Element, target: *const Element) -
         if std::ptr::eq(el as *const Element, target) {
             return Some(clip);
         }
+        let (child_lin, child_sc) = child_paint_ancestor(el, ancestor_linear, ancestor_scale);
         for child in &el.children {
-            if let Some(found) = rec(child, clip, target) {
+            if let Some(found) = rec(child, clip, child_lin, child_sc, target) {
                 return Some(found);
             }
         }
         None
     }
-    rec(root, None, target).flatten()
+    rec(root, None, crate::style::MAT2D_IDENTITY, [1.0, 1.0], target).flatten()
 }
 
 /// Scratch filled by [`sync_reactive_elements_subtree_ex`] so the frame path can

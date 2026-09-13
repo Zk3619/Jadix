@@ -25,6 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 thread_local! {
     static RUNTIME: RefCell<Rc<Runtime>> = RefCell::new(Runtime::new());
@@ -154,8 +155,10 @@ struct OwnerNode {
 }
 
 /// Flush order (I-12 / WP-R.9): memos, then Computed, then Render (`bind_*`), then User.
+///
+/// Exposed for [`take_flushed_effects`] (WP-G.1 diagnostic; not a SemVer surface).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum EffectPhase {
+pub enum EffectPhase {
     Computed = 0,
     Render = 1,
     User = 2,
@@ -223,6 +226,12 @@ pub struct Runtime {
     ui_root_effect: Cell<Option<EffectId>>,
     /// Latched once per UI-root install so debug builds do not spam on every root re-run.
     ui_root_bare_get_warned: Cell<bool>,
+    /// Effects actually executed by `flush_pending` since the last [`take_flushed_effects`].
+    flushed_effects: RefCell<Vec<(EffectId, EffectPhase)>>,
+    /// `isolate_reads` discarded a tracked `get` (D6 / WP-G.2).
+    isolated_discarded_read_count: Cell<usize>,
+    /// Debug warn once per signal id for discarded isolated reads.
+    isolated_discarded_warned: RefCell<HashSet<SignalId>>,
 }
 
 impl Runtime {
@@ -257,6 +266,9 @@ impl Runtime {
             mark_next_as_ui_root: Cell::new(false),
             ui_root_effect: Cell::new(None),
             ui_root_bare_get_warned: Cell::new(false),
+            flushed_effects: RefCell::new(Vec::new()),
+            isolated_discarded_read_count: Cell::new(0),
+            isolated_discarded_warned: RefCell::new(HashSet::new()),
         })
     }
 
@@ -542,12 +554,16 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
         .effects
         .borrow()
         .get(&effect_id)
-        .map(|s| (s.owner, Rc::clone(&s.f)))
+        .map(|s| (s.owner, s.phase, Rc::clone(&s.f)))
     else {
         rt.effect_run_depth.set(depth - 1);
         return;
     };
-    let (owner, effect_fn) = state;
+    let (owner, phase, effect_fn) = state;
+    // Mount-time `run_effect` (create) is not a flush; only record `flush_pending` executions.
+    if rt.flushing_pending.get() {
+        rt.flushed_effects.borrow_mut().push((effect_id, phase));
+    }
 
     // Solid: dispose previous child scopes before re-running.
     dispose_owner_children(rt, owner);
@@ -1279,6 +1295,28 @@ pub fn ui_root_effect_dep_count() -> usize {
     })
 }
 
+/// Drain `(effect, phase)` pairs executed by `flush_pending` since the previous take (WP-G.1).
+///
+/// Diagnostic hook for “this `set` ran whom”. Not a SemVer surface. Mount-time
+/// `create_effect` runs are excluded (they are not a flush).
+pub fn take_flushed_effects() -> Vec<(EffectId, EffectPhase)> {
+    RUNTIME.with(|rt_rc| std::mem::take(&mut *rt_rc.borrow().flushed_effects.borrow_mut()))
+}
+
+/// How many tracked reads [`isolate_reads`] discarded (D6 / WP-G.2).
+pub fn isolated_discarded_read_count() -> usize {
+    RUNTIME.with(|rt_rc| rt_rc.borrow().isolated_discarded_read_count.get())
+}
+
+/// Clear the WP-G.2 discarded-read counter (tests).
+pub fn reset_isolated_discarded_read_count() {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        rt.isolated_discarded_read_count.set(0);
+        rt.isolated_discarded_warned.borrow_mut().clear();
+    });
+}
+
 /// Alias of [`ui_root_effect_dep_count`] (WP-2.7 / R-WP-2 diagnostic hook).
 pub fn root_bare_get_count() -> usize {
     ui_root_effect_dep_count()
@@ -1340,6 +1378,9 @@ pub fn clear_effects() {
         rt.mark_next_as_ui_root.set(false);
         rt.ui_root_effect.set(None);
         rt.ui_root_bare_get_warned.set(false);
+        rt.flushed_effects.borrow_mut().clear();
+        rt.isolated_discarded_read_count.set(0);
+        rt.isolated_discarded_warned.borrow_mut().clear();
         *rt.current_effect.borrow_mut() = None;
         *rt.current_memo.borrow_mut() = None;
         *rt.current_owner.borrow_mut() = None;
@@ -1987,10 +2028,56 @@ where
                 if let Some(set) = rt.signal_subscribers.borrow_mut().get_mut(&sig_id) {
                     set.remove(&effect_id);
                 }
+                rt.isolated_discarded_read_count
+                    .set(rt.isolated_discarded_read_count.get().saturating_add(1));
+                #[cfg(debug_assertions)]
+                {
+                    let mut warned = rt.isolated_discarded_warned.borrow_mut();
+                    if warned.insert(sig_id) {
+                        log::warn!(
+                            "isolate_reads discarded a tracked Signal::get() \
+                             — this is a missed bind, not an update \
+                             (see docs/ops/reactivity_and_hot_reload.md; \
+                             diagnose with isolated_discarded_read_count)"
+                        );
+                    }
+                }
             }
         }
         out
     })
+}
+
+/// Whether default `#[component]` bodies run under [`isolate_reads`] (D2 / N.3).
+///
+/// Default **on**. Set `RUI_COMPONENT_ISOLATE_DEFAULT=0` / `false` / `off` to roll back
+/// while a Gallery page still relies on a parent-effect subscription.
+pub fn component_isolate_default() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| match std::env::var("RUI_COMPONENT_ISOLATE_DEFAULT") {
+        Ok(v) => {
+            let t = v.trim();
+            !(t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("off"))
+        }
+        Err(_) => true,
+    })
+}
+
+/// Run `f` under [`isolate_reads`] when [`component_isolate_default`] is on.
+///
+/// Used by the default `#[component]` expansion so a child body's naked `get()` does
+/// not subscribe a parent effect. [`crate::app::reactive::reactive_component`] already
+/// isolates its render closure — do not wrap that path again.
+/// [`crate::app::reactive::reactive_component_live`] stays un-isolated.
+pub fn component_isolated_body<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    if component_isolate_default() {
+        isolate_reads(f)
+    } else {
+        f()
+    }
 }
 
 pub fn is_tracking() -> bool {

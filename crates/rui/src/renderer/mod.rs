@@ -161,6 +161,9 @@ pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
         out.shadow_offset[1] *= scale;
         out.shadow_blur *= scale;
         out.shadow_spread *= scale;
+        // Origin txty is logical px (same space as rect_pos). Linear 2×2 stays.
+        out.transform[4] *= scale;
+        out.transform[5] *= scale;
         if out.clip_size[0] >= 0.0 && out.clip_size[1] >= 0.0 {
             out.clip_pos[0] *= scale;
             out.clip_pos[1] *= scale;
@@ -195,7 +198,8 @@ pub struct TexturedDraw {
     pub tint_rgb: [f32; 3],
     /// CSS/`compute_combined_transform` 矩阵（绕矩形中心）；默认单位阵。
     pub transform: [f32; 6],
-    /// Overflow clip in the same space as `rect` (`clip_size[0] < 0` = off).
+    /// Overflow clip in `rect` / `rect_pos` space (`clip_size[0] < 0` = off).
+    /// Fragment shaders test after undoing the instance affine (local border box).
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
 }
@@ -239,7 +243,8 @@ impl TexturedDraw {
         self
     }
 
-    /// World-space overflow AABB applied after the instance transform (writing-mode Bake).
+    /// Overflow clip in `rect_pos` space. FS undoes the instance affine (local box).
+    /// Dest-reset / node-present scissors use `NodePaint.overflow_clip` (paint AABB).
     pub fn with_overflow_clip(mut self, clip: Option<[f32; 4]>) -> Self {
         match clip {
             Some([x, y, w, h]) if w > 0.0 && h > 0.0 => {
@@ -275,33 +280,31 @@ pub(crate) fn aabbs_disjoint(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// World AABB of a textured quad after the same center-pivot linear transform the VS uses.
 pub(crate) fn aabb_of_centered_transform(rect: [f32; 4], m: &[f32; 6]) -> [f32; 4] {
-    let [x, y, w, h] = rect;
-    let cx = x + w * 0.5;
-    let cy = y + h * 0.5;
-    let corners = [
-        [-0.5 * w, -0.5 * h],
-        [0.5 * w, -0.5 * h],
-        [0.5 * w, 0.5 * h],
-        [-0.5 * w, 0.5 * h],
-    ];
-    let mut min_x = f32::MAX;
-    let mut min_y = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut max_y = f32::MIN;
-    for [lx, ly] in corners {
-        let px = cx + m[0] * lx + m[2] * ly + m[4];
-        let py = cy + m[1] * lx + m[3] * ly + m[5];
-        min_x = min_x.min(px);
-        min_y = min_y.min(py);
-        max_x = max_x.max(px);
-        max_y = max_y.max(py);
+    crate::style::aabb_of_centered_transform(rect, m)
+}
+
+/// CSS overflow discard after undoing the instance affine (`rounded_rect.wgsl` `in.p`,
+/// `textured_rect.wgsl` `affine_inv_linear`). `clip_*` stay in `rect_pos` space.
+pub(crate) fn overflow_clip_contains_after_affine_inv(
+    clip_pos: [f32; 2],
+    clip_size: [f32; 2],
+    rect_pos: [f32; 2],
+    rect_size: [f32; 2],
+    transform: &[f32; 6],
+    world: [f32; 2],
+) -> bool {
+    if clip_size[0] < 0.0 || clip_size[1] < 0.0 {
+        return true;
     }
-    [
-        min_x,
-        min_y,
-        (max_x - min_x).max(0.0),
-        (max_y - min_y).max(0.0),
-    ]
+    let cx = rect_pos[0] + rect_size[0] * 0.5;
+    let cy = rect_pos[1] + rect_size[1] * 0.5;
+    let dx = world[0] - cx - transform[4];
+    let dy = world[1] - cy - transform[5];
+    let inv = crate::style::mat2d_inverse(&crate::style::mat2d_linear(transform));
+    let (lx, ly) = crate::style::mat2d_transform_vec(&inv, dx, dy);
+    let x0 = clip_pos[0] - cx;
+    let y0 = clip_pos[1] - cy;
+    lx >= x0 && lx < x0 + clip_size[0] && ly >= y0 && ly < y0 + clip_size[1]
 }
 
 /// `textured_rect` 顶点：rect 顶 → `uv.y=0`（与上传图 / 离屏 RT 行序一致）。
@@ -415,6 +418,27 @@ mod textured_uv_tests {
         scale_instances_in_place(&mut v, 1.0);
         assert_eq!(v[0].rect_pos, [10.0, 20.0]);
         assert_eq!(v[0].rect_size, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn scale_instances_scales_transform_translation() {
+        use super::{scale_instances_in_place, InstanceInput};
+        use bytemuck::Zeroable;
+        let mut v = vec![InstanceInput::zeroed()];
+        let c = 45.0f32.to_radians().cos();
+        let s = 45.0f32.to_radians().sin();
+        v[0].transform = [c, s, -s, c, 10.0, -4.0];
+        scale_instances_in_place(&mut v, 2.0);
+        assert!(
+            (v[0].transform[4] - 20.0).abs() < 1e-4 && (v[0].transform[5] + 8.0).abs() < 1e-4,
+            "origin txty must scale with DPI, got {:?}",
+            v[0].transform
+        );
+        assert!(
+            (v[0].transform[0] - c).abs() < 1e-5,
+            "linear part must stay, got {:?}",
+            v[0].transform
+        );
     }
 
     #[test]
@@ -559,6 +583,44 @@ mod textured_uv_tests {
             "90° of swapped bake must recover the layout AABB, got {vis:?}"
         );
         assert!(!super::aabbs_disjoint(vis, parent.unwrap()));
+
+        let keep_rot = keep.clone().with_transform(xform);
+        let c = [
+            keep_rot.rect[0] + keep_rot.rect[2] * 0.5,
+            keep_rot.rect[1] + keep_rot.rect[3] * 0.5,
+        ];
+        let tip_local = [
+            parent.unwrap()[0] + parent.unwrap()[2] * 0.5,
+            parent.unwrap()[1] + 4.0,
+        ];
+        let d = [tip_local[0] - c[0], tip_local[1] - c[1]];
+        let (rx, ry) = crate::style::mat2d_transform_vec(&keep_rot.transform, d[0], d[1]);
+        let tip_world = [
+            c[0] + rx + keep_rot.transform[4],
+            c[1] + ry + keep_rot.transform[5],
+        ];
+        assert!(
+            super::overflow_clip_contains_after_affine_inv(
+                keep_rot.clip_pos,
+                keep_rot.clip_size,
+                [keep_rot.rect[0], keep_rot.rect[1]],
+                [keep_rot.rect[2], keep_rot.rect[3]],
+                &keep_rot.transform,
+                tip_world,
+            ),
+            "GPU overflow must keep local-box ink after affine inverse, tip={tip_world:?}"
+        );
+        assert!(
+            !super::overflow_clip_contains_after_affine_inv(
+                keep_rot.clip_pos,
+                keep_rot.clip_size,
+                [keep_rot.rect[0], keep_rot.rect[1]],
+                [keep_rot.rect[2], keep_rot.rect[3]],
+                &keep_rot.transform,
+                [0.0, 40.0],
+            ),
+            "unrotated bake-quad corner must miss the local overflow box"
+        );
     }
 
     #[test]
@@ -569,6 +631,44 @@ mod textured_uv_tests {
         let scaled = scale_textured_draws(&[d], 2.0);
         assert!((scaled[0].clip_pos[0] - 4.0).abs() < 1e-4);
         assert!((scaled[0].clip_size[1] - 32.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn gpu_overflow_clip_follows_local_box_after_affine_inv() {
+        let rect = [0.0, 0.0, 80.0, 80.0];
+        let clip = [0.0, 0.0, 80.0, 80.0];
+        let rot =
+            crate::style::mat2d_linear(&crate::style::mat2d_rotate(std::f32::consts::FRAC_PI_4));
+        let c = [40.0, 40.0];
+        let d = [4.0 - c[0], 4.0 - c[1]];
+        let (rx, ry) = crate::style::mat2d_transform_vec(&rot, d[0], d[1]);
+        let tip = [c[0] + rx, c[1] + ry];
+        assert!(
+            super::overflow_clip_contains_after_affine_inv(
+                [clip[0], clip[1]],
+                [clip[2], clip[3]],
+                [rect[0], rect[1]],
+                [rect[2], rect[3]],
+                &rot,
+                tip,
+            ),
+            "local vertex must survive, tip={tip:?}"
+        );
+        assert!(
+            !super::overflow_clip_contains_after_affine_inv(
+                [clip[0], clip[1]],
+                [clip[2], clip[3]],
+                [rect[0], rect[1]],
+                [rect[2], rect[3]],
+                &rot,
+                [80.0, 0.0],
+            ),
+            "unrotated AABB corner must discard"
+        );
+        assert!(
+            tip[1] < 0.0 || tip[0] < 0.0,
+            "vacuous unless the vertex leaves the layout AABB, tip={tip:?}"
+        );
     }
 }
 

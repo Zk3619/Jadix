@@ -1,4 +1,4 @@
-//! WP-R.7 / G8: `ui!` auto-lowering under `isolate_reads` / `#[component(reactive)]`.
+//! WP-R.7 / G8: `ui!` auto-lowering under `isolate_reads` / `#[component]`.
 //! Naked `.get()` that is not lowered is discarded by isolate_reads → UI never updates.
 
 #![allow(non_snake_case)]
@@ -9,12 +9,18 @@ use std::rc::Rc;
 
 use rui::app::reactive::{
     keyed_list_item_owner_count, registered_binding_count, reset_registered_anchors,
+    reset_unkeyed_for_rebuild_count, unkeyed_for_rebuild_count,
 };
 use rui::component;
 use rui::core::reactivity::{
-    create_effect, create_root, dispose_effect, isolate_reads, use_signal, Signal,
+    clear_ui_root_effect, create_effect, create_memo, create_root, create_signal, dispose_effect,
+    isolate_reads, isolated_discarded_read_count, mark_next_effect_as_ui_root,
+    reset_isolated_discarded_read_count, take_flushed_effects, ui_root_effect_dep_count,
+    use_signal, EffectPhase, Signal,
 };
+use rui::core::store::create_store;
 use rui::core::tree::Element;
+use rui::prelude::{Button, ButtonProps};
 use rui::ui;
 
 fn collect_ids(el: &Element, out: &mut Vec<String>) {
@@ -39,6 +45,7 @@ fn find_text(el: &Element, want: &str) -> bool {
 
 thread_local! {
     static REACTIVE_CHIP_BODY: Cell<u32> = const { Cell::new(0) };
+    static DEFAULT_LIVE_BODY: Cell<u32> = const { Cell::new(0) };
     static FOR_RENDER_COUNTS: RefCell<HashMap<i32, u32>> = RefCell::new(HashMap::new());
 }
 
@@ -267,6 +274,71 @@ fn reactive_component_isolate_reads_field_get_does_not_rerun_body() {
 
     drop(mounted.borrow_mut().take());
     reset_registered_anchors();
+}
+
+#[component]
+fn DefaultLiveLabel(n: Signal<i32>) -> Element {
+    DEFAULT_LIVE_BODY.with(|c| c.set(c.get() + 1));
+    ui! { { n.get() } }
+}
+
+/// Wave 4 + Wave 1：默认 `#[component]` isolate 丢边，但 `ui! { {n.get()} }` 仍降 `bind_*`。
+#[test]
+fn default_component_ui_get_still_updates() {
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
+    DEFAULT_LIVE_BODY.with(|c| c.set(0));
+    let n = create_signal(1_i32);
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let mounted_a = Rc::clone(&mounted);
+
+    let (_owner, _) = create_root(|| {
+        create_effect(move || {
+            let el = DefaultLiveLabel(DefaultLiveLabelProps {
+                n: Some(n),
+                children: None,
+                base: None,
+            });
+            *mounted_a.borrow_mut() = Some(el);
+        });
+    });
+
+    assert_eq!(
+        DEFAULT_LIVE_BODY.with(|c| c.get()),
+        1,
+        "component body runs once at mount"
+    );
+    {
+        let tree = mounted.borrow();
+        let tree = tree.as_ref().expect("mounted");
+        assert!(
+            template_contains(tree, ":bind#") || find_text(tree, "1"),
+            "ui! {{n.get()}} must lower to bind_text; tree text/id missing"
+        );
+    }
+    assert_eq!(
+        isolated_discarded_read_count(),
+        0,
+        "lowered ui! get must not discard onto the isolate frame"
+    );
+
+    let _ = take_flushed_effects();
+    n.set(2);
+    assert_eq!(
+        DEFAULT_LIVE_BODY.with(|c| c.get()),
+        1,
+        "leaf set must not re-run default #[component] body"
+    );
+    assert!(
+        take_flushed_effects()
+            .iter()
+            .any(|(_, phase)| *phase == EffectPhase::Render),
+        "ui! {{n.get()}} must still flush a bind Render effect"
+    );
+
+    drop(mounted.borrow_mut().take());
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
 }
 
 #[test]
@@ -502,5 +574,198 @@ fn with_lowers_to_bind_peek_does_not() {
         "peek() must not subscribe / must not lower to bind"
     );
     assert!(find_text(&peek_el, "w"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn format_get_lowers_to_bind_text() {
+    reset_registered_anchors();
+    let n = use_signal("__rui_wp_n1_fmt", || 7_i32);
+    n.set_silent(7);
+    let el = ui! {
+        <Box>{ format!("{}", n.get()) }</Box>
+    };
+    assert!(
+        template_contains(&el, ":bind#"),
+        "format! with .get() must lower to bind_text"
+    );
+    assert!(find_text(&el, "7"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn builder_live_text_class_ui_counter_canary() {
+    reset_registered_anchors();
+    clear_ui_root_effect();
+    let count = create_signal(0_i32);
+    let kept = Rc::new(RefCell::new(None::<Element>));
+    let kept_e = Rc::clone(&kept);
+
+    mark_next_effect_as_ui_root();
+    let root = create_effect(move || {
+        let el = ui! {
+            <VStack>
+                { count.get() }
+            </VStack>
+        };
+        *kept_e.borrow_mut() = Some(el);
+    });
+
+    assert_eq!(
+        ui_root_effect_dep_count(),
+        0,
+        "ui! Counter must not subscribe the UI root"
+    );
+    assert!(find_text(kept.borrow().as_ref().unwrap(), "0"));
+    assert!(
+        template_contains(kept.borrow().as_ref().unwrap(), ":bind#"),
+        "ui! text child get must lower to bind_text"
+    );
+
+    let _ = take_flushed_effects();
+    count.set(1);
+    let render_runs = take_flushed_effects()
+        .into_iter()
+        .filter(|(_, phase)| *phase == EffectPhase::Render)
+        .count();
+    assert_eq!(render_runs, 1, "count.set must run one text Render effect");
+
+    drop(kept.borrow_mut().take());
+    dispose_effect(root);
+    clear_ui_root_effect();
+    reset_registered_anchors();
+}
+
+#[test]
+fn memo_get_lowers_to_bind_text() {
+    reset_registered_anchors();
+    let n = create_signal(3_i32);
+    let m = create_memo(move || n.get() * 2);
+    let el = ui! {
+        <Box>{ m.get() }</Box>
+    };
+    assert!(
+        template_contains(&el, ":bind#"),
+        "Memo::get must lower to bind_text"
+    );
+    assert!(find_text(&el, "6"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn store_field_get_lowers_to_bind_text() {
+    reset_registered_anchors();
+    #[derive(Clone, PartialEq)]
+    struct User {
+        name: String,
+    }
+    let store = create_store(User {
+        name: "ada".to_string(),
+    });
+    let name = store.field("name", |u| u.name.clone(), |u, v| u.name = v);
+    let el = ui! {
+        <Box>{ name.get() }</Box>
+    };
+    assert!(
+        template_contains(&el, ":bind#"),
+        "StoreField::get must lower to bind_text"
+    );
+    assert!(find_text(&el, "ada"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn nested_if_text_get_lowers_to_bind() {
+    reset_registered_anchors();
+    let ok = use_signal("__rui_wp_n1_nested_if", || true);
+    ok.set_silent(true);
+    let label = use_signal("__rui_wp_n1_nested_if_label", || "in".to_string());
+    label.set_silent("in".to_string());
+    let el = ui! {
+        <Box>{ if ok.get() { if true { label.get() } else { "no".to_string() } } else { "out".to_string() } }</Box>
+    };
+    assert!(
+        template_contains(&el, ":bind#"),
+        "nested if text with .get() must lower to bind_text"
+    );
+    assert!(find_text(&el, "in"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn event_closure_get_does_not_emit_leaf_bind() {
+    reset_registered_anchors();
+    let n = use_signal("__rui_wp_n1_click", || 0_i32);
+    n.set_silent(0);
+    let el = ui! {
+        <Button id="n1-click" on_click={move || { let _ = n.get(); }}>"static"</Button>
+    };
+    assert!(
+        !template_contains(&el, ":bind#"),
+        "on_click closure .get() is a click-time read, not a leaf bind"
+    );
+    assert!(find_text(&el, "static"));
+    reset_registered_anchors();
+}
+
+#[test]
+fn unkeyed_for_each_get_rebuilds_whole_table() {
+    reset_registered_anchors();
+    reset_unkeyed_for_rebuild_count();
+    let items = use_signal("__rui_wp_n4_unkeyed_ui", || vec![1_i32, 2]);
+    items.set_silent(vec![1, 2]);
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let mounted_a = Rc::clone(&mounted);
+
+    let (_owner, _) = create_root(|| {
+        create_effect(move || {
+            let el = ui! {
+                <For each={items.get()} item={item}>
+                    { format!("{item}") }
+                </For>
+            };
+            *mounted_a.borrow_mut() = Some(el);
+        });
+    });
+
+    let after_mount = unkeyed_for_rebuild_count();
+    assert!(
+        after_mount >= 1,
+        "ui! <For each={{get()}}> without key must take the for_reactive warn path"
+    );
+    assert_eq!(
+        keyed_list_item_owner_count(),
+        0,
+        "unkeyed For must not register item owners"
+    );
+
+    items.set(vec![1, 2, 3]);
+    assert!(
+        unkeyed_for_rebuild_count() > after_mount,
+        "unkeyed list change must rebuild the whole table"
+    );
+
+    drop(mounted.borrow_mut().take());
+    reset_registered_anchors();
+    reset_unkeyed_for_rebuild_count();
+}
+
+#[test]
+fn opacity_get_lowers_to_bind_prop() {
+    reset_registered_anchors();
+    let n = use_signal("__rui_wp_n2_opacity", || 0.4_f32);
+    n.set_silent(0.4);
+    let el = ui! {
+        <Box opacity={n.get()}></Box>
+    };
+    assert!(
+        template_contains(&el, "bind_opacity"),
+        "opacity={{n.get()}} must lower to bind_prop"
+    );
+    assert!(
+        (el.style.opacity - 0.4).abs() < 1e-5,
+        "initial opacity {}",
+        el.style.opacity
+    );
     reset_registered_anchors();
 }

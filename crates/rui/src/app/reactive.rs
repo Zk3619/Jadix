@@ -31,13 +31,17 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 
 use crate::core::reactivity::{
     create_render_effect, dispose_effect, effect_is_alive, untrack, use_signal, EffectId, Signal,
 };
-use crate::core::tree::{Element, IntoCssDim, IntoNodeText, LayoutStatus, UnitSlot, UnmountHook};
+use crate::core::tree::{
+    Element, IntoCssDim, IntoNodeBg, IntoNodeClass, IntoNodeFg, IntoNodeOpacity, IntoNodeSize,
+    IntoNodeText, IntoOpacity, LayoutStatus, UnitSlot, UnmountHook,
+};
+use crate::style::{IntoPaintColor, IntoTextColor};
 
 use super::runtime;
 
@@ -60,6 +64,14 @@ thread_local! {
     /// which is not a tracked effect. Islands must inline `render()` instead of
     /// returning an empty placeholder (same contract as drag's `assemble_*`).
     static INLINE_ISLAND_RENDER: Cell<bool> = const { Cell::new(false) };
+    /// `try_update_element_by_template_id` DFS miss (WP-N.5 / D4).
+    static BIND_MISS_COUNT: Cell<usize> = const { Cell::new(0) };
+    /// Tracked `<For>` without `key` rebuilt the whole list (WP-N.4 / Wave 2).
+    static UNKEYED_FOR_REBUILD_COUNT: Cell<usize> = const { Cell::new(0) };
+    static UNKEYED_FOR_WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// WP-N.6 interned static skeletons keyed by `template_hash` (or Show fallback id).
+    static STATIC_TEMPLATES: RefCell<HashMap<String, Element>> = RefCell::new(HashMap::new());
+    static STATIC_TEMPLATE_CLONE_HITS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// See [`INLINE_ISLAND_RENDER`]. Entered by drag overlay source-preview clone.
@@ -269,6 +281,122 @@ pub fn reset_registered_anchors() {
     COMPONENT_PROPS.with(|store| store.borrow_mut().clear());
     COMPONENT_CHILDREN.with(|store| store.borrow_mut().clear());
     super::keyed_list::reset_keyed_list_registry();
+    reset_unkeyed_for_rebuild_count();
+    reset_static_templates();
+}
+
+/// Leaf `bind_*` apply must not claim a structural rebuild (D4 / WP-N.5).
+pub(crate) fn sanitize_leaf_bind_status(status: LayoutStatus) -> LayoutStatus {
+    if matches!(status, LayoutStatus::StructureChanged) {
+        #[cfg(debug_assertions)]
+        log::warn!(
+            target: "rui::bind",
+            "leaf bind apply returned StructureChanged; coercing to LayoutChanged \
+             (structure changes belong on Show/For/Portal islands)"
+        );
+        LayoutStatus::LayoutChanged
+    } else {
+        status
+    }
+}
+
+/// Count of bind `template_id` lookups that missed the live tree (WP-N.5).
+pub fn bind_miss_count() -> usize {
+    BIND_MISS_COUNT.with(Cell::get)
+}
+
+/// Clear [`bind_miss_count`] (tests).
+pub fn reset_bind_miss_count() {
+    BIND_MISS_COUNT.with(|c| c.set(0));
+}
+
+pub(crate) fn note_bind_miss(template_id: &str) {
+    BIND_MISS_COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(debug_assertions)]
+    log::warn!(
+        target: "rui::bind",
+        "bind miss template_id={template_id} (unmounted or not in the live tree)"
+    );
+}
+
+/// Whole-list rebuilds from tracked `<For>` without `key` (WP-N.4).
+pub fn unkeyed_for_rebuild_count() -> usize {
+    UNKEYED_FOR_REBUILD_COUNT.with(Cell::get)
+}
+
+/// Clear [`unkeyed_for_rebuild_count`] (tests).
+pub fn reset_unkeyed_for_rebuild_count() {
+    UNKEYED_FOR_REBUILD_COUNT.with(|c| c.set(0));
+    UNKEYED_FOR_WARNED.with(|s| s.borrow_mut().clear());
+}
+
+fn note_unkeyed_for_rebuild(anchor_id: &str) {
+    UNKEYED_FOR_REBUILD_COUNT.with(|c| c.set(c.get().saturating_add(1)));
+    let first = UNKEYED_FOR_WARNED.with(|s| s.borrow_mut().insert(anchor_id.to_string()));
+    #[cfg(debug_assertions)]
+    if first {
+        log::warn!(
+            target: "rui::list",
+            "tracked <For> {anchor_id} has no key; each list change rebuilds the whole table. Add `key={{…}}` to use for_keyed_reactive (item-level owners)."
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = first;
+}
+
+/// How many Show remounts reused an interned static skeleton (WP-N.6).
+pub fn static_template_clone_hit_count() -> usize {
+    STATIC_TEMPLATE_CLONE_HITS.with(Cell::get)
+}
+
+/// Clear interned static templates (tests).
+pub fn reset_static_templates() {
+    STATIC_TEMPLATES.with(|m| m.borrow_mut().clear());
+    STATIC_TEMPLATE_CLONE_HITS.with(|c| c.set(0));
+}
+
+fn intern_static_template(key: &str, el: &Element) {
+    STATIC_TEMPLATES.with(|m| {
+        m.borrow_mut()
+            .entry(key.to_string())
+            .or_insert_with(|| el.clone_static_skeleton());
+    });
+}
+
+fn clone_interned_template(key: &str) -> Option<Element> {
+    STATIC_TEMPLATES.with(|m| m.borrow().get(key).map(Element::clone_static_skeleton))
+}
+
+fn subtree_is_clone_safe(root: &Element) -> bool {
+    let mut stack = vec![root];
+    while let Some(el) = stack.pop() {
+        if el.on_click.is_some()
+            || el.on_hover.is_some()
+            || el.on_mousedown.is_some()
+            || el.on_mouseup.is_some()
+            || el.on_context_menu.is_some()
+            || el.on_double_click.is_some()
+            || el.on_mousemove.is_some()
+            || el.on_mouseover.is_some()
+            || el.on_mouseout.is_some()
+            || el.on_key_down.is_some()
+            || el.on_unmount.is_some()
+            || el.button_hover_paint.is_some()
+            || el.input_paint_sync.is_some()
+            || el.switch_checked_sync.is_some()
+            || el.checkbox_sync.is_some()
+            || el.radio_selected_sync.is_some()
+            || el.reactive_sync.is_some()
+        {
+            return false;
+        }
+        stack.extend(el.children.iter());
+    }
+    true
+}
+
+fn has_static_payload(el: &Element) -> bool {
+    el.text.is_some() || !el.children.is_empty() || !el.attrs.is_empty() || el.template_id.is_some()
 }
 
 /// Stash RSX `children` for a reactive component between `From`/function calls.
@@ -460,6 +588,10 @@ where
 }
 
 /// Component/application reusable structural reactive boundary.
+///
+/// Allowed: Show / For / Match / Portal / a composite root that must insert or delete
+/// descendants. Not allowed: flashing a label, `variant`, or class — use [`bind_prop`] /
+/// [`bind_text`] / [`crate::core::tree::ReactiveSync`] instead (WP-N.4).
 ///
 /// Stateful components can return this directly when signal changes must mount/unmount descendants.
 /// For style/layout-only changes prefer [`crate::core::tree::ReactiveSync`], which avoids subtree
@@ -835,7 +967,7 @@ where
         }
     }
 
-    let _ = apply(&mut el, initial);
+    let _ = sanitize_leaf_bind_status(apply(&mut el, initial));
 
     if !crate::core::reactivity::is_tracking() {
         return el;
@@ -887,7 +1019,7 @@ where
         let next = compute();
         if let Some(status) =
             runtime::try_update_element_by_template_id(&effect_node_id, |mounted| {
-                apply(mounted, next)
+                sanitize_leaf_bind_status(apply(mounted, next))
             })
         {
             if status != LayoutStatus::Clean {
@@ -1051,6 +1183,17 @@ pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> 
     }
 }
 
+/// Patch CSS opacity from a fine-grained binding (`ui!` dynamic `opacity` / Builder Signal).
+pub fn apply_bound_opacity(el: &mut Element, next: impl IntoOpacity) -> LayoutStatus {
+    let v = next.into_opacity();
+    if (el.style.opacity - v).abs() <= f32::EPSILON {
+        LayoutStatus::Clean
+    } else {
+        el.style.opacity = v;
+        LayoutStatus::StyleChanged
+    }
+}
+
 /// Conditional rendering helper for fine-grained blocks.
 pub fn show<F>(when: bool, render: F) -> Element
 where
@@ -1078,13 +1221,44 @@ where
 
 /// Solid-style `<Show>`: `when` is evaluated inside a dedicated [`reactive_view`] effect so
 /// `signal.get()` in the condition does not subscribe the root `app_builder`.
+///
+/// Static bodies (no `bind_*`, no instance hooks) intern by `template_hash` and remount via
+/// [`Element::clone_static_skeleton`] (WP-N.6). Dynamic bodies still re-run `render`.
 pub fn show_reactive<W, F>(anchor_id: impl Into<String>, mut when: W, render: F) -> Element
 where
     W: FnMut() -> bool + 'static,
     F: Fn() -> Element + 'static,
 {
     let id = anchor_id.into();
-    reactive_view(id, move || if when() { render() } else { Element::new() })
+    let intern_key = Rc::new(RefCell::new(None::<String>));
+    reactive_view(id.clone(), move || {
+        if !when() {
+            return Element::new();
+        }
+        if let Some(key) = intern_key.borrow().clone() {
+            if let Some(cloned) = clone_interned_template(&key) {
+                STATIC_TEMPLATE_CLONE_HITS.with(|c| c.set(c.get().saturating_add(1)));
+                return cloned;
+            }
+        }
+        let binds_before = registered_binding_count();
+        let anchors_before = registered_anchor_count();
+        let el = render();
+        let clone_safe = registered_binding_count() == binds_before
+            && registered_anchor_count() == anchors_before
+            && subtree_is_clone_safe(&el)
+            && has_static_payload(&el);
+        if clone_safe {
+            let key = el
+                .template_hash
+                .clone()
+                .filter(|h| h != REACTIVE_PLACEHOLDER_HASH)
+                .unwrap_or_else(|| format!("{id}__static_tmpl"));
+            intern_static_template(&key, &el);
+            *intern_key.borrow_mut() = Some(key);
+        }
+        el
+    })
 }
 
 /// Solid-style `<Switch>`: read `key` inside a [`reactive_view`], then `render(&key)`.
@@ -1170,18 +1344,18 @@ pub fn apply_bound_z_index(el: &mut Element, z: i32) -> LayoutStatus {
     }
 }
 
-/// Solid-style `<For each={list.get()}>`: rebuild the keyed children list inside a dedicated
-/// [`reactive_view`] so reading the list signal does not subscribe the root tree.
+/// **降级** whole-list `<For>`: re-runs `render_list` then keyed Element reconcile.
 ///
-/// This is the **whole-list** path (re-runs `render_list` then keyed Element reconcile).
-/// For item-level owners (I-7, unchanged keys do not re-run item `render`) use
-/// [`for_keyed_reactive`].
+/// Tracked `<For each={…get()}>` without `key` takes this path and logs a debug warn
+/// (WP-N.4). Prefer [`for_keyed_reactive`] (item-level owners, I-7) or [`index_reactive`].
 pub fn for_reactive<F>(anchor_id: impl Into<String>, mut render_list: F) -> Element
 where
     F: FnMut() -> Vec<Element> + 'static,
 {
     let id = anchor_id.into();
+    let warn_id = id.clone();
     reactive_view(id, move || {
+        note_unkeyed_for_rebuild(&warn_id);
         let mut root = Element::new();
         root.children = render_list();
         root
@@ -1212,10 +1386,11 @@ where
         .collect()
 }
 
-/// List helper with index-based stable keys (`{scope_id}:{index}`).
-/// Useful as a lower-boilerplate `<For each={...}>` fallback when explicit keys are omitted.
+/// **降级** index-keyed snapshot (`{scope_id}:{index}`). Not Solid `<Index>`.
 ///
-/// This is **not** Solid `<Index>` (no per-index Accessor). Use [`index_reactive`] for I-11.
+/// Useful as a lower-boilerplate `<For each={...}>` fallback when explicit keys are omitted.
+/// Prefer [`index_reactive`] for I-11 (per-index Accessor) and [`for_keyed_reactive`] when
+/// items have stable keys.
 pub fn for_each<T, RF>(scope_id: impl Into<String>, items: &[T], mut render: RF) -> Vec<Element>
 where
     RF: FnMut(&T) -> Element,
@@ -1288,6 +1463,146 @@ where
             .clone()
             .unwrap_or_else(|| format!("{}:{}:{}:bind_text", loc.file(), loc.line(), loc.column()));
         bind_prop(el, id, self, apply_bound_text_value)
+    }
+}
+
+#[track_caller]
+fn caller_bind_key(kind: &str) -> String {
+    let loc = std::panic::Location::caller();
+    format!("{}:{}:{}:bind_{kind}", loc.file(), loc.line(), loc.column())
+}
+
+impl<T: Clone + std::fmt::Display + 'static> IntoNodeClass for Signal<T> {
+    fn apply_node_class(self, el: Element) -> Element {
+        let id = format!("__rui_class_sig:{:?}", self.id());
+        bind_class(el, id, move || self.get().to_string())
+    }
+}
+
+impl<F, S> IntoNodeClass for F
+where
+    F: FnMut() -> S + 'static,
+    S: Into<String>,
+{
+    #[track_caller]
+    fn apply_node_class(self, el: Element) -> Element {
+        let mut compute = self;
+        bind_class(el, caller_bind_key("class"), move || compute().into())
+    }
+}
+
+impl<T: Clone + IntoCssDim + 'static> IntoNodeSize for Signal<T> {
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        let id = format!("__rui_size_{axis}_sig:{:?}", self.id());
+        bind_prop(
+            el,
+            id,
+            move || self.get(),
+            move |el, dim| apply_bound_size(el, axis, dim),
+        )
+    }
+}
+
+impl<F, D> IntoNodeSize for F
+where
+    F: FnMut() -> D + 'static,
+    D: IntoCssDim + 'static,
+{
+    #[track_caller]
+    fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
+        bind_prop(
+            el,
+            caller_bind_key(&format!("size_{axis}")),
+            self,
+            move |el, dim| apply_bound_size(el, axis, dim),
+        )
+    }
+}
+
+impl<T: Clone + IntoPaintColor + 'static> IntoNodeBg for Signal<T> {
+    fn apply_node_bg(self, el: Element) -> Element {
+        let id = format!("__rui_bg_sig:{:?}", self.id());
+        bind_prop(
+            el,
+            id,
+            move || self.get().into_paint_color(),
+            |el, color| crate::style::apply_user_bg(el, color),
+        )
+    }
+}
+
+impl<F, C> IntoNodeBg for F
+where
+    F: FnMut() -> C + 'static,
+    C: IntoPaintColor + 'static,
+{
+    #[track_caller]
+    fn apply_node_bg(self, el: Element) -> Element {
+        let mut compute = self;
+        bind_prop(
+            el,
+            caller_bind_key("bg"),
+            move || compute().into_paint_color(),
+            |el, color| crate::style::apply_user_bg(el, color),
+        )
+    }
+}
+
+impl<T: Clone + IntoTextColor + 'static> IntoNodeFg for Signal<T> {
+    fn apply_node_fg(self, el: Element) -> Element {
+        let id = format!("__rui_fg_sig:{:?}", self.id());
+        bind_prop(
+            el,
+            id,
+            move || self.get().into_text_color(),
+            |el, color| crate::style::apply_user_fg(el, color),
+        )
+    }
+}
+
+impl<F, C> IntoNodeFg for F
+where
+    F: FnMut() -> C + 'static,
+    C: IntoTextColor + 'static,
+{
+    #[track_caller]
+    fn apply_node_fg(self, el: Element) -> Element {
+        let mut compute = self;
+        bind_prop(
+            el,
+            caller_bind_key("fg"),
+            move || compute().into_text_color(),
+            |el, color| crate::style::apply_user_fg(el, color),
+        )
+    }
+}
+
+impl<T: Clone + IntoOpacity + 'static> IntoNodeOpacity for Signal<T> {
+    fn apply_node_opacity(self, el: Element) -> Element {
+        let id = format!("__rui_opacity_sig:{:?}", self.id());
+        bind_prop(
+            el,
+            id,
+            move || self.get(),
+            |el, o| apply_bound_opacity(el, o),
+        )
+    }
+}
+
+impl<F, O> IntoNodeOpacity for F
+where
+    F: FnMut() -> O + 'static,
+    O: IntoOpacity + 'static,
+{
+    #[track_caller]
+    fn apply_node_opacity(self, el: Element) -> Element {
+        let mut compute = self;
+        bind_prop(
+            el,
+            caller_bind_key("opacity"),
+            move || compute(),
+            |el, o| apply_bound_opacity(el, o),
+        )
     }
 }
 

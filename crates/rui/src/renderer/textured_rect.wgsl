@@ -48,6 +48,12 @@ fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ab.x * v.x + cd.x * v.y, ab.y * v.x + cd.y * v.y);
 }
 
+fn affine_inv_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
+    let det = ab.x * cd.y - ab.y * cd.x;
+    let inv_det = 1.0 / det;
+    return vec2<f32>(cd.y * v.x - cd.x * v.y, -ab.y * v.x + ab.x * v.y) * inv_det;
+}
+
 /// MSDF median (single-channel SDF packed as R=G=B still works).
 fn median3(r: f32, g: f32, b: f32) -> f32 {
     return max(min(r, g), min(max(r, g), b));
@@ -87,6 +93,18 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
         let rotated = affine_linear(local, ab, cd);
         let center = inst.rect_pos + inst.rect_size * 0.5;
         physical = center + rotated + txty;
+        // Overflow clip is in `rect_pos` space. FS tests affine-inverted local vs
+        // clip shifted to this instance's center (same contract as rounded_rect).
+        out.frag_px = affine_inv_linear(physical - center - txty, ab, cd);
+        out.clip_pos = inst.clip_pos - center;
+        out.clip_size = inst.clip_size;
+        let ndc_x = (physical.x / globals.resolution.x) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (physical.y / globals.resolution.y) * 2.0;
+        out.clip_position = vec4<f32>(ndc_x * clip_w, ndc_y * clip_w, 0.0, clip_w);
+        out.uv = inst.uv_offset + v.uv * inst.uv_scale;
+        out.tint = inst.tint;
+        out.flags = inst.flags;
+        return out;
     }
 
     let ndc_x = (physical.x / globals.resolution.x) * 2.0 - 1.0;
@@ -95,6 +113,7 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.uv = inst.uv_offset + v.uv * inst.uv_scale;
     out.tint = inst.tint;
     out.flags = inst.flags;
+    // Perspective warp: clip stays world AABB (`frag_px` = physical).
     out.frag_px = physical;
     out.clip_pos = inst.clip_pos;
     out.clip_size = inst.clip_size;

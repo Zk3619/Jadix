@@ -2,8 +2,8 @@
 //! tail from `min-h-full` / inflated `content_h`.
 
 use crate::app::draw_cull::{
-    clip_text_nodes_to_rect, padded_xywh, page_stack_band_submit_text, DAMAGE_CULL_PAD_LOGICAL,
-    SCROLL_LAYER_TEXT_PAD_LOGICAL,
+    clip_text_nodes_to_rect, padded_xywh, page_stack_band_submit_text, CullRects,
+    DAMAGE_CULL_PAD_LOGICAL, SCROLL_LAYER_TEXT_PAD_LOGICAL,
 };
 use crate::app::reactive::{reactive_view_sized, reset_registered_anchors};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
@@ -1394,7 +1394,7 @@ fn rail_captions_in_submit(
     prev: &[crate::layout::layout_tree::TextLayoutInfo],
     curr: &[crate::layout::layout_tree::TextLayoutInfo],
     ranges: &[crate::layout::layout_tree::OverlayBandRange],
-    scroll_clip: Option<[f32; 4]>,
+    scroll_clip: Option<CullRects>,
 ) -> Vec<String> {
     let mut stolen = Vec::new();
     let push_hit = |stolen: &mut Vec<String>,
@@ -1671,7 +1671,10 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
             &before_nodes,
             &after.text_nodes,
             &after_ranges,
-            Some(padded_xywh(after_ms, SCROLL_LAYER_TEXT_PAD_LOGICAL)),
+            Some(CullRects::one(padded_xywh(
+                after_ms,
+                SCROLL_LAYER_TEXT_PAD_LOGICAL,
+            ))),
         );
         assert!(
             stolen_plain.is_empty() && stolen_clip.is_empty(),

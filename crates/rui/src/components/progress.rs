@@ -12,7 +12,8 @@
 //! ```
 //!
 //! 轨道样式对位 `cn-progress-track` / `cn-progress-indicator`：`h-2` · `rounded-full` ·
-//! `bg-primary/20` 轨 + `bg-primary` 指示条 · `w-full`。
+//! `bg-primary/20` 轨 + `bg-primary` 指示条 · `w-full`。指示条尺寸走 `bind_prop`，
+//! 不因 `value` 重建轨（N.4）。
 //!
 //! `ui!` 中 `<Progress>` 由宏展开为 [`progress_scope`]（子树先拿到上下文）。
 //! Builder [`progress`] 简单条与 `.child(|| …)` 复合面共用同一套实现。
@@ -54,7 +55,7 @@
 
 use std::sync::OnceLock;
 
-use crate::app::reactive::{bind_prop, bind_text, reactive_view};
+use crate::app::reactive::{apply_bound_size, bind_prop, bind_text};
 use crate::components::base::{
     fill_default_text_color, fill_default_text_size, fill_default_text_weight, packed_children,
     BaseComponentBuilder, SlotAuthor, SlotChrome,
@@ -444,6 +445,8 @@ pub struct ProgressTrackOpts {
 }
 
 /// ShadCN `cn-progress-track` + 内嵌 Indicator（响应 `value`）。
+///
+/// Track chrome is static. Fill size patches in place — same contract as the circle variant.
 pub fn progress_track(opts: ProgressTrackOpts) -> Element {
     let value = opts.value.or_else(|| use_progress().map(|c| c.value));
     let Some(val) = value else {
@@ -458,63 +461,84 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
         .orientation
         .or_else(|| use_progress().map(|c| c.orientation))
         .unwrap_or_default();
-    let view_id = format!("{instance}__progress_track_view");
-
-    let mut el = reactive_view(view_id, move || {
-        let t = val.get().clamp(0.0, 1.0);
-        let pct = (t * 100.0).clamp(0.0, 100.0);
-        let mut track_bg = tokens::primary();
-        track_bg[3] *= 0.2;
-        let mut track = if orientation.is_vertical() {
-            // 纵向：自底向上填充（justify-end + 高度百分比）。
-            let mut track: Element = vstack()
-                .w(PROGRESS_TRACK_CROSS)
-                .h("100%")
-                .rounded_full()
-                .overflow("hidden")
-                .items_center()
-                .justify("end")
-                .into();
-            track = track.bg(track_bg);
-            let mut fill: Element = r#box()
-                .w("100%")
-                .h(format!("{pct}%"))
-                .rounded_full()
-                .flex_shrink(0.0)
-                .into();
-            fill = fill.bg(tokens::primary());
-            track.child(fill)
-        } else {
-            // cn-progress-track: relative flex w-full items-center overflow-x-hidden; h-2 rounded-full
-            let mut track: Element = hstack()
-                .w("100%")
-                .h(PROGRESS_TRACK_CROSS)
-                .rounded_full()
-                .overflow("hidden")
-                .items_center()
-                .into();
-            track = track.bg(track_bg);
-            let mut fill: Element = r#box()
-                .h("100%")
-                .w(format!("{pct}%"))
-                .rounded_full()
-                .flex_shrink(0.0)
-                .into();
-            fill = fill.bg(tokens::primary());
-            track.child(fill)
-        };
-        track.set_attr("rui_progress", format!("{pct:.1}%"));
-        track.set_attr(ATTR_ORIENTATION, orientation.as_str());
-        track = track.accesskit_role("progressbar");
-        if let Some(ref c) = class {
-            track = with_class_list(track, c);
-        }
-        track.template_id = Some(format!("{instance}__track"));
-        track.set_attr(ATTR_SLOT, SLOT_TRACK);
+    let pct0 = (val.peek().clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+    let mut track_bg = tokens::primary();
+    track_bg[3] *= 0.2;
+    let vertical = orientation.is_vertical();
+    let mut track = if vertical {
+        let mut track: Element = vstack()
+            .w(PROGRESS_TRACK_CROSS)
+            .h("100%")
+            .rounded_full()
+            .overflow("hidden")
+            .items_center()
+            .justify("end")
+            .into();
+        track = track.bg(track_bg);
         track
-    });
-    el.set_attr(ATTR_SLOT, SLOT_TRACK);
-    el
+    } else {
+        let mut track: Element = hstack()
+            .w("100%")
+            .h(PROGRESS_TRACK_CROSS)
+            .rounded_full()
+            .overflow("hidden")
+            .items_center()
+            .into();
+        track = track.bg(track_bg);
+        track
+    };
+    let mut fill: Element = if vertical {
+        r#box()
+            .w("100%")
+            .h(format!("{pct0}%"))
+            .rounded_full()
+            .flex_shrink(0.0)
+            .into()
+    } else {
+        r#box()
+            .h("100%")
+            .w(format!("{pct0}%"))
+            .rounded_full()
+            .flex_shrink(0.0)
+            .into()
+    };
+    fill = fill.bg(tokens::primary());
+    fill.template_id = Some(format!("{instance}__fill"));
+    let axis = if vertical { "h" } else { "w" };
+    fill = bind_prop(
+        fill,
+        format!("{instance}__fill_dim"),
+        move || {
+            let pct = (val.get().clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+            format!("{pct}%")
+        },
+        move |el, pct: String| apply_bound_size(el, axis, pct),
+    );
+    track = track.child(fill);
+    track.set_attr("rui_progress", format!("{pct0:.1}%"));
+    track.set_attr(ATTR_ORIENTATION, orientation.as_str());
+    track = track.accesskit_role("progressbar");
+    if let Some(ref c) = class {
+        track = with_class_list(track, c);
+    }
+    track.template_id = Some(format!("{instance}__track"));
+    track.set_attr(ATTR_SLOT, SLOT_TRACK);
+    bind_prop(
+        track,
+        format!("{instance}__progress_attr"),
+        move || {
+            let pct = (val.get().clamp(0.0, 1.0) * 100.0).clamp(0.0, 100.0);
+            format!("{pct:.1}%")
+        },
+        |el, s: String| {
+            if el.attrs.get("rui_progress").map(String::as_str) == Some(s.as_str()) {
+                LayoutStatus::Clean
+            } else {
+                el.set_attr("rui_progress", s);
+                LayoutStatus::StyleChanged
+            }
+        },
+    )
 }
 
 /// RSX `<ProgressTrack class=… />`（需在 Progress 内；通常由 Root 自动注入）。
@@ -1057,6 +1081,101 @@ mod tests {
             find_track(&el),
             "injected track must carry data-slot=progress-track"
         );
+    }
+
+    fn fill_size_pct(el: &Element) -> Option<f32> {
+        if el
+            .template_id
+            .as_deref()
+            .is_some_and(|t| t.ends_with("__fill"))
+        {
+            match crate::core::tree::dim_kind(el.style.size.width) {
+                crate::core::tree::DimKind::Percent(p) if p > 0.0 => return Some(p),
+                _ => {}
+            }
+            match crate::core::tree::dim_kind(el.style.size.height) {
+                crate::core::tree::DimKind::Percent(p) if p > 0.0 => return Some(p),
+                _ => {}
+            }
+        }
+        el.children.iter().find_map(fill_size_pct)
+    }
+
+    fn has_track_view_island(el: &Element) -> bool {
+        el.template_id
+            .as_deref()
+            .is_some_and(|t| t.contains("__progress_track_view"))
+            || el.children.iter().any(has_track_view_island)
+    }
+
+    fn progress_attr(el: &Element) -> Option<String> {
+        if let Some(v) = el.attrs.get("rui_progress") {
+            return Some(v.clone());
+        }
+        el.children.iter().find_map(progress_attr)
+    }
+
+    #[test]
+    fn progress_track_value_set_patches_fill_without_island() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, take_flushed_effects};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let tree: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&tree));
+        let tree_for_assert = Rc::clone(&tree);
+        let (_owner, v) = create_root(|| {
+            let v = use_signal("pt-fill-val", || 0.25f32);
+            let tree = Rc::clone(&tree);
+            create_effect({
+                let v = v;
+                move || {
+                    let el: Element = progress().id("pt-fill").value_signal(v).into();
+                    tree.borrow_mut().children = vec![el];
+                }
+            });
+            v
+        });
+
+        assert!(
+            !has_track_view_island(&tree_for_assert.borrow()),
+            "linear track must not mount a reactive_view placeholder"
+        );
+        let before = fill_size_pct(&tree_for_assert.borrow()).expect("fill");
+        assert!((before - 0.25).abs() < 1e-4, "initial fill {before}");
+        assert_eq!(
+            progress_attr(&tree_for_assert.borrow()).as_deref(),
+            Some("25.0%")
+        );
+
+        let _ = take_flushed_effects();
+        v.set(0.8);
+        let flushed = take_flushed_effects();
+        assert!(
+            flushed
+                .iter()
+                .any(|(_, phase)| *phase == crate::core::reactivity::EffectPhase::Render),
+            "value.set must run fill bind Render effects, got {flushed:?}"
+        );
+        assert!(
+            !has_track_view_island(&tree_for_assert.borrow()),
+            "value.set must not grow a track island"
+        );
+        let after = fill_size_pct(&tree_for_assert.borrow()).expect("fill after set");
+        assert!(
+            (after - 0.8).abs() < 1e-4,
+            "fill must patch in place, got {after}"
+        );
+        assert_eq!(
+            progress_attr(&tree_for_assert.borrow()).as_deref(),
+            Some("80.0%")
+        );
+        clear_test_reconcile_root();
+        reset_registered_anchors();
     }
 
     #[test]

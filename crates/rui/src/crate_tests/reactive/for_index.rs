@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::app::reactive::{
-    bind_text, for_keyed_reactive, index_reactive, keyed_list_item_owner_count,
-    registered_anchor_count, reset_registered_anchors,
+    bind_text, for_keyed_reactive, for_reactive, index_reactive, keyed_list_item_owner_count,
+    registered_anchor_count, reset_registered_anchors, reset_unkeyed_for_rebuild_count,
+    unkeyed_for_rebuild_count,
 };
 use crate::core::reactivity::{create_effect, dispose_effect, use_signal, Signal};
 use crate::core::tree::Element;
@@ -210,6 +211,78 @@ fn index_same_slot_value_change_only_reruns_bind() {
         before_row1,
         "row 1 bind should stay"
     );
+
+    reset_registered_anchors();
+    dispose_effect(root);
+    drop(mounted.borrow_mut().take());
+}
+
+#[test]
+fn unkeyed_tracked_for_increments_rebuild_count() {
+    reset_registered_anchors();
+    reset_unkeyed_for_rebuild_count();
+
+    let items = use_signal("wp_n4_unkeyed_items", || vec![1_i32, 2]);
+    items.set_silent(items.peek());
+
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let mounted_a = Rc::clone(&mounted);
+    let root = create_effect(move || {
+        let view = for_reactive("wp_n4:unkeyed", move || {
+            items
+                .get()
+                .into_iter()
+                .map(|n| Element::new().text(n.to_string()))
+                .collect()
+        });
+        *mounted_a.borrow_mut() = Some(view);
+    });
+
+    let after_mount = unkeyed_for_rebuild_count();
+    assert!(
+        after_mount >= 1,
+        "unkeyed For must rebuild the whole list on mount"
+    );
+
+    items.set(vec![1, 2, 3]);
+    assert!(
+        unkeyed_for_rebuild_count() > after_mount,
+        "list change must rebuild the unkeyed table"
+    );
+
+    reset_registered_anchors();
+    dispose_effect(root);
+    drop(mounted.borrow_mut().take());
+}
+
+#[test]
+fn keyed_for_does_not_increment_unkeyed_rebuild_count() {
+    reset_registered_anchors();
+    reset_unkeyed_for_rebuild_count();
+
+    let items = use_signal("wp_n4_keyed_items", || vec![1_i32, 2, 3]);
+    items.set_silent(items.peek());
+
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let mounted_a = Rc::clone(&mounted);
+    let root = create_effect(move || {
+        let view = for_keyed_reactive(
+            "wp_n4:keyed",
+            move || items.get(),
+            |n| *n,
+            |n| Element::new().text(n.to_string()),
+        );
+        *mounted_a.borrow_mut() = Some(view);
+    });
+
+    assert_eq!(
+        unkeyed_for_rebuild_count(),
+        0,
+        "keyed For must not take the whole-list warn path"
+    );
+
+    items.set(vec![3, 1, 2]);
+    assert_eq!(unkeyed_for_rebuild_count(), 0);
 
     reset_registered_anchors();
     dispose_effect(root);

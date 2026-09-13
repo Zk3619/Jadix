@@ -1,15 +1,21 @@
 //! WP-3.14：`#[component]` / [`component_root`] 实例 Owner；`untrack` vs `isolate_reads` 锚点契约。
+//! Wave 4 (N.3)：默认 `#[component]` 体走 [`component_isolated_body`]。
 #![allow(non_snake_case)]
 
-use crate::app::reactive::{reactive_anchor, registered_anchor_count};
+use crate::app::reactive::{
+    bind_text, reactive_anchor, registered_anchor_count, reset_registered_anchors,
+};
 use crate::core::reactivity::{
-    component_root, create_context, create_effect, create_root, create_signal, isolate_reads,
-    provide_context, untrack, use_context, Context, Signal,
+    component_root, create_context, create_effect, create_root, create_signal, dispose_effect,
+    isolate_reads, isolated_discarded_read_count, provide_context,
+    reset_isolated_discarded_read_count, take_flushed_effects, untrack, use_context, Context,
+    Signal,
 };
 use crate::core::tree::Element;
 use rui_macros::component;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 fn probe_ctx() -> Context<String> {
@@ -116,4 +122,162 @@ fn untrack_skips_anchor_but_isolate_reads_registers() {
             "isolate_reads 必须仍能注册 reactive_anchor"
         );
     });
+}
+
+thread_local! {
+    static LEAK_BODY: Cell<u32> = const { Cell::new(0) };
+    static BIND_BODY: Cell<u32> = const { Cell::new(0) };
+    static BIND_LEAF: Cell<u32> = const { Cell::new(0) };
+}
+
+#[component(crate_path = "crate")]
+fn LeakLabel(n: Signal<i32>) -> Element {
+    LEAK_BODY.with(|c| c.set(c.get() + 1));
+    Element::new().text(format!("{}", n.get()))
+}
+
+#[component(crate_path = "crate")]
+fn BoundLabel(n: Signal<i32>) -> Element {
+    BIND_BODY.with(|c| c.set(c.get() + 1));
+    bind_text("n3_bound_label", move || {
+        BIND_LEAF.with(|c| c.set(c.get() + 1));
+        n.get().to_string()
+    })
+}
+
+#[component(crate_path = "crate")]
+fn PeekLabel(n: Signal<i32>) -> Element {
+    Element::new().text(format!("{}", n.peek()))
+}
+
+/// Wave 4：默认 `#[component]` 体内裸 `get()` 丢边，不订父 effect；文本卡住。
+#[test]
+fn default_component_bare_get_does_not_rerun_body() {
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
+    LEAK_BODY.with(|c| c.set(0));
+    let n = create_signal(1_i32);
+    let kept = Rc::new(RefCell::new(None::<Element>));
+    let kept_e = Rc::clone(&kept);
+
+    let root = create_effect(move || {
+        let el = LeakLabel(LeakLabelProps {
+            n: Some(n),
+            children: None,
+            base: None,
+        });
+        *kept_e.borrow_mut() = Some(el);
+    });
+
+    assert_eq!(LEAK_BODY.with(|c| c.get()), 1, "body runs once at mount");
+    assert!(
+        isolated_discarded_read_count() >= 1,
+        "bare get inside default #[component] must count as a discarded read (G.2)"
+    );
+    assert_eq!(
+        kept.borrow()
+            .as_ref()
+            .and_then(|e| e.text.clone())
+            .as_deref(),
+        Some("1")
+    );
+
+    let _ = take_flushed_effects();
+    n.set(2);
+    assert_eq!(
+        LEAK_BODY.with(|c| c.get()),
+        1,
+        "leaf set must not re-run default #[component] body"
+    );
+    assert!(
+        take_flushed_effects().is_empty(),
+        "discarded edge must not re-run the parent effect"
+    );
+    assert_eq!(
+        kept.borrow()
+            .as_ref()
+            .and_then(|e| e.text.clone())
+            .as_deref(),
+        Some("1"),
+        "UI stays stuck — that is the leaked-bind failure mode"
+    );
+
+    drop(kept.borrow_mut().take());
+    dispose_effect(root);
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
+}
+
+/// Wave 4：`bind_text` 仍订自己的 Render effect；组件体不因叶子 `set` 重跑。
+#[test]
+fn default_component_bind_text_updates_without_body_rerun() {
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
+    BIND_BODY.with(|c| c.set(0));
+    BIND_LEAF.with(|c| c.set(0));
+    let n = create_signal(1_i32);
+    let kept = Rc::new(RefCell::new(None::<Element>));
+    let kept_e = Rc::clone(&kept);
+
+    let root = create_effect(move || {
+        let el = BoundLabel(BoundLabelProps {
+            n: Some(n),
+            children: None,
+            base: None,
+        });
+        *kept_e.borrow_mut() = Some(el);
+    });
+
+    assert_eq!(BIND_BODY.with(|c| c.get()), 1, "body runs once at mount");
+    assert_eq!(
+        isolated_discarded_read_count(),
+        0,
+        "lowered bind_text must subscribe its own Render effect, not the isolate frame"
+    );
+    let after_mount = BIND_LEAF.with(|c| c.get());
+    assert!(after_mount >= 1, "bind_text compute runs at mount");
+
+    let _ = take_flushed_effects();
+    n.set(2);
+    assert_eq!(
+        BIND_BODY.with(|c| c.get()),
+        1,
+        "leaf set must not re-run default #[component] body"
+    );
+    assert!(
+        BIND_LEAF.with(|c| c.get()) > after_mount,
+        "bind_text leaf must still re-run on set"
+    );
+    assert!(
+        take_flushed_effects()
+            .iter()
+            .any(|(_, phase)| *phase == crate::core::reactivity::EffectPhase::Render),
+        "leaf set must flush the bind Render effect"
+    );
+
+    drop(kept.borrow_mut().take());
+    dispose_effect(root);
+    reset_registered_anchors();
+    reset_isolated_discarded_read_count();
+}
+
+/// Wave 4：`peek` 不丢边、不报警。
+#[test]
+fn default_component_peek_does_not_count_as_discarded() {
+    reset_isolated_discarded_read_count();
+    let n = create_signal(1_i32);
+    let root = create_effect(move || {
+        let _ = PeekLabel(PeekLabelProps {
+            n: Some(n),
+            children: None,
+            base: None,
+        });
+    });
+    assert_eq!(
+        isolated_discarded_read_count(),
+        0,
+        "peek must not warn / count as a discarded read"
+    );
+    dispose_effect(root);
+    reset_isolated_discarded_read_count();
 }

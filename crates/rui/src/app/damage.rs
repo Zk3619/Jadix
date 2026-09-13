@@ -10,12 +10,21 @@
 //! - A **single** node covering the viewport (modal underlay) FullClears. The union
 //!   of many local nodes must not.
 //! - Scroll invalidates the **viewport layer** (scissor Clear), not paint nodes.
+//!   A valid retain may **strip-blit** the overlap and Clear only the newly
+//!   exposed band(s) plus pin holes (sticky / overlay / named paint / nested
+//!   inner viewports). Nested containment blits the outer and pins the inner.
+//!   Overlapping siblings blit both and pin the intersection occupancy (copy
+//!   smear). `force_full_redraw`, invalid retain, `|delta| ≥ viewport`, and
+//!   `RUI_SCROLL_STRIP_BLIT=0` stay abort / layer-Clear gates. Spawn without
+//!   prev metrics does not abort sibling blits (no box to pin).
 //! - Page structure / page layout stay FullClear.
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use crate::core::tree::{Element, LayoutStatus};
 
@@ -176,6 +185,7 @@ pub enum FrameClearPolicy {
 
 static PARTIAL_LOAD_FRAMES: AtomicU64 = AtomicU64::new(0);
 static FULL_CLEAR_FRAMES: AtomicU64 = AtomicU64::new(0);
+static SCROLL_STRIP_BLIT_FRAMES: AtomicU64 = AtomicU64::new(0);
 static SUPPRESS_NOTES: AtomicU32 = AtomicU32::new(0);
 static ARM_SNAPSHOT: AtomicBool = AtomicBool::new(false);
 static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
@@ -200,6 +210,28 @@ pub fn partial_load_frame_count() -> u64 {
 
 pub fn full_clear_frame_count() -> u64 {
     FULL_CLEAR_FRAMES.load(Ordering::Relaxed)
+}
+
+/// Frames that applied a content strip blit (overlap copy + exposed-band Clear).
+pub fn scroll_strip_blit_count() -> u64 {
+    SCROLL_STRIP_BLIT_FRAMES.load(Ordering::Relaxed)
+}
+
+/// Default **on**. `RUI_SCROLL_STRIP_BLIT=0` / `false` / `off` keeps a full viewport-layer Clear.
+pub fn scroll_strip_blit_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("RUI_SCROLL_STRIP_BLIT") {
+        Ok(v) => {
+            let v = v.trim();
+            !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
+        }
+        Err(_) => true,
+    })
+}
+
+/// Record a committed strip blit (overlap copied; only the exposed band is cleared).
+pub fn note_scroll_strip_blit() {
+    SCROLL_STRIP_BLIT_FRAMES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Skip the next `frames` [`note_frame_clear_policy`] increments (stats-label paint).
@@ -243,6 +275,7 @@ fn stash_policy_snapshot() {
 pub fn reset_frame_policy_counters() {
     PARTIAL_LOAD_FRAMES.store(0, Ordering::Relaxed);
     FULL_CLEAR_FRAMES.store(0, Ordering::Relaxed);
+    SCROLL_STRIP_BLIT_FRAMES.store(0, Ordering::Relaxed);
     SUPPRESS_NOTES.store(0, Ordering::Relaxed);
     ARM_SNAPSHOT.store(false, Ordering::Relaxed);
     SNAPSHOT_READY.store(false, Ordering::Relaxed);
@@ -417,6 +450,15 @@ pub fn paint_dirty_matches_present_slot(
     if has_keyed_slot && slot_key != dirty_key {
         return false;
     }
+    if !has_keyed_slot && slot_key != dirty_key {
+        // same_box fallback must not dest-reset a larger ancestor (shimmer-box
+        // dirty matching the card / scroll viewport after a NodeId recycle).
+        let dirty_area = dirty_bounds[2] * dirty_bounds[3];
+        let slot_area = slot_bounds[2] * slot_bounds[3];
+        if slot_area > dirty_area * 2.0 + 1.0 {
+            return false;
+        }
+    }
     paint_dirty_matches_slot(dirty_key, dirty_bounds, slot_key, slot_bounds)
 }
 
@@ -424,17 +466,27 @@ pub fn paint_dirty_matches_present_slot(
 /// already being presented (Kbd Search Input inside InputAdornment). Skip the
 /// inner wipe; the ancestor slot redraws the fill, then the inner slot paints
 /// caret chrome on top.
+///
+/// Nesting is **center-in-larger**, not AABB intersect. Stacked Inputs pad their
+/// dirty boxes by ring+8px; those pads overlap across `gap-2`. Intersect+area
+/// treated the newly focused sibling as an ancestor, skipped the leave field's
+/// dest-reset, and src-over'd another Hard ring onto retain (color stacking).
 #[inline]
 pub fn paint_dirty_nested_in_larger_node(dirty: &PaintDirty, nodes: &[PaintDirty]) -> bool {
     if dirty.kind != PaintDirtyKind::Node {
         return false;
     }
     let area = dirty.bounds[2] * dirty.bounds[3];
+    let cx = dirty.bounds[0] + dirty.bounds[2] * 0.5;
+    let cy = dirty.bounds[1] + dirty.bounds[3] * 0.5;
     nodes.iter().any(|o| {
         o.kind == PaintDirtyKind::Node
             && o.key != dirty.key
-            && intersect_rects(o.bounds, dirty.bounds).is_some()
             && o.bounds[2] * o.bounds[3] > area + 1.0
+            && cx >= o.bounds[0]
+            && cy >= o.bounds[1]
+            && cx < o.bounds[0] + o.bounds[2]
+            && cy < o.bounds[1] + o.bounds[3]
     })
 }
 
@@ -755,6 +807,425 @@ pub fn damage_to_scissor_physical(
     Some((x0, y0, x1 - x0, y1 - y0))
 }
 
+/// Logical plan: copy the still-visible overlap, Clear+redraw only the newly exposed band(s).
+///
+/// `delta` is `new_scroll − old_scroll`. Positive `dy` means the user scrolled down
+/// (content moves up on screen). Near-zero on both axes or `|delta| ≥ viewport`
+/// → `None` (caller keeps a full viewport-layer Clear). Dual-axis is an L of two
+/// disjoint strips — never Clear their AABB union (that would wipe the copy).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollStripBlit {
+    pub viewport: [f32; 4],
+    pub delta: [f32; 2],
+    pub src: [f32; 4],
+    pub dst_origin: [f32; 2],
+    /// Newly exposed primary band `[x,y,w,h]` (logical px). Single-axis: the only strip.
+    /// Dual-axis: full-width `|dy|` band (corner lives here).
+    pub exposed: [f32; 4],
+    /// Dual-axis vertical `|dx| × overlap_h` band. Disjoint from [`Self::exposed`].
+    pub exposed_second: Option<[f32; 4]>,
+}
+
+impl ScrollStripBlit {
+    pub fn exposed_strips(self) -> impl Iterator<Item = [f32; 4]> {
+        std::iter::once(self.exposed).chain(self.exposed_second)
+    }
+
+    /// AABB of the L. Present must **not** Clear this — only each strip.
+    pub fn exposed_union(self) -> [f32; 4] {
+        match self.exposed_second {
+            Some(b) => union_rects(self.exposed, b),
+            None => self.exposed,
+        }
+    }
+}
+
+/// Integer-pixel copy of [`ScrollStripBlit::src`] → [`ScrollStripBlit::dst_origin`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollStripCopyPhysical {
+    pub src_x: u32,
+    pub src_y: u32,
+    pub dst_x: u32,
+    pub dst_y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+const STRIP_NEAR_ZERO: f32 = 0.5;
+
+/// One planned strip blit, tagged with the scroll viewport id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollStripBlitJob {
+    pub viewport_id: String,
+    pub plan: ScrollStripBlit,
+}
+
+/// Conservative present gates in front of [`plan_scroll_strip_blit`].
+///
+/// Overlay / named paint are **pin holes**, not abort gates (fields kept so
+/// callers still report them). Overlapping siblings blit both and pin occupancy
+/// ([`overlapping_sibling_occupancy_pins`]). `false` → keep today's full
+/// viewport-layer Clear. Does **not** sign whole B8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollStripBlitPolicy {
+    pub enabled: bool,
+    pub gpu_partial: bool,
+    pub retain_valid: bool,
+    pub force_full_redraw: bool,
+    /// Named (non-scroll) paint dirty set is non-empty — pin, do not abort.
+    pub named_paint_dirty: bool,
+    /// Overlay occupancy / leftover — pin when it intersects a blit viewport.
+    pub overlay: bool,
+}
+
+impl ScrollStripBlitPolicy {
+    pub fn allows(self) -> bool {
+        self.enabled && self.gpu_partial && self.retain_valid && !self.force_full_redraw
+    }
+}
+
+/// All viewports whose offset bits changed. Spawn / despawn do **not** abort
+/// moved ids (those jobs blit; despawned bounds are pinned by the caller).
+///
+/// Empty moved set → `None` (spawn-only / idle).
+pub fn changed_viewport_scroll_deltas(
+    prev: &HashMap<String, [u32; 2]>,
+    cur: &HashMap<String, [u32; 2]>,
+) -> Option<Vec<(String, [f32; 2])>> {
+    let mut out = Vec::new();
+    for (id, off) in cur {
+        let Some(old) = prev.get(id) else {
+            continue;
+        };
+        if old == off {
+            continue;
+        }
+        let dx = f32::from_bits(off[0]) - f32::from_bits(old[0]);
+        let dy = f32::from_bits(off[1]) - f32::from_bits(old[1]);
+        out.push((id.clone(), [dx, dy]));
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Viewport ids present last frame and gone this frame (pin last clip bounds).
+pub fn despawned_viewport_ids(
+    prev: &HashMap<String, [u32; 2]>,
+    cur: &HashMap<String, [u32; 2]>,
+) -> Vec<String> {
+    prev.keys()
+        .filter(|id| !cur.contains_key(*id))
+        .cloned()
+        .collect()
+}
+
+/// Exactly one viewport changed its offset bits.
+///
+/// Two viewports moving, or an empty moved set (idle / spawn-only) → `None`.
+pub fn single_viewport_scroll_delta(
+    prev: &HashMap<String, [u32; 2]>,
+    cur: &HashMap<String, [u32; 2]>,
+) -> Option<(String, [f32; 2])> {
+    let mut v = changed_viewport_scroll_deltas(prev, cur)?;
+    if v.len() == 1 {
+        Some(v.pop().unwrap())
+    } else {
+        None
+    }
+}
+
+/// Nested scrollers cannot blit independently (outer copy smears inner pixels).
+///
+/// - **Containment** (inner inside outer): blit the outer, drop the inner so the
+///   caller can pin-Clear the inner viewport.
+/// - **Overlap without containment** (siblings): keep both; caller pins
+///   [`overlapping_sibling_occupancy_pins`].
+/// - **Disjoint**: keep both.
+pub fn partition_disjoint_blit_jobs(
+    jobs: Vec<ScrollStripBlitJob>,
+) -> (Vec<ScrollStripBlitJob>, Vec<ScrollStripBlitJob>) {
+    let n = jobs.len();
+    if n <= 1 {
+        return (jobs, Vec::new());
+    }
+    let mut keep = vec![true; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let a = jobs[i].plan.viewport;
+            let b = jobs[j].plan.viewport;
+            if intersect_rects(a, b).is_none() {
+                continue;
+            }
+            let a_has_b = rect_contains_rect(a, b);
+            let b_has_a = rect_contains_rect(b, a);
+            if a_has_b && !b_has_a {
+                keep[j] = false;
+            } else if b_has_a && !a_has_b {
+                keep[i] = false;
+            } else if a_has_b && b_has_a {
+                keep[i] = false;
+                keep[j] = false;
+            }
+        }
+    }
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for (job, k) in jobs.into_iter().zip(keep) {
+        if k {
+            kept.push(job);
+        } else {
+            dropped.push(job);
+        }
+    }
+    (kept, dropped)
+}
+
+#[inline]
+fn translate_rect(r: [f32; 4], delta: [f32; 2]) -> [f32; 4] {
+    [r[0] + delta[0], r[1] + delta[1], r[2], r[3]]
+}
+
+/// Intersection occupancy after both copies. Nested containment → `None`
+/// (inner is a full-viewport pin, not this hole).
+pub fn overlapping_sibling_occupancy_pin(
+    a_viewport: [f32; 4],
+    a_delta: [f32; 2],
+    b_viewport: [f32; 4],
+    b_delta: [f32; 2],
+) -> Option<[f32; 4]> {
+    let inter = intersect_rects(a_viewport, b_viewport)?;
+    if rect_contains_rect(a_viewport, b_viewport) || rect_contains_rect(b_viewport, a_viewport) {
+        return None;
+    }
+    let hole = union_rects(
+        inter,
+        union_rects(
+            translate_rect(inter, a_delta),
+            translate_rect(inter, b_delta),
+        ),
+    );
+    intersect_rects(hole, union_rects(a_viewport, b_viewport))
+}
+
+/// Pairwise occupancy pins for kept blit jobs that overlap without containment.
+pub fn overlapping_sibling_occupancy_pins(jobs: &[ScrollStripBlitJob]) -> Vec<[f32; 4]> {
+    let mut pins = Vec::new();
+    for i in 0..jobs.len() {
+        for j in (i + 1)..jobs.len() {
+            if let Some(pin) = overlapping_sibling_occupancy_pin(
+                jobs[i].plan.viewport,
+                jobs[i].plan.delta,
+                jobs[j].plan.viewport,
+                jobs[j].plan.delta,
+            ) {
+                push_scroll_blit_pin(&mut pins, pin);
+            }
+        }
+    }
+    pins
+}
+
+/// Overlay leftover / current paint must pin when it shares pixels with a blit.
+pub fn overlay_needs_scroll_blit_pin(overlay: [f32; 4], viewports: &[[f32; 4]]) -> bool {
+    if overlay[2] <= 0.0 || overlay[3] <= 0.0 {
+        return false;
+    }
+    viewports
+        .iter()
+        .any(|v| intersect_rects(*v, overlay).is_some())
+}
+
+/// Sticky descendants of `root` with a non-empty layout box.
+pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
+    let mut out = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        if el.style.position_sticky {
+            let b = el.layout_bounds;
+            if b[2] > 0.0 && b[3] > 0.0 {
+                out.push(b);
+            }
+        }
+    });
+    out
+}
+
+fn push_scroll_blit_pin(pins: &mut Vec<[f32; 4]>, r: [f32; 4]) {
+    if r[2] <= 0.0 || r[3] <= 0.0 {
+        return;
+    }
+    if pins.iter().any(|p| {
+        (p[0] - r[0]).abs() < 0.01
+            && (p[1] - r[1]).abs() < 0.01
+            && (p[2] - r[2]).abs() < 0.01
+            && (p[3] - r[3]).abs() < 0.01
+    }) {
+        return;
+    }
+    pins.push(r);
+}
+
+/// Extra Clear+redraw holes on top of exposed strips. Never unioned into one AABB.
+pub fn merge_scroll_blit_pins(
+    overlay: Option<[f32; 4]>,
+    overlay_boxes: &[[f32; 4]],
+    overlay_restore: bool,
+    named: &[[f32; 4]],
+    sticky: &[[f32; 4]],
+    nested_layer_clear: &[[f32; 4]],
+    blit_viewports: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    let mut pins = Vec::new();
+    if overlay_restore {
+        if let Some(o) = overlay {
+            push_scroll_blit_pin(&mut pins, o);
+        }
+        for b in overlay_boxes {
+            push_scroll_blit_pin(&mut pins, *b);
+        }
+    } else if let Some(o) = overlay {
+        if overlay_needs_scroll_blit_pin(o, blit_viewports) {
+            push_scroll_blit_pin(&mut pins, o);
+            for b in overlay_boxes {
+                push_scroll_blit_pin(&mut pins, *b);
+            }
+        }
+    }
+    for n in named {
+        push_scroll_blit_pin(&mut pins, *n);
+    }
+    for s in sticky {
+        push_scroll_blit_pin(&mut pins, *s);
+    }
+    for v in nested_layer_clear {
+        push_scroll_blit_pin(&mut pins, *v);
+    }
+    pins
+}
+
+/// Axis-aligned strip copy of a rotated viewport smears. Abort that viewport
+/// to layer Clear; do **not** blit the rotated AABB as strips. Walls in
+/// [`plan_scroll_strip_blit`] stay walls.
+pub fn scroll_strip_blit_viewport_axis_aligned(el: &Element) -> bool {
+    if el.style.rotate_deg.abs() > 1e-4 {
+        return false;
+    }
+    if !crate::style::mat2d_is_axis_aligned(&el.paint_ancestor_linear) {
+        return false;
+    }
+    let w = el.layout_bounds[2].max(1.0);
+    let h = el.layout_bounds[3].max(1.0);
+    let offset = crate::style::offset_path::sample(&el.style, [w, h]);
+    let local = crate::style::rotate_and_list_mat2d(
+        el.style.rotate_deg + offset.rotate_deg,
+        el.style.transform.as_ref(),
+        w,
+        h,
+    );
+    crate::style::mat2d_is_axis_aligned(&crate::style::mat2d_linear(&local))
+}
+
+/// Pure geometry. No GPU. One or two axes; `|delta| ≥ viewport` or both near-zero → `None`.
+pub fn plan_scroll_strip_blit(viewport: [f32; 4], delta: [f32; 2]) -> Option<ScrollStripBlit> {
+    let [vx, vy, vw, vh] = viewport;
+    if vw <= 0.0 || vh <= 0.0 {
+        return None;
+    }
+    let dx = if delta[0].abs() >= STRIP_NEAR_ZERO {
+        delta[0]
+    } else {
+        0.0
+    };
+    let dy = if delta[1].abs() >= STRIP_NEAR_ZERO {
+        delta[1]
+    } else {
+        0.0
+    };
+    let ax = dx.abs();
+    let ay = dy.abs();
+    if ax < STRIP_NEAR_ZERO && ay < STRIP_NEAR_ZERO {
+        return None;
+    }
+    if ax + 1e-3 >= vw || ay + 1e-3 >= vh {
+        return None;
+    }
+    let overlap_w = vw - ax;
+    let overlap_h = vh - ay;
+    let src = [vx + dx.max(0.0), vy + dy.max(0.0), overlap_w, overlap_h];
+    let dst_origin = [vx + (-dx).max(0.0), vy + (-dy).max(0.0)];
+    let exp_h = if ay >= STRIP_NEAR_ZERO {
+        let y = if dy > 0.0 { vy + vh - ay } else { vy };
+        Some([vx, y, vw, ay])
+    } else {
+        None
+    };
+    let exp_v = if ax >= STRIP_NEAR_ZERO {
+        let x = if dx > 0.0 { vx + vw - ax } else { vx };
+        let y = if dy > 0.0 { vy } else { vy + ay };
+        Some([x, y, ax, overlap_h])
+    } else {
+        None
+    };
+    let (exposed, exposed_second) = match (exp_h, exp_v) {
+        (Some(h), Some(v)) => (h, Some(v)),
+        (Some(h), None) => (h, None),
+        (None, Some(v)) => (v, None),
+        (None, None) => return None,
+    };
+    Some(ScrollStripBlit {
+        viewport,
+        delta,
+        src,
+        dst_origin,
+        exposed,
+        exposed_second,
+    })
+}
+
+/// Integer copy matching [`plan_scroll_strip_blit`]. `None` when the rounded physical
+/// delta is 0 on both axes or the copy would leave the target.
+pub fn scroll_strip_copy_physical(
+    plan: &ScrollStripBlit,
+    scale: f32,
+    target_w: u32,
+    target_h: u32,
+) -> Option<ScrollStripCopyPhysical> {
+    let (x, y, w, h) = damage_to_scissor_physical(plan.viewport, 0.0, scale, target_w, target_h)?;
+    let dpx = (plan.delta[0] * scale.max(0.0)).round() as i32;
+    let dpy = (plan.delta[1] * scale.max(0.0)).round() as i32;
+    if dpx == 0 && dpy == 0 {
+        return None;
+    }
+    let adx = dpx.unsigned_abs();
+    let ady = dpy.unsigned_abs();
+    if adx >= w || ady >= h {
+        return None;
+    }
+    let src_x = if dpx > 0 { x + adx } else { x };
+    let src_y = if dpy > 0 { y + ady } else { y };
+    let dst_x = if dpx < 0 { x + adx } else { x };
+    let dst_y = if dpy < 0 { y + ady } else { y };
+    let width = w - adx;
+    let height = h - ady;
+    if src_x.saturating_add(width) > target_w
+        || src_y.saturating_add(height) > target_h
+        || dst_x.saturating_add(width) > target_w
+        || dst_y.saturating_add(height) > target_h
+    {
+        return None;
+    }
+    Some(ScrollStripCopyPhysical {
+        src_x,
+        src_y,
+        dst_x,
+        dst_y,
+        width,
+        height,
+    })
+}
+
 /// Union `bounds` into `damage_rect` for paint-only updates (same-width `bind_text`, etc.).
 ///
 /// Does **not** set `force_full_redraw` — that would force a full Clear and defeat WP-2.2.
@@ -836,6 +1307,36 @@ mod tests {
         assert!(paint_dirty_nested_in_larger_node(&input, &[shell, input]));
         assert!(!paint_dirty_nested_in_larger_node(&shell, &[shell, input]));
         assert!(!paint_dirty_nested_in_larger_node(&input, &[input]));
+    }
+
+    #[test]
+    fn stacked_input_dirties_must_not_skip_sibling_dest_reset() {
+        // Gallery forms: leave field already unfocused (pad blur+8=9), enter field
+        // focused (pad spread+8=11). Pads overlap across gap-8. Intersect+area
+        // treated the larger enter dirty as an ancestor and skipped the leave wipe.
+        let leave = PaintDirty {
+            key: 1,
+            bounds: [8.0, 8.0, 380.0, 36.0 + 18.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let enter = PaintDirty {
+            key: 2,
+            bounds: [8.0, 8.0 + 36.0 + 8.0 - 11.0, 380.0, 36.0 + 22.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(
+            intersect_rects(leave.bounds, enter.bounds).is_some(),
+            "precondition: padded sibling dirties must overlap (the false nested case)"
+        );
+        assert!(
+            enter.bounds[2] * enter.bounds[3] > leave.bounds[2] * leave.bounds[3] + 1.0,
+            "precondition: focused sibling dirty is larger (unfocus pad vs ring pad)"
+        );
+        assert!(
+            !paint_dirty_nested_in_larger_node(&leave, &[leave, enter]),
+            "leave Input dest-reset must still run when a sibling focus dirty overlaps"
+        );
+        assert!(!paint_dirty_nested_in_larger_node(&enter, &[leave, enter]));
     }
 
     #[test]
@@ -1440,5 +1941,406 @@ mod tests {
         let overlay = [90.0, 190.0, 160.0, 48.0];
         let d = overlay_membership_damage(Some(vp), Some(overlay), vp, true, true);
         assert_eq!(d, Some(vp));
+    }
+
+    #[test]
+    fn scroll_strip_blit_viewport_axis_aligned_rejects_rotate() {
+        let mut el = Element::new();
+        el.layout_bounds = [0.0, 0.0, 200.0, 100.0];
+        assert!(
+            scroll_strip_blit_viewport_axis_aligned(&el),
+            "identity viewport may blit"
+        );
+        el.style.rotate_deg = 45.0;
+        assert!(
+            !scroll_strip_blit_viewport_axis_aligned(&el),
+            "local rotate must abort strip blit"
+        );
+        el.style.rotate_deg = 0.0;
+        el.paint_ancestor_linear = crate::style::mat2d_rotate(45.0_f32.to_radians());
+        assert!(
+            !scroll_strip_blit_viewport_axis_aligned(&el),
+            "ancestor rotate must abort strip blit"
+        );
+        el.paint_ancestor_linear = crate::style::MAT2D_IDENTITY;
+        assert!(
+            scroll_strip_blit_viewport_axis_aligned(&el),
+            "cleared rotate must blit again"
+        );
+        assert!(
+            plan_scroll_strip_blit([0.0, 0.0, 200.0, 100.0], [0.0, 16.0]).is_some(),
+            "axis-aligned plan walls unchanged"
+        );
+        assert!(
+            plan_scroll_strip_blit([0.0, 0.0, 200.0, 100.0], [0.0, 100.0]).is_none(),
+            "|delta|≥viewport stays a wall"
+        );
+    }
+
+    #[test]
+    fn plan_scroll_strip_blit_down_exposes_bottom() {
+        let vp = [10.0, 20.0, 200.0, 100.0];
+        let plan = plan_scroll_strip_blit(vp, [0.0, 24.0]).expect("down");
+        assert_eq!(plan.src, [10.0, 44.0, 200.0, 76.0]);
+        assert_eq!(plan.dst_origin, [10.0, 20.0]);
+        assert_eq!(plan.exposed, [10.0, 96.0, 200.0, 24.0]);
+        assert!(plan.exposed_second.is_none());
+        assert!(plan.exposed[3] < vp[3]);
+    }
+
+    #[test]
+    fn plan_scroll_strip_blit_up_exposes_top() {
+        let vp = [0.0, 0.0, 100.0, 80.0];
+        let plan = plan_scroll_strip_blit(vp, [0.0, -16.0]).expect("up");
+        assert_eq!(plan.src, [0.0, 0.0, 100.0, 64.0]);
+        assert_eq!(plan.dst_origin, [0.0, 16.0]);
+        assert_eq!(plan.exposed, [0.0, 0.0, 100.0, 16.0]);
+        assert!(plan.exposed_second.is_none());
+    }
+
+    #[test]
+    fn plan_scroll_strip_blit_right_exposes_right() {
+        let vp = [0.0, 0.0, 120.0, 40.0];
+        let plan = plan_scroll_strip_blit(vp, [30.0, 0.0]).expect("right");
+        assert_eq!(plan.src, [30.0, 0.0, 90.0, 40.0]);
+        assert_eq!(plan.dst_origin, [0.0, 0.0]);
+        assert_eq!(plan.exposed, [90.0, 0.0, 30.0, 40.0]);
+        assert!(plan.exposed_second.is_none());
+    }
+
+    #[test]
+    fn plan_scroll_strip_blit_left_exposes_left() {
+        let vp = [8.0, 4.0, 80.0, 50.0];
+        let plan = plan_scroll_strip_blit(vp, [-20.0, 0.0]).expect("left");
+        assert_eq!(plan.src, [8.0, 4.0, 60.0, 50.0]);
+        assert_eq!(plan.dst_origin, [28.0, 4.0]);
+        assert_eq!(plan.exposed, [8.0, 4.0, 20.0, 50.0]);
+        assert!(plan.exposed_second.is_none());
+    }
+
+    #[test]
+    fn plan_scroll_strip_blit_rejects_diagonal_full_and_tiny() {
+        let vp = [0.0, 0.0, 200.0, 100.0];
+        let diag = plan_scroll_strip_blit(vp, [12.0, 8.0]).expect("dual-axis");
+        assert_eq!(diag.src, [12.0, 8.0, 188.0, 92.0]);
+        assert_eq!(diag.dst_origin, [0.0, 0.0]);
+        assert_eq!(diag.exposed, [0.0, 92.0, 200.0, 8.0]);
+        assert_eq!(diag.exposed_second, Some([188.0, 0.0, 12.0, 92.0]));
+        assert_eq!(diag.exposed_union()[2], 200.0);
+        assert_eq!(diag.exposed_union()[3], 100.0);
+        assert!(
+            intersect_rects(diag.exposed, diag.exposed_second.unwrap()).is_none(),
+            "L strips must be disjoint (corner lives in the |dy| band only)"
+        );
+        assert!(plan_scroll_strip_blit(vp, [0.0, 100.0]).is_none());
+        assert!(plan_scroll_strip_blit(vp, [0.0, 0.25]).is_none());
+        assert!(plan_scroll_strip_blit(vp, [0.0, 0.0]).is_none());
+        assert!(plan_scroll_strip_blit([0.0, 0.0, 0.0, 10.0], [0.0, 4.0]).is_none());
+    }
+
+    #[test]
+    fn scroll_strip_copy_physical_integer_delta() {
+        let vp = [0.0, 0.0, 200.0, 100.0];
+        let plan = plan_scroll_strip_blit(vp, [0.0, 10.0]).expect("down");
+        let copy = scroll_strip_copy_physical(&plan, 2.0, 400, 200).expect("phys");
+        assert_eq!(copy.src_y, 20);
+        assert_eq!(copy.dst_y, 0);
+        assert_eq!(copy.height, 180);
+        assert_eq!(copy.width, 400);
+        assert!(scroll_strip_copy_physical(&plan, 2.0, 400, 200).is_some());
+        let tiny = plan_scroll_strip_blit(vp, [0.0, 0.6]).expect("logical ok");
+        // 0.6 * 1.0 rounds to 1px; 0.2 * 1.0 rounds to 0 → None
+        assert!(scroll_strip_copy_physical(&tiny, 1.0, 200, 100).is_some());
+        let sub = plan_scroll_strip_blit(vp, [0.0, 0.6]).expect("sub");
+        assert!(scroll_strip_copy_physical(&sub, 0.4, 80, 40).is_none());
+        let diag = plan_scroll_strip_blit(vp, [12.0, 8.0]).expect("dual");
+        let copy = scroll_strip_copy_physical(&diag, 1.0, 200, 100).expect("dual phys");
+        assert_eq!(copy.src_x, 12);
+        assert_eq!(copy.src_y, 8);
+        assert_eq!(copy.dst_x, 0);
+        assert_eq!(copy.dst_y, 0);
+        assert_eq!(copy.width, 188);
+        assert_eq!(copy.height, 92);
+    }
+
+    #[test]
+    fn note_scroll_strip_blit_counts() {
+        reset_frame_policy_counters_for_test();
+        note_scroll_strip_blit();
+        note_scroll_strip_blit();
+        assert_eq!(scroll_strip_blit_count(), 2);
+        reset_frame_policy_counters_for_test();
+        assert_eq!(scroll_strip_blit_count(), 0);
+    }
+
+    fn bits(v: f32) -> u32 {
+        v.to_bits()
+    }
+
+    fn allow_policy() -> ScrollStripBlitPolicy {
+        ScrollStripBlitPolicy {
+            enabled: true,
+            gpu_partial: true,
+            retain_valid: true,
+            force_full_redraw: false,
+            named_paint_dirty: false,
+            overlay: false,
+        }
+    }
+
+    #[test]
+    fn scroll_strip_blit_policy_rejects_invalid_retain_not_overlay_or_named_paint() {
+        assert!(allow_policy().allows());
+        assert!(
+            ScrollStripBlitPolicy {
+                overlay: true,
+                ..allow_policy()
+            }
+            .allows(),
+            "overlay is a pin hole, not an abort gate"
+        );
+        assert!(
+            ScrollStripBlitPolicy {
+                named_paint_dirty: true,
+                ..allow_policy()
+            }
+            .allows(),
+            "named paint is a pin hole, not an abort gate"
+        );
+        assert!(!ScrollStripBlitPolicy {
+            retain_valid: false,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            force_full_redraw: true,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            gpu_partial: false,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            enabled: false,
+            ..allow_policy()
+        }
+        .allows());
+    }
+
+    #[test]
+    fn single_viewport_scroll_delta_one_axis_ok_two_viewports_or_spawn_none() {
+        let mut prev = HashMap::new();
+        prev.insert("a".into(), [bits(0.0), bits(0.0)]);
+        prev.insert("b".into(), [bits(0.0), bits(8.0)]);
+        let mut cur = prev.clone();
+        cur.insert("a".into(), [bits(0.0), bits(16.0)]);
+        let (id, delta) = single_viewport_scroll_delta(&prev, &cur).expect("one viewport");
+        assert_eq!(id, "a");
+        assert!((delta[1] - 16.0).abs() < 1e-4);
+        assert!(delta[0].abs() < 1e-4);
+
+        cur.insert("b".into(), [bits(0.0), bits(24.0)]);
+        assert!(
+            single_viewport_scroll_delta(&prev, &cur).is_none(),
+            "two viewports moving"
+        );
+
+        let mut spawn = prev.clone();
+        spawn.insert("c".into(), [bits(0.0), bits(0.0)]);
+        assert!(single_viewport_scroll_delta(&prev, &spawn).is_none());
+        assert!(single_viewport_scroll_delta(&prev, &prev).is_none());
+    }
+
+    #[test]
+    fn changed_viewport_scroll_deltas_two_disjoint_ok_spawn_none() {
+        let mut prev = HashMap::new();
+        prev.insert("a".into(), [bits(0.0), bits(0.0)]);
+        prev.insert("b".into(), [bits(0.0), bits(8.0)]);
+        let mut cur = prev.clone();
+        cur.insert("a".into(), [bits(0.0), bits(16.0)]);
+        cur.insert("b".into(), [bits(0.0), bits(24.0)]);
+        let mut deltas = changed_viewport_scroll_deltas(&prev, &cur).expect("both moved");
+        deltas.sort_by(|x, y| x.0.cmp(&y.0));
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].0, "a");
+        assert!((deltas[0].1[1] - 16.0).abs() < 1e-4);
+        assert_eq!(deltas[1].0, "b");
+        assert!((deltas[1].1[1] - 16.0).abs() < 1e-4);
+
+        let mut spawn = prev.clone();
+        spawn.insert("c".into(), [bits(0.0), bits(0.0)]);
+        assert!(changed_viewport_scroll_deltas(&prev, &spawn).is_none());
+        assert!(changed_viewport_scroll_deltas(&prev, &prev).is_none());
+
+        let mut moved_and_spawn = prev.clone();
+        moved_and_spawn.insert("a".into(), [bits(0.0), bits(16.0)]);
+        moved_and_spawn.insert("c".into(), [bits(0.0), bits(0.0)]);
+        let deltas =
+            changed_viewport_scroll_deltas(&prev, &moved_and_spawn).expect("A still moved");
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].0, "a");
+
+        let mut despawn = prev.clone();
+        despawn.remove("b");
+        despawn.insert("a".into(), [bits(0.0), bits(16.0)]);
+        let deltas =
+            changed_viewport_scroll_deltas(&prev, &despawn).expect("A moved under despawn");
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].0, "a");
+        let mut gone = despawned_viewport_ids(&prev, &despawn);
+        gone.sort();
+        assert_eq!(gone, ["b"]);
+    }
+
+    fn blit_job(id: &str, viewport: [f32; 4], dy: f32) -> ScrollStripBlitJob {
+        ScrollStripBlitJob {
+            viewport_id: id.into(),
+            plan: plan_scroll_strip_blit(viewport, [0.0, dy]).expect("plan"),
+        }
+    }
+
+    #[test]
+    fn nested_inner_is_pinned_outer_and_disjoint_still_blit() {
+        let outer = blit_job("outer", [0.0, 0.0, 400.0, 600.0], 16.0);
+        let inner = blit_job("inner", [40.0, 80.0, 320.0, 400.0], 8.0);
+        let side = blit_job("side", [500.0, 0.0, 200.0, 600.0], 12.0);
+        let (kept, dropped) = partition_disjoint_blit_jobs(vec![outer, inner, side]);
+        let mut kept_ids: Vec<_> = kept.iter().map(|j| j.viewport_id.as_str()).collect();
+        kept_ids.sort_unstable();
+        assert_eq!(kept_ids, ["outer", "side"]);
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].viewport_id, "inner");
+        let occ = overlapping_sibling_occupancy_pins(&kept);
+        assert!(
+            occ.is_empty(),
+            "nested/disjoint kept jobs must not emit sibling occupancy, got {occ:?}"
+        );
+    }
+
+    #[test]
+    fn three_level_nesting_keeps_outermost_only() {
+        let outer = blit_job("outer", [0.0, 0.0, 400.0, 600.0], 16.0);
+        let mid = blit_job("mid", [20.0, 40.0, 360.0, 500.0], 8.0);
+        let inner = blit_job("inner", [40.0, 80.0, 320.0, 400.0], 12.0);
+        let (kept, dropped) = partition_disjoint_blit_jobs(vec![outer, mid, inner]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].viewport_id, "outer");
+        let mut dropped_ids: Vec<_> = dropped.iter().map(|j| j.viewport_id.as_str()).collect();
+        dropped_ids.sort_unstable();
+        assert_eq!(dropped_ids, ["inner", "mid"]);
+    }
+
+    #[test]
+    fn overlapping_sibling_viewports_keep_both() {
+        let a = blit_job("a", [0.0, 0.0, 200.0, 200.0], 16.0);
+        let b = blit_job("b", [100.0, 100.0, 200.0, 200.0], 8.0);
+        let (kept, dropped) = partition_disjoint_blit_jobs(vec![a, b]);
+        let mut kept_ids: Vec<_> = kept.iter().map(|j| j.viewport_id.as_str()).collect();
+        kept_ids.sort_unstable();
+        assert_eq!(kept_ids, ["a", "b"]);
+        assert!(dropped.is_empty());
+        assert_eq!(overlapping_sibling_occupancy_pins(&kept).len(), 1);
+    }
+
+    #[test]
+    fn overlapping_sibling_occupancy_covers_intersection_and_smear() {
+        let pin = overlapping_sibling_occupancy_pin(
+            [0.0, 0.0, 200.0, 200.0],
+            [0.0, 16.0],
+            [100.0, 100.0, 200.0, 200.0],
+            [0.0, 8.0],
+        )
+        .expect("overlap");
+        let inter =
+            intersect_rects([0.0, 0.0, 200.0, 200.0], [100.0, 100.0, 200.0, 200.0]).unwrap();
+        assert!(
+            rect_contains_rect(pin, inter),
+            "pin must cover intersection"
+        );
+        assert!(
+            rect_contains_rect(pin, [100.0, 116.0, 100.0, 84.0]),
+            "pin must cover A's dest smear inside A∪B, got {pin:?}"
+        );
+        assert!(overlapping_sibling_occupancy_pin(
+            [0.0, 0.0, 400.0, 600.0],
+            [0.0, 16.0],
+            [40.0, 80.0, 320.0, 400.0],
+            [0.0, 8.0],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn identical_viewports_drop_both() {
+        let a = blit_job("a", [0.0, 0.0, 200.0, 200.0], 16.0);
+        let b = blit_job("b", [0.0, 0.0, 200.0, 200.0], 8.0);
+        let (kept, dropped) = partition_disjoint_blit_jobs(vec![a, b]);
+        assert!(kept.is_empty());
+        assert_eq!(dropped.len(), 2);
+    }
+
+    #[test]
+    fn overlay_disjoint_from_viewport_needs_no_pin() {
+        let scroller = [240.0, 0.0, 560.0, 600.0];
+        assert!(!overlay_needs_scroll_blit_pin(
+            [8.0, 8.0, 48.0, 32.0],
+            &[scroller]
+        ));
+        assert!(overlay_needs_scroll_blit_pin(
+            [300.0, 40.0, 160.0, 80.0],
+            &[scroller]
+        ));
+    }
+
+    #[test]
+    fn merge_scroll_blit_pins_overlay_intersect_named_sticky() {
+        let scroller = [0.0, 0.0, 400.0, 300.0];
+        let overlay = [40.0, 40.0, 80.0, 48.0];
+        let hover = [500.0, 10.0, 32.0, 16.0];
+        let sticky = [0.0, 0.0, 400.0, 28.0];
+        let pins = merge_scroll_blit_pins(
+            Some(overlay),
+            &[],
+            false,
+            &[hover],
+            &[sticky],
+            &[],
+            &[scroller],
+        );
+        assert!(
+            pins.iter().any(|p| (p[2] - 80.0).abs() < 0.1),
+            "intersecting overlay must pin, got {pins:?}"
+        );
+        assert!(pins.iter().any(|p| (p[0] - 500.0).abs() < 0.1));
+        assert!(pins.iter().any(|p| (p[3] - 28.0).abs() < 0.1));
+
+        let disjoint = merge_scroll_blit_pins(
+            Some([500.0, 0.0, 40.0, 40.0]),
+            &[],
+            false,
+            &[],
+            &[],
+            &[],
+            &[scroller],
+        );
+        assert!(
+            disjoint.is_empty(),
+            "disjoint overlay must not pin, got {disjoint:?}"
+        );
+    }
+
+    #[test]
+    fn sticky_layout_bounds_collects_nonzero_boxes() {
+        let mut root = Element::new();
+        let mut sticky = Element::new();
+        sticky.style.position_sticky = true;
+        sticky.layout_bounds = [0.0, 0.0, 200.0, 32.0];
+        let mut other = Element::new();
+        other.layout_bounds = [0.0, 32.0, 200.0, 100.0];
+        root.children.push(sticky);
+        root.children.push(other);
+        assert_eq!(sticky_layout_bounds(&root), vec![[0.0, 0.0, 200.0, 32.0]]);
     }
 }

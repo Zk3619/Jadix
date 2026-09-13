@@ -108,6 +108,26 @@ impl ClipPath {
         matches!(self, Self::None)
     }
 
+    pub fn fill_rule(&self) -> ClipFillRule {
+        match self {
+            Self::Polygon { fill, .. } => *fill,
+            Self::Url(_) => self.resolved().fill_rule(),
+            _ => ClipFillRule::EvenOdd,
+        }
+    }
+
+    /// Tessellate to a world polygon (including `inset()`). Identity transform
+    /// still uses [`Self::to_gpu`] so inset can stay an AABB `clip_pos`.
+    pub fn to_gpu_tessellated(&self, box_xywh: [f32; 4]) -> GpuClipPoly {
+        if matches!(self, Self::Url(_)) {
+            return self.resolved().to_gpu_tessellated(box_xywh);
+        }
+        if self.is_none() {
+            return GpuClipPoly::NONE;
+        }
+        GpuClipPoly::from_world_points(&self.to_world_polygon(box_xywh), self.fill_rule())
+    }
+
     /// Resolve `url(#id)` through the named clip table (depth-capped).
     pub fn resolved(&self) -> ClipPath {
         self.resolved_at(0)
@@ -1144,6 +1164,19 @@ mod tests {
             rounded_rect_contains(box_xywh, r, [8.0, 8.0])
         );
         assert_eq!(std::mem::size_of::<GpuClipPoly>(), 336);
+    }
+
+    #[test]
+    fn inset_tessellates_when_asked() {
+        let clip = parse_clip_path("inset(10px)").unwrap();
+        let poly = clip.to_gpu_tessellated([0.0, 0.0, 100.0, 80.0]);
+        assert!(poly.is_active());
+        assert!(poly.contains_point([50.0, 40.0]));
+        assert!(!poly.contains_point([5.0, 5.0]));
+        assert!(
+            !clip.to_gpu([0.0, 0.0, 100.0, 80.0]).is_active(),
+            "identity inset still uses AABB clip_pos, not a poly"
+        );
     }
 
     #[test]

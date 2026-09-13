@@ -77,11 +77,11 @@ pub(crate) fn record_ime_cursor(snap: ImeCursorSnapshot) {
     LAST_IME_CURSOR.with(|c| *c.borrow_mut() = Some(snap));
 }
 
-/// 本帧已绘制的文本叶视觉盒（`TextLayoutInfo.x/y` 已扣祖先滚动，与 caret 同空间）。
-pub fn painted_text_edit_visual_bounds(
-    text_nodes: &[crate::core::tree::TextLayoutInfo],
+/// 本帧已绘制的文本编辑叶（`x/y` 已扣祖先滚动；`paint_transform` 与 glyphon/Bake 同轴）。
+pub fn painted_text_edit_node<'a>(
+    text_nodes: &'a [crate::core::tree::TextLayoutInfo],
     focus_id: &str,
-) -> Option<[f32; 4]> {
+) -> Option<&'a crate::core::tree::TextLayoutInfo> {
     let rest = text_edit_rest(focus_id)?;
     let tid = crate::utils::text_field::input_text_template_id(rest);
     let mut fallback = None;
@@ -89,13 +89,35 @@ pub fn painted_text_edit_visual_bounds(
         if n.template_id.as_deref() != Some(tid.as_str()) {
             continue;
         }
-        let bounds = [n.x, n.y, n.width, n.height];
         if n.style.input_caret.is_some() {
-            return Some(bounds);
+            return Some(n);
         }
-        fallback = Some(bounds);
+        fallback = Some(n);
     }
     fallback
+}
+
+/// 本帧已绘制的文本叶视觉盒（`TextLayoutInfo.x/y` 已扣祖先滚动，与 caret 同空间）。
+pub fn painted_text_edit_visual_bounds(
+    text_nodes: &[crate::core::tree::TextLayoutInfo],
+    focus_id: &str,
+) -> Option<[f32; 4]> {
+    painted_text_edit_node(text_nodes, focus_id).map(|n| [n.x, n.y, n.width, n.height])
+}
+
+/// Layout-space caret origin → paint space (center-pivot 2×2, same as VS / glyphon).
+pub fn paint_space_ime_origin(
+    layout_xy: [f32; 2],
+    paint_linear: &crate::style::Mat2d,
+    paint_origin: [f32; 2],
+) -> [f32; 2] {
+    if crate::style::mat2d_is_identity(paint_linear) {
+        return layout_xy;
+    }
+    let dx = layout_xy[0] - paint_origin[0];
+    let dy = layout_xy[1] - paint_origin[1];
+    let (rx, ry) = crate::style::mat2d_transform_vec(paint_linear, dx, dy);
+    [paint_origin[0] + rx, paint_origin[1] + ry]
 }
 
 pub fn take_last_ime_commit() -> Option<(String, String)> {
@@ -493,6 +515,25 @@ mod tests {
     fn physical_area_clamps_caret_to_field_width() {
         let (x, _, _, _) = physical_ime_cursor_area([0.0, 0.0, 50.0, 20.0], 999.0, 1.0);
         assert_eq!(x, 50);
+    }
+
+    #[test]
+    fn paint_space_ime_origin_identity_is_layout() {
+        let p = paint_space_ime_origin([24.0, 80.0], &crate::style::MAT2D_IDENTITY, [124.0, 96.0]);
+        assert!((p[0] - 24.0).abs() < 1e-4 && (p[1] - 80.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn paint_space_ime_origin_follows_center_pivot_rotate() {
+        let origin = [50.0, 10.0];
+        let linear =
+            crate::style::mat2d_linear(&crate::style::mat2d_rotate(std::f32::consts::FRAC_PI_2));
+        let p = paint_space_ime_origin([80.0, 10.0], &linear, origin);
+        assert!(
+            (p[0] - 50.0).abs() < 0.5 && (p[1] - 40.0).abs() < 0.5,
+            "90° caret must land on the paint box, got {p:?}"
+        );
+        assert!((p[0] - 80.0).abs() > 5.0, "must not stay at layout x");
     }
 
     #[test]

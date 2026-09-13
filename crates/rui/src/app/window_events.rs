@@ -72,14 +72,16 @@ fn hit_input_caret_at(
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
     let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
     let ui_scale = scale.max(1.0);
+    let layout_ptr =
+        super::tree_hit::world_to_input_text_layout_pointer(root, rest, [x, y], [0.0, 0.0]);
     let (mx, my, hit_bounds, hit_style) =
         super::tree_hit::input_drag_select_hit_space(root, rest, x, y, bounds, &style, leaf_scroll);
     let ix = if !style.overflow.allows_caret_scroll() {
         crate::renderer::hit_test_textarea_click_caret_index(
             font_system,
             &display_el,
-            x + leaf_scroll[0],
-            y + leaf_scroll[1],
+            layout_ptr[0] + leaf_scroll[0],
+            layout_ptr[1] + leaf_scroll[1],
             bounds,
             &hit_style,
             ui_scale,
@@ -304,17 +306,8 @@ impl super::App {
                 }
             }
         }
-        // Fallback: click inside the focused field's layout box (padding / empty chrome).
-        if let Some((bounds, scroll_acc)) =
-            super::tree_hit::find_bounds_by_focus_id(root, focused, [0.0, 0.0])
-        {
-            let vx = bounds[0] - scroll_acc[0];
-            let vy = bounds[1] - scroll_acc[1];
-            if x >= vx && x <= vx + bounds[2] && y >= vy && y <= vy + bounds[3] {
-                return true;
-            }
-        }
-        false
+        // Fallback: click inside the focused field's painted box (padding / empty chrome).
+        super::tree_hit::pointer_hits_focus_paint(root, focused, x, y, [0.0, 0.0])
     }
 
     /// Keep InputOTP focus when the press hits the OTP root (or lands in its layout box).
@@ -331,16 +324,7 @@ impl super::App {
         if path.iter().any(|e| e.focus_id.as_deref() == Some(focused)) {
             return true;
         }
-        if let Some((bounds, scroll_acc)) =
-            super::tree_hit::find_bounds_by_focus_id(root, focused, [0.0, 0.0])
-        {
-            let vx = bounds[0] - scroll_acc[0];
-            let vy = bounds[1] - scroll_acc[1];
-            if x >= vx && x <= vx + bounds[2] && y >= vy && y <= vy + bounds[3] {
-                return true;
-            }
-        }
-        false
+        super::tree_hit::pointer_hits_focus_paint(root, focused, x, y, [0.0, 0.0])
     }
 
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
@@ -527,16 +511,14 @@ impl super::App {
         };
         let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
             let painted = super::ime_support::painted_text_edit_visual_bounds(text_nodes, &fid);
-            let focus_fallback = super::tree_hit::find_bounds_by_focus_id(root, &fid, [0.0, 0.0]);
+            let focus_fallback =
+                super::tree_hit::find_paint_aabb_by_focus_id(root, &fid, [0.0, 0.0]);
             match (painted, focus_fallback) {
                 (Some(visual), fb) => {
                     let scroll_acc = fb.map(|(_, sa)| sa).unwrap_or([0.0, 0.0]);
                     Some((visual, scroll_acc, fid.clone(), "painted"))
                 }
-                (None, Some((b, sa))) => {
-                    let visual = [b[0] - sa[0], b[1] - sa[1], b[2], b[3]];
-                    Some((visual, sa, fid.clone(), "focus_bounds"))
-                }
+                (None, Some((visual, sa))) => Some((visual, sa, fid.clone(), "focus_bounds")),
                 (None, None) => None,
             }
         } else {
@@ -562,12 +544,13 @@ impl super::App {
                 *ime_owner_window = Some(window_id);
                 if allow_ime {
                     let pad_zero = source == "painted";
+                    let measure = Self::ime_measure_visual(root, &fid_clone, source, visual);
                     let (caret_x_in_field, compose_x_in_field, line_h) =
                         Self::estimate_ime_caret_geom_in(
                             root,
                             font_system,
                             &fid_clone,
-                            visual,
+                            measure,
                             ui_scale,
                             if pad_zero { Some(0.0) } else { None },
                         );
@@ -576,8 +559,6 @@ impl super::App {
                         line_h,
                         win_h,
                     );
-                    let compose_visual_x =
-                        (visual[0] + compose_x_in_field).clamp(0.0, (win_w - 1.0).max(0.0));
                     let caret_w = 2.0_f32.max(1.0 / ui_scale.max(0.001));
                     let composing = {
                         let rest = super::ime_support::text_edit_rest(&fid_clone);
@@ -593,20 +574,25 @@ impl super::App {
                         })
                         .unwrap_or(false)
                     };
-                    let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
-                        [visual[0], caret_visual_y, visual[2], line_h],
+                    let [ax, ay] = Self::ime_paint_candidate_xy(
+                        root,
+                        text_nodes,
+                        &fid_clone,
+                        source,
+                        visual,
                         compose_x_in_field,
+                        caret_visual_y,
+                        line_h,
+                    );
+                    let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
+                    let ax = ax.clamp(0.0, (win_w - 1.0).max(0.0));
+                    let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
+                        [ax, ay, caret_w, line_h],
+                        0.0,
                         ui_scale,
                     );
                     super::ime_support::apply_ime_cursor_area(
-                        window,
-                        compose_visual_x,
-                        caret_visual_y,
-                        caret_w,
-                        line_h,
-                        ui_scale,
-                        scroll_acc,
-                        composing,
+                        window, ax, ay, caret_w, line_h, ui_scale, scroll_acc, composing,
                     );
                     super::ime_support::record_ime_cursor(super::ime_support::ImeCursorSnapshot {
                         focus_id: fid_clone,
@@ -615,8 +601,8 @@ impl super::App {
                         physical_w: pw,
                         physical_h: ph,
                         ui_scale,
-                        visual_x: visual[0],
-                        visual_y: caret_visual_y,
+                        visual_x: ax,
+                        visual_y: ay,
                         caret_x_in_field,
                         source,
                         scroll_acc_y: scroll_acc[1],
@@ -797,6 +783,48 @@ impl super::App {
             )
         };
         (caret_x, compose_x, line_h)
+    }
+
+    /// Fallback IME measure uses the layout box width, not the paint AABB.
+    fn ime_measure_visual(
+        root: &crate::core::tree::Element,
+        fid: &str,
+        source: &str,
+        visual: [f32; 4],
+    ) -> [f32; 4] {
+        if source == "painted" {
+            return visual;
+        }
+        super::tree_hit::find_element_by_focus_id(root, fid)
+            .map(|e| [0.0, 0.0, e.layout_bounds[2], e.layout_bounds[3]])
+            .unwrap_or(visual)
+    }
+
+    /// OS IME window origin in paint space (no `bind_caret`).
+    fn ime_paint_candidate_xy(
+        root: &crate::core::tree::Element,
+        text_nodes: &[crate::core::tree::TextLayoutInfo],
+        fid: &str,
+        source: &str,
+        visual: [f32; 4],
+        compose_x_in_field: f32,
+        caret_visual_y: f32,
+        line_h: f32,
+    ) -> [f32; 2] {
+        if source == "painted" {
+            if let Some(n) = super::ime_support::painted_text_edit_node(text_nodes, fid) {
+                return super::ime_support::paint_space_ime_origin(
+                    [n.x + compose_x_in_field, caret_visual_y],
+                    &n.paint_transform,
+                    n.paint_origin,
+                );
+            }
+        }
+        let y_local = super::tree_hit::find_element_by_focus_id(root, fid)
+            .map(|e| (e.layout_bounds[3] - line_h).max(0.0) * 0.5)
+            .unwrap_or_else(|| (visual[3] - line_h).max(0.0) * 0.5);
+        super::tree_hit::find_paint_ime_caret(root, fid, [compose_x_in_field, y_local], [0.0, 0.0])
+            .unwrap_or([visual[0] + compose_x_in_field, caret_visual_y])
     }
 
     fn find_element_by_template_id<'a>(
@@ -1172,8 +1200,16 @@ impl super::App {
                         super::tree_hit::find_selectable_text_leaf_for_key(&state.root_element, key)
                     {
                         let ui_scale = scale.max(1.0);
-                        let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
-                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                        let layout_ptr = super::tree_hit::world_to_selectable_text_layout_pointer(
+                            &state.root_element,
+                            key,
+                            [x, y],
+                            [0.0, 0.0],
+                        );
+                        let mx = (layout_ptr[0] + leaf_scroll[0])
+                            .clamp(bounds[0], bounds[0] + bounds[2]);
+                        let my = (layout_ptr[1] + leaf_scroll[1])
+                            .clamp(bounds[1], bounds[1] + bounds[3]);
                         let ix = crate::renderer::hit_test_input_text_index(
                             state.text_renderer.font_system_mut(),
                             &display_el,
@@ -1615,6 +1651,12 @@ impl super::App {
             {
                 let ui_scale = scale.max(1.0);
                 let is_textarea = focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                let layout_ptr = super::tree_hit::world_to_input_text_layout_pointer(
+                    &state.root_element,
+                    &rest,
+                    [x, y],
+                    [0.0, 0.0],
+                );
                 let (mx, my, hit_bounds, hit_style) = if is_textarea {
                     super::tree_hit::input_text_edit_pointer_space(
                         &state.root_element,
@@ -1627,19 +1669,19 @@ impl super::App {
                     )
                 } else {
                     (
-                        x + leaf_scroll[0],
-                        y + leaf_scroll[1],
+                        layout_ptr[0] + leaf_scroll[0],
+                        layout_ptr[1] + leaf_scroll[1],
                         bounds,
                         style.clone(),
                     )
                 };
                 let ix = if is_textarea {
-                    let raw_mx = x + leaf_scroll[0];
+                    let raw_mx = layout_ptr[0] + leaf_scroll[0];
                     crate::renderer::hit_test_textarea_click_caret_index(
                         state.text_renderer.font_system_mut(),
                         &display_el,
                         raw_mx,
-                        y + leaf_scroll[1],
+                        layout_ptr[1] + leaf_scroll[1],
                         bounds,
                         &hit_style,
                         ui_scale,
@@ -1671,7 +1713,11 @@ impl super::App {
                     && crate::renderer::hit_test_input_is_line_side_blank(
                         state.text_renderer.font_system_mut(),
                         &display_el,
-                        if is_textarea { x + leaf_scroll[0] } else { mx },
+                        if is_textarea {
+                            layout_ptr[0] + leaf_scroll[0]
+                        } else {
+                            mx
+                        },
                         my,
                         bounds,
                         if is_textarea { &hit_style } else { &style },
@@ -1686,11 +1732,17 @@ impl super::App {
                 super::tree_hit::find_selectable_text_at(&state.root_element, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
+                let layout_ptr = super::tree_hit::world_to_selectable_text_layout_pointer(
+                    &state.root_element,
+                    &key,
+                    [x, y],
+                    [0.0, 0.0],
+                );
                 let ix = crate::renderer::hit_test_input_text_index(
                     state.text_renderer.font_system_mut(),
                     &display_el,
-                    x + leaf_scroll[0],
-                    y + leaf_scroll[1],
+                    layout_ptr[0] + leaf_scroll[0],
+                    layout_ptr[1] + leaf_scroll[1],
                     bounds,
                     &style,
                     ui_scale,
@@ -3362,7 +3414,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         &state.text_nodes,
                         &fid,
                     );
-                    let focus_fallback = super::tree_hit::find_bounds_by_focus_id(
+                    let focus_fallback = super::tree_hit::find_paint_aabb_by_focus_id(
                         &state.root_element,
                         &fid,
                         [0.0, 0.0],
@@ -3372,8 +3424,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             let scroll_acc = fb.map(|(_, sa)| sa).unwrap_or([0.0, 0.0]);
                             Some((visual, scroll_acc, fid.clone(), "painted"))
                         }
-                        (None, Some((b, sa))) => {
-                            let visual = [b[0] - sa[0], b[1] - sa[1], b[2], b[3]];
+                        (None, Some((visual, sa))) => {
                             Some((visual, sa, fid.clone(), "focus_bounds"))
                         }
                         (None, None) => None,
@@ -3891,10 +3942,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             // Painted leaf is already inset; skip outer padding so caret_x is relative to
                             // the text box. Focus-bounds fallback still needs field padding.
                             let pad_zero = source == "painted";
+                            let measure = {
+                                let rb = self.state.borrow();
+                                rb.as_ref()
+                                    .map(|st| {
+                                        Self::ime_measure_visual(
+                                            &st.root_element,
+                                            &fid_clone,
+                                            source,
+                                            visual,
+                                        )
+                                    })
+                                    .unwrap_or(visual)
+                            };
                             let (caret_x_in_field, compose_x_in_field, line_h) = self
                                 .estimate_ime_caret_geom(
                                     &fid_clone,
-                                    visual,
+                                    measure,
                                     ui_scale,
                                     if pad_zero { Some(0.0) } else { None },
                                 );
@@ -3905,8 +3969,6 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 line_h,
                                 win_h,
                             );
-                            let compose_visual_x =
-                                (visual[0] + compose_x_in_field).clamp(0.0, (win_w - 1.0).max(0.0));
                             let caret_w = 2.0_f32.max(1.0 / ui_scale.max(0.001));
                             let composing = {
                                 let rest = super::ime_support::text_edit_rest(&fid_clone);
@@ -3923,22 +3985,33 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 })
                                 .unwrap_or(false)
                             };
+                            let [ax, ay] = {
+                                let rb = self.state.borrow();
+                                match rb.as_ref() {
+                                    Some(st) => Self::ime_paint_candidate_xy(
+                                        &st.root_element,
+                                        &st.text_nodes,
+                                        &fid_clone,
+                                        source,
+                                        visual,
+                                        compose_x_in_field,
+                                        caret_visual_y,
+                                        line_h,
+                                    ),
+                                    None => [visual[0] + compose_x_in_field, caret_visual_y],
+                                }
+                            };
+                            let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
+                            let ax = ax.clamp(0.0, (win_w - 1.0).max(0.0));
                             // IME area / candidate anchor = composition origin (not the advancing
                             // insert caret — that caused horizontal candidate creep while typing).
                             let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
-                                [visual[0], caret_visual_y, visual[2], line_h],
-                                compose_x_in_field,
+                                [ax, ay, caret_w, line_h],
+                                0.0,
                                 ui_scale,
                             );
                             super::ime_support::apply_ime_cursor_area(
-                                &window,
-                                compose_visual_x,
-                                caret_visual_y,
-                                caret_w,
-                                line_h,
-                                ui_scale,
-                                scroll_acc,
-                                composing,
+                                &window, ax, ay, caret_w, line_h, ui_scale, scroll_acc, composing,
                             );
                             super::ime_support::record_ime_cursor(
                                 super::ime_support::ImeCursorSnapshot {
@@ -3948,8 +4021,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                     physical_w: pw,
                                     physical_h: ph,
                                     ui_scale,
-                                    visual_x: visual[0],
-                                    visual_y: caret_visual_y,
+                                    visual_x: ax,
+                                    visual_y: ay,
                                     caret_x_in_field,
                                     source,
                                     scroll_acc_y: scroll_acc[1],

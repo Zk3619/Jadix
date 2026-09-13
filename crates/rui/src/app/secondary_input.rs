@@ -65,8 +65,16 @@ impl super::App {
                 if let Some((bounds, display_el, style, leaf_scroll)) =
                     super::tree_hit::find_selectable_text_leaf_for_key(&sec.root_element, key)
                 {
-                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
-                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    let layout_ptr = super::tree_hit::world_to_selectable_text_layout_pointer(
+                        &sec.root_element,
+                        key,
+                        [x, y],
+                        [0.0, 0.0],
+                    );
+                    let mx =
+                        (layout_ptr[0] + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                    let my =
+                        (layout_ptr[1] + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
                     let ix = crate::renderer::hit_test_input_text_index(
                         sec.text_renderer.font_system_mut(),
                         &display_el,
@@ -237,6 +245,13 @@ impl super::App {
                                 let ui_scale = scale.max(1.0);
                                 let is_textarea =
                                     focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                                let layout_ptr =
+                                    super::tree_hit::world_to_input_text_layout_pointer(
+                                        &sec.root_element,
+                                        &rest,
+                                        [x, y],
+                                        [0.0, 0.0],
+                                    );
                                 let (mx, my, hit_bounds, hit_style) = if is_textarea {
                                     super::tree_hit::input_text_edit_pointer_space(
                                         &sec.root_element,
@@ -249,8 +264,8 @@ impl super::App {
                                     )
                                 } else {
                                     (
-                                        x + leaf_scroll[0],
-                                        y + leaf_scroll[1],
+                                        layout_ptr[0] + leaf_scroll[0],
+                                        layout_ptr[1] + leaf_scroll[1],
                                         bounds,
                                         style.clone(),
                                     )
@@ -259,8 +274,8 @@ impl super::App {
                                     crate::renderer::hit_test_textarea_click_caret_index(
                                         sec.text_renderer.font_system_mut(),
                                         &display_el,
-                                        x + leaf_scroll[0],
-                                        y + leaf_scroll[1],
+                                        layout_ptr[0] + leaf_scroll[0],
+                                        layout_ptr[1] + leaf_scroll[1],
                                         bounds,
                                         &hit_style,
                                         ui_scale,
@@ -293,7 +308,11 @@ impl super::App {
                                     && crate::renderer::hit_test_input_is_line_side_blank(
                                         sec.text_renderer.font_system_mut(),
                                         &display_el,
-                                        if is_textarea { x + leaf_scroll[0] } else { mx },
+                                        if is_textarea {
+                                            layout_ptr[0] + leaf_scroll[0]
+                                        } else {
+                                            mx
+                                        },
                                         my,
                                         bounds,
                                         if is_textarea { &hit_style } else { &style },
@@ -316,11 +335,18 @@ impl super::App {
                             .map(
                                 |(key, bounds, display_el, style, leaf_scroll)| {
                                     let ui_scale = scale.max(1.0);
+                                    let layout_ptr =
+                                        super::tree_hit::world_to_selectable_text_layout_pointer(
+                                            &sec.root_element,
+                                            &key,
+                                            [x, y],
+                                            [0.0, 0.0],
+                                        );
                                     let ix = crate::renderer::hit_test_input_text_index(
                                         sec.text_renderer.font_system_mut(),
                                         &display_el,
-                                        x + leaf_scroll[0],
-                                        y + leaf_scroll[1],
+                                        layout_ptr[0] + leaf_scroll[0],
+                                        layout_ptr[1] + leaf_scroll[1],
                                         bounds,
                                         &style,
                                         ui_scale,

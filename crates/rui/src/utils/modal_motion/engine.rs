@@ -232,6 +232,21 @@ pub(crate) fn clear_pending_modal_enter(handle: &ModalPresenceHandle) {
     c.enter_active = false;
 }
 
+/// Wave 2 canary: jump Exiting → Absent without waiting on CSS / wall clock.
+#[cfg(test)]
+pub(crate) fn finish_modal_exit_for_test(handle: &ModalPresenceHandle) {
+    let mounted_sig = mounted_signal(handle);
+    {
+        let mut c = handle.cell.borrow_mut();
+        c.gate.force_absent();
+        c.exit_armed = false;
+        c.needs_exit_anim = false;
+        c.enter_active = false;
+        c.shell = None;
+    }
+    mounted_sig.set(false);
+}
+
 pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
     let key = format!("__rui_modal_presence:{inst_id}");
     let mounted_key = format!("__rui_modal_mounted:{inst_id}");

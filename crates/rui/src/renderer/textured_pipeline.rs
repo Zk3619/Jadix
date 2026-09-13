@@ -16,7 +16,8 @@ pub struct TexturedInstanceInput {
     pub transform: [f32; 6],
     /// `0` RGBA · `1` MSDF · `2` sparse blit · `3` RGBA perspective warp · `4` MSDF warp.
     pub flags: f32,
-    /// Overflow clip in the same space as `rect_pos`. `clip_size[0] < 0` disables.
+    /// Overflow clip in the same space as `rect_pos`. FS tests after affine inverse.
+    /// `clip_size[0] < 0` disables.
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
     /// Perspective warp: texture TL/TR pixel xy (`flags` 3 or 4). Ignored for affine.

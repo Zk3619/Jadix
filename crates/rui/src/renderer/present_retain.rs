@@ -3,15 +3,18 @@
 //! Swapchain images (FLIP_DISCARD / GLES) do not preserve prior frame contents, so
 //! Load+scissor directly on the surface leaves undefined/black pixels outside the
 //! damage rect. UI is drawn into this texture; each present blits the full buffer
-//! to the surface.
+//! to the surface. Scroll may copy a still-visible overlap (`copy_scroll_strip`)
+//! through a scratch texture before the Load pass.
 
 use wgpu::util::DeviceExt;
 
 use super::pipeline::VertexInput;
 
 struct RetainRt {
-    /// Kept alive so `view` / bind group remain valid.
-    _texture: wgpu::Texture,
+    /// Kept alive so `view` / bind group remain valid. `COPY_DST` for strip blit.
+    texture: wgpu::Texture,
+    /// Ping-pong for overlapping `copy_texture_to_texture` (same-texture copies are invalid).
+    scratch: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     width: u32,
@@ -191,7 +194,8 @@ impl PresentRetainPipeline {
             format: self.format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -209,8 +213,23 @@ impl PresentRetainPipeline {
                 },
             ],
         });
+        let scratch = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Present Retain Strip Scratch"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
         self.retain = Some(RetainRt {
-            _texture: texture,
+            texture,
+            scratch,
             view,
             bind_group,
             width,
@@ -221,6 +240,77 @@ impl PresentRetainPipeline {
 
     pub fn color_view(&self) -> Option<&wgpu::TextureView> {
         self.retain.as_ref().map(|r| &r.view)
+    }
+
+    /// Copy the still-visible overlap to its new origin via scratch (may overlap).
+    /// Returns `false` when the retain buffer is missing or the rects leave the texture.
+    pub fn copy_scroll_strip(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        src_x: u32,
+        src_y: u32,
+        dst_x: u32,
+        dst_y: u32,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let Some(rt) = self.retain.as_ref() else {
+            return false;
+        };
+        if width == 0 || height == 0 {
+            return false;
+        }
+        let src_ok =
+            src_x.saturating_add(width) <= rt.width && src_y.saturating_add(height) <= rt.height;
+        let dst_ok =
+            dst_x.saturating_add(width) <= rt.width && dst_y.saturating_add(height) <= rt.height;
+        if !src_ok || !dst_ok || width > rt.width || height > rt.height {
+            return false;
+        }
+        let extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &rt.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: src_x,
+                    y: src_y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &rt.scratch,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            extent,
+        );
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &rt.scratch,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &rt.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: dst_x,
+                    y: dst_y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            extent,
+        );
+        true
     }
 
     /// Blit the full retain buffer onto the swapchain view (always Clear → full image).

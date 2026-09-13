@@ -204,6 +204,12 @@ pub(super) struct AppState {
     last_present_node_bounds: Vec<(u64, [f32; 4])>,
     /// Unpadded union of viewports whose offset changed this frame (text clip).
     scroll_text_clip: Option<[f32; 4]>,
+    /// Dual-axis blit: second L strip (logical). `None` for single-axis / full viewport Clear.
+    scroll_text_clip_second: Option<[f32; 4]>,
+    /// Scroll: copy overlap in retain; Clear only the newly exposed strip(s).
+    scroll_strip_blit: Vec<super::damage::ScrollStripBlitJob>,
+    /// Extra Clear+redraw holes on a blit frame (sticky / overlay / named / nested layer).
+    scroll_blit_pins: Vec<[f32; 4]>,
     /// Overlay closed or shrank: Clear the leftover scissor then redraw page
     /// (retain still holds composited overlay pixels).
     overlay_restore_clear: bool,
@@ -249,13 +255,13 @@ fn draw_packed_textured_runs<'pass>(
     scaled_tex: &[ScaledTexturedDraw],
     start: usize,
     end: usize,
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     let end = end.min(scaled_tex.len());
     let mut ti = start.min(end);
     while ti < end {
         if let Some(damage) = cull {
-            if !super::draw_cull::textured_hits_damage(&scaled_tex[ti], damage) {
+            if !damage.hits_textured(&scaled_tex[ti]) {
                 ti += 1;
                 continue;
             }
@@ -338,11 +344,11 @@ fn draw_shadow_tex_draws<'pass>(
     shadow_tex_cache: &'pass HashMap<u64, super::image_registry::GpuImageTexture>,
     textured_pipeline: &'pass TexturedQuadPipeline,
     device: &wgpu::Device,
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     for sd in draws {
         if let Some(damage) = cull {
-            if crate::renderer::aabbs_disjoint(sd.rect, damage) {
+            if !damage.hits_aabb(sd.rect) {
                 continue;
             }
         }
@@ -402,10 +408,8 @@ struct GpuPresentPlan {
     /// Composite target. When GPU partial damage is on, FullClear still draws
     /// into retain so the next overlay/hover PartialLoad can Load page pixels.
     draw_to_retain: bool,
-    cull_phys: Option<[f32; 4]>,
-    #[allow(dead_code)]
-    cull_logical: Option<[f32; 4]>,
-    /// Scroll viewport layer: Load retain then Clear the scissor before redrawing.
+    cull_phys: Option<super::draw_cull::CullRects>,
+    /// Scroll viewport layer: Load retain then Clear each exposed strip (not the L AABB).
     clear_damage: bool,
     /// Paint-only: per-node scissor, no cross-node AABB cull.
     use_node_present: bool,
@@ -415,20 +419,20 @@ fn text_nodes_for_prepare(
     nodes: &[crate::core::tree::TextLayoutInfo],
     lo: usize,
     hi: usize,
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) -> Cow<'_, [crate::core::tree::TextLayoutInfo]> {
     let lo = lo.min(nodes.len());
     let hi = hi.min(nodes.len()).max(lo);
     let slice = &nodes[lo..hi];
     match cull {
-        Some(d) => Cow::Owned(super::draw_cull::clip_text_nodes_to_rect(slice, d)),
+        Some(d) => Cow::Owned(super::draw_cull::clip_text_nodes_to_cull(slice, d)),
         None => Cow::Borrowed(slice),
     }
 }
 
 fn instances_for_upload<'a>(
     slice: &'a [InstanceInput],
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) -> Cow<'a, [InstanceInput]> {
     match cull {
         Some(d) => Cow::Owned(super::draw_cull::filter_instances(slice, d)),
@@ -442,7 +446,7 @@ fn draw_instance_range(
     instances: &[InstanceInput],
     start: u32,
     count: u32,
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     if count == 0 {
         return;
@@ -552,7 +556,7 @@ fn draw_paint_ops<'pass>(
     scaled_tex: &'pass [ScaledTexturedDraw],
     backdrop: &'pass wgpu::BindGroup,
     instances: &[InstanceInput],
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     use crate::layout::layout_tree::PaintOp;
     let hi = hi.min(ops.len());
@@ -603,7 +607,7 @@ fn draw_page_stack_band_to_pass<'pass>(
     shadow_tex_cache: &'pass HashMap<u64, super::image_registry::GpuImageTexture>,
     backdrop: &'pass wgpu::BindGroup,
     instances: &[InstanceInput],
-    cull: Option<[f32; 4]>,
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     if band.paint_ops.0 < band.paint_ops.1 {
         draw_paint_ops(
@@ -1449,6 +1453,9 @@ impl AppState {
             last_present_node_bounds: Vec::new(),
             scroll_layer_clear: false,
             scroll_text_clip: None,
+            scroll_text_clip_second: None,
+            scroll_strip_blit: Vec::new(),
+            scroll_blit_pins: Vec::new(),
             overlay_restore_clear: false,
             compositor_alpha,
             composition_swapchain,
@@ -1505,6 +1512,10 @@ impl AppState {
                 .find(|(rest, _, _, _)| rest == id)
                 .map(|(_, b, _, _)| *b)
             else {
+                // Spawn: no prev clip to pin. Do not abort siblings that do have metrics.
+                if !prev.contains_key(id) {
+                    continue;
+                }
                 return false;
             };
             self.union_damage(bounds);
@@ -1535,6 +1546,212 @@ impl AppState {
         any
     }
 
+    /// Fall back to a full viewport-layer Clear (overlap copy not safe this frame).
+    fn abort_scroll_strip_blit(&mut self) {
+        let jobs = std::mem::take(&mut self.scroll_strip_blit);
+        self.scroll_blit_pins.clear();
+        if jobs.is_empty() {
+            return;
+        }
+        for job in jobs {
+            self.union_damage(job.plan.viewport);
+            self.scroll_text_clip = Some(match self.scroll_text_clip {
+                Some(prev) => super::damage::union_rects(prev, job.plan.viewport),
+                None => job.plan.viewport,
+            });
+        }
+        self.scroll_text_clip_second = None;
+    }
+
+    fn find_viewport_element(&self, viewport_id: &str) -> Option<&Element> {
+        let mut found: Option<&Element> = None;
+        crate::core::tree::walk_elements(&self.root_element, |el| {
+            if found.is_some() {
+                return;
+            }
+            if let Some(fid) = el.focus_id.as_deref() {
+                if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                    if rest == viewport_id {
+                        found = Some(el);
+                    }
+                }
+            }
+        });
+        found
+    }
+
+    /// One or more viewports. Overlay / sticky / named paint become pin holes
+    /// later (`collect_scroll_blit_pins`); nested inner viewports skip blit and
+    /// return their bounds for a layer Clear pin (outer still blits). Overlapping
+    /// siblings blit both; occupancy of the intersection is a pin. Despawned
+    /// viewports pin last clip bounds.
+    fn try_plan_scroll_strip_blits(
+        &self,
+        prev: &HashMap<String, [u32; 2]>,
+        cur: &HashMap<String, [u32; 2]>,
+    ) -> (Vec<super::damage::ScrollStripBlitJob>, Vec<[f32; 4]>) {
+        let policy = super::damage::ScrollStripBlitPolicy {
+            enabled: super::damage::scroll_strip_blit_enabled(),
+            gpu_partial: Self::gpu_partial_damage_enabled(),
+            retain_valid: self.present_retain.contents_valid(),
+            force_full_redraw: self.force_full_redraw,
+            named_paint_dirty: !self.damage_nodes.is_empty(),
+            overlay: self.overlay_occupied.is_some() || !self.last_overlay_boxes.is_empty(),
+        };
+        if !policy.allows() {
+            return (Vec::new(), Vec::new());
+        }
+        let Some(deltas) = super::damage::changed_viewport_scroll_deltas(prev, cur) else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut candidates = Vec::new();
+        let mut layer_clear = Vec::new();
+        for (id, delta) in deltas {
+            let Some(bounds) = self
+                .last_render_scroll_metrics
+                .iter()
+                .find(|(rest, _, _, _)| rest == &id)
+                .map(|(_, b, _, _)| *b)
+            else {
+                continue;
+            };
+            let Some(plan) = super::damage::plan_scroll_strip_blit(bounds, delta) else {
+                layer_clear.push(bounds);
+                continue;
+            };
+            if super::damage::scroll_strip_copy_physical(
+                &plan,
+                self.ui_scale(),
+                self.config.width,
+                self.config.height,
+            )
+            .is_none()
+            {
+                layer_clear.push(bounds);
+                continue;
+            }
+            match self.find_viewport_element(&id) {
+                None => {
+                    layer_clear.push(bounds);
+                    continue;
+                }
+                Some(el) if !super::damage::scroll_strip_blit_viewport_axis_aligned(el) => {
+                    layer_clear.push(bounds);
+                    continue;
+                }
+                Some(_) => {}
+            }
+            candidates.push(super::damage::ScrollStripBlitJob {
+                viewport_id: id,
+                plan,
+            });
+        }
+        let (kept, nested) = super::damage::partition_disjoint_blit_jobs(candidates);
+        for job in nested {
+            layer_clear.push(job.plan.viewport);
+        }
+        for pin in super::damage::overlapping_sibling_occupancy_pins(&kept) {
+            layer_clear.push(pin);
+        }
+        for id in super::damage::despawned_viewport_ids(prev, cur) {
+            if let Some(bounds) = self
+                .last_render_scroll_metrics
+                .iter()
+                .find(|(rest, _, _, _)| rest == &id)
+                .map(|(_, b, _, _)| *b)
+            {
+                layer_clear.push(bounds);
+            }
+        }
+        if kept.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            (kept, layer_clear)
+        }
+    }
+
+    fn blit_scissor_logical(&self) -> Option<[f32; 4]> {
+        let mut acc: Option<[f32; 4]> = None;
+        let absorb = |acc: &mut Option<[f32; 4]>, r: [f32; 4]| {
+            if r[2] <= 0.0 || r[3] <= 0.0 {
+                return;
+            }
+            *acc = Some(match *acc {
+                Some(a) => super::damage::union_rects(a, r),
+                None => r,
+            });
+        };
+        for job in &self.scroll_strip_blit {
+            absorb(&mut acc, job.plan.viewport);
+        }
+        for pin in &self.scroll_blit_pins {
+            absorb(&mut acc, *pin);
+        }
+        acc
+    }
+
+    fn collect_scroll_blit_pins(
+        &mut self,
+        overlay_visual: Option<[f32; 4]>,
+        node_paints: &[crate::layout::layout_tree::NodePaint],
+    ) {
+        if self.scroll_strip_blit.is_empty() {
+            self.scroll_blit_pins.clear();
+            return;
+        }
+        let viewports: Vec<[f32; 4]> = self
+            .scroll_strip_blit
+            .iter()
+            .map(|j| j.plan.viewport)
+            .collect();
+        let ids: Vec<String> = self
+            .scroll_strip_blit
+            .iter()
+            .map(|j| j.viewport_id.clone())
+            .collect();
+        let nested = std::mem::take(&mut self.scroll_blit_pins);
+        let mut sticky = Vec::new();
+        for id in &ids {
+            if let Some(vp) = self.find_viewport_element(id) {
+                sticky.extend(super::damage::sticky_layout_bounds(vp));
+            }
+        }
+        let named = super::draw_cull::named_scroll_blit_pins(
+            &self.damage_nodes,
+            &self.last_present_node_bounds,
+            node_paints,
+        );
+        let overlay = if self.overlay_restore_clear {
+            self.overlay_occupied.or(overlay_visual)
+        } else {
+            match (overlay_visual, self.overlay_occupied) {
+                (Some(v), Some(o)) => Some(super::damage::union_rects(v, o)),
+                (Some(v), None) => Some(v),
+                (None, o) => o,
+            }
+        };
+        self.scroll_blit_pins = super::damage::merge_scroll_blit_pins(
+            overlay,
+            &self.last_overlay_boxes,
+            self.overlay_restore_clear,
+            &named,
+            &sticky,
+            &nested,
+            &viewports,
+        );
+        if self.overlay_restore_clear && self.last_overlay_boxes.is_empty() {
+            self.overlay_occupied.take();
+        }
+        let strip_n: usize = self
+            .scroll_strip_blit
+            .iter()
+            .map(|j| j.plan.exposed_strips().count())
+            .sum();
+        if strip_n.saturating_add(self.scroll_blit_pins.len()) > super::draw_cull::CULL_RECTS_CAP {
+            self.abort_scroll_strip_blit();
+        }
+    }
+
     pub(super) fn union_damage(&mut self, rect: [f32; 4]) {
         if rect[2] <= 0.0 || rect[3] <= 0.0 {
             return;
@@ -1554,6 +1771,9 @@ impl AppState {
         self.damage_rect = None;
         self.damage_nodes.clear();
         self.scroll_text_clip = None;
+        self.scroll_text_clip_second = None;
+        self.scroll_strip_blit.clear();
+        self.scroll_blit_pins.clear();
         super::damage::clear_frame_paint_nodes();
     }
 
@@ -1649,7 +1869,7 @@ impl AppState {
                     }
                 }
             }
-            if cur_boxes.is_empty() && !overlay_present {
+            if cur_boxes.is_empty() && !overlay_present && !self.scroll_layer_clear {
                 self.overlay_occupied.take();
             }
         } else {
@@ -1709,7 +1929,9 @@ impl AppState {
 
     /// GPU PartialLoad: UI draws into `present_retain`; swapchain only gets a full blit.
     /// Default **on** (draw-list cull + scissor). `RUI_PARTIAL_DAMAGE=0` forces surface FullClear.
-    /// Overlay portal membership scissors to overlay bounds. Scroll uses viewport-layer Clear inside the scissor.
+    /// Overlay portal membership scissors to overlay bounds. Scroll uses viewport-layer
+    /// Clear inside the scissor; a valid retain may strip-blit the overlap first,
+    /// with pin holes for sticky / overlay / named paint.
     fn gpu_partial_damage_enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
         *ENABLED.get_or_init(|| match std::env::var("RUI_PARTIAL_DAMAGE") {
@@ -1755,6 +1977,39 @@ impl AppState {
                 logical_policy = super::damage::FrameClearPolicy::FullClear;
             }
         }
+        // Dual-axis / multi-viewport / pin AABB may equal the window.
+        // Using it as damage_rect would `damage_covers_full` → FullClear and wipe
+        // the copied overlap. Keep PartialLoad; scissor the union of scrollers + pins.
+        if !self.scroll_strip_blit.is_empty()
+            && self.has_presented_frame
+            && !self.force_full_redraw
+            && !node_present
+        {
+            logical_policy = super::damage::FrameClearPolicy::PartialLoad;
+            let expand = self.scroll_strip_blit.len() > 1
+                || self
+                    .scroll_strip_blit
+                    .iter()
+                    .any(|j| j.plan.exposed_second.is_some())
+                || !self.scroll_blit_pins.is_empty();
+            let scissor_src = if expand {
+                self.blit_scissor_logical()
+            } else {
+                Some(self.scroll_strip_blit[0].plan.exposed)
+            };
+            scissor_physical = scissor_src.and_then(|damage| {
+                super::damage::damage_to_scissor_physical(
+                    damage,
+                    super::draw_cull::DAMAGE_CULL_PAD_LOGICAL,
+                    ui_scale,
+                    self.config.width,
+                    self.config.height,
+                )
+            });
+            if scissor_physical.is_none() {
+                logical_policy = super::damage::FrameClearPolicy::FullClear;
+            }
+        }
         let keep_retain = Self::gpu_partial_damage_enabled();
         let want_gpu_partial =
             keep_retain && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad);
@@ -1762,24 +2017,32 @@ impl AppState {
         let warm_retain = keep_retain && !self.present_retain.contents_valid();
         let draw_to_retain = keep_retain;
         let use_node_present = node_present && use_partial_damage;
-        let (cull_phys, cull_logical) = if use_partial_damage && !use_node_present {
-            if let Some(damage) = self.damage_rect {
-                (
-                    Some(super::draw_cull::damage_cull_rect_physical(
-                        damage,
-                        super::draw_cull::DAMAGE_CULL_PAD_LOGICAL,
-                        ui_scale,
-                    )),
-                    Some(super::draw_cull::padded_xywh(
-                        damage,
-                        super::draw_cull::DAMAGE_CULL_PAD_LOGICAL,
-                    )),
-                )
+        let pad = super::draw_cull::DAMAGE_CULL_PAD_LOGICAL;
+        let cull_phys = if use_partial_damage && !use_node_present {
+            if !self.scroll_strip_blit.is_empty() {
+                let mut rects = Vec::new();
+                for job in &self.scroll_strip_blit {
+                    for s in job.plan.exposed_strips() {
+                        rects.push(super::draw_cull::damage_cull_rect_physical(
+                            s, pad, ui_scale,
+                        ));
+                    }
+                }
+                for pin in &self.scroll_blit_pins {
+                    rects.push(super::draw_cull::damage_cull_rect_physical(
+                        *pin, pad, ui_scale,
+                    ));
+                }
+                super::draw_cull::CullRects::from_rects(rects)
+            } else if let Some(damage) = self.damage_rect {
+                Some(super::draw_cull::CullRects::one(
+                    super::draw_cull::damage_cull_rect_physical(damage, pad, ui_scale),
+                ))
             } else {
-                (None, None)
+                None
             }
         } else {
-            (None, None)
+            None
         };
         GpuPresentPlan {
             logical_policy,
@@ -1788,7 +2051,6 @@ impl AppState {
             warm_retain,
             draw_to_retain,
             cull_phys,
-            cull_logical,
             clear_damage: use_partial_damage && self.scroll_layer_clear,
             use_node_present,
         }
@@ -1823,27 +2085,20 @@ impl AppState {
                 self.flush_node_present_page_glyphs(render_pass, ui_scale);
                 pending_page_glyphs = false;
             }
-            let scissor_pad = match dirty.kind {
-                PaintDirtyKind::Overlay => 16.0,
-                // `dirty.bounds` already includes OVERLAY_RESTORE_PAD_LOGICAL.
-                PaintDirtyKind::OverlayRestore => 2.0,
-                PaintDirtyKind::Node => 8.0,
-            };
-            let prev_slot = if dirty.kind == PaintDirtyKind::Node {
-                self.last_present_node_bounds
-                    .iter()
-                    .find(|(k, _)| *k == dirty.key)
-                    .map(|(_, b)| *b)
-            } else {
-                None
-            };
-            let scissor_logical = match prev_slot {
-                Some(prev) => super::damage::union_rects(dirty.bounds, prev),
-                None => dirty.bounds,
-            };
+            let scissor_pad = super::draw_cull::node_present_scissor_pad(dirty.kind);
+            // Pad is inside the helper; overflow is re-intersected after pad so the
+            // 8px Node scissor cannot leak into a title above ScrollArea.
+            let scissor_logical = super::draw_cull::node_present_scissor_logical(
+                dirty.kind,
+                dirty.key,
+                dirty.bounds,
+                &self.last_present_node_bounds,
+                node_paints,
+                scissor_pad,
+            );
             let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
                 scissor_logical,
-                scissor_pad,
+                0.0,
                 ui_scale,
                 self.config.width,
                 self.config.height,
@@ -1851,11 +2106,9 @@ impl AppState {
                 continue;
             };
             render_pass.set_scissor_rect(x, y, w, h);
-            let cull_phys = Some(super::draw_cull::damage_cull_rect_physical(
-                scissor_logical,
-                scissor_pad,
-                ui_scale,
-            ));
+            let cull_rect =
+                super::draw_cull::damage_cull_rect_physical(scissor_logical, 0.0, ui_scale);
+            let cull_phys = Some(super::draw_cull::CullRects::one(cull_rect));
             match dirty.kind {
                 PaintDirtyKind::OverlayRestore => {
                     let rect = super::draw_cull::damage_cull_rect_physical(
@@ -1909,7 +2162,7 @@ impl AppState {
                             &[],
                             scaled_instances,
                             overlay_inst_start,
-                            cull_phys,
+                            Some(cull_rect),
                         );
                     }
                 }
@@ -1999,6 +2252,11 @@ impl AppState {
                             dirty,
                             &self.damage_nodes,
                         ) {
+                            let prev_slot = super::draw_cull::last_present_prev_for_dirty(
+                                dirty.kind,
+                                dirty.key,
+                                &self.last_present_node_bounds,
+                            );
                             if let Some((rect, color)) =
                                 super::draw_cull::node_present_dest_reset_scaled(
                                     dirty.key,
@@ -2057,7 +2315,7 @@ impl AppState {
                             prev_underline_instances,
                             scaled_instances,
                             overlay_inst_start,
-                            cull_phys,
+                            Some(cull_rect),
                         );
                     }
                 }
@@ -2588,13 +2846,11 @@ impl AppState {
     where
         F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
     {
-        let mut path = self.template_paths.remove(template_id).unwrap_or_default();
-        if !Self::template_path_matches(&self.root_element, &path, template_id) {
-            path.clear();
-            if !Self::find_template_path(&self.root_element, template_id, &mut path) {
-                return crate::core::tree::LayoutStatus::Clean;
-            }
-        }
+        let Some(path) =
+            Self::resolve_template_path(&self.root_element, &mut self.template_paths, template_id)
+        else {
+            return crate::core::tree::LayoutStatus::Clean;
+        };
 
         let mut cursor = &mut self.root_element;
         for &index in &path {
@@ -2618,6 +2874,23 @@ impl AppState {
             super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
         }
         status
+    }
+
+    /// Resolve a cached or DFS `template_id` path. Miss records [`super::reactive::note_bind_miss`].
+    pub(super) fn resolve_template_path(
+        root: &Element,
+        template_paths: &mut HashMap<String, Vec<usize>>,
+        template_id: &str,
+    ) -> Option<Vec<usize>> {
+        let mut path = template_paths.remove(template_id).unwrap_or_default();
+        if !Self::template_path_matches(root, &path, template_id) {
+            path.clear();
+            if !Self::find_template_path(root, template_id, &mut path) {
+                crate::app::reactive::note_bind_miss(template_id);
+                return None;
+            }
+        }
+        Some(path)
     }
 
     /// Inspector live style edit (B1 P1): patch one node by child-index path.
@@ -3390,6 +3663,9 @@ impl AppState {
         let cur_offsets = Self::scroll_offsets_map(&self.root_element);
         self.scroll_layer_clear = false;
         self.scroll_text_clip = None;
+        self.scroll_text_clip_second = None;
+        self.scroll_strip_blit.clear();
+        self.scroll_blit_pins.clear();
         if scroll_changed && !self.portal_membership_dirty {
             // Pixels move inside the scroller: Clear that viewport layer, keep the rest
             // of the retain buffer (sidebar / chrome). Whole-window FullClear is wrong here.
@@ -3398,6 +3674,15 @@ impl AppState {
                 self.mark_full_redraw();
             } else {
                 self.scroll_layer_clear = true;
+                let (jobs, nested_pins) =
+                    self.try_plan_scroll_strip_blits(&prev_offsets, &cur_offsets);
+                if !jobs.is_empty() {
+                    self.damage_rect = Some(jobs[0].plan.exposed);
+                    self.scroll_text_clip = Some(jobs[0].plan.exposed);
+                    self.scroll_text_clip_second = jobs[0].plan.exposed_second;
+                    self.scroll_strip_blit = jobs;
+                    self.scroll_blit_pins = nested_pins;
+                }
             }
         }
         self.last_scroll_offset_fp = scroll_fp;
@@ -3679,6 +3964,16 @@ impl AppState {
 
         let overlay_split = render_result.overlay_split;
         let ui_scale_now = self.ui_scale();
+        // Logical visual slots *before* DPI scale + `take`. Dest-reset multiplies prev by
+        // `ui_scale`; recording after scale would double-count, and after take the instance
+        // / chrome outset (outline / extra-shadow / caret) is gone.
+        let next_last_present = super::draw_cull::last_present_visual_slots(
+            &render_result.node_paints,
+            &render_result.instances,
+            &scale_textured_draws(&render_result.textured_draws, 1.0),
+            &render_result.text_nodes,
+            &render_result.input_chrome_instances,
+        );
         scale_instances_in_place(&mut render_result.instances, ui_scale_now);
         scale_instances_in_place(&mut render_result.input_chrome_instances, ui_scale_now);
         scale_clip_polys_in_place(&mut render_result.clip_polys, ui_scale_now);
@@ -3953,6 +4248,7 @@ impl AppState {
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
+        self.collect_scroll_blit_pins(overlay_visual, &render_result.node_paints);
         // Consumed by `force_full_redraw_after_chrome` / scrollbar gates this frame.
         // Clear here (not inside overlay occupancy) so `note_fit_relayout_followup`
         // can still arm the *next* chrome after text prepare.
@@ -3992,9 +4288,36 @@ impl AppState {
         // page-stack buffer on FullClear — that drew empty captions over a wiped RT.
         // Glyph clip uses the unpadded scrolled viewport (1px AA), not the 16px SDF pad.
         let page_text_cull = if self.scroll_layer_clear && gpu_present.use_partial_damage {
-            self.scroll_text_clip.or(self.damage_rect).map(|d| {
-                super::draw_cull::padded_xywh(d, super::draw_cull::SCROLL_LAYER_TEXT_PAD_LOGICAL)
-            })
+            let pad = super::draw_cull::SCROLL_LAYER_TEXT_PAD_LOGICAL;
+            if !self.scroll_strip_blit.is_empty() {
+                let mut rects = Vec::new();
+                for job in &self.scroll_strip_blit {
+                    for s in job.plan.exposed_strips() {
+                        rects.push(super::draw_cull::padded_xywh(s, pad));
+                    }
+                }
+                for pin in &self.scroll_blit_pins {
+                    rects.push(super::draw_cull::padded_xywh(*pin, pad));
+                }
+                super::draw_cull::CullRects::from_rects(rects).or_else(|| {
+                    self.damage_rect.map(|d| {
+                        super::draw_cull::CullRects::one(super::draw_cull::padded_xywh(d, pad))
+                    })
+                })
+            } else {
+                match (self.scroll_text_clip, self.scroll_text_clip_second) {
+                    (Some(a), Some(b)) => Some(super::draw_cull::CullRects::pair(
+                        super::draw_cull::padded_xywh(a, pad),
+                        super::draw_cull::padded_xywh(b, pad),
+                    )),
+                    (Some(a), None) => Some(super::draw_cull::CullRects::one(
+                        super::draw_cull::padded_xywh(a, pad),
+                    )),
+                    (None, _) => self.damage_rect.map(|d| {
+                        super::draw_cull::CullRects::one(super::draw_cull::padded_xywh(d, pad))
+                    }),
+                }
+            }
         } else {
             None
         };
@@ -4319,37 +4642,39 @@ impl AppState {
             self.window.request_redraw();
         }
         self.note_fit_relayout_followup(page_fit_relayout, scroll_paint_only);
+        let page_inst = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
+        let page_tex = &scaled_tex[..overlay_tex_start.min(scaled_tex.len())];
+        let prev_slot_for = |key: u64| {
+            self.last_present_node_bounds
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, b)| *b)
+        };
+        let node_needs_glyphs = |d: &super::damage::PaintDirty| {
+            super::draw_cull::node_present_needs_glyphs_scaled(
+                d.key,
+                d.bounds,
+                &render_result.node_paints,
+                page_inst,
+                page_tex,
+                ui_scale,
+                prev_slot_for(d.key),
+            )
+        };
         let capture_text_ready = if gpu_present.use_node_present
             && self.damage_nodes.iter().any(|d| match d.kind {
                 super::damage::PaintDirtyKind::OverlayRestore => true,
-                super::damage::PaintDirtyKind::Node => {
-                    super::draw_cull::node_present_needs_glyphs_scaled(
-                        d.key,
-                        d.bounds,
-                        &render_result.node_paints,
-                        &scaled_instances[..overlay_inst_start.min(scaled_instances.len())],
-                        ui_scale,
-                    )
-                }
+                super::damage::PaintDirtyKind::Node => node_needs_glyphs(d),
                 super::damage::PaintDirtyKind::Overlay => false,
             }) {
             let page_text = &self.text_nodes[..overlay_text_start];
-            let page_inst = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
             let glyph_dirties: Vec<_> = self
                 .damage_nodes
                 .iter()
                 .copied()
                 .filter(|d| match d.kind {
                     super::damage::PaintDirtyKind::OverlayRestore => true,
-                    super::damage::PaintDirtyKind::Node => {
-                        super::draw_cull::node_present_needs_glyphs_scaled(
-                            d.key,
-                            d.bounds,
-                            &render_result.node_paints,
-                            page_inst,
-                            ui_scale,
-                        )
-                    }
+                    super::damage::PaintDirtyKind::Node => node_needs_glyphs(d),
                     super::damage::PaintDirtyKind::Overlay => false,
                 })
                 .collect();
@@ -4586,6 +4911,28 @@ impl AppState {
             );
         } else {
             self.present_retain.invalidate_contents();
+        }
+        if use_partial_damage && self.present_retain.contents_valid() {
+            for job in &self.scroll_strip_blit {
+                if let Some(copy) = super::damage::scroll_strip_copy_physical(
+                    &job.plan,
+                    ui_scale,
+                    self.config.width,
+                    self.config.height,
+                ) {
+                    if self.present_retain.copy_scroll_strip(
+                        &mut encoder,
+                        copy.src_x,
+                        copy.src_y,
+                        copy.dst_x,
+                        copy.dst_y,
+                        copy.width,
+                        copy.height,
+                    ) {
+                        super::damage::note_scroll_strip_blit();
+                    }
+                }
+            }
         }
         let clear_color = crate::renderer::surface_clear_color(self.compositor_alpha);
         let color_load = if use_partial_damage {
@@ -4976,14 +5323,16 @@ impl AppState {
             }
             super::frame_stats::begin_scene_batches();
             if gpu_present.clear_damage {
-                if let Some(rect) = cull_phys {
-                    draw_scissor_clear(
-                        &mut render_pass,
-                        &self.pipeline,
-                        &self.device,
-                        rect,
-                        clear_color,
-                    );
+                if let Some(cull) = cull_phys {
+                    for rect in cull.strips() {
+                        draw_scissor_clear(
+                            &mut render_pass,
+                            &self.pipeline,
+                            &self.device,
+                            rect,
+                            clear_color,
+                        );
+                    }
                 }
             }
 
@@ -5376,22 +5725,7 @@ impl AppState {
         self.damage_rect = None;
         self.damage_nodes.clear();
         self.force_full_redraw = false;
-        let tex_logical = scale_textured_draws(&render_result.textured_draws, 1.0);
-        self.last_present_node_bounds = render_result
-            .node_paints
-            .iter()
-            .filter(|p| !p.overlay)
-            .map(|p| {
-                (
-                    p.key,
-                    super::draw_cull::node_paint_visual_bounds(
-                        p,
-                        &render_result.instances,
-                        &tex_logical,
-                    ),
-                )
-            })
-            .collect();
+        self.last_present_node_bounds = next_last_present;
         self.has_presented_frame = true;
         {
             let draw_done = Instant::now();

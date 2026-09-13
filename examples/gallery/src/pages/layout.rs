@@ -2153,6 +2153,73 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
     root
 }
 
+/// Fine-grained matrix (suggested): who ran this `set`. Not a D1–D7 / B8 exit gate.
+#[component]
+pub(crate) fn FgMatrixShowcase() -> rui::core::tree::Element {
+    use rui::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
+    use rui::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
+
+    let n = use_signal("gal_fg_n", || 0_u32);
+    let last_render = use_signal("gal_fg_render", || 0_usize);
+    let last_total = use_signal("gal_fg_total", || 0_usize);
+    let root_deps = use_signal("gal_fg_root", || ui_root_effect_dep_count());
+    let miss = use_signal("gal_fg_miss", || bind_miss_count());
+    let unkeyed = use_signal("gal_fg_unkeyed", || unkeyed_for_rebuild_count());
+
+    ui! {
+        <MyCard title="FG 矩阵（建议 · 不替代库测）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对照 plans/true-fine-grained.md §5。点「同宽 +1」后读本次 flush：期望 Render≈1、根 dep 不抬、无 bind miss。不要把 PartialLoad / GPU 填色当 D1–D7 退出门。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "权威仍是库测（builder_live_ / graph_flush_ / menubar_trigger_open_patches）。本卡只做手工对照；点按会 drain take_flushed_effects，勿与其它诊断卡同时点。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { format!(
+                        "n={:02}  |  last Render={}  |  last flush={}  |  root_deps={}  |  bind_miss={}  |  unkeyed_For={}",
+                        n.get() % 100,
+                        last_render.get(),
+                        last_total.get(),
+                        root_deps.get(),
+                        miss.get(),
+                        unkeyed.get()
+                    ) }
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Label text_size="1.5rem" font_weight="700" leading="none">
+                        { format!("{:02}", n.get() % 100) }
+                    </Label>
+                    <Button variant="default" on_click={move || {
+                        let _ = take_flushed_effects();
+                        n.set(n.peek().wrapping_add(1));
+                        let flushed = take_flushed_effects();
+                        last_render.set(
+                            flushed
+                                .iter()
+                                .filter(|(_, phase)| *phase == EffectPhase::Render)
+                                .count(),
+                        );
+                        last_total.set(flushed.len());
+                        root_deps.set(ui_root_effect_dep_count());
+                        miss.set(bind_miss_count());
+                        unkeyed.set(unkeyed_for_rebuild_count());
+                    }}>
+                        "同宽 +1"
+                    </Button>
+                    <Button variant="outline" on_click={move || {
+                        root_deps.set(ui_root_effect_dep_count());
+                        miss.set(bind_miss_count());
+                        unkeyed.set(unkeyed_for_rebuild_count());
+                    }}>
+                        "刷新计数"
+                    </Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 /// WP-2.4 Gallery 验收：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
 #[component]
 pub(crate) fn OwnerRegistryShowcase() -> rui::core::tree::Element {

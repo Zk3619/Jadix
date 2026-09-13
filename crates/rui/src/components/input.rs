@@ -36,6 +36,14 @@
 //! - Explicit `invalid=true` overlaps with type checking.
 //! - 单行编辑默认 [`crate::style::TextOverflow::Hidden`]（原生 `<input>`：裁切溢出，光标/选区可滚出）。
 //!   `truncate` / `text-overflow: ellipsis|clip|newline` 用于 Label、Button 等不可编辑文本，**不会**作用在 Input 上。
+//!
+//! ## 细粒度（N.7）
+//!
+//! - 受控 [`InputBuilder::value_signal`]：paint 用 `peek` + [`crate::utils::text_field::pull_controlled_into_store`]。
+//!   **焦点内**或 **IME 合成未提交**时，外部 `set` 不覆盖 store、不抢光标 / 选区。
+//! - Caret、选区、焦点环走 [`crate::core::tree::TextEditPaintSync`]（每帧 peek），不是 `bind_text` / `bind_class`。
+//!   Hover chrome 同理：[`crate::core::tree::ReactiveSync`] / paint peek，禁止每帧新建 bind。
+//! - 禁止用叶子 bind 驱动 caret；禁止每键击重建 Input 子树。
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +53,9 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::components::base::SlotChrome;
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
+use crate::core::tree::{
+    parse_text_color, Element, IntoCssDim, IntoF32, IntoNodeSize, LayoutStatus,
+};
 use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_field::commit_value;
@@ -724,11 +734,13 @@ impl InputBuilder {
         self.step = if s.is_finite() && s > 0.0 { s } else { 1.0 };
         self
     }
-    pub fn w(mut self, width: impl IntoCssDim) -> Self {
+    #[track_caller]
+    pub fn w(mut self, width: impl IntoNodeSize) -> Self {
         self.container = self.container.w(width);
         self
     }
-    pub fn h(mut self, height: impl IntoCssDim) -> Self {
+    #[track_caller]
+    pub fn h(mut self, height: impl IntoNodeSize) -> Self {
         self.container = self.container.h(height);
         self
     }
@@ -774,7 +786,8 @@ impl InputBuilder {
     pub fn text_leading_relaxed(self) -> Self {
         self.text_leading(1.625)
     }
-    /// Controlled value: see [`crate::utils::text_field::bind_controlled_value`].
+    /// Controlled value: paint peek + [`crate::utils::text_field::bind_controlled_value`].
+    /// While focused or IME composing, an external `set` does not steal caret (N.7).
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self

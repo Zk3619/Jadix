@@ -267,6 +267,7 @@ pub(crate) fn GallerySectionLayout() -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <LayoutSubtreeShowcase />
                     <DamageShowcase />
+                    <FgMatrixShowcase />
                     <OwnerRegistryShowcase />
                     <StoreResourceShowcase />
                     <RootBareGetShowcase />

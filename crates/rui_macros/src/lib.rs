@@ -476,11 +476,14 @@ fn wrap_ui_expansion(
 /// Field-level Solid alignment:
 /// - Each invocation runs under [`component_root`] / instance Owner (WP-3.14). Sibling
 ///   `provide_context` calls do not overwrite each other.
+/// - Default (non-`reactive`) bodies run under [`isolate_reads`] so a naked `signal.get()`
+///   does **not** subscribe a parent effect (D2 / N.3). Set `RUI_COMPONENT_ISOLATE_DEFAULT=0`
+///   to roll back. Prefer `ui!` auto `bind_*` / `<Show>` / `<For>` — isolate discards a
+///   missed bind; it is not itself a bind.
 /// - `Signal` / closure / `Element` props are **excluded** from the PartialEq snapshot (static
 ///   props only trigger subtree refresh).
-/// - The component effect uses [`isolate_reads`] so naked `signal.get()` in the body does **not**
-///   re-subscribe the component boundary; prefer `ui!` auto `bind_*` / `<Show>` / `<For>` for
-///   field updates.
+/// - `#[component(reactive)]` already isolates via `reactive_component`; do not double-wrap.
+///   `reactive_component_live` stays un-isolated.
 #[proc_macro_attribute]
 pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemFn);
@@ -682,7 +685,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #crate_path::core::reactivity::component_root(|| {
                 #(#field_unwrapping)*
                 #merge_base_stmt
-                let mut __el = { #body };
+                let mut __el = #crate_path::core::reactivity::component_isolated_body(|| { #body });
                 __el = #crate_path::style::apply_stylesheet_rules_tree(__el);
                 #post_apply_base_stmt
                 __el
@@ -790,8 +793,10 @@ fn stable_template_hash(source: &str) -> String {
 ///
 /// Tightened vs a bare zero-arg `.get()` scan:
 /// - receiver must be a path / field / index / paren / reference chain (not a call result);
-/// - also treats `.get_untracked()` as non-subscribing (ignored);
+/// - `.peek()` / `.get_untracked()` are non-subscribing (ignored — different method names);
 /// - ignores `.get(...)` with arguments (e.g. `HashMap::get`);
+/// - does not walk closures (event handlers, `untrack(|| …)`, `move ||`);
+/// - skips `untrack(...)` call arguments;
 /// - scans inside macro args (e.g. `format!("…{}", count.get())`) — syn's default visit
 ///   does not walk macro token trees, which previously skipped auto `bind_text` lowering
 ///   and left naked `.get()` under `isolate_reads` (gallery section body) with no subscriber.
@@ -810,6 +815,7 @@ fn expr_reads_get(expr: &Expr) -> bool {
                 Expr::Group(g) => Self::receiver_ok(&g.expr),
                 Expr::Reference(r) => Self::receiver_ok(&r.expr),
                 Expr::Try(t) => Self::receiver_ok(&t.expr),
+                Expr::Cast(c) => Self::receiver_ok(&c.expr),
                 Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => Self::receiver_ok(&u.expr),
                 Expr::MethodCall(m) => {
                     // Allow chains like `self.count.get()` / `state.foo.get()`.
@@ -828,6 +834,15 @@ fn expr_reads_get(expr: &Expr) -> bool {
             };
             let s = seg.ident.to_string();
             s.len() > 1 && s.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+        }
+
+        fn path_ends_with_ident(expr: &Expr, name: &str) -> bool {
+            match expr {
+                Expr::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == name),
+                Expr::Paren(p) => Self::path_ends_with_ident(&p.expr, name),
+                Expr::Group(g) => Self::path_ends_with_ident(&g.expr, name),
+                _ => false,
+            }
         }
     }
     impl Visit<'_> for Finder {
@@ -850,6 +865,21 @@ fn expr_reads_get(expr: &Expr) -> bool {
                 return;
             }
             syn::visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_closure(&mut self, _node: &syn::ExprClosure) {
+            // Event handlers / `untrack(|| …)` / `move ||` compute: inner `.get()` is
+            // not a reason to emit a leaf bind on the outer expression.
+        }
+
+        fn visit_expr_call(&mut self, node: &syn::ExprCall) {
+            if self.found {
+                return;
+            }
+            if Self::path_ends_with_ident(&node.func, "untrack") {
+                return;
+            }
+            syn::visit::visit_expr_call(self, node);
         }
 
         fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
@@ -881,6 +911,49 @@ fn expr_reads_get(expr: &Expr) -> bool {
     finder.found
 }
 
+fn peel_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Paren(p) => peel_expr(&p.expr),
+        Expr::Group(g) => peel_expr(&g.expr),
+        other => other,
+    }
+}
+
+fn expr_contains_ui_macro(expr: &Expr) -> bool {
+    struct Finder {
+        found: bool,
+    }
+    impl Visit<'_> for Finder {
+        fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
+            if self.found {
+                return;
+            }
+            if node
+                .mac
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "ui")
+            {
+                self.found = true;
+                return;
+            }
+            syn::visit::visit_expr_macro(self, node);
+        }
+    }
+    let mut finder = Finder { found: false };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+/// Tracked `if sig.get() { ui!(…) } else { … }` as a child must be `<Show>` / `<Match>`.
+fn expr_is_reactive_structural_branch(expr: &Expr) -> bool {
+    match peel_expr(expr) {
+        Expr::If(_) | Expr::Match(_) => expr_reads_get(expr) && expr_contains_ui_macro(expr),
+        _ => false,
+    }
+}
+
 fn expand_node(
     node: &RsxNode,
     node_counter: &mut usize,
@@ -888,6 +961,13 @@ fn expand_node(
 ) -> proc_macro2::TokenStream {
     match node {
         RsxNode::Expr(expr) => {
+            if expr_is_reactive_structural_branch(expr) {
+                return quote! {
+                    compile_error!(
+                        "tracked `if` / `match` that builds UI must use `<Show>` / `<Match>`, not a child `{ if sig.get() { ui!(…) } }`"
+                    )
+                };
+            }
             // Solid-style: dynamic text children that read `.get()` become in-place bindings
             // instead of subscribing the surrounding (often root) effect.
             if expr_reads_get(expr) {
@@ -906,9 +986,10 @@ fn expand_node(
             quote! { #expr }
         }
         RsxNode::Element(el) => {
-            // HTML / Solid 风格别名 → 规范组件名（`<Img>`/`<img>` → `Image`）。
+            // HTML / Solid 风格别名 → 规范名（`<Img>`/`<img>` → `Image`；`<div>`/`<Div>` → `Box`）。
             let name_str = match el.name.to_string().as_str() {
                 "Img" | "img" => "Image".to_string(),
+                "div" | "Div" => "Box".to_string(),
                 other => other.to_string(),
             };
             let select_is_compound =
@@ -6907,6 +6988,7 @@ fn expand_node(
                                 | "ml"
                                 | "rounded"
                                 | "bg"
+                                | "opacity"
                                 | "color"
                                 | "text_color"
                                 | "font_weight"
@@ -7152,6 +7234,19 @@ fn expand_node(
                                             rui::core::tree::parse_color(__v.as_str())
                                         },
                                         |el, color| rui::style::apply_user_bg(el, color),
+                                    );
+                                });
+                                continue;
+                            }
+                            if attr_name == "opacity" {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_opacity#{}", file!(), line!(), #idx),
+                                        move || {
+                                            rui::core::tree::IntoOpacity::into_opacity(#value)
+                                        },
+                                        |el, o| rui::app::reactive::apply_bound_opacity(el, o),
                                     );
                                 });
                                 continue;
@@ -7749,6 +7844,7 @@ fn expand_node(
                     // Grid 为 GStack 的 HTML/Solid 风格别名。
                     "GStack" | "Grid" => quote! { rui::primitives::gstack() },
                     // Layout container. `Rect` is SVG — use `<Box>`.
+                    // HTML/Solid `<div>` / `<Div>` are remapped to `Box` above.
                     "Box" => quote! { rui::primitives::r#box() },
                     "Interactive" => {
                         quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
@@ -8394,7 +8490,22 @@ fn expand_node(
                         }
                     }
                     "opacity" => {
-                        element = quote! { #element.opacity(#value) };
+                        if expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_opacity#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoOpacity::into_opacity(#value)
+                                    },
+                                    |el, o| rui::app::reactive::apply_bound_opacity(el, o),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.opacity(#value) };
+                        }
                     }
                     "bg" => {
                         if expr_reads_get(value) {
@@ -9361,6 +9472,29 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn div_alias_lowers_to_box_primitive() {
+        let from_div = expand(r#"<div w="2rem" id="shell">"hi"</div>"#);
+        let from_box = expand(r#"<Box w="2rem" id="shell">"hi"</Box>"#);
+        assert!(
+            from_div.contains("r#box"),
+            "div must lower to primitives::r#box(); got {from_div}"
+        );
+        assert!(
+            from_div.contains(". id") || from_div.contains(".id"),
+            "div id must use BoxBuilder::id; got {from_div}"
+        );
+        assert_eq!(from_div, from_box, "div and Box must expand identically");
+    }
+
+    #[test]
+    fn div_pascal_alias_lowers_to_box_primitive() {
+        let from_div = expand(r#"<Div h="1rem"></Div>"#);
+        let from_box = expand(r#"<Box h="1rem"></Box>"#);
+        assert!(from_div.contains("r#box"), "{from_div}");
+        assert_eq!(from_div, from_box);
+    }
+
+    #[test]
     fn drag_reorder_handle_split_attrs_emit_builder() {
         let s = expand(r#"<Box drag_reorder_handle={list_id} drag_reorder_index={i}></Box>"#);
         assert!(s.contains("drag_reorder_handle"), "{s}");
@@ -9414,6 +9548,16 @@ mod rsx_lowering_tests {
         assert!(pct.contains("opacity"), "{pct}");
         let frac = expand(r#"<Box opacity={0.4}></Box>"#);
         assert!(frac.contains("opacity"), "{frac}");
+    }
+
+    #[test]
+    fn box_opacity_get_lowers_to_bind_prop() {
+        let s = expand(r#"<Box opacity={n.get()}></Box>"#);
+        assert!(
+            s.contains("bind_opacity"),
+            "opacity={{n.get()}} must lower to a leaf bind, got {s}"
+        );
+        assert!(s.contains("apply_bound_opacity"), "{s}");
     }
 
     #[test]
@@ -9758,5 +9902,72 @@ mod rsx_lowering_tests {
             lead.contains("into_f32_raw") || lead.contains("IntoF32Raw"),
             "{lead}"
         );
+    }
+
+    #[test]
+    fn memo_and_store_field_get_emit_bind_text() {
+        let memo = expand("<Box>{ memo.get() }</Box>");
+        assert!(memo.contains("bind_text"), "{memo}");
+        let field = expand("<Box>{ user.name.get() }</Box>");
+        assert!(field.contains("bind_text"), "{field}");
+        let paren = expand("<Box>{ (n.get()) }</Box>");
+        assert!(paren.contains("bind_text"), "{paren}");
+        let cast = expand("<Box>{ n.get() as i32 }</Box>");
+        assert!(cast.contains("bind_text"), "{cast}");
+        let recv_cast = expand("<Box>{ (n as _).get() }</Box>");
+        assert!(
+            recv_cast.contains("bind_text"),
+            "cast receiver `(n as _).get()` must still lower: {recv_cast}"
+        );
+    }
+
+    #[test]
+    fn unkeyed_tracked_for_emits_for_reactive_warn_path() {
+        let s = expand(r#"<For each={items.get()} item={item}>{ item }</For>"#);
+        assert!(
+            s.contains("for_reactive"),
+            "tracked <For> without key must lower to for_reactive: {s}"
+        );
+        assert!(
+            !s.contains("for_keyed_reactive"),
+            "unkeyed For must not take the item-owner path: {s}"
+        );
+    }
+
+    #[test]
+    fn format_and_nested_if_text_emit_bind_text() {
+        let fmt = expand(r#"<Box>{ format!("{}", n.get()) }</Box>"#);
+        assert!(fmt.contains("bind_text"), "{fmt}");
+        let nested = expand(r#"<Box>{ if ok { a.get() } else { b.get() } }</Box>"#);
+        assert!(nested.contains("bind_text"), "{nested}");
+    }
+
+    #[test]
+    fn peek_get_untracked_untrack_and_closures_do_not_emit_bind() {
+        assert!(!expand("<Box>{ n.peek() }</Box>").contains("bind_text"));
+        assert!(!expand("<Box>{ n.get_untracked() }</Box>").contains("bind_text"));
+        assert!(!expand("<Box>{ untrack(|| n.get()) }</Box>").contains("bind_text"));
+        assert!(
+            !expand("<Box>{ rui::core::reactivity::untrack(|| n.get()) }</Box>")
+                .contains("bind_text")
+        );
+        assert!(!expand("<Box>{ move || n.get() }</Box>").contains("bind_text"));
+        let click = expand(r#"<Box on_click={move |_| n.get()}>"x"</Box>"#);
+        assert!(
+            !click.contains("bind_text"),
+            "event-closure get must not emit a text leaf bind: {click}"
+        );
+    }
+
+    #[test]
+    fn tracked_if_ui_child_emits_compile_error() {
+        let s = expand(
+            r#"<Box>{ if n.get() { ui!(<Box>"a"</Box>) } else { ui!(<Box>"b"</Box>) } }</Box>"#,
+        );
+        assert!(
+            s.contains("compile_error"),
+            "structural if+ui! child must fail with Show/Match guidance: {s}"
+        );
+        assert!(s.contains("Show") || s.contains("Match"), "{s}");
     }
 }
