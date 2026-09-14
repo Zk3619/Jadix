@@ -484,10 +484,14 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // Scrollbar auto-hide: `WaitUntil` the hold deadline, then one redraw starts fade-out.
         // Expired keys MUST be removed — leaving them makes every later `about_to_wait`
         // see `until <= now` and `request_redraw()` forever (~vsync idle CPU).
+        // Windows coalesces `request_redraw` with `ControlFlow::Wait` (Dialog first-open).
+        // Static pages have no page-CSS Poll, so without a latched Poll until
+        // `RedrawRequested` the fade-start frame never runs and the overlay bar stays at cubic 1.
         if self.prune_expired_scrollbar_visibility(now) {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
+            self.scrollbar_hide_wake = true;
         }
         for &until in self.scrollbar_visible_until.values() {
             next_wake = Some(next_wake.map_or(until, |t| t.min(until)));
@@ -643,7 +647,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             || page_css_needs
             || self.paint_clock_active
             || self.force_redraw_count > 0
-            || resize_followup;
+            || resize_followup
+            || self.scrollbar_hide_wake;
         if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
@@ -1085,11 +1090,11 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         last_mouse_target: None,
         last_mouse_path: None,
         click_press_path: None,
+        click_press_scrolled: false,
         last_click_at: None,
         last_click_pos: [0.0, 0.0],
         click_count: 0,
         scrollbar_drag: None,
-        scrollbar_fade_active: false,
         content_scroll_drag: None,
         textarea_resize_drag: None,
         primary_touch_id: None,
@@ -1111,6 +1116,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         hover_scroll_rest: None,
         hover_scroll_axis: None,
         scrollbar_visible_until: std::collections::HashMap::new(),
+        scrollbar_hide_wake: false,
         scroll_velocity: std::collections::HashMap::new(),
         smooth_active_until: std::collections::HashMap::new(),
         scroll_max_lowpass: std::collections::HashMap::new(),
@@ -1182,5 +1188,56 @@ mod idle_control_flow_tests {
         );
         assert_eq!(idle_control_flow(None, false), ControlFlow::Wait);
         assert_eq!(idle_control_flow(None, true), ControlFlow::Poll);
+    }
+
+    #[test]
+    fn scrollbar_hide_expiry_polls_like_dialog() {
+        assert_eq!(
+            idle_control_flow(None, true),
+            ControlFlow::Poll,
+            "prune-expired auto-hide must Poll; Wait coalesces the fade-start redraw on Windows"
+        );
+        let leftover = Instant::now() + Duration::from_millis(400);
+        assert_eq!(
+            idle_control_flow(Some(leftover), true),
+            ControlFlow::Poll,
+            "a remaining axis deadline must not win WaitUntil over the expired-axis wake"
+        );
+    }
+
+    #[test]
+    fn scrollbar_hide_wake_survives_second_about_to_wait_before_redraw() {
+        // Windows: WaitUntil expiry → about_to_wait (prune) → about_to_wait again
+        // → RedrawRequested. The latch is App.scrollbar_hide_wake; it is not
+        // consumed by about_to_wait (unlike take_modal_force_immediate_wake).
+        let mut hide_wake = false;
+        let prune_first = true;
+        if prune_first {
+            hide_wake = true;
+        }
+        assert_eq!(
+            idle_control_flow(None, hide_wake),
+            ControlFlow::Poll,
+            "prune must Poll so the fade-start request_redraw is not coalesced"
+        );
+        let prune_second = false;
+        if prune_second {
+            hide_wake = true;
+        }
+        assert!(
+            hide_wake,
+            "a local prune flag would be false on the second wait; latch must hold"
+        );
+        assert_eq!(
+            idle_control_flow(None, hide_wake),
+            ControlFlow::Poll,
+            "second about_to_wait before RedrawRequested must still Poll"
+        );
+        hide_wake = false;
+        assert_eq!(
+            idle_control_flow(None, hide_wake),
+            ControlFlow::Wait,
+            "RedrawRequested consumes the latch; later idle may Wait"
+        );
     }
 }

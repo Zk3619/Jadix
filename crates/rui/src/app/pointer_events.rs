@@ -358,6 +358,34 @@ pub fn click_dispatch_path(down: &[HitPathEntry], up: &[HitPathEntry]) -> Vec<Hi
     Vec::new()
 }
 
+/// Physical-pixel slop matching primary double-click; below this the pointer is still.
+pub const CLICK_STILL_SLOP_PX: f32 = 6.0;
+
+pub fn click_pointer_moved(press_physical: [f32; 2], release_physical: [f32; 2]) -> bool {
+    (release_physical[0] - press_physical[0]).hypot(release_physical[1] - press_physical[1])
+        > CLICK_STILL_SLOP_PX
+}
+
+/// Press+release click.
+///
+/// A still pointer confirms the press path when the engine moved content (smooth
+/// chase already in flight). User-initiated scroll after press cancels `click`.
+/// User pointer motion uses the DOM LCA.
+pub fn click_gesture_path(
+    down: &[HitPathEntry],
+    up: &[HitPathEntry],
+    pointer_moved: bool,
+    scrolled_since_press: bool,
+) -> Vec<HitPathEntry> {
+    if scrolled_since_press {
+        return Vec::new();
+    }
+    if !pointer_moved && !down.is_empty() {
+        return down.to_vec();
+    }
+    click_dispatch_path(down, up)
+}
+
 /// Collect the hit path from root to the deepest hit node (inclusive).
 pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
     let mut path = Vec::new();
@@ -1025,5 +1053,40 @@ mod tests {
         let (cb, _) = resolve_click_from_path(&root, &click_path);
         (*cb.expect("captured button").borrow_mut())();
         assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn still_pointer_click_keeps_press_target_when_live_hit_slides() {
+        let (root, n) = click_tree();
+        let down = hit_path(&root, 60.0, 10.0);
+        let up = hit_path(&root, 10.0, 10.0);
+        assert_eq!(down.last().unwrap().focus_id.as_deref(), Some("btn"));
+        assert_eq!(up.last().unwrap().focus_id.as_deref(), Some("pad"));
+        let moved = click_dispatch_path(&down, &up);
+        let (cb_moved, _) = resolve_click_from_path(&root, &moved);
+        assert!(
+            cb_moved.is_none(),
+            "user motion off the button must not click it"
+        );
+        let still = click_gesture_path(&down, &up, false, false);
+        let (cb, _) = resolve_click_from_path(&root, &still);
+        (*cb.expect("still pointer keeps the press button")
+            .borrow_mut())();
+        assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn user_scroll_after_press_cancels_click_even_if_pointer_still() {
+        let (root, n) = click_tree();
+        let down = hit_path(&root, 60.0, 10.0);
+        let up = hit_path(&root, 60.0, 10.0);
+        assert_eq!(down.last().unwrap().focus_id.as_deref(), Some("btn"));
+        let click_path = click_gesture_path(&down, &up, false, true);
+        let (cb, _) = resolve_click_from_path(&root, &click_path);
+        assert!(
+            cb.is_none(),
+            "wheel / pan after mousedown must not fire on_click"
+        );
+        assert_eq!(n.get(), 0);
     }
 }

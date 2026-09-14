@@ -169,6 +169,57 @@ pub(crate) fn normalize_scrollbar_base_for_auto(
     }
 }
 
+/// Live `auto` visibility cubic for paint / paint-hash.
+///
+/// Overlay collect and fingerprint skip must sample this instead of baking alpha into
+/// `style.bg_color`. Full prepass writes base colors; ViewportsOnly frames then fade
+/// without Taffy thumb resize or hit-slab rewrite.
+pub(crate) fn auto_scrollbar_live_paint_alpha(el: &Element) -> Option<f32> {
+    let fid = el.focus_id.as_deref()?;
+    let (rest, axis, is_thumb) =
+        if let Some(prefix) = fid.strip_prefix(SCROLLBAR_THUMB_FOCUS_PREFIX) {
+            let (rest, axis) = prefix.rsplit_once(':').unwrap_or((prefix, "y"));
+            (rest, axis, true)
+        } else if let Some(prefix) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
+            let (rest, axis) = prefix.rsplit_once(':').unwrap_or((prefix, "y"));
+            (rest, axis, false)
+        } else {
+            return None;
+        };
+    let vis = use_signal(&scrollbar_visibility_signal_key(rest, axis), || {
+        "auto".to_string()
+    })
+    .peek();
+    if !vis.trim().eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    if !is_thumb {
+        let fades = el.attrs.get(ATTR_SCROLLBAR_TRACK_FADES).map(String::as_str) != Some("0");
+        if !fades {
+            return None;
+        }
+    }
+    Some(
+        crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
+            .peek()
+            .clamp(0.0, 1.0),
+    )
+}
+
+/// Restore build-time `auto` zeroing so collect can paint live cubic without a Full
+/// prepass writing `style.bg`. Transparent overlay tracks (`live_paint_alpha` = None)
+/// stay at 0.
+#[inline]
+pub(crate) fn auto_scrollbar_restore_base_alpha(el: &Element, mut color: [f32; 4]) -> [f32; 4] {
+    if auto_scrollbar_live_paint_alpha(el).is_none() {
+        return color;
+    }
+    if color[3] <= CHROME_ALPHA_EPS {
+        color[3] = 1.0;
+    }
+    color
+}
+
 /// Apply `auto` / `always` visibility alpha; track and thumb fade independently.
 #[inline]
 pub(crate) fn apply_scrollbar_visible_alpha(
@@ -739,6 +790,77 @@ mod chrome_tests {
         );
         assert!((track[3] - 0.5).abs() < 1e-4);
         assert!((thumb[3] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn auto_bar_paint_alpha_reads_live_cubic_not_style() {
+        use crate::core::reactivity::create_root;
+        use crate::style::{tick_animations, use_ui_transition_cubic};
+
+        let (_owner, _) = create_root(|| {
+            let mut el = Element::new();
+            el.focus_id = Some("scrollbar-thumb:fade-seam:y".into());
+            use_signal(&scrollbar_visibility_signal_key("fade-seam", "y"), || {
+                "auto".to_string()
+            })
+            .set("auto".to_string());
+            let tw = use_ui_transition_cubic("scrollbar_spring_fade-seam:y", 0.0);
+            tw.set(1.0);
+            tick_animations(0.08);
+            tick_animations(0.08);
+            let shown = auto_scrollbar_live_paint_alpha(&el).expect("auto thumb");
+            assert!(shown > 0.99, "settled show cubic must be ~1, got {shown}");
+            tw.set(0.0);
+            tick_animations(0.08);
+            tick_animations(0.08);
+            let hidden = auto_scrollbar_live_paint_alpha(&el).expect("auto thumb");
+            assert!(hidden < 0.01, "settled hide cubic must be ~0, got {hidden}");
+            let mut zeroed = [0.2, 0.2, 0.2, 0.0];
+            zeroed = auto_scrollbar_restore_base_alpha(&el, zeroed);
+            assert!(
+                (zeroed[3] - 1.0).abs() < 1e-4,
+                "collect must restore build-time auto zeroing, got {}",
+                zeroed[3]
+            );
+        });
+    }
+
+    #[test]
+    fn auto_hide_must_retarget_cubic_before_tick_or_collect_stays_opaque() {
+        use crate::core::reactivity::create_root;
+        use crate::style::{any_ui_animation_active, tick_animations, use_ui_transition_cubic};
+
+        let (_owner, _) = create_root(|| {
+            let tw = use_ui_transition_cubic("scrollbar_spring_hide-order:y", 0.0);
+            tw.set(1.0);
+            tick_animations(0.08);
+            tick_animations(0.08);
+            assert!(tw.peek() > 0.99);
+
+            // Old present-then-set order: tick/collect still see cubic 1.
+            let _ = tick_animations(0.016);
+            let collect_after_tick = tw.peek();
+            tw.set(0.0);
+            assert!(
+                collect_after_tick > 0.99,
+                "post-present set cannot change this frame's overlay collect, got {collect_after_tick}"
+            );
+            assert!(
+                any_ui_animation_active(),
+                "hide tween is active after set; paint_clock must pump it without force_redraw_count"
+            );
+
+            tw.set(1.0);
+            tick_animations(0.08);
+            tick_animations(0.08);
+            tw.set(0.0);
+            let _ = tick_animations(0.016);
+            let collect_after_retarget = tw.peek();
+            assert!(
+                collect_after_retarget < 0.99,
+                "paint-only hide must tick after retarget so collect leaves 1, got {collect_after_retarget}"
+            );
+        });
     }
 
     #[test]

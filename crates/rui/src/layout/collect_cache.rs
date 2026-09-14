@@ -343,6 +343,12 @@ fn node_collect_is_live(el: &Element) -> bool {
     if crate::style::css_animation_needs_frame(&el.style, &el.animation_snapshot) {
         return true;
     }
+    if el
+        .attrs
+        .contains_key(crate::primitives::shader::ATTR_SHADER)
+    {
+        return true;
+    }
     el.transition_snapshot.has_active_tweens()
 }
 
@@ -378,6 +384,11 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     hash_f32s(h, &el.style.border_color);
     el.style.border_width.to_bits().hash(h);
     el.style.opacity.to_bits().hash(h);
+    // Auto scrollbar cubic is not baked into `bg_color`. Hash the live peek so
+    // fingerprint skip busts the rail without disabling collect-skip for the page.
+    if let Some(v) = crate::components::scrollbar::auto_scrollbar_live_paint_alpha(el) {
+        v.to_bits().hash(h);
+    }
     hash_f32s(h, &el.style.radii);
     for s in el.style.resolved_corner_shapes() {
         std::mem::discriminant(&s).hash(h);
@@ -538,6 +549,9 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
             c.overwrite_highlight.hash(h);
             c.preedit_underline.hash(h);
             c.drop_caret.hash(h);
+            c.caret_color.hash(h);
+            c.selection_bg.hash(h);
+            c.selection_foreground.hash(h);
         }
         None => false.hash(h),
     }

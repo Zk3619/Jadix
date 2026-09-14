@@ -63,8 +63,12 @@ struct OverlayLayer {
     kind: OverlayKind,
 }
 
+fn layer_live(s: Signal<bool>) -> bool {
+    s.try_peek().unwrap_or(false)
+}
+
 fn layer_is_active(l: &OverlayLayer) -> bool {
-    l.open.peek() || l.keep_alive.is_some_and(|k| k.peek())
+    layer_live(l.open) || l.keep_alive.is_some_and(layer_live)
 }
 
 thread_local! {
@@ -109,11 +113,11 @@ fn prune_closed(stack: &mut Vec<OverlayLayer>) -> Vec<Signal<bool>> {
     let mut to_close = Vec::new();
     if let Some(pos) = stack.iter().position(|l| !layer_is_active(l)) {
         for l in stack.drain(pos..) {
-            if l.open.peek() {
+            if layer_live(l.open) {
                 to_close.push(l.open);
             }
             if let Some(k) = l.keep_alive {
-                if k.peek() {
+                if layer_live(k) {
                     to_close.push(k);
                 }
             }
@@ -199,7 +203,7 @@ fn portal_sync_inner(
     mode: OverlayMode,
 ) -> Option<OverlayZ> {
     let id = id.into();
-    let active = open.peek() || keep_alive.is_some_and(|k| k.peek());
+    let active = layer_live(open) || keep_alive.is_some_and(layer_live);
     match mode {
         OverlayMode::Pinned => {
             if active {
@@ -324,7 +328,7 @@ pub fn stacked_modal_open() -> bool {
         let to_close = prune_closed(stack);
         let open = stack
             .iter()
-            .any(|l| l.kind == OverlayKind::Modal && l.open.peek());
+            .any(|l| l.kind == OverlayKind::Modal && layer_live(l.open));
         (open, to_close)
     });
     for other in to_close {
@@ -338,9 +342,9 @@ pub fn stacked_modal_open() -> bool {
 pub fn stacked_menu_or_modal_open() -> bool {
     let (open, to_close) = with_stack_mut(|stack| {
         let to_close = prune_closed(stack);
-        let open = stack
-            .iter()
-            .any(|l| l.open.peek() && matches!(l.kind, OverlayKind::Modal | OverlayKind::Menu));
+        let open = stack.iter().any(|l| {
+            layer_live(l.open) && matches!(l.kind, OverlayKind::Modal | OverlayKind::Menu)
+        });
         (open, to_close)
     });
     for other in to_close {
@@ -366,7 +370,7 @@ pub fn try_close_top() -> bool {
     });
     let mut closed = false;
     for other in pruned {
-        if other.peek() {
+        if layer_live(other) {
             other.try_set(false);
             closed = true;
         }
@@ -374,7 +378,7 @@ pub fn try_close_top() -> bool {
     let Some(open) = to_close_top else {
         return closed;
     };
-    if open.peek() {
+    if layer_live(open) {
         // Prefer try_set: stack may briefly hold a disposed handle across teardown.
         open.try_set(false);
         true
@@ -433,7 +437,7 @@ pub fn try_dismiss_outside_press() -> bool {
     }
     let mut any = false;
     for open in to_close {
-        if open.peek() {
+        if layer_live(open) {
             open.try_set(false);
             any = true;
         }
@@ -450,7 +454,7 @@ pub fn hit_path_on_hoisted_portal(path: &[super::pointer_events::HitPathEntry]) 
 pub fn top_stacked_exclusive_id() -> Option<String> {
     with_stack_mut(|stack| {
         stack.iter().rev().find_map(|l| {
-            if !l.open.peek() {
+            if !layer_live(l.open) {
                 return None;
             }
             match l.kind {
@@ -480,7 +484,7 @@ pub fn hit_path_on_top_exclusive_surface(path: &[super::pointer_events::HitPathE
 
     with_stack_mut(|stack| {
         let Some(top_pos) = stack.iter().rposition(|l| {
-            l.open.peek()
+            layer_live(l.open)
                 && matches!(
                     l.kind,
                     OverlayKind::Menu | OverlayKind::Popover | OverlayKind::Tooltip
@@ -496,7 +500,7 @@ pub fn hit_path_on_top_exclusive_surface(path: &[super::pointer_events::HitPathE
         // Context-menu submenu open: clicks on the parent Menu still count as inside.
         if matches!(top_kind, OverlayKind::Menu) {
             for l in stack[..top_pos].iter().rev() {
-                if !l.open.peek() || !matches!(l.kind, OverlayKind::Menu) {
+                if !layer_live(l.open) || !matches!(l.kind, OverlayKind::Menu) {
                     continue;
                 }
                 if top_id.starts_with(&format!("{}__sub", l.id)) && path_hits_id(path, &l.id) {
@@ -556,6 +560,27 @@ mod tests {
 
     fn depth() -> usize {
         with_stack_mut(|s| s.len())
+    }
+
+    #[test]
+    fn page_teardown_must_not_peek_disposed_overlay_open() {
+        clear();
+        let (owner, open) = crate::core::reactivity::create_root(|| {
+            let open = Signal::new(true);
+            assert!(portal_sync("sel", open, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+            open
+        });
+        drop(owner);
+        assert!(
+            !open.is_alive(),
+            "page island dispose must drop the overlay open signal"
+        );
+        // Wheel / pointer / next portal_sync prune the stack. Peek panics were
+        // the gallery crash after opening a Select then switching pages.
+        let _ = stacked_menu_or_modal_open();
+        let _ = try_close_top();
+        assert_eq!(depth(), 0, "disposed layers must prune off the stack");
+        clear();
     }
 
     #[test]

@@ -1,0 +1,543 @@
+//! Overlay `auto` fade is paint-only: live cubic × collect, hit slab unchanged.
+//!
+//! Full prepass used to bake cubic into `style.bg` and skip-flex Taffy, which crushed
+//! the thumb and jumped the 8px hit slab. ViewportsOnly overlay collect must fade
+//! alpha without rewriting `layout_bounds`.
+
+use crate::app::pointer_events::{
+    click_dispatch_path, click_gesture_path, hit_path, resolve_click_from_path,
+};
+use crate::components::button::button;
+use crate::components::scroll_area::scroll_area;
+use crate::components::scrollbar::{SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX};
+use crate::core::reactivity::{create_effect, create_root, use_signal};
+use crate::core::scroll_viewport::{
+    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_y_signal_key,
+    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+};
+use crate::core::tree::{Element, LayoutTree};
+use crate::layout::layout_tree::RenderResult;
+use crate::style::{tick_animations, use_ui_transition_cubic};
+use std::cell::Cell;
+use std::rc::Rc;
+
+fn find_focus_bounds(el: &Element, prefix: &str, axis_suffix: &str) -> Option<[f32; 4]> {
+    if el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(prefix) && f.ends_with(axis_suffix))
+    {
+        return Some(el.layout_bounds);
+    }
+    el.children
+        .iter()
+        .find_map(|c| find_focus_bounds(c, prefix, axis_suffix))
+}
+
+fn thumb_style_alpha(el: &Element) -> Option<f32> {
+    if el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX) && f.ends_with(":y"))
+    {
+        return Some(el.style.bg_color[3]);
+    }
+    el.children.iter().find_map(thumb_style_alpha)
+}
+
+fn settle_cubic(rest: &str, axis: &str, target: f32) {
+    let tw = use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:{axis}"), 0.0);
+    tw.set(target);
+    tick_animations(0.08);
+    tick_animations(0.08);
+}
+
+fn thumb_fill_alpha(result: &RenderResult, thumb: [f32; 4]) -> f32 {
+    result
+        .instances
+        .iter()
+        .filter(|i| {
+            (i.rect_pos[0] - thumb[0]).abs() < 2.5
+                && (i.rect_pos[1] - thumb[1]).abs() < 2.5
+                && (i.rect_size[1] - thumb[3]).abs() < 2.5
+                && i.rect_size[0] > 1.0
+        })
+        .map(|i| i.color[3])
+        .fold(0.0_f32, f32::max)
+}
+
+#[test]
+fn overlay_auto_fade_paints_cubic_without_rewriting_hit_slab() {
+    const REST: &str = "diag-auto-fade";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+
+            settle_cubic(REST, "y", 1.0);
+
+            let shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track_shown = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y track shown");
+            let thumb_shown = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb shown");
+            let shown_a = thumb_fill_alpha(&shown, thumb_shown);
+            assert!(
+                thumb_style_alpha(&root).is_some_and(|a| a < 0.01),
+                "regression seam: ViewportsOnly must not need style.bg un-zeroed"
+            );
+            assert!(
+                shown_a > 0.85,
+                "visible cubic must paint thumb even while style.bg is still build-time 0, \
+                 got alpha {shown_a} bounds={thumb_shown:?}"
+            );
+            assert!(
+                thumb_shown[3] > 20.0,
+                "shown thumb must not be crushed to a top cap, h={}",
+                thumb_shown[3]
+            );
+            assert!(
+                track_shown[2] >= 7.5,
+                "8px hit slab must stay, track w={}",
+                track_shown[2]
+            );
+
+            settle_cubic(REST, "y", 0.0);
+            let hidden =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track_hidden = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y track hidden");
+            let thumb_hidden = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb hidden");
+            let hidden_a = thumb_fill_alpha(&hidden, thumb_hidden);
+            assert!(
+                hidden_a < 0.05,
+                "hidden cubic must paint ~0, got alpha {hidden_a}"
+            );
+            assert!(
+                (track_shown[0] - track_hidden[0]).abs() < 0.51
+                    && (track_shown[1] - track_hidden[1]).abs() < 0.51
+                    && (track_shown[2] - track_hidden[2]).abs() < 0.51
+                    && (track_shown[3] - track_hidden[3]).abs() < 0.51,
+                "fade must not rewrite track hit slab {track_shown:?} → {track_hidden:?}"
+            );
+            assert!(
+                (thumb_shown[2] - thumb_hidden[2]).abs() < 0.51
+                    && (thumb_shown[3] - thumb_hidden[3]).abs() < 0.51,
+                "fade must not crush thumb size {thumb_shown:?} → {thumb_hidden:?}"
+            );
+        });
+    });
+}
+
+fn find_focus_mut<'a>(
+    el: &'a mut Element,
+    prefix: &str,
+    axis_suffix: &str,
+) -> Option<&'a mut Element> {
+    if el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(prefix) && f.ends_with(axis_suffix))
+    {
+        return Some(el);
+    }
+    let n = el.children.len();
+    for i in 0..n {
+        if find_focus_bounds(&el.children[i], prefix, axis_suffix).is_some() {
+            return find_focus_mut(&mut el.children[i], prefix, axis_suffix);
+        }
+    }
+    None
+}
+
+fn poison_taffy_thumb_height(layout: &mut LayoutTree, thumb: &Element, height: f32) {
+    let nid = thumb.layout_node.expect("thumb taffy node");
+    let mut st = layout.taffy.style(nid).cloned().expect("thumb style");
+    st.size.height = taffy::style::Dimension::length(height);
+    st.min_size.height = taffy::style::Dimension::length(height);
+    st.max_size.height = taffy::style::Dimension::length(height);
+    layout.taffy.set_style(nid, st).expect("set thumb style");
+    let root = layout.root_node.expect("root");
+    layout
+        .taffy
+        .compute_layout(
+            root,
+            taffy::geometry::Size {
+                width: taffy::style::AvailableSpace::Definite(220.0),
+                height: taffy::style::AvailableSpace::Definite(120.0),
+            },
+        )
+        .expect("recompute after poison");
+}
+
+#[test]
+fn overlay_skip_replay_keeps_signal_thumb_not_taffy_min_cap() {
+    const REST: &str = "diag-skip-stamp";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            settle_cubic(REST, "y", 1.0);
+
+            layout.set_collect_skip_allowed(true);
+            let _warm =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let overlay_thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("overlay thumb");
+            assert!(
+                overlay_thumb[3] > 20.0,
+                "precondition: overlay thumb must be taller than the min cap, h={}",
+                overlay_thumb[3]
+            );
+
+            let thumb_el = find_focus_mut(&mut root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("thumb element");
+            poison_taffy_thumb_height(&mut layout, thumb_el, 8.0);
+            let nid = thumb_el.layout_node.expect("thumb node");
+            let taffy_h = layout.taffy.layout(nid).expect("thumb layout").size.height;
+            assert!(
+                (taffy_h - 8.0).abs() < 0.51,
+                "precondition: Taffy leftover must be the crushed cap, got {taffy_h}"
+            );
+
+            let _skipped =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let (skipped, _patched) = layout.last_collect_skip_counts();
+            assert!(
+                skipped >= 1,
+                "idle overlay collect must be able to skip; otherwise this does not test skip stamp"
+            );
+            let after = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("thumb after skip");
+            assert!(
+                (after[3] - overlay_thumb[3]).abs() < 0.51,
+                "skip must stamp overlay thumb, not Taffy min-cap {overlay_thumb:?} → {after:?} taffy_h={taffy_h}"
+            );
+            assert!(
+                after[3] > 20.0,
+                "skip must not crush hit to the groove top, h={}",
+                after[3]
+            );
+        });
+    });
+}
+
+#[test]
+fn overlay_thumb_ratio_uses_live_track_not_zero_vh_signal() {
+    const REST: &str = "diag-vh-vis";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            settle_cubic(REST, "y", 1.0);
+
+            let _shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("Y track");
+            let thumb =
+                find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y").expect("Y thumb");
+            assert!(
+                track[3] > 40.0,
+                "precondition: overlay track must have live Taffy height, {track:?}"
+            );
+            assert!(
+                thumb[3] > 20.0,
+                "ratio must use track along-size (vh_vis), not signal vh=0 min-cap, thumb={thumb:?} track={track:?}"
+            );
+        });
+    });
+}
+
+fn find_by_focus_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+    if el.focus_id.as_deref() == Some(id) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_by_focus_id(c, id))
+}
+
+fn path_focus_ids(path: &[crate::app::pointer_events::HitPathEntry]) -> Vec<String> {
+    path.iter().filter_map(|e| e.focus_id.clone()).collect()
+}
+
+fn path_hits_scrollbar(path: &[crate::app::pointer_events::HitPathEntry]) -> bool {
+    path.iter().any(|e| {
+        e.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
+                || f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
+        })
+    })
+}
+
+/// Overlay `auto` bar is visible during / after wheel (cubic=1, z=1000). Content
+/// clicks in the viewport must still hit the button, not the overlay track.
+#[test]
+fn overlay_visible_must_not_steal_content_button_hit() {
+    const REST: &str = "diag-click-during-scroll";
+    const BTN: &str = "scroll-click-btn";
+    let clicked = Rc::new(Cell::new(false));
+    let clicked_flag = clicked.clone();
+    let (_handle, _) = create_root(|| {
+        create_effect(move || {
+            let btn: Element = button(BTN)
+                .w("100%")
+                .on_click({
+                    let clicked_flag = clicked_flag.clone();
+                    move || clicked_flag.set(true)
+                })
+                .into();
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(8.0)
+                .child(Element::new().w("100%").h(40.0).bg([0.8, 0.8, 0.8, 1.0]))
+                .child(btn)
+                .children((0..12).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(36.0);
+            settle_cubic(REST, "y", 1.0);
+
+            let _shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y overlay track");
+            assert!(
+                track[2] < bounds[2] * 0.5,
+                "overlay track must stay an edge slab, not cover the viewport: track={track:?} viewport={bounds:?}"
+            );
+
+            let btn_el = find_by_focus_id(&root, BTN).expect("button");
+            let vis = crate::core::tree::visual_paint_aabb(btn_el, btn_el.paint_scroll_acc);
+            let (x, y) = (vis[0] + vis[2] * 0.5, vis[1] + vis[3] * 0.5);
+            assert!(
+                vis[2] > 8.0 && vis[3] > 8.0,
+                "button must have a hittable visual box, vis={vis:?} layout={:?}",
+                btn_el.layout_bounds
+            );
+            assert!(
+                y >= bounds[1] && y <= bounds[1] + bounds[3],
+                "probe must sit in the viewport, y={y} vis={vis:?} viewport={bounds:?}"
+            );
+
+            let path = hit_path(&root, x, y);
+            let ids = path_focus_ids(&path);
+            assert!(
+                !path_hits_scrollbar(&path),
+                "overlay z=1000 must not steal the content click at ({x},{y}) vis={vis:?} track={track:?} path={ids:?}"
+            );
+            let (cb, _) = resolve_click_from_path(&root, &path);
+            assert!(
+                cb.is_some(),
+                "button on_click must be on the hit path during overlay-visible scroll, ({x},{y}) vis={vis:?} track={track:?} path={ids:?}"
+            );
+            cb.unwrap().borrow_mut()();
+            assert!(clicked.get(), "resolved on_click must run");
+        });
+    });
+}
+
+/// Engine-driven scroll between mousedown and mouseup must not cancel a still-pointer
+/// click: the press path is the gesture, not the live mouseup hit.
+#[test]
+fn click_must_survive_inertial_scroll_under_stationary_pointer() {
+    const REST: &str = "diag-click-inertia";
+    const BTN: &str = "inertia-click-btn";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let btn: Element = button(BTN).w("100%").on_click(|| {}).into();
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(8.0)
+                .child(Element::new().w("100%").h(24.0))
+                .child(btn)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .scroll_behavior("smooth")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(8.0);
+            settle_cubic(REST, "y", 1.0);
+            layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+
+            let btn_el = find_by_focus_id(&root, BTN).expect("button");
+            let vis = crate::core::tree::visual_paint_aabb(btn_el, btn_el.paint_scroll_acc);
+            let (x, y) = (vis[0] + vis[2] * 0.5, vis[1] + vis[3] * 0.5);
+            let down = hit_path(&root, x, y);
+            let down_ids = path_focus_ids(&down);
+            assert!(
+                down.iter().any(|e| e.on_click.is_some()),
+                "press must hit the button, path={down_ids:?} vis={vis:?}"
+            );
+
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(48.0);
+            layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let up = hit_path(&root, x, y);
+            let up_ids = path_focus_ids(&up);
+            let lca = click_dispatch_path(&down, &up);
+            let (lca_cb, _) = resolve_click_from_path(&root, &lca);
+            assert!(
+                lca_cb.is_none(),
+                "precondition: live mouseup LCA must have lost the button, down={down_ids:?} up={up_ids:?} lca={:?}",
+                path_focus_ids(&lca)
+            );
+            let click_path = click_gesture_path(&down, &up, false, false);
+            let (cb, _) = resolve_click_from_path(&root, &click_path);
+            assert!(
+                cb.is_some(),
+                "still pointer must click the press target after engine scroll, down={down_ids:?} up={up_ids:?} click={:?}",
+                path_focus_ids(&click_path)
+            );
+        });
+    });
+}

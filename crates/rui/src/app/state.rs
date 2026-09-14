@@ -83,6 +83,8 @@ pub(super) struct AppState {
     textured_pipeline: TexturedQuadPipeline,
     #[cfg(feature = "scene3d")]
     scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
+    shader: Option<crate::renderer::shader_leaf::ShaderGpu>,
+    path2d: Option<crate::renderer::path_pipeline::PathGpu>,
     backdrop_blur: BackdropBlurPipeline,
     effect_pass: crate::renderer::EffectPassGpu,
     css_filter_pass: crate::renderer::CssFilterPassGpu,
@@ -1376,6 +1378,8 @@ impl AppState {
             textured_pipeline,
             #[cfg(feature = "scene3d")]
             scene3d: None,
+            shader: None,
+            path2d: None,
             backdrop_blur,
             effect_pass,
             css_filter_pass,
@@ -1805,6 +1809,13 @@ impl AppState {
         overlay_present: bool,
         overlay_visual: Option<[f32; 4]>,
     ) {
+        let collect_overlay_dirty = self
+            .damage_nodes
+            .iter()
+            .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay));
+        let prev_occ = self.overlay_occupied;
+        let prev_boxes = self.last_overlay_boxes.clone();
+        let had_occupancy = prev_occ.is_some();
         let cur_boxes = crate::layout::layout_tree::hoisted_portal_boxes(&self.root_element);
         let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
         let prev = self.last_portal_layer_damage;
@@ -1826,6 +1837,15 @@ impl AppState {
         let current_paint = overlay_visual.or(cur);
         let needs_restore =
             super::damage::overlay_restore_needed(self.overlay_occupied, current_paint);
+        let same_footprint =
+            super::damage::overlay_same_footprint(prev_occ, current_paint, 2.0);
+        let fade_replace = super::damage::overlay_fade_replace_needed(
+            had_occupancy,
+            overlay_present,
+            collect_overlay_dirty,
+            needs_restore,
+            same_footprint,
+        );
         if overlay_present
             && super::damage::overlay_pixels_need_full_clear(overlay_present, cur)
             && !self.force_full_redraw
@@ -1835,62 +1855,120 @@ impl AppState {
         } else if needs_restore {
             self.overlay_restore_clear = self.overlay_occupied.is_some();
             if !self.force_full_redraw && !self.scroll_layer_clear {
-                if let Some(occ) = self.overlay_occupied {
-                    self.damage_nodes.push(super::damage::PaintDirty {
-                        key: 0xE0E1_0000,
-                        bounds: super::draw_cull::padded_xywh(
-                            occ,
-                            super::damage::OVERLAY_RESTORE_PAD_LOGICAL,
-                        ),
-                        kind: super::damage::PaintDirtyKind::OverlayRestore,
-                    });
-                }
-                if overlay_present || !cur_boxes.is_empty() {
-                    if cur_boxes.is_empty() {
-                        if let Some(b) = current_paint.or(self.overlay_occupied) {
-                            self.damage_nodes.push(super::damage::PaintDirty {
-                                key: 0xE0E0_0000,
-                                bounds: b,
-                                kind: super::damage::PaintDirtyKind::Overlay,
-                            });
-                        }
-                    } else {
-                        for (i, b) in cur_boxes.iter().copied().enumerate() {
-                            let bounds = match overlay_visual {
-                                Some(v) => super::damage::union_rects(b, v),
-                                None => b,
-                            };
-                            self.damage_nodes.push(super::damage::PaintDirty {
-                                key: 0xE0E0_0000 | i as u64,
-                                bounds,
-                                kind: super::damage::PaintDirtyKind::Overlay,
-                            });
-                        }
-                    }
+                self.push_overlay_restore_leftovers(&prev_boxes, &cur_boxes);
+                if !collect_overlay_dirty && (overlay_present || !cur_boxes.is_empty()) {
+                    self.push_portal_overlay_paint_dirties(
+                        &cur_boxes,
+                        overlay_visual,
+                        current_paint,
+                    );
                 }
             }
             if cur_boxes.is_empty() && !overlay_present && !self.scroll_layer_clear {
                 self.overlay_occupied.take();
             }
         } else {
+            // Fade replace Restore must not set overlay_restore_clear — that flag
+            // disables page glyphon retain and punched the panel on enter.
             self.overlay_restore_clear = false;
-            if !self.force_full_redraw && !self.scroll_layer_clear && (membership || prev != cur) {
-                for (i, b) in cur_boxes.iter().copied().enumerate() {
-                    let bounds = match overlay_visual {
-                        Some(v) => super::damage::union_rects(b, v),
-                        None => b,
-                    };
-                    self.damage_nodes.push(super::damage::PaintDirty {
-                        key: 0xE0E0_0000 | i as u64,
-                        bounds,
-                        kind: super::damage::PaintDirtyKind::Overlay,
-                    });
-                }
+            if fade_replace && !self.force_full_redraw && !self.scroll_layer_clear {
+                self.push_overlay_fade_replace_restores(&cur_boxes);
+            } else if !self.force_full_redraw
+                && !self.scroll_layer_clear
+                && (membership || prev != cur)
+            {
+                self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
             }
         }
         self.last_overlay_boxes = cur_boxes;
         self.last_portal_layer_damage = cur;
         self.portal_membership_dirty = false;
+        super::damage::sort_paint_dirty_nodes(&mut self.damage_nodes);
+    }
+
+    fn push_overlay_restore_occupancy(&mut self) {
+        let Some(occ) = self.overlay_occupied else {
+            return;
+        };
+        self.push_overlay_restore_box(occ);
+    }
+
+    fn push_overlay_restore_leftovers(&mut self, prev_boxes: &[[f32; 4]], cur_boxes: &[[f32; 4]]) {
+        let leftovers = super::damage::overlay_restore_leftover_boxes(prev_boxes, cur_boxes);
+        if leftovers.is_empty() {
+            if cur_boxes.is_empty() {
+                // Close with no per-box history: punch the last occupancy hole.
+                self.push_overlay_restore_occupancy();
+            }
+            return;
+        }
+        for b in leftovers {
+            self.push_overlay_restore_box(b);
+        }
+    }
+
+    fn overlay_dirty_bounds_union(&self) -> Option<[f32; 4]> {
+        self.damage_nodes
+            .iter()
+            .filter(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay))
+            .map(|d| d.bounds)
+            .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+            .reduce(super::damage::union_rects)
+    }
+
+    fn push_overlay_fade_replace_restores(&mut self, cur_boxes: &[[f32; 4]]) {
+        let dirty = self.overlay_dirty_bounds_union();
+        let boxes = super::damage::overlay_fade_replace_restore_boxes(dirty, cur_boxes);
+        if boxes.is_empty() {
+            self.push_overlay_restore_occupancy();
+            return;
+        }
+        for b in boxes {
+            self.push_overlay_restore_box(b);
+        }
+    }
+
+    fn push_overlay_restore_box(&mut self, bounds: [f32; 4]) {
+        if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+            return;
+        }
+        self.damage_nodes.push(super::damage::PaintDirty {
+            key: 0xE0E1_0000,
+            bounds: super::draw_cull::padded_xywh(
+                bounds,
+                super::damage::OVERLAY_RESTORE_PAD_LOGICAL,
+            ),
+            kind: super::damage::PaintDirtyKind::OverlayRestore,
+        });
+    }
+
+    fn push_portal_overlay_paint_dirties(
+        &mut self,
+        cur_boxes: &[[f32; 4]],
+        overlay_visual: Option<[f32; 4]>,
+        current_paint: Option<[f32; 4]>,
+    ) {
+        if cur_boxes.is_empty() {
+            if let Some(b) = current_paint.or(self.overlay_occupied) {
+                self.damage_nodes.push(super::damage::PaintDirty {
+                    key: 0xE0E0_0000,
+                    bounds: b,
+                    kind: super::damage::PaintDirtyKind::Overlay,
+                });
+            }
+            return;
+        }
+        for (i, b) in cur_boxes.iter().copied().enumerate() {
+            let bounds = match overlay_visual {
+                Some(v) => super::damage::union_rects(b, v),
+                None => b,
+            };
+            self.damage_nodes.push(super::damage::PaintDirty {
+                key: 0xE0E0_0000 | i as u64,
+                bounds,
+                kind: super::damage::PaintDirtyKind::Overlay,
+            });
+        }
     }
 
     /// Overlay instance/text AABB in logical px (physical collect coords ÷ `ui_scale`).
@@ -2078,13 +2156,9 @@ impl AppState {
         use super::damage::PaintDirtyKind;
         let dummy = self.pipeline.dummy_backdrop();
         let mut pending_page_glyphs = capture_text_ready;
+        let mut overlay_scissor: Option<[f32; 4]> = None;
+        let mut page_punch_overlap: Option<[f32; 4]> = None;
         for dirty in &self.damage_nodes {
-            // Overlay draws after page dest-reset. Flush the clipped capture once
-            // so neighbor captions are not stamped under each node's scissor.
-            if dirty.kind == PaintDirtyKind::Overlay && pending_page_glyphs {
-                self.flush_node_present_page_glyphs(render_pass, ui_scale);
-                pending_page_glyphs = false;
-            }
             let scissor_pad = super::draw_cull::node_present_scissor_pad(dirty.kind);
             // Pad is inside the helper; overflow is re-intersected after pad so the
             // 8px Node scissor cannot leak into a title above ScrollArea.
@@ -2096,6 +2170,40 @@ impl AppState {
                 node_paints,
                 scissor_pad,
             );
+            if dirty.kind == PaintDirtyKind::Overlay {
+                overlay_scissor = Some(match overlay_scissor {
+                    Some(prev) => super::damage::union_rects(prev, scissor_logical),
+                    None => scissor_logical,
+                });
+                continue;
+            }
+            let scissor_logical = if dirty.kind == PaintDirtyKind::Node {
+                let clipped = super::damage::page_scissor_excluding_overlay(
+                    scissor_logical,
+                    self.overlay_occupied,
+                );
+                if super::damage::overlay_page_dirty_punches_occupancy(
+                    scissor_logical,
+                    clipped,
+                    self.overlay_occupied,
+                ) {
+                    if let Some(overlap) = super::damage::overlay_page_punch_overlap(
+                        self.overlay_occupied,
+                        scissor_logical,
+                    ) {
+                        page_punch_overlap = Some(match page_punch_overlap {
+                            Some(prev) => super::damage::union_rects(prev, overlap),
+                            None => overlap,
+                        });
+                    }
+                }
+                let Some(clipped) = clipped else {
+                    continue;
+                };
+                clipped
+            } else {
+                scissor_logical
+            };
             let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
                 scissor_logical,
                 0.0,
@@ -2167,74 +2275,8 @@ impl AppState {
                     }
                 }
                 PaintDirtyKind::Overlay => {
-                    if allow_primitives {
-                        for band in overlay_band_ranges {
-                            let op_lo = band.paint_ops.0.max(overlay_paint_start);
-                            let op_hi = band.paint_ops.1.max(op_lo);
-                            let inst_lo = band.instance.0.max(overlay_inst_start);
-                            let inst_hi = band.instance.1.max(inst_lo);
-                            let tex_lo = band.textured.0.max(overlay_tex_start);
-                            let tex_hi = band.textured.1.max(tex_lo);
-                            if op_lo < op_hi {
-                                draw_paint_ops(
-                                    render_pass,
-                                    paint_ops,
-                                    op_lo,
-                                    op_hi,
-                                    &self.pipeline,
-                                    &self.instance_buffer,
-                                    &self.textured_pipeline,
-                                    &self.textured_instance_buffer,
-                                    &self.image_textures,
-                                    scaled_tex,
-                                    dummy,
-                                    scaled_instances,
-                                    None,
-                                );
-                            } else if inst_lo < inst_hi {
-                                // Previous dirty node may have left glyphon's strip
-                                // pipeline bound; indexed SDF draws must rebind first.
-                                self.pipeline.bind_sdf(render_pass, true, dummy);
-                                render_pass
-                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                                render_pass.set_index_buffer(
-                                    self.pipeline.index_buffer.slice(..),
-                                    wgpu::IndexFormat::Uint16,
-                                );
-                                draw_instance_range(
-                                    render_pass,
-                                    &self.pipeline,
-                                    scaled_instances,
-                                    inst_lo as u32,
-                                    (inst_hi - inst_lo) as u32,
-                                    None,
-                                );
-                                if tex_lo < tex_hi {
-                                    draw_packed_textured_runs(
-                                        render_pass,
-                                        &self.textured_pipeline,
-                                        &self.textured_instance_buffer,
-                                        &self.image_textures,
-                                        scaled_tex,
-                                        tex_lo,
-                                        tex_hi,
-                                        None,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    if overlay_band_ranges.iter().any(|b| b.text.0 < b.text.1) {
-                        self.overlay_text_renderer.render(render_pass);
-                        for r in &self.overlay_band_text_renderers {
-                            r.render(render_pass);
-                        }
-                        super::frame_stats::note_scene_batch(
-                            super::frame_stats::SceneKind::Text,
-                            1,
-                        );
-                    }
+                    // Recorded into overlay_scissor above; suffix is drawn once after
+                    // Restore/Node so fade CSS + membership cannot stack the halo.
                 }
                 PaintDirtyKind::Node => {
                     if allow_primitives {
@@ -2321,8 +2363,129 @@ impl AppState {
                 }
             }
         }
+        // Overlay suffix once, after Restore/Node dest-reset. Encoding it per Overlay
+        // dirty src-overs the same fill/shadow under overlapping scissors (first-frame
+        // halo too dark). Restore may be appended after collect Overlay — drawing here
+        // keeps overlay on top of the restored page. Hover dest-reset that punches
+        // occupancy must still redraw overlay; never submit under a leftover Node scissor.
+        let overlay_scissor = super::damage::overlay_encode_scissor(
+            overlay_scissor,
+            super::damage::overlay_encode_occupancy(
+                overlay_scissor,
+                &self.last_overlay_boxes,
+                self.overlay_occupied,
+            ),
+            page_punch_overlap,
+        );
+        if overlay_scissor.is_some() && pending_page_glyphs {
+            self.flush_node_present_page_glyphs(render_pass, ui_scale);
+            pending_page_glyphs = false;
+        }
+        if let Some(scissor_logical) = overlay_scissor {
+            let physical = super::damage::damage_to_scissor_physical(
+                scissor_logical,
+                0.0,
+                ui_scale,
+                self.config.width,
+                self.config.height,
+            );
+            if let Some((x, y, w, h)) = physical {
+                render_pass.set_scissor_rect(x, y, w, h);
+                self.draw_node_present_overlay(
+                    render_pass,
+                    paint_ops,
+                    scaled_instances,
+                    scaled_tex,
+                    overlay_inst_start,
+                    overlay_tex_start,
+                    overlay_paint_start,
+                    overlay_band_ranges,
+                    dummy,
+                    allow_primitives,
+                );
+            }
+        }
         if pending_page_glyphs {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
+        }
+    }
+
+    fn draw_node_present_overlay<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        paint_ops: &[crate::layout::layout_tree::PaintOp],
+        scaled_instances: &[InstanceInput],
+        scaled_tex: &'pass [crate::renderer::ScaledTexturedDraw],
+        overlay_inst_start: usize,
+        overlay_tex_start: usize,
+        overlay_paint_start: usize,
+        overlay_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
+        dummy: &'pass wgpu::BindGroup,
+        allow_primitives: bool,
+    ) {
+        if allow_primitives {
+            for band in overlay_band_ranges {
+                let op_lo = band.paint_ops.0.max(overlay_paint_start);
+                let op_hi = band.paint_ops.1.max(op_lo);
+                let inst_lo = band.instance.0.max(overlay_inst_start);
+                let inst_hi = band.instance.1.max(inst_lo);
+                let tex_lo = band.textured.0.max(overlay_tex_start);
+                let tex_hi = band.textured.1.max(tex_lo);
+                if op_lo < op_hi {
+                    draw_paint_ops(
+                        render_pass,
+                        paint_ops,
+                        op_lo,
+                        op_hi,
+                        &self.pipeline,
+                        &self.instance_buffer,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        scaled_tex,
+                        dummy,
+                        scaled_instances,
+                        None,
+                    );
+                } else if inst_lo < inst_hi {
+                    // Previous dirty node may have left glyphon's strip
+                    // pipeline bound; indexed SDF draws must rebind first.
+                    self.pipeline.bind_sdf(render_pass, true, dummy);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    draw_instance_range(
+                        render_pass,
+                        &self.pipeline,
+                        scaled_instances,
+                        inst_lo as u32,
+                        (inst_hi - inst_lo) as u32,
+                        None,
+                    );
+                    if tex_lo < tex_hi {
+                        draw_packed_textured_runs(
+                            render_pass,
+                            &self.textured_pipeline,
+                            &self.textured_instance_buffer,
+                            &self.image_textures,
+                            scaled_tex,
+                            tex_lo,
+                            tex_hi,
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+        if overlay_band_ranges.iter().any(|b| b.text.0 < b.text.1) {
+            self.overlay_text_renderer.render(render_pass);
+            for r in &self.overlay_band_text_renderers {
+                r.render(render_pass);
+            }
+            super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
         }
     }
 
@@ -3188,10 +3351,18 @@ impl AppState {
                 log::warn!("hot-reload asset: failed to read {}", resolved.display());
                 continue;
             };
-            self.pipeline
-                .rebuild_wgsl(&self.device, &self.config, &source);
-            log::warn!("hot-reload asset: WGSL reloaded {}", resolved.display());
-            reloaded = true;
+            if self
+                .pipeline
+                .rebuild_wgsl(&self.device, &self.config, &source)
+            {
+                log::warn!("hot-reload asset: WGSL reloaded {}", resolved.display());
+                reloaded = true;
+            } else {
+                log::warn!(
+                    "hot-reload asset: WGSL compile failed, keeping previous pipeline ({})",
+                    resolved.display()
+                );
+            }
         }
         reloaded
     }
@@ -3654,10 +3825,11 @@ impl AppState {
                 active_drag_rest,
             );
         }
-        // Content scroll moves every pixel in the viewport. Named spin/shimmer dirties
-        // must not keep node-present PartialLoad — dest-reset of the current box leaves
-        // the previous offset in retain (stacked labels). Resize+StructureChanged may
-        // skip scrollbar geometry above; it must not skip this check.
+        // Content scroll moves every pixel in the viewport. Named spin/shimmer must
+        // not stay node-present PartialLoad (dest-reset of *now* leaves stacked
+        // labels). `scroll_layer_clear` is that gate — not window FullClear.
+        // Resize+StructureChanged may skip scrollbar geometry above; it must not
+        // skip this check.
         let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
         let scroll_changed = self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp;
         let cur_offsets = Self::scroll_offsets_map(&self.root_element);
@@ -4144,6 +4316,39 @@ impl AppState {
                 self.window.request_redraw();
             }
         }
+        {
+            if crate::primitives::path::has_path_jobs() || self.path2d.is_some() {
+                let samples = crate::renderer::path_pipeline::path_msaa_sample_count(&self.adapter);
+                let gpu = self.path2d.get_or_insert_with(|| {
+                    crate::renderer::path_pipeline::PathGpu::new(&self.device, samples)
+                });
+                if gpu.flush(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &mut self.image_textures,
+                ) {
+                    self.window.request_redraw();
+                }
+            }
+        }
+        {
+            if crate::primitives::shader::has_shader_jobs() || self.shader.is_some() {
+                let gpu = self.shader.get_or_insert_with(|| {
+                    crate::renderer::shader_leaf::ShaderGpu::new(&self.device)
+                });
+                if gpu.flush(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &mut self.image_textures,
+                    crate::style::global_time_s(),
+                    mouse_pos,
+                ) {
+                    self.window.request_redraw();
+                }
+            }
+        }
         let captures = crate::renderer::take_capture_jobs();
         let effects = crate::renderer::take_effect_jobs();
         let filters = crate::renderer::take_filter_jobs();
@@ -4259,10 +4464,18 @@ impl AppState {
             .filter(|p| !p.overlay)
             .map(|p| (p.key, p.bounds))
             .collect();
-        if super::damage::node_present_dirties_moved(
-            &self.damage_nodes,
-            &present_slots,
-            &self.last_present_node_bounds,
+        // Slot motion without a scroll layer (maximize / glyphon_fit) still
+        // FullClears: dest-reset of *now* cannot wipe the previous visual Y.
+        // A scroll layer already translated the viewport (strip blit or scissor
+        // Clear) and pins dest-reset named spin/shimmer in the copied overlap.
+        // `mark_full_redraw` here aborted B8 and window-Cleared Marker on every tick.
+        if super::damage::node_present_moved_forces_full_clear(
+            super::damage::node_present_dirties_moved(
+                &self.damage_nodes,
+                &present_slots,
+                &self.last_present_node_bounds,
+            ),
+            self.scroll_layer_clear,
         ) {
             self.mark_full_redraw();
         }
@@ -5978,15 +6191,10 @@ fn update_scrollbar_element_self(
     })
     .peek();
     let vis = vis.trim().to_ascii_lowercase();
-    let v = if vis == "never" {
-        0.0
-    } else if vis == "always" {
-        1.0
-    } else {
-        crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
-            .peek()
-            .clamp(0.0, 1.0)
-    };
+    // `auto` cubic is paint-only (collect × live peek). Baking it here made
+    // ViewportsOnly hover/hide frames paint stale alpha; Full+skip_flex then
+    // rewrote thumb Taffy size (crushed-top) and the 8px hit slab.
+    let v: f32 = if vis == "never" { 0.0 } else { 1.0 };
 
     // Recover base thickness from the track's max cross constraint only. Using `layout_bounds`
     // here caused cross-axis jitter whenever unrelated flex reflows nudged the resolved size.
@@ -6035,10 +6243,8 @@ fn update_scrollbar_element_self(
         inset_y.eq_ignore_ascii_case("outside")
     };
 
-    // Keep constant cross-size; show/hide is alpha-only (`v` = visibility cubic current).
-    // Do not clamp alpha to 0 while 0 < v < 0.01: during fade-in `v` stays tiny for several
-    // frames — forcing zero here made `auto` scrollbars look like hover never worked. Hit testing
-    // uses `layout_bounds`, not multiplied alpha.
+    // Keep constant cross-size; show/hide is paint-only cubic (collect), not size.
+    // Hit testing uses `layout_bounds`, not multiplied alpha.
     let inset = 1.0_f32;
     let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);

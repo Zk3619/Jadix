@@ -16,7 +16,11 @@
 //!   Overlapping siblings blit both and pin the intersection occupancy (copy
 //!   smear). `force_full_redraw`, invalid retain, `|delta| ≥ viewport`, and
 //!   `RUI_SCROLL_STRIP_BLIT=0` stay abort / layer-Clear gates. Spawn without
-//!   prev metrics does not abort sibling blits (no box to pin).
+//!   prev metrics does not abort sibling blits (no box to pin). A named
+//!   spin/shimmer slot that moved **with** that layer must not
+//!   `force_full_redraw` — that aborts strip blit. Pin holes dest-reset those
+//!   widgets in the copied overlap. Slot motion **without** a scroll layer
+//!   (maximize / `glyphon_fit`) still FullClears.
 //! - Page structure / page layout stay FullClear.
 
 use std::cell::RefCell;
@@ -101,7 +105,15 @@ pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
     } else {
         0.0
     };
-    let pad = (el.style.shadow_blur + el.style.shadow_spread.abs() + 2.0 + rot_pad).max(2.0);
+    // SDF vertex `ext` is `blur * 2 + spread + 2` (`rounded_rect.wgsl`). A 1× blur
+    // pad dest-resets the fill and leaves the halo in retain (dropdown smear).
+    let pad = (super::draw_cull::sdf_outset_shadow_pad(
+        el.style.shadow_blur,
+        el.style.shadow_spread,
+        el.style.shadow_offset,
+        0.0,
+    ) + rot_pad)
+        .max(2.0);
     push_paint_dirty(
         paint_element_key(el),
         [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
@@ -118,7 +130,8 @@ pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
         Some(t)
             if t.ends_with("__modal_overlay")
                 || t.ends_with("__modal_panel")
-                || t.ends_with("__modal_zoom") =>
+                || t.ends_with("__modal_zoom")
+                || t.ends_with("__floating_panel") =>
         {
             PaintDirtyKind::Overlay
         }
@@ -150,15 +163,20 @@ pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
     );
 }
 
+/// Restore page in the occupancy hole, then page nodes, then overlay chrome.
+pub fn sort_paint_dirty_nodes(nodes: &mut [PaintDirty]) {
+    nodes.sort_by_key(|d| match d.kind {
+        PaintDirtyKind::OverlayRestore => 0u8,
+        PaintDirtyKind::Node => 1,
+        PaintDirtyKind::Overlay => 2,
+    });
+}
+
 /// Take this frame's dirty nodes (order: restore, page, overlay).
 pub fn take_frame_paint_nodes() -> Vec<PaintDirty> {
     FRAME_PAINT_NODES.with(|slot| {
         let mut nodes = slot.borrow_mut().split_off(0);
-        nodes.sort_by_key(|d| match d.kind {
-            PaintDirtyKind::OverlayRestore => 0u8,
-            PaintDirtyKind::Node => 1,
-            PaintDirtyKind::Overlay => 2,
-        });
+        sort_paint_dirty_nodes(&mut nodes);
         nodes
     })
 }
@@ -353,6 +371,10 @@ pub fn overlay_pixels_need_full_clear(
 /// Load + overlay draw leaves every previous keyframe in retain (stacked ghosts).
 /// Clear the occupancy hole, restore page slots, then draw the current overlay.
 /// Grow does not need Clear: new pixels were page and the overlay covers them.
+/// Same-size fade is not shrink — OverlayRestore *with* `overlay_restore_clear`
+/// punches the panel (cannot open) and flashes the gallery. Fade still needs a
+/// **replace** ([`overlay_fade_replace_needed`]) so Load cannot src-over the
+/// previous keyframe (dark shadow flash / invisible fade-out).
 #[inline]
 pub fn overlay_restore_needed(occupied: Option<[f32; 4]>, current: Option<[f32; 4]>) -> bool {
     match (occupied, current) {
@@ -360,6 +382,256 @@ pub fn overlay_restore_needed(occupied: Option<[f32; 4]>, current: Option<[f32; 
         (Some(occ), Some(cur)) => overlay_box_extends_beyond(occ, cur, 2.0),
         _ => false,
     }
+}
+
+/// True when the overlay footprint did not grow or move (`slack` px).
+/// Expand accordion ticks Overlay dirty every frame while the box grows —
+/// that is not a same-size fade and must not OverlayRestore (flicker / punch).
+#[inline]
+pub fn overlay_same_footprint(
+    prev: Option<[f32; 4]>,
+    current: Option<[f32; 4]>,
+    slack: f32,
+) -> bool {
+    match (prev, current) {
+        (Some(a), Some(b)) => {
+            !overlay_box_extends_beyond(a, b, slack) && !overlay_box_extends_beyond(b, a, slack)
+        }
+        _ => false,
+    }
+}
+
+/// Same-size fade enter/exit on PartialLoad: restore page pixels in occupancy,
+/// then draw overlay once at the current opacity.
+///
+/// Src-over of a new opacity onto the previous keyframe stacks the outset
+/// shadow (fig.1 dark flash) and makes fade-out a no-op (translucent onto
+/// opaque retain). Unlike shrink/close, this Restore must not set
+/// `overlay_restore_clear` — that flag disables page glyphon retain.
+/// Expand / flip (`same_footprint == false`) must not Restore every tick.
+#[inline]
+pub fn overlay_fade_replace_needed(
+    had_occupancy: bool,
+    overlay_present: bool,
+    overlay_dirty: bool,
+    shrink_or_close: bool,
+    same_footprint: bool,
+) -> bool {
+    had_occupancy && overlay_present && overlay_dirty && !shrink_or_close && same_footprint
+}
+
+/// Previous portal boxes minus current ones. Flip below→above must Restore the
+/// old chip-side box only — not the union AABB that includes the page gap
+/// (forms / 2c heading) between the two positions.
+pub fn overlay_restore_leftover_boxes(
+    prev_boxes: &[[f32; 4]],
+    cur_boxes: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if prev_boxes.is_empty() {
+        return Vec::new();
+    }
+    let cur: Vec<[f32; 4]> = cur_boxes
+        .iter()
+        .copied()
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        .collect();
+    let mut out = Vec::new();
+    for prev in prev_boxes.iter().copied().filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+        let mut remnants = vec![prev];
+        for c in &cur {
+            remnants = remnants
+                .into_iter()
+                .flat_map(|r| subtract_rect(r, *c))
+                .collect();
+        }
+        out.extend(remnants);
+    }
+    out
+}
+
+/// Overlay suffix is submitted once per present.
+///
+/// Fade CSS (`push_frame_paint_element`) and portal membership each name an
+/// Overlay dirty for the same panel. Encoding both replays the full overlay
+/// band (`cull None`) under overlapping scissors — the fill/shadow src-over
+/// twice on the first open frame (halo looks too dark), then once on later
+/// ticks (looks lighter).
+#[inline]
+pub fn overlay_primitive_encode_count(overlay_dirty_count: usize) -> usize {
+    overlay_dirty_count.min(1)
+}
+
+/// `outer` minus `hole` as up to four AABBs. Empty when `hole` covers `outer`.
+pub fn subtract_rect(outer: [f32; 4], hole: [f32; 4]) -> Vec<[f32; 4]> {
+    let Some(i) = intersect_rects(outer, hole) else {
+        return vec![outer];
+    };
+    let mut out = Vec::new();
+    if i[1] > outer[1] {
+        out.push([outer[0], outer[1], outer[2], i[1] - outer[1]]);
+    }
+    let outer_y2 = outer[1] + outer[3];
+    let i_y2 = i[1] + i[3];
+    if i_y2 < outer_y2 {
+        out.push([outer[0], i_y2, outer[2], outer_y2 - i_y2]);
+    }
+    if i[0] > outer[0] {
+        out.push([outer[0], i[1], i[0] - outer[0], i[3]]);
+    }
+    let outer_x2 = outer[0] + outer[2];
+    let i_x2 = i[0] + i[2];
+    if i_x2 < outer_x2 {
+        out.push([i_x2, i[1], outer_x2 - i_x2, i[3]]);
+    }
+    out.into_iter()
+        .filter(|r| r[2] > 0.0 && r[3] > 0.0)
+        .collect()
+}
+
+/// Page node-present scissor with overlay occupancy cut out. Multi-rect
+/// remainders (trigger pad around a dropdown) keep the largest AABB so dest-reset
+/// cannot punch overlay pixels. `None` = dirty is entirely inside the overlay.
+pub fn page_scissor_excluding_overlay(
+    scissor: [f32; 4],
+    overlay_occupied: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    let Some(occ) = overlay_occupied.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
+        return Some(scissor);
+    };
+    subtract_rect(scissor, occ).into_iter().max_by(|a, b| {
+        (a[2] * a[3])
+            .partial_cmp(&(b[2] * b[3]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+/// Overlap of a page node-present scissor with overlay occupancy.
+#[inline]
+pub fn overlay_page_punch_overlap(
+    overlay_occupied: Option<[f32; 4]>,
+    page_scissor: [f32; 4],
+) -> Option<[f32; 4]> {
+    overlay_occupied
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        .and_then(|occ| intersect_rects(occ, page_scissor))
+}
+
+/// True when dest-reset will punch occupancy: overlap exists and the page
+/// scissor was not cut down (`clipped == original`, e.g. a caller that skipped
+/// [`page_scissor_excluding_overlay`]). Fully-inside dirties (`clipped == None`)
+/// skip dest-reset and are not punches.
+#[inline]
+pub fn overlay_page_dirty_punches_occupancy(
+    original_scissor: [f32; 4],
+    clipped_scissor: Option<[f32; 4]>,
+    overlay_occupied: Option<[f32; 4]>,
+) -> bool {
+    let Some(overlap) = overlay_page_punch_overlap(overlay_occupied, original_scissor) else {
+        return false;
+    };
+    match clipped_scissor {
+        None => false,
+        Some(c) => c == original_scissor && overlap[2] > 0.0 && overlap[3] > 0.0,
+    }
+}
+
+/// Overlay suffix scissor after Restore/Node dest-reset.
+///
+/// Fade Overlay dirty may sit in the wrong space — occupancy is the GPU footprint.
+/// Hover dest-reset that could not be clipped redraws only the punch strip (full
+/// occupancy src-over would restack the shadow halo). Idle overlay stays in retain.
+pub fn overlay_encode_scissor(
+    overlay_dirty_scissor: Option<[f32; 4]>,
+    overlay_occupied: Option<[f32; 4]>,
+    page_punch_overlap: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    let dirty = overlay_dirty_scissor.filter(|b| b[2] > 0.0 && b[3] > 0.0);
+    let occ = overlay_occupied
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        .map(|b| {
+            super::draw_cull::padded_xywh(
+                b,
+                super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay),
+            )
+        });
+    let punch = page_punch_overlap
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        .map(|b| {
+            super::draw_cull::padded_xywh(
+                b,
+                super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay),
+            )
+        });
+    match (dirty, occ, punch) {
+        (Some(d), Some(o), _) => Some(union_rects(d, o)),
+        (Some(d), None, _) => Some(d),
+        (None, _, Some(p)) => Some(p),
+        _ => None,
+    }
+}
+
+/// Portal boxes that a fade Overlay dirty actually overlaps.
+///
+/// Occupancy is the **union AABB of every hoisted portal**. Nested Select fade
+/// must Restore / encode-scissor only the fading panel — restoring the union
+/// dest-resets the parent popover and the page between them (forms / 2c heading
+/// show through an inline calendar dropdown).
+///
+/// Empty intersection (document-space fade dirty): return `None` so the caller
+/// can keep full occupancy for encode (do not clip the panel) while Restore
+/// uses the dirty itself instead of punching sibling portals.
+pub fn overlay_boxes_intersecting_dirty(
+    overlay_dirty: Option<[f32; 4]>,
+    portal_boxes: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    let Some(d) = overlay_dirty.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
+        return Vec::new();
+    };
+    portal_boxes
+        .iter()
+        .copied()
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0 && intersect_rects(*b, d).is_some())
+        .collect()
+}
+
+/// Occupancy fed to [`overlay_encode_scissor`] for a fade / membership Overlay dirty.
+///
+/// Intersecting portal boxes only — sibling popovers stay in retain. No hit
+/// (wrong-space fade) falls back to full occupancy so the panel stays in scissor.
+pub fn overlay_encode_occupancy(
+    overlay_dirty: Option<[f32; 4]>,
+    portal_boxes: &[[f32; 4]],
+    full_occupancy: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    let hit = overlay_boxes_intersecting_dirty(overlay_dirty, portal_boxes);
+    if hit.is_empty() {
+        return full_occupancy;
+    }
+    rects_union(&hit)
+}
+
+/// Fade-replace Restore boxes: intersecting portal panels, or the Overlay dirty
+/// itself when it missed every box (never the union of sibling portals).
+pub fn overlay_fade_replace_restore_boxes(
+    overlay_dirty: Option<[f32; 4]>,
+    portal_boxes: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    let hit = overlay_boxes_intersecting_dirty(overlay_dirty, portal_boxes);
+    if !hit.is_empty() {
+        return hit;
+    }
+    overlay_dirty
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        .into_iter()
+        .collect()
+}
+
+/// Overlay primitives are submitted only after their own physical scissor is set.
+/// Drawing under a leftover page Node scissor clips the panel to the trigger chip
+/// (invisible but hittable; FullClear on page switch shows it).
+#[inline]
+pub fn overlay_suffix_submitted(physical_scissor: Option<(u32, u32, u32, u32)>) -> bool {
+    physical_scissor.is_some()
 }
 
 /// True when `outer` sticks out of `inner` by more than `slack` px (`[x,y,w,h]`).
@@ -692,8 +964,12 @@ pub fn node_present_slot_moved(prev: [f32; 4], now: [f32; 4]) -> bool {
 ///
 /// `NodePaint.bounds` and chrome dirties are **visual** (abs − scroll). Scroll,
 /// maximize, and `glyphon_fit` all move that box. Dest-reset of *now* only leaves
-/// the previous visual Y in retain — this gate FullClears when the last presented
-/// visual slot is not the current one.
+/// the previous visual Y in retain.
+///
+/// Detection only. Callers must pass the result through
+/// [`node_present_moved_forces_full_clear`]: a scroll viewport layer already
+/// translated sibling pixels (and pin holes dest-reset the named widget).
+/// Window FullClear is for slot motion **without** that layer.
 pub fn node_present_dirties_moved(
     dirties: &[PaintDirty],
     current_slots: &[(u64, [f32; 4])],
@@ -722,6 +998,18 @@ pub fn node_present_dirties_moved(
         };
         node_present_slot_moved(prev, now)
     })
+}
+
+/// Window FullClear when a named slot moved **and** no scroll layer owns the
+/// translation.
+///
+/// `scroll_layer_clear` already forbids node-present (`plan_gpu_present`) and
+/// either strip-blits or scissor-Clears the viewport. `mark_full_redraw` on top
+/// of that wipes blit jobs and named dirties — Marker spin/shimmer then
+/// FullClears the window on every scroll tick.
+#[inline]
+pub fn node_present_moved_forces_full_clear(dirties_moved: bool, scroll_layer_clear: bool) -> bool {
+    dirties_moved && !scroll_layer_clear
 }
 
 /// `glyphon_fit` after a live-resize / fast-measure frame reflows **page** Y.
@@ -1290,6 +1578,209 @@ mod tests {
             paint_kind_for_element(&Element::new()),
             PaintDirtyKind::Node
         );
+        let mut floating = Element::new();
+        floating.template_id = Some("cal-month__floating_panel".into());
+        assert_eq!(
+            paint_kind_for_element(&floating),
+            PaintDirtyKind::Overlay,
+            "Select/Popover fade chrome must not dest-reset as a page Node"
+        );
+    }
+
+    #[test]
+    fn overlay_same_size_fade_is_not_restore() {
+        let panel = [90.0, 140.0, 40.0, 160.0];
+        assert!(
+            !overlay_restore_needed(Some(panel), Some(panel)),
+            "same-size occupancy is not a shrink — OverlayRestore Clear punches the panel"
+        );
+        assert!(!overlay_restore_needed(None, Some(panel)));
+        assert!(
+            overlay_partial_load_retains_page(true, false, true, true),
+            "fade PartialLoad must keep page glyphon retain"
+        );
+    }
+
+    #[test]
+    fn overlay_same_size_fade_replace_does_not_arm_restore_clear() {
+        assert!(
+            overlay_fade_replace_needed(true, true, true, false, true),
+            "occupancy + fade Overlay dirty must replace retain (shadow stack / lost exit)"
+        );
+        assert!(
+            !overlay_fade_replace_needed(false, true, true, false, true),
+            "first paint has no prior overlay pixels to replace"
+        );
+        assert!(
+            !overlay_fade_replace_needed(true, true, true, true, true),
+            "shrink/close keeps overlay_restore_clear so page glyphs return in the hole"
+        );
+        assert!(!overlay_fade_replace_needed(true, true, false, false, true));
+        assert!(
+            !overlay_fade_replace_needed(true, true, true, false, false),
+            "Expand growth is not same-size fade — Restore every tick flashes the page"
+        );
+        assert!(
+            overlay_partial_load_retains_page(true, false, true, true),
+            "fade replace Restore must keep page glyphon retain"
+        );
+        assert!(
+            !overlay_partial_load_retains_page(true, true, true, true),
+            "shrink restore_clear still repaints page glyphs in the hole"
+        );
+    }
+
+    #[test]
+    fn overlay_primitive_encode_is_once_per_present() {
+        assert_eq!(overlay_primitive_encode_count(0), 0);
+        assert_eq!(overlay_primitive_encode_count(1), 1);
+        assert_eq!(overlay_primitive_encode_count(2), 1);
+        assert_eq!(overlay_primitive_encode_count(5), 1);
+    }
+
+    #[test]
+    fn overlay_suffix_must_not_submit_without_physical_scissor() {
+        assert!(
+            !overlay_suffix_submitted(None),
+            "leftover page Node scissor clips the panel to the trigger (invisible but hittable)"
+        );
+        assert!(overlay_suffix_submitted(Some((10, 20, 40, 160))));
+    }
+
+    #[test]
+    fn page_trigger_scissor_must_not_enter_overlay_occupancy() {
+        let occ = [90.0, 140.0, 40.0, 160.0];
+        let trigger = [90.0, 110.0, 40.0, 32.0];
+        let trigger_scissor = crate::app::draw_cull::padded_xywh(trigger, 8.0);
+        assert!(
+            overlay_page_punch_overlap(Some(occ), trigger_scissor).is_some(),
+            "Select trigger pad overlaps the dropdown"
+        );
+        let clipped = page_scissor_excluding_overlay(trigger_scissor, Some(occ))
+            .expect("trigger still has page chrome above the menu");
+        assert!(
+            intersect_rects(clipped, occ).is_none(),
+            "clipped trigger scissor must not dest-reset overlay pixels"
+        );
+        assert!(
+            !overlay_page_dirty_punches_occupancy(trigger_scissor, Some(clipped), Some(occ)),
+            "a single-AABB clip is not a punch — overlay stays in retain"
+        );
+        assert!(
+            overlay_encode_scissor(None, Some(occ), None).is_none(),
+            "idle overlay stays in retain — do not src-over the halo again"
+        );
+        let inside = [90.0, 150.0, 40.0, 20.0];
+        assert!(
+            page_scissor_excluding_overlay(inside, Some(occ)).is_none(),
+            "page dirty entirely in the overlay must not dest-reset as a Node"
+        );
+    }
+
+    #[test]
+    fn l_shaped_page_scissor_keeps_largest_remainder_outside_overlay() {
+        let occ = [90.0, 100.0, 80.0, 80.0];
+        let corner = [80.0, 90.0, 40.0, 40.0];
+        assert!(subtract_rect(corner, occ).len() > 1);
+        let clipped = page_scissor_excluding_overlay(corner, Some(occ))
+            .expect("corner still has page chrome outside the overlay");
+        assert!(
+            intersect_rects(clipped, occ).is_none(),
+            "largest remainder must not dest-reset overlay pixels"
+        );
+        assert!(!overlay_page_dirty_punches_occupancy(
+            corner,
+            Some(clipped),
+            Some(occ)
+        ));
+    }
+
+    #[test]
+    fn overlay_encode_scissor_unions_occupancy_so_fade_dirty_cannot_clip_panel() {
+        let fade_document = [0.0, 8000.0, 40.0, 160.0];
+        let occ = [90.0, 140.0, 40.0, 160.0];
+        let scissor = overlay_encode_scissor(Some(fade_document), Some(occ), None)
+            .expect("occupancy must keep the panel in the encode scissor");
+        assert!(
+            intersect_rects(scissor, occ).is_some(),
+            "fade dirty in document space must not clip overlay to an off-screen hole"
+        );
+    }
+
+    #[test]
+    fn nested_overlay_fade_replace_must_not_restore_sibling_union() {
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [88.0, 40.0, 144.0, 220.0];
+        let fade = [88.0, 40.0, 144.0, 220.0];
+        let boxes = [parent, nested];
+        let restore = overlay_fade_replace_restore_boxes(Some(fade), &boxes);
+        assert_eq!(restore, vec![nested]);
+        assert!(
+            intersect_rects(restore[0], parent).is_none(),
+            "Restore of the nested menu must not dest-reset the parent popover / page between them"
+        );
+        let encode_occ = overlay_encode_occupancy(Some(fade), &boxes, rects_union(&boxes));
+        assert_eq!(encode_occ, Some(nested));
+    }
+
+    #[test]
+    fn nested_overlay_wrong_space_fade_does_not_punch_sibling_on_restore() {
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [88.0, 400.0, 144.0, 220.0];
+        let fade_document = [0.0, 8000.0, 40.0, 160.0];
+        let boxes = [parent, nested];
+        let restore = overlay_fade_replace_restore_boxes(Some(fade_document), &boxes);
+        assert_eq!(restore, vec![fade_document]);
+        let occ = rects_union(&boxes);
+        let encode_occ = overlay_encode_occupancy(Some(fade_document), &boxes, occ);
+        assert_eq!(
+            encode_occ, occ,
+            "wrong-space fade still unions occupancy so encode cannot clip the panel"
+        );
+    }
+
+    #[test]
+    fn overlay_flip_restore_must_not_punch_page_gap_between_positions() {
+        let below = [88.0, 400.0, 144.0, 80.0];
+        let above = [88.0, 40.0, 144.0, 220.0];
+        let leftover = overlay_restore_leftover_boxes(&[below], &[above]);
+        assert_eq!(leftover, vec![below]);
+        let gap = [88.0, 260.0, 144.0, 140.0];
+        assert!(
+            leftover
+                .iter()
+                .all(|b| intersect_rects(*b, gap).is_none()),
+            "union AABB of below∪above would dest-reset the page between the two positions"
+        );
+        assert!(overlay_same_footprint(Some(below), Some(below), 2.0));
+        assert!(!overlay_same_footprint(Some(below), Some(above), 2.0));
+    }
+
+    #[test]
+    fn overlay_grow_has_no_leftover_restore() {
+        let small = [90.0, 140.0, 40.0, 40.0];
+        let grown = [90.0, 140.0, 40.0, 160.0];
+        assert!(overlay_restore_leftover_boxes(&[small], &[grown]).is_empty());
+        assert!(!overlay_same_footprint(Some(small), Some(grown), 2.0));
+    }
+
+    #[test]
+    fn overlay_restore_sorts_before_overlay_encode() {
+        let mut nodes = vec![
+            PaintDirty {
+                key: 1,
+                bounds: [90.0, 140.0, 40.0, 160.0],
+                kind: PaintDirtyKind::Overlay,
+            },
+            PaintDirty {
+                key: 2,
+                bounds: [80.0, 130.0, 80.0, 200.0],
+                kind: PaintDirtyKind::OverlayRestore,
+            },
+        ];
+        sort_paint_dirty_nodes(&mut nodes);
+        assert_eq!(nodes[0].kind, PaintDirtyKind::OverlayRestore);
+        assert_eq!(nodes[1].kind, PaintDirtyKind::Overlay);
     }
 
     #[test]
@@ -1670,6 +2161,28 @@ mod tests {
                 &[],
             ),
             "first present has no previous pixels to leave behind"
+        );
+        let scroll_tick = [PaintDirty {
+            key: 7,
+            bounds: [10.0, 12.0, 16.0, 16.0],
+            kind: PaintDirtyKind::Node,
+        }];
+        let moved = node_present_dirties_moved(
+            &scroll_tick,
+            &[(7, [10.0, 12.0, 16.0, 16.0])],
+            &[(7, [10.0, 10.0, 16.0, 16.0])],
+        );
+        assert!(
+            !node_present_moved_forces_full_clear(moved, true),
+            "scroll viewport layer already translated pixels; named spin must not window-Clear"
+        );
+        assert!(
+            node_present_moved_forces_full_clear(moved, false),
+            "without a scroll layer, dest-reset of now leaves previous visual Y"
+        );
+        assert!(
+            !node_present_moved_forces_full_clear(false, true),
+            "scroll layer without a moved named slot does not FullClear"
         );
         assert!(
             force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, false),

@@ -1033,6 +1033,9 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
             };
             if tick_element_css(panel, dt) {
                 any = true;
+                // Fade/expand ticks used to skip named Overlay dirty → Load stacked
+                // translucent fill + box-shadow into retain (calendar smear).
+                crate::app::damage::push_frame_paint_element(panel, [0.0, 0.0]);
             }
             if shell.kind == FloatingMotionKind::Expand {
                 apply_expand_width_clip(

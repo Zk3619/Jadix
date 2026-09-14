@@ -189,7 +189,7 @@ pub fn sync_panel_presence<E>(
         let mut c = handle.cell.borrow_mut();
         if policy.mutex_kick
             && !want
-            && !c.mounted.peek()
+            && c.mounted.try_peek() == Some(false)
             && c.gate.phase() == PresencePhase::Exiting
         {
             c.gate.force_absent();

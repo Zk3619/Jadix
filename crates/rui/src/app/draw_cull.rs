@@ -131,12 +131,32 @@ fn transform_is_identity(m: &[f32; 6]) -> bool {
         .all(|(a, b)| (*a - *b).abs() <= 1e-5)
 }
 
+/// Outset the SDF vertex shader actually paints (`rounded_rect.wgsl` `ext` =
+/// `|offset| + blur * 2 + spread + border + 2`). Dest-reset / overlay occupancy
+/// that uses `blur` once leaves the halo in retain (dropdown smear on calendar).
+pub(crate) fn sdf_outset_shadow_pad(
+    blur: f32,
+    spread: f32,
+    offset: [f32; 2],
+    border_width: f32,
+) -> f32 {
+    offset[0].abs().max(offset[1].abs())
+        + blur.max(0.0) * 2.0
+        + spread.abs()
+        + border_width.max(0.0)
+        + 2.0
+}
+
 /// Content box ∪ drop-shadow (outset only). Coordinates match `rect_pos` space.
 pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
     let mut bounds = [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]];
     if i.shadow_inset == 0.0 {
-        let extra = i.shadow_blur.max(0.0) + i.shadow_spread.abs();
-        if extra > 0.0 || i.shadow_offset[0] != 0.0 || i.shadow_offset[1] != 0.0 {
+        // Offset shifts the halo; pad is the SDF `ext` without `|offset|` (that
+        // would double-count). Vertex shader uses `|offset| + blur*2 + …` as a
+        // uniform quad pad — union of fill ∪ shifted halo is the same AABB.
+        let extra =
+            sdf_outset_shadow_pad(i.shadow_blur, i.shadow_spread, [0.0, 0.0], i.border_width);
+        if extra > 2.0 || i.shadow_offset[0] != 0.0 || i.shadow_offset[1] != 0.0 {
             let sx = i.rect_pos[0] + i.shadow_offset[0] - extra;
             let sy = i.rect_pos[1] + i.shadow_offset[1] - extra;
             let sw = i.rect_size[0] + extra * 2.0;
@@ -1027,6 +1047,7 @@ pub(crate) fn node_present_glyphs_for_dirty(
                 }
             }
         }
+        PaintDirtyKind::Overlay => {}
         PaintDirtyKind::Node => {
             for (i, n) in page_text.iter().enumerate() {
                 if glyph_belongs_to_dirty(i, n, dirty, page_text, node_paints) {
@@ -1034,7 +1055,6 @@ pub(crate) fn node_present_glyphs_for_dirty(
                 }
             }
         }
-        PaintDirtyKind::Overlay => {}
     }
     idx
 }
@@ -1126,6 +1146,7 @@ fn glyph_belongs_to_dirty(
 ) -> bool {
     match dirty.kind {
         PaintDirtyKind::OverlayRestore => text_hits_damage(n, dirty.bounds),
+        PaintDirtyKind::Overlay => false,
         PaintDirtyKind::Node => {
             // Collect-slot membership only. Center-in-box steals neighbor captions
             // whose ink sits in the padded dirty (Gallery sidebar 「布局」 sharing
@@ -1138,7 +1159,6 @@ fn glyph_belongs_to_dirty(
                 }
             })
         }
-        PaintDirtyKind::Overlay => false,
     }
 }
 
@@ -1285,6 +1305,23 @@ mod tests {
             instance_hits_damage(&i, damage),
             "drop-shadow must inflate cull bounds"
         );
+    }
+
+    #[test]
+    fn instance_paint_bounds_covers_sdf_blur_twice() {
+        // Select menu Elevation::Lg blur=12. Shader ext is blur*2+2; 1× blur
+        // occupancy left the halo on the calendar after dest-reset of the fill.
+        let mut i = blank_instance(100.0, 100.0, 40.0, 160.0);
+        i.shadow_blur = 12.0;
+        i.shadow_color = [0.0, 0.0, 0.0, 0.14];
+        let b = instance_paint_bounds(&i);
+        let pad = sdf_outset_shadow_pad(12.0, 0.0, [0.0, 0.0], 0.0);
+        assert!(pad >= 26.0, "SDF ext is blur*2+2 = 26, got {pad}");
+        assert!(
+            b[0] <= 100.0 - 24.0 && b[1] <= 100.0 - 24.0,
+            "occupancy must cover the SDF halo, got {b:?}"
+        );
+        assert!(b[2] >= 40.0 + 48.0 && b[3] >= 160.0 + 48.0);
     }
 
     #[test]

@@ -160,6 +160,7 @@ impl super::App {
         self.last_mouse_path = None;
         self.last_mouse_target = None;
         self.click_press_path = None;
+        self.click_press_scrolled = false;
         self.scrollbar_drag = None;
         self.content_scroll_drag = None;
         self.textarea_resize_drag = None;
@@ -378,6 +379,10 @@ impl super::App {
             let render_ok = match sec.render() {
                 Ok(()) => true,
                 Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
+                    let inner = sec.window.inner_size();
+                    if inner.width > 0 && inner.height > 0 {
+                        sec.resize(inner);
+                    }
                     sec.recover_surface();
                     sec.window.request_redraw();
                     false
@@ -859,6 +864,143 @@ impl super::App {
         super::scroll_support::retain_future_instants(&mut self.scrollbar_visible_until, now)
     }
 
+    /// Overlay `auto` alpha is collect × live cubic. Retarget **before**
+    /// `tick_animations` so this frame's collect is not stuck at last present's peek.
+    /// Post-present `fade.set` used to start the hide tween after pixels were already
+    /// submitted; static pages then slept (`any_ui_animation_active` gated on
+    /// `force_redraw_count`) and the bar stayed at cubic 1.
+    fn apply_overlay_scrollbar_fade_targets(&mut self, now: std::time::Instant) {
+        let rests: Vec<(String, f32, f32)> = self
+            .scroll_metrics_cache
+            .iter()
+            .map(|(rest, (_, [mx, my], _))| (rest.clone(), *mx, *my))
+            .collect();
+        for (rest, raw_max_x, raw_max_y) in rests {
+            self.retarget_overlay_scrollbar_cubics(&rest, now, raw_max_x, raw_max_y);
+        }
+    }
+
+    fn retarget_overlay_scrollbar_cubics(
+        &mut self,
+        rest: &str,
+        now: std::time::Instant,
+        raw_max_x: f32,
+        raw_max_y: f32,
+    ) {
+        let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
+            rest,
+            &mut self.scroll_signal_key_cache,
+        );
+        let overflow_x =
+            crate::core::reactivity::use_signal(keys.overflow_x.as_str(), || "auto".to_string())
+                .peek();
+        let overflow_y =
+            crate::core::reactivity::use_signal(keys.overflow_y.as_str(), || "auto".to_string())
+                .peek();
+        let axis_x_enabled =
+            crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(overflow_x.as_str());
+        let axis_y_enabled =
+            crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(overflow_y.as_str());
+        if !axis_x_enabled && !axis_y_enabled {
+            return;
+        }
+        let is_hover =
+            crate::core::reactivity::use_signal(keys.hover_legacy.as_str(), || false).peek();
+        let is_hover_x =
+            crate::core::reactivity::use_signal(keys.hover_axis_x.as_str(), || false).peek();
+        let is_hover_y =
+            crate::core::reactivity::use_signal(keys.hover_axis_y.as_str(), || false).peek();
+        let visible_until_x = self
+            .scrollbar_visible_until
+            .get(&Self::scrollbar_axis_key(
+                rest,
+                super::scroll_support::ScrollAxis::X,
+            ))
+            .copied()
+            .unwrap_or(now);
+        let visible_until_y = self
+            .scrollbar_visible_until
+            .get(&Self::scrollbar_axis_key(
+                rest,
+                super::scroll_support::ScrollAxis::Y,
+            ))
+            .copied()
+            .unwrap_or(now);
+        let is_dragging_x = self
+            .scrollbar_drag
+            .as_ref()
+            .is_some_and(|d| d.rest == rest && d.axis == super::scroll_support::ScrollAxis::X);
+        let is_dragging_y = self
+            .scrollbar_drag
+            .as_ref()
+            .is_some_and(|d| d.rest == rest && d.axis == super::scroll_support::ScrollAxis::Y);
+        let text_drag_on_rest = crate::utils::text_field::text_drag_select_active()
+            && self
+                .input_drag_rest
+                .as_ref()
+                .is_some_and(|id| crate::utils::text_field::textarea_scroll_rest(id) == rest);
+        let keep_visible_x =
+            (is_hover || is_hover_x) || is_dragging_x || now < visible_until_x || text_drag_on_rest;
+        let keep_visible_y =
+            (is_hover || is_hover_y) || is_dragging_y || now < visible_until_y || text_drag_on_rest;
+        let vis_x =
+            crate::core::reactivity::use_signal(keys.scrollbar_visibility_x.as_str(), || {
+                "auto".to_string()
+            })
+            .peek()
+            .to_ascii_lowercase();
+        let vis_y =
+            crate::core::reactivity::use_signal(keys.scrollbar_visibility_y.as_str(), || {
+                "auto".to_string()
+            })
+            .peek()
+            .to_ascii_lowercase();
+        if axis_x_enabled {
+            let fade_x = crate::style::use_ui_transition_cubic(keys.spring_x.as_str(), 0.0);
+            let spring_eligible_x = raw_max_x > 0.5
+                || is_hover_x
+                || is_dragging_x
+                || now < visible_until_x
+                || text_drag_on_rest;
+            match vis_x.as_str() {
+                "never" => fade_x.set(0.0),
+                "always" => fade_x.set(1.0),
+                _ => {
+                    if spring_eligible_x {
+                        fade_x.set(if keep_visible_x { 1.0 } else { 0.0 });
+                    } else {
+                        fade_x.set(0.0);
+                    }
+                }
+            }
+        }
+        if axis_y_enabled {
+            let fade_y = crate::style::use_ui_transition_cubic(keys.spring_y.as_str(), 0.0);
+            let spring_eligible_y = raw_max_y > 0.5
+                || is_hover_y
+                || is_dragging_y
+                || now < visible_until_y
+                || text_drag_on_rest;
+            match vis_y.as_str() {
+                "never" => fade_y.set(0.0),
+                "always" => fade_y.set(1.0),
+                _ => {
+                    if spring_eligible_y {
+                        fade_y.set(if keep_visible_y { 1.0 } else { 0.0 });
+                    } else {
+                        fade_y.set(0.0);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn note_user_scroll_after_press(&mut self) {
+        if self.click_press_path.is_some() {
+            self.click_press_scrolled = true;
+        }
+    }
+
     pub(super) fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
         // Small window to bridge discrete wheel ticks (prevents "move-stop-move").
         let until = now + std::time::Duration::from_millis(200);
@@ -916,6 +1058,7 @@ impl super::App {
         let next_x = (cur_x - dx).clamp(0.0, max_x);
         let next_y = (cur_y - dy).clamp(0.0, max_y);
         super::scroll_support::set_scroll_offset_with_behavior(&rest, next_x, next_y, true);
+        self.note_user_scroll_after_press();
         self.bump_smooth_active_until(&rest, now);
         crate::core::reactivity::use_signal(
             &crate::core::scroll_viewport::scroll_activity_signal_key(&rest),
@@ -1623,6 +1766,7 @@ impl super::App {
             // Drop a stale press path if this gesture never reaches mousedown dispatch
             // (scrollbar / resize / reorder early-return).
             self.click_press_path = None;
+            self.click_press_scrolled = false;
         }
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -2032,6 +2176,7 @@ impl super::App {
                 super::pointer_events::PointerKind::Down,
             );
             self.click_press_path = Some(path.clone());
+            self.click_press_scrolled = false;
             // Overlay / on_drag_start wait for `tick`. Press-only stays Pending
             // (do not dim/raise the source). A same-point tick is still required
             // so delay clocks and sensors see the hold.
@@ -2318,6 +2463,7 @@ impl super::App {
         }
     }
     fn commit_wheel_delta(&mut self, rest: String, dx: f32, dy: f32, max_x: f32, max_y: f32) {
+        self.note_user_scroll_after_press();
         let now = std::time::Instant::now();
         if dx.abs() > 0.1 {
             self.bump_scrollbar_visible_until_axis(
@@ -2725,6 +2871,7 @@ impl super::App {
                     let smooth = super::scroll_support::apply_scroll_navigation_absolute(
                         &rest, tx, ty, max_x, max_y,
                     );
+                    self.note_user_scroll_after_press();
                     if smooth {
                         crate::components::chart::set_chart_hover_frozen(true);
                         self.bump_smooth_active_until(&rest, now);
@@ -2747,6 +2894,7 @@ impl super::App {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
+        self.scrollbar_hide_wake = false;
         super::input_controller::clear_text_edit_frame_mutated();
         #[cfg(debug_assertions)]
         {
@@ -2763,6 +2911,7 @@ impl super::App {
                 let mut requested_redraw = assets_reloaded;
                 let file = super::hmr_log::display_path(&hot_reload.last_patch_file);
 
+                let mut stylesheet_applied = false;
                 if !hot_reload.stylesheet_paths.is_empty() {
                     let paths: Vec<std::path::PathBuf> = hot_reload
                         .stylesheet_paths
@@ -2771,14 +2920,17 @@ impl super::App {
                         .collect();
                     match crate::style::apply_style_file_batch(&paths) {
                         Ok(()) => {
+                            stylesheet_applied = true;
                             requested_redraw = true;
                             super::hmr_log::update("stylesheet");
                         }
+                        // Keep last-good registry (apply_style_file_batch) and skip
+                        // rebuild_ui — error_handling.md E6.
                         Err(err) => log::warn!("stylesheet HMR: {err}"),
                     }
                 }
 
-                if hot_reload.force_reload || !hot_reload.stylesheet_paths.is_empty() {
+                if hot_reload.force_reload || stylesheet_applied {
                     let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
@@ -2883,6 +3035,7 @@ impl super::App {
         }
 
         crate::style::utility::set_frame_dt(dt.max(0.0));
+        self.apply_overlay_scrollbar_fade_targets(now);
         let anim_tick = crate::style::tick_animations(anim_dt);
         let nav_animating = crate::app::navigator::tick_active(anim_dt);
         if anim_tick.any || nav_animating || anim_icons || gif_tick {
@@ -3216,14 +3369,10 @@ impl super::App {
 
         // Idle frames use ViewportsOnly so `update_scrollbar_elements` only syncs `scroll:` offsets
         // (plus subtree pruning via `Element::contains_scroll_viewport`). Full pass is needed while
-        // dragging, smoothing scroll, coalescing wheel delta, or fading auto-scrollbar alpha.
-        // Smooth scroll moves thumbs via overlay collect (live offset signals). Full prepass is
-        // only required while dragging, fading auto-scrollbar alpha, or coalescing wheel.
-        let scrollbar_fade_busy = self.scrollbar_fade_active;
-        let scrollbar_pass = if self.scrollbar_drag.is_some()
-            || !self.scroll_accum.is_empty()
-            || scrollbar_fade_busy
-        {
+        // dragging or coalescing wheel delta. Auto-hide alpha is paint-only (overlay collect ×
+        // live cubic) — Full+skip_flex during fade rewrote Taffy thumb size and the hit slab.
+        // Smooth scroll moves thumbs via overlay collect (live offset signals).
+        let scrollbar_pass = if self.scrollbar_drag.is_some() || !self.scroll_accum.is_empty() {
             ScrollbarUpdateMode::Full
         } else {
             ScrollbarUpdateMode::ViewportsOnly
@@ -3234,18 +3383,15 @@ impl super::App {
         // clicking fields after scroll stops.
         let text_force_fast_mode = self.scrollbar_drag.is_some()
             || smooth_scroll_animating
-            || !self.scroll_accum.is_empty()
-            || scrollbar_fade_busy;
+            || !self.scroll_accum.is_empty();
 
         let scrollbar_drag_active = self.scrollbar_drag.is_some();
-        let scrollbar_skip_flex_layout =
-            scrollbar_drag_active || (self.scrollbar_drag.is_none() && scrollbar_fade_busy);
+        let scrollbar_skip_flex_layout = scrollbar_drag_active;
         // Do NOT fold `smooth_active_until` into paint-only: the 200ms wheel bridge would skip
         // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
         // but the caret does not install until the bridge expires.
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
-        let scroll_paint_only =
-            smooth_scroll_animating || scrollbar_fade_busy || scrollbar_drag_active;
+        let scroll_paint_only = smooth_scroll_animating || scrollbar_drag_active;
         crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
@@ -3851,8 +3997,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Keep the redraw pump alive only while content is still animating.
                 // For the scrollbar `visible_until` hold window, sleep until the deadline via
                 // `about_to_wait` + WaitUntil (one wake starts fade-out) instead of ~1.5s of frames.
-                // Switch chrome only sets its tween in this render/sync (after the prior tick);
-                // pump `any_ui_animation_active` here or it stalls on frame 0.
+                // Chrome (Switch, overlay auto-hide) retargets cubics after the previous
+                // tick. `any_ui_animation_active` is that follow-up vsync — do not gate it
+                // on `force_redraw_count` or a static page sleeps on scrollbar WaitUntil
+                // with the bar stuck at cubic 1. Settled cubics are inactive, so the 1.5s
+                // hold window still WaitUntil's.
                 let ui_anim_active = crate::style::any_ui_animation_active();
                 let modal_css_active = crate::utils::modal_motion::any_modal_css_needs_frame();
                 let page_css_active = crate::style::any_page_css_needs_frame();
@@ -3869,7 +4018,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || super::scroll_support::has_pending_scroll_item_align()
                     || modal_css_active
                     || page_css_active
-                    || (ui_anim_active && self.force_redraw_count > 0);
+                    || ui_anim_active;
                 if self.paint_clock_active {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
@@ -3884,8 +4033,6 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(until));
                     }
                 }
-                self.scrollbar_fade_active = scrollbar_fade_animating;
-
                 for (cb, is_hover) in hover_to_run {
                     (*cb.borrow_mut())(is_hover);
                 }
@@ -4189,7 +4336,18 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             super::pointer_events::hit_path(&state.root_element, x, y)
                         };
                         let click_path = match self.click_press_path.take() {
-                            Some(down) => super::pointer_events::click_dispatch_path(&down, &path),
+                            Some(down) => {
+                                let scrolled = std::mem::take(&mut self.click_press_scrolled);
+                                super::pointer_events::click_gesture_path(
+                                    &down,
+                                    &path,
+                                    super::pointer_events::click_pointer_moved(
+                                        self.last_click_pos,
+                                        [self.cursor_pos.x as f32, self.cursor_pos.y as f32],
+                                    ),
+                                    scrolled,
+                                )
+                            }
                             None => Vec::new(),
                         };
                         let cb_resolved = super::pointer_events::resolve_click_from_path(

@@ -363,21 +363,26 @@ fn chrome_spin_dirty_must_cover_visual_instance_after_scroll() {
         fmt_rect(spin_dirty.bounds)
     );
 
+    let spin_dirties_moved = crate::app::damage::node_present_dirties_moved(
+        &[spin_dirty.clone()],
+        &[(key, slot.bounds)],
+        &[(
+            key,
+            [
+                slot.bounds[0],
+                slot.bounds[1] + 80.0,
+                slot.bounds[2],
+                slot.bounds[3],
+            ],
+        )],
+    );
     assert!(
-        crate::app::damage::node_present_dirties_moved(
-            &[spin_dirty.clone()],
-            &[(key, slot.bounds)],
-            &[(
-                key,
-                [
-                    slot.bounds[0],
-                    slot.bounds[1] + 80.0,
-                    slot.bounds[2],
-                    slot.bounds[3]
-                ]
-            )],
-        ),
+        spin_dirties_moved,
         "visual Y shift of a named spin cannot stay paint-in-place"
+    );
+    assert!(
+        !crate::app::damage::node_present_moved_forces_full_clear(spin_dirties_moved, true),
+        "scroll-layer frames pin the spin; they must not mark_full_redraw"
     );
 }
 

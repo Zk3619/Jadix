@@ -24,6 +24,7 @@ mod rotate_paint_hit;
 mod scale_paint_hit;
 mod scroll_clip_border;
 mod scroll_content_shrink;
+mod scrollbar_auto_fade_paint;
 mod scrollbar_corners;
 mod scrollbar_thumb_overlay;
 mod showcase_collapse;

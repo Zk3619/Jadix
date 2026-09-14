@@ -846,6 +846,21 @@ fn floating_trigger_of(el: &Element) -> Option<String> {
         .or_else(|| el.attrs.get("rui_select_trigger").cloned())
 }
 
+/// Last non-zero visual box for `fid`.
+///
+/// `collect_focus_bounds` is document-order: an in-page 0×0 slot / stale ghost is
+/// first, the hoisted copy inside the portal layer is last. `.find` anchored
+/// nested Select / inline calendar dropdowns at the ghost (top of the gallery).
+fn floating_trigger_bounds(triggers: &[(String, [f32; 4])], fid: &str) -> Option<[f32; 4]> {
+    let mut best = None;
+    for (f, b) in triggers {
+        if f == fid && b[2] > 0.0 && b[3] > 0.0 {
+            best = Some(*b);
+        }
+    }
+    best
+}
+
 fn apply_floating_menus(
     el: &mut Element,
     triggers: &[(String, [f32; 4])],
@@ -878,7 +893,7 @@ fn apply_floating_menus(
     let tb = if let Some(pt) = point {
         Some([pt[0], pt[1], 0.0, 0.0])
     } else if let Some(ref fid) = trigger_fid {
-        triggers.iter().find(|(f, _)| f == fid).map(|(_, b)| *b)
+        floating_trigger_bounds(triggers, fid)
     } else {
         None
     };
@@ -1045,12 +1060,24 @@ fn apply_floating_menus(
                     let edge = existing_edge
                         .unwrap_or_else(|| (tb[1] - gap).max(FLOATING_VIEWPORT_MARGIN));
                     el.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, format!("{edge}"));
-                    if animating_h {
-                        let visual_h = dimension_length(el.style.max_size.height)
+                    // Glue the trigger-facing edge to the *painted* height. `compute_anchored_placement`
+                    // uses estimate.min(space_above); a stretched wrapper / viewport remainder
+                    // slams `top` to the window margin (calendar month list floating over forms).
+                    let visual_h = if animating_h {
+                        dimension_length(el.style.max_size.height)
                             .filter(|h| *h >= 0.0)
-                            .unwrap_or(el.layout_bounds[3].max(0.0));
-                        y = (edge - visual_h.min(max_h.max(0.0))).max(FLOATING_VIEWPORT_MARGIN);
-                    }
+                            .unwrap_or(el.layout_bounds[3].max(0.0))
+                    } else if let Some(content) = el
+                        .attrs
+                        .get(ATTR_FLOATING_CONTENT_H)
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .filter(|h| *h > 0.5)
+                    {
+                        content
+                    } else {
+                        el.layout_bounds[3].max(estimate_h)
+                    };
+                    y = (edge - visual_h.min(max_h.max(0.0))).max(FLOATING_VIEWPORT_MARGIN);
                 } else if !animating_h {
                     el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
                 }
@@ -1482,6 +1509,35 @@ mod tests {
             ),
             None => panic!("expected top inset"),
         }
+    }
+
+    #[test]
+    fn sync_floating_places_above_using_content_height_not_viewport_remainder() {
+        let mut trigger = Element::new().focus_id("t-up-stretch");
+        trigger.layout_bounds = [20.0, 500.0, 116.0, 32.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "up-stretch",
+            "t-up-stretch",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_W, "144px");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "256px");
+        // Wrapper stretched to the viewport remainder (ScrollArea h:100% / max_h cap).
+        panel.layout_bounds = [20.0, 8.0, 144.0, 500.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let top = inset_length(root.children[1].style.inset.top).expect("top");
+        // Edge = 500 - 8 = 492; painted height min(500, attr max 256) = 256 → y = 236.
+        // Using estimate.min(space_above) slams top to the 8px viewport margin.
+        assert!(
+            (top - 236.0).abs() < 0.5,
+            "upward menu must glue to the trigger with painted height, got {top}"
+        );
     }
 
     #[test]
@@ -2018,6 +2074,94 @@ mod tests {
         assert!(
             (top - 160.0).abs() < 0.5,
             "y must follow scroll: viewport offset, got {top}"
+        );
+    }
+
+    #[test]
+    fn sync_floating_skips_zero_size_duplicate_focus_id() {
+        // In-page portal slot / unmeasured ghost is first in document order.
+        let mut ghost = Element::new().focus_id("cal:cap_m:trigger");
+        ghost.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+
+        let mut trigger = Element::new().focus_id("cal:cap_m:trigger");
+        trigger.layout_bounds = [80.0, 360.0, 116.0, 32.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "cal:cap_m",
+            "cal:cap_m:trigger",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_W, "144px");
+        panel.layout_bounds = [0.0, 0.0, 144.0, 220.0];
+
+        let mut root = Element::new().child(ghost).child(trigger).child(panel);
+        root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let top = inset_length(root.children[2].style.inset.top).expect("top");
+        // Trigger at y=360, estimate 220 → flips above (360-8-220=132), not origin 8.
+        assert!(
+            (top - 132.0).abs() < 0.5,
+            "must ignore 0×0 duplicate focus_id (got {top})"
+        );
+    }
+
+    #[test]
+    fn sync_floating_prefers_hoisted_trigger_over_page_ghost() {
+        use crate::layout::layout_tree::ATTR_HOISTED_PORTAL;
+
+        // Forms DatePicker leftover (scrolled into view at y=40) shares focus_id
+        // with the hoisted copy inside the portal layer (inline / nested chip).
+        let mut page_ghost = Element::new().focus_id("cal:cap_m:trigger");
+        page_ghost.layout_bounds = [80.0, 40.0, 116.0, 32.0];
+
+        let mut hoisted_trigger = Element::new().focus_id("cal:cap_m:trigger");
+        hoisted_trigger.layout_bounds = [88.0, 400.0, 116.0, 32.0];
+
+        let mut host = Element::new().child(hoisted_trigger);
+        host.style.position_fixed = true;
+        host.layout_bounds = [80.0, 360.0, 280.0, 320.0];
+        host.set_attr(ATTR_HOISTED_PORTAL, "1");
+
+        let mut layer = Element::new().child(host);
+        layer.template_id = Some(PORTAL_LAYER_ID.into());
+        layer.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "cal:cap_m",
+            "cal:cap_m:trigger",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_W, "144px");
+        panel.layout_bounds = [0.0, 0.0, 144.0, 220.0];
+        panel.set_attr(ATTR_HOISTED_PORTAL, "1");
+        layer.children.push(panel);
+
+        let mut root = Element::new().child(page_ghost).child(layer);
+        root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let menu = root
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer")
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_FLOATING).map(String::as_str) == Some("cal:cap_m"))
+            .expect("menu");
+        let top = inset_length(menu.style.inset.top).expect("top");
+        // Hoisted chip at y=400, estimate 220 → flips above (400-8-220=172).
+        // Page ghost at y=40 would have placed at ~80.
+        assert!(
+            (top - 172.0).abs() < 0.5,
+            "nested/inline select must follow the hoisted trigger, got {top}"
         );
     }
 

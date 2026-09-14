@@ -164,13 +164,13 @@ struct App {
     last_mouse_path: Option<Vec<pointer_events::HitPathEntry>>,
     /// Left-button `mousedown` hit path. `click` / `dblclick` use the LCA with mouseup.
     click_press_path: Option<Vec<pointer_events::HitPathEntry>>,
+    /// User-initiated scroll (wheel / pan / keyboard) after this press; cancels `click`.
+    click_press_scrolled: bool,
     /// Last primary-button click for double-click detection.
     last_click_at: Option<std::time::Instant>,
     last_click_pos: [f32; 2],
     click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
-    /// Previous-frame auto-scrollbar fade still running (drives Full scrollbar prepass).
-    scrollbar_fade_active: bool,
     /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
     content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
     /// Textarea bottom-right drag-to-resize height.
@@ -218,6 +218,10 @@ struct App {
     hover_scroll_axis: Option<(String, scroll_support::ScrollAxis)>,
     /// Overlay scrollbar auto-hide: visible-until deadline (scroll/hover/drag extends it).
     scrollbar_visible_until: std::collections::HashMap<String, std::time::Instant>,
+    /// Prune in `about_to_wait` must Poll until a real `RedrawRequested`. Windows often
+    /// delivers a second `about_to_wait` before paint; a local one-shot then `Wait`s and
+    /// coalesces the fade-start frame (bar stuck at cubic 1).
+    scrollbar_hide_wake: bool,
     /// Scroll fling velocity (px/s of offset) seeded by content-pan release; decayed each frame.
     /// Wheel must not write here — it only moves `target_*` (see `handle_mouse_wheel`).
     scroll_velocity: std::collections::HashMap<String, [f32; 2]>,
