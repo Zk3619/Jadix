@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::core::reactivity::{create_effect, create_signal};
-use crate::core::resource::{pop_suspense_frame, push_suspense_frame, suspense_frame_is_pending};
+use crate::core::resource::{push_suspense_frame, suspense_frame_is_pending, SuspenseFrameGuard};
 use crate::core::tree::Element;
 
 use super::reactive::reactive_view;
@@ -75,12 +75,19 @@ where
     F: Fn() -> Element + 'static,
     C: Fn() -> Element + 'static,
 {
-    let id = anchor_id.into();
+    let id = {
+        let s = anchor_id.into();
+        if s.trim().is_empty() {
+            String::from("Suspense")
+        } else {
+            s
+        }
+    };
     reactive_view(id, move || {
         let frame = push_suspense_frame();
+        let _guard = SuspenseFrameGuard;
         let child = children();
         let pending = suspense_frame_is_pending(&frame);
-        pop_suspense_frame();
         if pending {
             fallback()
         } else {
@@ -192,6 +199,25 @@ mod tests {
         wait_until(|| true);
         drop(owner);
         drain_ui_tasks();
+    }
+
+    #[test]
+    fn suspense_empty_id_is_not_blank_identity() {
+        use crate::core::reactivity::create_effect;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let (_o, template_id) = create_root(|| {
+            let out = Rc::new(RefCell::new(None::<String>));
+            let out2 = out.clone();
+            create_effect(move || {
+                let el = suspense("", || Element::new(), || Element::new());
+                *out2.borrow_mut() = el.template_id.clone();
+            });
+            let tid = out.borrow().clone().expect("template_id");
+            tid
+        });
+        assert_eq!(template_id, "Suspense");
     }
 
     #[test]

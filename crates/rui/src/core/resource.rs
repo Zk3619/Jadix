@@ -135,6 +135,15 @@ pub(crate) fn pop_suspense_frame() {
     });
 }
 
+/// Pops the TLS frame even if `children()` panics (does **not** catch the panic).
+pub(crate) struct SuspenseFrameGuard;
+
+impl Drop for SuspenseFrameGuard {
+    fn drop(&mut self) {
+        pop_suspense_frame();
+    }
+}
+
 pub(crate) fn suspense_frame_is_pending(frame: &SuspenseFrame) -> bool {
     frame.pending.get()
 }
@@ -160,6 +169,24 @@ mod tests {
             assert!(!suspense_frame_is_pending(&frame));
             mark_suspense_pending();
             assert!(suspense_frame_is_pending(&frame));
+            pop_suspense_frame();
+        });
+    }
+
+    #[test]
+    fn panic_in_suspense_frame_still_pops() {
+        let (_o, _) = create_root(|| {
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _frame = push_suspense_frame();
+                let _guard = super::SuspenseFrameGuard;
+                panic!("user-render");
+            }));
+            assert!(panicked.is_err());
+            let frame = push_suspense_frame();
+            assert!(
+                !suspense_frame_is_pending(&frame),
+                "leaked frame would leave a stale stack slot"
+            );
             pop_suspense_frame();
         });
     }
