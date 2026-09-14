@@ -678,6 +678,24 @@ pub(crate) fn set_scroll_offset_with_behavior(
     ty.set_silent(target_y);
 }
 
+/// Drop leftover smooth-scroll chase: `target = offset` so the next frame does not
+/// interpolate. Clicking a text field after a wheel-to-clip must not dump extra
+/// page motion when the focus-chrome frame finally presents (user did not scroll).
+pub(crate) fn snap_scroll_targets_to_current_offsets<'a>(
+    rests: impl IntoIterator<Item = &'a str>,
+) {
+    for rest in rests {
+        let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(rest);
+        let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(rest);
+        let tx_key = crate::core::scroll_viewport::scroll_target_x_signal_key(rest);
+        let ty_key = crate::core::scroll_viewport::scroll_target_y_signal_key(rest);
+        let sx = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32).peek();
+        let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).peek();
+        crate::core::reactivity::use_signal(&tx_key, || sx).set_silent(sx);
+        crate::core::reactivity::use_signal(&ty_key, || sy).set_silent(sy);
+    }
+}
+
 /// Apply keyboard / page scroll delta respecting viewport `scroll_behavior`.
 /// Returns `true` when smooth mode wrote targets (caller should keep animating).
 pub(crate) fn apply_scroll_navigation_delta(
@@ -907,6 +925,24 @@ mod clamp_scroll_extent_tests {
         // Shrink again: with synced target, stay at top (bottom overflows).
         let (o2, t2) = clamp_scroll_offset_and_target(o, t, 200.0);
         assert_eq!((o2, t2), (0.0, 0.0));
+    }
+
+    #[test]
+    fn snap_targets_cancel_leftover_smooth_chase() {
+        use crate::core::reactivity::use_signal;
+        use crate::core::scroll_viewport::{
+            scroll_offset_y_signal_key, scroll_target_y_signal_key,
+        };
+        let rest = "snap-leftover-forms";
+        use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).set_silent(80.0);
+        use_signal(&scroll_target_y_signal_key(rest), || 0.0_f32).set_silent(140.0);
+        super::snap_scroll_targets_to_current_offsets([rest]);
+        let ty = use_signal(&scroll_target_y_signal_key(rest), || 0.0_f32).peek();
+        let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+        assert!(
+            (ty - sy).abs() < 0.01,
+            "click must drop leftover target (ty={ty} sy={sy}) so unfreeze does not dump scroll"
+        );
     }
 
     #[test]

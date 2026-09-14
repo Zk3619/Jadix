@@ -1,7 +1,21 @@
 //! Off-screen descendants of an overflow clip must not be collected as instances,
 //! while Taffy content height (scroll range) stays the full column.
 
-use crate::core::tree::{Element, LayoutTree};
+use crate::app::ime_support::painted_ime_field_in_overflow_clip;
+use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
+use crate::components::internal::text_edit::{
+    sync_text_edit_paint_subtree, sync_text_edit_paint_subtree_in_viewport,
+};
+use crate::components::scroll_area::scroll_area;
+use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+use crate::core::tree::{Element, LayoutStatus, LayoutTree};
+use crate::primitives::r#box::hstack;
+use crate::renderer::font_loader;
+use crate::style::{sync_class_variants_subtree, tick_active_css_transitions_subtree};
+use crate::text::install_shared_font_system;
+use crate::utils::text_field::input_text_template_id;
+use taffy::style::FlexWrap;
 
 fn tall_scroll_content_column() -> Element {
     let mut col = Element::new()
@@ -425,5 +439,626 @@ fn accordion_max_height_paints_the_clip_not_content_height() {
     assert!(
         max_bottom <= panel.layout_bounds[1] + 40.0 + 16.0,
         "outline/shadow must not stamp a full-content frame around the clip (bottom={max_bottom})"
+    );
+}
+
+/// Gallery forms: focus an Input, scroll until the field is not fully visible.
+/// Clip-cull used to drop the text leaf (`input_caret` gone from `text_nodes`) while
+/// the chrome still peeks. `caret_wake_at` died → bare `Wait` → clicks/keys queued
+/// until the next scroll/blank-click paint.
+#[test]
+fn clip_cull_must_keep_focused_input_caret_when_field_is_partially_clipped() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "clip-cull-live-caret";
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
+    use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+
+    let field: Element = input(id).placeholder("Placeholder…").into();
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w(240.0)
+        .child(field)
+        .child(
+            Element::new()
+                .w(240.0)
+                .h(400.0)
+                .flex_shrink(0.0)
+                .bg([0.9, 0.9, 0.9, 1.0]),
+        );
+    let mut root = Element::new()
+        .w(240.0)
+        .h(80.0)
+        .overflow_y("hidden")
+        .child(col);
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let full = tree.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+    assert!(
+        full.text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "focused Input must emit caret before scroll"
+    );
+
+    // Default Input is 2.25rem (36px) with `py` 0.25rem. Wrapper still peeks for
+    // scroll in (text-leaf-bottom, 36): chrome vis > 0, text leaf vis == 0, so
+    // clip-cull used to drop `input_caret` while the field still looked focused.
+    root.scroll_offset = [0.0, 34.0];
+    impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let clipped = tree.build_and_layout_fast(&mut root, 240.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        clipped
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "partially clipped focused Input must stay in collect so caret WaitUntil does not die"
+    );
+}
+
+fn wipe_input_carets(el: &mut Element) {
+    el.text_style.input_caret = None;
+    for c in &mut el.children {
+        wipe_input_carets(c);
+    }
+}
+
+/// `scroll_paint_only` skipped `sync_text_edit` after class-variant hover-leave restored
+/// `base_text_style` (no caret). Collect then had nothing to emit; `caret_wake_at` died.
+#[test]
+fn class_snapshot_restore_without_text_edit_sync_drops_caret_on_partial_clip() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "clip-cull-wiped-caret";
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
+    use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+
+    let field: Element = input(id).placeholder("Placeholder…").into();
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w(240.0)
+        .child(field)
+        .child(
+            Element::new()
+                .w(240.0)
+                .h(400.0)
+                .flex_shrink(0.0)
+                .bg([0.9, 0.9, 0.9, 1.0]),
+        );
+    let mut root = Element::new()
+        .w(240.0)
+        .h(80.0)
+        .overflow_y("hidden")
+        .child(col);
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+
+    wipe_input_carets(&mut root);
+    root.scroll_offset = [0.0, 34.0];
+    let skipped = tree.build_and_layout_fast(&mut root, 240.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        skipped
+            .text_nodes
+            .iter()
+            .all(|n| n.style.input_caret.is_none()),
+        "skipping paint-sync after snapshot restore must drop caret (the freeze)"
+    );
+
+    impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let restored = tree.build_and_layout_fast(&mut root, 240.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        restored
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "paint-sync on the scroll frame must reinstall caret before collect"
+    );
+}
+
+fn collect_input_bounds(el: &Element, out: &mut Vec<(String, [f32; 4])>) {
+    if let Some(fid) = el.focus_id.as_deref() {
+        if fid.starts_with("input:") {
+            out.push((fid.to_string(), el.layout_bounds));
+        }
+    }
+    for c in &el.children {
+        collect_input_bounds(c, out);
+    }
+}
+
+fn wrap_child_input_span(wrap: &Element) -> (usize, f32, Vec<(String, [f32; 4])>) {
+    let mut kids = Vec::new();
+    for c in &wrap.children {
+        collect_input_bounds(c, &mut kids);
+    }
+    if kids.is_empty() {
+        return (0, 0.0, kids);
+    }
+    let min_y = kids.iter().map(|(_, b)| b[1]).fold(f32::MAX, f32::min);
+    let max_b = kids
+        .iter()
+        .map(|(_, b)| b[1] + b[3])
+        .fold(0.0_f32, f32::max);
+    (kids.len(), (max_b - min_y).max(0.0), kids)
+}
+
+fn collect_wrap_rows<'a>(el: &'a Element, out: &mut Vec<&'a Element>) {
+    if el.style.flex_wrap != FlexWrap::NoWrap {
+        out.push(el);
+    }
+    for c in &el.children {
+        collect_wrap_rows(c, out);
+    }
+}
+
+/// RSX `<Input flex_grow="1">` used to keep the builder's `w(100%)`, forcing
+/// one wrap item per line (gallery forms Placeholder–Search). `Element::flex_grow`
+/// now matches [`input`] builder (`w(auto)`). Re-apply `w(100%)` to lock that
+/// stacked overflow-hidden wrap layout.
+fn gallery_rsx_flex_grow_input(id: &str) -> Element {
+    let mut b = input(id).placeholder(id).clearable(true);
+    if id.ends_with("-c") {
+        b = b.input_type("password").password_toggle(true);
+    }
+    if id.ends_with("-d") {
+        b = b.input_type("number").number_steppers(true);
+    }
+    let el: Element = b.into();
+    el.flex_grow(1.0).w("100%")
+}
+
+/// Gallery forms card: two `wrap` HStacks of RSX `flex_grow` Inputs (`w(100%)`
+/// kept). After scrolling the first field half off the ScrollArea, the focused
+/// sibling must keep a caret in `text_nodes` (event loop WaitUntil).
+#[test]
+fn wrap_flex_grow_inputs_must_keep_caret_when_first_field_is_partially_clipped() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const REST: &str = "scroll-forms";
+    const VW: f32 = 280.0;
+    const VH: f32 = 160.0;
+
+    let ids = [
+        "wrap-a", "wrap-b", "wrap-c", "wrap-d", "wrap-e", "wrap-f", "wrap-g", "wrap-h",
+    ];
+    for id in ids {
+        use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    }
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input("wrap-c"));
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(0.0);
+
+    fn row(ids: &[&str]) -> Element {
+        let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w("100%");
+        for id in ids {
+            row = row.child(gallery_rsx_flex_grow_input(id));
+        }
+        row.into()
+    }
+
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w("100%")
+        .gap("0.75rem")
+        .child(row(&ids[..4]))
+        .child(row(&ids[4..]));
+    let mut root: Element = scroll_area(REST)
+        .flex_grow(1.0)
+        .min_h(0.0)
+        .overflow_y("auto")
+        .overflow_x("auto")
+        .w(VW)
+        .h(VH)
+        .child(col)
+        .into();
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let _ = tree.build_and_layout(&mut root, VW, VH, [-1.0, -1.0]);
+
+    let mut bounds = Vec::new();
+    collect_input_bounds(&root, &mut bounds);
+    let mut wrap_els = Vec::new();
+    collect_wrap_rows(&root, &mut wrap_els);
+    let wraps: Vec<[f32; 4]> = wrap_els.iter().map(|e| e.layout_bounds).collect();
+    assert_eq!(
+        bounds.len(),
+        8,
+        "expected 8 inputs, wraps={wraps:?} inputs={bounds:?}"
+    );
+    assert_eq!(wraps.len(), 2, "expected two wrap HStacks, got {wraps:?}");
+    for wrap_el in &wrap_els {
+        let wrap = wrap_el.layout_bounds;
+        let (n, span, kids) = wrap_child_input_span(wrap_el);
+        assert!(
+            n >= 4 && wrap[3] + 1.0 >= span,
+            "wrap HStack height must cover its wrapped Inputs (else clip-cull/hit use a one-row box).\n\
+             wrap={wrap:?} span={span} n={n} kids={kids:?}"
+        );
+    }
+
+    bounds.sort_by(|a, b| {
+        a.1[1]
+            .partial_cmp(&b.1[1])
+            .unwrap()
+            .then(a.1[0].partial_cmp(&b.1[0]).unwrap())
+    });
+    let first = bounds[0].1;
+
+    let scroll_y = (first[3] - 8.0).max(1.0);
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(scroll_y);
+    impact = LayoutStatus::Clean;
+    let fid = focus_id_for_input("wrap-c");
+    crate::style::tick_active_css_transitions_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, 4.0],
+        fid.as_str(),
+        false,
+        VW,
+        VH,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let clipped = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], true, false);
+    tree.set_collect_skip_allowed(true);
+    impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let idle = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+
+    let mut after = Vec::new();
+    collect_input_bounds(&root, &mut after);
+    after.sort_by(|a, b| a.1[1].partial_cmp(&b.1[1]).unwrap());
+    let focused = after
+        .iter()
+        .find(|(id, _)| id.contains("wrap-c"))
+        .expect("password-like third field");
+    let has_caret = clipped
+        .text_nodes
+        .iter()
+        .any(|n| n.style.input_caret.is_some())
+        && idle
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some());
+    assert!(
+        has_caret,
+        "focused wrap Input must keep caret when the first sibling is partially clipped.\n\
+         scroll_y={scroll_y} wraps={wraps:?}\n\
+         before={bounds:?}\n\
+         after={after:?}\n\
+         focused={focused:?} text_nodes={}",
+        clipped.text_nodes.len()
+    );
+}
+
+#[test]
+fn rsx_input_flex_grow_clears_default_full_width() {
+    let el: Element = input("rsx-grow").into();
+    assert_eq!(
+        el.style.size.width,
+        taffy::style::Dimension::percent(1.0),
+        "default Input is w(100%)"
+    );
+    let grown = el.flex_grow(1.0);
+    assert_eq!(
+        grown.style.size.width,
+        taffy::style::Dimension::auto(),
+        "RSX flex_grow on Input must match builder w(auto)"
+    );
+    assert!((grown.style.flex_grow - 1.0).abs() < 1e-5);
+}
+
+fn gallery_like_wrap_input(id: &str) -> Element {
+    let mut b = input(id).placeholder(id).clearable(true);
+    if id.ends_with("-d") {
+        b = b.input_type("number").number_steppers(true);
+    }
+    if id.ends_with("-h") {
+        b = b.input_type("search");
+    }
+    let el: Element = b.into();
+    el.flex_grow(1.0)
+}
+
+fn text_nodes_have_caret(nodes: &[crate::core::tree::TextLayoutInfo], rest: &str) -> bool {
+    let tid = input_text_template_id(rest);
+    nodes
+        .iter()
+        .any(|n| n.template_id.as_deref() == Some(tid.as_str()) && n.style.input_caret.is_some())
+}
+
+fn input_shadow_spread(el: &Element, rest: &str) -> Option<f32> {
+    let want = focus_id_for_input(rest);
+    fn walk(el: &Element, want: &str) -> Option<f32> {
+        if el.focus_id.as_deref() == Some(want) {
+            return Some(el.style.shadow_spread);
+        }
+        el.children.iter().find_map(|c| walk(c, want))
+    }
+    walk(el, &want)
+}
+
+/// Gallery forms card「2) Input」: focus is paint-only. After the first wrap field is a
+/// chrome sliver, clicking Search must move caret + ring on the next collect — without
+/// rebuilding `InputShowcase`. IME may already follow `focus_id` (candidates on Search)
+/// while the last presented DL still shows the number field.
+#[test]
+fn wrap_flex_grow_focus_move_must_repaint_chrome_after_first_field_clip() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const REST: &str = "scroll-forms-focus-move";
+    const VW: f32 = 520.0;
+    const VH: f32 = 200.0;
+    const NUMBER: &str = "wrap-d";
+    const SEARCH: &str = "wrap-h";
+
+    let ids = [
+        "wrap-a", "wrap-b", "wrap-c", "wrap-d", "wrap-e", "wrap-f", "wrap-g", "wrap-h",
+    ];
+    for id in ids {
+        use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    }
+    use_signal(&input_value_signal_key(NUMBER), String::new).set("p".into());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(NUMBER));
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(0.0);
+
+    fn row(ids: &[&str]) -> Element {
+        let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w("100%");
+        for id in ids {
+            row = row.child(gallery_like_wrap_input(id));
+        }
+        row.into()
+    }
+
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w("100%")
+        .gap("0.75rem")
+        .child(row(&ids[..4]))
+        .child(row(&ids[4..]));
+    let mut root: Element = scroll_area(REST)
+        .flex_grow(1.0)
+        .min_h(0.0)
+        .overflow_y("auto")
+        .overflow_x("auto")
+        .w(VW)
+        .h(VH)
+        .child(col)
+        .into();
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let _ = tree.build_and_layout(&mut root, VW, VH, [-1.0, -1.0]);
+
+    let mut bounds = Vec::new();
+    collect_input_bounds(&root, &mut bounds);
+    bounds.sort_by(|a, b| {
+        a.1[1]
+            .partial_cmp(&b.1[1])
+            .unwrap()
+            .then(a.1[0].partial_cmp(&b.1[0]).unwrap())
+    });
+    let first = bounds[0].1;
+    let scroll_y = (first[1] + first[3] - 8.0).max(1.0);
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(scroll_y);
+
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, 4.0],
+        focus_id_for_input(NUMBER).as_str(),
+        false,
+        VW,
+        VH,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    tree.set_collect_skip_allowed(true);
+    let clipped = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+
+    assert!(
+        text_nodes_have_caret(&clipped.text_nodes, NUMBER),
+        "number field must keep a caret after the first sibling is a sliver"
+    );
+    assert!(
+        !painted_ime_field_in_overflow_clip(
+            &clipped.text_nodes,
+            &focus_id_for_input(NUMBER),
+            VW,
+            VH
+        ),
+        "sliver caret must not count as in-clip (Windows Imm hang)"
+    );
+
+    // Paint-only focus move — do not rebuild the tree (InputShowcase isolate_reads).
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(SEARCH));
+    assert!(
+        !painted_ime_field_in_overflow_clip(
+            &clipped.text_nodes,
+            &focus_id_for_input(SEARCH),
+            VW,
+            VH
+        ),
+        "Search placeholder without a caret must not Imm; composing would freeze \
+         the previous field's ring while IME candidates sit on Search"
+    );
+
+    impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, 80.0],
+        focus_id_for_input(SEARCH).as_str(),
+        false,
+        VW,
+        VH,
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let moved = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+
+    assert!(
+        text_nodes_have_caret(&moved.text_nodes, SEARCH),
+        "paint-sync + collect-skip must put the caret on Search after focus_id.set"
+    );
+    assert!(
+        !text_nodes_have_caret(&moved.text_nodes, NUMBER),
+        "the sliver number field must drop its caret when focus moved to Search"
+    );
+    let search_spread = input_shadow_spread(&root, SEARCH).unwrap_or(0.0);
+    let number_spread = input_shadow_spread(&root, NUMBER).unwrap_or(0.0);
+    assert!(
+        search_spread >= 2.5,
+        "Search must receive the focus ring (spread={search_spread})"
+    );
+    assert!(
+        number_spread < 1.5,
+        "number field must drop the focus ring (spread={number_spread})"
+    );
+    assert!(
+        painted_ime_field_in_overflow_clip(&moved.text_nodes, &focus_id_for_input(SEARCH), VW, VH),
+        "after the chrome frame, Search's caret is in clip and may Imm"
+    );
+}
+
+/// Live `scroll_paint_only` uses `tick_active_css_transitions_subtree`, not class
+/// variants. Focus chrome must still follow `focus_id.set` on that path.
+#[test]
+fn wrap_flex_grow_tick_active_focus_move_must_repaint_chrome() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const REST: &str = "scroll-forms-tick-active-focus";
+    const VW: f32 = 520.0;
+    const VH: f32 = 200.0;
+    const NUMBER: &str = "tick-d";
+    const SEARCH: &str = "tick-h";
+
+    let ids = [
+        "tick-a", "tick-b", "tick-c", "tick-d", "tick-e", "tick-f", "tick-g", "tick-h",
+    ];
+    for id in ids {
+        use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    }
+    use_signal(&input_value_signal_key(NUMBER), String::new).set("p".into());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(NUMBER));
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(0.0);
+
+    fn row(ids: &[&str]) -> Element {
+        let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w("100%");
+        for id in ids {
+            row = row.child(gallery_like_wrap_input(id));
+        }
+        row.into()
+    }
+
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w("100%")
+        .gap("0.75rem")
+        .child(row(&ids[..4]))
+        .child(row(&ids[4..]));
+    let mut root: Element = scroll_area(REST)
+        .flex_grow(1.0)
+        .min_h(0.0)
+        .overflow_y("auto")
+        .overflow_x("auto")
+        .w(VW)
+        .h(VH)
+        .child(col)
+        .into();
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let _ = tree.build_and_layout(&mut root, VW, VH, [-1.0, -1.0]);
+
+    let mut bounds = Vec::new();
+    collect_input_bounds(&root, &mut bounds);
+    bounds.sort_by(|a, b| {
+        a.1[1]
+            .partial_cmp(&b.1[1])
+            .unwrap()
+            .then(a.1[0].partial_cmp(&b.1[0]).unwrap())
+    });
+    let first = bounds[0].1;
+    let scroll_y = (first[1] + first[3] - 8.0).max(1.0);
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(scroll_y);
+
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, 4.0],
+        focus_id_for_input(NUMBER).as_str(),
+        false,
+        VW,
+        VH,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    tree.set_collect_skip_allowed(true);
+    let clipped = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(SEARCH));
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, 80.0],
+        focus_id_for_input(SEARCH).as_str(),
+        false,
+        VW,
+        VH,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let moved = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+
+    assert!(
+        text_nodes_have_caret(&moved.text_nodes, SEARCH),
+        "tick_active (scroll_paint_only) + paint-sync must put the caret on Search"
+    );
+    assert!(
+        !text_nodes_have_caret(&moved.text_nodes, NUMBER),
+        "tick_active must drop the sliver number caret after focus moved"
+    );
+    assert!(
+        clipped
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "pre-move frame still had a caret to mismatch against"
     );
 }

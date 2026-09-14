@@ -226,6 +226,96 @@ pub(crate) fn visual_fully_outside_window(visual: [f32; 4], win_w: f32, win_h: f
     w <= 0.0 || h <= 0.0 || x + w <= 0.0 || y + h <= 0.0 || x >= win_w || y >= win_h
 }
 
+/// `visual` 是否整盒落在 `clip` 内（逻辑 px）。半裁切不算。
+pub(crate) fn visual_rect_fully_inside(visual: [f32; 4], clip: [f32; 4]) -> bool {
+    const EPS: f32 = 0.5;
+    let [x, y, w, h] = visual;
+    let [cx, cy, cw, ch] = clip;
+    w > 0.0
+        && h > 0.0
+        && cw > 0.0
+        && ch > 0.0
+        && x >= cx - EPS
+        && y >= cy - EPS
+        && x + w <= cx + cw + EPS
+        && y + h <= cy + ch + EPS
+}
+
+/// Idle `ImmSetCompositionWindow` / winit `set_ime_cursor_area` is safe only when the
+/// painted text leaf is fully inside its overflow clip (and the window).
+///
+/// Gallery forms card「2) Input」: the first wrap field's leaf stays in `text_nodes`
+/// (live clip-cull exemption) after it is only a chrome sliver. Pushing Imm for that
+/// half-clipped box hangs Windows `WaitUntil` — clicks/keys sit in the OS queue until
+/// a wheel or a click that cancels IME. Card 2b's leaf stays fully inside the
+/// ScrollArea clip, so the same scroll does not hang.
+pub(crate) fn idle_ime_may_push_imm(
+    visual: [f32; 4],
+    clip: Option<[f32; 4]>,
+    win_w: f32,
+    win_h: f32,
+) -> bool {
+    if visual_fully_outside_window(visual, win_w, win_h) {
+        return false;
+    }
+    if visual[1] < -0.5 || visual[1] + visual[3] > win_h + 0.5 {
+        return false;
+    }
+    match clip {
+        None => true,
+        Some(c) => visual_rect_fully_inside(visual, c),
+    }
+}
+
+/// Last collected caret belongs to `focus_id`.
+///
+/// `false` when the DL still has a caret on another field (paint-only `focus_id.set`
+/// has not been presented). The previous field's blink `WaitUntil` must not swallow
+/// the chrome frame — and IME must not treat that sliver caret as the live anchor.
+pub(crate) fn painted_caret_matches_focus(
+    text_nodes: &[crate::core::tree::TextLayoutInfo],
+    focus_id: &str,
+) -> bool {
+    let Some(rest) = text_edit_rest(focus_id) else {
+        return true;
+    };
+    let tid = crate::utils::text_field::input_text_template_id(rest);
+    let mut other_caret = false;
+    for n in text_nodes {
+        if n.style.input_caret.is_none() {
+            continue;
+        }
+        if n.template_id.as_deref() == Some(tid.as_str()) {
+            return true;
+        }
+        other_caret = true;
+    }
+    !other_caret
+}
+
+/// Painted **caret** leaf is fully inside its collect clip.
+///
+/// `false` if the focused field was not collected with a caret — including the
+/// placeholder leaf that stays in `text_nodes` after focus moved but before the
+/// next paint-sync. Imm on that chrome/placeholder rect (or on a sliver) hangs
+/// Windows `WaitUntil`: IME candidates follow `focus_id`, while the last
+/// presented frame keeps the previous field's ring/caret (gallery forms: number
+/// chrome frozen, Search composing).
+pub(crate) fn painted_ime_field_in_overflow_clip(
+    text_nodes: &[crate::core::tree::TextLayoutInfo],
+    focus_id: &str,
+    win_w: f32,
+    win_h: f32,
+) -> bool {
+    let Some(n) = painted_text_edit_node(text_nodes, focus_id) else {
+        return false;
+    };
+    if n.style.input_caret.is_none() {
+        return false;
+    }
+    idle_ime_may_push_imm([n.x, n.y, n.width, n.height], n.clip_bounds, win_w, win_h)
+}
+
 /// Strip IME syllable-separator apostrophes from a preedit string before force-commit.
 pub(crate) fn preedit_without_syllable_separators(preedit: &str) -> String {
     preedit.chars().filter(|c| *c != '\'').collect()
@@ -314,7 +404,9 @@ pub(crate) fn on_ime_composition_ended() {
 /// - **键入**：只维护 `IMR`（X=组字起点）；Imm 仅组字开始一次；**不**动候选 HWND（横向交给 TIP）。
 /// - **滚动**：现代中文 TIP 常忽略组字中 Imm/IMR 的 Y 更新 → 仅此时对已闩锁候选 HWND
 ///   做 **ΔY** `SetWindowPos`（不改 X、不改尺寸、不每帧绝对钉死）。
-/// - **空闲**：winit + Imm。不创建系统 caret。
+/// - **空闲 / 组字**：仅当本帧 `text_nodes` 里该焦点已带 caret 且整盒在 overflow clip 内
+///   才 Imm。半裁切、以及焦点已切走但仍是 placeholder 的叶，都不推 Imm
+///   （`ImmSetCompositionWindow` 会挂死 `WaitUntil`：IME 跟 `focus_id`，画面停在上一字段）。
 pub(crate) fn apply_ime_cursor_area(
     window: &winit::window::Window,
     area_x: f32,
@@ -324,6 +416,7 @@ pub(crate) fn apply_ime_cursor_area(
     ui_scale: f32,
     scroll_acc: [f32; 2],
     composing: bool,
+    field_in_overflow_clip: bool,
 ) {
     let scale = ui_scale.max(0.001);
     let py = (area_y * scale).round() as i32;
@@ -352,7 +445,15 @@ pub(crate) fn apply_ime_cursor_area(
         }
     }
     crate::platform::apply_ime_cursor_area(
-        window, area_x, area_y, area_w, area_h, ui_scale, scroll_acc, composing,
+        window,
+        area_x,
+        area_y,
+        area_w,
+        area_h,
+        ui_scale,
+        scroll_acc,
+        composing,
+        field_in_overflow_clip,
     );
 }
 
@@ -493,6 +594,23 @@ mod tests {
             win.0,
             win.1
         ));
+    }
+
+    #[test]
+    fn idle_ime_skips_imm_when_leaf_is_only_a_clip_sliver() {
+        let win = (400.0, 300.0);
+        // ScrollArea clip at y=80; text leaf mostly above it (gallery forms first Input).
+        let leaf = [24.0, 56.0, 160.0, 20.0];
+        let scroll_clip = [0.0, 80.0, 400.0, 220.0];
+        assert!(
+            !idle_ime_may_push_imm(leaf, Some(scroll_clip), win.0, win.1),
+            "half-clipped wrap Input must not ImmSetCompositionWindow"
+        );
+        let in_view = [24.0, 200.0, 160.0, 20.0];
+        assert!(
+            idle_ime_may_push_imm(in_view, Some(scroll_clip), win.0, win.1),
+            "2b / fully visible field may still push Imm"
+        );
     }
 
     #[test]
@@ -688,5 +806,93 @@ mod tests {
         ];
         let b = painted_text_edit_visual_bounds(&nodes, "input:gal").expect("bounds");
         assert!((b[1] - 80.0).abs() < 0.5, "y={}", b[1]);
+    }
+
+    fn test_text_node(
+        rest: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        clip: Option<[f32; 4]>,
+        caret: bool,
+    ) -> crate::core::tree::TextLayoutInfo {
+        use crate::core::tree::TextLayoutInfo;
+        use crate::style::TextStyle;
+        let mut style = TextStyle::default();
+        if caret {
+            style.input_caret = Some(crate::style::InputCaretDraw {
+                caret_byte_index: 0,
+                selection: None,
+                selection_bg: [0; 4],
+                overwrite_highlight: None,
+                preedit_underline: None,
+                drop_caret: false,
+                caret_color: None,
+                selection_foreground: None,
+            });
+        }
+        TextLayoutInfo {
+            text: rest.into(),
+            shape_suffix: None,
+            spans: None,
+            template_id: Some(crate::utils::text_field::input_text_template_id(rest)),
+            x,
+            y,
+            width: w,
+            height: h,
+            clip_bounds: clip,
+            style,
+            prepared: None,
+            glyph_fx: None,
+            shimmer: None,
+            paint_scale: 1.0,
+            paint_transform: crate::style::MAT2D_IDENTITY,
+            paint_origin: [x + w * 0.5, y + h * 0.5],
+            glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
+        }
+    }
+
+    #[test]
+    fn idle_ime_skips_imm_on_placeholder_after_focus_moved() {
+        // Last presented frame: number still has the caret; Search is the in-view
+        // placeholder. Focus signal already says Search (IME candidates sit there).
+        let clip = Some([0.0, 0.0, 400.0, 300.0]);
+        let nodes = vec![
+            test_text_node("num", 40.0, -28.0, 120.0, 36.0, clip, true),
+            test_text_node("search", 40.0, 80.0, 320.0, 36.0, clip, false),
+        ];
+        assert!(
+            !painted_ime_field_in_overflow_clip(&nodes, "input:search", 400.0, 300.0),
+            "placeholder leaf without caret must not Imm — composing would hang WaitUntil \
+             while GPU still shows the previous field's ring"
+        );
+        let in_clip = test_text_node("search", 40.0, 80.0, 320.0, 36.0, clip, true);
+        assert!(
+            painted_ime_field_in_overflow_clip(&[in_clip], "input:search", 400.0, 300.0),
+            "focused caret fully inside overflow clip may Imm"
+        );
+    }
+
+    #[test]
+    fn painted_caret_mismatch_when_focus_moved_and_dl_still_has_old_caret() {
+        let clip = Some([0.0, 0.0, 400.0, 300.0]);
+        let nodes = vec![
+            test_text_node("num", 40.0, -28.0, 120.0, 36.0, clip, true),
+            test_text_node("search", 40.0, 80.0, 320.0, 36.0, clip, false),
+        ];
+        assert!(
+            !painted_caret_matches_focus(&nodes, "input:search"),
+            "Search focus + number caret must not plant WaitUntil on the stale blink"
+        );
+        assert!(
+            painted_caret_matches_focus(&nodes, "input:num"),
+            "caret still on the focused number field is a match"
+        );
+        let none = vec![test_text_node("search", 40.0, 80.0, 320.0, 36.0, clip, false)];
+        assert!(
+            painted_caret_matches_focus(&none, "input:search"),
+            "no painted caret is not a stale-caret mismatch"
+        );
     }
 }

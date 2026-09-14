@@ -91,17 +91,34 @@ pub(crate) fn apply_ime_cursor_area(
     ui_scale: f32,
     scroll_acc: [f32; 2],
     composing: bool,
+    field_in_overflow_clip: bool,
 ) {
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
         os::current::apply_ime_cursor_area(
-            window, area_x, area_y, area_w, area_h, ui_scale, scroll_acc, composing,
+            window,
+            area_x,
+            area_y,
+            area_w,
+            area_h,
+            ui_scale,
+            scroll_acc,
+            composing,
+            field_in_overflow_clip,
         );
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         desktop::apply_ime_cursor_area(
-            window, area_x, area_y, area_w, area_h, ui_scale, scroll_acc, composing,
+            window,
+            area_x,
+            area_y,
+            area_w,
+            area_h,
+            ui_scale,
+            scroll_acc,
+            composing,
+            field_in_overflow_clip,
         );
     }
 }

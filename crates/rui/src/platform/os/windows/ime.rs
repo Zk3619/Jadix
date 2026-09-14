@@ -40,7 +40,10 @@ static COMPOSE_IMM_SENT: AtomicBool = AtomicBool::new(false);
 static IMR_FROZEN: AtomicBool = AtomicBool::new(false);
 static LAST_ANCHOR_SCR_Y: AtomicI32 = AtomicI32::new(0);
 static HAS_ANCHOR_SCR: AtomicBool = AtomicBool::new(false);
-static LAST_IMM_MS: AtomicI32 = AtomicI32::new(0);
+static LAST_IDLE_COMPOSE_X: AtomicI32 = AtomicI32::new(i32::MIN);
+static LAST_IDLE_COMPOSE_Y: AtomicI32 = AtomicI32::new(i32::MIN);
+static LAST_IDLE_COMPOSE_W: AtomicI32 = AtomicI32::new(0);
+static LAST_IDLE_COMPOSE_H: AtomicI32 = AtomicI32::new(0);
 static LAST_RELOCATE_LOG_MS: AtomicI32 = AtomicI32::new(0);
 static TRACKED_IME_HWNDS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 static LAST_IME_FOCUS_ID: Mutex<String> = Mutex::new(String::new());
@@ -99,6 +102,8 @@ fn clear_compose_session() {
     COMPOSE_IMM_SENT.store(false, Ordering::Relaxed);
     IMR_FROZEN.store(false, Ordering::Relaxed);
     HAS_ANCHOR_SCR.store(false, Ordering::Relaxed);
+    LAST_IDLE_COMPOSE_X.store(i32::MIN, Ordering::Relaxed);
+    LAST_IDLE_COMPOSE_Y.store(i32::MIN, Ordering::Relaxed);
     if let Ok(mut v) = TRACKED_IME_HWNDS.lock() {
         v.clear();
     }
@@ -396,7 +401,6 @@ fn drive_composing(window: &Window, compose_x: i32, y: i32, w: u32, h: u32, scro
     if first {
         store_compose_geom(compose_x, y, w, h);
         apply_imm_compose_form(hwnd, compose_x, y, w, h);
-        LAST_IMM_MS.store(now_ms(), Ordering::Relaxed);
         IMR_FROZEN.store(true, Ordering::Release);
         let anchor = compose_anchor_screen(hwnd, compose_x, y, h);
         LAST_ANCHOR_SCR_Y.store(anchor.y, Ordering::Relaxed);
@@ -420,29 +424,20 @@ fn drive_composing(window: &Window, compose_x: i32, y: i32, w: u32, h: u32, scro
     let _ = (compose_x, y, w, h, IMR_FROZEN.load(Ordering::Relaxed));
 }
 
-/// Idle: Imm + IMR at composition origin. Never creates a system caret.
-fn reinforce_imm(window: &Window, compose_x: i32, y: i32, w: u32, h: u32) {
-    let Some(hwnd) = hwnd_of(window) else {
-        log::warn!("RUI_IME_DIAG windows_hwnd unavailable — Imm path skipped");
-        return;
-    };
-    APP_HWND.store(hwnd as isize, Ordering::Relaxed);
-    if unsafe { !is_app_foreground(hwnd) } {
-        return;
+fn last_idle_cursor_unchanged(compose_x: i32, y: i32, w: u32, h: u32) -> bool {
+    let width = (w as i32).max(1);
+    let height = (h as i32).max(1);
+    let same = LAST_IDLE_COMPOSE_X.load(Ordering::Relaxed) == compose_x
+        && LAST_IDLE_COMPOSE_Y.load(Ordering::Relaxed) == y
+        && LAST_IDLE_COMPOSE_W.load(Ordering::Relaxed) == width
+        && LAST_IDLE_COMPOSE_H.load(Ordering::Relaxed) == height;
+    if !same {
+        LAST_IDLE_COMPOSE_X.store(compose_x, Ordering::Relaxed);
+        LAST_IDLE_COMPOSE_Y.store(y, Ordering::Relaxed);
+        LAST_IDLE_COMPOSE_W.store(width, Ordering::Relaxed);
+        LAST_IDLE_COMPOSE_H.store(height, Ordering::Relaxed);
     }
-    store_compose_geom(compose_x, y, w, h);
-    ensure_subclass(hwnd);
-    let t = now_ms();
-    let last_imm = LAST_IMM_MS.load(Ordering::Relaxed);
-    let refresh_imm = last_imm == 0 || t.wrapping_sub(last_imm).abs() >= 32;
-    if refresh_imm {
-        LAST_IMM_MS.store(t, Ordering::Relaxed);
-        apply_imm_compose_form(hwnd, compose_x, y, w, h);
-    } else {
-        unsafe {
-            let _ = DestroyCaret();
-        }
-    }
+    same
 }
 
 fn destroy_caret() {
@@ -535,6 +530,7 @@ pub(crate) fn apply_ime_cursor_area(
     ui_scale: f32,
     scroll_acc: [f32; 2],
     composing: bool,
+    field_in_overflow_clip: bool,
 ) {
     let scale = ui_scale.max(0.001);
     let compose_px = (area_x * scale).round() as i32;
@@ -543,14 +539,34 @@ pub(crate) fn apply_ime_cursor_area(
     let ph = (area_h * scale).max(1.0).round() as u32;
     let scrolling = begin_scroll_delta(scroll_acc, scale);
     if composing {
+        // Same hang as idle sliver Imm. Focus can already be the in-view sibling
+        // (Search) while `text_nodes` still carry the previous field's caret —
+        // composing must not Imm until that sibling paints a caret in clip.
+        if !field_in_overflow_clip {
+            return;
+        }
         drive_composing(window, compose_px, py, pw, ph, scrolling);
+        return;
+    }
+    // Idle: never ImmSetCompositionWindow. Compose owns Imm (once + HWND ΔY on scroll).
+    // Reinforcing Imm every paint after the focused field moves hangs winit WaitUntil —
+    // clicks/keys sit in the OS queue until the next wheel or a click that cancels IME.
+    // A half-clipped leaf (gallery forms card 2 wrap Inputs) is the same hang: winit's
+    // set_ime_cursor_area is ImmSetCompositionWindow. 2b stays fully in the ScrollArea
+    // clip so it may still push. Keep last in-view IMR geom; do not store the sliver.
+    if scrolling || !field_in_overflow_clip {
+        if field_in_overflow_clip {
+            store_compose_geom(compose_px, py, pw, ph);
+        }
+        return;
+    }
+    if last_idle_cursor_unchanged(compose_px, py, pw, ph) {
         return;
     }
     window.set_ime_cursor_area(
         winit::dpi::LogicalPosition::new(area_x as f64, area_y as f64),
         winit::dpi::LogicalSize::new(area_w.max(1.0) as f64, area_h.max(1.0) as f64),
     );
-    reinforce_imm(window, compose_px, py, pw, ph);
 }
 
 pub(crate) fn ime_disallow(window: &Window) {

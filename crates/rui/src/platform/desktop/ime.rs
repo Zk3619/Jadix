@@ -11,8 +11,9 @@ pub(crate) fn apply_ime_cursor_area(
     ui_scale: f32,
     scroll_acc: [f32; 2],
     composing: bool,
+    field_in_overflow_clip: bool,
 ) {
-    let _ = (ui_scale, scroll_acc, composing);
+    let _ = (ui_scale, scroll_acc, composing, field_in_overflow_clip);
     window.set_ime_cursor_area(
         winit::dpi::LogicalPosition::new(area_x as f64, area_y as f64),
         winit::dpi::LogicalSize::new(area_w.max(1.0) as f64, area_h.max(1.0) as f64),

@@ -40,6 +40,33 @@ pub(crate) fn idle_control_flow(next_wake: Option<Instant>, force_immediate: boo
     }
 }
 
+/// `about_to_wait` must Poll while any of these are true.
+///
+/// `request_redraw` inside about_to_wait is coalesced on Windows. If we only
+/// redraw and still `WaitUntil` caret/scrollbar, Dialog/Sheet enter/exit CSS
+/// freezes mid-curve (plays a few frames → hitch → continues when the timer
+/// fires). Page CSS already latches Poll; modal CSS must too — not only the
+/// one-shot armed at `open.set`.
+pub(crate) fn about_to_wait_force_immediate(
+    modal_one_shot: bool,
+    modal_css_needs_frame: bool,
+    page_css_needs_frame: bool,
+    text_edit_pump: bool,
+    paint_clock_active: bool,
+    force_redraw_pending: bool,
+    resize_followup: bool,
+    scrollbar_hide_wake: bool,
+) -> bool {
+    modal_one_shot
+        || modal_css_needs_frame
+        || page_css_needs_frame
+        || text_edit_pump
+        || paint_clock_active
+        || force_redraw_pending
+        || resize_followup
+        || scrollbar_hide_wake
+}
+
 impl super::App {
     /// Drop GPU resources while the window / event loop are still valid.
     ///
@@ -498,7 +525,18 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         }
 
         if let Some(wake) = self.caret_wake_at {
-            if wake <= now {
+            let caret_wake_stale = (*self.state.borrow()).as_ref().is_some_and(|s| {
+                let fid =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+                crate::app::ime_support::is_text_edit_focus(&fid)
+                    && !crate::app::ime_support::painted_caret_matches_focus(&s.text_nodes, &fid)
+            });
+            if caret_wake_stale {
+                self.caret_wake_at = None;
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else if wake <= now {
                 self.caret_wake_at = None;
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();
@@ -634,22 +672,27 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
         // Dialog/Sheet/Drawer: `request_redraw` inside RedrawRequested / about_to_wait
         // is coalesced on Windows. Opening arms a one-shot `Poll` so caret/long-press
-        // `WaitUntil` (~500ms) cannot be the next wake.
+        // `WaitUntil` (~500ms) cannot be the next wake. Later enter/exit frames must
+        // keep Polling via `any_modal_css_needs_frame` — same latch as page CSS.
         // Hold-repeat typing uses the same Poll: otherwise caret WaitUntil lets the OS
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         let page_css_needs = crate::style::any_page_css_needs_frame();
+        let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         let resize_followup = (*self.state.borrow())
             .as_ref()
             .is_some_and(|s| s.needs_resize_followup());
-        let force_immediate = crate::utils::modal_motion::take_modal_force_immediate_wake()
-            || text_edit_pump
-            || page_css_needs
-            || self.paint_clock_active
-            || self.force_redraw_count > 0
-            || resize_followup
-            || self.scrollbar_hide_wake;
-        if force_immediate || crate::utils::modal_motion::any_modal_css_needs_frame() {
+        let force_immediate = about_to_wait_force_immediate(
+            crate::utils::modal_motion::take_modal_force_immediate_wake(),
+            modal_css_needs,
+            page_css_needs,
+            text_edit_pump,
+            self.paint_clock_active,
+            self.force_redraw_count > 0,
+            resize_followup,
+            self.scrollbar_hide_wake,
+        );
+        if force_immediate {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
@@ -1162,7 +1205,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
 
 #[cfg(test)]
 mod idle_control_flow_tests {
-    use super::idle_control_flow;
+    use super::{about_to_wait_force_immediate, idle_control_flow};
     use std::time::{Duration, Instant};
     use winit::event_loop::ControlFlow;
 
@@ -1192,6 +1235,25 @@ mod idle_control_flow_tests {
     }
 
     #[test]
+    fn paint_only_focus_chrome_does_not_sleep_on_caret_wait_until() {
+        // Clicking Search after a sliver-clip: `force_redraw_count` is the existing
+        // Windows coalescing pump (same as maximize). Caret WaitUntil on the previous
+        // field must not win.
+        let caret = Instant::now() + Duration::from_millis(520);
+        let force =
+            about_to_wait_force_immediate(false, false, false, false, false, true, false, false);
+        assert!(
+            force,
+            "text-edit click arming force_redraw_count must Poll"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), force),
+            ControlFlow::Poll,
+            "paint-only focus_id.set cannot WaitUntil the previous field's caret blink"
+        );
+    }
+
+    #[test]
     fn modal_open_does_not_sleep_on_caret_wait_until() {
         let caret = Instant::now() + Duration::from_millis(520);
         assert_eq!(
@@ -1205,6 +1267,27 @@ mod idle_control_flow_tests {
         );
         assert_eq!(idle_control_flow(None, false), ControlFlow::Wait);
         assert_eq!(idle_control_flow(None, true), ControlFlow::Poll);
+    }
+
+    #[test]
+    fn modal_css_pump_polls_after_one_shot_consumed() {
+        // One-shot Poll is taken on the first about_to_wait. Mid enter/exit still
+        // needs Poll or caret WaitUntil (~520ms) freezes the CSS clock.
+        let caret = Instant::now() + Duration::from_millis(520);
+        let force =
+            about_to_wait_force_immediate(false, true, false, false, false, false, false, false);
+        assert!(
+            force,
+            "any_modal_css_needs_frame must latch Poll after take_modal_force_immediate_wake"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), force),
+            ControlFlow::Poll,
+            "mid Dialog/Sheet CSS must Poll; request_redraw + WaitUntil caret is the hitch"
+        );
+        assert!(!about_to_wait_force_immediate(
+            false, false, false, false, false, false, false, false,
+        ));
     }
 
     #[test]

@@ -196,6 +196,10 @@ pub(super) struct AppState {
     /// Fingerprint of the last submitted GPU frame (instances + text chrome + caret).
     /// Used to skip acquire/submit/present when a redraw was requested but nothing visual changed.
     last_gpu_frame_fp: u64,
+    /// This `render()` submitted a swapchain frame. Skip-present still replaces
+    /// `text_nodes` / element `scroll_offset`; IME must not follow that unpresented
+    /// geometry (gallery forms: page frozen, candidate HWND walks up).
+    pub(super) gpu_presented_this_frame: bool,
     /// Hash of all `scroll:` viewport offsets after prepass.
     last_scroll_offset_fp: u64,
     last_scroll_offsets: HashMap<String, [u32; 2]>,
@@ -1482,6 +1486,7 @@ impl AppState {
             last_portal_layer_damage: None,
             has_presented_frame: false,
             last_gpu_frame_fp: 0,
+            gpu_presented_this_frame: true,
             last_scroll_offset_fp: 0,
             last_scroll_offsets: HashMap::new(),
             last_present_node_bounds: Vec::new(),
@@ -1850,8 +1855,7 @@ impl AppState {
         let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
         let prev = self.last_portal_layer_damage;
         let membership = self.portal_membership_dirty;
-        let measuring =
-            crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element);
+        let measuring = crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element);
         // GPU stamp this frame. Opacity-0 expand measure still emits instances at
         // unconstrained content height — that AABB is not occupancy, and must not
         // enter last_overlay_boxes (the next clip frame would OverlayRestore a
@@ -1861,10 +1865,8 @@ impl AppState {
         } else {
             overlay_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0)
         };
-        let needs_restore =
-            super::damage::overlay_restore_needed(prev_occ, current_paint);
-        let same_footprint =
-            super::damage::overlay_same_footprint(prev_occ, current_paint, 2.0);
+        let needs_restore = super::damage::overlay_restore_needed(prev_occ, current_paint);
+        let same_footprint = super::damage::overlay_same_footprint(prev_occ, current_paint, 2.0);
         // CSS tick, portal join/leave, or a laid-out size change: the previous GPU
         // stamp is stale. Membership / box delta without an Overlay dirty still
         // need a replace (otherwise Load src-overs a new keyframe onto retain).
@@ -1912,11 +1914,7 @@ impl AppState {
                 self.push_overlay_restore_visual(b);
             }
             if !collect_overlay_dirty {
-                self.push_portal_overlay_paint_dirties(
-                    &cur_boxes,
-                    overlay_visual,
-                    current_paint,
-                );
+                self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
             }
             self.overlay_occupied = current_paint.or(prev_occ);
         } else if needs_restore {
@@ -1942,10 +1940,7 @@ impl AppState {
         } else {
             self.overlay_restore_clear = false;
             self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
-            if !self.force_full_redraw
-                && !self.scroll_layer_clear
-                && (membership || prev != cur)
-            {
+            if !self.force_full_redraw && !self.scroll_layer_clear && (membership || prev != cur) {
                 self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
             }
         }
@@ -2266,8 +2261,7 @@ impl AppState {
             let cull_phys = Some(super::draw_cull::CullRects::one(cull_rect));
             match dirty.kind {
                 PaintDirtyKind::OverlayRestore => {
-                    let page =
-                        &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
+                    let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
                     let fill = super::draw_cull::opaque_fill_color_at(
                         page,
                         cull_rect[0] + cull_rect[2] * 0.5,
@@ -3535,6 +3529,7 @@ impl AppState {
         // longer on their paint AABB. Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
+        self.gpu_presented_this_frame = false;
         // Collect / Taffy / GPU do not map tree depth onto the OS stack.
         // Construction (`app_builder`, `flush_pending` islands) grows at those sites.
         self.render_inner(
@@ -3806,21 +3801,22 @@ impl AppState {
             }
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
-        // `text_style.input_caret` before collect. Offset-only scroll frames keep last paint.
-        if !scroll_paint_only {
-            crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-                viewport_w,
-                viewport_h,
-                [0.0, 0.0],
-            );
-            crate::components::label::sync_label_selection_paint_subtree(
-                &mut self.root_element,
-                &mut sync_impact,
-            );
-        }
+        // `text_style.input_caret` before collect. Same as button hover: do **not** skip
+        // this on `scroll_paint_only`. Tick-active hover-leave restores `base_text_style`
+        // (caret-less); skipping reinstall drops `input_caret` from `text_nodes`,
+        // `caret_wake_at` dies, and Windows coalesces the settle redraw with Wait.
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+            viewport_w,
+            viewport_h,
+            [0.0, 0.0],
+        );
+        crate::components::label::sync_label_selection_paint_subtree(
+            &mut self.root_element,
+            &mut sync_impact,
+        );
 
         #[cfg(feature = "devtools")]
         {
@@ -3956,8 +3952,9 @@ impl AppState {
                 }
             }
         }
-        self.last_scroll_offset_fp = scroll_fp;
-        self.last_scroll_offsets = cur_offsets;
+        // Do **not** commit `last_scroll_offset_fp` here. skip_present still ran
+        // `update_scroll_offset_in_place`; committing would hide the delta from the
+        // next presented frame (page frozen, leftover target dumps on unfreeze).
         // Highlight geometry is restamped during layout collect from paint_visual_bounds.
         // Do **not** refresh_highlight here: it raced collect (stale abs−scroll vs paint
         // rect) and flickered the overlay during / after smooth scroll + pick hover.
@@ -5059,6 +5056,10 @@ impl AppState {
                 for v in d.rect {
                     v.to_bits().hash(&mut hasher);
                 }
+                // Dest AABB is often the rest pose; CSS scale/rotate lives here.
+                for v in d.transform {
+                    v.to_bits().hash(&mut hasher);
+                }
             }
             hash_present_underline_layers(
                 &mut hasher,
@@ -5162,6 +5163,7 @@ impl AppState {
                     scaled_input_chrome,
                 );
                 self.last_render_at = Instant::now();
+                self.gpu_presented_this_frame = false;
                 return Ok(());
             }
             self.last_gpu_frame_fp = frame_fp;
@@ -5172,6 +5174,9 @@ impl AppState {
         // with present pacing; this typically reduces blocking time in get_current_texture().
         let acquire_begin = Instant::now();
         let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
+        self.last_scroll_offset_fp = scroll_fp;
+        self.last_scroll_offsets = cur_offsets;
+        self.gpu_presented_this_frame = true;
         let acquire_done = Instant::now();
         let view = output
             .texture

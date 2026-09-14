@@ -244,7 +244,8 @@ pub(crate) fn hoisted_expand_measuring(root: &Element) -> bool {
         if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1") {
             return;
         }
-        if el.attrs
+        if el
+            .attrs
             .get("rui_floating_expand_measure")
             .map(String::as_str)
             == Some("1")
@@ -256,7 +257,8 @@ pub(crate) fn hoisted_expand_measuring(root: &Element) -> bool {
 }
 
 fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
-    if el.attrs
+    if el
+        .attrs
         .get("rui_floating_expand_measure")
         .map(String::as_str)
         == Some("1")
@@ -4872,90 +4874,95 @@ impl LayoutTree {
             let pad = paint_outset_pad(&element.style, lay_w, lay_h);
             let vis = intersect_rect(parent_clip, inflate_rect(render_rect, pad, pad));
             if vis[2] <= 0.0 || vis[3] <= 0.0 {
-                if let Some(fid) = element.focus_id.as_deref() {
-                    if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                        // Do not publish max_scroll=0 for off-screen nested viewports —
-                        // post-render would clamp their offset to 0 (table/tree/masonry
-                        // snap to top while the page scrolls).
-                        let content = if rest.ends_with("__ta_scroll") {
-                            textarea_scrollport_content_size(element, abs_x, abs_y, layout.size)
-                        } else {
-                            let mut content = scroll_viewport_taffy_content_size(
-                                &self.taffy,
-                                element,
-                                node,
-                                layout.size,
-                            );
-                            content[1] = cap_message_scroller_collect_content_h(
-                                self,
-                                element,
-                                node,
-                                content[1],
+                let focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                        .peek();
+                if !crate::core::tree::subtree_holds_live_text_edit(element, focused.as_str()) {
+                    if let Some(fid) = element.focus_id.as_deref() {
+                        if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                            // Do not publish max_scroll=0 for off-screen nested viewports —
+                            // post-render would clamp their offset to 0 (table/tree/masonry
+                            // snap to top while the page scrolls).
+                            let content = if rest.ends_with("__ta_scroll") {
+                                textarea_scrollport_content_size(element, abs_x, abs_y, layout.size)
+                            } else {
+                                let mut content = scroll_viewport_taffy_content_size(
+                                    &self.taffy,
+                                    element,
+                                    node,
+                                    layout.size,
+                                );
+                                content[1] = cap_message_scroller_collect_content_h(
+                                    self,
+                                    element,
+                                    node,
+                                    content[1],
+                                    layout.size.height,
+                                );
+                                content
+                            };
+                            scroll_metrics.push((
+                                rest.to_string(),
+                                [abs_x, abs_y, layout.size.width, layout.size.height],
+                                [
+                                    (content[0] - layout.size.width).max(0.0),
+                                    (content[1] - layout.size.height).max(0.0),
+                                ],
+                                content,
+                            ));
+                            seed_scroll_signals_from_collect(
+                                scroll_signals_cache,
+                                rest,
+                                layout.size.width,
                                 layout.size.height,
+                                content[0],
+                                content[1],
                             );
-                            content
-                        };
-                        scroll_metrics.push((
-                            rest.to_string(),
-                            [abs_x, abs_y, layout.size.width, layout.size.height],
-                            [
-                                (content[0] - layout.size.width).max(0.0),
-                                (content[1] - layout.size.height).max(0.0),
-                            ],
-                            content,
-                        ));
-                        seed_scroll_signals_from_collect(
-                            scroll_signals_cache,
-                            rest,
-                            layout.size.width,
-                            layout.size.height,
-                            content[0],
-                            content[1],
-                        );
+                        }
                     }
-                }
-                let own = [abs_x + lay_w, abs_y + lay_h];
-                let contain_x = overflow_contains_axis(element.style.overflow.x);
-                let contain_y = overflow_contains_axis(element.style.overflow.y);
-                // Taffy overflow (incl. abspos) so clip-cull does not drop chart tick labels
-                // from the parent scroller. Non-visible overflow contributes the border box.
-                let mut extent = own;
-                if !contain_x || !contain_y {
-                    let ovf = taffy_scrollable_overflow_extent(
-                        &self.taffy,
+                    let own = [abs_x + lay_w, abs_y + lay_h];
+                    let contain_x = overflow_contains_axis(element.style.overflow.x);
+                    let contain_y = overflow_contains_axis(element.style.overflow.y);
+                    // Taffy overflow (incl. abspos) so clip-cull does not drop chart tick labels
+                    // from the parent scroller. Non-visible overflow contributes the border box.
+                    let mut extent = own;
+                    if !contain_x || !contain_y {
+                        let ovf = taffy_scrollable_overflow_extent(
+                            &self.taffy,
+                            element,
+                            node,
+                            [abs_x, abs_y],
+                        );
+                        if !contain_x {
+                            extent[0] = extent[0].max(ovf[0]);
+                        }
+                        if !contain_y {
+                            extent[1] = extent[1].max(ovf[1]);
+                        }
+                    }
+                    element.collect_extent = extent;
+                    element.collect_extent_valid = true;
+                    self.stamp_descendants_layout_bounds_from_taffy(
                         element,
                         node,
                         [abs_x, abs_y],
+                        [lay_w, lay_h],
+                        scrollbar_overlay_collect,
+                        scroll_signals_cache,
                     );
-                    if !contain_x {
-                        extent[0] = extent[0].max(ovf[0]);
-                    }
-                    if !contain_y {
-                        extent[1] = extent[1].max(ovf[1]);
-                    }
+                    // Parent already has fresh layout_bounds + paint_visual; refresh descendants
+                    // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
+                    #[cfg(feature = "devtools")]
+                    self.sync_devtools_descendants_from_taffy(
+                        element,
+                        node,
+                        [abs_x, abs_y],
+                        [lay_w, lay_h],
+                        scroll_for_render,
+                    );
+                    stamp_clip_polys(clip_polys, instances.len(), gpu_poly);
+                    return CollectPaintOutcome::Done(extent);
                 }
-                element.collect_extent = extent;
-                element.collect_extent_valid = true;
-                self.stamp_descendants_layout_bounds_from_taffy(
-                    element,
-                    node,
-                    [abs_x, abs_y],
-                    [lay_w, lay_h],
-                    scrollbar_overlay_collect,
-                    scroll_signals_cache,
-                );
-                // Parent already has fresh layout_bounds + paint_visual; refresh descendants
-                // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
-                #[cfg(feature = "devtools")]
-                self.sync_devtools_descendants_from_taffy(
-                    element,
-                    node,
-                    [abs_x, abs_y],
-                    [lay_w, lay_h],
-                    scroll_for_render,
-                );
-                stamp_clip_polys(clip_polys, instances.len(), gpu_poly);
-                return CollectPaintOutcome::Done(extent);
             }
         }
 
@@ -6399,14 +6406,42 @@ impl LayoutTree {
                                 walk.parent_tl[1] + cl.location.y,
                             ];
                             let child_size = [cl.size.width, cl.size.height];
-                            match scroll_sibling_band_action(
+                            let mut band = scroll_sibling_band_action(
                                 child_abs,
                                 child_size,
                                 walk.next_scroll_acc,
                                 clip_rect,
                                 element.style.flex_direction,
                                 element.style.flex_wrap,
-                            ) {
+                            );
+                            if !matches!(band, ScrollSiblingBandAction::Visit) {
+                                let focused = crate::core::reactivity::use_signal(
+                                    "__rui_button_focus_id",
+                                    String::new,
+                                )
+                                .peek();
+                                let keep = match band {
+                                    ScrollSiblingBandAction::SkipBefore => {
+                                        crate::core::tree::subtree_holds_live_text_edit(
+                                            &element.children[i],
+                                            focused.as_str(),
+                                        )
+                                    }
+                                    ScrollSiblingBandAction::StopAfter => {
+                                        element.children[i..].iter().any(|c| {
+                                            crate::core::tree::subtree_holds_live_text_edit(
+                                                c,
+                                                focused.as_str(),
+                                            )
+                                        })
+                                    }
+                                    ScrollSiblingBandAction::Visit => false,
+                                };
+                                if keep {
+                                    band = ScrollSiblingBandAction::Visit;
+                                }
+                            }
+                            match band {
                                 ScrollSiblingBandAction::SkipBefore => {
                                     #[cfg(feature = "devtools")]
                                     {

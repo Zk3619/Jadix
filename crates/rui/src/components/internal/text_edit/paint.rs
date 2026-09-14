@@ -64,7 +64,10 @@ pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
     viewport_h: f32,
     scroll_acc: [f32; 2],
 ) {
-    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+    let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h)
+        && !crate::core::tree::subtree_holds_live_text_edit(el, focused.as_str())
+    {
         return;
     }
     struct Frame {
@@ -78,7 +81,9 @@ pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive paint-sync walk of `el`'s subtree.
         let node = unsafe { &mut *frame.el };
-        if crate::core::tree::element_is_offscreen(node, frame.scroll_acc, viewport_w, viewport_h) {
+        if crate::core::tree::element_is_offscreen(node, frame.scroll_acc, viewport_w, viewport_h)
+            && !crate::core::tree::subtree_holds_live_text_edit(node, focused.as_str())
+        {
             continue;
         }
         if let Some(desc) = node.input_paint_sync.clone() {

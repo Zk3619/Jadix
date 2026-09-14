@@ -3435,6 +3435,13 @@ impl Element {
     }
     pub fn flex_grow(mut self, grow: impl IntoF32Raw) -> Self {
         self.style.flex_grow = grow.into_f32_raw();
+        // RSX `<Input flex_grow="1">` lands here after `InputBuilder` already set
+        // `w(100%)`. Same contract as [`crate::components::input::InputBuilder::flex_grow`]:
+        // opting into grow shares a wrap row instead of forcing a full-width line
+        // of `overflow:hidden` siblings (gallery forms Placeholder–Search).
+        if self.input_paint_sync.is_some() {
+            self = self.w("auto").min_w("0");
+        }
         self
     }
     pub fn flex_shrink(mut self, shrink: impl IntoF32Raw) -> Self {
@@ -3876,6 +3883,28 @@ pub(crate) fn element_is_offscreen(
     let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
     let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
     vx + b[2] < -PAD || vy + b[3] < -PAD || vx > viewport_w + PAD || vy > viewport_h + PAD
+}
+
+/// Focused `input:` / `textarea:` wrap, or a leaf that still carries `input_caret`.
+///
+/// Fine-grained clip-cull / offscreen paint-sync skip used to drop this subtree.
+/// Losing the caret from `text_nodes` clears `caret_wake_at` and the event loop
+/// goes to bare `Wait` — animations and later clicks sit in state until a scroll
+/// or blank click pumps a frame (gallery forms: first field not fully visible).
+pub(crate) fn subtree_holds_live_text_edit(el: &Element, focused: &str) -> bool {
+    fn walk(el: &Element, focused: &str) -> bool {
+        if el.text_style.input_caret.is_some() {
+            return true;
+        }
+        if !focused.is_empty()
+            && crate::utils::text_field::text_edit_rest(focused).is_some()
+            && el.focus_id.as_deref() == Some(focused)
+        {
+            return true;
+        }
+        el.children.iter().any(|c| walk(c, focused))
+    }
+    walk(el, focused)
 }
 
 /// Axis-aligned point-in-rect (`[x, y, w, h]`).

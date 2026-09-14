@@ -788,6 +788,141 @@ fn forms_password_input_adornments_visible_when_focused() {
     rui::app::reactive::reset_registered_anchors();
 }
 
+fn gallery_collect_input_bounds(el: &rui::core::tree::Element, out: &mut Vec<(String, [f32; 4])>) {
+    if let Some(fid) = el.focus_id.as_deref() {
+        if let Some(rest) = fid.strip_prefix(rui::components::INPUT_FOCUS_PREFIX) {
+            out.push((rest.to_string(), el.layout_bounds));
+        }
+    }
+    for c in &el.children {
+        gallery_collect_input_bounds(c, out);
+    }
+}
+
+fn gallery_tree_has_input_caret(el: &rui::core::tree::Element) -> bool {
+    el.text_style.input_caret.is_some() || el.children.iter().any(gallery_tree_has_input_caret)
+}
+
+/// Gallery forms: wrap Inputs in card「2) Input」used to drop `input_caret` from
+/// `text_nodes` once the first field was only a chrome sliver — event loop fell
+/// to bare `Wait`. 2b InputAdornment is the control that must still paint a caret
+/// under the same scroll.
+#[test]
+fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                const VW: f32 = 520.0;
+                const VH: f32 = 800.0;
+                let showcase = "gal-s2-input-a";
+                let adornment = "gal-ia-search";
+                use_signal(
+                    &rui::components::input_value_signal_key(showcase),
+                    String::new,
+                )
+                .set("hello".into());
+                use_signal(
+                    &rui::components::input_value_signal_key(adornment),
+                    String::new,
+                )
+                .set("query".into());
+
+                fn collect_after_clip(
+                    focus_rest: &str,
+                    vw: f32,
+                    vh: f32,
+                ) -> (bool, bool, bool, f32, Vec<(String, [f32; 4])>, usize) {
+                    use_signal("__rui_button_focus_id", String::new).set(format!(
+                        "{}{focus_rest}",
+                        rui::components::INPUT_FOCUS_PREFIX
+                    ));
+                    let mut tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let _ = layout.build_and_layout(&mut tree, vw, vh, [-1.0, -1.0]);
+                    let mut bounds = Vec::new();
+                    gallery_collect_input_bounds(&tree, &mut bounds);
+                    let first = bounds
+                        .iter()
+                        .find(|(id, _)| id == "gal-s2-input-a")
+                        .map(|(_, b)| *b)
+                        .expect("gal-s2-input-a");
+                    let scroll_y = first[1] + first[3] - 8.0;
+                    assert!(
+                        set_scroll_offset(&mut tree, "scroll-forms", [0.0, scroll_y]),
+                        "scroll:scroll-forms viewport must exist"
+                    );
+                    use_signal(
+                        &rui::core::scroll_viewport::scroll_offset_y_signal_key("scroll-forms"),
+                        || 0.0_f32,
+                    )
+                    .set_silent(scroll_y);
+                    let clipped =
+                        layout.build_and_layout_fast(&mut tree, vw, vh, [-1.0, -1.0], true, false);
+                    let mut after = Vec::new();
+                    gallery_collect_input_bounds(&tree, &mut after);
+                    let caret = clipped
+                        .text_nodes
+                        .iter()
+                        .find(|n| n.style.input_caret.is_some());
+                    let caret_fully_in_clip = caret.is_some_and(|n| match n.clip_bounds {
+                        None => n.y >= -0.5 && n.y + n.height <= vh + 0.5,
+                        Some(c) => {
+                            n.width > 0.0
+                                && n.height > 0.0
+                                && c[2] > 0.0
+                                && c[3] > 0.0
+                                && n.x >= c[0] - 0.5
+                                && n.y >= c[1] - 0.5
+                                && n.x + n.width <= c[0] + c[2] + 0.5
+                                && n.y + n.height <= c[1] + c[3] + 0.5
+                        }
+                    });
+                    (
+                        gallery_tree_has_input_caret(&tree),
+                        caret.is_some(),
+                        caret_fully_in_clip,
+                        scroll_y,
+                        after,
+                        clipped.text_nodes.len(),
+                    )
+                }
+
+                let (tree_a, nodes_a, in_clip_a, sy_a, after_a, ntext_a) =
+                    collect_after_clip(showcase, VW, VH);
+                assert!(
+                    nodes_a,
+                    "2) Input focused field must keep caret in text_nodes when the first wrap field is a chrome sliver.\n\
+                     tree_caret={tree_a} scroll_y={sy_a} text_nodes={ntext_a} inputs={after_a:?}"
+                );
+                assert!(
+                    !in_clip_a,
+                    "2) sliver leaf must sit outside its overflow clip (Windows Imm hang trigger).\n\
+                     tree_caret={tree_a} scroll_y={sy_a} text_nodes={ntext_a} inputs={after_a:?}"
+                );
+
+                let (tree_b, nodes_b, in_clip_b, sy_b, after_b, ntext_b) =
+                    collect_after_clip(adornment, VW, VH);
+                assert!(
+                    nodes_b,
+                    "2b InputAdornment is the control: caret must survive the same first-field clip.\n\
+                     tree_caret={tree_b} scroll_y={sy_b} text_nodes={ntext_b} inputs={after_b:?}"
+                );
+                assert!(
+                    in_clip_b,
+                    "2b leaf must stay fully inside the ScrollArea clip under the same scroll.\n\
+                     tree_caret={tree_b} scroll_y={sy_b} text_nodes={ntext_b} inputs={after_b:?}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
 #[test]
 fn forms_section_mounts_wp_r7_reactive_chips() {
     rui::app::reactive::reset_registered_anchors();

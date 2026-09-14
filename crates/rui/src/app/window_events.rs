@@ -596,8 +596,20 @@ impl super::App {
                         0.0,
                         ui_scale,
                     );
+                    let field_in_overflow_clip =
+                        super::ime_support::painted_ime_field_in_overflow_clip(
+                            text_nodes, &fid_clone, win_w, win_h,
+                        );
                     super::ime_support::apply_ime_cursor_area(
-                        window, ax, ay, caret_w, line_h, ui_scale, scroll_acc, composing,
+                        window,
+                        ax,
+                        ay,
+                        caret_w,
+                        line_h,
+                        ui_scale,
+                        scroll_acc,
+                        composing,
+                        field_in_overflow_clip,
                     );
                     super::ime_support::record_ime_cursor(super::ime_support::ImeCursorSnapshot {
                         focus_id: fid_clone,
@@ -1939,9 +1951,8 @@ impl super::App {
                             // applying scroll so the overlay does not follow the trigger then
                             // close on mouse-up. Overlay-owned bars (Select list) stay.
                             let path = super::pointer_events::hit_path(&state.root_element, x, y);
-                            let page_scrollbar = !super::portal_overlay::hit_path_on_top_exclusive_surface(
-                                &path,
-                            );
+                            let page_scrollbar =
+                                !super::portal_overlay::hit_path_on_top_exclusive_surface(&path);
                             let (
                                 track_start,
                                 track_len,
@@ -1969,7 +1980,8 @@ impl super::App {
                             };
                             drop(state_borrow);
                             if page_scrollbar {
-                                let _ = super::portal_overlay::dismiss_exclusive_on_viewport_change();
+                                let _ =
+                                    super::portal_overlay::dismiss_exclusive_on_viewport_change();
                             }
                             let focus_visible =
                                 crate::core::reactivity::use_signal("__rui_focus_visible", || {
@@ -2325,6 +2337,14 @@ impl super::App {
                 self.smooth_active_until.clear();
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
+                // Leftover smooth `target != offset` from the wheel-to-clip would
+                // interpolate on the next chrome frame. User did not scroll: snap
+                // targets so unfreeze does not dump extra page motion.
+                let rests: Vec<String> = self.scroll_metrics_cache.keys().cloned().collect();
+                super::scroll_support::snap_scroll_targets_to_current_offsets(
+                    rests.iter().map(String::as_str),
+                );
+                self.force_redraw_count = self.force_redraw_count.max(1);
             } else if let Some((key, caret_ix)) = label_drag {
                 let sk = crate::components::label::label_selection_signal_key(&key);
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
@@ -2508,8 +2528,8 @@ impl super::App {
 
         if is_smooth_mode {
             crate::components::chart::set_chart_hover_frozen(true);
-            let next_x = (tx.get() - dx).clamp(0.0, max_x);
-            let next_y = (ty.get() - dy).clamp(0.0, max_y);
+            let next_x = (tx.peek() - dx).clamp(0.0, max_x);
+            let next_y = (ty.peek() - dy).clamp(0.0, max_y);
             tx.set_silent(next_x);
             ty.set_silent(next_y);
             self.bump_smooth_active_until(&rest, now);
@@ -3609,12 +3629,25 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .iter()
                     .any(|n| n.style.input_caret.is_some())
                     || crate::components::input_otp::take_otp_caret_blink_needed();
+                let ime_field_in_overflow_clip = ime_data.as_ref().is_some_and(|(_, _, fid, _)| {
+                    super::ime_support::painted_ime_field_in_overflow_clip(
+                        &state.text_nodes,
+                        fid,
+                        win_w,
+                        win_h,
+                    )
+                });
                 let svg_smil_active =
                     crate::primitives::svg::subtree_has_svg_smil(&state.root_element);
                 let anim_icon_active =
                     crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
                         &state.root_element,
                     );
+                let gpu_presented = state.gpu_presented_this_frame;
+                let painted_caret_matches_focus = super::ime_support::painted_caret_matches_focus(
+                    &state.text_nodes,
+                    &fid,
+                );
 
                 drop(re_borrow); // CRITICAL: Free the borrow before updating signals!
 
@@ -4095,7 +4128,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             allow_ime,
                             &mut self.ime_allowed_latched,
                         );
-                        if allow_ime {
+                        if allow_ime && gpu_presented {
                             // Painted leaf is already inset; skip outer padding so caret_x is relative to
                             // the text box. Focus-bounds fallback still needs field padding.
                             let pad_zero = source == "painted";
@@ -4168,7 +4201,15 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 ui_scale,
                             );
                             super::ime_support::apply_ime_cursor_area(
-                                &window, ax, ay, caret_w, line_h, ui_scale, scroll_acc, composing,
+                                &window,
+                                ax,
+                                ay,
+                                caret_w,
+                                line_h,
+                                ui_scale,
+                                scroll_acc,
+                                composing,
+                                ime_field_in_overflow_clip,
                             );
                             super::ime_support::record_ime_cursor(
                                 super::ime_support::ImeCursorSnapshot {
@@ -4211,18 +4252,26 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
 
                 // Caret blink: wake ~once per phase (~520ms), not every frame.
-                // Do **not** plant that WaitUntil while a Dialog/Sheet enter is armed or
-                // this frame already requested a redraw — `request_redraw` inside
-                // RedrawRequested is coalesced on Windows, and the 520ms caret deadline
-                // then becomes a first-open empty wait.
-                if has_input_caret {
+                // Do **not** plant that WaitUntil while a Dialog/Sheet enter/exit is
+                // armed or this frame already requested a redraw — `request_redraw`
+                // inside RedrawRequested is coalesced on Windows, and the 520ms caret
+                // deadline then freezes mid-zoom (plays → hitch → continues).
+                // Same hang when paint-only `focus_id.set` has not been presented:
+                // the previous field's caret is still in `text_nodes`, so WaitUntil
+                // swallows the Search chrome frame (gallery forms card 2).
+                if has_input_caret && painted_caret_matches_focus {
                     let wake = crate::renderer::caret_blink_next_toggle_at();
                     self.caret_wake_at = Some(wake);
-                    let anim_pump = self.paint_clock_active || self.force_redraw_count > 0;
+                    let anim_pump = self.paint_clock_active
+                        || self.force_redraw_count > 0
+                        || crate::utils::modal_motion::any_modal_css_needs_frame();
                     if !anim_pump {
                         event_loop
                             .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
                     }
+                } else if has_input_caret && !painted_caret_matches_focus {
+                    self.caret_wake_at = None;
+                    window.request_redraw();
                 } else if !self
                     .secondaries
                     .borrow()

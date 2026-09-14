@@ -436,7 +436,11 @@ pub fn overlay_restore_leftover_boxes(
         .filter(|b| b[2] > 0.0 && b[3] > 0.0)
         .collect();
     let mut out = Vec::new();
-    for prev in prev_boxes.iter().copied().filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+    for prev in prev_boxes
+        .iter()
+        .copied()
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+    {
         let mut remnants = vec![prev];
         for c in &cur {
             remnants = remnants
@@ -1841,9 +1845,7 @@ mod tests {
         assert_eq!(leftover, vec![below]);
         let gap = [88.0, 260.0, 144.0, 140.0];
         assert!(
-            leftover
-                .iter()
-                .all(|b| intersect_rects(*b, gap).is_none()),
+            leftover.iter().all(|b| intersect_rects(*b, gap).is_none()),
             "union AABB of below∪above would dest-reset the page between the two positions"
         );
         assert!(overlay_same_footprint(Some(below), Some(below), 2.0));
@@ -1874,7 +1876,10 @@ mod tests {
             !overlay_restore_needed(None, Some(clip)),
             "first painted clip is a grow from empty occupancy — Restore dest-resets a white frame"
         );
-        assert!(!overlay_restore_needed(Some(clip), Some([90.0, 140.0, 40.0, 80.0])));
+        assert!(!overlay_restore_needed(
+            Some(clip),
+            Some([90.0, 140.0, 40.0, 80.0])
+        ));
         assert!(overlay_restore_needed(
             Some([90.0, 140.0, 40.0, 80.0]),
             Some(clip)
@@ -1907,8 +1912,13 @@ mod tests {
     fn overlay_mounted_replace_holes_flip_does_not_punch_gap() {
         let below = [88.0, 400.0, 144.0, 80.0];
         let above = [88.0, 40.0, 144.0, 220.0];
-        let holes =
-            overlay_mounted_replace_holes(Some(below), Some(above), &[below], &[above], Some(above));
+        let holes = overlay_mounted_replace_holes(
+            Some(below),
+            Some(above),
+            &[below],
+            &[above],
+            Some(above),
+        );
         assert_eq!(holes, vec![below, above]);
         let gap = [88.0, 260.0, 144.0, 140.0];
         assert!(
@@ -1936,8 +1946,13 @@ mod tests {
     #[test]
     fn overlay_mounted_replace_holes_same_size_fade() {
         let panel = [90.0, 140.0, 40.0, 160.0];
-        let holes =
-            overlay_mounted_replace_holes(Some(panel), Some(panel), &[panel], &[panel], Some(panel));
+        let holes = overlay_mounted_replace_holes(
+            Some(panel),
+            Some(panel),
+            &[panel],
+            &[panel],
+            Some(panel),
+        );
         assert_eq!(holes, vec![panel]);
     }
 
