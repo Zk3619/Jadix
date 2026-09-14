@@ -555,17 +555,24 @@ impl RuiPipeline {
     }
 
     /// Dev hot-reload: replace the main rect shader (entry points stay `vs_main` / `fs_main`).
+    ///
+    /// Returns `false` and keeps the previous pipeline if WGSL or PSO validation fails.
     pub fn rebuild_wgsl(
         &mut self,
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
         wgsl_source: &str,
-    ) {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rounded Rect Shader (hot reload)"),
-            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
-        });
-        let (bind_group, bind_group_clip_poly, render_pipeline) = {
+    ) -> bool {
+        let Some(shader) = crate::renderer::wgpu_compat::try_shader_module(
+            device,
+            "Rounded Rect Shader (hot reload)",
+            wgsl_source,
+        ) else {
+            log::warn!("hot-reload WGSL: shader module failed; keeping previous pipeline");
+            return false;
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let bind_group = Self::make_bind_group(
                 device,
                 &self.bind_group_layout,
@@ -586,10 +593,23 @@ impl RuiPipeline {
                 &self.backdrop_bgl,
             );
             (bind_group, bind_group_clip_poly, render_pipeline)
+        }));
+        let (bind_group, bind_group_clip_poly, render_pipeline) = match built {
+            Ok(tuple) => tuple,
+            Err(_) => {
+                let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
+                log::warn!("hot-reload WGSL: pipeline create panicked; keeping previous pipeline");
+                return false;
+            }
         };
+        if crate::renderer::wgpu_compat::wait_error_scope(device, scope).is_some() {
+            log::warn!("hot-reload WGSL: pipeline validation failed; keeping previous pipeline");
+            return false;
+        }
         self.bind_group = bind_group;
         self.bind_group_clip_poly = bind_group_clip_poly;
         self.render_pipeline = render_pipeline;
+        true
     }
 
     /// Bind group 1 when the instance does not sample a blurred capture.

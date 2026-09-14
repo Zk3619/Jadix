@@ -56,7 +56,10 @@ fn svg_ui_tag_builds_a_leaf() {
     );
     assert!(el.get_attr(ATTR_SVG_SCENE).is_some());
     let d = el.get_attr(ATTR_PATH_D).expect("d");
-    assert!(d.contains('M') && d.contains('L'), "{d}");
+    assert!(
+        d.contains('M') && (d.contains('L') || d.contains('A')),
+        "{d}"
+    );
 }
 
 #[test]

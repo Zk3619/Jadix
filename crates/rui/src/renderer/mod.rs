@@ -18,6 +18,7 @@ pub mod geometry2d;
 pub mod glyph_fx;
 pub mod graph;
 pub mod offscreen;
+pub mod path_pipeline;
 pub mod pipeline;
 pub mod prepare_text;
 pub mod present_retain;
@@ -32,6 +33,7 @@ pub(crate) mod wgpu_compat;
 
 #[cfg(feature = "scene3d")]
 pub mod scene3d;
+pub mod shader_leaf;
 #[cfg(feature = "image-stream")]
 pub mod yuv_convert;
 

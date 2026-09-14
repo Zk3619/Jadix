@@ -38,7 +38,7 @@ fn svg_builder_leaf_layout_bounds_and_path_texture() {
     );
     let d = svg_el.get_attr(ATTR_PATH_D).expect("shared path d");
     assert!(
-        d.contains('M') && d.contains('L'),
+        d.contains('M') && (d.contains('L') || d.contains('A')),
         "same PathCommand d: {d}"
     );
 

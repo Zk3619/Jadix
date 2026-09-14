@@ -1,22 +1,26 @@
-//! GPU 2D path backend: flatten curves → tessellate quads → [`InstanceInput`].
+//! GPU 2D path backend: flatten curves → tessellate mesh → [`crate::renderer::path_pipeline::PathGpu`].
 //!
-//! CPU coverage raster (`paint_path_premul`) remains the default product path and
-//! the golden/headless fallback. Enable GPU quads with `RUI_GPU_2D=1`.
+//! CPU coverage raster (`paint_path_premul`) remains the golden/headless fallback.
+//! Product path is on by default; set `RUI_GPU_2D=0` to force CPU raster.
 
 use crate::primitives::path::{tessellate_path, PathCommand, PathQuad, PathStyle};
 use crate::renderer::InstanceInput;
 
-/// `RUI_GPU_2D=1` opts Chart/Svg/Canvas path leaves into tessellated GPU quads.
+/// Product GPU 2D path (PathPipeline). `RUI_GPU_2D=0`/`false` forces CPU golden.
 pub fn gpu2d_enabled() -> bool {
     static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CELL.get_or_init(|| {
         std::env::var("RUI_GPU_2D")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+            .map(|v| {
+                let t = v.trim();
+                !(t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("off"))
+            })
+            .unwrap_or(true)
     })
 }
 
-/// Flatten + tessellate a path into SDF-rect instances (same pipeline as UI chrome).
+/// Flatten + tessellate a path into SDF-rect instances (thin-stroke fallback / tests).
+/// Product Chart/Svg leaves use [`crate::renderer::path_pipeline::PathGpu`].
 pub fn path_to_instances(
     cmds: &[PathCommand],
     style: &PathStyle,

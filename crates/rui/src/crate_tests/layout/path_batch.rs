@@ -1,4 +1,4 @@
-//! WP-3.2：path 产品绘制走 TexturedDraw（CPU 覆盖率光栅）；tessellate 仅回退。
+//! WP-3.2：path 产品绘制走 TexturedDraw（GPU PathPipeline 或 CPU golden）；SDF 矩形不是产品核。
 
 use crate::components::{
     area_chart, bar_chart, define_chart, line_chart, line_y, pie_chart, ChartDatum,
@@ -28,6 +28,35 @@ fn path_leaf_emits_textured_stroke() {
         root.get_attr(ATTR_PATH_D).is_some(),
         "shared path d attr missing"
     );
+    let sdf_round_caps = result
+        .instances
+        .iter()
+        .filter(|i| {
+            i.border_width == 0.0
+                && i.shadow_blur == 0.0
+                && (i.rect_size[0] - i.rect_size[1]).abs() < 0.25
+                && i.rect_size[0] > 1.5
+                && i.rect_size[0] < 8.0
+                && i.radii.iter().all(|&r| r > 0.4)
+        })
+        .count();
+    if crate::renderer::gpu2d_enabled() {
+        assert_eq!(
+            sdf_round_caps,
+            0,
+            "GPU2D stroke must not emit SDF round-cap quads; instances={}",
+            result.instances.len()
+        );
+        assert!(
+            result
+                .render_graph
+                .nodes
+                .iter()
+                .any(|n| n.kind == crate::renderer::PassKind::Path2d),
+            "collect must enqueue PassKind::Path2d; graph={:?}",
+            result.render_graph.nodes
+        );
+    }
 }
 
 #[test]

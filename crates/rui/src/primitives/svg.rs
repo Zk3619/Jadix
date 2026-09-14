@@ -2,7 +2,8 @@
 //!
 //! HTML `<svg viewBox>` mental model, but a **vector scene graph inside an RUI Element leaf**, not the DOM.
 //! Child shapes (`path` / `circle` / `ellipse` / `rect` / `line` / `polyline` / `polygon` / `g`) do **not** each own a taffy node.
-//! Paint uses the same [`PathCommand`] core as Chart (CPU coverage raster atlas); curves in `<path d>` flatten to M/L/Z in [`decode_path_d`].
+//! Paint uses the same [`PathCommand`] core as Chart. [`decode_path_d`] keeps C/Q/A;
+//! flatten is only at raster / tessellate / hit. Circle / ellipse emit [`PathCommand::Arc`].
 //! emoji-svg / resvg are **out of scope** for this module.
 //!
 //! Dual surface: [`svg`] Builder; `ui!` `<svg>` / `<circle>` / `<path>`… (see `rui_macros`).
@@ -14,9 +15,9 @@ use std::hash::{Hash, Hasher};
 
 use crate::core::tree::{Element, IntoCssDim, IntoElementList};
 use crate::primitives::path::{
-    decode_path_d, encode_path_d, ensure_raster_texture, filled_circle, filled_rect,
-    polygon as path_polygon, polyline as path_polyline, register_path_scene, FillRule, PathCommand,
-    PathStyle, Point2, StrokeLinecap, StrokeLinejoin, ATTR_PATH_D, ATTR_PATH_FIT_LEAF,
+    decode_path_d, encode_path_d, ensure_raster_texture, filled_circle, filled_ellipse,
+    filled_rect, polygon as path_polygon, polyline as path_polyline, register_path_scene, FillRule,
+    PathCommand, PathStyle, Point2, StrokeLinecap, StrokeLinejoin, ATTR_PATH_D, ATTR_PATH_FIT_LEAF,
     ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
 };
 use crate::style::parse_color;
@@ -215,11 +216,8 @@ impl Affine {
 
 fn apply_affine(cmds: &[PathCommand], xf: Affine) -> Vec<PathCommand> {
     cmds.iter()
-        .map(|c| match *c {
-            PathCommand::MoveTo(p) => PathCommand::MoveTo(xf.apply(p)),
-            PathCommand::LineTo(p) => PathCommand::LineTo(xf.apply(p)),
-            PathCommand::Close => PathCommand::Close,
-        })
+        .cloned()
+        .map(|c| c.map_xy(|p| xf.apply(p)))
         .collect()
 }
 
@@ -555,18 +553,6 @@ fn stroke_attrs(el: &Element) -> (StrokeLinecap, StrokeLinejoin, FillRule) {
         .map(|s| FillRule::parse(s))
         .unwrap_or_default();
     (linecap, linejoin, fill_rule)
-}
-
-fn filled_ellipse(cx: f32, cy: f32, rx: f32, ry: f32, segments: usize) -> Vec<PathCommand> {
-    let n = segments.max(8);
-    let rx = rx.max(0.0);
-    let ry = ry.max(0.0);
-    let mut pts = Vec::with_capacity(n);
-    for i in 0..n {
-        let a = std::f32::consts::TAU * (i as f32) / (n as f32);
-        pts.push((cx + rx * a.cos(), cy + ry * a.sin()));
-    }
-    path_polygon(&pts)
 }
 
 #[derive(Clone, Debug)]
@@ -2652,7 +2638,10 @@ mod tests {
         );
         assert!(el.get_attr(ATTR_PATH_SCENE).is_some());
         let d = el.get_attr(ATTR_PATH_D).expect("shared path d");
-        assert!(d.contains('M') && d.contains('L'), "{d}");
+        assert!(
+            d.contains('M') && (d.contains('L') || d.contains('A')),
+            "{d}"
+        );
         assert_eq!(
             el.get_attr(ATTR_PATH_FIT_LEAF).map(String::as_str),
             Some("1")
@@ -2678,6 +2667,14 @@ mod tests {
         assert!((vb[2] - 100.0).abs() < 1e-3 && (vb[3] - 100.0).abs() < 1e-3);
         let circle_pts = points_from_commands(&layers[0].0);
         assert!(circle_pts.len() >= 8);
+        assert!(
+            layers[0]
+                .0
+                .iter()
+                .any(|c| matches!(c, PathCommand::Arc { .. })),
+            "svg circle must keep Arc until flatten, got {:?}",
+            layers[0].0
+        );
         assert!(layers[0].1.fill.is_some());
         assert!(layers[1].1.stroke.is_some() && layers[1].1.fill.is_none());
         match &layers[1].0[0] {

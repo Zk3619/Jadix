@@ -174,6 +174,10 @@ fn is_canvas_tag(name: &str) -> bool {
     matches!(name, "canvas" | "Canvas")
 }
 
+fn is_shader_tag(name: &str) -> bool {
+    matches!(name, "shader" | "Shader")
+}
+
 /// Valueless RSX flags: `<DragProvider scroll-lock-all>` ≡ `scroll_lock="all"`.
 fn is_scroll_lock_flag_attr(name: &str) -> bool {
     matches!(
@@ -237,13 +241,36 @@ enum RsxNode {
     Expr(Expr),
 }
 
+/// RSX `{ … }` child: a single expression, or a statement block (`throw_x(); view()`).
+///
+/// The outer braces are RSX delimiters (stripped). A complete inner expr is kept as-is
+/// (`n.get()`, `{ |k| k }`, `{ { stmt; elem } }`). Leftover tokens after a partial expr
+/// (typically `;`) are wrapped into a Rust block so `{ throw_x(); view() }` parses.
+fn parse_rsx_brace_child(content: ParseStream) -> syn::Result<Expr> {
+    use syn::parse::discouraged::Speculative;
+
+    if content.is_empty() {
+        return Err(content.error("empty `{}` expression child"));
+    }
+    let fork = content.fork();
+    if let Ok(expr) = fork.parse::<Expr>() {
+        if fork.is_empty() {
+            content.advance_to(&fork);
+            return Ok(expr);
+        }
+    }
+    let inner: proc_macro2::TokenStream = content.parse()?;
+    syn::parse2(quote! {{ #inner }})
+        .map_err(|e| syn::Error::new(e.span(), format!("RSX `{{ … }}` statement block: {e}")))
+}
+
 impl Parse for RsxNode {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        // If it starts with `{`, it's an expression
+        // If it starts with `{`, it's an expression (or a statement block).
         if input.peek(syn::token::Brace) {
             let content;
             braced!(content in input);
-            let expr: Expr = content.parse()?;
+            let expr = parse_rsx_brace_child(&content)?;
             return Ok(RsxNode::Expr(expr));
         }
 
@@ -789,6 +816,39 @@ fn stable_template_hash(source: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// `id` / `scope` for reactive islands. Empty / whitespace string literals are
+/// treated as omitted (`element_identity.md` — empty string is not an identity).
+fn rsx_island_anchor(
+    id_expr: Option<&Expr>,
+    kind: &str,
+    node_counter: &mut usize,
+) -> proc_macro2::TokenStream {
+    let use_generated = match id_expr {
+        None => true,
+        Some(expr) => expr_is_blank_str_lit(expr),
+    };
+    if use_generated {
+        let idx = *node_counter;
+        *node_counter += 1;
+        quote! { format!("{}:{}:{}#{}", file!(), line!(), #kind, #idx) }
+    } else {
+        let expr = id_expr.expect("non-generated island id has an expr");
+        quote! { #expr }
+    }
+}
+
+fn expr_is_blank_str_lit(expr: &Expr) -> bool {
+    match expr {
+        Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        }) => s.value().trim().is_empty(),
+        Expr::Group(g) => expr_is_blank_str_lit(&g.expr),
+        Expr::Paren(p) => expr_is_blank_str_lit(&p.expr),
+        _ => false,
+    }
+}
+
 /// Best-effort AST heuristic for Solid-style signal reads.
 ///
 /// Tightened vs a bare zero-arg `.get()` scan:
@@ -1022,6 +1082,8 @@ fn expand_node(
             // MessageScrollerProvider is compound (scope before Viewport / Button).
             if name_str == "Reactive"
                 || name_str == "Show"
+                || name_str == "ErrorBoundary"
+                || name_str == "Suspense"
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
                 || name_str == "AnchoredOverlay"
@@ -6063,6 +6125,88 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "ErrorBoundary" {
+                    let Some(fallback_expr) = get_attr("fallback") else {
+                        return quote! {
+                            compile_error!("<ErrorBoundary> requires `fallback={|msg| ...}`")
+                        };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = rsx_island_anchor(
+                        get_attr("id").or_else(|| get_attr("scope")),
+                        "ErrorBoundary",
+                        node_counter,
+                    );
+                    return quote! {
+                        rui::app::error_boundary(
+                            #id_ts,
+                            #fallback_expr,
+                            move || { #child_el },
+                        )
+                    };
+                }
+
+                if name_str == "Suspense" {
+                    let Some(fallback_expr) = get_attr("fallback") else {
+                        return quote! {
+                            compile_error!("<Suspense> requires `fallback={|| ...}`")
+                        };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend(rui::core::tree::build_ui_child(|| (#expanded_children))); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = rsx_island_anchor(
+                        get_attr("id").or_else(|| get_attr("scope")),
+                        "Suspense",
+                        node_counter,
+                    );
+                    return quote! {
+                        rui::app::suspense(
+                            #id_ts,
+                            #fallback_expr,
+                            move || { #child_el },
+                        )
+                    };
+                }
+
                 if name_str == "Show" {
                     let Some(when_expr) = get_attr("when") else {
                         return quote! { compile_error!("<Show> requires `when={...}` attribute"); };
@@ -7907,6 +8051,7 @@ fn expand_node(
                     }
                     "canvas" | "Canvas" => quote! { rui::primitives::canvas() },
                     "scene3d" | "Scene3d" => quote! { rui::primitives::scene3d() },
+                    "shader" | "Shader" => quote! { rui::primitives::shader() },
                     other => {
                         if let Some(tag) = svg_tag_canonical(other) {
                             quote! { rui::primitives::svg::svg_el(#tag) }
@@ -8334,6 +8479,26 @@ fn expand_node(
                 }
                 if is_canvas_tag(&name_str) && attr_str.as_str() == "paint" {
                     element = quote! { #element.paint(#value) };
+                    continue;
+                }
+                if is_shader_tag(&name_str) && attr_str.as_str() == "wgsl" {
+                    element = quote! { #element.wgsl(#value) };
+                    continue;
+                }
+                if is_shader_tag(&name_str) && matches!(attr_str.as_str(), "texture" | "src") {
+                    element = quote! { #element.texture("src", #value) };
+                    continue;
+                }
+                if is_shader_tag(&name_str) && matches!(attr_str.as_str(), "texture1" | "src1") {
+                    element = quote! { #element.texture("src1", #value) };
+                    continue;
+                }
+                if is_shader_tag(&name_str) && attr_str.as_str() == "preset" {
+                    element = quote! { #element.preset(#value) };
+                    continue;
+                }
+                if is_shader_tag(&name_str) && attr_str.as_str() == "buffer" {
+                    element = quote! { #element.buffer(#value) };
                     continue;
                 }
                 match attr_str.as_str() {
@@ -9450,6 +9615,101 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn error_boundary_requires_fallback() {
+        let s = expand("<ErrorBoundary><Box></Box></ErrorBoundary>");
+        assert!(
+            s.contains("compile_error"),
+            "missing fallback must fail: {s}"
+        );
+    }
+
+    #[test]
+    fn error_boundary_lowers_to_app_fn() {
+        let s = expand(r#"<ErrorBoundary fallback={|m| m}><Box></Box></ErrorBoundary>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("error_boundary"), "{s}");
+        assert!(
+            s.contains("\"ErrorBoundary\"") && compact.contains("format!"),
+            "generated anchor: {s}"
+        );
+    }
+
+    #[test]
+    fn error_boundary_explicit_id() {
+        let s = expand(r#"<ErrorBoundary id={"eb"} fallback={|m| m}><Box></Box></ErrorBoundary>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("error_boundary"), "{s}");
+        assert!(s.contains("eb"), "{s}");
+        assert!(
+            !compact.contains("ErrorBoundary#"),
+            "explicit id must not use file:line: {s}"
+        );
+    }
+
+    #[test]
+    fn error_boundary_empty_id_generates_anchor() {
+        let s = expand(r#"<ErrorBoundary id="" fallback={|m| m}><Box></Box></ErrorBoundary>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("error_boundary"), "{s}");
+        assert!(
+            s.contains("\"ErrorBoundary\"") && compact.contains("format!"),
+            "empty id must not be identity: {s}"
+        );
+    }
+
+    #[test]
+    fn suspense_requires_fallback() {
+        let s = expand("<Suspense><Box></Box></Suspense>");
+        assert!(
+            s.contains("compile_error"),
+            "missing fallback must fail: {s}"
+        );
+    }
+
+    #[test]
+    fn suspense_lowers_to_app_fn() {
+        let s = expand(r#"<Suspense fallback={|| x}><Box></Box></Suspense>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("suspense"), "{s}");
+        assert!(
+            s.contains("\"Suspense\"") && compact.contains("format!"),
+            "generated anchor: {s}"
+        );
+    }
+
+    #[test]
+    fn suspense_explicit_id() {
+        let s = expand(r#"<Suspense id={"sus"} fallback={|| x}><Box></Box></Suspense>"#);
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("suspense"), "{s}");
+        assert!(s.contains("sus"), "{s}");
+        assert!(
+            !compact.contains("Suspense#"),
+            "explicit id must not use file:line: {s}"
+        );
+    }
+
+    #[test]
+    fn error_boundary_stmt_block_child() {
+        let s = expand(
+            r#"<ErrorBoundary fallback={|m| m}>{ throw_error("x"); Element::new() }</ErrorBoundary>"#,
+        );
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("error_boundary"), "{s}");
+        assert!(compact.contains("throw_error"), "{s}");
+    }
+
+    #[test]
+    fn error_boundary_double_brace_stmt_block_child() {
+        let s = expand(
+            r#"<ErrorBoundary fallback={|m| m}>{ { throw_error("x"); Element::new() } }</ErrorBoundary>"#,
+        );
+        let compact = s.replace(' ', "");
+        assert!(compact.contains("error_boundary"), "{s}");
+        assert!(compact.contains("throw_error"), "{s}");
+    }
+
+    #[test]
     fn sidebar_menu_button_is_active_get_emits_live_bind() {
         let s = expand(r#"<SidebarMenuButton isActive={tab.get() == "a"}></SidebarMenuButton>"#);
         assert!(s.contains("apply_bound_sidebar_menu_button_active"), "{s}");
@@ -9969,5 +10229,32 @@ mod rsx_lowering_tests {
             "structural if+ui! child must fail with Show/Match guidance: {s}"
         );
         assert!(s.contains("Show") || s.contains("Match"), "{s}");
+    }
+
+    #[test]
+    fn shader_texture_attr_calls_builder_slot0() {
+        let s = expand(r#"<shader w={80.0} h={60.0} wgsl={"fn"} texture={"rui_canvas:x"} />"#);
+        assert!(
+            s.contains("texture"),
+            "shader texture attr must call ShaderBuilder::texture: {s}"
+        );
+        assert!(s.contains("src"), "{s}");
+        assert!(s.contains("rui_canvas:x"), "{s}");
+    }
+
+    #[test]
+    fn shader_src1_attr_calls_builder_slot1() {
+        let s = expand(r#"<shader w={80.0} h={60.0} wgsl={"fn"} src1={"rui_path:y"} />"#);
+        assert!(s.contains("texture"), "{s}");
+        assert!(s.contains("src1"), "{s}");
+        assert!(s.contains("rui_path:y"), "{s}");
+    }
+
+    #[test]
+    fn shader_preset_and_buffer_attrs_call_builder() {
+        let s = expand(r#"<shader w={40.0} h={30.0} preset={"blur"} buffer={true} />"#);
+        assert!(s.contains("preset"), "{s}");
+        assert!(s.contains("buffer"), "{s}");
+        assert!(s.contains("blur"), "{s}");
     }
 }

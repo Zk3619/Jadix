@@ -47,3 +47,58 @@ pub(crate) fn acquire_surface(
         wgpu::CurrentSurfaceTexture::Validation => Err(SurfaceAcquireError::Validation),
     }
 }
+
+/// Poll a wgpu validation error scope to completion (shader / pipeline compile).
+pub(crate) fn wait_error_scope(
+    device: &wgpu::Device,
+    scope: wgpu::ErrorScopeGuard,
+) -> Option<wgpu::Error> {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake};
+
+    struct Noop;
+    impl Wake for Noop {
+        fn wake(self: Arc<Self>) {}
+        fn wake_by_ref(self: &Arc<Self>) {}
+    }
+
+    let waker = Arc::new(Noop).into();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = pin!(scope.pop());
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(err) => return err,
+            Poll::Pending => {
+                let _ = device.poll(wgpu::PollType::Poll);
+                std::thread::yield_now();
+            }
+        }
+    }
+}
+
+/// Create a WGSL module without panicking on validation failure.
+pub(crate) fn try_shader_module(
+    device: &wgpu::Device,
+    label: &'static str,
+    source: &str,
+) -> Option<wgpu::ShaderModule> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        })
+    })) {
+        Ok(m) => m,
+        Err(_) => {
+            let _ = wait_error_scope(device, scope);
+            return None;
+        }
+    };
+    if wait_error_scope(device, scope).is_some() {
+        return None;
+    }
+    Some(module)
+}

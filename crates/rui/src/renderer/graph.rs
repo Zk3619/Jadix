@@ -14,6 +14,8 @@ pub enum PassKind {
     SubtreeCapture,
     Effect,
     Scene3d,
+    Shader,
+    Path2d,
     Composite,
     GlyphText,
     Present,

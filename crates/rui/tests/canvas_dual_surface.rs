@@ -35,3 +35,28 @@ fn scene3d_tag_and_builder_compile() {
     };
     let _: Element = el;
 }
+
+#[test]
+fn shader_tag_and_builder_compile() {
+    const WGSL: &str = r#"
+        @fragment
+        fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+            return vec4<f32>(in.uv, 0.3, 1.0);
+        }
+    "#;
+    let _b: Element = shader()
+        .w(80.0)
+        .h(60.0)
+        .wgsl(WGSL)
+        .texture("src", "rui-gallery-stream")
+        .into();
+    let el = ui! {
+        <shader w={80.0} h={60.0} wgsl={WGSL} texture={"rui-gallery-stream"} />
+    };
+    assert_eq!(
+        el.get_attr(rui::primitives::shader::ATTR_SHADER_TEX)
+            .map(|s| s.as_str()),
+        Some("rui-gallery-stream")
+    );
+    let _: Element = el;
+}

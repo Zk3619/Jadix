@@ -36,6 +36,7 @@ pub enum ResourceKind {
     Canvas,
     Image,
     Scene3d,
+    Shader,
     Capture,
     Effect,
     /// CSS / API background gradients (`rui-grad:…`).
@@ -53,6 +54,8 @@ impl ResourceKind {
             Self::Canvas
         } else if key.starts_with("rui_scene3d:") {
             Self::Scene3d
+        } else if key.starts_with("rui_shader:") {
+            Self::Shader
         } else if key.starts_with("rui_capture:")
             || key.starts_with("rui_filter_cap:")
             || key.starts_with("rui_zoom_cap:")
@@ -73,10 +76,12 @@ impl ResourceKind {
 
     pub fn pass_kind(self) -> Option<PassKind> {
         match self {
-            Self::Path | Self::Canvas | Self::Image | Self::Gradient | Self::TextXform => {
+            Self::Path => Some(PassKind::Path2d),
+            Self::Canvas | Self::Image | Self::Gradient | Self::TextXform => {
                 Some(PassKind::Geometry2d)
             }
             Self::Scene3d => Some(PassKind::Scene3d),
+            Self::Shader => Some(PassKind::Shader),
             Self::Capture => Some(PassKind::SubtreeCapture),
             Self::Effect => Some(PassKind::Effect),
             Self::Other => None,
@@ -303,6 +308,10 @@ mod tests {
         assert_eq!(
             ResourceKind::from_key("rui_scene3d:8x8"),
             ResourceKind::Scene3d
+        );
+        assert_eq!(
+            ResourceKind::from_key("rui_shader:01"),
+            ResourceKind::Shader
         );
         assert_eq!(
             ResourceKind::from_key("rui_capture:x"),

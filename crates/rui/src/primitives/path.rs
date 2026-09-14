@@ -1,8 +1,11 @@
 //! # Path primitives（WP-3.2 / WP-3.11 共用核）
 //!
 //! 折线 / 多边形 / 扇区 → [`PathCommand`]；编码为 `rui_path_d`。
-//! [`decode_path_d`] 接受常用 HTML/SVG `d`（含 C/Q/A 等），解析后展平为 M/L/Z。
-//! 产品绘制：**CPU 覆盖率光栅 → RGBA 贴图**（抗锯齿填充 + 连续描边）；tessellate 四边形仅作回退。
+//! [`decode_path_d`] 接受常用 HTML/SVG `d`（含 C/Q/A 等），**保留曲线**；
+//! [`flatten_path`] 只在光栅 / tessellate / 命中边界按像素误差展平。
+//! 产品绘制：**CPU 覆盖率光栅**是 golden / `RUI_GPU_2D=0` 回退；默认走 PathPipeline
+//! 描边 mesh + stencil-cover fill + 4× MSAA（S3+S4）→ `rui_path:`。
+//! tessellate 四边形不再进 `rounded_rect.wgsl`。
 //! 不另开 Skia/Vello。Chart / `<svg>` / `<canvas>` 禁止第二套折线格式。
 
 use std::cell::RefCell;
@@ -47,12 +50,70 @@ pub const ATTR_PATH_MARKERS: &str = "rui_path_markers";
 /// 多层 scene 键（Chart 等）；布局期按叶宽光栅，避免 `image_texture` 低分拉伸 + `d` 默认描边叠画。
 pub const ATTR_PATH_SCENE: &str = "rui_path_scene";
 
-/// 路径绘制命令（直线核；曲线在 [`decode_path_d`] 中展平）。
+/// 路径绘制命令。曲线活到光栅 / tessellate 边界（[`flatten_path`]）。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathCommand {
     MoveTo(Point2),
     LineTo(Point2),
+    QuadTo {
+        ctrl: Point2,
+        to: Point2,
+    },
+    CubicTo {
+        c1: Point2,
+        c2: Point2,
+        to: Point2,
+    },
+    /// SVG 椭圆弧（终点参数：`rx,ry x-rot large sweep x,y`）。
+    Arc {
+        radii: Point2,
+        x_rot_deg: f32,
+        large: bool,
+        sweep: bool,
+        to: Point2,
+    },
     Close,
+}
+
+impl PathCommand {
+    /// Pen after this command (`Close` has none).
+    pub fn pen(&self) -> Option<Point2> {
+        match *self {
+            Self::MoveTo(p) | Self::LineTo(p) => Some(p),
+            Self::QuadTo { to, .. } | Self::CubicTo { to, .. } | Self::Arc { to, .. } => Some(to),
+            Self::Close => None,
+        }
+    }
+
+    pub fn map_xy(self, mut f: impl FnMut(Point2) -> Point2) -> Self {
+        match self {
+            Self::MoveTo(p) => Self::MoveTo(f(p)),
+            Self::LineTo(p) => Self::LineTo(f(p)),
+            Self::QuadTo { ctrl, to } => Self::QuadTo {
+                ctrl: f(ctrl),
+                to: f(to),
+            },
+            Self::CubicTo { c1, c2, to } => Self::CubicTo {
+                c1: f(c1),
+                c2: f(c2),
+                to: f(to),
+            },
+            Self::Arc {
+                radii,
+                x_rot_deg,
+                large,
+                sweep,
+                to,
+            } => Self::Arc {
+                radii,
+                x_rot_deg,
+                large,
+                sweep,
+                to: f(to),
+            },
+            Self::Close => Self::Close,
+        }
+    }
 }
 
 /// CSS/SVG `stroke-linecap`。
@@ -205,6 +266,7 @@ impl Default for PathStyle {
 }
 
 /// Tessellate 产出：与 [`crate::renderer::InstanceInput`] 对齐的旋转四边形。
+/// S3 产品核改走 [`PathTri`] / PathPipeline；本类型只留作极窄 stroke 回退与测试。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PathQuad {
     /// 未旋转矩形左上角（与 `InstanceInput.rect_pos` 同语义）。
@@ -213,6 +275,66 @@ pub struct PathQuad {
     pub rotate_deg: f32,
     pub color: [f32; 4],
     pub radii: [f32; 4],
+}
+
+/// PathPipeline 三角形（叶局部像素，y 向下）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathTri {
+    pub a: Point2,
+    pub b: Point2,
+    pub c: Point2,
+    pub color: [f32; 4],
+}
+
+/// S4 cover pass：线性 / 径向渐变（conic / repeating / hints / px-stop 仍 CPU）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GpuFillGrad {
+    pub kind: u32,
+    pub angle: f32,
+    pub bbox: [f32; 4],
+    pub center: [f32; 2],
+    pub radii: [f32; 2],
+    pub stop_n: u32,
+    pub stop_t: [f32; 8],
+    pub stop_c: [[f32; 4]; 8],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PathGpuFill {
+    pub even_odd: bool,
+    pub stencil: Vec<PathTri>,
+    pub cover: [PathTri; 2],
+    pub grad: Option<GpuFillGrad>,
+    /// Leaf-pixel AABB scissor. `None` = full RT.
+    pub clip: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PathGpuMesh {
+    pub tris: Vec<PathTri>,
+    pub clip: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PathGpuOp {
+    Fill(PathGpuFill),
+    Mesh(PathGpuMesh),
+}
+
+impl PathGpuOp {
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::Fill(f) => f.stencil.is_empty(),
+            Self::Mesh(m) => m.tris.is_empty(),
+        }
+    }
+
+    pub(crate) fn clip(&self) -> Option<[f32; 4]> {
+        match self {
+            Self::Fill(f) => f.clip,
+            Self::Mesh(m) => m.clip,
+        }
+    }
 }
 
 /// 折线 → 命令列表。
@@ -237,7 +359,18 @@ pub fn polygon(points: &[Point2]) -> Vec<PathCommand> {
     cmds
 }
 
+fn push_pen(out: &mut Vec<PathCommand>, p: Point2) {
+    match out.last().and_then(PathCommand::pen) {
+        None => out.push(PathCommand::MoveTo(p)),
+        Some(q) if (q.0 - p.0).abs() > 1e-4 || (q.1 - p.1).abs() > 1e-4 => {
+            out.push(PathCommand::LineTo(p));
+        }
+        Some(_) => {}
+    }
+}
+
 /// 饼图扇区：圆心 + 半径 + 起止角（弧度，0 = 正右；屏幕 y 向下时增大角顺时针）。
+/// `segments` 保留给调用方；展平段数由 [`flatten_path`] 按像素误差决定。
 pub fn pie_sector(
     cx: f32,
     cy: f32,
@@ -246,28 +379,61 @@ pub fn pie_sector(
     end: f32,
     segments: usize,
 ) -> Vec<PathCommand> {
-    let n = segments.max(3);
-    let mut pts = Vec::with_capacity(n + 2);
-    pts.push((cx, cy));
-    for i in 0..=n {
-        let t = i as f32 / n as f32;
-        let a = start + (end - start) * t;
-        pts.push((cx + r * a.cos(), cy + r * a.sin()));
+    let _ = segments;
+    let r = r.max(0.0);
+    let start_p = (cx + r * start.cos(), cy + r * start.sin());
+    let end_p = (cx + r * end.cos(), cy + r * end.sin());
+    let span = end - start;
+    if r < 1e-6 || span.abs() < 1e-6 {
+        return polygon(&[(cx, cy), start_p, end_p]);
     }
-    polygon(&pts)
+    vec![
+        PathCommand::MoveTo((cx, cy)),
+        PathCommand::LineTo(start_p),
+        PathCommand::Arc {
+            radii: (r, r),
+            x_rot_deg: 0.0,
+            large: span.abs() > std::f32::consts::PI,
+            sweep: span > 0.0,
+            to: end_p,
+        },
+        PathCommand::Close,
+    ]
 }
 
-/// 实心圆：圆周多边形（不含圆心顶点），fill 为盘、stroke 为圆周。
+/// 实心椭圆：两段半椭圆 [`PathCommand::Arc`]。`segments` 保留给调用方；
+/// 展平段数由 [`flatten_path`] 按像素误差决定。
+pub fn filled_ellipse(cx: f32, cy: f32, rx: f32, ry: f32, segments: usize) -> Vec<PathCommand> {
+    let _ = segments;
+    let rx = rx.max(0.5);
+    let ry = ry.max(0.5);
+    let a = (cx + rx, cy);
+    let b = (cx - rx, cy);
+    vec![
+        PathCommand::MoveTo(a),
+        PathCommand::Arc {
+            radii: (rx, ry),
+            x_rot_deg: 0.0,
+            large: false,
+            sweep: true,
+            to: b,
+        },
+        PathCommand::Arc {
+            radii: (rx, ry),
+            x_rot_deg: 0.0,
+            large: false,
+            sweep: true,
+            to: a,
+        },
+        PathCommand::Close,
+    ]
+}
+
+/// 实心圆：两段半圆 [`PathCommand::Arc`]（不含圆心顶点），fill 为盘、stroke 为圆周。
 /// 点 mark 必须用这个而不是 [`pie_sector`] 满周——后者 stroke 会画出半径。
+/// `segments` 保留给调用方；展平段数由 [`flatten_path`] 按像素误差决定。
 pub fn filled_circle(cx: f32, cy: f32, r: f32, segments: usize) -> Vec<PathCommand> {
-    let n = segments.max(8);
-    let r = r.max(0.5);
-    let mut pts = Vec::with_capacity(n);
-    for i in 0..n {
-        let a = std::f32::consts::TAU * (i as f32) / (n as f32);
-        pts.push((cx + r * a.cos(), cy + r * a.sin()));
-    }
-    polygon(&pts)
+    filled_ellipse(cx, cy, r, r, segments)
 }
 
 /// 轴对齐矩形（柱、气泡 backing）。
@@ -289,43 +455,50 @@ pub fn rounded_rect(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Vec<Path
     if tl + tr + br + bl < 0.5 {
         return filled_rect(x, y, w, h);
     }
-    const SEGS: usize = 6;
-    let mut pts = Vec::with_capacity(SEGS * 4 + 4);
-    let mut arc = |cx: f32, cy: f32, r: f32, a0: f32, span: f32| {
+    let mut cmds = Vec::new();
+    let mut corner = |cx: f32, cy: f32, r: f32, a0: f32, span: f32| {
         if r < 0.5 {
-            pts.push((cx, cy));
+            push_pen(&mut cmds, (cx, cy));
             return;
         }
-        for i in 0..=SEGS {
-            let t = i as f32 / SEGS as f32;
-            let a = a0 + span * t;
-            pts.push((cx + r * a.cos(), cy + r * a.sin()));
-        }
+        let start = (cx + r * a0.cos(), cy + r * a0.sin());
+        let a1 = a0 + span;
+        let end = (cx + r * a1.cos(), cy + r * a1.sin());
+        push_pen(&mut cmds, start);
+        cmds.push(PathCommand::Arc {
+            radii: (r, r),
+            x_rot_deg: 0.0,
+            large: span.abs() > std::f32::consts::PI,
+            sweep: span > 0.0,
+            to: end,
+        });
     };
-    // clockwise from top-left
-    arc(
+    corner(
         x + tl,
         y + tl,
         tl,
         std::f32::consts::PI,
         std::f32::consts::FRAC_PI_2,
     );
-    arc(
+    corner(
         x + w - tr,
         y + tr,
         tr,
         -std::f32::consts::FRAC_PI_2,
         std::f32::consts::FRAC_PI_2,
     );
-    arc(x + w - br, y + h - br, br, 0.0, std::f32::consts::FRAC_PI_2);
-    arc(
+    corner(x + w - br, y + h - br, br, 0.0, std::f32::consts::FRAC_PI_2);
+    corner(
         x + bl,
         y + h - bl,
         bl,
         std::f32::consts::FRAC_PI_2,
         std::f32::consts::FRAC_PI_2,
     );
-    polygon(&pts)
+    if !cmds.is_empty() {
+        cmds.push(PathCommand::Close);
+    }
+    cmds
 }
 
 /// 柱状图顶圆角矩形（底边贴基线、顶边左右圆角）。`r` 自动钳到宽高一半。
@@ -365,19 +538,35 @@ pub fn pie_ring(
     if inner < 1.0 || inner >= outer {
         return pie_sector(cx, cy, outer, start, end, segments);
     }
-    let n = segments.max(3);
-    let mut pts = Vec::with_capacity((n + 1) * 2);
-    for i in 0..=n {
-        let t = i as f32 / n as f32;
-        let a = start + (end - start) * t;
-        pts.push((cx + outer * a.cos(), cy + outer * a.sin()));
+    let span = end - start;
+    if outer < 1e-6 || span.abs() < 1e-6 {
+        return pie_sector(cx, cy, outer, start, end, segments);
     }
-    for i in (0..=n).rev() {
-        let t = i as f32 / n as f32;
-        let a = start + (end - start) * t;
-        pts.push((cx + inner * a.cos(), cy + inner * a.sin()));
-    }
-    polygon(&pts)
+    let o0 = (cx + outer * start.cos(), cy + outer * start.sin());
+    let o1 = (cx + outer * end.cos(), cy + outer * end.sin());
+    let i1 = (cx + inner * end.cos(), cy + inner * end.sin());
+    let i0 = (cx + inner * start.cos(), cy + inner * start.sin());
+    let large = span.abs() > std::f32::consts::PI;
+    let sweep = span > 0.0;
+    vec![
+        PathCommand::MoveTo(o0),
+        PathCommand::Arc {
+            radii: (outer, outer),
+            x_rot_deg: 0.0,
+            large,
+            sweep,
+            to: o1,
+        },
+        PathCommand::LineTo(i1),
+        PathCommand::Arc {
+            radii: (inner, inner),
+            x_rot_deg: 0.0,
+            large,
+            sweep: !sweep,
+            to: i0,
+        },
+        PathCommand::Close,
+    ]
 }
 
 /// 将点列编码为旧 attr（`x,y;x,y;…`）。
@@ -389,23 +578,92 @@ pub fn encode_points(points: &[Point2]) -> String {
         .join(";")
 }
 
-/// SVG 子集 `d`：`M x,y L x,y Z`（曲线已展平，编码仍为折线）。
+/// SVG 子集 `d`：保留 C/Q/A（不再先展平）。
 pub fn encode_path_d(cmds: &[PathCommand]) -> String {
     let mut parts = Vec::with_capacity(cmds.len());
     for cmd in cmds {
         match *cmd {
             PathCommand::MoveTo((x, y)) => parts.push(format!("M{x:.3},{y:.3}")),
             PathCommand::LineTo((x, y)) => parts.push(format!("L{x:.3},{y:.3}")),
+            PathCommand::QuadTo {
+                ctrl: (cx, cy),
+                to: (x, y),
+            } => parts.push(format!("Q{cx:.3},{cy:.3} {x:.3},{y:.3}")),
+            PathCommand::CubicTo {
+                c1: (x1, y1),
+                c2: (x2, y2),
+                to: (x, y),
+            } => parts.push(format!("C{x1:.3},{y1:.3} {x2:.3},{y2:.3} {x:.3},{y:.3}")),
+            PathCommand::Arc {
+                radii: (rx, ry),
+                x_rot_deg,
+                large,
+                sweep,
+                to: (x, y),
+            } => parts.push(format!(
+                "A{rx:.3},{ry:.3} {x_rot_deg:.3} {} {} {x:.3},{y:.3}",
+                if large { 1 } else { 0 },
+                if sweep { 1 } else { 0 },
+            )),
             PathCommand::Close => parts.push("Z".into()),
         }
     }
     parts.join(" ")
 }
 
-/// 解析 HTML/SVG path `d`（绝对/相对 M/L/H/V/C/S/Q/T/A/Z），曲线展平为折线。
+/// 解析 HTML/SVG path `d`（绝对/相对 M/L/H/V/C/S/Q/T/A/Z）。曲线保留为 [`PathCommand`] 变体。
 pub fn decode_path_d(d: &str) -> Vec<PathCommand> {
     let parser = PathDParser::new(d);
     parser.parse()
+}
+
+/// Flatten curves to `MoveTo` / `LineTo` / `Close` for raster, tessellate, and hit-testing.
+pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
+    let mut out = Vec::with_capacity(cmds.len());
+    let mut cur = (0.0f32, 0.0f32);
+    for cmd in cmds {
+        match *cmd {
+            PathCommand::MoveTo(p) => {
+                out.push(PathCommand::MoveTo(p));
+                cur = p;
+            }
+            PathCommand::LineTo(p) => {
+                out.push(PathCommand::LineTo(p));
+                cur = p;
+            }
+            PathCommand::QuadTo { ctrl, to } => {
+                flatten_quad(cur, ctrl, to, &mut out);
+                cur = to;
+            }
+            PathCommand::CubicTo { c1, c2, to } => {
+                flatten_cubic(cur, c1, c2, to, &mut out);
+                cur = to;
+            }
+            PathCommand::Arc {
+                radii,
+                x_rot_deg,
+                large,
+                sweep,
+                to,
+            } => {
+                flatten_arc(
+                    cur,
+                    radii.0.abs(),
+                    radii.1.abs(),
+                    x_rot_deg,
+                    large,
+                    sweep,
+                    to,
+                    &mut out,
+                );
+                cur = to;
+            }
+            PathCommand::Close => {
+                out.push(PathCommand::Close);
+            }
+        }
+    }
+    out
 }
 
 struct PathDParser<'a> {
@@ -605,7 +863,11 @@ impl<'a> PathDParser<'a> {
                     } else {
                         (cx + x1, cy + y1, cx + x2, cy + y2, cx + x, cy + y)
                     };
-                    flatten_cubic((cx, cy), (x1, y1), (x2, y2), (x, y), &mut out);
+                    out.push(PathCommand::CubicTo {
+                        c1: (x1, y1),
+                        c2: (x2, y2),
+                        to: (x, y),
+                    });
                     last_c2 = Some((x2, y2));
                     last_q = None;
                     cx = x;
@@ -633,7 +895,11 @@ impl<'a> PathDParser<'a> {
                         Some((lx, ly)) => (2.0 * cx - lx, 2.0 * cy - ly),
                         None => (cx, cy),
                     };
-                    flatten_cubic((cx, cy), (x1, y1), (x2, y2), (x, y), &mut out);
+                    out.push(PathCommand::CubicTo {
+                        c1: (x1, y1),
+                        c2: (x2, y2),
+                        to: (x, y),
+                    });
                     last_c2 = Some((x2, y2));
                     last_q = None;
                     cx = x;
@@ -657,7 +923,10 @@ impl<'a> PathDParser<'a> {
                     } else {
                         (cx + x1, cy + y1, cx + x, cy + y)
                     };
-                    flatten_quad((cx, cy), (x1, y1), (x, y), &mut out);
+                    out.push(PathCommand::QuadTo {
+                        ctrl: (x1, y1),
+                        to: (x, y),
+                    });
                     last_q = Some((x1, y1));
                     last_c2 = None;
                     cx = x;
@@ -675,7 +944,10 @@ impl<'a> PathDParser<'a> {
                         Some((lx, ly)) => (2.0 * cx - lx, 2.0 * cy - ly),
                         None => (cx, cy),
                     };
-                    flatten_quad((cx, cy), (x1, y1), (x, y), &mut out);
+                    out.push(PathCommand::QuadTo {
+                        ctrl: (x1, y1),
+                        to: (x, y),
+                    });
                     last_q = Some((x1, y1));
                     last_c2 = None;
                     cx = x;
@@ -704,16 +976,13 @@ impl<'a> PathDParser<'a> {
                         break;
                     };
                     let (x, y) = if abs { (x, y) } else { (cx + x, cy + y) };
-                    flatten_arc(
-                        (cx, cy),
-                        rx.abs(),
-                        ry.abs(),
-                        x_axis_rot,
-                        large_arc != 0.0,
-                        sweep != 0.0,
-                        (x, y),
-                        &mut out,
-                    );
+                    out.push(PathCommand::Arc {
+                        radii: (rx.abs(), ry.abs()),
+                        x_rot_deg: x_axis_rot,
+                        large: large_arc != 0.0,
+                        sweep: sweep != 0.0,
+                        to: (x, y),
+                    });
                     last_c2 = None;
                     last_q = None;
                     cx = x;
@@ -730,37 +999,55 @@ impl<'a> PathDParser<'a> {
     }
 }
 
+fn mid_pt(a: Point2, b: Point2) -> Point2 {
+    ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)
+}
+
+/// Chord error in leaf px. Matches the old ~0.35 length heuristic without a 12-seg floor.
+const FLATTEN_FLATNESS: f32 = 0.35;
+const FLATTEN_MAX_DEPTH: u8 = 10;
+
 fn flatten_cubic(p0: Point2, p1: Point2, p2: Point2, p3: Point2, out: &mut Vec<PathCommand>) {
-    let chord = (p0.0 - p3.0).hypot(p0.1 - p3.1);
-    let ctrl_len = (p0.0 - p1.0)
-        .hypot(p0.1 - p1.1)
-        .max((p2.0 - p3.0).hypot(p2.1 - p3.1));
-    let by_len = ((chord + ctrl_len) / 0.35).ceil() as usize;
-    let segments = by_len.clamp(12, 48);
-    for i in 1..=segments {
-        let t = i as f32 / segments as f32;
-        let u = 1.0 - t;
-        let tt = t * t;
-        let uu = u * u;
-        let uuu = uu * u;
-        let ttt = tt * t;
-        let x = uuu * p0.0 + 3.0 * uu * t * p1.0 + 3.0 * u * tt * p2.0 + ttt * p3.0;
-        let y = uuu * p0.1 + 3.0 * uu * t * p1.1 + 3.0 * u * tt * p2.1 + ttt * p3.1;
-        out.push(PathCommand::LineTo((x, y)));
+    flatten_cubic_rec(p0, p1, p2, p3, 0, out);
+}
+
+fn flatten_cubic_rec(
+    p0: Point2,
+    p1: Point2,
+    p2: Point2,
+    p3: Point2,
+    depth: u8,
+    out: &mut Vec<PathCommand>,
+) {
+    let err = dist_to_segment(p1, p0, p3).max(dist_to_segment(p2, p0, p3));
+    if depth >= FLATTEN_MAX_DEPTH || err <= FLATTEN_FLATNESS {
+        out.push(PathCommand::LineTo(p3));
+        return;
     }
+    let m01 = mid_pt(p0, p1);
+    let m12 = mid_pt(p1, p2);
+    let m23 = mid_pt(p2, p3);
+    let m012 = mid_pt(m01, m12);
+    let m123 = mid_pt(m12, m23);
+    let m = mid_pt(m012, m123);
+    flatten_cubic_rec(p0, m01, m012, m, depth.saturating_add(1), out);
+    flatten_cubic_rec(m, m123, m23, p3, depth.saturating_add(1), out);
 }
 
 fn flatten_quad(p0: Point2, p1: Point2, p2: Point2, out: &mut Vec<PathCommand>) {
-    let chord = (p0.0 - p2.0).hypot(p0.1 - p2.1);
-    let by_len = (chord / 0.35).ceil() as usize;
-    let segments = by_len.clamp(10, 32);
-    for i in 1..=segments {
-        let t = i as f32 / segments as f32;
-        let u = 1.0 - t;
-        let x = u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0;
-        let y = u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1;
-        out.push(PathCommand::LineTo((x, y)));
+    flatten_quad_rec(p0, p1, p2, 0, out);
+}
+
+fn flatten_quad_rec(p0: Point2, p1: Point2, p2: Point2, depth: u8, out: &mut Vec<PathCommand>) {
+    if depth >= FLATTEN_MAX_DEPTH || dist_to_segment(p1, p0, p2) <= FLATTEN_FLATNESS {
+        out.push(PathCommand::LineTo(p2));
+        return;
     }
+    let m01 = mid_pt(p0, p1);
+    let m12 = mid_pt(p1, p2);
+    let m = mid_pt(m01, m12);
+    flatten_quad_rec(p0, m01, m, depth.saturating_add(1), out);
+    flatten_quad_rec(m, m12, p2, depth.saturating_add(1), out);
 }
 
 /// SVG elliptical arc → polyline (W3C endpoint-to-center parameterization).
@@ -839,8 +1126,8 @@ fn flatten_arc(
     let avg_r = (rx + ry) * 0.5;
     let arc_len = avg_r * dtheta.abs();
     let by_angle = (dtheta.abs() / MAX_ANGLE_STEP).ceil() as usize;
-    let by_length = (arc_len / 0.35).ceil() as usize;
-    let segments = by_angle.max(by_length).clamp(8, 128);
+    let by_length = (arc_len / FLATTEN_FLATNESS).ceil() as usize;
+    let segments = by_angle.max(by_length).clamp(1, 256);
     for i in 1..=segments {
         let t = i as f32 / segments as f32;
         let theta = theta1 + dtheta * t;
@@ -985,10 +1272,11 @@ pub fn draw_polyline_batch_stub(points: &[Point2]) -> Element {
 
 pub fn points_from_commands(cmds: &[PathCommand]) -> Vec<Point2> {
     let mut pts = Vec::new();
-    for cmd in cmds {
-        match *cmd {
+    for cmd in flatten_path(cmds) {
+        match cmd {
             PathCommand::MoveTo(p) | PathCommand::LineTo(p) => pts.push(p),
             PathCommand::Close => {}
+            PathCommand::QuadTo { .. } | PathCommand::CubicTo { .. } | PathCommand::Arc { .. } => {}
         }
     }
     pts
@@ -1011,12 +1299,13 @@ fn bounds_size(points: &[Point2]) -> (f32, f32) {
     ((max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
 }
 
-/// 子路径：每次 `MoveTo` 起一段；`Close` 闭合。
+/// 子路径：每次 `MoveTo` 起一段；`Close` 闭合。曲线先 [`flatten_path`]。
 fn subpaths(cmds: &[PathCommand]) -> Vec<(Vec<Point2>, bool)> {
+    let cmds = flatten_path(cmds);
     let mut out = Vec::new();
     let mut cur: Vec<Point2> = Vec::new();
     let mut start: Option<Point2> = None;
-    for cmd in cmds {
+    for cmd in &cmds {
         match *cmd {
             PathCommand::MoveTo(p) => {
                 if !cur.is_empty() {
@@ -1041,6 +1330,7 @@ fn subpaths(cmds: &[PathCommand]) -> Vec<(Vec<Point2>, bool)> {
                 }
                 start = None;
             }
+            PathCommand::QuadTo { .. } | PathCommand::CubicTo { .. } | PathCommand::Arc { .. } => {}
         }
     }
     if !cur.is_empty() {
@@ -1070,26 +1360,150 @@ fn push_oriented_quad(
     });
 }
 
-fn tessellate_stroke_points(pts: &[Point2], width: f32, color: [f32; 4], out: &mut Vec<PathQuad>) {
+const STROKE_MITER_LIMIT: f32 = 4.0;
+
+fn unit_dir(a: Point2, b: Point2) -> Option<(f32, f32)> {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    let len = dx.hypot(dy);
+    if len < 1e-4 {
+        None
+    } else {
+        Some((dx / len, dy / len))
+    }
+}
+
+fn intersect_lines(p: Point2, d: (f32, f32), q: Point2, e: (f32, f32)) -> Option<Point2> {
+    let cross = d.0 * e.1 - d.1 * e.0;
+    if cross.abs() < 1e-8 {
+        return None;
+    }
+    let t = ((q.0 - p.0) * e.1 - (q.1 - p.1) * e.0) / cross;
+    Some((p.0 + t * d.0, p.1 + t * d.1))
+}
+
+fn push_stroke_tri(a: Point2, b: Point2, c: Point2, color: [f32; 4], out: &mut Vec<PathTri>) {
+    if color[3] <= 0.0 {
+        return;
+    }
+    out.push(PathTri { a, b, c, color });
+}
+
+/// Outer bevel/miter wedges. Round joins stay as discs in [`tessellate_stroke_points`].
+fn stroke_join_tris(
+    b: Point2,
+    d1: (f32, f32),
+    d2: (f32, f32),
+    hw: f32,
+    join: StrokeLinejoin,
+    color: [f32; 4],
+    out: &mut Vec<PathTri>,
+) {
+    if matches!(join, StrokeLinejoin::Round) {
+        return;
+    }
+    let cross = d1.0 * d2.1 - d1.1 * d2.0;
+    let dot = d1.0 * d2.0 + d1.1 * d2.1;
+    if cross.abs() < 1e-5 && dot > 0.97 {
+        return;
+    }
+    let n1 = (-d1.1 * hw, d1.0 * hw);
+    let n2 = (-d2.1 * hw, d2.0 * hw);
+    let (o1, o2) = if cross > 0.0 {
+        ((b.0 - n1.0, b.1 - n1.1), (b.0 - n2.0, b.1 - n2.1))
+    } else {
+        ((b.0 + n1.0, b.1 + n1.1), (b.0 + n2.0, b.1 + n2.1))
+    };
+    let mut bevel = || {
+        push_stroke_tri(o1, b, o2, color, out);
+    };
+    if join == StrokeLinejoin::Bevel {
+        bevel();
+        return;
+    }
+    if let Some(m) = intersect_lines(o1, d1, o2, d2) {
+        let miter_len = (m.0 - b.0).hypot(m.1 - b.1);
+        if miter_len <= hw * STROKE_MITER_LIMIT * 1.05 {
+            push_stroke_tri(o1, m, o2, color, out);
+            push_stroke_tri(o1, b, o2, color, out);
+            return;
+        }
+    }
+    bevel();
+}
+
+fn tessellate_stroke_points(
+    pts: &[Point2],
+    width: f32,
+    color: [f32; 4],
+    cap: StrokeLinecap,
+    join: StrokeLinejoin,
+    closed: bool,
+    out: &mut Vec<PathQuad>,
+) {
     let w = width.max(0.75);
     let hw = w * 0.5;
     let round = [hw, hw, hw, hw];
+    let n = pts.len();
+    let mut segs: Vec<(Point2, Point2, f32, f32, f32)> = Vec::new();
     for win in pts.windows(2) {
         let a = win[0];
         let b = win[1];
-        let dx = b.0 - a.0;
-        let dy = b.1 - a.1;
-        let len = dx.hypot(dy);
-        if len < 1e-4 {
+        let Some((dx, dy)) = unit_dir(a, b) else {
             continue;
-        }
+        };
+        let len = (b.0 - a.0).hypot(b.1 - a.1);
         let angle = dy.atan2(dx).to_degrees();
         let mid = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
-        // 两端各伸出半线宽，避免 SDF 接头漏白。
-        push_oriented_quad(mid, len + w, w, angle, color, [0.0; 4], out);
+        push_oriented_quad(mid, len, w, angle, color, [0.0; 4], out);
+        segs.push((a, b, dx, dy, angle));
     }
-    for &p in pts {
-        push_oriented_quad(p, w, w, 0.0, color, round, out);
+    if segs.is_empty() {
+        return;
+    }
+    if !closed {
+        let (a0, _, dx0, dy0, ang0) = segs[0];
+        let (_, b1, dx1, dy1, ang1) = segs[segs.len() - 1];
+        match cap {
+            StrokeLinecap::Butt => {}
+            StrokeLinecap::Square => {
+                push_oriented_quad(
+                    (a0.0 - dx0 * hw * 0.5, a0.1 - dy0 * hw * 0.5),
+                    hw,
+                    w,
+                    ang0,
+                    color,
+                    [0.0; 4],
+                    out,
+                );
+                push_oriented_quad(
+                    (b1.0 + dx1 * hw * 0.5, b1.1 + dy1 * hw * 0.5),
+                    hw,
+                    w,
+                    ang1,
+                    color,
+                    [0.0; 4],
+                    out,
+                );
+            }
+            StrokeLinecap::Round => {
+                push_oriented_quad(a0, w, w, 0.0, color, round, out);
+                push_oriented_quad(b1, w, w, 0.0, color, round, out);
+            }
+        }
+    }
+    if join == StrokeLinejoin::Round {
+        let wrapped = closed && n >= 3;
+        for (i, &p) in pts.iter().enumerate() {
+            let is_end = !closed && (i == 0 || i + 1 == n);
+            if is_end {
+                continue;
+            }
+            if wrapped && i + 1 == n {
+                continue;
+            }
+            push_oriented_quad(p, w, w, 0.0, color, round, out);
+        }
     }
 }
 
@@ -1208,10 +1622,412 @@ pub fn tessellate_path(cmds: &[PathCommand], style: &PathStyle) -> Vec<PathQuad>
             if (style.fill.is_some() || style.fill_gradient.is_some()) && has_open && *closed {
                 continue;
             }
-            tessellate_stroke_points(pts, w, stroke, &mut out);
+            tessellate_stroke_points(
+                pts,
+                w,
+                stroke,
+                style.stroke_linecap,
+                style.stroke_linejoin,
+                *closed,
+                &mut out,
+            );
         }
     }
     out
+}
+
+fn quad_to_tris(q: PathQuad, out: &mut Vec<PathTri>) {
+    if q.size.0 <= 0.0 || q.size.1 <= 0.0 || q.color[3] <= 0.0 {
+        return;
+    }
+    let cx = q.pos.0 + q.size.0 * 0.5;
+    let cy = q.pos.1 + q.size.1 * 0.5;
+    let hw = q.size.0 * 0.5;
+    let hh = q.size.1 * 0.5;
+    let (s, c) = q.rotate_deg.to_radians().sin_cos();
+    let rot = |x: f32, y: f32| (cx + x * c - y * s, cy + x * s + y * c);
+    let p0 = rot(-hw, -hh);
+    let p1 = rot(hw, -hh);
+    let p2 = rot(hw, hh);
+    let p3 = rot(-hw, hh);
+    out.push(PathTri {
+        a: p0,
+        b: p1,
+        c: p2,
+        color: q.color,
+    });
+    out.push(PathTri {
+        a: p0,
+        b: p2,
+        c: p3,
+        color: q.color,
+    });
+}
+
+fn fan_fill(pts: &[Point2], color: [f32; 4], out: &mut Vec<PathTri>) {
+    let pts = ring_pts(pts);
+    if pts.len() < 3 || color[3] <= 0.0 {
+        return;
+    }
+    let a = pts[0];
+    for i in 1..pts.len() - 1 {
+        out.push(PathTri {
+            a,
+            b: pts[i],
+            c: pts[i + 1],
+            color,
+        });
+    }
+}
+
+fn disc_fan(center: Point2, radius: f32, color: [f32; 4], out: &mut Vec<PathTri>) {
+    let r = radius.max(0.5);
+    if color[3] <= 0.0 {
+        return;
+    }
+    const N: usize = 12;
+    let tau = std::f32::consts::TAU;
+    for i in 0..N {
+        let a0 = i as f32 / N as f32 * tau;
+        let a1 = (i + 1) as f32 / N as f32 * tau;
+        out.push(PathTri {
+            a: center,
+            b: (center.0 + r * a0.cos(), center.1 + r * a0.sin()),
+            c: (center.0 + r * a1.cos(), center.1 + r * a1.sin()),
+            color,
+        });
+    }
+}
+
+/// Stroke mesh（填充走 stencil-cover，不经过这里）。
+pub fn tessellate_path_mesh(
+    cmds: &[PathCommand],
+    style: &PathStyle,
+    markers: &[Point2],
+    marker_r: f32,
+) -> Vec<PathTri> {
+    let mut out = Vec::new();
+    if cmds.is_empty() && markers.is_empty() {
+        return out;
+    }
+    let paths = subpaths(cmds);
+    if let Some(fill) = style.fill {
+        if style.fill_gradient.is_none() {
+            let closed_n = paths.iter().filter(|(_, c)| *c).count();
+            if closed_n == 1 {
+                for (pts, closed) in &paths {
+                    if *closed && pts.len() >= 3 {
+                        fan_fill(pts, fill, &mut out);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(stroke) = style.stroke {
+        let w = style.stroke_width;
+        let has_open = paths.iter().any(|(_, c)| !*c);
+        let mut quads = Vec::new();
+        for (pts, closed) in &paths {
+            if (style.fill.is_some() || style.fill_gradient.is_some()) && has_open && *closed {
+                continue;
+            }
+            tessellate_stroke_points(
+                pts,
+                w,
+                stroke,
+                style.stroke_linecap,
+                style.stroke_linejoin,
+                *closed,
+                &mut quads,
+            );
+            let hw = w.max(0.75) * 0.5;
+            let n = pts.len();
+            let last = n.saturating_sub(1);
+            let ring_closed = *closed && n >= 3;
+            let wrap_last = if ring_closed
+                && (pts[0].0 - pts[last].0).abs() < 1e-4
+                && (pts[0].1 - pts[last].1).abs() < 1e-4
+            {
+                last.saturating_sub(1)
+            } else {
+                last
+            };
+            if ring_closed {
+                for i in 0..=wrap_last {
+                    let prev = if i == 0 { wrap_last } else { i - 1 };
+                    let next = if i == wrap_last { 0 } else { i + 1 };
+                    let Some(d1) = unit_dir(pts[prev], pts[i]) else {
+                        continue;
+                    };
+                    let Some(d2) = unit_dir(pts[i], pts[next]) else {
+                        continue;
+                    };
+                    stroke_join_tris(pts[i], d1, d2, hw, style.stroke_linejoin, stroke, &mut out);
+                }
+            } else {
+                for i in 1..n.saturating_sub(1) {
+                    let Some(d1) = unit_dir(pts[i - 1], pts[i]) else {
+                        continue;
+                    };
+                    let Some(d2) = unit_dir(pts[i], pts[i + 1]) else {
+                        continue;
+                    };
+                    stroke_join_tris(pts[i], d1, d2, hw, style.stroke_linejoin, stroke, &mut out);
+                }
+            }
+        }
+        for q in quads {
+            quad_to_tris(q, &mut out);
+        }
+    }
+    if marker_r > 0.0 {
+        let color = style.stroke.or(style.fill).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+        for &p in markers {
+            disc_fan(p, marker_r, color, &mut out);
+        }
+    }
+    out
+}
+
+/// 复杂渐变（conic / repeating / hint / px-stop / >8 stops）仍 CPU golden。
+fn mesh_needs_cpu(layers: &[(Vec<PathCommand>, PathStyle)]) -> bool {
+    layers.iter().any(|(_, st)| {
+        st.fill_gradient
+            .as_ref()
+            .is_some_and(|g| pack_gpu_gradient(g).is_none())
+    })
+}
+
+fn pack_stops(stops: &[crate::style::ColorStop]) -> Option<Vec<(f32, [f32; 4])>> {
+    if stops.is_empty() || stops.len() > 8 {
+        return None;
+    }
+    if stops.iter().any(|s| s.position_px || s.position_end_px) {
+        return None;
+    }
+    let n = stops.len();
+    let mut out = Vec::with_capacity(n.saturating_mul(2).min(8));
+    for (i, s) in stops.iter().enumerate() {
+        let t = s
+            .position
+            .unwrap_or(if n <= 1 {
+                0.0
+            } else {
+                i as f32 / (n - 1) as f32
+            })
+            .clamp(0.0, 1.0);
+        out.push((t, s.color));
+        if let Some(end) = s.position_end {
+            if out.len() >= 8 {
+                return None;
+            }
+            out.push((end.clamp(0.0, 1.0), s.color));
+        }
+    }
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Some(out)
+}
+
+fn radial_radii_unit(rg: &crate::style::RadialGradient) -> (f32, f32) {
+    let cx = rg.position.x;
+    let cy = rg.position.y;
+    match rg.extent {
+        crate::style::RadialExtent::Ellipse { rx, ry } => (rx.max(1e-6), ry.max(1e-6)),
+        crate::style::RadialExtent::Circle(r) => (r.max(1e-6), r.max(1e-6)),
+        crate::style::RadialExtent::Keyword(kw) => {
+            let sides = [cx.abs(), (1.0 - cx).abs(), cy.abs(), (1.0 - cy).abs()];
+            let corners = [
+                (cx * cx + cy * cy).sqrt(),
+                ((1.0 - cx) * (1.0 - cx) + cy * cy).sqrt(),
+                (cx * cx + (1.0 - cy) * (1.0 - cy)).sqrt(),
+                ((1.0 - cx) * (1.0 - cx) + (1.0 - cy) * (1.0 - cy)).sqrt(),
+            ];
+            let r = match kw {
+                crate::style::RadialSize::ClosestSide => {
+                    sides.into_iter().fold(f32::INFINITY, f32::min)
+                }
+                crate::style::RadialSize::FarthestSide => sides.into_iter().fold(0.0_f32, f32::max),
+                crate::style::RadialSize::ClosestCorner => {
+                    corners.into_iter().fold(f32::INFINITY, f32::min)
+                }
+                crate::style::RadialSize::FarthestCorner => {
+                    corners.into_iter().fold(0.0_f32, f32::max)
+                }
+            };
+            let r = r.max(1e-6);
+            (r, r)
+        }
+    }
+}
+
+fn pack_gpu_gradient(g: &crate::style::Gradient) -> Option<GpuFillGrad> {
+    let (kind, angle, center, radii, stops) = match g {
+        crate::style::Gradient::Conic(_) => return None,
+        crate::style::Gradient::Linear(lg) => {
+            if lg.repeating || lg.hints.iter().any(|h| h.is_some()) {
+                return None;
+            }
+            (
+                1u32,
+                lg.angle_deg,
+                [0.5, 0.5],
+                [1.0, 1.0],
+                pack_stops(&lg.stops)?,
+            )
+        }
+        crate::style::Gradient::Radial(rg) => {
+            if rg.repeating || rg.hints.iter().any(|h| h.is_some()) {
+                return None;
+            }
+            let (rx, ry) = radial_radii_unit(rg);
+            (
+                2u32,
+                0.0,
+                [rg.position.x, rg.position.y],
+                [rx, ry],
+                pack_stops(&rg.stops)?,
+            )
+        }
+    };
+    let mut stop_t = [1.0f32; 8];
+    let mut stop_c = [[0.0f32; 4]; 8];
+    let n = stops.len().min(8);
+    for (i, (t, c)) in stops.iter().take(n).enumerate() {
+        stop_t[i] = *t;
+        stop_c[i] = *c;
+    }
+    Some(GpuFillGrad {
+        kind,
+        angle,
+        bbox: [0.0; 4],
+        center,
+        radii,
+        stop_n: n as u32,
+        stop_t,
+        stop_c,
+    })
+}
+
+fn stencil_fan(pts: &[Point2], dummy: [f32; 4], out: &mut Vec<PathTri>) {
+    let pts = ring_pts(pts);
+    if pts.len() < 3 {
+        return;
+    }
+    let a = pts[0];
+    for i in 1..pts.len() - 1 {
+        out.push(PathTri {
+            a,
+            b: pts[i],
+            c: pts[i + 1],
+            color: dummy,
+        });
+    }
+}
+
+fn cover_quad(min: Point2, max: Point2, color: [f32; 4]) -> [PathTri; 2] {
+    let p0 = (min.0, min.1);
+    let p1 = (max.0, min.1);
+    let p2 = (max.0, max.1);
+    let p3 = (min.0, max.1);
+    [
+        PathTri {
+            a: p0,
+            b: p1,
+            c: p2,
+            color,
+        },
+        PathTri {
+            a: p0,
+            b: p2,
+            c: p3,
+            color,
+        },
+    ]
+}
+
+pub(crate) fn build_fill_op(cmds: &[PathCommand], style: &PathStyle) -> Option<PathGpuFill> {
+    if style.fill.is_none() && style.fill_gradient.is_none() {
+        return None;
+    }
+    let solid = style.fill.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    if style.fill_gradient.is_none() && solid[3] <= 0.0 {
+        return None;
+    }
+    let cover_color = if style.fill_gradient.is_some() {
+        [1.0, 1.0, 1.0, solid[3].clamp(0.0, 1.0)]
+    } else {
+        solid
+    };
+    let mut stencil = Vec::new();
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    let mut any = false;
+    for (pts, closed) in subpaths(cmds) {
+        if !closed || pts.len() < 3 {
+            continue;
+        }
+        stencil_fan(&pts, cover_color, &mut stencil);
+        for &(x, y) in &pts {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        any = true;
+    }
+    if !any || stencil.is_empty() {
+        return None;
+    }
+    let pad = 0.75;
+    min_x -= pad;
+    min_y -= pad;
+    max_x += pad;
+    max_y += pad;
+    let mut grad = style.fill_gradient.as_ref().and_then(pack_gpu_gradient);
+    if let Some(g) = grad.as_mut() {
+        g.bbox = [
+            min_x,
+            min_y,
+            (max_x - min_x).max(1e-6),
+            (max_y - min_y).max(1e-6),
+        ];
+    }
+    Some(PathGpuFill {
+        even_odd: matches!(style.fill_rule, FillRule::EvenOdd),
+        stencil,
+        cover: cover_quad((min_x, min_y), (max_x, max_y), cover_color),
+        grad,
+        clip: None,
+    })
+}
+
+fn build_gpu_ops(
+    layers: &[(Vec<PathCommand>, PathStyle)],
+    markers: &[Point2],
+    marker_r: f32,
+) -> Vec<PathGpuOp> {
+    let mut ops = Vec::new();
+    let last = layers.len().saturating_sub(1);
+    for (i, (cmds, style)) in layers.iter().enumerate() {
+        if let Some(fill) = build_fill_op(cmds, style) {
+            ops.push(PathGpuOp::Fill(fill));
+        }
+        let mr = if i == last { marker_r } else { 0.0 };
+        let m = if i == last { markers } else { &[][..] };
+        let mut stroke_style = style.clone();
+        stroke_style.fill = None;
+        stroke_style.fill_gradient = None;
+        let mesh = tessellate_path_mesh(cmds, &stroke_style, m, mr);
+        if !mesh.is_empty() {
+            ops.push(PathGpuOp::Mesh(PathGpuMesh {
+                tris: mesh,
+                clip: None,
+            }));
+        }
+    }
+    ops
 }
 
 pub fn parse_path_viewbox(s: &str) -> Option<[f32; 4]> {
@@ -1263,10 +2079,22 @@ fn scale_commands(cmds: &[PathCommand], vb: [f32; 4], leaf: [f32; 2]) -> Vec<Pat
     };
     let map = |p: Point2| ((p.0 - vb[0]) * sx, (p.1 - vb[1]) * sy);
     cmds.iter()
-        .map(|c| match *c {
-            PathCommand::MoveTo(p) => PathCommand::MoveTo(map(p)),
-            PathCommand::LineTo(p) => PathCommand::LineTo(map(p)),
-            PathCommand::Close => PathCommand::Close,
+        .cloned()
+        .map(|c| match c {
+            PathCommand::Arc {
+                radii,
+                x_rot_deg,
+                large,
+                sweep,
+                to,
+            } => PathCommand::Arc {
+                radii: (radii.0 * sx.abs(), radii.1 * sy.abs()),
+                x_rot_deg,
+                large,
+                sweep,
+                to: map(to),
+            },
+            other => other.map_xy(map),
         })
         .collect()
 }
@@ -1376,6 +2204,73 @@ thread_local! {
     static RASTER_CPU: RefCell<HashMap<String, PathCpuEntry>> = RefCell::new(HashMap::new());
     static RASTER_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static SCENE_STORE: RefCell<HashMap<u64, PathScene>> = RefCell::new(HashMap::new());
+    static PATH_JOBS: RefCell<Vec<PathGpuJob>> = const { RefCell::new(Vec::new()) };
+    static RT_READBACK_REQ: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static RT_READBACK: RefCell<HashMap<String, (u32, u32, Vec<u8>)>> = RefCell::new(HashMap::new());
+}
+
+/// GPU PathPipeline 作业：布局收集排队，渲染期画到 `rui_path:` / `rui_canvas:`。
+#[derive(Clone, Debug)]
+pub struct PathGpuJob {
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    pub(crate) ops: Vec<PathGpuOp>,
+    /// Canvas keys are id-stable; skip-if-same-size would freeze `request_frame`.
+    pub force_redraw: bool,
+}
+
+pub(crate) fn queue_path_job(job: PathGpuJob) {
+    PATH_JOBS.with(|j| j.borrow_mut().push(job));
+}
+
+pub(crate) fn take_path_jobs() -> Vec<PathGpuJob> {
+    PATH_JOBS.with(|j| std::mem::take(&mut *j.borrow_mut()))
+}
+
+pub(crate) fn has_path_jobs() -> bool {
+    PATH_JOBS.with(|j| !j.borrow().is_empty())
+}
+
+/// Paint called `get_image_data`: after PathPipeline flush, copy the RT (低频, stalls).
+pub fn request_path_rt_readback(key: impl Into<String>) {
+    RT_READBACK_REQ.with(|s| {
+        s.borrow_mut().insert(key.into());
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn path_rt_readback_is_pending(key: &str) -> bool {
+    RT_READBACK_REQ.with(|s| s.borrow().contains(key))
+}
+
+pub(crate) fn take_path_rt_readback_request(key: &str) -> bool {
+    RT_READBACK_REQ.with(|s| s.borrow_mut().remove(key))
+}
+
+pub(crate) fn store_path_rt_readback(key: String, width: u32, height: u32, pixels: Vec<u8>) {
+    RT_READBACK.with(|m| {
+        m.borrow_mut().insert(key, (width, height, pixels));
+    });
+}
+
+/// GPU RT pixels from the last flush that honored [`request_path_rt_readback`].
+pub fn take_path_rt_readback(key: &str) -> Option<(u32, u32, Vec<u8>)> {
+    RT_READBACK.with(|m| m.borrow_mut().remove(key))
+}
+
+pub(crate) fn enrich_path_graph(graph: &mut crate::renderer::RenderGraph) {
+    PATH_JOBS.with(|j| {
+        for job in j.borrow().iter() {
+            graph.push(
+                crate::renderer::RenderPassNode::new(
+                    crate::renderer::PassKind::Path2d,
+                    format!("path-{}", job.key),
+                )
+                .write(job.key.clone()),
+            );
+        }
+    });
 }
 
 /// 注册多层 path 场景，返回 hex 键（写入 [`ATTR_PATH_SCENE`]）。
@@ -1480,6 +2375,25 @@ fn fill_contains(p: Point2, pts: &[Point2], rule: FillRule) -> bool {
     }
 }
 
+/// Fill hit in path user space (after CTM if the caller applied it). Canvas `is_point_in_path`.
+pub fn path_contains_point(cmds: &[PathCommand], p: Point2, rule: FillRule) -> bool {
+    for (pts, closed) in subpaths(cmds) {
+        if closed && pts.len() >= 3 && fill_contains(p, &pts, rule) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stroke hit in path user space. Canvas `is_point_in_stroke`（当前线宽 / cap）。
+pub fn path_stroke_contains(cmds: &[PathCommand], style: &PathStyle, p: Point2) -> bool {
+    let mut st = style.clone();
+    if st.stroke.is_none() {
+        st.stroke = Some([0.0, 0.0, 0.0, 1.0]);
+    }
+    point_in_stroke(cmds, &st, p)
+}
+
 fn dist_to_segment(p: Point2, a: Point2, b: Point2) -> f32 {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
@@ -1512,13 +2426,11 @@ fn point_in_stroke(cmds: &[PathCommand], style: &PathStyle, p: Point2) -> bool {
         return false;
     };
     let hw = style.stroke_width.max(0.5) * 0.5;
-    let round_caps = matches!(
-        style.stroke_linecap,
-        StrokeLinecap::Round | StrokeLinecap::Square
-    );
+    let round_caps = style.stroke_linecap == StrokeLinecap::Round;
+    let square_caps = style.stroke_linecap == StrokeLinecap::Square;
     for (pts, closed) in subpaths(cmds) {
         if pts.len() < 2 {
-            if pts.len() == 1 && round_caps {
+            if pts.len() == 1 && (round_caps || square_caps) {
                 let q = pts[0];
                 if (p.0 - q.0).hypot(p.1 - q.1) <= hw {
                     return true;
@@ -1540,13 +2452,29 @@ fn point_in_stroke(cmds: &[PathCommand], style: &PathStyle, p: Point2) -> bool {
                 }
             }
         }
-        if !closed && round_caps {
-            let first = pts[0];
-            let last = pts[pts.len() - 1];
-            if (p.0 - first.0).hypot(p.1 - first.1) <= hw
-                || (p.0 - last.0).hypot(p.1 - last.1) <= hw
-            {
-                return true;
+        if !closed && pts.len() >= 2 {
+            if round_caps {
+                let first = pts[0];
+                let last = pts[pts.len() - 1];
+                if (p.0 - first.0).hypot(p.1 - first.1) <= hw
+                    || (p.0 - last.0).hypot(p.1 - last.1) <= hw
+                {
+                    return true;
+                }
+            } else if square_caps {
+                if let Some(d) = unit_dir(pts[1], pts[0]) {
+                    let ext = (pts[0].0 + d.0 * hw, pts[0].1 + d.1 * hw);
+                    if dist_to_segment(p, pts[0], ext) <= hw {
+                        return true;
+                    }
+                }
+                let last = pts.len() - 1;
+                if let Some(d) = unit_dir(pts[last - 1], pts[last]) {
+                    let ext = (pts[last].0 + d.0 * hw, pts[last].1 + d.1 * hw);
+                    if dist_to_segment(p, pts[last], ext) <= hw {
+                        return true;
+                    }
+                }
             }
         }
     }
@@ -2160,20 +3088,90 @@ pub fn path_raster_from_element_attrs(
     leaf_w: f32,
     leaf_h: f32,
 ) -> Option<(String, f32, f32)> {
+    let prepared = prepare_path_draw(attrs, leaf_w, leaf_h)?;
+    let tex = ensure_raster_texture(
+        &prepared.layers,
+        &prepared.markers,
+        prepared.marker_r,
+        prepared.width,
+        prepared.height,
+        2,
+    )?;
+    Some((tex, prepared.target[0], prepared.target[1]))
+}
+
+/// 布局期：产品 GPU 核。复杂渐变回 `None`（调用方走 CPU golden）。
+pub fn path_gpu_from_element_attrs(
+    attrs: &HashMap<String, String>,
+    leaf_w: f32,
+    leaf_h: f32,
+) -> Option<(String, f32, f32)> {
+    if !crate::renderer::gpu2d_enabled() {
+        return None;
+    }
+    let prepared = prepare_path_draw(attrs, leaf_w, leaf_h)?;
+    if mesh_needs_cpu(&prepared.layers) {
+        return None;
+    }
+    let ops = build_gpu_ops(&prepared.layers, &prepared.markers, prepared.marker_r);
+    if ops.iter().all(PathGpuOp::is_empty) {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    b"stencil-v1".hash(&mut hasher);
+    prepared.width.hash(&mut hasher);
+    prepared.height.hash(&mut hasher);
+    prepared.marker_r.to_bits().hash(&mut hasher);
+    for (cmds, style) in &prepared.layers {
+        encode_path_d(cmds).hash(&mut hasher);
+        hash_style(&mut hasher, style);
+    }
+    for &(x, y) in &prepared.markers {
+        x.to_bits().hash(&mut hasher);
+        y.to_bits().hash(&mut hasher);
+    }
+    let key = format!("rui_path:{:016x}", hasher.finish());
+    queue_path_job(PathGpuJob {
+        key: key.clone(),
+        width: prepared.width,
+        height: prepared.height,
+        ops,
+        force_redraw: false,
+    });
+    Some((key, prepared.target[0], prepared.target[1]))
+}
+
+struct PreparedPathDraw {
+    layers: Vec<(Vec<PathCommand>, PathStyle)>,
+    markers: Vec<Point2>,
+    marker_r: f32,
+    target: [f32; 2],
+    width: u32,
+    height: u32,
+}
+
+fn prepare_path_draw(
+    attrs: &HashMap<String, String>,
+    leaf_w: f32,
+    leaf_h: f32,
+) -> Option<PreparedPathDraw> {
     let target = path_target_leaf_size(attrs, [leaf_w, leaf_h]);
     let w = target[0].round() as i32;
     let h = target[1].round() as i32;
     if w < 2 || h < 2 {
         return None;
     }
-    let w = w as u32;
-    let h = h as u32;
+    let width = w as u32;
+    let height = h as u32;
+    if width.saturating_mul(height) > MAX_RASTER_PX {
+        return None;
+    }
 
     if let Some(scene_hex) = attrs.get(ATTR_PATH_SCENE) {
         if let Ok(id) = u64::from_str_radix(scene_hex.trim(), 16) {
             let scene = SCENE_STORE.with(|s| s.borrow().get(&id).cloned());
             if let Some(scene) = scene {
-                let scaled: Vec<(Vec<PathCommand>, PathStyle)> = scene
+                let layers: Vec<(Vec<PathCommand>, PathStyle)> = scene
                     .layers
                     .iter()
                     .map(|(cmds, st)| {
@@ -2183,15 +3181,21 @@ pub fn path_raster_from_element_attrs(
                         )
                     })
                     .collect();
-                if scaled.iter().all(|(c, _)| c.is_empty()) && scene.markers.is_empty() {
+                if layers.iter().all(|(c, _)| c.is_empty()) && scene.markers.is_empty() {
                     return None;
                 }
                 let markers = scale_points(&scene.markers, scene.vb, target);
                 let sx = target[0] / scene.vb[2].max(1e-6);
                 let sy = target[1] / scene.vb[3].max(1e-6);
-                let mr = scene.marker_r * sx.min(sy).max(0.25);
-                let tex = ensure_raster_texture(&scaled, &markers, mr, w, h, 2)?;
-                return Some((tex, target[0], target[1]));
+                let marker_r = scene.marker_r * sx.min(sy).max(0.25);
+                return Some(PreparedPathDraw {
+                    layers,
+                    markers,
+                    marker_r,
+                    target,
+                    width,
+                    height,
+                });
             }
         }
     }
@@ -2226,8 +3230,14 @@ pub fn path_raster_from_element_attrs(
         1.0
     };
     let marker_r = marker_r * sx.max(0.25);
-    let tex = ensure_raster_texture(&[(cmds, style)], &markers, marker_r, w, h, 2)?;
-    Some((tex, target[0], target[1]))
+    Some(PreparedPathDraw {
+        layers: vec![(cmds, style)],
+        markers,
+        marker_r,
+        target,
+        width,
+        height,
+    })
 }
 
 #[cfg(test)]
@@ -2240,6 +3250,10 @@ mod tests {
         assert_eq!(cmds.len(), 2);
         let pie = pie_sector(0.0, 0.0, 10.0, 0.0, std::f32::consts::FRAC_PI_2, 4);
         assert!(pie.len() >= 4);
+        assert!(
+            pie.iter().any(|c| matches!(c, PathCommand::Arc { .. })),
+            "pie_sector must keep Arc until flatten, got {pie:?}"
+        );
         let ring = pie_ring(0.0, 0.0, 10.0, 4.0, 0.0, std::f32::consts::FRAC_PI_2, 4);
         assert!(
             ring.len() > pie.len(),
@@ -2250,6 +3264,21 @@ mod tests {
         let s = encode_points(&[(1.5, 2.5)]);
         assert_eq!(s, "1.500,2.500");
         let c = filled_circle(10.0, 20.0, 5.0, 16);
+        assert!(
+            c.iter().any(|cmd| matches!(cmd, PathCommand::Arc { .. })),
+            "filled_circle must keep Arc until flatten, got {c:?}"
+        );
+        let ell = filled_ellipse(0.0, 0.0, 10.0, 4.0, 8);
+        assert!(
+            ell.iter().any(|cmd| matches!(
+                cmd,
+                PathCommand::Arc {
+                    radii: (rx, ry),
+                    ..
+                } if (*rx - 10.0).abs() < 1e-3 && (*ry - 4.0).abs() < 1e-3
+            )),
+            "filled_ellipse must keep rx/ry Arc, got {ell:?}"
+        );
         let pts = points_from_commands(&c);
         let n = pts.len().max(1) as f32;
         let cx = pts.iter().map(|p| p.0).sum::<f32>() / n;
@@ -2283,6 +3312,24 @@ mod tests {
         assert!(
             (cx - 320.0).abs() < 1.0 && (cy - 70.0).abs() < 1.0,
             "centroid should map by sx/sy, got ({cx},{cy})"
+        );
+    }
+
+    #[test]
+    fn path_stroke_contains_mid_segment_and_square_cap() {
+        let cmds = polyline(&[(10.0, 10.0), (30.0, 10.0)]);
+        let butt = PathStyle::stroke([1.0, 1.0, 1.0, 1.0], 4.0).linecap(StrokeLinecap::Butt);
+        assert!(path_stroke_contains(&cmds, &butt, (20.0, 10.0)));
+        assert!(!path_stroke_contains(&cmds, &butt, (20.0, 16.0)));
+        let corner = (32.0, 12.0);
+        assert!(
+            !path_stroke_contains(&cmds, &butt, corner),
+            "butt must miss the square-cap corner"
+        );
+        let square = PathStyle::stroke([1.0, 1.0, 1.0, 1.0], 4.0).linecap(StrokeLinecap::Square);
+        assert!(
+            path_stroke_contains(&cmds, &square, corner),
+            "square cap must cover the outer rectangle corner"
         );
     }
 
@@ -2330,19 +3377,45 @@ mod tests {
     }
 
     #[test]
-    fn path_d_flattens_cubic_and_arc() {
+    fn path_d_preserves_cubic_and_arc() {
         let cubic = decode_path_d("M0,0 C10,0 10,10 0,10");
-        assert!(
-            cubic.len() > 4,
-            "cubic should flatten to multiple LineTo, got {}",
-            cubic.len()
-        );
+        assert_eq!(cubic.len(), 2, "cubic must stay one CubicTo, got {cubic:?}");
         assert!(matches!(cubic[0], PathCommand::MoveTo((0.0, 0.0))));
+        assert!(matches!(
+            cubic[1],
+            PathCommand::CubicTo {
+                to: (x, y),
+                ..
+            } if (x - 0.0).abs() < 1e-3 && (y - 10.0).abs() < 0.2
+        ));
+        let flat = flatten_path(&cubic);
+        assert!(
+            flat.len() > 4,
+            "flatten_path should emit multiple LineTo, got {}",
+            flat.len()
+        );
         let last = points_from_commands(&cubic).last().copied().unwrap();
         assert!((last.0 - 0.0).abs() < 0.2 && (last.1 - 10.0).abs() < 0.2);
 
+        let tiny = flatten_path(&[
+            PathCommand::MoveTo((0.0, 0.0)),
+            PathCommand::CubicTo {
+                c1: (0.2, 0.0),
+                c2: (0.4, 0.0),
+                to: (0.5, 0.0),
+            },
+        ]);
+        assert!(
+            tiny.len() <= 4,
+            "near-linear 0.5px cubic must not force 12 segments, got {}",
+            tiny.len()
+        );
+
         let arc = decode_path_d("M10,0 A10,10 0 0 1 0,10");
-        assert!(arc.len() >= 3, "arc should flatten, got {}", arc.len());
+        assert!(
+            matches!(arc.last(), Some(PathCommand::Arc { .. })),
+            "arc must stay Arc, got {arc:?}"
+        );
         let end = points_from_commands(&arc).last().copied().unwrap();
         assert!((end.0 - 0.0).abs() < 0.5 && (end.1 - 10.0).abs() < 0.5);
     }
@@ -2367,6 +3440,183 @@ mod tests {
         );
         assert!(quads.iter().any(|q| q.rotate_deg.abs() < 1.0));
         assert!(quads.len() >= 3);
+    }
+
+    #[test]
+    fn tessellate_stroke_butt_is_exact_length() {
+        let cmds = polyline(&[(0.0, 10.0), (40.0, 10.0)]);
+        let style = PathStyle::stroke([1.0, 0.0, 0.0, 1.0], 4.0).linecap(StrokeLinecap::Butt);
+        let quads = tessellate_path(&cmds, &style);
+        let seg = quads
+            .iter()
+            .find(|q| q.rotate_deg.abs() < 1.0 && q.size.0 > 20.0)
+            .expect("horizontal segment");
+        assert!(
+            (seg.size.0 - 40.0).abs() < 0.6,
+            "butt must not extend len+w, got {}",
+            seg.size.0
+        );
+    }
+
+    #[test]
+    fn tessellate_stroke_miter_covers_outer_corner() {
+        let cmds = polyline(&[(0.0, 20.0), (40.0, 20.0), (40.0, 60.0)]);
+        let style = PathStyle::stroke([1.0, 0.0, 0.0, 1.0], 4.0)
+            .linecap(StrokeLinecap::Butt)
+            .linejoin(StrokeLinejoin::Miter);
+        let tris = tessellate_path_mesh(&cmds, &style, &[], 0.0);
+        let has_miter = tris
+            .iter()
+            .any(|t| [t.a, t.b, t.c].iter().any(|p| p.0 >= 41.4 && p.1 <= 18.6));
+        assert!(
+            has_miter,
+            "90° miter should reach ~ (42, 18), tris={tris:?}"
+        );
+    }
+
+    #[test]
+    fn tessellate_path_mesh_stroke_is_triangles() {
+        let cmds = polyline(&[(10.0, 10.0), (50.0, 10.0), (50.0, 40.0)]);
+        let style = PathStyle::stroke([1.0, 0.2, 0.2, 1.0], 4.0);
+        let tris = tessellate_path_mesh(&cmds, &style, &[], 0.0);
+        assert!(
+            tris.len() >= 4,
+            "stroke mesh must be triangles, got {}",
+            tris.len()
+        );
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        for t in &tris {
+            for p in [t.a, t.b, t.c] {
+                min_x = min_x.min(p.0);
+                max_x = max_x.max(p.0);
+                min_y = min_y.min(p.1);
+                max_y = max_y.max(p.1);
+            }
+        }
+        assert!(
+            min_x <= 10.0 + 1.0 && max_x >= 50.0 - 1.0 && max_y >= 40.0 - 1.0,
+            "mesh bbox [{min_x},{min_y}]-[{max_x},{max_y}] must cover the polyline"
+        );
+        let cpu = rasterize_path_rgba(&cmds, &style, &[], 64, 48, 2);
+        let opaque = cpu.chunks(4).filter(|p| p[3] > 8).count();
+        assert!(
+            opaque > 40,
+            "CPU golden stroke should paint, opaque={opaque}"
+        );
+    }
+
+    #[test]
+    fn path_gpu_queues_mesh_job_not_sdf_instances() {
+        if !crate::renderer::gpu2d_enabled() {
+            return;
+        }
+        let _ = take_path_jobs();
+        let el = attach_path(
+            Element::new().w(80.0).h(60.0),
+            &polyline(&[(4.0, 30.0), (40.0, 8.0), (76.0, 50.0)]),
+            &PathStyle::stroke([0.2, 0.5, 0.9, 1.0], 3.0),
+        );
+        let (key, w, h) = path_gpu_from_element_attrs(&el.attrs, 80.0, 60.0)
+            .expect("stroke polyline must queue PathPipeline job");
+        assert!(key.starts_with("rui_path:"));
+        assert!(w > 40.0 && h > 20.0);
+        let jobs = take_path_jobs();
+        assert!(!jobs.is_empty());
+        let n = jobs[0]
+            .ops
+            .iter()
+            .map(|op| match op {
+                PathGpuOp::Mesh(m) => m.tris.len(),
+                PathGpuOp::Fill(_) => 0,
+            })
+            .sum::<usize>();
+        assert!(n >= 4, "stroke mesh must be triangles, got {n}");
+    }
+
+    #[test]
+    fn path_gpu_queues_stencil_fill() {
+        if !crate::renderer::gpu2d_enabled() {
+            return;
+        }
+        let _ = take_path_jobs();
+        let el = attach_path(
+            Element::new().w(80.0).h(60.0),
+            &pie_sector(40.0, 30.0, 24.0, 0.0, 1.8, 8),
+            &PathStyle::fill([0.2, 0.4, 0.9, 1.0]),
+        );
+        let (key, _, _) = path_gpu_from_element_attrs(&el.attrs, 80.0, 60.0)
+            .expect("solid fill must queue stencil-cover");
+        assert!(key.starts_with("rui_path:"));
+        let jobs = take_path_jobs();
+        let fill = jobs[0].ops.iter().find_map(|op| match op {
+            PathGpuOp::Fill(f) => Some(f),
+            PathGpuOp::Mesh(_) => None,
+        });
+        let fill = fill.expect("fill op");
+        assert!(!fill.even_odd);
+        assert!(fill.stencil.len() >= 3);
+        assert!(fill.grad.is_none());
+    }
+
+    #[test]
+    fn path_gpu_evenodd_hole_is_one_fill() {
+        if !crate::renderer::gpu2d_enabled() {
+            return;
+        }
+        let _ = take_path_jobs();
+        let mut cmds = filled_circle(40.0, 30.0, 22.0, 16);
+        cmds.extend(filled_circle(40.0, 30.0, 10.0, 12));
+        let mut style = PathStyle::fill([0.9, 0.3, 0.2, 1.0]);
+        style.fill_rule = FillRule::EvenOdd;
+        let el = attach_path(Element::new().w(80.0).h(60.0), &cmds, &style);
+        path_gpu_from_element_attrs(&el.attrs, 80.0, 60.0).expect("evenodd hole must stay on GPU");
+        let jobs = take_path_jobs();
+        let fill = jobs[0]
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                PathGpuOp::Fill(f) => Some(f),
+                _ => None,
+            })
+            .expect("fill");
+        assert!(fill.even_odd);
+        assert!(
+            fill.stencil.len() >= 20,
+            "outer+inner fans, got {}",
+            fill.stencil.len()
+        );
+    }
+
+    #[test]
+    fn path_gpu_linear_gradient_packs() {
+        let mut style = PathStyle::fill([1.0, 1.0, 1.0, 1.0]);
+        style.fill_gradient = Some(crate::style::Gradient::Linear(
+            crate::style::LinearGradient::two_stop(
+                [0.1, 0.2, 0.9, 1.0],
+                [0.9, 0.2, 0.1, 1.0],
+                90.0,
+            ),
+        ));
+        let fill = build_fill_op(&filled_rect(8.0, 8.0, 60.0, 40.0), &style).expect("fill");
+        let g = fill.grad.expect("packed linear");
+        assert_eq!(g.kind, 1);
+        assert_eq!(g.stop_n, 2);
+    }
+
+    #[test]
+    fn path_gpu_conic_falls_back_to_cpu() {
+        let mut style = PathStyle::fill([1.0, 1.0, 1.0, 1.0]);
+        style.fill_gradient = Some(crate::style::Gradient::Conic(
+            crate::style::ConicGradient::default(),
+        ));
+        assert!(pack_gpu_gradient(style.fill_gradient.as_ref().unwrap()).is_none());
+        assert!(mesh_needs_cpu(&[(
+            filled_rect(8.0, 8.0, 60.0, 40.0),
+            style
+        )]));
     }
 
     #[test]

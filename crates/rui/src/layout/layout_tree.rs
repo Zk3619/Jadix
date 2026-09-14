@@ -3579,6 +3579,8 @@ impl LayoutTree {
         let mut render_graph =
             crate::renderer::RenderGraph::standard_composite(scratch.tex_keys.clone());
         crate::renderer::enrich_render_graph(&mut render_graph);
+        crate::primitives::shader::enrich_shader_graph(&mut render_graph);
+        crate::primitives::path::enrich_path_graph(&mut render_graph);
         let result = RenderResult {
             instances: std::mem::take(&mut scratch.instances),
             textured_draws: std::mem::take(&mut scratch.textured_draws),
@@ -3911,7 +3913,18 @@ impl LayoutTree {
         node: NodeId,
         abs: [f32; 2],
         size: [f32; 2],
+        overlay_collect: bool,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     ) {
+        if self.try_stamp_overlay_scrollbar_hit(
+            element,
+            abs,
+            size,
+            overlay_collect,
+            scroll_signals_cache,
+        ) {
+            return;
+        }
         let mut stack: Vec<(*mut Element, NodeId, [f32; 2], [f32; 2])> =
             vec![(element as *mut Element, node, abs, size)];
         while let Some((ptr, node, abs, size)) = stack.pop() {
@@ -3931,6 +3944,15 @@ impl LayoutTree {
                 };
                 let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
                 let child_size = [cl.size.width, cl.size.height];
+                if self.try_stamp_overlay_scrollbar_hit(
+                    &mut element.children[i],
+                    child_abs,
+                    child_size,
+                    overlay_collect,
+                    scroll_signals_cache,
+                ) {
+                    continue;
+                }
                 element.children[i].layout_bounds =
                     [child_abs[0], child_abs[1], child_size[0], child_size[1]];
                 crate::style::stamp_element_used_layout(&mut element.children[i]);
@@ -3953,9 +3975,87 @@ impl LayoutTree {
         node: NodeId,
         abs: [f32; 2],
         size: [f32; 2],
+        overlay_collect: bool,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     ) {
+        if self.try_stamp_overlay_scrollbar_hit(
+            child,
+            abs,
+            size,
+            overlay_collect,
+            scroll_signals_cache,
+        ) {
+            return;
+        }
         child.layout_bounds = [abs[0], abs[1], size[0], size[1]];
-        self.stamp_descendants_layout_bounds_from_taffy(child, node, abs, size);
+        crate::style::stamp_element_used_layout(child);
+        self.stamp_descendants_layout_bounds_from_taffy(
+            child,
+            node,
+            abs,
+            size,
+            overlay_collect,
+            scroll_signals_cache,
+        );
+    }
+
+    /// Overlay tracks/thumbs paint from `scrollbar_track_overlay_abs`. Skip replay must
+    /// stamp the same rects — Taffy thumb size is the Full-prepass leftover (min cap at
+    /// the unscrolled top) and is not the hit box.
+    fn try_stamp_overlay_scrollbar_hit(
+        &self,
+        element: &mut Element,
+        base_abs: [f32; 2],
+        layout_size: [f32; 2],
+        overlay_collect: bool,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+    ) -> bool {
+        let Some(fid) = element.focus_id.as_deref() else {
+            return false;
+        };
+        let Some(rest_axis) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) else {
+            return false;
+        };
+        let is_overlay = overlay_collect
+            || element
+                .attrs
+                .get("rui_scrollbar_overlay")
+                .map(String::as_str)
+                == Some("1");
+        if !is_overlay {
+            return false;
+        }
+        let (rest, axis) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
+        let (t_rect, th_rect) = if let Some(cache) = scroll_signals_cache.as_mut() {
+            let sig = scroll_area_signals_cached(rest, cache);
+            scrollbar_track_overlay_abs(
+                element,
+                base_abs[0],
+                base_abs[1],
+                layout_size[0],
+                layout_size[1],
+                axis,
+                sig,
+            )
+        } else {
+            let sig = peek_scroll_area_meta(rest);
+            scrollbar_track_overlay_abs(
+                element,
+                base_abs[0],
+                base_abs[1],
+                layout_size[0],
+                layout_size[1],
+                axis,
+                &sig,
+            )
+        };
+        element.layout_bounds = t_rect;
+        crate::style::stamp_element_used_layout(element);
+        if let Some(thumb) = element.children.first_mut() {
+            thumb.layout_bounds = th_rect;
+            crate::style::stamp_element_used_layout(thumb);
+        }
+        true
     }
 
     fn collect_skip_geom(&self, frame: &CollectFrame) -> crate::layout::collect_cache::GeomKey {
@@ -4091,6 +4191,8 @@ impl LayoutTree {
                             frame.node,
                             paint_abs,
                             [cl.size.width, cl.size.height],
+                            frame.scrollbar_overlay_collect,
+                            scroll_signals_cache,
                         );
                     }
                     let [lx, ly, lw, lh] = element.layout_bounds;
@@ -4228,12 +4330,14 @@ impl LayoutTree {
                     element,
                     walk,
                     _scroll_only,
+                    frame.scrollbar_overlay_collect,
                     instances,
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
                     overlay_split,
                     paint_rec,
+                    scroll_signals_cache,
                 )
             };
             if let Some(job) = job {
@@ -4461,7 +4565,13 @@ impl LayoutTree {
         let fade = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
         // Own chrome (rounded border / shadow) paints with the fade. Capture children
         // stay opaque; fade lives on the inner blit so the RT is content-stable.
-        let opacity = fade;
+        // Auto scrollbar cubic is paint-only on this node — do not fold it into
+        // `fade` passed to children (track × thumb would square the alpha).
+        let bar_alpha = crate::components::scrollbar::auto_scrollbar_live_paint_alpha(element);
+        let opacity = match bar_alpha {
+            Some(v) => (fade * v).clamp(0.0, 1.0),
+            None => fade,
+        };
         // Stamped Inspector highlight rects are already in paint/visual space — never
         // subtract ancestor scroll again (that shifts the overlay upward).
         // Local `mount=` portals must keep ancestor scroll even if a prior body-mount
@@ -4757,6 +4867,8 @@ impl LayoutTree {
                     node,
                     [abs_x, abs_y],
                     [lay_w, lay_h],
+                    scrollbar_overlay_collect,
+                    scroll_signals_cache,
                 );
                 // Parent already has fresh layout_bounds + paint_visual; refresh descendants
                 // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
@@ -4815,10 +4927,18 @@ impl LayoutTree {
             //（零宽侧仍会画一笔，叠在前一段共享边上，观感与 ShadCN border-l-0 一致）。
             && !element.style.radii.iter().any(|r| *r > 0.5);
         let sdf_border_w = if use_border_strips { 0.0 } else { border_w };
+        let paint_bg = crate::components::scrollbar::auto_scrollbar_restore_base_alpha(
+            element,
+            element.style.bg_color,
+        );
+        let paint_border = crate::components::scrollbar::auto_scrollbar_restore_base_alpha(
+            element,
+            representative_border_color(&element.style),
+        );
         let sdf_border_color = if use_border_strips {
             [0.0, 0.0, 0.0, 0.0]
         } else {
-            mul_color_alpha(representative_border_color(&element.style), opacity)
+            mul_color_alpha(paint_border, opacity)
         };
         let sdf_border_extra = {
             let bs = if use_border_strips {
@@ -4832,7 +4952,7 @@ impl LayoutTree {
                 element.style.corner_shape.shader_param(),
             )
         };
-        let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
+        let has_bg = paint_bg[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
         // Page-stack `backdrop-filter` is sampled on this element's SDF instance
@@ -4844,7 +4964,11 @@ impl LayoutTree {
         };
         let has_backdrop = instance_backdrop_blur > 0.5;
         let paint_visible = intersect_rect(parent_clip, render_rect);
+        // Hidden `auto` bars keep layout_bounds for hit, but must not emit even
+        // alpha-0 quads (maximize tests treat thin rects as a painted rail).
+        let auto_bar_hidden = bar_alpha.is_some_and(|v| v <= 1e-4);
         if (has_bg || has_border || has_shadow || has_backdrop)
+            && !auto_bar_hidden
             && paint_visible[2] > 0.0
             && paint_visible[3] > 0.0
         {
@@ -4901,7 +5025,7 @@ impl LayoutTree {
                     InstanceInput {
                         rect_pos: [render_rect[0], render_rect[1]],
                         rect_size: [render_rect[2], render_rect[3]],
-                        color: mul_color_alpha(element.style.bg_color, opacity),
+                        color: mul_color_alpha(paint_bg, opacity),
                         border_color: sdf_border_color,
                         radii: resolved_radii,
                         border_width: sdf_border_w,
@@ -4970,13 +5094,26 @@ impl LayoutTree {
             }
         }
 
-        // WP-3.2 / 3.11 / 3.12: CPU coverage raster → texture; tessellate fallback.
-        // Canvas paint 与 path/svg 互斥：先 canvas 贴图，再 path scene，最后 tessellate。
+        // WP-3.2 / 3.11 / 3.12: GPU PathPipeline（描边 mesh + stencil-cover 填充）或 CPU golden → rui_path:。
+        // Canvas：GpuCanvas → PathPipeline `rui_canvas:`（或 CPU pixmap）；再 shader/scene3d，再 path。
         // Chart 多层 scene / 单层 `d` 已在此出图时，勿再画 `image_texture`（否则低分拉伸 + 默认黑描边叠一层）。
         let mut path_tex_drawn = false;
         if visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
             if let Some((tex_key, dw, dh)) =
                 crate::primitives::canvas::canvas_raster_from_element_attrs(
+                    &element.attrs,
+                    vis_w,
+                    vis_h,
+                )
+            {
+                if let Some(draw) =
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
+                {
+                    textured_draws.push(draw.with_transform(transform));
+                    path_tex_drawn = true;
+                }
+            } else if let Some((tex_key, dw, dh)) =
+                crate::primitives::shader::shader_tex_from_element_attrs(
                     &element.attrs,
                     vis_w,
                     vis_h,
@@ -5002,49 +5139,19 @@ impl LayoutTree {
                     path_tex_drawn = true;
                 }
             } else if crate::renderer::gpu2d_enabled() {
-                if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
-                    &element.attrs,
-                    [vis_x, vis_y],
-                    [vis_w, vis_h],
-                ) {
-                    for q in quads {
-                        if q.color[3] <= 0.0 || q.size.0 <= 0.0 || q.size.1 <= 0.0 {
-                            continue;
-                        }
-                        instances.push(
-                            InstanceInput {
-                                rect_pos: [q.pos.0, q.pos.1],
-                                rect_size: [q.size.0, q.size.1],
-                                color: mul_color_alpha(q.color, opacity),
-                                border_color: [0.0, 0.0, 0.0, 0.0],
-                                radii: q.radii,
-                                border_width: 0.0,
-                                shadow_color: [0.0, 0.0, 0.0, 0.0],
-                                shadow_offset: [0.0, 0.0],
-                                shadow_blur: 0.0,
-                                shadow_spread: 0.0,
-                                shadow_inset: 0.0,
-                                transform: {
-                                    if q.rotate_deg.abs() > 1e-3 {
-                                        crate::style::transform::mat2d_multiply(
-                                            &transform,
-                                            &crate::style::transform::mat2d_rotate(
-                                                q.rotate_deg.to_radians(),
-                                            ),
-                                        )
-                                    } else {
-                                        transform
-                                    }
-                                },
-                                clip_pos: [0.0, 0.0],
-                                clip_size: InstanceInput::NO_CLIP_SIZE,
-                                border_extra: 0.0,
-                                backdrop_blur: 0.0,
-                            }
-                            .with_clip(clip),
-                        );
+                if let Some((tex_key, dw, dh)) =
+                    crate::primitives::path::path_gpu_from_element_attrs(
+                        &element.attrs,
+                        vis_w,
+                        vis_h,
+                    )
+                {
+                    if let Some(draw) =
+                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
+                    {
+                        textured_draws.push(draw.with_transform(transform));
+                        path_tex_drawn = true;
                     }
-                    path_tex_drawn = true;
                 } else if let Some((tex_key, dw, dh)) =
                     crate::primitives::svg::svg_raster_from_element_attrs(
                         &element.attrs,
@@ -5826,7 +5933,7 @@ impl LayoutTree {
             opacity: if zoom_layer_scale.is_some() {
                 ancestor_opacity.clamp(0.0, 1.0)
             } else {
-                opacity
+                fade
             },
             clip,
             parent_clip,
@@ -6151,12 +6258,14 @@ impl LayoutTree {
         element: &mut Element,
         walk: &mut CollectWalk,
         _scroll_only: bool,
+        scrollbar_overlay_collect: bool,
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
         input_chrome_instances: &mut Vec<InstanceInput>,
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
+        scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     ) -> Option<CollectChildJob> {
         if walk.stopped {
             return None;
@@ -6240,6 +6349,8 @@ impl LayoutTree {
                                         walk.child_nodes[i],
                                         child_abs,
                                         child_size,
+                                        scrollbar_overlay_collect,
+                                        scroll_signals_cache,
                                     );
                                     let extent = skipped_sibling_extent(
                                         &element.children[i],
@@ -6274,6 +6385,8 @@ impl LayoutTree {
                                                 walk.child_nodes[j],
                                                 j_abs,
                                                 j_size,
+                                                scrollbar_overlay_collect,
+                                                scroll_signals_cache,
                                             );
                                             let extent = skipped_sibling_extent(
                                                 &element.children[j],
@@ -6646,10 +6759,10 @@ fn scrollbar_track_overlay_abs(
         "x" => {
             let track_inner = (track_w - inset * 2.0).max(1.0);
             let (tw, ml) = if scrollable {
-                let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
+                let ratio = (vw_vis / cw.max(vw_vis)).clamp(0.0, 1.0);
                 let min_thumb = scrollbar_min_thumb_along_track(track_inner);
                 let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
-                let max_offset = (cw - vw).max(0.0);
+                let max_offset = (cw - vw_vis).max(0.0);
                 let t = if max_offset > 1e-4 {
                     (sx / max_offset).clamp(0.0, 1.0)
                 } else {
@@ -6670,10 +6783,10 @@ fn scrollbar_track_overlay_abs(
         _ => {
             let track_inner = (track_h - inset * 2.0).max(1.0);
             let (th, mt) = if scrollable {
-                let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
+                let ratio = (vh_vis / ch.max(vh_vis)).clamp(0.0, 1.0);
                 let min_thumb = scrollbar_min_thumb_along_track(track_inner);
                 let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
-                let max_offset = (ch - vh).max(0.0);
+                let max_offset = (ch - vh_vis).max(0.0);
                 let t = if max_offset > 1e-4 {
                     (sy / max_offset).clamp(0.0, 1.0)
                 } else {
@@ -7424,7 +7537,7 @@ fn push_input_chrome_instances(
     } else if !pan {
         caret_x = caret_x.min(x + box_w - caret_w).max(x);
     }
-    let c = style.color_resolved();
+    let c = caret.caret_color.unwrap_or_else(|| style.color_resolved());
     let color = [
         c[0] as f32 / 255.0,
         c[1] as f32 / 255.0,
@@ -7529,6 +7642,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let mut selection = Vec::new();
@@ -7572,6 +7687,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: Some((6, 9)),
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
         let mut underline = Vec::new();
         let mut chrome = Vec::new();
@@ -7643,6 +7760,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let tall_h = lh * ranges.len() as f32 + 8.0;
@@ -7738,6 +7857,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let mut chrome = Vec::new();
@@ -7792,6 +7913,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let mut chrome = Vec::new();
@@ -7853,6 +7976,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let mut selection = Vec::new();
@@ -7886,6 +8011,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
         selection.clear();
         push_input_chrome_instances(
@@ -7934,6 +8061,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let origin = 10.0 - scroll_x;
@@ -7997,6 +8126,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
         let origin = 10.0_f32;
         let want_dx = style.align_inline_offset(line_w, box_w);
@@ -8154,6 +8285,8 @@ mod prepared_text_attach_tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
 
         let mut chrome = Vec::new();

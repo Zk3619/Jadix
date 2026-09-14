@@ -42,7 +42,7 @@ fn canvas_builder_leaf_layout_bounds_and_texture() {
         result.textured_draws.iter().any(|d| d.rect[2] > 80.0
             && d.rect[3] > 40.0
             && d.texture_key.starts_with("rui_canvas:")),
-        "canvas must raster via pixmap upload; draws={:?}",
+        "canvas must emit rui_canvas: texture; draws={:?}",
         result.textured_draws
     );
 }

@@ -769,3 +769,46 @@ fn opacity_get_lowers_to_bind_prop() {
     );
     reset_registered_anchors();
 }
+
+#[test]
+fn ui_error_boundary_tag_builds_element() {
+    use rui::prelude::throw_error;
+    reset_registered_anchors();
+    let (_owner, template_id) = create_root(|| {
+        let out = Rc::new(RefCell::new(None::<String>));
+        let out2 = out.clone();
+        create_effect(move || {
+            let el = ui! {
+                <ErrorBoundary id="eb-tag" fallback={|msg| Element::new().text(format!("fb:{msg}"))}>
+                    { throw_error("x"); Element::new().text("child") }
+                </ErrorBoundary>
+            };
+            *out2.borrow_mut() = el.template_id.clone();
+        });
+        let tid = out.borrow().clone().expect("template_id");
+        tid
+    });
+    assert_eq!(template_id, "eb-tag");
+    reset_registered_anchors();
+}
+
+#[test]
+fn ui_suspense_tag_builds_element() {
+    reset_registered_anchors();
+    let (_owner, template_id) = create_root(|| {
+        let out = Rc::new(RefCell::new(None::<String>));
+        let out2 = out.clone();
+        create_effect(move || {
+            let el = ui! {
+                <Suspense id="sus-tag" fallback={|| Element::new().text("loading")}>
+                    { Element::new().text("ready") }
+                </Suspense>
+            };
+            *out2.borrow_mut() = el.template_id.clone();
+        });
+        let tid = out.borrow().clone().expect("template_id");
+        tid
+    });
+    assert_eq!(template_id, "sus-tag");
+    reset_registered_anchors();
+}
