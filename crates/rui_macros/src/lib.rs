@@ -4585,7 +4585,7 @@ fn expand_node(
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
                         .map(|e| quote_length_f32(e))
-                        .unwrap_or_else(|| quote! { 4.0f32 });
+                        .unwrap_or_else(|| quote! { rui::utils::popup::FLOATING_TRIGGER_GAP });
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });
@@ -4647,7 +4647,7 @@ fn expand_node(
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
                         .map(|e| quote_length_f32(e))
-                        .unwrap_or_else(|| quote! { 4.0f32 });
+                        .unwrap_or_else(|| quote! { rui::utils::popup::FLOATING_TRIGGER_GAP });
                     let focus_id = get_attr("focus_id")
                         .or_else(|| get_attr("focusId"))
                         .or_else(|| get_attr("triggerId"))
@@ -5242,7 +5242,7 @@ fn expand_node(
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
                         .map(|e| quote_length_f32(e))
-                        .unwrap_or_else(|| quote! { 4.0f32 });
+                        .unwrap_or_else(|| quote! { rui::utils::popup::FLOATING_TRIGGER_GAP });
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });

@@ -57,6 +57,7 @@ use crate::utils::lucide_glyph;
 use crate::utils::popup::{
     disarm_underlay_close, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
     ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    FLOATING_TRIGGER_GAP,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
@@ -261,7 +262,9 @@ pub fn SelectTrigger(
     // bind_text via `build_text_node` (nested shells paint as empty).
     let mut btn = button(&trigger_id).variant("outline");
     if full_width {
-        btn = btn.w_full();
+        // `truncate` 让 Button 重建文案叶时带上 ellipsis（SelectValue 的 overflow
+        // 也会被 From 保留）；同时覆盖默认 `shrink-0`，槽位变窄时才能省略。
+        btn = btn.w_full().truncate(true);
     }
     let mut trigger: Element = btn
         .on_click(move || {
@@ -289,6 +292,11 @@ pub fn SelectTrigger(
         .border_color(tokens::input());
     if !class.is_empty() {
         trigger = with_class_list(trigger, &class);
+    }
+    if full_width {
+        // Button 默认 `shrink-0`；吃满父级时必须能在 flex 槽里收缩，否则文案把槽撑破、
+        // 命中盒大于可视盒，悬停在相邻 Select 间来回切。
+        trigger = trigger.min_w(0.0).overflow("hidden").flex_shrink(1.0);
     }
     trigger.accesskit_role("combobox")
 }
@@ -413,7 +421,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         placement: Some(Placement::trigger(
             String::new(),
             placement,
-            0.0,
+            FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
@@ -425,16 +433,12 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         ..Default::default()
     };
     anchored_overlay_content(ao_opts, move || {
-        if !ctx.open.peek() {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-        }
-
         // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
         let rows = untrack(|| body());
         let scroll_id = format!("{id_for_effect}:menu_scroll");
-        if scroll_mode != SelectScrollSelected::None {
+        if !ctx.open.peek() {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&scroll_id);
+        } else if scroll_mode != SelectScrollSelected::None {
             if let Some(index) = find_select_item_index(&rows, &value.peek()) {
                 let n = count_select_items(&rows).max(1);
                 let align = match scroll_mode {
@@ -472,8 +476,8 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         });
 
         // 外层 chrome 承载 floating 几何（勿把 scroll_area 当作 floating 根）。
-        // cn-select-content-aria: bg-popover ring-1 ring-foreground/10 rounded-lg shadow-md min-w-36
-        // overflow hidden：裁剪由 chrome 负责；滚轮交给内部 ScrollArea。
+        // cn-select-content-aria: bg-popover ring-1 ring-foreground/10 rounded-lg shadow-md
+        // min-w-36 only when not matching the trigger. overflow hidden：裁剪由 chrome 负责。
         let mut menu: Element = vstack()
             .w("auto")
             .h("auto")
@@ -489,9 +493,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             .bg(tokens::background())
             .rounded("0.5rem")
             .outline(ring, 1.0)
-            // Dialog shell uses elevation Xl (0.16 / 16); menu is a bit lighter/tighter.
-            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
-            .min_w("9rem");
+            .popup_shadow();
 
         menu.set_attr(
             ATTR_FLOATING_MATCH_TRIGGER,
@@ -501,9 +503,11 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             menu.set_attr(ATTR_FLOATING_W, mw.as_str());
         }
         if match_trigger {
+            // 宽度严格等于触发器（shadcn `w-(--trigger-width)`）；勿再叠 style min_w 干扰。
             menu.set_attr(ATTR_FLOATING_MIN_W, "trigger");
         } else {
             menu.set_attr(ATTR_FLOATING_MIN_W, "8rem");
+            menu = menu.min_w("9rem");
         }
         if let Some(h) = &menu_height {
             menu.set_attr(ATTR_FLOATING_H, h.as_str());
@@ -1220,7 +1224,13 @@ fn select_item_row(
             "foreground"
         }))
         .into();
-    text_el = text_el.flex_grow(1.0).min_w(0.0).flex_shrink(1.0);
+    text_el = text_el
+        .flex_grow(1.0)
+        .min_w(0.0)
+        .flex_shrink(1.0)
+        .overflow("hidden")
+        .whitespace_nowrap()
+        .text_overflow_ellipsis();
 
     // Fixed-size end slot so selected/unselected rows share the same text width.
     let indicator = if selected {
@@ -1341,6 +1351,37 @@ mod tests {
             )
         });
         assert_eq!(el.template_id.as_deref(), Some("calc:mode__select"));
+    }
+
+    #[test]
+    fn select_trigger_keeps_value_ellipsis_after_button_rebuild() {
+        let (_owner, el) = create_root(|| {
+            Element::from(
+                select("sel_ell")
+                    .default_value("september")
+                    .options(vec![("september".into(), "September".into())])
+                    .trigger_width("100%"),
+            )
+        });
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+        let value = find_tid(&el, "sel_ell:value").expect("SelectValue leaf");
+        assert!(
+            matches!(
+                value.text_style.overflow,
+                crate::style::TextOverflow::Ellipsis
+            ),
+            "trigger caption must ellipsis, got {:?}",
+            value.text_style.overflow
+        );
+        assert!(
+            value.style.flex_shrink > 0.5,
+            "ellipsis caption must shrink inside the trigger"
+        );
     }
 
     #[test]

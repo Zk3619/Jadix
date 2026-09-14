@@ -80,6 +80,7 @@ use crate::utils::lucide_glyph;
 use crate::utils::popup::{
     disarm_underlay_close, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
     ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    FLOATING_TRIGGER_GAP,
 };
 use crate::utils::take_packed;
 use crate::utils::text_field::{commit_value, commit_value_sig};
@@ -574,7 +575,7 @@ pub fn combobox_content(
         placement: Some(Placement::trigger(
             String::new(),
             placement,
-            0.0,
+            FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
@@ -589,11 +590,6 @@ pub fn combobox_content(
         let _ = active.get();
         let _ = input_store.get();
         let _ = value.get();
-        if !open.peek() {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-        }
 
         let cur = value.peek();
         let ix0 = active_index_for_value(&visible.peek(), &cur);
@@ -610,7 +606,9 @@ pub fn combobox_content(
         }
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         let n = visible.peek().len().max(1);
-        if n > 1 {
+        if !open.peek() {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&scroll_id);
+        } else if n > 1 {
             crate::app::scroll_support::request_scroll_item_into_view(
                 scroll_id.as_str(),
                 ix,
@@ -648,7 +646,7 @@ pub fn combobox_content(
             .bg(tokens::background())
             .rounded("0.5rem")
             .outline(ring, 1.0)
-            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0);
+            .popup_shadow();
 
         menu.set_attr(
             ATTR_FLOATING_MATCH_TRIGGER,

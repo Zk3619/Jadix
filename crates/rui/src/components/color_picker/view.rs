@@ -1140,10 +1140,7 @@ pub(super) fn panel_shell(width: &str, body: Element) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow(
-            crate::tokens::shadow_rgba(crate::tokens::Elevation::Md),
-            8.0,
-        );
+        .popup_shadow();
     panel.set_attr(ATTR_CP_SLOT, "color-picker-content");
     panel
 }
@@ -1382,7 +1379,7 @@ pub(super) fn build_color_picker_view(
             placement: Some(Placement::trigger(
                 trigger_focus_id(&overlay_id),
                 PopupPlacement::BottomStart,
-                4.0,
+                crate::utils::popup::FLOATING_TRIGGER_GAP,
                 FloatingStrategy::Fixed,
             )),
             kind: OverlayKind::Popover,

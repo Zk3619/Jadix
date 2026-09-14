@@ -168,7 +168,9 @@ pub(crate) const ATTR_FLOATING_EXPAND_CLIP_X: &str = "rui_floating_expand_clip_x
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
 /// Default gap between the trigger and the floating panel (placement geometry).
-pub const FLOATING_TRIGGER_GAP: f32 = 8.0;
+///
+/// Matches ShadCN `sideOffset` (4px) used by Popover / Select / DatePicker / Tooltip.
+pub const FLOATING_TRIGGER_GAP: f32 = 4.0;
 
 /// Tag a portal panel for post-layout anchored placement.
 pub fn mark_floating(
@@ -182,7 +184,7 @@ pub fn mark_floating(
     el.set_attr(ATTR_FLOATING_PLACEMENT, placement.as_attr());
 }
 
-/// Like [`mark_floating`], with an explicit trigger–panel gap in px (e.g. tooltip `sideOffset`/`gutter` ≈ 4).
+/// Like [`mark_floating`], with an explicit trigger–panel gap in px.
 ///
 /// Negative `gap_px` overlaps the panel onto the trigger. Submenus use a positive gap for the
 /// visual seam while keeping the floating silhouette (shadow host) itself unpadded.
@@ -1469,8 +1471,9 @@ mod tests {
         let menu = &root.children[1];
         match inset_length(menu.style.inset.top) {
             Some(y) => assert!(
-                (y - 292.0).abs() < 0.5,
-                "top must use content height 200 (y=292), not clip 20 (y=536), got {y}"
+                (y - (500.0 - FLOATING_TRIGGER_GAP - 200.0)).abs() < 0.5,
+                "top must use content height 200 (y={}), not clip 20, got {y}",
+                500.0 - FLOATING_TRIGGER_GAP - 200.0
             ),
             None => panic!("expected top inset"),
         }
@@ -1500,11 +1503,10 @@ mod tests {
         let mut root = Element::new().child(trigger).child(panel);
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let menu = &root.children[1];
-        // Trigger-facing edge = 500 - 8; visual clip 20 → y = 472 (grows from trigger).
-        // Final content y would be 292 — must not jump there while clipped.
+        // Trigger-facing edge = 500 - gap; visual clip 20 → grows from trigger.
         match inset_length(menu.style.inset.top) {
             Some(y) => assert!(
-                (y - 472.0).abs() < 0.5,
+                (y - (500.0 - FLOATING_TRIGGER_GAP - 20.0)).abs() < 0.5,
                 "upward accordion must track visual height from trigger, got {y}"
             ),
             None => panic!("expected top inset"),
@@ -1532,10 +1534,10 @@ mod tests {
         let mut root = Element::new().child(trigger).child(panel);
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let top = inset_length(root.children[1].style.inset.top).expect("top");
-        // Edge = 500 - 8 = 492; painted height min(500, attr max 256) = 256 → y = 236.
-        // Using estimate.min(space_above) slams top to the 8px viewport margin.
+        // Edge = 500 - gap; painted height min(500, attr max 256) = 256.
+        // Using estimate.min(space_above) slams top to the viewport margin.
         assert!(
-            (top - 236.0).abs() < 0.5,
+            (top - (500.0 - FLOATING_TRIGGER_GAP - 256.0)).abs() < 0.5,
             "upward menu must glue to the trigger with painted height, got {top}"
         );
     }
@@ -1970,8 +1972,8 @@ mod tests {
         );
         assert!(!flipped);
         assert_eq!(x, 10.0);
-        // trigger bottom 34 + gap 8 → 42; not flush to trigger
-        assert_eq!(y, 42.0);
+        // trigger bottom 34 + FLOATING_TRIGGER_GAP; not flush to trigger
+        assert_eq!(y, 34.0 + FLOATING_TRIGGER_GAP);
         assert!(max_h > 48.0);
     }
 
@@ -2038,10 +2040,11 @@ mod tests {
             (left - 40.0).abs() < 0.5,
             "x should follow visual trigger, got {left}"
         );
-        // visual trigger bottom = 100+36=136; gap 8 → y=144 (not unscrolled 500+36+8=544)
+        // visual trigger bottom = 100+36=136; + FLOATING_TRIGGER_GAP (not unscrolled 500+36+gap)
         assert!(
-            (top - 144.0).abs() < 0.5,
-            "y must use scrolled visual bounds (expect ~144), got {top}"
+            (top - (136.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
+            "y must use scrolled visual bounds (expect ~{}), got {top}",
+            136.0 + FLOATING_TRIGGER_GAP
         );
     }
 
@@ -2070,9 +2073,9 @@ mod tests {
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let top =
             inset_length(root.children[1].style.inset.top).expect("expected Length top inset");
-        // visual trigger y=120, h=32, gap 8 → y=160 (not unscrolled 480+32+8=520)
+        // visual trigger y=120, h=32 + FLOATING_TRIGGER_GAP (not unscrolled 480+32+gap)
         assert!(
-            (top - 160.0).abs() < 0.5,
+            (top - (152.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
             "y must follow scroll: viewport offset, got {top}"
         );
     }
@@ -2102,9 +2105,9 @@ mod tests {
 
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let top = inset_length(root.children[2].style.inset.top).expect("top");
-        // Trigger at y=360, estimate 220 → flips above (360-8-220=132), not origin 8.
+        // Trigger at y=360, estimate 220 → flips above (360-gap-220), not origin.
         assert!(
-            (top - 132.0).abs() < 0.5,
+            (top - (360.0 - FLOATING_TRIGGER_GAP - 220.0)).abs() < 0.5,
             "must ignore 0×0 duplicate focus_id (got {top})"
         );
     }
@@ -2157,10 +2160,10 @@ mod tests {
             .find(|c| c.attrs.get(ATTR_FLOATING).map(String::as_str) == Some("cal:cap_m"))
             .expect("menu");
         let top = inset_length(menu.style.inset.top).expect("top");
-        // Hoisted chip at y=400, estimate 220 → flips above (400-8-220=172).
+        // Hoisted chip at y=400, estimate 220 → flips above (400-gap-220).
         // Page ghost at y=40 would have placed at ~80.
         assert!(
-            (top - 172.0).abs() < 0.5,
+            (top - (400.0 - FLOATING_TRIGGER_GAP - 220.0)).abs() < 0.5,
             "nested/inline select must follow the hoisted trigger, got {top}"
         );
     }
@@ -2185,8 +2188,11 @@ mod tests {
         let mut root = Element::new().child(trigger).child(panel);
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let top1 = inset_length(root.children[1].style.inset.top).unwrap();
-        // trigger bottom 152 + gap 8 → 160
-        assert!((top1 - 160.0).abs() < 0.5, "first place y={top1}");
+        // trigger bottom 152 + FLOATING_TRIGGER_GAP
+        assert!(
+            (top1 - (152.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
+            "first place y={top1}"
+        );
 
         // Second open: brand-new panel with auto insets; signal already holds the place.
         // Old bug skipped writing when signal was unchanged → stuck at (0,0) / zero-size.
@@ -2215,7 +2221,10 @@ mod tests {
         let top = inset_length(root2.children[1].style.inset.top).unwrap();
         let width = dimension_length(root2.children[1].style.size.width).unwrap();
         assert!((left - 80.0).abs() < 0.5, "reopen left={left}");
-        assert!((top - 160.0).abs() < 0.5, "reopen top={top}");
+        assert!(
+            (top - (152.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
+            "reopen top={top}"
+        );
         assert!((width - 100.0).abs() < 0.5, "reopen width={width}");
     }
 
@@ -2242,9 +2251,9 @@ mod tests {
 
         let menu = &root.children[1];
         let top = inset_length(menu.style.inset.top).unwrap();
-        // trigger bottom 556 + gap 8 → 564; not flipped above
+        // trigger bottom 556 + FLOATING_TRIGGER_GAP; not flipped above
         assert!(
-            (top - 564.0).abs() < 0.5,
+            (top - (556.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
             "fixed y must stay below trigger, got {top}"
         );
         assert!(

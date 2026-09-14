@@ -47,7 +47,9 @@ use crate::utils::anchored_overlay::{
 };
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::popup::{PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W};
+use crate::utils::popup::{
+    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, FLOATING_TRIGGER_GAP,
+};
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
@@ -252,6 +254,7 @@ fn time_colon() -> Element {
             ..Default::default()
         },
     )
+    .flex_shrink(0.0)
 }
 
 fn time_unit_combobox(id: &str, value: Signal<String>, max: u32, placeholder: &str) -> Element {
@@ -267,11 +270,12 @@ fn time_unit_combobox(id: &str, value: Signal<String>, max: u32, placeholder: &s
         .value_signal(value)
         .placeholder(placeholder)
         .clearable(false)
-        .class("w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]");
+        .class("w-full min-w-0");
     for i in 0..=max {
         b = b.item(ComboboxItemData::new(format!("{i:02}"), format!("{i:02}")));
     }
-    b.into()
+    let el: Element = b.into();
+    el.min_w(0.0).flex_grow(1.0).flex_shrink(1.0)
 }
 
 fn time_hms_row(
@@ -648,7 +652,7 @@ fn build_date_picker_view(
             placement: Some(Placement::trigger(
                 trigger_focus_id(&id),
                 PopupPlacement::BottomStart,
-                4.0,
+                FLOATING_TRIGGER_GAP,
                 FloatingStrategy::Fixed,
             )),
             kind: OverlayKind::Popover,
@@ -714,7 +718,7 @@ fn build_date_picker_panel_content(
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 8.0)
+        .popup_shadow()
         .overflow("hidden");
 
     match kind {
@@ -801,9 +805,10 @@ fn build_date_picker_panel_content(
             }
             let header: Element = hstack()
                 .w("100%")
+                .min_w(0.0)
                 .items_center()
-                .justify_center()
                 .gap("0.375rem")
+                .overflow("hidden")
                 .child(calendar_month_select(format!("{id}:dp_m"), m_sel))
                 .child(calendar_year_select(
                     format!("{id}:dp_y"),

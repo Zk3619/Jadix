@@ -47,7 +47,7 @@ use crate::utils::floating_motion::FloatingMotionKind;
 use crate::utils::hover_intent::{
     bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
 };
-use crate::utils::popup::PopupPlacement;
+use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ pub fn tooltip_bubble(mut body: Element) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow(tokens::shadow_rgba(tokens::Elevation::Xs), 3.0);
+        .popup_shadow();
     if is_text_leaf(&body) {
         let t = body.text.clone().unwrap_or_default();
         body = text(t)
@@ -285,7 +285,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         placement: Some(Placement::trigger(
             "",
             placement,
-            4.0,
+            FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Tooltip,

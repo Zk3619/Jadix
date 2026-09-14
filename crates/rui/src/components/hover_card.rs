@@ -60,7 +60,7 @@ use crate::utils::floating_motion::FloatingMotionKind;
 use crate::utils::hover_intent::{
     bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
 };
-use crate::utils::popup::ATTR_FLOATING_W;
+use crate::utils::popup::{ATTR_FLOATING_W, FLOATING_TRIGGER_GAP};
 use rui_macros::component;
 
 /// Default open delay (ms); demos often use `delay={10}` — product default stays snappy.
@@ -286,7 +286,7 @@ impl Default for HoverCardContentOpts {
         Self {
             side: "bottom".into(),
             align: "center".into(),
-            side_offset: 4.0,
+            side_offset: FLOATING_TRIGGER_GAP,
             class: None,
             width: None,
             style: None,
@@ -314,8 +314,7 @@ pub fn hover_card_surface(mut body: Element, width: Option<&str>) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        // Approximate shadow-md
-        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 10.0);
+        .popup_shadow();
     if is_text_leaf(&body) {
         let t = body.text.clone().unwrap_or_default();
         body = text(t)

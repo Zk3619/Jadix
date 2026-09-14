@@ -777,7 +777,7 @@ fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> 
         .border_style("solid")
         .border_width(EXPAND_CHROME_BORDER)
         .border_color(tokens::border())
-        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 10.0)
+        .popup_shadow()
         .children(faces)
         .into();
     if let Some(c) = expand_class.map(str::trim).filter(|s| !s.is_empty()) {

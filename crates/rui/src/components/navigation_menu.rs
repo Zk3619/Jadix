@@ -90,7 +90,7 @@ use crate::utils::anchored_overlay::{
     FloatingMotionKind, FloatingStrategy, Placement,
 };
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::popup::PopupPlacement;
+use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
@@ -407,7 +407,7 @@ pub fn navigation_menu_content(
         placement: Some(Placement::trigger(
             String::new(),
             PopupPlacement::BottomStart,
-            0.0,
+            FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
@@ -467,7 +467,7 @@ pub fn navigation_menu_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
+            .popup_shadow()
             .absolute(true)
             .into();
         panel = chrome.apply(panel);

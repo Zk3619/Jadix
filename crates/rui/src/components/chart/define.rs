@@ -959,7 +959,7 @@ fn chart_tooltip_bubble(body: Element, chrome: &SlotChrome) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(parse_color("border/50"))
-        .shadow(tokens::shadow_rgba(tokens::Elevation::Md), 12.0);
+        .popup_shadow();
     paint_slot(panel.child(body), "chart-tooltip", chrome)
 }
 

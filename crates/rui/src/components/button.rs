@@ -952,7 +952,6 @@ impl From<ButtonBuilder> for Element {
         } else {
             builder.text_overflow
         };
-        let caption_shrink = overflow_mode.is_some();
 
         let mut el: Element = container.into();
         match overflow_mode {
@@ -994,6 +993,16 @@ impl From<ButtonBuilder> for Element {
                 } else {
                     builder.text_style.size_px
                 };
+                // SelectValue 等子节点会自带 `text-overflow: ellipsis`。重建文案叶时必须
+                // 保留，否则只剩 nowrap + 父级 clip，看起来像裁切而没有省略号。
+                let child_overflow = match child.text_style.overflow {
+                    crate::style::TextOverflow::Ellipsis
+                    | crate::style::TextOverflow::Hidden
+                    | crate::style::TextOverflow::Newline => Some(child.text_style.overflow),
+                    crate::style::TextOverflow::Clip => None,
+                };
+                let leaf_overflow = overflow_mode.or(child_overflow);
+                let leaf_shrink = leaf_overflow.is_some();
                 let mut text_node = build_text_node(
                     text_content,
                     TextNodeConfig {
@@ -1010,20 +1019,23 @@ impl From<ButtonBuilder> for Element {
                         ..builder.text_style.clone()
                     },
                 )
-                .flex_shrink(if caption_shrink { 1.0 } else { 0.0 });
+                .flex_shrink(if leaf_shrink { 1.0 } else { 0.0 });
+                if child.style.flex_grow > 0.0 {
+                    text_node = text_node.flex_grow(child.style.flex_grow);
+                }
                 // CSS `text-overflow`: overflowing nowrap is start-aligned (ellipsis at
                 // inline-end). `text-align: center` on the caption would center a short
                 // truncated run in the full button — large left gap. Untruncated buttons
                 // still center via flex `justify-center` + shrink-wrapped caption.
-                if caption_shrink
-                    && !matches!(overflow_mode, Some(crate::style::TextOverflow::Newline))
+                if leaf_shrink
+                    && !matches!(leaf_overflow, Some(crate::style::TextOverflow::Newline))
                 {
                     text_node = text_node.text_left();
                 } else {
                     text_node = text_node.text_center();
                 }
                 if !is_lucide_glyph {
-                    match overflow_mode {
+                    match leaf_overflow {
                         Some(mode) => {
                             text_node = text_node.text_overflow(mode).min_w(0.0);
                         }

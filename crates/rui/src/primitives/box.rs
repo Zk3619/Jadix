@@ -753,6 +753,10 @@ impl BoxBuilder {
         self.el = self.el.shadow(color, blur);
         self
     }
+    pub fn popup_shadow(mut self) -> Self {
+        self.el = self.el.popup_shadow();
+        self
+    }
     pub fn box_shadow(mut self, spec: impl AsRef<str>) -> Self {
         self.el = self.el.box_shadow(spec);
         self

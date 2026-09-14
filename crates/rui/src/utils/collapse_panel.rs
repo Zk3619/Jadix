@@ -187,12 +187,17 @@ pub enum CollapseHeightEffect {
 pub struct CollapseHeightOpts {
     /// Pin exit `max-height` to the current clip (Expand). Accordion uses `auto`.
     pub pin_exit_height: bool,
+    /// Expand: leave the last keyframe `max-height`. Accordion Idle resets to `auto`
+    /// so in-page panels size to content. Auto on a floating Select ScrollArea is a
+    /// one-row hitch (min-content) that placement then covers up.
+    pub keep_open_max_height: bool,
 }
 
 impl Default for CollapseHeightOpts {
     fn default() -> Self {
         Self {
             pin_exit_height: false,
+            keep_open_max_height: false,
         }
     }
 }
@@ -232,6 +237,7 @@ pub fn apply_collapse_height<E>(
             return CollapseHeightEffect::Animating;
         }
         el.style.animations.clear();
+        reset_anim_snapshot(el);
         el.style.max_size.height = Dimension::length(0.0);
         return CollapseHeightEffect::FinishedExit;
     }
@@ -256,7 +262,11 @@ pub fn apply_collapse_height<E>(
             return CollapseHeightEffect::Animating;
         }
         el.style.animations.clear();
-        if el.style.max_size.height != Dimension::auto() {
+        // Drop the keyframe snapshot here. An empty list + leftover `written`
+        // makes the next CSS tick `restore_baseline` back to seed `max-height: auto`
+        // (and `min-height: auto` → Taffy min-content ≈ one row).
+        reset_anim_snapshot(el);
+        if !opts.keep_open_max_height && el.style.max_size.height != Dimension::auto() {
             el.style.max_size.height = Dimension::auto();
         }
         presence.clear_enter_active();
@@ -393,6 +403,81 @@ mod tests {
             assert!(
                 el.style.animations.iter().any(|a| a.name == keys.down),
                 "first real expand must run collapsible-down"
+            );
+        });
+    }
+
+    #[test]
+    fn accordion_idle_resets_max_height_to_auto() {
+        let (_o, ()) = create_root(|| {
+            let p = use_collapse_panel_presence("idle_auto");
+            sync_collapse_panel_presence(&p, false);
+            sync_collapse_panel_presence(&p, true);
+            let mut el = Element::new();
+            el.layout_bounds = [0.0, 0.0, 100.0, 64.0];
+            el.used_layout
+                .stamp_border_box([0.0, 0.0, 100.0, 64.0], false);
+            let keys = CollapseKeyframes::ACCORDION;
+            assert!(matches!(
+                apply_collapse_height(&mut el, &p, keys, CollapseHeightOpts::default()),
+                CollapseHeightEffect::SeededEnter
+            ));
+            let _ = el.tick_css_animations(0.0);
+            for _ in 0..40 {
+                let _ = el.tick_css_animations(0.016);
+            }
+            assert!(!animation_run_active(&el.style, &el.animation_snapshot));
+            let effect = apply_collapse_height(&mut el, &p, keys, CollapseHeightOpts::default());
+            assert!(matches!(effect, CollapseHeightEffect::Idle));
+            assert!(
+                matches!(
+                    crate::layout::dim_kind(el.style.max_size.height),
+                    crate::layout::DimKind::Auto
+                ),
+                "in-page accordion Idle must return to auto"
+            );
+        });
+    }
+
+    #[test]
+    fn expand_idle_keeps_last_max_height() {
+        let (_o, ()) = create_root(|| {
+            let p = use_collapse_panel_presence("idle_keep");
+            sync_collapse_panel_presence(&p, false);
+            sync_collapse_panel_presence(&p, true);
+            let mut el = Element::new();
+            el.layout_bounds = [0.0, 0.0, 100.0, 192.0];
+            el.used_layout
+                .stamp_border_box([0.0, 0.0, 100.0, 192.0], false);
+            let keys = CollapseKeyframes::ACCORDION;
+            let opts = CollapseHeightOpts {
+                pin_exit_height: true,
+                keep_open_max_height: true,
+            };
+            assert!(matches!(
+                apply_collapse_height(&mut el, &p, keys, opts),
+                CollapseHeightEffect::SeededEnter
+            ));
+            let _ = el.tick_css_animations(0.0);
+            for _ in 0..40 {
+                let _ = el.tick_css_animations(0.016);
+            }
+            let last = crate::layout::dim_length_px(el.style.max_size.height);
+            assert!(
+                last.is_some_and(|h| (h - 192.0).abs() < 1.0),
+                "last keyframe must reach content height, got {last:?}"
+            );
+            let effect = apply_collapse_height(&mut el, &p, keys, opts);
+            assert!(matches!(effect, CollapseHeightEffect::Idle));
+            let kept = crate::layout::dim_length_px(el.style.max_size.height);
+            assert!(
+                kept.is_some_and(|h| (h - last.unwrap()).abs() < 0.01),
+                "Expand Idle must keep last keyframe max-height, got {kept:?} last {last:?}"
+            );
+            let _ = el.tick_css_animations(0.0);
+            assert!(
+                crate::layout::dim_length_px(el.style.max_size.height).is_some(),
+                "cleared snapshot must not restore max-height auto"
             );
         });
     }

@@ -73,7 +73,7 @@ use crate::utils::anchored_overlay::{
     anchored_overlay, anchored_overlay_content, provide_anchored_overlay_context,
     AnchoredOverlayContentOpts, FloatingMotionKind, FloatingStrategy, Placement,
 };
-use crate::utils::popup::{disarm_underlay_close, PopupPlacement};
+use crate::utils::popup::{disarm_underlay_close, PopupPlacement, FLOATING_TRIGGER_GAP};
 use crate::utils::take_packed;
 use rui_macros::component;
 
@@ -291,7 +291,7 @@ impl Default for PopoverContentOpts {
         Self {
             side: "bottom".into(),
             align: "center".into(),
-            side_offset: 4.0,
+            side_offset: FLOATING_TRIGGER_GAP,
             class: None,
             strategy: None,
             width: None,
@@ -321,8 +321,7 @@ pub fn popover_surface(mut body: Element, width: Option<&str>) -> Element {
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        // shadow-md 近似
-        .shadow([0.0, 0.0, 0.0, 0.12], 10.0);
+        .popup_shadow();
     if is_text_leaf(&body) {
         let t = body.text.clone().unwrap_or_default();
         body = text(t)
@@ -478,7 +477,7 @@ pub fn popover_panel(open: Signal<bool>) -> PopoverPanelBuilder {
         z_override: None,
         anchor_focus_id: None,
         placement: PopupPlacement::BottomCenter,
-        side_offset: 4.0,
+        side_offset: FLOATING_TRIGGER_GAP,
         strategy: String::new(),
     }
 }
@@ -591,6 +590,15 @@ mod tests {
             popover_side_align_to_placement("top-end", ""),
             PopupPlacement::TopEnd
         );
+    }
+
+    #[test]
+    fn popover_surface_uses_popup_shadow() {
+        let el = popover_surface(Element::new().text("hi"), None);
+        let (c, b) = crate::tokens::elevation_shadow(crate::tokens::Elevation::Md);
+        assert_eq!(el.style.shadow_color, c);
+        assert!((el.style.shadow_blur - b).abs() < 0.01);
+        assert_eq!(el.style.shadow_offset, [0.0, 0.0]);
     }
 
     #[test]

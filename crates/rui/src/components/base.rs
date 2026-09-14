@@ -696,6 +696,12 @@ impl BaseComponentBuilder {
         self
     }
 
+    pub fn popup_shadow(mut self) -> Self {
+        self.el = self.el.popup_shadow();
+        mark_variant_style_override(&mut self.el, VariantStyleField::Shadow);
+        self
+    }
+
     pub fn filter(mut self, spec: impl AsRef<str>) -> Self {
         self.el = self.el.filter(spec);
         self

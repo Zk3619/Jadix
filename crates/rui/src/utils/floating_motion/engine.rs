@@ -155,19 +155,6 @@ fn ensure_expand_down_from_keyframe(from_h: f32) -> String {
     key
 }
 
-fn ensure_expand_up_to_keyframe(to_h: f32) -> String {
-    let to_h = to_h.max(0.0);
-    let key = format!("rui-expand-up-{}", to_h.round().max(1.0) as u32);
-    EXPAND_OFFSET_KEYFRAMES.with(|cache| {
-        let mut set = cache.borrow_mut();
-        if !set.contains(&key) {
-            register_keyframes(&key, vec![KeyframeStop::at(1.0).max_height(to_h)]);
-            set.insert(key.clone());
-        }
-    });
-    key
-}
-
 pub use crate::utils::floating_kind::FloatingMotionKind;
 
 fn panel_tid(overlay_id: &str) -> String {
@@ -431,13 +418,11 @@ fn seed_expand_exit(el: &mut Element, content_height: f32) {
         .min(content_height.max(0.0))
         .max(1.0);
     el.style.max_size.height = Dimension::length(from);
-    let anim_name = if let Some(to_h) = floating_expand_from_h(el) {
-        ensure_expand_up_to_keyframe(to_h.min(from))
-    } else {
-        EXPAND_KEYS.up.to_string()
-    };
+    // `from_h` is the enter baseline (trigger chip). Exit must collapse the open
+    // panel to 0 like accordion-up — not reverse into a one-row slice of the list
+    // (Select month menu parking on "March") then snap 28→0 on finish (hitch).
     el.style.animations = vec![keyframes_anim_entry(
-        anim_name,
+        EXPAND_KEYS.up.to_string(),
         EXPAND_KEYS.duration_ms,
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
@@ -494,20 +479,12 @@ fn apply_idle_expand_max_h(panel: &mut Element, presence: &FloatingPresenceHandl
         .shell
         .as_ref()
         .map(|s| s.overlay_id.clone());
-    let Some(id) = overlay_id else {
-        panel.style.max_size.height = Dimension::auto();
-        if floating_expand_from_w(panel).is_some() {
-            panel.style.max_size.width = Dimension::auto();
-        }
-        return;
-    };
-    match peek_floating_place_max_h(&id) {
-        Some(h) if h > 0.0 => {
+    if let Some(id) = overlay_id {
+        if let Some(h) = peek_floating_place_max_h(&id).filter(|h| *h > 0.0) {
             panel.style.max_size.height = Dimension::length(h);
         }
-        _ => {
-            panel.style.max_size.height = Dimension::auto();
-        }
+        // No place cap: keep the last accordion sample. Writing `auto` here lets
+        // Taffy min-content the unpinned ScrollArea to one row for a frame.
     }
     if floating_expand_from_w(panel).is_some() {
         panel.style.max_size.width = Dimension::auto();
@@ -515,8 +492,60 @@ fn apply_idle_expand_max_h(panel: &mut Element, presence: &FloatingPresenceHandl
     }
 }
 
+fn expand_contents_are_pinned(panel: &Element) -> bool {
+    panel.children.iter().any(|c| {
+        c.style.flex_shrink < 0.5
+            && crate::layout::dim_length_px(c.style.min_size.height).is_some_and(|h| h > 1.0)
+    })
+}
+
 fn panel_content_height(el: &Element, cap: Option<f32>) -> f32 {
     take_measured_height(el, cap).max(el.layout_bounds[3].max(0.0))
+}
+
+fn expand_open_content_h(el: &Element, cap: Option<f32>) -> f32 {
+    el.attrs
+        .get(ATTR_FLOATING_CONTENT_H)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|h| *h > 1.0)
+        .unwrap_or_else(|| panel_content_height(el, cap))
+}
+
+/// Accordion `max-height` must overflow-clip the open list. Select's ScrollArea is
+/// `h:100%; min-h:0; flex-shrink:1` so it can scroll when idle — under a shrinking
+/// clip that relayouts the viewport to one row (month menu becoming a "March" chip).
+/// Pin descendants to the measured open height for the duration of the keyframes.
+fn pin_expand_overflow_contents(panel: &mut Element, max_height_cap: Option<f32>) {
+    if floating_expand_from_h(panel).is_some() {
+        return;
+    }
+    if !panel
+        .style
+        .animations
+        .iter()
+        .any(|a| is_expand_down_anim(&a.name) || is_expand_up_anim(&a.name))
+    {
+        return;
+    }
+    let h = expand_open_content_h(panel, max_height_cap);
+    if h <= 1.0 {
+        return;
+    }
+    for child in &mut panel.children {
+        child.style.flex_shrink = 0.0;
+        child.style.min_size.height = Dimension::length(h);
+    }
+}
+
+/// Idle / uncapped chrome: ScrollArea must shrink again (`min-h:0`) so overflow can scroll.
+fn restore_expand_overflow_contents(panel: &mut Element) {
+    if floating_expand_from_h(panel).is_some() {
+        return;
+    }
+    for child in &mut panel.children {
+        child.style.flex_shrink = 1.0;
+        child.style.min_size.height = Dimension::length(0.0);
+    }
 }
 
 /// Grow used-layout intrinsic; never shrink to the current viewport clip.
@@ -692,6 +721,7 @@ fn apply_expand_motion(
             EXPAND_KEYS,
             CollapseHeightOpts {
                 pin_exit_height: true,
+                keep_open_max_height: true,
             },
         );
         if from_w.is_some() {
@@ -708,10 +738,12 @@ fn apply_expand_motion(
                     apply_expand_width_clip(panel, presence, false);
                 }
                 absorb_expand_intrinsic(panel, max_height_cap);
+                pin_expand_overflow_contents(panel, max_height_cap);
                 return true;
             }
             CollapseHeightEffect::SeededExit | CollapseHeightEffect::Animating => {
                 remember_clip_height(presence, panel);
+                pin_expand_overflow_contents(panel, max_height_cap);
                 if exiting {
                     let _ = hide_expand_exit_sliver(panel, presence, false);
                     return true;
@@ -728,7 +760,18 @@ fn apply_expand_motion(
                 return true;
             }
             CollapseHeightEffect::Idle => {
+                let before_h = crate::layout::dim_length_px(panel.style.max_size.height);
+                let was_pinned = expand_contents_are_pinned(panel);
                 apply_idle_expand_max_h(panel, presence);
+                restore_expand_overflow_contents(panel);
+                reset_anim_snapshot(panel);
+                remember_clip_height(presence, panel);
+                absorb_expand_intrinsic(panel, max_height_cap);
+                let after_h = crate::layout::dim_length_px(panel.style.max_size.height);
+                let unpinned = was_pinned && !expand_contents_are_pinned(panel);
+                if unpinned || before_h != after_h {
+                    return true;
+                }
             }
             CollapseHeightEffect::Hidden => {}
         }
@@ -780,6 +823,7 @@ fn apply_expand_motion(
                 }
                 panel.style.animations.clear();
                 apply_idle_expand_max_h(panel, presence);
+                reset_anim_snapshot(panel);
                 {
                     let mut c = presence.cell.borrow_mut();
                     c.enter_active = false;
@@ -1043,6 +1087,7 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
                     &handle,
                     matches!(shell.phase, PresencePhase::Exiting),
                 );
+                pin_expand_overflow_contents(panel, shell.max_height_cap);
             }
             if clamp_animated_max_h_to_place(panel, &shell.overlay_id) {
                 any = true;
@@ -1308,6 +1353,98 @@ mod tests {
     }
 
     #[test]
+    fn expand_from_h_exit_collapses_to_zero_not_chip() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.set_attr(ATTR_FLOATING_EXPAND_FROM_H, "28");
+            panel.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-from-exit", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-from-exit",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from-exit__floating_panel").unwrap();
+            panel.layout_bounds[3] = 120.0;
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-from-exit__floating_panel").unwrap();
+                for _ in 0..20 {
+                    let _ = panel.tick_css_animations(0.016);
+                }
+                panel.style.animations.clear();
+                panel.animation_snapshot = Default::default();
+                handle.cell.borrow_mut().enter_active = false;
+                handle.cell.borrow_mut().needs_enter = false;
+                handle.cell.borrow_mut().measuring = false;
+                panel.style.max_size.height = Dimension::length(120.0);
+                panel
+                    .used_layout
+                    .stamp_border_box([0.0, 0.0, 100.0, 120.0], false);
+            }
+
+            open.set(false);
+            sync_floating_presence(&handle, false);
+            let panel = find_template_id_mut(&mut root, "exp-from-exit__floating_panel").unwrap();
+            apply_floating_panel_motion(
+                "exp-from-exit",
+                panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Exiting,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-from-exit__floating_panel").unwrap();
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == EXPAND_KEYS.up),
+                "from_h exit must accordion-up to 0, not park at the trigger chip; anims={:?}",
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                !panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name.starts_with("rui-expand-up-")),
+                "exit must not target rui-expand-up-{{from_h}} (one-row list slice)"
+            );
+            for _ in 0..8 {
+                let _ = panel.tick_css_animations(0.016);
+            }
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                mh < 28.0,
+                "exit max-height must pass the trigger chip toward 0, got {mh}"
+            );
+        });
+    }
+
+    #[test]
     fn expand_with_from_w_clips_width_on_enter() {
         create_root(|| {
             let mut root = Element::new();
@@ -1507,6 +1644,74 @@ mod tests {
     }
 
     #[test]
+    fn expand_idle_keeps_max_height_and_relayouts_unpin() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            let mut child = Element::new();
+            child.style.flex_shrink = 1.0;
+            child.style.min_size.height = Dimension::length(0.0);
+            panel.children.push(child);
+            panel.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-idle-keep", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-idle-keep",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-idle-keep__floating_panel").unwrap();
+            panel.layout_bounds[3] = 192.0;
+            panel
+                .used_layout
+                .stamp_border_box([0.0, 0.0, 100.0, 192.0], false);
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-idle-keep__floating_panel").unwrap();
+                assert!(
+                    panel.children[0].style.flex_shrink < 0.5,
+                    "enter must pin overflow contents"
+                );
+                for _ in 0..40 {
+                    let _ = panel.tick_css_animations(0.016);
+                }
+            }
+            let idle = flush_floating_motion_subtree(&mut root);
+            let panel = find_template_id_mut(&mut root, "exp-idle-keep__floating_panel").unwrap();
+            assert!(
+                crate::layout::dim_length_px(panel.style.max_size.height).is_some(),
+                "Expand Idle must not snap max-height to auto"
+            );
+            assert!(
+                (panel.children[0].style.flex_shrink - 1.0).abs() < 0.01,
+                "Idle must unpin ScrollArea"
+            );
+            assert!(
+                idle,
+                "first Idle after unpin must request a same-frame layout"
+            );
+            let mh_before_tick = crate::layout::dim_length_px(panel.style.max_size.height);
+            let _ = tick_hoisted_floating_css(&mut root);
+            let panel = find_template_id_mut(&mut root, "exp-idle-keep__floating_panel").unwrap();
+            let mh_after_tick = crate::layout::dim_length_px(panel.style.max_size.height);
+            assert_eq!(
+                mh_before_tick, mh_after_tick,
+                "tick after Idle must not restore seed max-height auto"
+            );
+        });
+    }
+
+    #[test]
     fn expand_exit_reseed_continues_from_mid_height() {
         create_root(|| {
             let mut root = Element::new();
@@ -1552,11 +1757,20 @@ mod tests {
             );
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "exp-exit-mid__floating_panel").unwrap();
-            assert!(panel
-                .style
-                .animations
-                .iter()
-                .any(|a| a.name == EXPAND_KEYS.up));
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == EXPAND_KEYS.up),
+                "menu expand exit must accordion-up; anims={:?}",
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+            );
             let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
             assert!(
                 mh <= 50.0,
@@ -1622,6 +1836,14 @@ mod tests {
             {
                 let panel =
                     find_template_id_mut(&mut root, "exp-exit-hide__floating_panel").unwrap();
+                assert!(
+                    panel
+                        .style
+                        .animations
+                        .iter()
+                        .any(|a| a.name == EXPAND_KEYS.up),
+                    "menu exit must accordion-up"
+                );
                 for _ in 0..20 {
                     let _ = panel.tick_css_animations(0.016);
                 }
@@ -1644,6 +1866,98 @@ mod tests {
                 panel.style.opacity < 0.01,
                 "sliver must be hidden before collect, got {}",
                 panel.style.opacity
+            );
+        });
+    }
+
+    #[test]
+    fn expand_exit_pins_child_min_height_so_list_overflows_instead_of_relayout() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            let mut child = Element::new();
+            child.style.flex_shrink = 1.0;
+            child.style.min_size.height = Dimension::length(0.0);
+            child.layout_bounds = [0.0, 0.0, 100.0, 240.0];
+            panel.children.push(child);
+            panel.layout_bounds = [0.0, 0.0, 100.0, 240.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-exit-clip", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-exit-clip",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-exit-clip__floating_panel").unwrap();
+            panel.layout_bounds[3] = 240.0;
+            let bounds = panel.layout_bounds;
+            panel.used_layout.stamp_border_box(bounds, false);
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-exit-clip__floating_panel").unwrap();
+                panel.style.animations.clear();
+                panel.animation_snapshot = Default::default();
+                handle.cell.borrow_mut().enter_active = false;
+                handle.cell.borrow_mut().needs_enter = false;
+                handle.cell.borrow_mut().measuring = false;
+                panel.style.max_size.height = Dimension::length(240.0);
+                panel.style.opacity = 1.0;
+                if let Some(child) = panel.children.first_mut() {
+                    child.style.flex_shrink = 1.0;
+                    child.style.min_size.height = Dimension::length(0.0);
+                }
+            }
+            open.set(false);
+            sync_floating_presence(&handle, false);
+            let panel = find_template_id_mut(&mut root, "exp-exit-clip__floating_panel").unwrap();
+            apply_floating_panel_motion(
+                "exp-exit-clip",
+                panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Exiting,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-exit-clip__floating_panel").unwrap();
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == EXPAND_KEYS.up),
+                "exit must stay accordion-up, not scale"
+            );
+            for _ in 0..8 {
+                let _ = panel.tick_css_animations(0.016);
+            }
+            let _ = flush_floating_motion_subtree(&mut root);
+            let panel = find_template_id_mut(&mut root, "exp-exit-clip__floating_panel").unwrap();
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(mh < 200.0, "accordion-up must shrink the clip, got {mh}");
+            let child = panel.children.first().expect("list child");
+            assert!(
+                child.style.flex_shrink < 0.01,
+                "list must not flex-shrink with the clip"
+            );
+            let child_min =
+                crate::layout::dim_length_px(child.style.min_size.height).unwrap_or(0.0);
+            assert!(
+                child_min > 200.0,
+                "open list min-height must survive the clip so overflow hides rows, got {child_min}"
             );
         });
     }

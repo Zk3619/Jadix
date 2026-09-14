@@ -48,10 +48,6 @@ const CELL: &str = "2rem";
 const CALENDAR_DAY_GRID_MIN_H: &str = "17rem";
 /// 7×cell + p-3；固定宽度，避免换月/换标题文案时浮层 w-fit 跟着抖。
 const CALENDAR_W: &str = "17.5rem";
-/// dropdown caption：容纳最长月名 `September`（触发器勿 `w:auto`）。
-const MONTH_SELECT_W: &str = "7.25rem";
-/// dropdown caption: four-digit year.
-const YEAR_SELECT_W: &str = "4.75rem";
 const YEAR_SELECT_LO: i32 = 1900;
 const YEAR_SELECT_HI: i32 = 2100;
 
@@ -368,23 +364,36 @@ fn lucide_chevron(name: &str) -> Element {
         .text_color(parse_text_color("foreground"))
 }
 
+/// `select()` 根节点默认 `width: 100%`。同一行两个这样的子项会各按父级全宽排，
+/// 再叠加 `justify-center` 就会叠在中间（命中区重叠 → 悬停在两个 trigger 间闪）。
+/// 标题栏槽位改成 `flex: grow 1 0 / min-width: 0`，只裁溢出，不抢同一块区域。
+fn caption_select_flex_item(el: Element, grow: f32) -> Element {
+    el.w("auto")
+        .min_w(0.0)
+        .max_w("100%")
+        .flex_grow(grow)
+        .flex_shrink(1.0)
+        .flex_basis(0.0)
+        .overflow("hidden")
+}
+
 /// Aria `CalendarMonthPicker`：复用产品面 [`select`]（勿自绘月份网格）。
+/// 触发器吃满标题栏剩余宽度，菜单跟触发器同宽；文案溢出省略，避免撑破左右翻月按钮。
 pub(crate) fn calendar_month_select(id: impl Into<String>, value: Signal<String>) -> Element {
     let mut b = select(id)
         .value_signal(value)
         .placeholder("Month")
-        .match_trigger(false)
+        .trigger_width("100%")
         .max_height("16rem")
-        .menu_width("9rem")
         .scroll_selected("center");
     for (i, name) in MONTH_NAMES.iter().enumerate() {
         b = b.item(SelectItemData::new((i + 1).to_string(), *name));
     }
-    let el: Element = b.into();
-    el.w(MONTH_SELECT_W).flex_shrink(0.0)
+    caption_select_flex_item(b.into(), 1.25)
 }
 
 /// Aria `CalendarYearPicker`：复用产品面 [`select`]。
+/// 与月份共用 flex 槽；年份字更短，grow 略小，空间不够时同样省略。
 pub(crate) fn calendar_year_select(
     id: impl Into<String>,
     value: Signal<String>,
@@ -395,15 +404,13 @@ pub(crate) fn calendar_year_select(
     let mut b = select(id)
         .value_signal(value)
         .placeholder("Year")
-        .match_trigger(false)
+        .trigger_width("100%")
         .max_height("16rem")
-        .menu_width("6.5rem")
         .scroll_selected("center");
     for yy in lo..=hi {
         b = b.item(SelectItemData::new(yy.to_string(), yy.to_string()));
     }
-    let el: Element = b.into();
-    el.w(YEAR_SELECT_W).flex_shrink(0.0)
+    caption_select_flex_item(b.into(), 0.75)
 }
 
 fn build_calendar_view(
@@ -595,7 +602,8 @@ fn build_calendar_view(
             })
             .child(lucide_chevron("chevron-left"))
             .into(),
-    );
+    )
+    .flex_shrink(0.0);
     let next: Element = slots.paint(
         SLOT_NAV_NEXT,
         button(format!("{id}:next"))
@@ -619,19 +627,27 @@ fn build_calendar_view(
             })
             .child(lucide_chevron("chevron-right"))
             .into(),
-    );
+    )
+    .flex_shrink(0.0);
 
-    let caption_el: Element = if caption == CalendarCaption::Dropdown && !disabled {
+    let dropdown = caption == CalendarCaption::Dropdown;
+    let caption_el: Element = if dropdown && !disabled {
         hstack()
+            .flex_grow(1.0)
+            .min_w(0.0)
             .gap("0.375rem")
             .items_center()
+            .overflow("hidden")
             .child(calendar_month_select(format!("{id}:cap_m"), month_sel))
             .child(calendar_year_select(format!("{id}:cap_y"), year_sel, y))
             .into()
-    } else if caption == CalendarCaption::Dropdown {
+    } else if dropdown {
         hstack()
+            .flex_grow(1.0)
+            .min_w(0.0)
             .gap("0.375rem")
             .items_center()
+            .overflow("hidden")
             .child(caption_label(
                 MONTH_SHORT
                     .get((m.saturating_sub(1) as usize).min(11))
@@ -643,21 +659,25 @@ fn build_calendar_view(
         caption_label(&caption_title(y, m))
     };
 
+    let mut caption_slot = hstack()
+        .flex_grow(1.0)
+        .min_w(0.0)
+        .overflow("hidden")
+        .items_center();
+    // Label 标题在剩余空间里居中；Dropdown 的 Select 必须 stretch，
+    // `justify-center` 会把溢出的 100% 宽子项叠到中间。
+    if !dropdown {
+        caption_slot = caption_slot.justify_center();
+    }
     let header: Element = hstack()
         .w("100%")
         .h(CELL)
         .items_center()
         .justify("between")
         .gap("0.25rem")
+        .overflow("hidden")
         .child(prev)
-        .child(
-            hstack()
-                .flex_grow(1.0)
-                .min_w("0")
-                .items_center()
-                .justify_center()
-                .child(caption_el),
-        )
+        .child(caption_slot.child(caption_el))
         .child(next)
         .into();
     root = root.child(header);
@@ -1003,6 +1023,182 @@ mod tests {
         assert!(
             has_focus_id(&el, "t-cal-dd:cap_y:trigger"),
             "year caption must reuse Select trigger"
+        );
+    }
+
+    #[test]
+    fn calendar_dropdown_caption_selects_flex_instead_of_fixed_chip() {
+        let val = use_signal("t-cal-flex-val", || "2026-09-14".to_string());
+        let year = use_signal("t-cal-flex-y", || 2026i32);
+        let month = use_signal("t-cal-flex-m", || 9u32);
+        let focus = use_signal("t-cal-flex-f", || 14u32);
+        let msel = use_signal("t-cal-flex-msel", || "9".to_string());
+        let ysel = use_signal("t-cal-flex-ysel", || "2026".to_string());
+        let el = build_calendar_view(
+            CalendarRenderProps {
+                id: "t-cal-flex".into(),
+                caption: CalendarCaption::Dropdown,
+                disabled: false,
+                bordered: true,
+            },
+            val,
+            year,
+            month,
+            focus,
+            msel,
+            ysel,
+            None,
+            SlotMap::default(),
+        );
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+        let month = find_tid(&el, "t-cal-flex:cap_m__select").expect("month select");
+        let year = find_tid(&el, "t-cal-flex:cap_y__select").expect("year select");
+        use crate::layout::{dim_kind, DimKind};
+        assert!(
+            matches!(dim_kind(month.style.min_size.width), DimKind::Length(v) if v < 0.5)
+                || matches!(dim_kind(month.style.min_size.width), DimKind::Auto),
+            "month select min-width must allow shrink, got {:?}",
+            dim_kind(month.style.min_size.width)
+        );
+        assert!(
+            month.style.flex_grow > 0.5,
+            "month select must fill leftover caption width, grow={}",
+            month.style.flex_grow
+        );
+        assert!(
+            month.style.flex_shrink > 0.5,
+            "month select must shrink instead of overlapping nav"
+        );
+        assert!(
+            !matches!(
+                dim_kind(month.style.size.width),
+                DimKind::Length(px) if (px - 116.0).abs() < 1.0
+            ),
+            "must not pin a September chip width"
+        );
+        assert!(
+            year.style.flex_shrink > 0.5,
+            "year select must shrink on a narrow caption"
+        );
+        assert!(
+            matches!(dim_kind(month.style.size.width), DimKind::Auto),
+            "month select must not keep select()'s width:100% in a row, got {:?}",
+            dim_kind(month.style.size.width)
+        );
+        assert!(
+            matches!(dim_kind(year.style.size.width), DimKind::Auto),
+            "year select must not keep select()'s width:100% in a row, got {:?}",
+            dim_kind(year.style.size.width)
+        );
+        assert!(
+            matches!(dim_kind(month.style.flex_basis), DimKind::Length(v) if v < 0.5),
+            "month flex-basis 0 so the slot is the leftover width, got {:?}",
+            dim_kind(month.style.flex_basis)
+        );
+        assert!(
+            matches!(dim_kind(year.style.flex_basis), DimKind::Length(v) if v < 0.5),
+            "year flex-basis 0 so two caption selects share the row, got {:?}",
+            dim_kind(year.style.flex_basis)
+        );
+        assert!(
+            year.style.flex_grow > 0.5,
+            "year select must share the caption row, grow={}",
+            year.style.flex_grow
+        );
+        assert!(
+            !matches!(
+                dim_kind(year.style.size.width),
+                DimKind::Length(px) if (px - 76.0).abs() < 1.0
+            ),
+            "must not pin a 4.75rem year chip"
+        );
+    }
+
+    fn xywh_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+        let ax2 = a[0] + a[2];
+        let ay2 = a[1] + a[3];
+        let bx2 = b[0] + b[2];
+        let by2 = b[1] + b[3];
+        a[0] < bx2 - 0.5 && b[0] < ax2 - 0.5 && a[1] < by2 - 0.5 && b[1] < ay2 - 0.5
+    }
+
+    #[test]
+    fn calendar_dropdown_caption_selects_do_not_overlap_in_layout() {
+        let val = use_signal("t-cal-aabb-val", || "2026-09-14".to_string());
+        let year = use_signal("t-cal-aabb-y", || 2026i32);
+        let month = use_signal("t-cal-aabb-m", || 9u32);
+        let focus = use_signal("t-cal-aabb-f", || 14u32);
+        let msel = use_signal("t-cal-aabb-msel", || "9".to_string());
+        let ysel = use_signal("t-cal-aabb-ysel", || "2026".to_string());
+        let mut el = build_calendar_view(
+            CalendarRenderProps {
+                id: "t-cal-aabb".into(),
+                caption: CalendarCaption::Dropdown,
+                disabled: false,
+                bordered: true,
+            },
+            val,
+            year,
+            month,
+            focus,
+            msel,
+            ysel,
+            None,
+            SlotMap::default(),
+        );
+        let mut layout = crate::core::tree::LayoutTree::new();
+        layout.build_and_layout(&mut el, 400.0, 400.0, [-1.0, -1.0]);
+
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+        fn find_fid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.focus_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_fid(c, want))
+        }
+        let month = find_tid(&el, "t-cal-aabb:cap_m__select").expect("month select");
+        let year = find_tid(&el, "t-cal-aabb:cap_y__select").expect("year select");
+        let prev = find_fid(&el, "t-cal-aabb:prev").expect("prev nav");
+        let next = find_fid(&el, "t-cal-aabb:next").expect("next nav");
+        assert!(
+            month.layout_bounds[2] > 1.0 && year.layout_bounds[2] > 1.0,
+            "caption selects must receive a flex slot, month={:?} year={:?}",
+            month.layout_bounds,
+            year.layout_bounds
+        );
+        assert!(
+            !xywh_overlap(month.layout_bounds, year.layout_bounds),
+            "month/year selects must not occupy the same pixels: month={:?} year={:?}",
+            month.layout_bounds,
+            year.layout_bounds
+        );
+        assert!(
+            month.layout_bounds[0] + month.layout_bounds[2] <= year.layout_bounds[0] + 0.5,
+            "month select must sit to the left of year: month={:?} year={:?}",
+            month.layout_bounds,
+            year.layout_bounds
+        );
+        assert!(
+            !xywh_overlap(month.layout_bounds, prev.layout_bounds),
+            "month select must not overlap prev nav: month={:?} prev={:?}",
+            month.layout_bounds,
+            prev.layout_bounds
+        );
+        assert!(
+            !xywh_overlap(year.layout_bounds, next.layout_bounds),
+            "year select must not overlap next nav: year={:?} next={:?}",
+            year.layout_bounds,
+            next.layout_bounds
         );
     }
 

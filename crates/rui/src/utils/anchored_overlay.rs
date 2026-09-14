@@ -26,7 +26,7 @@ use crate::utils::popup::{
     apply_stored_floating_place, mark_floating_at_point, mark_floating_with_gap,
     mount_anchored_overlay, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER,
     ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
-    ATTR_FLOATING_W,
+    ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
 };
 
 pub use crate::utils::floating_kind::FloatingMotionKind;
@@ -328,7 +328,7 @@ impl AnchoredOverlayBuilder {
                 placement_mode: String::new(),
                 side: String::new(),
                 align: String::new(),
-                side_offset: 4.0,
+                side_offset: FLOATING_TRIGGER_GAP,
                 focus_id: self.trigger_id,
                 strategy: String::new(),
                 pos: None,
@@ -391,7 +391,7 @@ impl Default for AnchoredOverlayContentOpts {
             placement_mode: "trigger".into(),
             side: "bottom".into(),
             align: "start".into(),
-            side_offset: 4.0,
+            side_offset: FLOATING_TRIGGER_GAP,
             focus_id: String::new(),
             strategy: String::new(),
             pos: None,
@@ -830,7 +830,7 @@ mod tests {
                 &Placement::Trigger {
                     focus_id: "btn".into(),
                     placement: PopupPlacement::BottomStart,
-                    gap: 4.0,
+                    gap: FLOATING_TRIGGER_GAP,
                     strategy: FloatingStrategy::Fixed,
                 },
                 Signal::new(String::new()),
@@ -857,7 +857,7 @@ mod tests {
                 &Placement::Trigger {
                     focus_id: "btn".into(),
                     placement: PopupPlacement::BottomStart,
-                    gap: 4.0,
+                    gap: FLOATING_TRIGGER_GAP,
                     strategy: FloatingStrategy::Fixed,
                 },
                 Signal::new(String::new()),

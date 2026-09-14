@@ -617,7 +617,7 @@ pub fn dropdown_menu_content(
         placement: Some(Placement::trigger(
             String::new(),
             placement,
-            0.0,
+            FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
@@ -666,7 +666,7 @@ pub fn dropdown_menu_content(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
+            .popup_shadow()
             .absolute();
         panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
@@ -1302,7 +1302,7 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
-            .shadow(tokens::shadow_rgba(tokens::Elevation::Lg), 12.0)
+            .popup_shadow()
             .absolute();
         if let Some(ref c) = class {
             panel = with_class_list(panel, c);
