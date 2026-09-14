@@ -215,6 +215,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
                     <ImageStreamShowcase />
                     <DrawingScene3dShowcase />
                     <DrawingBillboardShowcase />
+                    <DrawingShaderShowcase />
                 </VStack>
             </ScrollArea>
         }
@@ -479,7 +480,7 @@ pub(crate) fn build_gallery_app() -> Element {
                                 </When>
                                 <When when={section.get() == "draw"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
-                                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · lucide-animated。"
+                                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · shader() 叶 · lucide-animated。"
                                     </Label>
                                 </When>
                                 <When when={section.get() == "theme"}>

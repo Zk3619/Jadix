@@ -860,8 +860,8 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
 /// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
 fn ensure_gallery_motion_extras() {
     use rui::style::{
-        parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
-        PropertyId,
+        AnimatableValue, KeyframeStop, PropertyId, parse_clip_path, register_clip_path,
+        register_keyframes,
     };
     register_keyframes(
         "gal-linear-slide",
@@ -2157,7 +2157,7 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
 #[component]
 pub(crate) fn FgMatrixShowcase() -> rui::core::tree::Element {
     use rui::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
-    use rui::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
+    use rui::core::reactivity::{EffectPhase, take_flushed_effects, ui_root_effect_dep_count};
 
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);
@@ -2377,10 +2377,10 @@ pub(crate) fn OwnerRegistryShowcase() -> rui::core::tree::Element {
 
 #[component]
 pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
-    use rui::app::{error_boundary, throw_resource_error};
     use rui::core::reactivity::{create_effect, create_memo};
     use rui::core::resource::{Resource, ResourceState};
     use rui::core::store::create_store;
+    use rui::prelude::throw_resource_error;
 
     #[derive(Clone, Debug, PartialEq)]
     struct Form {
@@ -2423,30 +2423,11 @@ pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
         ResourceState::Loading { .. } => "Loading".into(),
     });
 
-    let eb = error_boundary(
-        "gal_wp25_eb",
-        |msg| {
-            ui! {
-                <Label w="100%" text_size="0.875rem" color="destructive" font_weight="600" leading="normal">
-                    { format!("fallback: {msg}") }
-                </Label>
-            }
-        },
-        move || {
-            throw_resource_error(resource);
-            ui! {
-                <Label w="100%" text_size="0.875rem" leading="normal">
-                    { format!("children ok · resource = {:?}", resource.state()) }
-                </Label>
-            }
-        },
-    );
-
     ui! {
         <MyCard title="WP-2.5) Store produce + Resource→EB">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 WP-2.5 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.5 验收」。"
+                    "权威判定：库测全绿即 WP-2.5 通过。本卡片只做手工对照；细则见 development-docs/AUTHORITY.md「WP-2.5 验收」与 development-docs/error_handling.md。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "A · 库测（必须）"
@@ -2455,7 +2436,7 @@ pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
                     "命令：cargo test -p rui --lib produce_notifies   与   cargo test -p rui --lib resource_err_to_error_boundary   与   cargo test -p rui --lib create_resource_err_sets"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "通过：三测均 passed。失败：任一 FAILED。CHANGELOG 草案：docs/CHANGELOG.md。"
+                    "通过：三测均 passed。失败：任一 FAILED。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "B1 · produce 切片（建议）"
@@ -2508,18 +2489,44 @@ pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
                     </Button>
                 </HStack>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B2 · Resource Err → ErrorBoundary（建议）"
+                    "B2 · Resource Err → ErrorBoundary；Loading → Suspense（建议）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "契约：巩固期须显式 throw_resource_error。1) 初始 children ok  2) 「注入 Err」→ fallback: gallery boom  3) 「复位 Ready」→ 回到 children ok。旁路行 resource= 应同步变。"
+                    "契约：巩固期须显式 throw_resource_error。1) 初始 children ok  2) 「注入 Loading」→ 框内 loading…  3) 「注入 Err」→ fallback: gallery boom  4) 「复位 Ready」→ children ok。旁路行 resource= 应同步变。"
                 </Label>
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { format!("resource(旁路) = {}  |  note: {}", res_summary.get(), action_note.get()) }
                 </Label>
                 <Box bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                    { eb }
+                    <ErrorBoundary id="gal_wp25_eb" fallback={|msg| {
+                        ui! {
+                            <Label w="100%" text_size="0.875rem" color="destructive" font_weight="600" leading="normal">
+                                { format!("fallback: {msg}") }
+                            </Label>
+                        }
+                    }}>
+                        { throw_resource_error(resource); ui! {
+                            <Suspense id="gal_wp25_sus" fallback={|| {
+                                ui! {
+                                    <Label w="100%" text_size="0.875rem" color="muted-foreground" leading="normal">
+                                        "loading…"
+                                    </Label>
+                                }
+                            }}>
+                                <Label w="100%" text_size="0.875rem" leading="normal">
+                                    { format!("children ok · resource = {:?}", resource.get()) }
+                                </Label>
+                            </Suspense>
+                        } }
+                    </ErrorBoundary>
                 </Box>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="secondary" on_click={move || {
+                        res_state.set(ResourceState::Loading { previous: None });
+                        action_note.set("已注入 Loading → 框内应见 loading…".into());
+                    }}>
+                        "注入 Loading"
+                    </Button>
                     <Button variant="destructive" on_click={move || {
                         resource.set_error("gallery boom");
                         action_note.set("已注入 Err → 框内应见 fallback".into());

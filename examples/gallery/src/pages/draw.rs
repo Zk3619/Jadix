@@ -1,4 +1,4 @@
-//! SVG / Canvas / Scene3d。
+//! SVG / Canvas / Scene3d / Shader。
 
 use crate::imports::*;
 use crate::shared::*;
@@ -437,6 +437,68 @@ pub(crate) fn DrawingBillboardShowcase() -> Element {
                     <VStack gap="0.25rem">
                         { steep }
                         <Label text_size="0.6rem" color="muted-foreground">"pitch≈53° · 永角（梯形）"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+const SHADERTOY_FS: &str = r#"
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv * 2.0 - vec2<f32>(1.0);
+    let t = u.time;
+    let r = length(uv);
+    let a = atan2(uv.y, uv.x);
+    let bands = 0.5 + 0.5 * sin(r * 12.0 - t * 2.5 + a * 2.0);
+    let col = vec3<f32>(
+        0.12 + 0.80 * bands,
+        0.28 + 0.40 * sin(t + r * 4.0),
+        0.88 - 0.35 * bands,
+    );
+    return vec4<f32>(col * col, 1.0);
+}
+"#;
+
+const SAMPLE_SRC_FS: &str = r#"
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let warp = vec2<f32>(sin(u.time + in.uv.y * 8.0), cos(u.time + in.uv.x * 8.0)) * 0.035;
+    var c = textureSample(t_src, s_src, in.uv + warp);
+    c.r = textureSample(t_src, s_src, in.uv + warp * 1.5).r;
+    return vec4<f32>(c.rgb, 1.0);
+}
+"#;
+
+#[component]
+pub(crate) fn DrawingShaderShowcase() -> Element {
+    queue_synthetic_stream_frame();
+    let plasma: Element = shader().w(280.0).h(180.0).wgsl(SHADERTOY_FS).into();
+    let sampled: Element = shader()
+        .w(280.0)
+        .h(180.0)
+        .texture("src", IMAGE_STREAM_KEY)
+        .wgsl(SAMPLE_SRC_FS)
+        .into();
+    ui! {
+        <MyCard title="Shader · 用户 WGSL 叶（experimental）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "公开 shader() 叶：框架 VS + time/resolution/pointer + t_src / t_src1。用户只写 fs_main。离屏 RT 再 textured 合成。编译失败品红/留上帧，不 panic。`.texture(\"src\"|\"src1\", key)` 吃 rui_path: / rui_canvas: / 媒体槽（本卡采样合成色条）。默认 GLES，不是 Cargo feature。"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="start">
+                    <VStack gap="0.25rem">
+                        { plasma }
+                        <Label text_size="0.6rem" color="muted-foreground">"Builder shader().wgsl"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        <shader w={280.0} h={180.0} wgsl={SHADERTOY_FS} />
+                        <Label text_size="0.6rem" color="muted-foreground">"ui! <shader wgsl>"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        { sampled }
+                        <Label text_size="0.6rem" color="muted-foreground">"shader().texture src=色条"</Label>
                     </VStack>
                 </HStack>
             </VStack>
