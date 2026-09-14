@@ -17,6 +17,9 @@ struct PendingScrollItemAlign {
     item_count: usize,
     align: ScrollItemAlign,
     tries: u8,
+    /// Frames where viewport still matches content (Expand pin). Not reset by
+    /// Select rebuilding the menu each frame — see [`request_scroll_item_into_view`].
+    clip_waits: u8,
     requested_at: Instant,
 }
 
@@ -44,16 +47,28 @@ pub(crate) fn request_scroll_item_into_view(
     align: ScrollItemAlign,
 ) {
     PENDING_SCROLL_ITEM_ALIGN.with(|m| {
-        m.borrow_mut().insert(
-            rest.into(),
-            PendingScrollItemAlign {
-                index,
-                item_count: item_count.max(1),
-                align,
-                tries: 0,
-                requested_at: Instant::now(),
-            },
-        );
+        let mut map = m.borrow_mut();
+        let key = rest.into();
+        match map.get_mut(&key) {
+            Some(pending) => {
+                pending.index = index;
+                pending.item_count = item_count.max(1);
+                pending.align = align;
+            }
+            None => {
+                map.insert(
+                    key,
+                    PendingScrollItemAlign {
+                        index,
+                        item_count: item_count.max(1),
+                        align,
+                        tries: 0,
+                        clip_waits: 0,
+                        requested_at: Instant::now(),
+                    },
+                );
+            }
+        }
     });
 }
 
@@ -93,6 +108,18 @@ pub(crate) fn apply_pending_scroll_item_into_view(
             });
         }
         return false;
+    }
+    // Expand pins ScrollArea min-height to content, so viewport≈content and
+    // `max_sy` is 0. Consuming now writes offset 0; Idle unpin then clips and
+    // the list sits one row short until a later rebuild re-requests.
+    if viewport_h + 0.5 >= content_h {
+        pending.clip_waits = pending.clip_waits.saturating_add(1);
+        if pending.clip_waits < 36 {
+            PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+                m.borrow_mut().insert(rest.to_string(), pending);
+            });
+            return false;
+        }
     }
     let item_h = content_h / pending.item_count as f32;
     let sy = match pending.align {
@@ -1137,6 +1164,45 @@ mod scroll_item_align_tests {
             assert!(
                 (sy - expected).abs() < 0.5,
                 "offset should match real row height, got {sy} expected {expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn pending_align_waits_while_viewport_matches_content() {
+        let _ = create_root(|| {
+            cancel_scroll_item_into_view("t-pin-align");
+            request_scroll_item_into_view("t-pin-align", 8, 12, ScrollItemAlign::Center);
+            let content_h = 12.0 * 32.0;
+            assert!(!apply_pending_scroll_item_into_view(
+                "t-pin-align",
+                content_h,
+                content_h
+            ));
+            assert!(has_pending_scroll_item_align());
+            // Select rebuilds the open menu every frame; re-request must not
+            // reset the clip wait or we never survive Expand pin.
+            request_scroll_item_into_view("t-pin-align", 8, 12, ScrollItemAlign::Center);
+            assert!(!apply_pending_scroll_item_into_view(
+                "t-pin-align",
+                content_h,
+                content_h
+            ));
+            assert!(apply_pending_scroll_item_into_view(
+                "t-pin-align",
+                256.0,
+                content_h
+            ));
+            assert!(!has_pending_scroll_item_align());
+            let sy = crate::core::reactivity::use_signal(
+                &scroll_offset_y_signal_key("t-pin-align"),
+                || 0.0_f32,
+            )
+            .peek();
+            let expected = scroll_offset_to_center_item(8, 32.0, 256.0, 12);
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "offset after unpin must center, got {sy} expected {expected}"
             );
         });
     }

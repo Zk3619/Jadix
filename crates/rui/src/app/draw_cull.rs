@@ -902,8 +902,7 @@ pub(crate) fn node_present_scissor_logical(
 pub(crate) fn node_present_scissor_pad(kind: PaintDirtyKind) -> f32 {
     match kind {
         PaintDirtyKind::Overlay => 16.0,
-        // `dirty.bounds` already includes OVERLAY_RESTORE_PAD_LOGICAL.
-        PaintDirtyKind::OverlayRestore => 2.0,
+        PaintDirtyKind::OverlayRestore => 0.0,
         PaintDirtyKind::Node => 8.0,
     }
 }
@@ -2593,6 +2592,15 @@ mod tests {
         assert!(
             !rect_contains_point(scissor, title[0] + 40.0, title[1] + title[3] - 4.0),
             "scissor pad must not leak past overflow clip into the title bottom\n scissor={scissor:?} title={title:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_restore_scissor_is_visual_occupancy() {
+        assert_eq!(
+            node_present_scissor_pad(PaintDirtyKind::OverlayRestore),
+            0.0,
+            "Restore dest-reset is already visual occupancy; extra pad leaves a white frame the overlay fill cannot cover"
         );
     }
 

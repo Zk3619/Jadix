@@ -1004,27 +1004,44 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     });
                 }
             }
-            WindowEvent::Occluded(occluded) if !occluded => {
-                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                    if state.window.id() == id {
+            WindowEvent::Occluded(occluded) => {
+                let is_primary = (*self.state.borrow())
+                    .as_ref()
+                    .is_some_and(|state| state.window.id() == id);
+                if occluded {
+                    if is_primary {
+                        // Minimize / covered: close floating before the next layout so it
+                        // does not follow the shrinking / restoring window.
+                        let _ = super::portal_overlay::dismiss_exclusive_on_viewport_change();
+                    }
+                } else if is_primary {
+                    if let Some(state) = (*self.state.borrow_mut()).as_mut() {
                         state.window.set_visible(true);
                         // One redraw; avoid extra `configure` / forced multi-frame redraw (flicker).
                         state.window.request_redraw();
                     }
                 }
             }
-            WindowEvent::Resized(physical_size)
-                if physical_size.width > 0 && physical_size.height > 0 =>
-            {
-                if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
-                    sec.resize(physical_size);
-                    sec.window.request_redraw();
-                } else if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                    if state.window.id() == id {
-                        state.note_winit_resized(physical_size);
-                        state.resize(physical_size);
-                        state.window.request_redraw();
-                        self.force_redraw_count = self.force_redraw_count.max(1);
+            WindowEvent::Resized(physical_size) => {
+                let is_primary = (*self.state.borrow())
+                    .as_ref()
+                    .is_some_and(|state| state.window.id() == id);
+                if is_primary {
+                    // Edge-resize / maximize fire Resized before the next floating
+                    // sync. Close first so the panel does not chase the trigger.
+                    let _ = super::portal_overlay::dismiss_exclusive_on_viewport_change();
+                }
+                if physical_size.width > 0 && physical_size.height > 0 {
+                    if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                        sec.resize(physical_size);
+                        sec.window.request_redraw();
+                    } else if is_primary {
+                        if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                            state.note_winit_resized(physical_size);
+                            state.resize(physical_size);
+                            state.window.request_redraw();
+                            self.force_redraw_count = self.force_redraw_count.max(1);
+                        }
                     }
                 }
             }

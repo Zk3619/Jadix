@@ -390,3 +390,40 @@ fn abspos_overflow_visible_content_extent_stable_across_scroll() {
         "full collect after clip-cull must keep content extent (base=({base_w},{base_h}) now=({w},{h}))"
     );
 }
+
+#[test]
+fn accordion_max_height_paints_the_clip_not_content_height() {
+    let mut panel = Element::new()
+        .w(80.0)
+        .max_h(40.0)
+        .overflow_y("hidden")
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .outline([1.0, 1.0, 1.0, 1.0], 1.0)
+        .child(
+            Element::new()
+                .w(80.0)
+                .h(200.0)
+                .flex_shrink(0.0)
+                .bg([1.0, 0.0, 0.0, 1.0]),
+        );
+    panel.set_attr("rui_hoisted_portal", "1");
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut panel, 80.0, 400.0, [-1.0, -1.0]);
+    assert!(
+        panel.layout_bounds[3] <= 41.0,
+        "Taffy used height must be the max-height clip, got {}",
+        panel.layout_bounds[3]
+    );
+    let max_bottom = result
+        .instances
+        .iter()
+        .map(|i| {
+            let b = crate::app::draw_cull::instance_paint_bounds(i);
+            b[1] + b[3]
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_bottom <= panel.layout_bounds[1] + 40.0 + 16.0,
+        "outline/shadow must not stamp a full-content frame around the clip (bottom={max_bottom})"
+    );
+}

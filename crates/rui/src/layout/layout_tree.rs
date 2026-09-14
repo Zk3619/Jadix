@@ -193,20 +193,94 @@ pub(crate) fn hoisted_portal_damage(root: &Element) -> Option<[f32; 4]> {
     }))
 }
 
-/// Each hoisted overlay child's visual box (no union — node present submits separately).
+/// Each hoisted overlay child's **painted** box (no union — node present submits separately).
+///
+/// Expand measure (`rui_floating_expand_measure`) lays out unconstrained content at
+/// opacity 0. Recording that box as occupancy / `last_overlay_boxes` makes the first
+/// accordion clip look like a shrink — OverlayRestore dest-resets window white around
+/// the growing menu. Skip it. Animated `max-height` is the overflow clip; Taffy may
+/// still report content height, so clamp to the specified max.
 pub(crate) fn hoisted_portal_boxes(root: &Element) -> Vec<[f32; 4]> {
+    hoisted_portal_stamps(root)
+        .into_iter()
+        .map(|(_, b)| b)
+        .collect()
+}
+
+/// Painted hoisted overlay boxes keyed like [`crate::app::damage::paint_element_key`].
+/// Keyframe replace dest-resets this overlay's previous stamp, not a sibling portal.
+pub(crate) fn hoisted_portal_stamps(root: &Element) -> Vec<(u64, [f32; 4])> {
     let mut out = Vec::new();
     crate::core::tree::walk_elements(root, |el| {
         if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1") {
             return;
         }
-        let b = el.layout_bounds;
-        if b[2] <= 0.0 || b[3] <= 0.0 {
-            return;
+        if let Some(b) = hoisted_portal_paint_box(el) {
+            out.push((hoisted_portal_stamp_key(el), b));
         }
-        out.push(b);
     });
     out
+}
+
+fn hoisted_portal_stamp_key(el: &Element) -> u64 {
+    el.layout_node.map(|n| u64::from(n)).unwrap_or_else(|| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        el.layout_bounds[0].to_bits().hash(&mut h);
+        el.layout_bounds[1].to_bits().hash(&mut h);
+        el.layout_bounds[2].to_bits().hash(&mut h);
+        el.layout_bounds[3].to_bits().hash(&mut h);
+        h.finish()
+    })
+}
+
+/// True while an expand panel is on its unconstrained measure frame.
+pub(crate) fn hoisted_expand_measuring(root: &Element) -> bool {
+    let mut yes = false;
+    crate::core::tree::walk_elements(root, |el| {
+        if yes {
+            return;
+        }
+        if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1") {
+            return;
+        }
+        if el.attrs
+            .get("rui_floating_expand_measure")
+            .map(String::as_str)
+            == Some("1")
+        {
+            yes = true;
+        }
+    });
+    yes
+}
+
+fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
+    if el.attrs
+        .get("rui_floating_expand_measure")
+        .map(String::as_str)
+        == Some("1")
+    {
+        return None;
+    }
+    let mut b = el.layout_bounds;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    if let Some(h) = crate::layout::dim_length_px(el.style.max_size.height) {
+        if h >= 0.0 {
+            b[3] = b[3].min(h);
+        }
+    }
+    if let Some(w) = crate::layout::dim_length_px(el.style.max_size.width) {
+        if w >= 0.0 {
+            b[2] = b[2].min(w);
+        }
+    }
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    Some(b)
 }
 
 fn subtree_has_drag_overlay(el: &Element) -> bool {
@@ -8453,6 +8527,37 @@ mod portal_hoist_tests {
             [0.0, 0.0, 800.0, 600.0],
             full
         ));
+    }
+
+    #[test]
+    fn expand_measure_portal_is_not_a_paint_box() {
+        let mut panel = Element::new();
+        panel.set_attr(ATTR_HOISTED_PORTAL, "1");
+        panel.set_attr("rui_floating_expand_measure", "1");
+        panel.layout_bounds = [90.0, 140.0, 40.0, 200.0];
+        let root = Element::new().child(panel);
+        assert!(hoisted_expand_measuring(&root));
+        assert!(
+            hoisted_portal_boxes(&root).is_empty(),
+            "unconstrained measure must not enter last_overlay_boxes"
+        );
+    }
+
+    #[test]
+    fn expand_clip_portal_box_follows_max_height() {
+        let mut panel = Element::new();
+        panel.set_attr(ATTR_HOISTED_PORTAL, "1");
+        panel.layout_bounds = [90.0, 140.0, 40.0, 200.0];
+        panel.style.max_size.height = taffy::style::Dimension::length(40.0);
+        let root = Element::new().child(panel);
+        let boxes = hoisted_portal_boxes(&root);
+        assert_eq!(boxes.len(), 1);
+        assert!(
+            (boxes[0][3] - 40.0).abs() < 0.01,
+            "paint box must be the overflow clip, got {}",
+            boxes[0][3]
+        );
+        assert!(!hoisted_expand_measuring(&root));
     }
 
     #[test]

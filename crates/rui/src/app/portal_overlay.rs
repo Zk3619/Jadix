@@ -445,6 +445,46 @@ pub fn try_dismiss_outside_press() -> bool {
     any
 }
 
+/// Close stacked Popover / Menu / Tooltip **before** viewport geometry moves
+/// (page scrollbar press, window resize, minimize / maximize).
+///
+/// Outside-press waits until mouse-up on the scrollbar path, so the floating
+/// layer would first `sync_floating` with the new layout and only then close.
+/// Modal stays. Does not require underlay-close armed — these are not the
+/// opening gesture.
+pub fn dismiss_exclusive_on_viewport_change() -> bool {
+    let (to_close, pruned) = with_stack_mut(|stack| {
+        let pruned = prune_closed(stack);
+        let mut closing = Vec::new();
+        while stack.last().is_some_and(|l| {
+            layer_is_active(l)
+                && matches!(
+                    l.kind,
+                    OverlayKind::Popover | OverlayKind::Menu | OverlayKind::Tooltip
+                )
+        }) {
+            if let Some(l) = stack.pop() {
+                closing.push(l.open);
+            }
+        }
+        (closing, pruned)
+    });
+    for other in pruned {
+        other.try_set(false);
+    }
+    if to_close.is_empty() {
+        return false;
+    }
+    let mut any = false;
+    for open in to_close {
+        if layer_live(open) {
+            open.try_set(false);
+            any = true;
+        }
+    }
+    any
+}
+
 /// True when the hit path intersects a hoisted portal surface (`rui_hoisted_portal`).
 pub fn hit_path_on_hoisted_portal(path: &[super::pointer_events::HitPathEntry]) -> bool {
     path.iter().any(|e| e.hoisted_portal)
@@ -746,6 +786,31 @@ mod tests {
             !overlay_blocks_page_wheel(&page),
             "popover/tooltip must not lock page scroll"
         );
+    }
+
+    #[test]
+    fn dismiss_viewport_change_closes_exclusive_keeps_modal() {
+        clear();
+        let dialog = Signal::new(true);
+        let pop = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync("dlg", dialog, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("pop", pop, OverlayKind::Popover, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        // Resize / scrollbar must not wait for underlay arm (not an outside click).
+        crate::utils::popup::disarm_underlay_close();
+        assert!(dismiss_exclusive_on_viewport_change());
+        assert!(dialog.peek(), "modal must survive viewport dismiss");
+        assert!(!pop.peek(), "popover must close before layout follows");
+        assert!(!menu.peek(), "menu must close before layout follows");
+        assert_eq!(depth(), 1);
+        clear();
+    }
+
+    #[test]
+    fn dismiss_viewport_change_noop_when_empty() {
+        clear();
+        assert!(!dismiss_exclusive_on_viewport_change());
     }
 
     #[test]

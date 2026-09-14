@@ -1935,6 +1935,13 @@ impl super::App {
                                 [0.0, 0.0],
                             ),
                         ) {
+                            // Page scrollbar is outside the floating panel. Dismiss *before*
+                            // applying scroll so the overlay does not follow the trigger then
+                            // close on mouse-up. Overlay-owned bars (Select list) stay.
+                            let path = super::pointer_events::hit_path(&state.root_element, x, y);
+                            let page_scrollbar = !super::portal_overlay::hit_path_on_top_exclusive_surface(
+                                &path,
+                            );
                             let (
                                 track_start,
                                 track_len,
@@ -1961,6 +1968,9 @@ impl super::App {
                                 ),
                             };
                             drop(state_borrow);
+                            if page_scrollbar {
+                                let _ = super::portal_overlay::dismiss_exclusive_on_viewport_change();
+                            }
                             let focus_visible =
                                 crate::core::reactivity::use_signal("__rui_focus_visible", || {
                                     false

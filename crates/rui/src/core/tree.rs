@@ -2705,6 +2705,17 @@ impl Element {
         self.style.shadow_blur = blur;
         self
     }
+
+    /// Non-modal popup chrome: [`crate::tokens::Elevation::Md`] blur, offset 0 (halo on all sides).
+    pub fn popup_shadow(mut self) -> Self {
+        let (color, blur) = crate::tokens::elevation_shadow(crate::tokens::Elevation::Md);
+        self.style.shadow_color = color;
+        self.style.shadow_blur = blur;
+        self.style.shadow_offset = [0.0, 0.0];
+        self.style.shadow_spread = 0.0;
+        self.style.shadow_inset = false;
+        self
+    }
     pub fn box_shadow(mut self, shadow: impl AsRef<str>) -> Self {
         let list = crate::style::parse_box_shadows(shadow);
         self.style.set_shadows_from_parsed(&list);

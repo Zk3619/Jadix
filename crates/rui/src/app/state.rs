@@ -503,6 +503,36 @@ fn draw_scissor_clear<'a>(
     rect: [f32; 4],
     clear: wgpu::Color,
 ) {
+    draw_scissor_clear_ex(pass, pipeline, device, rect, clear, 0.0);
+}
+
+/// Dest-reset that must fill `rect` opaquely. The SDF shader expands +2px AA;
+/// drawing a quad the size of the scissor leaves a translucent fringe that
+/// cuts page captions as a white frame. Inflate the instance so the fringe
+/// sits outside the scissor.
+fn draw_scissor_fill<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a RuiPipeline,
+    device: &wgpu::Device,
+    rect: [f32; 4],
+    clear: wgpu::Color,
+) {
+    draw_scissor_clear_ex(pass, pipeline, device, rect, clear, 8.0);
+}
+
+fn draw_scissor_clear_ex<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a RuiPipeline,
+    device: &wgpu::Device,
+    rect: [f32; 4],
+    clear: wgpu::Color,
+    inflate: f32,
+) {
+    let rect = if inflate > 0.0 {
+        super::draw_cull::padded_xywh(rect, inflate)
+    } else {
+        rect
+    };
     let inst = InstanceInput {
         rect_pos: [rect[0], rect[1]],
         rect_size: [rect[2], rect[3]],
@@ -1820,40 +1850,76 @@ impl AppState {
         let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
         let prev = self.last_portal_layer_damage;
         let membership = self.portal_membership_dirty;
-        if let Some(c) = cur {
-            self.overlay_occupied = Some(match self.overlay_occupied {
-                Some(o) => super::damage::union_rects(o, c),
-                None => c,
-            });
-        }
-        // Layout boxes miss expand-from-chip scale, shadows, and wrap overflow.
-        // Occupancy must track what GPU actually stamped into present_retain.
-        if let Some(visual) = overlay_visual {
-            self.overlay_occupied =
-                super::damage::union_overlay_visual_bounds(self.overlay_occupied, visual);
-        }
-        // Painted footprint this frame (clip/max-width may shrink while Taffy
-        // wrapper bounds stay large). Restore against this, not the wrapper.
-        let current_paint = overlay_visual.or(cur);
+        let measuring =
+            crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element);
+        // GPU stamp this frame. Opacity-0 expand measure still emits instances at
+        // unconstrained content height — that AABB is not occupancy, and must not
+        // enter last_overlay_boxes (the next clip frame would OverlayRestore a
+        // white leftover around the growing menu).
+        let current_paint = if measuring {
+            None
+        } else {
+            overlay_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0)
+        };
         let needs_restore =
-            super::damage::overlay_restore_needed(self.overlay_occupied, current_paint);
+            super::damage::overlay_restore_needed(prev_occ, current_paint);
         let same_footprint =
             super::damage::overlay_same_footprint(prev_occ, current_paint, 2.0);
+        // CSS tick, portal join/leave, or a laid-out size change: the previous GPU
+        // stamp is stale. Membership / box delta without an Overlay dirty still
+        // need a replace (otherwise Load src-overs a new keyframe onto retain).
+        let overlay_dirty = collect_overlay_dirty
+            || membership
+            || prev != cur
+            || (needs_restore && overlay_present);
         let fade_replace = super::damage::overlay_fade_replace_needed(
             had_occupancy,
             overlay_present,
-            collect_overlay_dirty,
+            overlay_dirty,
             needs_restore,
             same_footprint,
         );
         if overlay_present
             && super::damage::overlay_pixels_need_full_clear(overlay_present, cur)
+            && !measuring
             && !self.force_full_redraw
         {
             self.mark_full_redraw();
             self.overlay_restore_clear = false;
+            self.overlay_occupied = current_paint;
+        } else if measuring {
+            self.overlay_restore_clear = false;
+        } else if fade_replace && !self.force_full_redraw && !self.scroll_layer_clear {
+            // Dest-reset previous *visual* occupancy (instance paint AABB), not
+            // leftover strips and not a padded layout box. A ring Clear cuts
+            // captions; extra pad around a rounded fill stays as a white frame.
+            self.overlay_restore_clear = false;
+            let dirty = self
+                .damage_nodes
+                .iter()
+                .filter(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay))
+                .map(|d| d.bounds)
+                .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+                .reduce(super::damage::union_rects);
+            let holes = super::damage::overlay_mounted_replace_holes(
+                prev_occ,
+                current_paint,
+                &prev_boxes,
+                &cur_boxes,
+                dirty,
+            );
+            for b in holes {
+                self.push_overlay_restore_visual(b);
+            }
+            if !collect_overlay_dirty {
+                self.push_portal_overlay_paint_dirties(
+                    &cur_boxes,
+                    overlay_visual,
+                    current_paint,
+                );
+            }
+            self.overlay_occupied = current_paint.or(prev_occ);
         } else if needs_restore {
-            self.overlay_restore_clear = self.overlay_occupied.is_some();
             if !self.force_full_redraw && !self.scroll_layer_clear {
                 self.push_overlay_restore_leftovers(&prev_boxes, &cur_boxes);
                 if !collect_overlay_dirty && (overlay_present || !cur_boxes.is_empty()) {
@@ -1864,23 +1930,28 @@ impl AppState {
                     );
                 }
             }
+            self.overlay_restore_clear = self
+                .damage_nodes
+                .iter()
+                .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::OverlayRestore));
             if cur_boxes.is_empty() && !overlay_present && !self.scroll_layer_clear {
                 self.overlay_occupied.take();
+            } else {
+                self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
             }
         } else {
-            // Fade replace Restore must not set overlay_restore_clear — that flag
-            // disables page glyphon retain and punched the panel on enter.
             self.overlay_restore_clear = false;
-            if fade_replace && !self.force_full_redraw && !self.scroll_layer_clear {
-                self.push_overlay_fade_replace_restores(&cur_boxes);
-            } else if !self.force_full_redraw
+            self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
+            if !self.force_full_redraw
                 && !self.scroll_layer_clear
                 && (membership || prev != cur)
             {
                 self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
             }
         }
-        self.last_overlay_boxes = cur_boxes;
+        if !measuring {
+            self.last_overlay_boxes = cur_boxes;
+        }
         self.last_portal_layer_damage = cur;
         self.portal_membership_dirty = false;
         super::damage::sort_paint_dirty_nodes(&mut self.damage_nodes);
@@ -1890,7 +1961,7 @@ impl AppState {
         let Some(occ) = self.overlay_occupied else {
             return;
         };
-        self.push_overlay_restore_box(occ);
+        self.push_overlay_restore_visual(occ);
     }
 
     fn push_overlay_restore_leftovers(&mut self, prev_boxes: &[[f32; 4]], cur_boxes: &[[f32; 4]]) {
@@ -1903,41 +1974,17 @@ impl AppState {
             return;
         }
         for b in leftovers {
-            self.push_overlay_restore_box(b);
+            self.push_overlay_restore_visual(b);
         }
     }
 
-    fn overlay_dirty_bounds_union(&self) -> Option<[f32; 4]> {
-        self.damage_nodes
-            .iter()
-            .filter(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay))
-            .map(|d| d.bounds)
-            .filter(|b| b[2] > 0.0 && b[3] > 0.0)
-            .reduce(super::damage::union_rects)
-    }
-
-    fn push_overlay_fade_replace_restores(&mut self, cur_boxes: &[[f32; 4]]) {
-        let dirty = self.overlay_dirty_bounds_union();
-        let boxes = super::damage::overlay_fade_replace_restore_boxes(dirty, cur_boxes);
-        if boxes.is_empty() {
-            self.push_overlay_restore_occupancy();
-            return;
-        }
-        for b in boxes {
-            self.push_overlay_restore_box(b);
-        }
-    }
-
-    fn push_overlay_restore_box(&mut self, bounds: [f32; 4]) {
+    fn push_overlay_restore_visual(&mut self, bounds: [f32; 4]) {
         if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
             return;
         }
         self.damage_nodes.push(super::damage::PaintDirty {
             key: 0xE0E1_0000,
-            bounds: super::draw_cull::padded_xywh(
-                bounds,
-                super::damage::OVERLAY_RESTORE_PAD_LOGICAL,
-            ),
+            bounds,
             kind: super::damage::PaintDirtyKind::OverlayRestore,
         });
     }
@@ -2219,17 +2266,27 @@ impl AppState {
             let cull_phys = Some(super::draw_cull::CullRects::one(cull_rect));
             match dirty.kind {
                 PaintDirtyKind::OverlayRestore => {
-                    let rect = super::draw_cull::damage_cull_rect_physical(
-                        dirty.bounds,
-                        scissor_pad,
-                        ui_scale,
+                    let page =
+                        &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
+                    let fill = super::draw_cull::opaque_fill_color_at(
+                        page,
+                        cull_rect[0] + cull_rect[2] * 0.5,
+                        cull_rect[1] + cull_rect[3] * 0.5,
                     );
-                    draw_scissor_clear(
+                    let restore_color = fill
+                        .map(|c| wgpu::Color {
+                            r: c[0] as f64,
+                            g: c[1] as f64,
+                            b: c[2] as f64,
+                            a: 1.0,
+                        })
+                        .unwrap_or(clear_color);
+                    draw_scissor_fill(
                         render_pass,
                         &self.pipeline,
                         &self.device,
-                        rect,
-                        clear_color,
+                        cull_rect,
+                        restore_color,
                     );
                     if allow_primitives {
                         if overlay_paint_start > 0 {
@@ -2248,6 +2305,30 @@ impl AppState {
                                 scaled_instances,
                                 cull_phys,
                             );
+                        } else {
+                            let inst_end = overlay_inst_start.min(scaled_instances.len());
+                            if inst_end > 0 {
+                                draw_instance_range(
+                                    render_pass,
+                                    &self.pipeline,
+                                    scaled_instances,
+                                    0,
+                                    inst_end as u32,
+                                    cull_phys,
+                                );
+                            }
+                            if overlay_tex_start > 0 {
+                                draw_packed_textured_runs(
+                                    render_pass,
+                                    &self.textured_pipeline,
+                                    &self.textured_instance_buffer,
+                                    &self.image_textures,
+                                    scaled_tex,
+                                    0,
+                                    overlay_tex_start,
+                                    cull_phys,
+                                );
+                            }
                         }
                         self.draw_matching_node_paints(
                             render_pass,
@@ -2258,8 +2339,14 @@ impl AppState {
                             dummy,
                             |p| {
                                 !p.overlay
-                                    && super::damage::restore_slot_in_hole(p.bounds, dirty.bounds)
+                                    && super::damage::restore_page_behind_overlay(
+                                        p.bounds,
+                                        dirty.bounds,
+                                    )
                             },
+                            cull_phys,
+                            Some(overlay_inst_start),
+                            Some(overlay_tex_start),
                         );
                     }
                     if allow_primitives {
@@ -2349,6 +2436,9 @@ impl AppState {
                                         has_keyed,
                                     )
                             },
+                            None,
+                            None,
+                            None,
                         );
                         self.draw_node_present_underlines(
                             render_pass,
@@ -2604,11 +2694,16 @@ impl AppState {
         scaled_input_chrome: &[InstanceInput],
         dummy: &'pass wgpu::BindGroup,
         pred: impl Fn(&crate::layout::layout_tree::NodePaint) -> bool,
+        cull: Option<super::draw_cull::CullRects>,
+        inst_cap: Option<usize>,
+        tex_cap: Option<usize>,
     ) {
         for p in node_paints.iter().filter(|p| pred(p)) {
             // `PaintOp` runs coalesce across siblings/ancestors. Drawing a slot's
             // paint_ops range would submit neighbor quads into this scissor.
-            if p.instance.0 < p.instance.1 {
+            let inst_lo = p.instance.0;
+            let inst_hi = inst_cap.unwrap_or(p.instance.1).min(p.instance.1);
+            if inst_lo < inst_hi {
                 // Prior slot may have been textured, or the previous dirty node
                 // ended on glyphon (TriangleStrip, strip_index_format None).
                 // Indexed SDF draws with the leftover Uint16 index buffer panic:
@@ -2616,6 +2711,8 @@ impl AppState {
                 // Clip-poly SSBO is indexed by `instance_index`. A ranged draw on
                 // GLES can feed a relative index and clip the fill to another
                 // widget's inset round-clip (Default looks 1px smaller on hover).
+                // OverlayRestore caps at the page prefix so a containing page
+                // slot cannot submit overlay instances (that would restack the halo).
                 self.pipeline.bind_sdf(render_pass, false, dummy);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -2627,21 +2724,23 @@ impl AppState {
                     render_pass,
                     &self.pipeline,
                     scaled_instances,
-                    p.instance.0 as u32,
-                    (p.instance.1 - p.instance.0) as u32,
-                    None,
+                    inst_lo as u32,
+                    (inst_hi - inst_lo) as u32,
+                    cull,
                 );
             }
-            if p.textured.0 < p.textured.1 {
+            let tex_lo = p.textured.0;
+            let tex_hi = tex_cap.unwrap_or(p.textured.1).min(p.textured.1);
+            if tex_lo < tex_hi {
                 draw_packed_textured_runs(
                     render_pass,
                     &self.textured_pipeline,
                     &self.textured_instance_buffer,
                     &self.image_textures,
                     scaled_tex,
-                    p.textured.0,
-                    p.textured.1,
-                    None,
+                    tex_lo,
+                    tex_hi,
+                    cull,
                 );
             }
             if p.chrome.0 < p.chrome.1 && p.chrome.1 <= scaled_input_chrome.len() {

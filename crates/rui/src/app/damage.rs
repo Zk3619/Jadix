@@ -372,9 +372,9 @@ pub fn overlay_pixels_need_full_clear(
 /// Clear the occupancy hole, restore page slots, then draw the current overlay.
 /// Grow does not need Clear: new pixels were page and the overlay covers them.
 /// Same-size fade is not shrink — OverlayRestore *with* `overlay_restore_clear`
-/// punches the panel (cannot open) and flashes the gallery. Fade still needs a
-/// **replace** ([`overlay_fade_replace_needed`]) so Load cannot src-over the
-/// previous keyframe (dark shadow flash / invisible fade-out).
+/// punches the panel (cannot open) and flashes the gallery. Any Overlay dirty
+/// while the portal is still mounted is a **replace** ([`overlay_fade_replace_needed`])
+/// so Load cannot src-over the previous keyframe (dark shadow / leftover white frame).
 #[inline]
 pub fn overlay_restore_needed(occupied: Option<[f32; 4]>, current: Option<[f32; 4]>) -> bool {
     match (occupied, current) {
@@ -385,8 +385,6 @@ pub fn overlay_restore_needed(occupied: Option<[f32; 4]>, current: Option<[f32; 
 }
 
 /// True when the overlay footprint did not grow or move (`slack` px).
-/// Expand accordion ticks Overlay dirty every frame while the box grows —
-/// that is not a same-size fade and must not OverlayRestore (flicker / punch).
 #[inline]
 pub fn overlay_same_footprint(
     prev: Option<[f32; 4]>,
@@ -401,23 +399,25 @@ pub fn overlay_same_footprint(
     }
 }
 
-/// Same-size fade enter/exit on PartialLoad: restore page pixels in occupancy,
-/// then draw overlay once at the current opacity.
+/// Overlay CSS tick on PartialLoad: dest-reset the previous GPU stamp, restore
+/// page in that hole, then draw overlay once at the current clip / opacity.
 ///
-/// Src-over of a new opacity onto the previous keyframe stacks the outset
-/// shadow (fig.1 dark flash) and makes fade-out a no-op (translucent onto
-/// opaque retain). Unlike shrink/close, this Restore must not set
-/// `overlay_restore_clear` — that flag disables page glyphon retain.
-/// Expand / flip (`same_footprint == false`) must not Restore every tick.
+/// Src-over of a new keyframe onto the previous stacks the outset shadow
+/// (Select expand/collapse looks darker than the idle panel). Accordion
+/// leftover-strip Restore dest-resets a padded ring with window Clear and
+/// cuts page captions — replace the previous panel box instead.
+/// This Restore must not set `overlay_restore_clear` (that flag disables
+/// page glyphon retain). Close (`overlay_present == false`) is occupancy
+/// restore, not a keyframe replace.
 #[inline]
 pub fn overlay_fade_replace_needed(
     had_occupancy: bool,
     overlay_present: bool,
     overlay_dirty: bool,
-    shrink_or_close: bool,
-    same_footprint: bool,
+    _shrink_or_close: bool,
+    _same_footprint: bool,
 ) -> bool {
-    had_occupancy && overlay_present && overlay_dirty && !shrink_or_close && same_footprint
+    had_occupancy && overlay_present && overlay_dirty
 }
 
 /// Previous portal boxes minus current ones. Flip below→above must Restore the
@@ -607,7 +607,18 @@ pub fn overlay_encode_occupancy(
     if hit.is_empty() {
         return full_occupancy;
     }
-    rects_union(&hit)
+    let layout = rects_union(&hit)?;
+    // One portal: Taffy layout misses the SDF halo (`blur * 2`). Dest-reset uses
+    // visual occupancy; encode must cover that hole or dest-reset white stays as
+    // a frame around the rounded panel. Several portals: intersecting layout
+    // only — full occupancy is the sibling union and would restack their shadows.
+    if portal_boxes.len() <= 1 {
+        return Some(match full_occupancy.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+            Some(visual) => union_rects(layout, visual),
+            None => layout,
+        });
+    }
+    Some(layout)
 }
 
 /// Fade-replace Restore boxes: intersecting portal panels, or the Overlay dirty
@@ -624,6 +635,56 @@ pub fn overlay_fade_replace_restore_boxes(
         .filter(|b| b[2] > 0.0 && b[3] > 0.0)
         .into_iter()
         .collect()
+}
+
+/// GPU ink that a mounted overlay must dest-reset before redrawing.
+///
+/// Leftover strips (`prev − cur`) are a ring around the shrinking clip: dest-reset
+/// of that ring cuts page captions and leaves the interior in retain so the next
+/// src-over stacks the outset shadow. Overlapping shrink/grow dest-resets the
+/// **union** (previous visual occupancy). Flip without overlap dest-resets the two
+/// boxes, never their AABB (that punches the page gap). Nested portals dest-reset
+/// only prev boxes that intersect the Overlay dirty.
+pub fn overlay_mounted_replace_holes(
+    prev_visual: Option<[f32; 4]>,
+    current_visual: Option<[f32; 4]>,
+    prev_boxes: &[[f32; 4]],
+    cur_boxes: &[[f32; 4]],
+    overlay_dirty: Option<[f32; 4]>,
+) -> Vec<[f32; 4]> {
+    if prev_boxes.len() > 1 || cur_boxes.len() > 1 {
+        let hit = overlay_boxes_intersecting_dirty(overlay_dirty, prev_boxes);
+        if hit.is_empty() {
+            return overlay_dirty
+                .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+                .into_iter()
+                .collect();
+        }
+        return match overlay_dirty {
+            Some(d) if d[2] > 0.0 && d[3] > 0.0 => {
+                hit.into_iter().map(|b| union_rects(b, d)).collect()
+            }
+            _ => hit,
+        };
+    }
+    let prev = prev_visual.or_else(|| {
+        prev_boxes
+            .first()
+            .copied()
+            .filter(|b| b[2] > 0.0 && b[3] > 0.0)
+    });
+    match (prev, current_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0)) {
+        (Some(p), Some(c)) => {
+            if intersect_rects(p, c).is_some() {
+                vec![union_rects(p, c)]
+            } else {
+                vec![p, c]
+            }
+        }
+        (Some(p), None) => vec![p],
+        (None, Some(c)) => vec![c],
+        _ => Vec::new(),
+    }
 }
 
 /// Overlay primitives are submitted only after their own physical scissor is set.
@@ -760,6 +821,18 @@ pub fn paint_dirty_nested_in_larger_node(dirty: &PaintDirty, nodes: &[PaintDirty
             && cx < o.bounds[0] + o.bounds[2]
             && cy < o.bounds[1] + o.bounds[3]
     })
+}
+
+/// Overlay dest-reset hole: repaint page fills that sit behind it.
+///
+/// [`restore_slot_in_hole`] skips the card/page that fully contains the hole so a
+/// close Restore does not pull every descendant caption. That left the dest-reset
+/// AABB (window/card white) in retain around a rounded panel and through the
+/// translucent shadow — a flashing white frame on every expand/collapse tick.
+/// Instance ranges are per-widget; scissor already clips to the hole.
+#[inline]
+pub fn restore_page_behind_overlay(slot_bounds: [f32; 4], hole: [f32; 4]) -> bool {
+    intersect_rects(slot_bounds, hole).is_some()
 }
 
 /// Overlay close: redraw this collect slot into the cleared hole.
@@ -1605,20 +1678,24 @@ mod tests {
     fn overlay_same_size_fade_replace_does_not_arm_restore_clear() {
         assert!(
             overlay_fade_replace_needed(true, true, true, false, true),
-            "occupancy + fade Overlay dirty must replace retain (shadow stack / lost exit)"
+            "occupancy + Overlay dirty must replace retain (shadow stack / lost exit)"
         );
         assert!(
             !overlay_fade_replace_needed(false, true, true, false, true),
             "first paint has no prior overlay pixels to replace"
         );
         assert!(
-            !overlay_fade_replace_needed(true, true, true, true, true),
-            "shrink/close keeps overlay_restore_clear so page glyphs return in the hole"
+            overlay_fade_replace_needed(true, true, true, true, true),
+            "shrink while mounted replaces the previous stamp — leftover-strip Clear cuts captions"
         );
         assert!(!overlay_fade_replace_needed(true, true, false, false, true));
         assert!(
-            !overlay_fade_replace_needed(true, true, true, false, false),
-            "Expand growth is not same-size fade — Restore every tick flashes the page"
+            overlay_fade_replace_needed(true, true, true, false, false),
+            "expand accordion CSS tick must replace the previous keyframe (src-over stacks shadow)"
+        );
+        assert!(
+            !overlay_fade_replace_needed(true, false, true, true, true),
+            "unmount restore uses overlay_restore_clear so page glyphs return in the hole"
         );
         assert!(
             overlay_partial_load_retains_page(true, false, true, true),
@@ -1626,7 +1703,7 @@ mod tests {
         );
         assert!(
             !overlay_partial_load_retains_page(true, true, true, true),
-            "shrink restore_clear still repaints page glyphs in the hole"
+            "unmount restore_clear still repaints page glyphs in the hole"
         );
     }
 
@@ -1724,6 +1801,23 @@ mod tests {
     }
 
     #[test]
+    fn overlay_encode_occupancy_single_portal_covers_visual_halo() {
+        let layout = [90.0, 140.0, 40.0, 160.0];
+        let visual = [74.0, 124.0, 72.0, 192.0];
+        let occ = overlay_encode_occupancy(Some(layout), &[layout], Some(visual))
+            .expect("single portal encode occupancy");
+        assert!(
+            occ[0] <= visual[0] + 1e-3 && occ[1] <= visual[1] + 1e-3,
+            "encode occupancy must reach the dest-reset visual halo, not just the Taffy box; occ={occ:?}"
+        );
+        assert!(
+            occ[0] + occ[2] + 1e-3 >= visual[0] + visual[2]
+                && occ[1] + occ[3] + 1e-3 >= visual[1] + visual[3],
+            "encode occupancy must cover visual occupancy; occ={occ:?} visual={visual:?}"
+        );
+    }
+
+    #[test]
     fn nested_overlay_wrong_space_fade_does_not_punch_sibling_on_restore() {
         let parent = [80.0, 360.0, 280.0, 320.0];
         let nested = [88.0, 400.0, 144.0, 220.0];
@@ -1762,6 +1856,89 @@ mod tests {
         let grown = [90.0, 140.0, 40.0, 160.0];
         assert!(overlay_restore_leftover_boxes(&[small], &[grown]).is_empty());
         assert!(!overlay_same_footprint(Some(small), Some(grown), 2.0));
+    }
+
+    #[test]
+    fn expand_measure_box_must_not_restore_against_first_clip() {
+        let measure = [90.0, 140.0, 40.0, 200.0];
+        let clip = [90.0, 140.0, 40.0, 40.0];
+        assert!(
+            !overlay_restore_leftover_boxes(&[measure], &[clip]).is_empty(),
+            "document: recording the unconstrained measure box makes the next clip look like a shrink"
+        );
+        assert!(
+            overlay_restore_leftover_boxes(&[], &[clip]).is_empty(),
+            "measure frames must not enter last_overlay_boxes"
+        );
+        assert!(
+            !overlay_restore_needed(None, Some(clip)),
+            "first painted clip is a grow from empty occupancy — Restore dest-resets a white frame"
+        );
+        assert!(!overlay_restore_needed(Some(clip), Some([90.0, 140.0, 40.0, 80.0])));
+        assert!(overlay_restore_needed(
+            Some([90.0, 140.0, 40.0, 80.0]),
+            Some(clip)
+        ));
+        assert!(
+            overlay_fade_replace_needed(true, true, true, false, false),
+            "expand growth still replaces the previous stamp (src-over would stack the shadow)"
+        );
+    }
+
+    #[test]
+    fn overlay_mounted_replace_holes_shrink_is_union_not_leftover_ring() {
+        let prev = [80.0, 30.0, 164.0, 240.0];
+        let cur = [90.0, 140.0, 144.0, 100.0];
+        let leftover = overlay_restore_leftover_boxes(&[prev], &[cur]);
+        assert!(
+            leftover.len() > 1 || leftover.iter().any(|b| b[2] > 0.0 && b[3] > 0.0),
+            "leftover of shrink is a strip/ring"
+        );
+        let holes =
+            overlay_mounted_replace_holes(Some(prev), Some(cur), &[prev], &[cur], Some(cur));
+        assert_eq!(holes, vec![union_rects(prev, cur)]);
+        assert!(
+            leftover.iter().all(|s| rect_contains_rect(holes[0], *s)),
+            "filled previous visual covers leftover strips so dest-reset is not a caption-cutting ring"
+        );
+    }
+
+    #[test]
+    fn overlay_mounted_replace_holes_flip_does_not_punch_gap() {
+        let below = [88.0, 400.0, 144.0, 80.0];
+        let above = [88.0, 40.0, 144.0, 220.0];
+        let holes =
+            overlay_mounted_replace_holes(Some(below), Some(above), &[below], &[above], Some(above));
+        assert_eq!(holes, vec![below, above]);
+        let gap = [88.0, 260.0, 144.0, 140.0];
+        assert!(
+            holes.iter().all(|b| intersect_rects(*b, gap).is_none()),
+            "union AABB of below∪above would dest-reset the page between the two positions"
+        );
+    }
+
+    #[test]
+    fn overlay_mounted_replace_holes_nested_does_not_restore_parent() {
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [88.0, 40.0, 144.0, 220.0];
+        let fade = nested;
+        let holes = overlay_mounted_replace_holes(
+            Some(union_rects(parent, nested)),
+            Some(union_rects(parent, nested)),
+            &[parent, nested],
+            &[parent, nested],
+            Some(fade),
+        );
+        assert_eq!(holes, vec![nested]);
+        assert!(intersect_rects(holes[0], parent).is_none());
+    }
+
+    #[test]
+    fn overlay_mounted_replace_holes_same_size_fade() {
+        let panel = [90.0, 140.0, 40.0, 160.0];
+        let holes =
+            overlay_mounted_replace_holes(Some(panel), Some(panel), &[panel], &[panel], Some(panel));
+        assert_eq!(holes, vec![panel]);
     }
 
     #[test]
@@ -2070,12 +2247,11 @@ mod tests {
             None
         );
         let occupied = union_overlay_visual_bounds(Some(chip), visual_panel).expect("visual");
-        let hole = crate::app::draw_cull::padded_xywh(occupied, OVERLAY_RESTORE_PAD_LOGICAL);
         assert!(
-            rect_contains_rect(hole, visual_panel),
-            "collapse Clear must cover transform/overflow paint, not just the chip layout box"
+            rect_contains_rect(occupied, visual_panel),
+            "occupancy is the instance paint AABB; dest-reset that hole, do not pad a white frame"
         );
-        assert!(rect_contains_rect(hole, chip));
+        assert!(rect_contains_rect(occupied, chip));
         assert!(overlay_restore_needed(Some(occupied), Some(chip)));
     }
 
@@ -2420,6 +2596,12 @@ mod tests {
         assert!(!restore_slot_in_hole(page, hole));
         assert!(restore_slot_in_hole(bubble, hole));
         assert!(!restore_slot_in_hole(neighbor, hole));
+        assert!(
+            restore_page_behind_overlay(page, hole),
+            "overlay dest-reset AABB must be covered by the page/card fill, not left as a white frame"
+        );
+        assert!(restore_page_behind_overlay(bubble, hole));
+        assert!(!restore_page_behind_overlay(neighbor, hole));
     }
 
     #[test]
