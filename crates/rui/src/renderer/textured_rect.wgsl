@@ -138,11 +138,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let edge = (sd - 0.5) / w;
         let coverage = smoothstep(-0.6, 0.6, edge);
         c = vec4<f32>(in.tint.rgb, coverage * in.tint.a);
-    } else {
-        c = sample * in.tint;
-        if (in.flags > 1.5 && in.flags < 2.5 && c.a < (1.0 / 255.0)) {
+    } else if (in.flags > 1.5 && in.flags < 2.5) {
+        // Transparent-RT capture (zoom / filter). Src-over onto clear(0) stores
+        // premul rgb = color * coverage. Sparse discard keeps live inner SDF visible.
+        // Un-premultiply so ALPHA_BLENDING does not apply coverage twice — that
+        // wash made AlertDialog descriptions look like muted-foreground until settle.
+        let a_tex = sample.a;
+        let a = a_tex * in.tint.a;
+        if (a < (1.0 / 255.0)) {
             discard;
         }
+        let rgb_unpremul = sample.rgb / max(a_tex, 1e-5);
+        c = vec4<f32>(rgb_unpremul * in.tint.rgb, a);
+        if (globals.premultiply > 0.5) {
+            return vec4<f32>(sample.rgb * in.tint.rgb * in.tint.a, a);
+        }
+        return c;
+    } else {
+        c = sample * in.tint;
     }
     var rgb = c.rgb;
     if (globals.premultiply > 0.5) {

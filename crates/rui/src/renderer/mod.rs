@@ -344,6 +344,8 @@ impl ScaledTexturedDraw {
         } else if self.texture_key.starts_with("rui_zoom_cap:")
             || self.texture_key.starts_with("rui_filter_cap:")
         {
+            // Sparse blit: discard a=0 so live inner SDF shows through. FS also
+            // un-premultiplies — the capture RT stores src-over onto transparent.
             2.0
         } else {
             0.0
@@ -445,6 +447,7 @@ mod textured_uv_tests {
 
     #[test]
     fn zoom_capture_blit_sets_sparse_sprite_flag() {
+        // flags=2: discard a=0 (live inner SDF) and un-premultiply capture samples.
         use super::ScaledTexturedDraw;
         let mk = |key: &str| ScaledTexturedDraw {
             rect: [0.0, 0.0, 10.0, 10.0],
@@ -467,6 +470,24 @@ mod textured_uv_tests {
                 - 1.0)
                 .abs()
                 < 1e-5
+        );
+    }
+
+    #[test]
+    fn sparse_capture_unpremul_recovers_variant_color() {
+        // Transparent RT stores color * coverage. ALPHA_BLENDING that sample
+        // without un-premultiply yields color * coverage² (washed gray).
+        let color = [34.0f32 / 255.0, 197.0 / 255.0, 94.0 / 255.0];
+        let cov = 0.78f32;
+        let stored = [color[0] * cov, color[1] * cov, color[2] * cov];
+        let recovered = [stored[0] / cov, stored[1] / cov, stored[2] / cov];
+        for i in 0..3 {
+            assert!((recovered[i] - color[i]).abs() < 1e-5);
+        }
+        let washed = [stored[0] * cov, stored[1] * cov, stored[2] * cov];
+        assert!(
+            (washed[1] - color[1]).abs() > 0.05,
+            "double coverage must be a visible wash"
         );
     }
 

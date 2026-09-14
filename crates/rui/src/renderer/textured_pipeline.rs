@@ -14,7 +14,7 @@ pub struct TexturedInstanceInput {
     pub uv_scale: [f32; 2],
     /// 2D affine `[a, b, c, d, tx, ty]` about rect center (identity = no rotate).
     pub transform: [f32; 6],
-    /// `0` RGBA · `1` MSDF · `2` sparse blit · `3` RGBA perspective warp · `4` MSDF warp.
+    /// `0` RGBA · `1` MSDF · `2` sparse blit (transparent-RT capture, premul) · `3` RGBA perspective warp · `4` MSDF warp.
     pub flags: f32,
     /// Overflow clip in the same space as `rect_pos`. FS tests after affine inverse.
     /// `clip_size[0] < 0` disables.
