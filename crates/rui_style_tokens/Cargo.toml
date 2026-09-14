@@ -3,7 +3,7 @@ name = "rui_style_tokens"
 version = "0.1.0"
 edition = "2021"
 description = "Shared Tailwind/Uno-style utility token catalog and variant parsing for rui"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/Zk3619/rui"
 
 include = [

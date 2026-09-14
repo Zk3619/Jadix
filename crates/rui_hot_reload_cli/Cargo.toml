@@ -3,7 +3,7 @@ name = "rui_hot_reload_cli"
 version = "0.1.0"
 edition = "2021"
 description = "Dev-time hot-reload watcher for rui (`template_patch` / reload)"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/Zk3619/rui"
 
 include = [

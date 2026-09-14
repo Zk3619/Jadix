@@ -225,6 +225,6 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Bundled fonts and icon assets are listed in [NOTICE](NOTICE).
+Apache License 2.0 — see [LICENSE](LICENSE). Bundled fonts and icon assets are listed in [NOTICE](NOTICE).
 
 Dependency licenses are audited with [`deny.toml`](deny.toml) (`cargo deny check licenses`).
