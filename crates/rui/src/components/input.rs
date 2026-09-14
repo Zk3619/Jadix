@@ -10,6 +10,7 @@
 //! <Input id="pw" type="password" password_toggle=true clearable=true placeholder="password" />
 //! <Input id="n" type="number" number_steppers=true />
 //! <Input id="q" type="search" clearable=true />
+//! <Input id="accent" caret_color="#111" selection_background="selection-background" selection_foreground="selection-foreground" />
 //! ```
 //!
 //! ## `type`（对齐 HTML `<input type>` 文本族）
@@ -27,6 +28,14 @@
 //! - Editing shortcut keys (Ctrl/Cmd): Select all A, copy C, paste V, cut X, undo Z, redo Y or Shift+Z; Shift + arrow keys to expand the selection. Tab into the field selects all.
 //! - `password_toggle`: `type=password` only; toggle mask/plaintext (default `false`).
 //! - `number_steppers`：仅 `type=number`；右侧上下增减触发器（solid-ui `NumberField` 风格）；`step` 默认 `1`；可长按连发（缺省 `false`）。
+//!
+//! ## Caret / 选区色
+//! - `caret_color`：CSS `caret-color`。默认主题 token `caret`（与 `foreground` 同值），**不**跟 placeholder 的 muted 色。
+//! - `selection_background`：选区高亮填充，按传入色原样使用（含 alpha）。默认主题 token
+//!   `selection-background`（别名 `selection`）。
+//! - `selection_foreground`：选中文字前景色（CSS `::selection { color }`），按传入色原样使用。
+//!   默认主题 token `selection-foreground`，与 `selection-background` 成对相反。
+//!   Builder 与 RSX 均可设。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
@@ -552,6 +561,12 @@ pub struct InputBuilder {
     value: Option<Signal<String>>,
     /// CSS `text-align` (default `start`).
     text_align: crate::style::TextAlign,
+    /// CSS `caret-color`. `None` → theme token `caret`.
+    caret_color: Option<[u8; 4]>,
+    /// Selection highlight. `None` → theme token `selection-background`.
+    selection_background: Option<[u8; 4]>,
+    /// Selected glyph color. `None` → theme token `selection-foreground`.
+    selection_foreground: Option<[u8; 4]>,
     /// 内嵌于 InputAdornment / Command：无自身边框与焦点环。
     plain_chrome: bool,
     chrome: SlotChrome,
@@ -573,6 +588,9 @@ pub fn Input(
     input_type: Option<String>,
     step: Option<f32>,
     text_size: Option<f32>,
+    caret_color: Option<String>,
+    selection_background: Option<String>,
+    selection_foreground: Option<String>,
     value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
@@ -601,6 +619,15 @@ pub fn Input(
 
     if let Some(s) = text_size {
         builder = builder.text_size(s);
+    }
+    if let Some(c) = caret_color {
+        builder = builder.caret_color(c);
+    }
+    if let Some(c) = selection_background {
+        builder = builder.selection_background(c);
+    }
+    if let Some(c) = selection_foreground {
+        builder = builder.selection_foreground(c);
     }
 
     if let Some(sig) = value {
@@ -686,6 +713,9 @@ pub fn input(id: &str) -> InputBuilder {
         leading_scale: None,
         value: None,
         text_align: crate::style::TextAlign::Start,
+        caret_color: None,
+        selection_background: None,
+        selection_foreground: None,
         plain_chrome: false,
         chrome: SlotChrome::default(),
         #[cfg(feature = "text-undo")]
@@ -819,6 +849,25 @@ impl InputBuilder {
     /// CSS `text-align` (like `"center"` / `"start"` / `"justify"`).
     pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
         self.text_align = crate::style::TextAlign::parse(align.as_ref());
+        self
+    }
+    /// CSS `caret-color`. Tokens / hex / `[u8; 4]`. Default theme token `caret`
+    /// (independent of placeholder muted color).
+    pub fn caret_color(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.caret_color = Some(color.into_text_color());
+        self
+    }
+    /// Selection highlight fill. Tokens / hex / `[u8; 4]` used as-is (including alpha).
+    /// Default is theme token `selection-background` (alias `selection`).
+    pub fn selection_background(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.selection_background = Some(color.into_text_color());
+        self
+    }
+    /// Selected glyph color (CSS `::selection { color }`). Tokens / hex / `[u8; 4]`
+    /// used as-is. Default is theme token `selection-foreground` (inverse of
+    /// `selection-background`).
+    pub fn selection_foreground(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.selection_foreground = Some(color.into_text_color());
         self
     }
     /// 覆盖默认水平内边距（默认 `0.75rem`）。
@@ -1035,6 +1084,9 @@ impl From<InputBuilder> for Element {
             leading_scale: builder.leading_scale,
             value: builder.value,
             text_align: builder.text_align,
+            caret_color: builder.caret_color,
+            selection_bg: builder.selection_background,
+            selection_foreground: builder.selection_foreground,
             single_line_container: Some(builder.container),
             multiline: false,
             rows: 1,

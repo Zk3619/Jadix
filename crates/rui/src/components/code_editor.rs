@@ -126,6 +126,9 @@ impl From<CodeEditorBuilder> for Element {
             wrap_mode,
             plain_chrome: false,
             drop_undo_on_unmount: false,
+            caret_color: None,
+            selection_bg: None,
+            selection_foreground: None,
             undo: {
                 #[cfg(feature = "text-undo")]
                 {

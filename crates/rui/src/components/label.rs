@@ -28,7 +28,7 @@ use crate::core::tree::{
     Element, IntoCssDim, IntoF32, IntoNodeBg, IntoNodeFg, IntoNodeSize, LayoutStatus,
 };
 use crate::primitives::text::TextBuilder;
-use crate::style::{parse_color, InputCaretDraw};
+use crate::style::InputCaretDraw;
 use crate::utils::clipboard::set_text as clipboard_set_text;
 use crate::utils::text_node::apply_label_defaults;
 use rui_macros::component;
@@ -59,14 +59,7 @@ pub fn selectable_text_key(el: &Element) -> Option<String> {
 }
 
 fn selection_bg_color() -> [u8; 4] {
-    let mut pc = parse_color("primary");
-    pc[3] *= 0.35;
-    [
-        (pc[0] * 255.0) as u8,
-        (pc[1] * 255.0) as u8,
-        (pc[2] * 255.0) as u8,
-        (pc[3] * 255.0) as u8,
-    ]
+    InputCaretDraw::default_selection_bg()
 }
 
 /// Input 内联文本由 [`crate::components::internal::text_edit::sync_text_edit_paint_subtree`] 写入 `input_caret`。
@@ -107,6 +100,8 @@ fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
         overwrite_highlight: None,
         preedit_underline: None,
         drop_caret: false,
+        caret_color: None,
+        selection_foreground: Some(InputCaretDraw::default_selection_foreground()),
     });
     if el.text_style.input_caret != want {
         el.text_style.input_caret = want;
@@ -580,6 +575,8 @@ mod tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
         let mut root = Element::new().child(text);
         let mut impact = LayoutStatus::Clean;

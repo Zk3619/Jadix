@@ -171,6 +171,10 @@ fn sync_one_text_edit_paint(
     if desc.disabled {
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;
     }
+    // Placeholder glyphs are muted; the I-beam stays on token `caret` unless overridden.
+    let caret_color = desc
+        .caret_color
+        .unwrap_or_else(InputCaretDraw::default_caret_color);
 
     let mut border_c = if desc.plain_chrome {
         [0.0, 0.0, 0.0, 0.0]
@@ -354,14 +358,12 @@ fn sync_one_text_edit_paint(
         }
 
         let caret_draw = if is_focused {
-            let mut pc = parse_color("primary");
-            pc[3] *= 0.35;
-            let selection_bg = [
-                (pc[0] * 255.0) as u8,
-                (pc[1] * 255.0) as u8,
-                (pc[2] * 255.0) as u8,
-                (pc[3] * 255.0) as u8,
-            ];
+            let selection_bg = desc
+                .selection_bg
+                .unwrap_or_else(InputCaretDraw::default_selection_bg);
+            let selection_foreground = desc
+                .selection_foreground
+                .unwrap_or_else(InputCaretDraw::default_selection_foreground);
             let sel_draw = if preedit.is_empty() {
                 text_sel_sig.peek().and_then(|(a, b)| {
                     if a.min(b) < a.max(b) {
@@ -422,6 +424,8 @@ fn sync_one_text_edit_paint(
                 overwrite_highlight,
                 preedit_underline,
                 drop_caret,
+                caret_color: Some(caret_color),
+                selection_foreground: Some(selection_foreground),
             })
         } else {
             None

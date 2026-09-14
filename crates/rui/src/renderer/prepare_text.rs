@@ -1146,6 +1146,59 @@ fn apply_shimmer_sweep(
     buffer.shape_until_scroll(font_system, false);
 }
 
+/// Color selected glyphs via `set_rich_text` (cosmic-text has no public layout_mut).
+/// Splits `text` at `[lo, hi)` so only that range gets `fg`; other runs keep `attrs`.
+fn set_selection_colored_buffer_text(
+    buffer: &mut glyphon::Buffer,
+    text: &str,
+    lo: usize,
+    hi: usize,
+    fg: [u8; 4],
+    attrs: &glyphon::Attrs,
+    letter_spacing: f32,
+    direction: TextDirection,
+    scaled_size: f32,
+    shaping: glyphon::Shaping,
+) {
+    let len = text.len();
+    let lo = text.floor_char_boundary(lo.min(len));
+    let hi = text.floor_char_boundary(hi.min(len));
+    if lo >= hi {
+        buffer.set_text(text, attrs, shaping, None);
+        return;
+    }
+    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(3);
+    let mut first = true;
+    let mut push = |body: &str, color: Option<[u8; 4]>| {
+        if body.is_empty() {
+            return;
+        }
+        let mut s = apply_letter_spacing_approx(body, letter_spacing, scaled_size).into_owned();
+        if first {
+            let m = direction_mark(direction);
+            if !m.is_empty() {
+                s = format!("{m}{s}");
+            }
+            first = false;
+        }
+        let mut a = attrs.clone();
+        if let Some(c) = color {
+            a = a.color(glyphon::Color::rgba(c[0], c[1], c[2], c[3]));
+        }
+        owned.push((s, a));
+    };
+    push(&text[..lo], None);
+    push(&text[lo..hi], Some(fg));
+    push(&text[hi..], None);
+    if owned.is_empty() {
+        buffer.set_text(text, attrs, shaping, None);
+        return;
+    }
+    let rich: Vec<(&str, glyphon::Attrs)> =
+        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
+    buffer.set_rich_text(rich, attrs, shaping, None);
+}
+
 fn resolve_text_align(
     align: crate::style::TextAlign,
     dir: TextDirection,
@@ -2251,7 +2304,7 @@ pub fn prepare_text_frame_at(
         } else {
             Cow::Owned(format!("{mark}{with_spacing}"))
         };
-        let shape_hash = node_shape_identity_hash(
+        let mut shape_hash = node_shape_identity_hash(
             shape_text.as_ref(),
             scaled_size,
             line_height,
@@ -2265,6 +2318,15 @@ pub fn prepare_text_frame_at(
             requested_weight,
             resolved_face.synthetic_bold,
         );
+        // Glyph recolor is baked into Attrs; Exact reuse must miss when the range/color moves.
+        if let Some(((lo, hi), fg)) = st.input_caret.as_ref().and_then(|c| c.selection_recolor()) {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            shape_hash.hash(&mut h);
+            lo.hash(&mut h);
+            hi.hash(&mut h);
+            fg.hash(&mut h);
+            shape_hash = h.finish();
+        }
         // Derive Exact key from identity — do not re-hash the full string (scroll frames
         // visit every visible label; browsers keep glyphs and only translate).
         let key_hash = node_shape_key_from_identity(shape_hash, scaled_w, scaled_h, false);
@@ -2774,6 +2836,21 @@ pub fn prepare_text_frame_at(
                     let rich: Vec<(&str, glyphon::Attrs)> =
                         owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
                     buffer.set_rich_text(rich, &attrs, shaping, None);
+                } else if let Some(((lo, hi), fg)) =
+                    st.input_caret.as_ref().and_then(|c| c.selection_recolor())
+                {
+                    set_selection_colored_buffer_text(
+                        &mut buffer,
+                        info.text.as_str(),
+                        lo,
+                        hi,
+                        fg,
+                        &attrs,
+                        st.letter_spacing,
+                        st.direction,
+                        scaled_size,
+                        shaping,
+                    );
                 } else {
                     let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
                     set_shaped_buffer_text(
@@ -3957,6 +4034,58 @@ mod shape_cache_key_tests {
         assert_eq!(super::direction_mark(TextDirection::Auto), "");
         assert_eq!(super::direction_mark(TextDirection::Ltr), "");
         assert_eq!(super::direction_mark(TextDirection::Rtl), "\u{200F}");
+    }
+
+    fn glyph_rgba(c: glyphon::Color) -> [u8; 4] {
+        let v = c.0;
+        [
+            ((v >> 16) & 0xff) as u8,
+            ((v >> 8) & 0xff) as u8,
+            (v & 0xff) as u8,
+            ((v >> 24) & 0xff) as u8,
+        ]
+    }
+
+    #[test]
+    fn selection_rich_text_sets_color_opt_on_selected_range() {
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        buffer.set_size(Some(400.0), Some(40.0));
+        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
+        super::set_selection_colored_buffer_text(
+            &mut buffer,
+            "abc",
+            1,
+            2,
+            [9, 8, 7, 255],
+            &attrs,
+            0.0,
+            TextDirection::Ltr,
+            14.0,
+            glyphon::Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let mut found_sel = false;
+        let mut found_other = false;
+        for run in buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                let rgba = g.color_opt.map(glyph_rgba);
+                if g.start >= 1 && g.start < 2 {
+                    assert_eq!(rgba, Some([9, 8, 7, 255]), "selected glyph {:?}", g.start);
+                    found_sel = true;
+                } else {
+                    assert_eq!(rgba, Some([1, 2, 3, 255]), "unselected glyph {:?}", g.start);
+                    found_other = true;
+                }
+            }
+        }
+        assert!(found_sel, "expected a glyph in the selected byte range");
+        assert!(found_other, "expected a glyph outside the selected range");
     }
 
     #[test]

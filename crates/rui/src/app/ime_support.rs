@@ -643,6 +643,8 @@ mod tests {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         });
         let nodes = vec![
             TextLayoutInfo {

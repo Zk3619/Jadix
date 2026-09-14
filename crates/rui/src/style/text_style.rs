@@ -388,6 +388,15 @@ pub struct InputCaretDraw {
     pub preedit_underline: Option<(usize, usize)>,
     /// Draw the I-beam even when a selection highlight is present (selection-move drop caret).
     pub drop_caret: bool,
+    /// I-beam fill. `None` uses the node's text color. Input/Textarea default this
+    /// to token `caret` (same value as `foreground`) so a placeholder's muted
+    /// color cannot tint the caret (CSS `caret-color` is not `::placeholder`).
+    /// Override via [`crate::components::input::InputBuilder::caret_color`].
+    pub caret_color: Option<[u8; 4]>,
+    /// Selected glyph color (CSS `::selection { color }`). `None` uses token
+    /// `selection-foreground` (inverse of `selection-background`). Override via
+    /// [`crate::components::input::InputBuilder::selection_foreground`].
+    pub selection_foreground: Option<[u8; 4]>,
 }
 
 impl Default for InputCaretDraw {
@@ -399,7 +408,42 @@ impl Default for InputCaretDraw {
             overwrite_highlight: None,
             preedit_underline: None,
             drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
         }
+    }
+}
+
+impl InputCaretDraw {
+    /// CSS `caret-color` default: theme token `caret`.
+    pub fn default_caret_color() -> [u8; 4] {
+        super::parse_text_color("caret")
+    }
+
+    /// Default selection highlight: theme token `selection-background`.
+    pub fn default_selection_bg() -> [u8; 4] {
+        super::parse_text_color("selection-background")
+    }
+
+    /// Default selected-text color: theme token `selection-foreground`
+    /// (inverse of `selection-background`).
+    pub fn default_selection_foreground() -> [u8; 4] {
+        super::parse_text_color("selection-foreground")
+    }
+
+    /// Byte range + color for recoloring selected glyphs. `None` when there is
+    /// no highlight. Missing [`Self::selection_foreground`] uses the token default.
+    pub fn selection_recolor(&self) -> Option<((usize, usize), [u8; 4])> {
+        let (a, b) = self.selection?;
+        let lo = a.min(b);
+        let hi = a.max(b);
+        if lo >= hi {
+            return None;
+        }
+        let fg = self
+            .selection_foreground
+            .unwrap_or_else(Self::default_selection_foreground);
+        Some(((lo, hi), fg))
     }
 }
 

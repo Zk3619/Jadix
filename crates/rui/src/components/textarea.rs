@@ -15,6 +15,10 @@
 //! 内容超出可视区时在内部滚动视口滚动；默认右下角可拖拽改高（斜线手柄）。
 //! 超长文档（≥64KB / ≥2048 视觉行）自动启用高度估算虚拟化 MVP。
 //! [`TextareaBuilder::resizable`] 为 `false` 时禁止改高并隐藏手柄。
+//!
+//! Caret / 选区色：[`TextareaBuilder::caret_color`] / [`TextareaBuilder::selection_background`] /
+//! [`TextareaBuilder::selection_foreground`]，与 Input 相同（默认 token `caret` /
+//! `selection-background` / `selection-foreground`）。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -45,6 +49,9 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         resize_max_h: None,
         wrap_mode: TextareaWrapMode::Word,
         plain_chrome: false,
+        caret_color: None,
+        selection_background: None,
+        selection_foreground: None,
         chrome: SlotChrome::default(),
         #[cfg(feature = "text-undo")]
         undo: crate::utils::text_edit_history::TextUndoConfig::textarea_default(),
@@ -62,6 +69,9 @@ pub struct TextareaBuilder {
     resize_max_h: Option<f32>,
     wrap_mode: TextareaWrapMode,
     plain_chrome: bool,
+    caret_color: Option<[u8; 4]>,
+    selection_background: Option<[u8; 4]>,
+    selection_foreground: Option<[u8; 4]>,
     chrome: SlotChrome,
     #[cfg(feature = "text-undo")]
     undo: crate::utils::text_edit_history::TextUndoConfig,
@@ -142,6 +152,27 @@ impl TextareaBuilder {
         self.plain_chrome = v;
         self
     }
+
+    /// CSS `caret-color`. Tokens / hex / `[u8; 4]`. Default theme token `caret`.
+    pub fn caret_color(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.caret_color = Some(color.into_text_color());
+        self
+    }
+
+    /// Selection highlight fill. Tokens / hex / `[u8; 4]` used as-is (including alpha).
+    /// Default is theme token `selection-background`.
+    pub fn selection_background(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.selection_background = Some(color.into_text_color());
+        self
+    }
+
+    /// Selected glyph color (CSS `::selection { color }`). Tokens / hex / `[u8; 4]`
+    /// used as-is. Default is theme token `selection-foreground` (inverse of
+    /// `selection-background`).
+    pub fn selection_foreground(mut self, color: impl crate::style::IntoTextColor) -> Self {
+        self.selection_foreground = Some(color.into_text_color());
+        self
+    }
 }
 
 impl From<TextareaBuilder> for Element {
@@ -157,6 +188,9 @@ impl From<TextareaBuilder> for Element {
             resize_max_h,
             wrap_mode,
             plain_chrome,
+            caret_color,
+            selection_background,
+            selection_foreground,
             chrome,
             #[cfg(feature = "text-undo")]
             undo,
@@ -198,6 +232,9 @@ impl From<TextareaBuilder> for Element {
             wrap_mode,
             plain_chrome,
             drop_undo_on_unmount: true,
+            caret_color,
+            selection_bg: selection_background,
+            selection_foreground,
             undo: {
                 #[cfg(feature = "text-undo")]
                 {
@@ -224,6 +261,9 @@ pub fn Textarea(
     resizable: Option<bool>,
     resize_max_h: Option<f32>,
     wrap: Option<String>,
+    caret_color: Option<String>,
+    selection_background: Option<String>,
+    selection_foreground: Option<String>,
     value: Option<Signal<String>>,
     undo_enabled: Option<bool>,
     max_undo_entries: Option<u32>,
@@ -247,6 +287,15 @@ pub fn Textarea(
     }
     if let Some(w) = wrap {
         b = b.wrap(w);
+    }
+    if let Some(c) = caret_color {
+        b = b.caret_color(c);
+    }
+    if let Some(c) = selection_background {
+        b = b.selection_background(c);
+    }
+    if let Some(c) = selection_foreground {
+        b = b.selection_foreground(c);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);

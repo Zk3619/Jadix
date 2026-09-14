@@ -50,6 +50,12 @@ pub(crate) struct TextEditBuildParams {
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
     /// Command / InputAdornment 内嵌控件：无边框/阴影/焦点环（外壳提供 chrome）。
     pub plain_chrome: bool,
+    /// CSS `caret-color`. `None` → [`InputCaretDraw::default_caret_color`].
+    pub caret_color: Option<[u8; 4]>,
+    /// Selection highlight. `None` → [`InputCaretDraw::default_selection_bg`].
+    pub selection_bg: Option<[u8; 4]>,
+    /// Selected glyph color. `None` → [`InputCaretDraw::default_selection_foreground`].
+    pub selection_foreground: Option<[u8; 4]>,
     pub undo: crate::utils::text_edit_history::TextUndoConfig,
     /// L1 Input/Textarea: drop undo on unmount. L3 CodeEditor: `false` (session lives in
     /// [`crate::utils::document_registry::DocumentRegistry`] until `unregister`).
@@ -79,6 +85,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resize_max_h,
         wrap_mode,
         plain_chrome,
+        caret_color: caret_color_override,
+        selection_bg: selection_bg_override,
+        selection_foreground: selection_foreground_override,
         undo,
         drop_undo_on_unmount,
     } = params;
@@ -166,6 +175,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     if disabled {
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;
     }
+    // Placeholder glyphs are muted; the I-beam stays on token `caret` unless overridden.
+    let caret_color = caret_color_override.unwrap_or_else(InputCaretDraw::default_caret_color);
 
     let mut border_c = if plain_chrome {
         [0.0, 0.0, 0.0, 0.0]
@@ -300,14 +311,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     }
 
     if is_focused {
-        let mut pc = parse_color("primary");
-        pc[3] *= 0.35;
-        let selection_bg = [
-            (pc[0] * 255.0) as u8,
-            (pc[1] * 255.0) as u8,
-            (pc[2] * 255.0) as u8,
-            (pc[3] * 255.0) as u8,
-        ];
+        let selection_bg =
+            selection_bg_override.unwrap_or_else(InputCaretDraw::default_selection_bg);
+        let selection_foreground = selection_foreground_override
+            .unwrap_or_else(InputCaretDraw::default_selection_foreground);
         let sel_draw = if preedit.is_empty() {
             text_sel_sig.peek().and_then(|(a, b)| {
                 if a.min(b) < a.max(b) {
@@ -348,6 +355,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             overwrite_highlight,
             preedit_underline,
             drop_caret: false,
+            caret_color: Some(caret_color),
+            selection_foreground: Some(selection_foreground),
         });
     }
 
@@ -633,6 +642,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         plain_chrome,
         text_align,
         wrap_mode,
+        caret_color: caret_color_override,
+        selection_bg: selection_bg_override,
+        selection_foreground: selection_foreground_override,
     };
 
     let id_for_click = fid.clone();

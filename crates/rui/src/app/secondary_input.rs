@@ -361,6 +361,7 @@ impl super::App {
                     };
 
                     self.click_press_path = Some(path.clone());
+                    self.click_press_scrolled = false;
                     let mut down =
                         self.build_mouse_event(x, y, MouseButton::Left, 1, "mousedown", None);
                     super::pointer_events::dispatch_pointer(
@@ -562,7 +563,18 @@ impl super::App {
                         };
                         let path = super::pointer_events::hit_path(&sec.root_element, x, y);
                         let click_path = match self.click_press_path.take() {
-                            Some(down) => super::pointer_events::click_dispatch_path(&down, &path),
+                            Some(down) => {
+                                let scrolled = std::mem::take(&mut self.click_press_scrolled);
+                                super::pointer_events::click_gesture_path(
+                                    &down,
+                                    &path,
+                                    super::pointer_events::click_pointer_moved(
+                                        self.last_click_pos,
+                                        [self.cursor_pos.x as f32, self.cursor_pos.y as f32],
+                                    ),
+                                    scrolled,
+                                )
+                            }
                             None => Vec::new(),
                         };
                         let (cb, label_for) = super::pointer_events::resolve_click_from_path(
@@ -671,6 +683,7 @@ impl super::App {
             &mut rests,
         );
         let metrics = &sec.scroll_metrics_cache;
+        let mut scrolled = false;
         for rest in rests {
             let Some((_, [max_x, max_y], _)) = metrics.get(&rest) else {
                 continue;
@@ -680,6 +693,7 @@ impl super::App {
                 let cur = use_signal(&key, || 0.0f32).peek();
                 let next = (cur - dy).clamp(0.0, *max_y);
                 use_signal(&key, || 0.0f32).set(next);
+                scrolled = true;
                 break;
             }
             if *max_x > 0.5 && dx.abs() > f32::EPSILON {
@@ -687,10 +701,15 @@ impl super::App {
                 let cur = use_signal(&key, || 0.0f32).peek();
                 let next = (cur - dx).clamp(0.0, *max_x);
                 use_signal(&key, || 0.0f32).set(next);
+                scrolled = true;
                 break;
             }
         }
         sec.window.request_redraw();
+        drop(secs);
+        if scrolled {
+            self.note_user_scroll_after_press();
+        }
     }
 
     pub(super) fn handle_secondary_keyboard(&mut self, id: WindowId, event: KeyEvent) {
