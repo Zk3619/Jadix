@@ -76,7 +76,13 @@ pub struct DesignTokens {
     pub code_foreground: [f32; 4],
     pub code_highlight: [f32; 4],
     pub code_number: [f32; 4],
-    pub selection: [f32; 4],
+    /// I-beam fill (`caret` / `caret-color`). Defaults to `foreground`.
+    pub caret: [f32; 4],
+    /// Selected-range fill (`selection-background`; alias `selection`).
+    /// Inverse pair with [`Self::selection_foreground`].
+    pub selection_background: [f32; 4],
+    /// Selected glyph color (`selection-foreground`). Inverse of
+    /// [`Self::selection_background`].
     pub selection_foreground: [f32; 4],
     /// Scrollbar track fill (`scrollbar-track`).
     pub scrollbar_track: [f32; 4],
@@ -179,7 +185,8 @@ impl Theme {
                 code_foreground: foreground,
                 code_highlight: oklch_to_display_srgba(0.96, 0.0, 0.0, 1.0),
                 code_number: oklch_to_display_srgba(0.56, 0.0, 0.0, 1.0),
-                selection: foreground,
+                caret: foreground,
+                selection_background: foreground,
                 selection_foreground: background,
                 scrollbar_track: oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0),
                 scrollbar_thumb: foreground,
@@ -242,7 +249,8 @@ impl Theme {
                 code_foreground: surface_fg,
                 code_highlight: oklch_to_display_srgba(0.27, 0.0, 0.0, 1.0),
                 code_number: oklch_to_display_srgba(0.72, 0.0, 0.0, 1.0),
-                selection: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
+                caret: foreground,
+                selection_background: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 selection_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
                 scrollbar_track: oklch_to_display_srgba(0.269, 0.0, 0.0, 1.0),
                 scrollbar_thumb: foreground,

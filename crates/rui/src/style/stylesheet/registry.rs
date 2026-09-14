@@ -22,6 +22,14 @@ pub fn clear_stylesheets() {
     REGISTRY.with(|r| r.borrow_mut().clear());
 }
 
+pub(super) fn snapshot_stylesheets() -> Vec<Stylesheet> {
+    REGISTRY.with(|r| r.borrow().clone())
+}
+
+pub(super) fn restore_stylesheets(sheets: Vec<Stylesheet>) {
+    REGISTRY.with(|r| *r.borrow_mut() = sheets);
+}
+
 pub fn stylesheet_count() -> usize {
     REGISTRY.with(|r| r.borrow().len())
 }

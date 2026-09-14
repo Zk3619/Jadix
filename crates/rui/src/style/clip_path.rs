@@ -935,16 +935,11 @@ fn unquote_path(s: &str) -> Option<&str> {
 }
 
 fn tessellate_path_d(d: &str, fill: ClipFillRule) -> Option<ClipPath> {
-    let mut points = Vec::new();
-    for cmd in crate::primitives::path::decode_path_d(d) {
-        match cmd {
-            crate::primitives::path::PathCommand::MoveTo((x, y))
-            | crate::primitives::path::PathCommand::LineTo((x, y)) => {
-                points.push([ClipCoord::Px(x), ClipCoord::Px(y)]);
-            }
-            crate::primitives::path::PathCommand::Close => {}
-        }
-    }
+    let points: Vec<[ClipCoord; 2]> =
+        crate::primitives::path::points_from_commands(&crate::primitives::path::decode_path_d(d))
+            .into_iter()
+            .map(|(x, y)| [ClipCoord::Px(x), ClipCoord::Px(y)])
+            .collect();
     if points.len() < 3 {
         return None;
     }

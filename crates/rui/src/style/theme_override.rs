@@ -87,7 +87,10 @@ pub struct DesignTokensPatch {
     pub code_highlight: Option<String>,
     #[serde(alias = "code-number")]
     pub code_number: Option<String>,
-    pub selection: Option<String>,
+    #[serde(alias = "caret-color")]
+    pub caret: Option<String>,
+    #[serde(alias = "selection-background", alias = "selection")]
+    pub selection_background: Option<String>,
     #[serde(alias = "selection-foreground")]
     pub selection_foreground: Option<String>,
     #[serde(alias = "scrollbar-track")]
@@ -186,6 +189,16 @@ pub fn clear_theme_overrides() {
     refresh_active_theme();
 }
 
+pub(crate) fn snapshot_theme_overrides() -> ThemeOverrides {
+    USER_OVERRIDES.with(|o| o.borrow().clone())
+}
+
+/// Restore a previous [`snapshot_theme_overrides`] and recompose the active theme.
+pub(crate) fn restore_theme_overrides(overrides: ThemeOverrides) {
+    USER_OVERRIDES.with(|o| *o.borrow_mut() = overrides);
+    refresh_active_theme();
+}
+
 pub(crate) fn refresh_active_theme() {
     let fallback_ring = get_theme().focus_ring_style;
     let mode = theme_mode();
@@ -265,7 +278,8 @@ fn apply_design_tokens_patch(
     apply_color!(code_foreground, "code-foreground");
     apply_color!(code_highlight, "code-highlight");
     apply_color!(code_number, "code-number");
-    apply_color!(selection, "selection");
+    apply_color!(caret, "caret");
+    apply_color!(selection_background, "selection-background");
     apply_color!(selection_foreground, "selection-foreground");
     apply_color!(scrollbar_track, "scrollbar-track");
     apply_color!(scrollbar_thumb, "scrollbar-thumb");

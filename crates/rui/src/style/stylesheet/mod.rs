@@ -41,7 +41,7 @@ pub fn load_stylesheet(path: impl AsRef<Path>) -> Result<Stylesheet, StylesheetE
     Ok(sheet)
 }
 
-/// Clear the rule registry, reload each path, install any theme patches, then redraw.
+/// Reload each path (keeping the previous registry on failure), then request a redraw.
 pub fn reload_stylesheets<I, P>(paths: I) -> Result<(), StylesheetError>
 where
     I: IntoIterator<Item = P>,
@@ -58,25 +58,52 @@ where
 
 /// Load a mixed batch: `theme.toml` → token patch; other `.toml` → stylesheet IR.
 /// Does **not** redraw; watchers / HMR rebuild the tree afterwards.
+///
+/// Parse the whole batch **before** mutating live state. Any load or commit
+/// failure restores the previous registry and theme overrides
+/// (`error_handling.md` E6).
 pub fn apply_style_file_batch(paths: &[impl AsRef<Path>]) -> Result<(), StylesheetError> {
-    let mut sheets = Vec::new();
-    let mut themes = Vec::new();
+    let mut sheet_paths = Vec::new();
+    let mut theme_paths = Vec::new();
     for p in paths {
         let p = p.as_ref();
         if watch::is_theme_override_file(p) {
-            themes.push(p.to_path_buf());
+            theme_paths.push(p.to_path_buf());
         } else {
-            sheets.push(p.to_path_buf());
+            sheet_paths.push(p.to_path_buf());
         }
     }
-    if !sheets.is_empty() {
-        clear_stylesheets();
-        for s in &sheets {
-            register_stylesheet(load_stylesheet(s)?)?;
-        }
+
+    let mut loaded_sheets = Vec::with_capacity(sheet_paths.len());
+    for s in &sheet_paths {
+        loaded_sheets.push(load_stylesheet(s)?);
     }
-    for t in &themes {
-        crate::style::load_and_install_theme_overrides(t)?;
+    let mut loaded_themes = Vec::with_capacity(theme_paths.len());
+    for t in &theme_paths {
+        loaded_themes.push(crate::style::load_theme_overrides(t)?);
+    }
+    if loaded_sheets.is_empty() && loaded_themes.is_empty() {
+        return Ok(());
+    }
+
+    let sheet_snap = registry::snapshot_stylesheets();
+    let theme_snap = crate::style::snapshot_theme_overrides();
+    let commit = (|| -> Result<(), StylesheetError> {
+        if !loaded_sheets.is_empty() {
+            clear_stylesheets();
+            for sheet in loaded_sheets {
+                register_stylesheet(sheet)?;
+            }
+        }
+        for patch in loaded_themes {
+            crate::style::install_theme_overrides(patch)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = commit {
+        registry::restore_stylesheets(sheet_snap);
+        crate::style::restore_theme_overrides(theme_snap);
+        return Err(err);
     }
     Ok(())
 }
@@ -365,5 +392,179 @@ classes = "px-2 sm:px-4 dark:text-muted-foreground"
     fn reject_non_toml_extension() {
         let err = load_stylesheet("styles.css").unwrap_err();
         assert!(err.to_string().contains("unsupported"), "{}", err);
+    }
+
+    fn temp_style_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rui-style-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn apply_style_file_batch_keeps_previous_on_parse_error() {
+        reset();
+        let sheet = parse_stylesheet(
+            r#"
+[[rule]]
+selectors = ["[data-slot=keep]"]
+classes = "px-3"
+"#,
+        )
+        .unwrap();
+        register_stylesheet(sheet).unwrap();
+        assert_eq!(stylesheet_count(), 1);
+
+        let dir = temp_style_dir("keep");
+        let bad = dir.join("bad.toml");
+        std::fs::write(&bad, "this is not toml [[[").unwrap();
+        assert!(apply_style_file_batch(&[&bad]).is_err());
+        assert_eq!(
+            stylesheet_count(),
+            1,
+            "failed reload must not clear registry"
+        );
+
+        let mut el = Element::new();
+        el.set_attr("data-slot", "keep");
+        el = apply_stylesheet_rules(el);
+        let cs = el.class_set.as_ref().expect("class_set");
+        assert!(cs.base.iter().any(|c| c == "px-3"), "got {:?}", cs.base);
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
+    }
+
+    #[test]
+    fn apply_style_file_batch_does_not_commit_partial_batch() {
+        reset();
+        let sheet = parse_stylesheet(
+            r#"
+[[rule]]
+selectors = ["[data-slot=x]"]
+classes = "p-1"
+"#,
+        )
+        .unwrap();
+        register_stylesheet(sheet).unwrap();
+
+        let dir = temp_style_dir("partial");
+        let good = dir.join("good.toml");
+        let bad = dir.join("bad.toml");
+        std::fs::write(
+            &good,
+            r#"
+[[rule]]
+selectors = ["[data-slot=x]"]
+classes = "p-8"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &bad,
+            r#"
+[[rule]]
+selectors = ["div [data-slot=x]"]
+classes = "p-4"
+"#,
+        )
+        .unwrap();
+        assert!(apply_style_file_batch(&[&good, &bad]).is_err());
+        assert_eq!(stylesheet_count(), 1);
+
+        let mut el = Element::new();
+        el.set_attr("data-slot", "x");
+        el = apply_stylesheet_rules(el);
+        let joined = el.class_set.as_ref().unwrap().base.join(" ");
+        assert!(joined.contains("p-1"), "{joined}");
+        assert!(
+            !joined.contains("p-8"),
+            "partial batch must not replace: {joined}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
+    }
+
+    #[test]
+    fn apply_style_file_batch_theme_fail_keeps_previous_theme() {
+        reset();
+        let dir = temp_style_dir("theme-keep");
+        let path = dir.join("theme.toml");
+        std::fs::write(&path, "[light]\ndestructive = \"oklch(0.62 0.25 30)\"\n").unwrap();
+        apply_style_file_batch(&[&path]).unwrap();
+        let patched = get_theme().colors.destructive;
+        assert_eq!(patched, parse_color("oklch(0.62 0.25 30)"));
+
+        std::fs::write(&path, "[light]\nthis is broken").unwrap();
+        assert!(apply_style_file_batch(&[&path]).is_err());
+        assert_eq!(
+            get_theme().colors.destructive,
+            patched,
+            "failed theme reload must keep last good override"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
+    }
+
+    #[test]
+    fn apply_style_file_batch_restores_on_theme_install_error() {
+        reset();
+        let dir = temp_style_dir("theme-install");
+        let path = dir.join("theme.toml");
+        std::fs::write(&path, "[light]\ndestructive = \"oklch(0.62 0.25 30)\"\n").unwrap();
+        apply_style_file_batch(&[&path]).unwrap();
+        let patched = get_theme().colors.destructive;
+
+        std::fs::write(&path, "[light]\ndestructive = \"not-a-color\"\n").unwrap();
+        assert!(apply_style_file_batch(&[&path]).is_err());
+        assert_eq!(
+            get_theme().colors.destructive,
+            patched,
+            "install failure must restore last good theme"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
+    }
+
+    #[test]
+    fn apply_style_file_batch_replaces_on_success() {
+        reset();
+        let sheet = parse_stylesheet(
+            r#"
+[[rule]]
+selectors = ["[data-slot=x]"]
+classes = "p-1"
+"#,
+        )
+        .unwrap();
+        register_stylesheet(sheet).unwrap();
+
+        let dir = temp_style_dir("replace");
+        let path = dir.join("styles.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[rule]]
+selectors = ["[data-slot=x]"]
+classes = "p-8"
+"#,
+        )
+        .unwrap();
+        apply_style_file_batch(&[&path]).unwrap();
+        assert_eq!(stylesheet_count(), 1);
+
+        let mut el = Element::new();
+        el.set_attr("data-slot", "x");
+        el = apply_stylesheet_rules(el);
+        let joined = el.class_set.as_ref().unwrap().base.join(" ");
+        assert!(joined.contains("p-8"), "{joined}");
+        assert!(!joined.contains("p-1"), "{joined}");
+        let _ = std::fs::remove_dir_all(&dir);
+        reset();
     }
 }

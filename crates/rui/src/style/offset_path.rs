@@ -100,15 +100,10 @@ pub fn sample(style: &Style, box_wh: [f32; 2]) -> OffsetSample {
 }
 
 fn polyline_from_d(d: &str) -> Vec<[f32; 2]> {
-    let mut pts = Vec::new();
-    for cmd in crate::primitives::path::decode_path_d(d) {
-        match cmd {
-            crate::primitives::path::PathCommand::MoveTo((x, y))
-            | crate::primitives::path::PathCommand::LineTo((x, y)) => pts.push([x, y]),
-            crate::primitives::path::PathCommand::Close => {}
-        }
-    }
-    pts
+    crate::primitives::path::points_from_commands(&crate::primitives::path::decode_path_d(d))
+        .into_iter()
+        .map(|(x, y)| [x, y])
+        .collect()
 }
 
 fn sample_polyline(pts: &[[f32; 2]], t: f32) -> ([f32; 2], f32) {

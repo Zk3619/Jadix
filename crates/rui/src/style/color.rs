@@ -1019,7 +1019,8 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
         "code-foreground" => colors.code_foreground,
         "code-highlight" => colors.code_highlight,
         "code-number" => colors.code_number,
-        "selection" => colors.selection,
+        "caret" | "caret-color" => colors.caret,
+        "selection" | "selection-background" => colors.selection_background,
         "selection-foreground" => colors.selection_foreground,
         "scrollbar-track" => colors.scrollbar_track,
         "scrollbar-thumb" => colors.scrollbar_thumb,
@@ -1048,6 +1049,27 @@ pub fn parse_text_color(s: &str) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_caret_and_selection_tokens() {
+        assert_eq!(try_parse_color("caret"), try_parse_color("caret-color"));
+        assert_eq!(
+            try_parse_color("selection-background"),
+            try_parse_color("selection")
+        );
+        let bg = try_parse_color("selection-background").unwrap();
+        let fg = try_parse_color("selection-foreground").unwrap();
+        assert_ne!(bg, fg, "selection pair must be inverse colors");
+        assert_eq!(try_parse_color("caret"), try_parse_color("foreground"));
+        assert_eq!(
+            try_parse_color("selection-background"),
+            try_parse_color("foreground")
+        );
+        assert_eq!(
+            try_parse_color("selection-foreground"),
+            try_parse_color("background")
+        );
+    }
 
     #[test]
     fn parses_semantic_token_opacity_suffix() {

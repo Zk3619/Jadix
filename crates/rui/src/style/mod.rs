@@ -158,6 +158,7 @@ pub use theme_override::{
     load_and_install_theme_overrides, load_theme_overrides, parse_theme_overrides_str,
     DesignTokensPatch, ThemeOverrideError, ThemeOverrides,
 };
+pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
 pub use timeline::{
     any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,
     Timeline, TimelineInner,

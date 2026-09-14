@@ -743,7 +743,7 @@ fn warn_unknown_keyframes(name: &str) {
     }
     SEEN.with(|s| {
         if s.borrow_mut().insert(name.to_string()) {
-            eprintln!(
+            log::warn!(
                 "[rui] animation `{name}` has no @keyframes; the element will stay at its \
                  cascaded value. Register it with `register_keyframes(\"{name}\", ..)`."
             );
