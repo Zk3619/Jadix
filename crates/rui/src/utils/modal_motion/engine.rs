@@ -172,8 +172,12 @@ impl ModalPresenceHandle {
 
     /// [`motion_busy`] using the gate's current phase (paint-sync / focus).
     pub(crate) fn is_motion_busy(&self) -> bool {
-        let phase = self.cell.borrow().gate.phase();
-        self.motion_busy(phase)
+        self.motion_busy(self.phase())
+    }
+
+    /// Gate phase. Source of truth for flush/tick — `shell.phase` is only a cache.
+    pub(crate) fn phase(&self) -> PresencePhase {
+        self.cell.borrow().gate.phase()
     }
 }
 
@@ -217,6 +221,9 @@ pub(crate) fn take_modal_force_immediate_wake() -> bool {
 fn arm_modal_event_loop_wake() {
     MODAL_CSS_NEEDS_FRAME.with(|f| f.set(true));
     MODAL_FORCE_IMMEDIATE_WAKE.with(|f| f.set(true));
+    // Close no longer rebuilds the paint island, so `open.set` has no view to
+    // request a redraw. Pair the Poll latch with an actual frame.
+    crate::app::runtime::request_redraw();
 }
 
 #[cfg(test)]
@@ -279,12 +286,13 @@ pub(crate) fn mounted_signal(handle: &ModalPresenceHandle) -> Signal<bool> {
 /// 同步 `open` 期望；返回当前相位。
 pub(crate) fn sync_modal_presence(handle: &ModalPresenceHandle, want_open: bool) -> PresencePhase {
     let mounted_sig = mounted_signal(handle);
-    let (phase, mounted, set_mounted) = {
+    let (phase, mounted, set_mounted, wake) = {
         let mut c = handle.cell.borrow_mut();
         let was = c.gate.phase();
         let changed = c.gate.set_present(want_open, Instant::now());
         let phase = c.gate.phase();
         let mounted = c.gate.is_mounted();
+        let mut wake = false;
         if want_open
             && matches!(phase, PresencePhase::Present)
             && (changed || was == PresencePhase::Absent)
@@ -293,25 +301,36 @@ pub(crate) fn sync_modal_presence(handle: &ModalPresenceHandle, want_open: bool)
             c.enter_active = false;
             c.exit_armed = false;
             c.needs_exit_anim = false;
-            arm_modal_event_loop_wake();
+            if let Some(s) = c.shell.as_mut() {
+                s.phase = PresencePhase::Present;
+            }
+            wake = true;
         }
         if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
             c.exit_armed = true;
             c.needs_enter = false;
             c.enter_active = false;
             c.needs_exit_anim = true;
-            arm_modal_event_loop_wake();
+            if let Some(s) = c.shell.as_mut() {
+                s.phase = PresencePhase::Exiting;
+            }
+            wake = true;
         }
         let set_mounted = c.mounted.peek() != mounted;
-        (phase, mounted, set_mounted)
+        (phase, mounted, set_mounted, wake)
     };
-    // Opening is already running inside `{id}__dialog_view` (it tracks `open.get()`).
-    // `mounted.set` would enqueue that same view again and flush it after this turn —
-    // a second `body()` + reconcile before the first paint. That is the whole-program
-    // first-open wait (cold tree twice); later opens hit warm named signals and feel
-    // instant. Unmount still uses `mounted.set(false)` from `tick_modal_presence`.
+    // The paint island tracks `mounted`, not `open`. Opening from a Computed
+    // must `set` so the island mounts. Same-turn peek-sync *inside* that island
+    // (default-open first run) must `set_silent` or `body()` runs twice.
     if set_mounted {
-        mounted_sig.set_silent(mounted);
+        if mounted && crate::core::reactivity::current_effect_is_render_phase() {
+            mounted_sig.set_silent(mounted);
+        } else {
+            mounted_sig.set(mounted);
+        }
+    }
+    if wake {
+        arm_modal_event_loop_wake();
     }
     phase
 }
@@ -1242,7 +1261,7 @@ fn flush_shell_state(
         overlay,
         motion_el,
         shell.motion,
-        shell.phase,
+        presence.phase(),
         presence,
         shell.extra_translate,
         shell.dragging,
@@ -1446,6 +1465,33 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
     anim || trans
 }
 
+/// Tick CSS and dest-reset Overlay occupancy when the pose actually moved.
+///
+/// [`crate::style::tick_element_animations`] returns false on `TimingPhase::Finished`
+/// even though fill-mode just wrote the 100% sample. `fade-out-0` is `ease-in`, so
+/// that last sample is most of the fade — skipping dirty freezes the previous GPU
+/// stamp until [`finish_dialog_exit_presence`] unmounts.
+fn tick_hoisted_shell_css(el: &mut Element, dt: f32) -> bool {
+    let opacity = el.style.opacity;
+    let scale = el.style.scale;
+    let translate = el.style.translate;
+    let translate_pct = el.style.translate_pct;
+    let ticked = tick_element_css(el, dt);
+    let posed = (el.style.opacity - opacity).abs() > 1e-6
+        || (el.style.scale[0] - scale[0]).abs() > 1e-6
+        || (el.style.scale[1] - scale[1]).abs() > 1e-6
+        || (el.style.translate[0] - translate[0]).abs() > 1e-6
+        || (el.style.translate[1] - translate[1]).abs() > 1e-6
+        || (el.style.translate_pct[0] - translate_pct[0]).abs() > 1e-6
+        || (el.style.translate_pct[1] - translate_pct[1]).abs() > 1e-6;
+    if ticked || posed {
+        crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+        true
+    } else {
+        false
+    }
+}
+
 /// Advance CSS on hoisted overlay / panel / zoom. Call **after**
 /// [`flush_modal_shell_motion_subtree`] so seed/targets exist and this is the only stepper.
 pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
@@ -1476,7 +1522,10 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                 }
                 shell
             };
-            let enter_started = cell_rc.borrow().enter_started;
+            let (enter_started, exiting) = {
+                let c = cell_rc.borrow();
+                (c.enter_started, c.gate.phase() == PresencePhase::Exiting)
+            };
             let overlay_tid = format!("{}__modal_overlay", shell.modal_id);
             let motion_tid = if shell.motion == ModalSurfaceMotion::DialogFade {
                 dialog_fade_motion_tid(root, &shell.modal_id)
@@ -1500,7 +1549,6 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
             // layout at opacity 0 → extra vsync before any pixels.
             let hold_seed = overlay.animation_snapshot.runs.is_empty()
                 && motion_el.animation_snapshot.runs.is_empty();
-            let exiting = shell.phase == PresencePhase::Exiting;
             // Catch-up is enter-only. Exit rebuilds (AlertDialog Action click) often
             // drop snapshots; seeking `enter_started` (seconds ago) would consume the
             // whole 200ms fade/zoom in one tick and skip the exit animation.
@@ -1525,10 +1573,18 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
             } else {
                 dt
             };
-            if tick_element_css(overlay, step) {
+            if tick_hoisted_shell_css(overlay, step) {
                 any = true;
             }
-            if tick_element_css(motion_el, step) {
+            if tick_hoisted_shell_css(motion_el, step) {
+                any = true;
+            }
+            if crate::style::css_animation_needs_frame(&overlay.style, &overlay.animation_snapshot)
+                || crate::style::css_animation_needs_frame(
+                    &motion_el.style,
+                    &motion_el.animation_snapshot,
+                )
+            {
                 any = true;
             }
         }
@@ -1710,7 +1766,11 @@ mod tests {
             );
             assert!(
                 !take_modal_force_immediate_wake(),
-                "immediate wake is one-shot; later frames use the CSS pump"
+                "immediate wake is one-shot; later frames Poll via any_modal_css_needs_frame"
+            );
+            assert!(
+                any_modal_css_needs_frame(),
+                "CSS pump must stay armed after the one-shot is consumed"
             );
         });
     }
@@ -1732,10 +1792,18 @@ mod tests {
             assert!(mounted.get());
             assert_eq!(
                 runs.get(),
-                1,
-                "opening must set_silent mounted; set() re-flushed the view (first-open double body)"
+                2,
+                "opening must notify mounted so the paint island (which tracks mounted, not open) mounts"
             );
             assert_eq!(sync_modal_presence(&handle, true), PresencePhase::Present);
+            assert_eq!(runs.get(), 2, "already-open sync must not remount");
+            assert_eq!(sync_modal_presence(&handle, false), PresencePhase::Exiting);
+            assert!(mounted.get(), "Exiting stays mounted");
+            assert_eq!(
+                runs.get(),
+                2,
+                "close must not notify mounted; that rebuild is the exit hitch"
+            );
         });
     }
 
@@ -2195,6 +2263,219 @@ mod tests {
     }
 
     #[test]
+    fn tick_hoisted_modal_css_exit_dirties_overlay_paint() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let _ = crate::app::damage::take_frame_paint_nodes();
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-dirty", &mut panel);
+            let handle = use_modal_presence("exit-dirty");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-dirty",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            {
+                let o = find_template_id_mut(&mut root, "dlg-dirty__modal_overlay").unwrap();
+                o.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+                let z = find_template_id_mut(&mut root, "dlg-dirty__modal_zoom").unwrap();
+                z.layout_bounds = [200.0, 120.0, 400.0, 280.0];
+            }
+            let _ = crate::app::damage::take_frame_paint_nodes();
+            assert!(tick_hoisted_modal_css(&mut root));
+            let dirty = crate::app::damage::take_frame_paint_nodes();
+            assert!(
+                dirty.iter().any(|d| {
+                    matches!(d.kind, crate::app::damage::PaintDirtyKind::Overlay)
+                }),
+                "exit CSS tick must dest-reset Overlay occupancy (PartialLoad otherwise freezes the last stamp), got {dirty:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn dialog_exit_opacity_keeps_moving_until_css_finishes() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-mono", &mut panel);
+            let handle = use_modal_presence("exit-mono");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-mono",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            for _ in 0..20 {
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+                let _ = tick_hoisted_modal_css(&mut root);
+            }
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            let mut last_opacity = 1.0_f32;
+            let mut last_scale = 1.0_f32;
+            let mut saw_mid = false;
+            let mut plateau = 0u32;
+            for i in 0..24 {
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+                if !handle.cell.borrow().gate.is_mounted() {
+                    assert!(
+                        last_opacity < 0.05,
+                        "unmount must wait until fade-out 100% sample, froze at {last_opacity} on tick {i}"
+                    );
+                    break;
+                }
+                let _ = tick_hoisted_modal_css(&mut root);
+                let (opacity, scale) = {
+                    let o_ptr = find_template_id_mut(&mut root, "dlg-mono__modal_overlay").unwrap()
+                        as *mut Element;
+                    let z_ptr = find_template_id_mut(&mut root, "dlg-mono__modal_zoom").unwrap()
+                        as *mut Element;
+                    let (o, z) = unsafe { (&*o_ptr, &*z_ptr) };
+                    (o.style.opacity, z.style.scale[0])
+                };
+                if opacity < 0.95 && opacity > 0.08 {
+                    saw_mid = true;
+                }
+                assert!(
+                    opacity <= last_opacity + 1e-4,
+                    "exit overlay opacity must not rise, {last_opacity} → {opacity} at tick {i}"
+                );
+                assert!(
+                    scale <= last_scale + 1e-4,
+                    "exit zoom scale must not rise, {last_scale} → {scale} at tick {i}"
+                );
+                if (last_opacity - opacity).abs() < 1e-5 && opacity > 0.08 {
+                    plateau += 1;
+                    assert!(
+                        plateau < 3,
+                        "exit opacity froze at {opacity} while still mounted (tick {i})"
+                    );
+                } else {
+                    plateau = 0;
+                }
+                last_opacity = opacity;
+                last_scale = scale;
+            }
+            assert!(
+                saw_mid,
+                "exit must pass through mid opacities, not skip to unmount"
+            );
+        });
+    }
+
+    #[test]
+    fn dialog_exit_finish_tick_dirties_end_pose() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let _ = crate::app::damage::take_frame_paint_nodes();
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-end", &mut panel);
+            let handle = use_modal_presence("exit-end");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-end",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            for _ in 0..20 {
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+                let _ = tick_hoisted_modal_css(&mut root);
+            }
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            {
+                let o = find_template_id_mut(&mut root, "dlg-end__modal_overlay").unwrap();
+                o.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+                let z = find_template_id_mut(&mut root, "dlg-end__modal_zoom").unwrap();
+                z.layout_bounds = [200.0, 120.0, 400.0, 280.0];
+            }
+            let mut saw_finish = false;
+            for i in 0..24 {
+                let before = {
+                    let o_ptr = find_template_id_mut(&mut root, "dlg-end__modal_overlay").unwrap()
+                        as *mut Element;
+                    let z_ptr = find_template_id_mut(&mut root, "dlg-end__modal_zoom").unwrap()
+                        as *mut Element;
+                    let (o, z) = unsafe { (&*o_ptr, &*z_ptr) };
+                    dialog_css_animating(o, z)
+                };
+                let _ = crate::app::damage::take_frame_paint_nodes();
+                let _ = tick_hoisted_modal_css(&mut root);
+                let (after, opacity) = {
+                    let o_ptr = find_template_id_mut(&mut root, "dlg-end__modal_overlay").unwrap()
+                        as *mut Element;
+                    let z_ptr = find_template_id_mut(&mut root, "dlg-end__modal_zoom").unwrap()
+                        as *mut Element;
+                    let (o, z) = unsafe { (&*o_ptr, &*z_ptr) };
+                    (dialog_css_animating(o, z), o.style.opacity)
+                };
+                let dirty = crate::app::damage::take_frame_paint_nodes();
+                if before && !after {
+                    saw_finish = true;
+                    assert!(
+                        opacity < 0.05,
+                        "Finished fill must write fade-out 100% this tick, got {opacity} at {i}"
+                    );
+                    assert!(
+                        dirty.iter().any(|d| {
+                            matches!(d.kind, crate::app::damage::PaintDirtyKind::Overlay)
+                        }),
+                        "Finished sample must dest-reset Overlay (ease-in tail otherwise freezes), got {dirty:?}"
+                    );
+                    assert!(
+                        handle.cell.borrow().gate.is_mounted(),
+                        "unmount is the next flush, not the finishing tick"
+                    );
+                    break;
+                }
+            }
+            assert!(saw_finish, "exit keyframes must reach Finished");
+            let _ = flush_modal_shell_motion_subtree(&mut root);
+            assert!(
+                !handle.cell.borrow().gate.is_mounted(),
+                "next flush unmounts after the end pose has been dirtied"
+            );
+        });
+    }
+
+    #[test]
     fn tick_hoisted_modal_css_keeps_redraw_flag_while_dialog_enter_plays() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2339,12 +2620,6 @@ mod tests {
             root.children.push(panel);
             assert!(flush_modal_shell_motion_subtree(&mut root));
             sync_modal_presence(&handle, false);
-            {
-                let mut c = handle.cell.borrow_mut();
-                if let Some(shell) = c.shell.as_mut() {
-                    shell.phase = PresencePhase::Exiting;
-                }
-            }
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let o_ptr =
                 find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap() as *mut Element;
@@ -2398,12 +2673,6 @@ mod tests {
             assert!(flush_modal_shell_motion_subtree(&mut root));
 
             sync_modal_presence(&handle, false);
-            {
-                let mut c = handle.cell.borrow_mut();
-                if let Some(shell) = c.shell.as_mut() {
-                    shell.phase = PresencePhase::Exiting;
-                }
-            }
             assert!(flush_modal_shell_motion_subtree(&mut root));
             // Action-click rebuild: snapshots dropped while `enter_started` still
             // points at open time (hundreds of ms ago).

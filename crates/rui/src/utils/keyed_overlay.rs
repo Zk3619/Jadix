@@ -199,9 +199,36 @@ pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -
             || !prev.style.transition.is_empty()
             || css_transition_needs_frame(&prev.style, &prev.transition_snapshot));
     if preserve {
-        copy_keyed_motion_state(fresh, prev);
+        preserve_generic_keyed_motion(fresh, prev);
     }
     preserve
+}
+
+/// Keep used values for enter / mid-tween rebuilds. On first exit (`opacity` dropped,
+/// no active tween yet) keep the specified target and seed a snapshot from `prev`
+/// so CSS can retarget — `copy_transition_used_values` would clobber opacity 0→1.
+fn preserve_generic_keyed_motion(fresh: &mut Element, prev: &Element) {
+    let fresh_exit_motion = fresh.transition_snapshot.has_active_tweens()
+        || fresh.style.opacity + 0.05 < prev.style.opacity;
+    if fresh_exit_motion && !prev.transition_snapshot.has_active_tweens() {
+        seed_exit_transition_from_prev(fresh, prev);
+        return;
+    }
+    copy_keyed_motion_state(fresh, prev);
+}
+
+fn seed_exit_transition_from_prev(fresh: &mut Element, prev: &Element) {
+    fresh.transition_snapshot = prev.transition_snapshot.clone();
+    fresh.animation_snapshot = prev.animation_snapshot.clone();
+    if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
+        fresh.style.transition = prev.style.transition.clone();
+    }
+    if !fresh.transition_snapshot.has_any_tweens() {
+        crate::style::snap_element_transitions_to_current(
+            &prev.style,
+            &mut fresh.transition_snapshot,
+        );
+    }
 }
 
 /// hoist 后同 portal key 调和：按 `template_id` 递归合并，保留 mid。
@@ -407,6 +434,48 @@ mod tests {
             (fresh.style.shadow_color[3] - 0.0).abs() < f32::EPSILON,
             "box-shadow is not an active tween property here"
         );
+    }
+
+    #[test]
+    fn presence_wrapper_reconcile_keeps_exit_opacity_and_seeds_tween() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+
+        let mut prev = Element::new().template_id("gal-pres-exit-rsx__presence");
+        prev.style.opacity = 1.0;
+        prev.style.transition.push(TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: 320.0,
+            delay_ms: 0.0,
+            timing: crate::style::TimingFunction::Ease,
+        });
+
+        let mut fresh = Element::new().template_id("gal-pres-exit-rsx__presence");
+        fresh.style.opacity = 0.0;
+        fresh.style.transition = prev.style.transition.clone();
+
+        assert!(preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
+        assert!(
+            (fresh.style.opacity - 0.0).abs() < f32::EPSILON,
+            "exit target must not be copied back to the visible used value"
+        );
+        assert!(
+            fresh.transition_snapshot.has_any_tweens(),
+            "first exit must seed a snapshot so tick can retarget 1→0"
+        );
+        let mut style = fresh.style.clone();
+        let mut snap = fresh.transition_snapshot.clone();
+        assert!(crate::style::tick_element_transitions(
+            &mut style, &mut snap, 0.0
+        ));
+        crate::style::set_css_transition_timeline_ms(160.0);
+        let _ = crate::style::tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            style.opacity > 0.05 && style.opacity < 0.95,
+            "opacity should be mid-fade, got {}",
+            style.opacity
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
     }
 
     #[test]

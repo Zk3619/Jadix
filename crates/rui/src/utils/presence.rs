@@ -188,19 +188,15 @@ pub fn sync_generic_presence(handle: &GenericPresenceHandle, want: bool) -> Pres
 /// UI-thread tick: Exiting → Absent, clears mounted. Returns true when a redraw is needed.
 pub fn tick_generic_presence() -> bool {
     let now = Instant::now();
-    let outcome = GENERIC_PRESENCE_REGISTRY.with(|r| {
-        tick_panel_cells(
-            &r.borrow(),
-            now,
-            |_| false,
-            |c| {
-                if c.mounted.is_alive() {
-                    c.mounted.set(false);
-                }
-            },
-            false,
-        )
-    });
+    let outcome = GENERIC_PRESENCE_REGISTRY
+        .with(|r| tick_panel_cells(&r.borrow(), now, |_| false, |_| {}, false));
+    // Set mounted after dropping registry/cell borrows — `set` flushes readers
+    // (`presence` subscribes to `mounted`) which re-enter `sync_generic_presence`.
+    for sig in &outcome.unmount {
+        if sig.is_alive() {
+            sig.set(false);
+        }
+    }
     outcome.needs_frame || !outcome.unmount.is_empty()
 }
 
@@ -234,7 +230,9 @@ pub fn presence(
     let view_id = presence_template_id(&scope_id);
     reactive_view(view_id, move || {
         let phase = sync_generic_presence(&handle, show.get());
-        if phase == PresencePhase::Absent {
+        // Tick clears `mounted` after exit_ms; subscribe so this island rebuilds to Absent.
+        let mounted = handle.mounted().get();
+        if phase == PresencePhase::Absent || !mounted {
             return Element::new();
         }
         body()
@@ -306,6 +304,47 @@ mod tests {
             assert!(tick_generic_presence());
             assert_eq!(handle.phase(), PresencePhase::Absent);
             assert!(!handle.mounted().get());
+        });
+    }
+
+    #[test]
+    fn generic_presence_tick_notifies_mounted_readers() {
+        use crate::core::reactivity::{create_effect, create_root};
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        create_root(|| {
+            let handle = use_generic_presence("gp-reader", 50);
+            let runs = Rc::new(Cell::new(0u32));
+            create_effect({
+                let handle = handle.clone();
+                let runs = Rc::clone(&runs);
+                move || {
+                    let _ = handle.mounted().get();
+                    runs.set(runs.get() + 1);
+                }
+            });
+            assert_eq!(sync_generic_presence(&handle, true), PresencePhase::Present);
+            let before = runs.get();
+            assert_eq!(
+                sync_generic_presence(&handle, false),
+                PresencePhase::Exiting
+            );
+            let t0 = Instant::now();
+            GENERIC_PRESENCE_REGISTRY.with(|r| {
+                for cell in r.borrow().iter() {
+                    let mut c = cell.borrow_mut();
+                    if c.gate.phase() == PresencePhase::Exiting {
+                        c.gate.exit_started = Some(t0 - Duration::from_millis(60));
+                    }
+                }
+            });
+            assert!(tick_generic_presence());
+            assert!(!handle.mounted().get());
+            assert!(
+                runs.get() > before,
+                "mounted.set(false) must flush readers after tick releases cell borrows"
+            );
         });
     }
 }

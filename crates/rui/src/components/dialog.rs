@@ -925,6 +925,77 @@ mod tests {
     }
 
     #[test]
+    fn dialog_close_does_not_rebuild_content_body() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let builds = Rc::new(Cell::new(0u32));
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("dlg_close_once__open", || false);
+            let builds = Rc::clone(&builds);
+            let live_e = Rc::clone(&live);
+            crate::core::reactivity::create_effect(move || {
+                let builds_once = Rc::clone(&builds);
+                let el = dialog("dlg_close_once").open(open).child(move || {
+                    dialog_content(DialogContentOpts::default(), move || {
+                        builds_once.set(builds_once.get() + 1);
+                        Element::new().text("body")
+                    })
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        open.set(true);
+        drain_deferred_view_remounts();
+        assert_eq!(builds.get(), 1, "open must build body once");
+
+        open.set(false);
+        drain_deferred_view_remounts();
+        assert_eq!(
+            builds.get(),
+            1,
+            "close must keep the live DialogContent tree through Exiting; rebuilding overlay/zoom is the exit hitch"
+        );
+
+        {
+            let mut tree = live.borrow_mut();
+            assert!(
+                flush_modal_shell_motion_subtree(&mut tree),
+                "close must seed exit keyframes on the live tree"
+            );
+            fn has_fade_out(el: &Element) -> bool {
+                el.style.animations.iter().any(|a| a.name == "fade-out-0")
+                    || el.children.iter().any(has_fade_out)
+            }
+            assert!(
+                has_fade_out(&tree),
+                "exit keyframes must land on the existing overlay/zoom, not a rebuilt island"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
     fn dialog_open_first_paint_is_already_fading() {
         use std::cell::RefCell;
         use std::rc::Rc;

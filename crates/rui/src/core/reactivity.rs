@@ -1560,6 +1560,18 @@ pub(crate) fn current_effect_id() -> Option<EffectId> {
     RUNTIME.with(|rt_rc| *rt_rc.borrow().current_effect.borrow())
 }
 
+/// True while a `bind_*` / `reactive_view` render effect is running.
+/// `mounted.set` inside that island would re-flush `body()`; use `set_silent`.
+pub(crate) fn current_effect_is_render_phase() -> bool {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let Some(id) = *rt.current_effect.borrow() else {
+            return false;
+        };
+        effect_phase_of(&rt, id) == EffectPhase::Render
+    })
+}
+
 /// Live owner nodes in the runtime graph (WP-R.5 / leak diagnostics).
 pub fn live_owner_count() -> usize {
     RUNTIME.with(|rt_rc| rt_rc.borrow().owners.borrow().len())

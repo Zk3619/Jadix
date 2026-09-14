@@ -7,8 +7,8 @@ use std::sync::OnceLock;
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    create_computed, create_context, isolate_reads, provide_context, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
@@ -262,6 +262,7 @@ pub fn viewport_modal_content(
     let presence = use_modal_presence(&id);
 
     reactive_anchor(view_id.clone(), move || {
+        arm_modal_open_sync(&id, open, &presence);
         assemble_modal(
             &id,
             open,
@@ -288,19 +289,42 @@ pub(crate) struct ViewportModalPortal {
     pub zs: ModalShellZs,
 }
 
-pub(crate) fn sync_viewport_modal_portal(
+/// `open.get()` lives here, not in the paint island. Tracking `open` in the view
+/// rebuilds overlay/panel/zoom on close (StructureChanged + zoom recapture).
+fn arm_modal_open_sync(id: &str, open: Signal<bool>, presence: &ModalPresenceHandle) {
+    let presence = presence.clone();
+    let id = id.to_string();
+    create_computed(move || {
+        let _ = sync_modal_presence(&presence, open.get());
+        let mounted = mounted_signal(&presence);
+        let _ = modal_sync_presence(&id, open, mounted);
+    });
+}
+
+fn viewport_modal_portal_if_mounted(
     id: &str,
     open: Signal<bool>,
     presence: &ModalPresenceHandle,
 ) -> Option<ViewportModalPortal> {
-    let phase = sync_modal_presence(presence, open.get());
     let mounted = mounted_signal(presence);
     if !mounted.get() {
         let _ = modal_sync_presence(id, open, mounted);
         return None;
     }
     let zs = modal_sync_presence(id, open, mounted)?;
-    Some(ViewportModalPortal { phase, zs })
+    Some(ViewportModalPortal {
+        phase: presence.phase(),
+        zs,
+    })
+}
+
+pub(crate) fn sync_viewport_modal_portal(
+    id: &str,
+    open: Signal<bool>,
+    presence: &ModalPresenceHandle,
+) -> Option<ViewportModalPortal> {
+    let _ = sync_modal_presence(presence, open.peek());
+    viewport_modal_portal_if_mounted(id, open, presence)
 }
 
 pub(crate) fn apply_viewport_modal_motion(
@@ -381,7 +405,7 @@ pub fn viewport_modal_motion_busy(id: &str) -> bool {
 /// Logical `open` may already be false; `true` while the exit animation is still mounted.
 pub fn viewport_modal_is_mounted(id: &str, open: Signal<bool>) -> bool {
     let presence = use_modal_presence(id);
-    let _ = sync_modal_presence(&presence, open.get());
+    let _ = sync_modal_presence(&presence, open.peek());
     mounted_signal(&presence).get()
 }
 
@@ -413,7 +437,9 @@ pub fn viewport_modal_layer(
     body: impl FnOnce(Option<PresencePhase>) -> Option<Element>,
 ) -> Element {
     let presence = use_modal_presence(id);
-    let portal = sync_viewport_modal_portal(id, open, &presence);
+    arm_modal_open_sync(id, open, &presence);
+    let _ = sync_modal_presence(&presence, open.peek());
+    let portal = viewport_modal_portal_if_mounted(id, open, &presence);
     let phase = portal.as_ref().map(|p| p.phase);
     let Some(panel) = body(phase) else {
         return Element::new();
@@ -474,7 +500,8 @@ fn assemble_modal(
     opts: ViewportModalContentOpts,
     body: Element,
 ) -> Element {
-    let Some(portal) = sync_viewport_modal_portal(id, open, presence) else {
+    let _ = sync_modal_presence(presence, open.peek());
+    let Some(portal) = viewport_modal_portal_if_mounted(id, open, presence) else {
         return Element::new().w(0.0).h(0.0);
     };
 

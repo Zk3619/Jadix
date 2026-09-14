@@ -579,56 +579,58 @@ fn build_calendar_view(
         root = root.cursor_kind(CursorKind::Pointer);
     }
 
-    let prev: Element = slots.paint(
-        SLOT_NAV_PREV,
-        button(format!("{id}:prev"))
-            .variant("ghost")
-            .size("icon-sm")
-            .disabled(disabled)
-            .on_click({
-                let y_sig = y_sig;
-                let m_sig = m_sig;
-                let f_sig = f_sig;
-                let msel = month_sel;
-                let ysel = year_sel;
-                move || {
-                    let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), -1);
-                    y_sig.set(yy);
-                    m_sig.set(mm);
-                    f_sig.set(clamp_day(yy, mm, f_sig.peek()));
-                    msel.set(mm.to_string());
-                    ysel.set(yy.to_string());
-                }
-            })
-            .child(lucide_chevron("chevron-left"))
-            .into(),
-    )
-    .flex_shrink(0.0);
-    let next: Element = slots.paint(
-        SLOT_NAV_NEXT,
-        button(format!("{id}:next"))
-            .variant("ghost")
-            .size("icon-sm")
-            .disabled(disabled)
-            .on_click({
-                let y_sig = y_sig;
-                let m_sig = m_sig;
-                let f_sig = f_sig;
-                let msel = month_sel;
-                let ysel = year_sel;
-                move || {
-                    let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), 1);
-                    y_sig.set(yy);
-                    m_sig.set(mm);
-                    f_sig.set(clamp_day(yy, mm, f_sig.peek()));
-                    msel.set(mm.to_string());
-                    ysel.set(yy.to_string());
-                }
-            })
-            .child(lucide_chevron("chevron-right"))
-            .into(),
-    )
-    .flex_shrink(0.0);
+    let prev: Element = slots
+        .paint(
+            SLOT_NAV_PREV,
+            button(format!("{id}:prev"))
+                .variant("ghost")
+                .size("icon-sm")
+                .disabled(disabled)
+                .on_click({
+                    let y_sig = y_sig;
+                    let m_sig = m_sig;
+                    let f_sig = f_sig;
+                    let msel = month_sel;
+                    let ysel = year_sel;
+                    move || {
+                        let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), -1);
+                        y_sig.set(yy);
+                        m_sig.set(mm);
+                        f_sig.set(clamp_day(yy, mm, f_sig.peek()));
+                        msel.set(mm.to_string());
+                        ysel.set(yy.to_string());
+                    }
+                })
+                .child(lucide_chevron("chevron-left"))
+                .into(),
+        )
+        .flex_shrink(0.0);
+    let next: Element = slots
+        .paint(
+            SLOT_NAV_NEXT,
+            button(format!("{id}:next"))
+                .variant("ghost")
+                .size("icon-sm")
+                .disabled(disabled)
+                .on_click({
+                    let y_sig = y_sig;
+                    let m_sig = m_sig;
+                    let f_sig = f_sig;
+                    let msel = month_sel;
+                    let ysel = year_sel;
+                    move || {
+                        let (yy, mm) = add_months(y_sig.peek(), m_sig.peek(), 1);
+                        y_sig.set(yy);
+                        m_sig.set(mm);
+                        f_sig.set(clamp_day(yy, mm, f_sig.peek()));
+                        msel.set(mm.to_string());
+                        ysel.set(yy.to_string());
+                    }
+                })
+                .child(lucide_chevron("chevron-right"))
+                .into(),
+        )
+        .flex_shrink(0.0);
 
     let dropdown = caption == CalendarCaption::Dropdown;
     let caption_el: Element = if dropdown && !disabled {
