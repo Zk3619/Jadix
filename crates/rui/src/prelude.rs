@@ -71,7 +71,10 @@ pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::app::with_ui_build_stack;
-pub use crate::app::{run, run_with, WindowBackdrop, WindowOptions};
+pub use crate::app::{
+    create_resource, error_boundary, run, run_with, suspense, throw_error, throw_resource_error,
+    Resource, ResourceState, WindowBackdrop, WindowOptions,
+};
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
@@ -85,11 +88,11 @@ pub use crate::primitives::{
     animate, animate_motion, animate_transform, boxed, canvas, circle, clip_path, defs, desc,
     effect_wrap, ellipse, fe_blend, fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur,
     fe_merge, fe_merge_node, fe_offset, filter, g, gstack, hstack, icon, image, interactive, line,
-    linear_gradient, marker, mask, mpath, pattern, r#box, rect, scene3d, set_el, stop, svg, svg_el,
-    svg_path, svg_text, svg_use, symbol, text, text_path, title, tspan, vstack, BoxBuilder,
+    linear_gradient, marker, mask, mpath, pattern, r#box, rect, scene3d, set_el, shader, stop, svg,
+    svg_el, svg_path, svg_text, svg_use, symbol, text, text_path, title, tspan, vstack, BoxBuilder,
     Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder, EffectWrapBuilder, InteractiveBuilder,
     PathBuilder, Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
-    SvgBuilder, TextBuilder,
+    ShaderBuilder, SvgBuilder, TextBuilder,
 };
 
 pub use crate::utils::font::{

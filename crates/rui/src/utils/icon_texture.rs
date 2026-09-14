@@ -58,10 +58,22 @@ fn color_f32(c: [u8; 4]) -> [f32; 4] {
 #[cfg(not(feature = "svg"))]
 fn scale_cmds(cmds: &[PathCommand], s: f32) -> Vec<PathCommand> {
     cmds.iter()
-        .map(|c| match *c {
-            PathCommand::MoveTo((x, y)) => PathCommand::MoveTo((x * s, y * s)),
-            PathCommand::LineTo((x, y)) => PathCommand::LineTo((x * s, y * s)),
-            PathCommand::Close => PathCommand::Close,
+        .cloned()
+        .map(|c| match c {
+            PathCommand::Arc {
+                radii,
+                x_rot_deg,
+                large,
+                sweep,
+                to,
+            } => PathCommand::Arc {
+                radii: (radii.0 * s, radii.1 * s),
+                x_rot_deg,
+                large,
+                sweep,
+                to: (to.0 * s, to.1 * s),
+            },
+            other => other.map_xy(|(x, y)| (x * s, y * s)),
         })
         .collect()
 }

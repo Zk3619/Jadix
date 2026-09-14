@@ -441,7 +441,7 @@ fn xml_escape_attr(s: &str) -> String {
 /// the real length instead.
 fn svg_path_d_length(d: &str) -> f32 {
     use crate::primitives::path::PathCommand;
-    let cmds = crate::primitives::path::decode_path_d(d);
+    let cmds = crate::primitives::path::flatten_path(&crate::primitives::path::decode_path_d(d));
     let mut len = 0.0f32;
     let mut cx = 0.0f32;
     let mut cy = 0.0f32;
@@ -465,6 +465,7 @@ fn svg_path_d_length(d: &str) -> f32 {
                 cx = sx;
                 cy = sy;
             }
+            PathCommand::QuadTo { .. } | PathCommand::CubicTo { .. } | PathCommand::Arc { .. } => {}
         }
     }
     len.max(1e-3)

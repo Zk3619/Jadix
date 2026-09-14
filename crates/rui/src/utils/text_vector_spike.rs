@@ -28,8 +28,7 @@ pub fn glyph_outline_to_path_commands(
     Vec::new()
 }
 
-/// Intended next step (not implemented): tessellate [`PathCommand`]s via
-/// [`crate::renderer::geometry2d::path_to_instances`] when `RUI_GPU_2D=1`.
+/// Intended next step (not implemented): feed outlines to [`crate::primitives::path::tessellate_path_mesh`].
 pub fn path_commands_ready_for_gpu2d(cmds: &[PathCommand]) -> bool {
     !cmds.is_empty()
 }

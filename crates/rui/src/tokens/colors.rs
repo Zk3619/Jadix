@@ -94,6 +94,21 @@ pub fn chart(n: u8) -> [f32; 4] {
 }
 
 #[inline]
+pub fn caret() -> [f32; 4] {
+    parse_color("caret")
+}
+
+#[inline]
+pub fn selection_background() -> [f32; 4] {
+    parse_color("selection-background")
+}
+
+#[inline]
+pub fn selection_foreground() -> [f32; 4] {
+    parse_color("selection-foreground")
+}
+
+#[inline]
 pub fn foreground_text() -> [u8; 4] {
     parse_text_color("foreground")
 }

@@ -588,12 +588,7 @@ mod tests {
             sel.style
         );
         fn pts(cmds: &[PathCommand]) -> Vec<(f32, f32)> {
-            cmds.iter()
-                .filter_map(|c| match c {
-                    PathCommand::MoveTo(p) | PathCommand::LineTo(p) => Some(*p),
-                    PathCommand::Close => None,
-                })
-                .collect()
+            crate::primitives::path::points_from_commands(cmds)
         }
         fn centroid(pts: &[(f32, f32)]) -> (f32, f32) {
             let n = pts.len().max(1) as f32;
@@ -652,13 +647,9 @@ mod tests {
         let plain = mark.render(&ctx_plain);
         let selected = mark.render(&ctx_sel);
         fn inner_r(cmds: &[PathCommand]) -> f32 {
-            cmds.iter()
-                .filter_map(|c| match c {
-                    PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
-                        Some((p.0 - 90.0).hypot(p.1 - 90.0))
-                    }
-                    PathCommand::Close => None,
-                })
+            crate::primitives::path::points_from_commands(cmds)
+                .into_iter()
+                .map(|(x, y)| (x - 90.0).hypot(y - 90.0))
                 .fold(f32::MAX, f32::min)
         }
         let sel = selected.last().expect("selected last");

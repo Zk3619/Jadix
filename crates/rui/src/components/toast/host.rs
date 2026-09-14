@@ -69,7 +69,7 @@ impl From<ToasterBuilder> for Element {
     fn from(builder: ToasterBuilder) -> Self {
         if crate::app::reactive::reactive_anchor_is_live(TOAST_HOST_VIEW) {
             #[cfg(debug_assertions)]
-            eprintln!(
+            log::warn!(
                 "rui: <Toaster> / toaster() is a singleton — mount once at the application root \
                  (sibling of the shell), like Sonner. Extra hosts share the same queue and 0×0 anchor."
             );

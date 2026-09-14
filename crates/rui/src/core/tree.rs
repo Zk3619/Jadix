@@ -525,6 +525,12 @@ pub struct TextEditPaintSync {
     pub text_align: crate::style::TextAlign,
     /// Textarea 单行溢出：软换行（默认）或横向滚动。
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
+    /// CSS `caret-color`. `None` → theme token `caret`.
+    pub caret_color: Option<[u8; 4]>,
+    /// Selection highlight. `None` → theme token `selection-background`.
+    pub selection_bg: Option<[u8; 4]>,
+    /// Selected glyph color (CSS `::selection { color }`). `None` → theme token `selection-foreground`.
+    pub selection_foreground: Option<[u8; 4]>,
 }
 
 /// 兼容旧名：与 [`TextEditPaintSync`] 相同。
