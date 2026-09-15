@@ -181,6 +181,34 @@ pub fn enrich_render_graph(graph: &mut crate::renderer::RenderGraph) {
                 .read(fx.input_key.clone())
                 .write(fx.output_key.clone()),
             );
+            if matches!(fx.kind, EffectKind::Blur) && cfg!(feature = "compute") {
+                graph.push(
+                    crate::renderer::RenderPassNode::new(
+                        crate::renderer::PassKind::Compute,
+                        format!("blur-cs-{}", fx.output_key),
+                    )
+                    .read(fx.input_key.clone())
+                    .write(fx.output_key.clone()),
+                );
+            }
+            if matches!(fx.kind, EffectKind::Particle) && cfg!(feature = "compute") {
+                graph.push(
+                    crate::renderer::RenderPassNode::new(
+                        crate::renderer::PassKind::Compute,
+                        format!("hist-cs-{}", fx.output_key),
+                    )
+                    .read(fx.input_key.clone())
+                    .write(fx.output_key.clone()),
+                );
+                graph.push(
+                    crate::renderer::RenderPassNode::new(
+                        crate::renderer::PassKind::Compute,
+                        format!("particle-cs-{}", fx.output_key),
+                    )
+                    .read(fx.input_key.clone())
+                    .write(fx.output_key.clone()),
+                );
+            }
         }
     });
 }
@@ -336,6 +364,68 @@ mod tests {
         assert_eq!(fx.len(), 1);
         assert_eq!(fx[0].kind, EffectKind::Blur);
         assert!((fx[0].strength - 0.8).abs() < 1e-4);
+    }
+
+    #[test]
+    #[cfg(feature = "compute")]
+    fn blur_effect_enriches_compute_pass() {
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(ATTR_EFFECT.into(), "blur".into());
+        queue_from_attrs(&attrs, [0.0, 0.0, 32.0, 16.0], None);
+        let mut graph = crate::renderer::RenderGraph::default();
+        enrich_render_graph(&mut graph);
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.kind == crate::renderer::PassKind::Compute),
+            "blur effect must dump PassKind::Compute"
+        );
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
+    }
+
+    #[test]
+    #[cfg(not(feature = "compute"))]
+    fn blur_effect_skips_compute_dump_without_feature() {
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(ATTR_EFFECT.into(), "blur".into());
+        queue_from_attrs(&attrs, [0.0, 0.0, 32.0, 16.0], None);
+        let mut graph = crate::renderer::RenderGraph::default();
+        enrich_render_graph(&mut graph);
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .all(|n| n.kind != crate::renderer::PassKind::Compute),
+            "default build must not dump Compute"
+        );
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
+    }
+
+    #[test]
+    #[cfg(feature = "compute")]
+    fn particle_effect_enriches_compute_pass() {
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(ATTR_EFFECT.into(), "particle".into());
+        queue_from_attrs(&attrs, [0.0, 0.0, 32.0, 16.0], None);
+        let mut graph = crate::renderer::RenderGraph::default();
+        enrich_render_graph(&mut graph);
+        let compute_n = graph
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::renderer::PassKind::Compute)
+            .count();
+        assert!(compute_n >= 2, "particle must dump hist + particle Compute");
+        let _ = take_effect_jobs();
+        let _ = take_capture_jobs();
     }
 
     #[test]

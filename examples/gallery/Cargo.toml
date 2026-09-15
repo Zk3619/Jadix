@@ -33,5 +33,8 @@ scene3d = ["rui/scene3d"]
 # WP-M.3 I420 Gallery path. Off by default.
 #   cargo run -p gallery --features image-stream
 image-stream = ["rui/image-stream"]
+# Optional wgpu compute (blur / histogram / particles / backdrop-filter).
+#   cargo run -p gallery --features compute
+compute = ["rui/compute"]
 # Deprecated alias (raster formats are always available via rui's image core).
 images = ["rui/images"]

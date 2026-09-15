@@ -4,10 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use wgpu::util::DeviceExt;
 
-use super::effect::{CaptureJob, EffectJob, EffectUniforms};
+use super::effect::{CaptureJob, EffectJob, EffectKind, EffectUniforms};
 use super::pipeline::VertexInput;
 use super::{InstanceInput, TexturedInstanceInput, TexturedQuadPipeline};
 use crate::app::image_registry::GpuImageTexture;
+use crate::renderer::compute::ComputePipelines;
 
 pub struct EffectPassGpu {
     pipeline: wgpu::RenderPipeline,
@@ -174,6 +175,7 @@ impl EffectPassGpu {
         ui_scale: f32,
         rect_pipeline: &super::RuiPipeline,
         mut text: Option<&mut super::text::RuiTextRenderer>,
+        mut compute: Option<&mut ComputePipelines>,
     ) -> bool {
         if captures.is_empty() && effects.is_empty() {
             return false;
@@ -230,7 +232,18 @@ impl EffectPassGpu {
             if images.get(&job.input_key).is_none() {
                 continue;
             }
-            if self.apply_effect(device, queue, textured, images, job, w, h, time_s, pointer) {
+            if self.apply_effect(
+                device,
+                queue,
+                textured,
+                images,
+                job,
+                w,
+                h,
+                time_s,
+                pointer,
+                compute.as_deref_mut(),
+            ) {
                 any = true;
             }
         }
@@ -519,6 +532,7 @@ impl EffectPassGpu {
         h: u32,
         time_s: f32,
         pointer: [f32; 2],
+        mut compute: Option<&mut ComputePipelines>,
     ) -> bool {
         let Some(src) = images.get(&job.input_key) else {
             return false;
@@ -532,20 +546,54 @@ impl EffectPassGpu {
         let dst_view = dst
             ._texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rui-effect-tex-bg"),
-            layout: &self.tex_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&src_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&textured.sampler),
-                },
-            ],
-        });
+        if matches!(job.kind, EffectKind::Blur) {
+            if let Some(cs) = compute.as_mut().and_then(|p| p.blur.as_mut()) {
+                let sigma = (2.0 + job.strength * 6.0).max(0.5);
+                if let Some(blurred) = cs.blur_submit(device, queue, &src_view, w, h, sigma) {
+                    let u = EffectUniforms {
+                        mode: 0.0,
+                        time: time_s,
+                        pointer: [0.0, 0.0],
+                        strength: 0.0,
+                        _pad0: 0.0,
+                        texel: [1.0 / w as f32, 1.0 / h as f32],
+                        _pad1: [0.0; 4],
+                    };
+                    return self.draw_fsq(device, queue, textured, blurred, &dst_view, &u);
+                }
+            }
+        }
+        if matches!(job.kind, EffectKind::Particle) {
+            if let Some(pipes) = compute.as_mut() {
+                if let Some(hist) = pipes.histogram.as_mut() {
+                    hist.submit(device, queue, &src_view, w, h);
+                }
+                let hist_bins = pipes.histogram.as_ref().map(|h| h.bins_buffer());
+                if let Some(p) = pipes.particles.as_mut() {
+                    if let Some(field) = p.submit(
+                        device,
+                        queue,
+                        &src_view,
+                        hist_bins,
+                        w,
+                        h,
+                        time_s,
+                        job.strength,
+                    ) {
+                        let u = EffectUniforms {
+                            mode: 0.0,
+                            time: time_s,
+                            pointer: [0.0, 0.0],
+                            strength: 0.0,
+                            _pad0: 0.0,
+                            texel: [1.0 / w as f32, 1.0 / h as f32],
+                            _pad1: [0.0; 4],
+                        };
+                        return self.draw_fsq(device, queue, textured, field, &dst_view, &u);
+                    }
+                }
+            }
+        }
         let u = EffectUniforms {
             mode: job.kind.as_mode() as f32,
             time: time_s,
@@ -558,7 +606,33 @@ impl EffectPassGpu {
             texel: [1.0 / w as f32, 1.0 / h as f32],
             _pad1: [0.0; 4],
         };
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
+        self.draw_fsq(device, queue, textured, &src_view, &dst_view, &u)
+    }
+
+    fn draw_fsq(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textured: &TexturedQuadPipeline,
+        src_view: &wgpu::TextureView,
+        dst_view: &wgpu::TextureView,
+        u: &EffectUniforms,
+    ) -> bool {
+        let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rui-effect-tex-bg"),
+            layout: &self.tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&textured.sampler),
+                },
+            ],
+        });
+        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(u));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rui-effect-enc"),
@@ -567,7 +641,7 @@ impl EffectPassGpu {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rui-effect-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &dst_view,
+                    view: dst_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {

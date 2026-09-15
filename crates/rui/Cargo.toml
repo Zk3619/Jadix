@@ -84,6 +84,13 @@ images = []
 cursor-images = []
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
 scene3d = []
+# Optional wgpu compute (blur / histogram / particles / backdrop-filter).
+# Off by default so GLES / gallery / calculator stay fragment-only.
+# Still adapter-gated: GLES reports compute: no even with this feature.
+#   cargo run -p gallery --features compute
+#   cargo test -p rui --lib --features compute
+# Workspace unification: do not enable from calculator / gpu_probe.
+compute = []
 # WP-M.3: YUV (NV12 / I420 / P010) → BT.709 RGBA for ImageStream. Off by default.
 # Zero decoder crates — applications inject demux.
 image-stream = []

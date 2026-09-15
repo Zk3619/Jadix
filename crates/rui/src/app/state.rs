@@ -74,6 +74,7 @@ pub(super) struct AppState {
     /// Retained so secondary windows can `create_surface` on the same GPU backend.
     pub(super) instance: wgpu::Instance,
     pub(super) adapter: wgpu::Adapter,
+    pub(super) gpu_caps: crate::renderer::GpuCaps,
     pub(super) device: Arc<wgpu::Device>,
     pub(super) queue: Arc<wgpu::Queue>,
     pub(super) surface: wgpu::Surface<'static>,
@@ -88,6 +89,7 @@ pub(super) struct AppState {
     backdrop_blur: BackdropBlurPipeline,
     effect_pass: crate::renderer::EffectPassGpu,
     css_filter_pass: crate::renderer::CssFilterPassGpu,
+    compute: crate::renderer::ComputePipelines,
     /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
     present_retain: PresentRetainPipeline,
     image_textures: crate::renderer::TexturePool,
@@ -750,6 +752,7 @@ fn capture_page_stack_local_backdrop(
     shadow_tex_cache: &HashMap<u64, super::image_registry::GpuImageTexture>,
     text_renderer: &crate::renderer::RuiTextRenderer,
     page_stack_band_text_renderers: &[crate::renderer::RuiTextRenderer],
+    compute: Option<&mut crate::renderer::ComputePipelines>,
 ) {
     let dummy = pipeline.dummy_backdrop();
     backdrop.ensure_size(device, surface_w, surface_h, surface_format);
@@ -829,7 +832,7 @@ fn capture_page_stack_local_backdrop(
         }
     }
 
-    backdrop.blur(device, queue, &mut cap_encoder, radius_px);
+    backdrop.blur(device, queue, &mut cap_encoder, radius_px, compute);
     queue.submit(std::iter::once(cap_encoder.finish()));
 }
 
@@ -1185,56 +1188,91 @@ impl AppState {
     }
 
     /// Create the instance / surface / adapter triple from the first backend that works.
-    async fn acquire_adapter(
+    async fn acquire_gpu(
         window: &Arc<Window>,
         force_software: bool,
         compositor_alpha: bool,
-    ) -> (wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter) {
-        let candidates = crate::platform::gpu_backend_candidates(compositor_alpha);
-        if !force_software {
-            for (backends, name) in &candidates {
-                let instance = crate::renderer::wgpu_compat::instance(*backends);
-                let Ok(surface) = instance.create_surface(window.clone()) else {
-                    log::debug!("backend {name}: no surface");
-                    continue;
-                };
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        // Integrated GPU for 2D UI — lower working set than discrete.
-                        power_preference: wgpu::PowerPreference::LowPower,
-                        compatible_surface: Some(&surface),
-                        force_fallback_adapter: false,
-                        ..Default::default()
-                    })
-                    .await;
-                if let Ok(adapter) = adapter {
-                    log::info!("gpu backend: {name} ({})", adapter.get_info().name);
-                    return (instance, surface, adapter);
-                }
-                log::debug!("backend {name}: no adapter");
-            }
-        }
-
-        // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
-        for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN] {
+    ) -> (
+        wgpu::Instance,
+        wgpu::Surface<'static>,
+        wgpu::Adapter,
+        wgpu::Device,
+        wgpu::Queue,
+    ) {
+        async fn try_backend(
+            window: &Arc<Window>,
+            backends: wgpu::Backends,
+            name: &str,
+            force_fallback: bool,
+        ) -> Option<(
+            wgpu::Instance,
+            wgpu::Surface<'static>,
+            wgpu::Adapter,
+            wgpu::Device,
+            wgpu::Queue,
+        )> {
             let instance = crate::renderer::wgpu_compat::instance(backends);
             let Ok(surface) = instance.create_surface(window.clone()) else {
-                continue;
+                log::debug!("backend {name}: no surface");
+                return None;
             };
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: Some(&surface),
-                    force_fallback_adapter: true,
+                    force_fallback_adapter: force_fallback,
                     ..Default::default()
                 })
-                .await;
-            if let Ok(adapter) = adapter {
-                log::warn!(
-                    "falling back to software adapter: {}",
-                    adapter.get_info().name
-                );
-                return (instance, surface, adapter);
+                .await
+                .ok()?;
+            let required_limits = crate::renderer::limits_for(&adapter);
+            match adapter
+                .request_device(&crate::renderer::wgpu_compat::device_desc(
+                    None,
+                    required_limits,
+                    wgpu::MemoryHints::MemoryUsage,
+                ))
+                .await
+            {
+                Ok((device, queue)) => {
+                    if force_fallback {
+                        log::warn!(
+                            "falling back to software adapter: {}",
+                            adapter.get_info().name
+                        );
+                    } else {
+                        let caps = crate::renderer::probe_gpu_caps(&adapter);
+                        log::info!(
+                            "gpu backend: {name} ({}) compute: {}",
+                            adapter.get_info().name,
+                            crate::renderer::compute_yes_no(caps)
+                        );
+                    }
+                    Some((instance, surface, adapter, device, queue))
+                }
+                Err(e) => {
+                    log::warn!("backend {name}: device failed: {e}");
+                    None
+                }
+            }
+        }
+
+        let candidates = crate::platform::gpu_backend_candidates(compositor_alpha);
+        if !force_software {
+            for (backends, name) in &candidates {
+                if let Some(gpu) = try_backend(window, *backends, name, false).await {
+                    return gpu;
+                }
+            }
+        }
+
+        // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
+        for (backends, name) in [
+            (wgpu::Backends::DX12, "dx12-software"),
+            (wgpu::Backends::VULKAN, "vulkan-software"),
+        ] {
+            if let Some(gpu) = try_backend(window, backends, name, true).await {
+                return gpu;
             }
         }
 
@@ -1271,8 +1309,9 @@ impl AppState {
         // user-mode drivers commit ~80 MB of private heaps at device creation, while
         // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
         // not need what DX12 buys, so GL leads and the others stay as fallbacks.
-        let (instance, surface, adapter) =
-            Self::acquire_adapter(&window, force_software, compositor_alpha).await;
+        let (instance, surface, adapter, device, queue) =
+            Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+        crate::renderer::wgpu_compat::install_device_error_handlers(&device);
         let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             TextRendererBackend::CpuTextHybrid
         } else {
@@ -1280,26 +1319,10 @@ impl AppState {
         };
         log::warn!("text renderer backend: {:?}", text_backend);
 
-        let adapter_limits = adapter.limits();
-        // Keep lean 2D defaults, but lift 2D texture cap to the adapter — otherwise maximize /
-        // large windows (>2048px) panic when configuring the swapchain.
-        let mut required_limits = wgpu::Limits::downlevel_defaults();
-        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
-        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        required_limits.max_texture_dimension_3d = adapter_limits
-            .max_texture_dimension_3d
-            .min(required_limits.max_texture_dimension_3d.max(2048));
-
-        let (device, queue) = adapter
-            .request_device(&crate::renderer::wgpu_compat::device_desc(
-                None,
-                required_limits,
-                wgpu::MemoryHints::MemoryUsage,
-            ))
-            .await
-            .unwrap();
+        let mut gpu_caps = crate::renderer::probe_gpu_caps(&adapter);
         let device = Arc::new(device);
         let queue = Arc::new(queue);
+        let compute = crate::renderer::ComputePipelines::new(&device, &mut gpu_caps);
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -1406,6 +1429,7 @@ impl AppState {
             window,
             instance,
             adapter,
+            gpu_caps,
             device,
             queue,
             surface,
@@ -1420,6 +1444,7 @@ impl AppState {
             backdrop_blur,
             effect_pass,
             css_filter_pass,
+            compute,
             present_retain,
             image_textures: crate::renderer::TexturePool::new(),
             textured_instance_buffer,
@@ -4475,49 +4500,80 @@ impl AppState {
         }
         #[cfg(feature = "scene3d")]
         {
-            let gpu = self
-                .scene3d
-                .get_or_insert_with(|| crate::renderer::scene3d::Scene3dGpu::new(&self.device));
-            if gpu.flush(
-                &self.device,
-                &self.queue,
-                &self.textured_pipeline,
-                &mut self.image_textures,
-            ) {
-                // Collect already ran under `&mut self`; do not go through `runtime::request_redraw`.
-                self.window.request_redraw();
-            }
-        }
-        {
-            if crate::primitives::path::has_path_jobs() || self.path2d.is_some() {
-                let samples = crate::renderer::path_pipeline::path_msaa_sample_count(&self.adapter);
-                let gpu = self.path2d.get_or_insert_with(|| {
-                    crate::renderer::path_pipeline::PathGpu::new(&self.device, samples)
-                });
-                if gpu.flush(
-                    &self.device,
-                    &self.queue,
-                    &self.textured_pipeline,
-                    &mut self.image_textures,
-                ) {
-                    self.window.request_redraw();
+            if !crate::renderer::scene3d::scene3d_gpu_enabled() {
+                let _ = crate::primitives::scene3d::take_scene3d_jobs();
+            } else if crate::primitives::scene3d::has_scene3d_jobs() || self.scene3d.is_some() {
+                if self.scene3d.is_none() {
+                    match crate::renderer::scene3d::Scene3dGpu::try_new(&self.device) {
+                        Some(gpu) => self.scene3d = Some(gpu),
+                        None => {
+                            crate::renderer::scene3d::disable_scene3d_gpu_runtime();
+                            let _ = crate::primitives::scene3d::take_scene3d_jobs();
+                        }
+                    }
+                }
+                if let Some(gpu) = self.scene3d.as_mut() {
+                    if gpu.flush(
+                        &self.device,
+                        &self.queue,
+                        &self.textured_pipeline,
+                        &mut self.image_textures,
+                    ) {
+                        // Collect already ran under `&mut self`; do not go through `runtime::request_redraw`.
+                        self.window.request_redraw();
+                    }
                 }
             }
         }
         {
-            if crate::primitives::shader::has_shader_jobs() || self.shader.is_some() {
-                let gpu = self.shader.get_or_insert_with(|| {
-                    crate::renderer::shader_leaf::ShaderGpu::new(&self.device)
-                });
-                if gpu.flush(
-                    &self.device,
-                    &self.queue,
-                    &self.textured_pipeline,
-                    &mut self.image_textures,
-                    crate::style::global_time_s(),
-                    mouse_pos,
-                ) {
-                    self.window.request_redraw();
+            if crate::primitives::path::has_path_jobs() || self.path2d.is_some() {
+                if self.path2d.is_none() {
+                    let samples =
+                        crate::renderer::path_pipeline::path_msaa_sample_count(&self.adapter);
+                    match crate::renderer::path_pipeline::PathGpu::try_new(&self.device, samples) {
+                        Some(gpu) => self.path2d = Some(gpu),
+                        None => {
+                            crate::renderer::geometry2d::disable_gpu2d_runtime();
+                            let _ = crate::primitives::path::take_path_jobs();
+                        }
+                    }
+                }
+                if let Some(gpu) = self.path2d.as_mut() {
+                    if gpu.flush(
+                        &self.device,
+                        &self.queue,
+                        &self.textured_pipeline,
+                        &mut self.image_textures,
+                    ) {
+                        self.window.request_redraw();
+                    }
+                }
+            }
+        }
+        {
+            if !crate::renderer::shader_leaf::shader_gpu_enabled() {
+                let _ = crate::primitives::shader::take_shader_jobs();
+            } else if crate::primitives::shader::has_shader_jobs() || self.shader.is_some() {
+                if self.shader.is_none() {
+                    match crate::renderer::shader_leaf::ShaderGpu::try_new(&self.device) {
+                        Some(gpu) => self.shader = Some(gpu),
+                        None => {
+                            crate::renderer::shader_leaf::disable_shader_gpu_runtime();
+                            let _ = crate::primitives::shader::take_shader_jobs();
+                        }
+                    }
+                }
+                if let Some(gpu) = self.shader.as_mut() {
+                    if gpu.flush(
+                        &self.device,
+                        &self.queue,
+                        &self.textured_pipeline,
+                        &mut self.image_textures,
+                        crate::style::global_time_s(),
+                        mouse_pos,
+                    ) {
+                        self.window.request_redraw();
+                    }
                 }
             }
         }
@@ -4527,6 +4583,7 @@ impl AppState {
         let capture_n = captures.len();
         let fx_begin = Instant::now();
         let mut fx_dirty = false;
+        let use_compute = self.gpu_caps.compute;
         if self.effect_pass.flush(
             &self.device,
             &self.queue,
@@ -4539,6 +4596,11 @@ impl AppState {
             ui_scale,
             &self.pipeline,
             Some(&mut self.capture_text_renderer),
+            if use_compute {
+                Some(&mut self.compute)
+            } else {
+                None
+            },
         ) {
             fx_dirty = true;
         }
@@ -4550,6 +4612,11 @@ impl AppState {
             &mut self.image_textures,
             &filters,
             ui_scale,
+            if use_compute {
+                self.compute.blur.as_mut()
+            } else {
+                None
+            },
         ) {
             fx_dirty = true;
         }
@@ -5223,7 +5290,7 @@ impl AppState {
             {
                 let total_ms = render_begin.elapsed().as_secs_f32() * 1000.0;
                 if total_ms >= 200.0 {
-                    eprintln!(
+                    log::warn!(
                         "slow render {total_ms:.0}ms skip_present=true idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} captures={capture_n} modal_css={}",
                         (pre_done - render_begin).as_secs_f32() * 1000.0,
                         (layout_done - pre_done).as_secs_f32() * 1000.0,
@@ -5384,6 +5451,11 @@ impl AppState {
                     &self.shadow_tex_cache,
                     &self.text_renderer,
                     &self.page_stack_band_text_renderers,
+                    if self.gpu_caps.compute {
+                        Some(&mut self.compute)
+                    } else {
+                        None
+                    },
                 );
                 if let Some(view) = self.backdrop_blur.blurred_view() {
                     let idx = live_backdrops.len();
@@ -5672,6 +5744,11 @@ impl AppState {
                     &self.queue,
                     &mut encoder,
                     max_backdrop_blur_logical * modal_underlay_opacity * ui_scale,
+                    if self.gpu_caps.compute {
+                        Some(&mut self.compute)
+                    } else {
+                        None
+                    },
                 );
                 // Same UV space as capture / TexturedQuadPipeline (rect top → uv.y = 0).
                 // Destination is retain (draw_to_retain forced above); never Load the swapchain.
@@ -6143,7 +6220,7 @@ impl AppState {
 
             let total_ms = (draw_done - render_begin).as_secs_f32() * 1000.0;
             if total_ms >= 200.0 {
-                eprintln!(
+                log::warn!(
                     "slow render {total_ms:.0}ms skip_present=false idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} acquire={:.1} encode={:.1} submit={:.1} present={:.1} captures={capture_n} modal_css={}",
                     (pre_done - render_begin).as_secs_f32() * 1000.0,
                     (layout_done - pre_done).as_secs_f32() * 1000.0,

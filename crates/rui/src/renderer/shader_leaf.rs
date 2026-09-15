@@ -5,6 +5,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -13,6 +14,16 @@ use crate::app::image_registry::GpuImageTexture;
 use crate::primitives::shader::take_shader_jobs;
 use crate::renderer::pipeline::VertexInput;
 use crate::renderer::TexturedQuadPipeline;
+
+static RUNTIME_ON: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn shader_gpu_enabled() -> bool {
+    RUNTIME_ON.load(Ordering::Relaxed)
+}
+
+pub(crate) fn disable_shader_gpu_runtime() {
+    RUNTIME_ON.store(false, Ordering::Relaxed);
+}
 
 const PREAMBLE: &str = include_str!("shader_preamble.wgsl");
 const FALLBACK_FS: &str = r#"
@@ -79,7 +90,23 @@ pub struct ShaderGpu {
 }
 
 impl ShaderGpu {
-    pub fn new(device: &wgpu::Device) -> Self {
+    /// Magenta fallback PSO. `None` if even that fails — caller skips shader leaves (E2).
+    pub fn try_new(device: &wgpu::Device) -> Option<Self> {
+        match crate::renderer::wgpu_compat::try_gpu_init(
+            device,
+            "shader() fallback pipeline failed; shader leaves disabled",
+            || Self::build(device),
+        ) {
+            Some(Some(gpu)) => Some(gpu),
+            Some(None) => {
+                log::warn!("shader() fallback pipeline failed; shader leaves disabled");
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn build(device: &wgpu::Device) -> Option<Self> {
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rui-shader-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -130,6 +157,22 @@ impl ShaderGpu {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -142,8 +185,7 @@ impl ShaderGpu {
             &layout,
             &compose_user_wgsl(FALLBACK_FS),
             wgpu::TextureFormat::Rgba8UnormSrgb,
-        )
-        .expect("fallback shader pipeline");
+        )?;
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rui-shader-uniforms"),
@@ -212,7 +254,7 @@ impl ShaderGpu {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        Self {
+        Some(Self {
             fallback,
             layout,
             uniform_buf,
@@ -230,7 +272,7 @@ impl ShaderGpu {
             target_size: HashMap::new(),
             had_good_frame: HashMap::new(),
             buf_tex: HashMap::new(),
-        }
+        })
     }
 
     /// Returns `true` if any leaf was drawn (caller should `window.request_redraw` for time).
@@ -308,15 +350,20 @@ impl ShaderGpu {
 
         let slot0_user = job.tex_key.as_deref().filter(|k| *k != job.key.as_str());
         let slot1_user = job.tex_key1.as_deref().filter(|k| *k != job.key.as_str());
+        let slot2_user = job.tex_key2.as_deref().filter(|k| *k != job.key.as_str());
         let buf_on_0 = job.buffer && slot0_user.is_none();
         let buf_on_1 = job.buffer && slot0_user.is_some() && slot1_user.is_none();
-        if buf_on_0 || buf_on_1 {
+        let buf_on_2 =
+            job.buffer && slot0_user.is_some() && slot1_user.is_some() && slot2_user.is_none();
+        if buf_on_0 || buf_on_1 || buf_on_2 {
             self.ensure_buf(device, &job.key, w, h);
         }
         let src0_owned = resolve_src_view(images, slot0_user, buf_on_0, self.buf_tex.get(&job.key));
         let src1_owned = resolve_src_view(images, slot1_user, buf_on_1, self.buf_tex.get(&job.key));
+        let src2_owned = resolve_src_view(images, slot2_user, buf_on_2, self.buf_tex.get(&job.key));
         let src0 = src0_owned.as_ref().unwrap_or(&self.dummy_view);
         let src1 = src1_owned.as_ref().unwrap_or(&self.dummy_view);
+        let src2 = src2_owned.as_ref().unwrap_or(&self.dummy_view);
         let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rui-shader-src-bg"),
             layout: &self.tex_bgl,
@@ -335,6 +382,14 @@ impl ShaderGpu {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(src2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
@@ -612,6 +667,7 @@ mod tests {
         assert!(src.contains("var<uniform> u"));
         assert!(src.contains("var t_src"));
         assert!(src.contains("var t_src1"));
+        assert!(src.contains("var t_src2"));
         assert!(src.contains("fn fs_main"));
     }
 }

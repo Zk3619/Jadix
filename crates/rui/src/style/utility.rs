@@ -443,6 +443,27 @@ pub fn patch_class_set_base_paint(
     }
 }
 
+/// Keep `display` in the restore snapshot.
+///
+/// Chrome [`resolve_class_variants`] clones `base_style` after `reactive_sync`.
+/// Questionnaire (and any hover-class node) that toggles `Display::None` would
+/// otherwise flash Flex for one frame whenever a `data-*` attr changes the
+/// variant fingerprint.
+pub fn patch_class_set_base_display(el: &mut Element) {
+    let display = el.style.display;
+    let Some(cs) = el.class_set.as_mut() else {
+        return;
+    };
+    let Some(s) = cs.base_style.as_mut() else {
+        return;
+    };
+    if s.display == display {
+        return;
+    }
+    s.display = display;
+    cs.last_ctx_fp = None;
+}
+
 /// After ButtonGroup join rewrites inner corners, keep those radii in the restore snapshot.
 pub fn patch_class_set_base_radii(el: &mut Element) {
     let radii = el.style.radii;
@@ -2959,6 +2980,53 @@ mod tests {
         let cs = el.class_set.as_ref().unwrap();
         assert!(cs.base.iter().any(|t| t == "flex"));
         assert_eq!(cs.variants.len(), 2);
+    }
+
+    #[test]
+    fn class_variant_restore_keeps_patched_display_none() {
+        use taffy::style::Display;
+        let mut el = Element::new();
+        apply_class_list(&mut el, "hover:bg-accent");
+        el.style.display = Display::None;
+        patch_class_set_base_display(&mut el);
+        el.attrs
+            .insert("data-status".to_string(), "unanswered".to_string());
+        el.layout_bounds = [8.0, 8.0, 80.0, 32.0];
+
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [-1.0e9, -1.0e9],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(el.style.display, Display::None);
+
+        el.attrs
+            .insert("data-status".to_string(), "answered".to_string());
+        el.style.display = Display::None;
+        patch_class_set_base_display(&mut el);
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [-1.0e9, -1.0e9],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            el.style.display,
+            Display::None,
+            "data-* fingerprint change must not restore Flex over Display::None"
+        );
     }
 
     #[test]

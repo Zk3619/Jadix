@@ -3,6 +3,7 @@
 //! 仅 `scene3d` feature。无 glTF / 无 three.js。采样走 [`TexturedQuadPipeline`]。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -11,6 +12,16 @@ use crate::app::image_registry::GpuImageTexture;
 use crate::primitives::scene3d::take_scene3d_jobs;
 use crate::renderer::textured_pipeline::TexturedInstanceInput;
 use crate::renderer::TexturedQuadPipeline;
+
+static RUNTIME_ON: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn scene3d_gpu_enabled() -> bool {
+    RUNTIME_ON.load(Ordering::Relaxed)
+}
+
+pub(crate) fn disable_scene3d_gpu_runtime() {
+    RUNTIME_ON.store(false, Ordering::Relaxed);
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -52,7 +63,15 @@ pub struct Scene3dGpu {
 }
 
 impl Scene3dGpu {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn try_new(device: &wgpu::Device) -> Option<Self> {
+        crate::renderer::wgpu_compat::try_gpu_init(
+            device,
+            "scene3d GPU pipeline failed; 3D leaves disabled",
+            || Self::build(device),
+        )
+    }
+
+    fn build(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rui-scene3d-shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("scene3d.wgsl").into()),
@@ -225,12 +244,10 @@ impl Scene3dGpu {
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
         self.ensure_depth(device, w, h);
-        let depth_view = self
-            .depth
-            .as_ref()
-            .expect("scene3d depth")
-            .2
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let Some((_, _, depth_tex)) = self.depth.as_ref() else {
+            return;
+        };
+        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         let aspect = w as f32 / h as f32;
         let mvp = mul4(

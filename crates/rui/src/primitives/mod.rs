@@ -50,6 +50,7 @@ pub use scene3d::{
 };
 pub use shader::{
     shader, ShaderBuilder, ShaderUniform, ATTR_SHADER, ATTR_SHADER_TEX, ATTR_SHADER_TEX1,
+    ATTR_SHADER_TEX2,
 };
 pub use svg::{
     animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse, fe_blend,

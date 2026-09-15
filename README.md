@@ -84,6 +84,8 @@ rui/
 
 ```bash
 cargo run -p gallery
+# Optional wgpu compute (blur / histogram / particles / backdrop-filter):
+# cargo run -p gallery --features compute
 ```
 
 ### 3) 启用开发期热重载（可选） | Enable dev hot reload (optional)

@@ -12,6 +12,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::compute::ComputePipelines;
 use super::pipeline::VertexInput;
 
 /// wgpu minimum offset alignment for dynamic uniform buffers.
@@ -363,12 +364,16 @@ impl BackdropBlurPipeline {
     }
 
     /// Blur `scene` with a CSS-like Gaussian (σ ≈ radius_px).
+    ///
+    /// With `--features compute` and a live [`ComputePipelines`], H/V (and large-image
+    /// downsample) run as compute; fragment downsample/upsample stay for sRGB surfaces.
     pub fn blur(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         radius_px: f32,
+        mut compute: Option<&mut ComputePipelines>,
     ) {
         let radius = radius_px.clamp(0.5, 64.0);
         let factor = Self::work_factor(radius);
@@ -391,6 +396,35 @@ impl BackdropBlurPipeline {
         let sigma_work = (radius / factor as f32).clamp(0.5, 32.0);
         // Destination texel in shared 0–1 UV space (correct footprint for reduce).
         let work_texel = [1.0 / work_a.width as f32, 1.0 / work_a.height as f32];
+        let work_w = work_a.width;
+        let work_h = work_a.height;
+
+        if let Some(pipes) = compute.as_mut() {
+            if Self::try_compute_from_scene(
+                device,
+                queue,
+                encoder,
+                pipes,
+                &self.pipeline,
+                &self.uniforms_buffer,
+                &self.uniforms_bind_group,
+                &self.vertex_buffer,
+                &self.index_buffer,
+                self.num_indices,
+                &self.tex_bgl,
+                &self.sampler,
+                &scene.view,
+                &full.view,
+                factor,
+                work_w,
+                work_h,
+                work_texel,
+                sigma_work,
+            ) {
+                return;
+            }
+        }
+
         let mut slot = 0u32;
 
         if factor > 1 {
@@ -433,6 +467,31 @@ impl BackdropBlurPipeline {
                 1.0,
                 wgpu::Color::TRANSPARENT,
             );
+        }
+
+        if let Some(pipes) = compute.as_mut() {
+            if Self::try_compute_hv(
+                device,
+                queue,
+                encoder,
+                pipes,
+                &self.pipeline,
+                &self.uniforms_buffer,
+                &self.uniforms_bind_group,
+                &self.vertex_buffer,
+                &self.index_buffer,
+                self.num_indices,
+                &self.tex_bgl,
+                &self.sampler,
+                &work_a.view,
+                &full.view,
+                work_w,
+                work_h,
+                work_texel,
+                sigma_work,
+            ) {
+                return;
+            }
         }
 
         // Separable Gaussian: H then V (isotropic).
@@ -536,6 +595,195 @@ impl BackdropBlurPipeline {
             1.0,
             wgpu::Color::TRANSPARENT,
         );
+    }
+
+    fn tex_bind(
+        device: &wgpu::Device,
+        tex_bgl: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Backdrop Blur Compute Tex BG"),
+            layout: tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    fn upsample_from(
+        pipeline: &wgpu::RenderPipeline,
+        uniforms_buffer: &wgpu::Buffer,
+        uniforms_bind_group: &wgpu::BindGroup,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        num_indices: u32,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        src_bg: &wgpu::BindGroup,
+        dst: &wgpu::TextureView,
+        work_texel: [f32; 2],
+    ) {
+        let mut slot = 0u32;
+        Self::dispatch_pass(
+            &mut slot,
+            pipeline,
+            uniforms_buffer,
+            uniforms_bind_group,
+            vertex_buffer,
+            index_buffer,
+            num_indices,
+            queue,
+            encoder,
+            src_bg,
+            dst,
+            work_texel,
+            [0.0, 0.0],
+            0.0,
+            2.0,
+            1.0,
+            wgpu::Color::TRANSPARENT,
+        );
+    }
+
+    fn try_compute_hv(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pipes: &mut ComputePipelines,
+        pipeline: &wgpu::RenderPipeline,
+        uniforms_buffer: &wgpu::Buffer,
+        uniforms_bind_group: &wgpu::BindGroup,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        num_indices: u32,
+        tex_bgl: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        src: &wgpu::TextureView,
+        full: &wgpu::TextureView,
+        work_w: u32,
+        work_h: u32,
+        work_texel: [f32; 2],
+        sigma_work: f32,
+    ) -> bool {
+        let Some(cs) = pipes.blur.as_mut() else {
+            return false;
+        };
+        if !cs.blur_encode(device, queue, encoder, src, work_w, work_h, sigma_work) {
+            return false;
+        }
+        let Some(view) = cs.result_view() else {
+            return false;
+        };
+        let bg = Self::tex_bind(device, tex_bgl, sampler, view);
+        Self::upsample_from(
+            pipeline,
+            uniforms_buffer,
+            uniforms_bind_group,
+            vertex_buffer,
+            index_buffer,
+            num_indices,
+            queue,
+            encoder,
+            &bg,
+            full,
+            work_texel,
+        );
+        true
+    }
+
+    fn try_compute_from_scene(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pipes: &mut ComputePipelines,
+        pipeline: &wgpu::RenderPipeline,
+        uniforms_buffer: &wgpu::Buffer,
+        uniforms_bind_group: &wgpu::BindGroup,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        num_indices: u32,
+        tex_bgl: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        scene: &wgpu::TextureView,
+        full: &wgpu::TextureView,
+        factor: u32,
+        work_w: u32,
+        work_h: u32,
+        work_texel: [f32; 2],
+        sigma_work: f32,
+    ) -> bool {
+        if factor <= 1 {
+            return Self::try_compute_hv(
+                device,
+                queue,
+                encoder,
+                pipes,
+                pipeline,
+                uniforms_buffer,
+                uniforms_bind_group,
+                vertex_buffer,
+                index_buffer,
+                num_indices,
+                tex_bgl,
+                sampler,
+                scene,
+                full,
+                work_w,
+                work_h,
+                work_texel,
+                sigma_work,
+            );
+        }
+        let down_ok = pipes
+            .histogram
+            .as_mut()
+            .is_some_and(|h| h.downsample_encode(device, queue, encoder, scene, work_w, work_h));
+        if !down_ok {
+            return false;
+        }
+        let src = {
+            let Some(view) = pipes.histogram.as_ref().and_then(|h| h.result_view()) else {
+                return false;
+            };
+            // Copy the view handle by encoding from it immediately.
+            let Some(cs) = pipes.blur.as_mut() else {
+                return false;
+            };
+            if !cs.blur_encode(device, queue, encoder, view, work_w, work_h, sigma_work) {
+                return false;
+            }
+            cs.result_view().is_some()
+        };
+        if !src {
+            return false;
+        }
+        let Some(view) = pipes.blur.as_ref().and_then(|b| b.result_view()) else {
+            return false;
+        };
+        let bg = Self::tex_bind(device, tex_bgl, sampler, view);
+        Self::upsample_from(
+            pipeline,
+            uniforms_buffer,
+            uniforms_bind_group,
+            vertex_buffer,
+            index_buffer,
+            num_indices,
+            queue,
+            encoder,
+            &bg,
+            full,
+            work_texel,
+        );
+        true
     }
 
     /// Blit the blurred full-res result onto `dst` with the same UV orientation as capture.

@@ -68,13 +68,7 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
             );
             continue;
         }
-        let adapter_limits = adapter.limits();
-        let mut required_limits = wgpu::Limits::downlevel_defaults();
-        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
-        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        required_limits.max_texture_dimension_3d = adapter_limits
-            .max_texture_dimension_3d
-            .min(required_limits.max_texture_dimension_3d.max(2048));
+        let required_limits = crate::renderer::limits_for(&adapter);
         let (device, queue) = match adapter
             .request_device(&crate::renderer::wgpu_compat::device_desc(
                 Some("rui glass"),
@@ -83,7 +77,10 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
             ))
             .await
         {
-            Ok(dq) => dq,
+            Ok(dq) => {
+                crate::renderer::wgpu_compat::install_device_error_handlers(&dq.0);
+                dq
+            }
             Err(e) => {
                 log::debug!("glass gpu {name}: device failed: {e}");
                 continue;
@@ -122,8 +119,9 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
         };
         surface.configure(&device, &config);
         log::info!(
-            "glass gpu: {name} ({}) alpha_mode={alpha_mode:?} format={format:?}",
-            adapter.get_info().name
+            "glass gpu: {name} ({}) alpha_mode={alpha_mode:?} format={format:?} compute: {}",
+            adapter.get_info().name,
+            crate::renderer::compute_yes_no(crate::renderer::probe_gpu_caps(&adapter))
         );
         return Some(CompositorGpu {
             instance,

@@ -29,6 +29,37 @@ pub fn take_filter_jobs() -> Vec<FilterJob> {
     FILTER_JOBS.with(|j| std::mem::take(&mut *j.borrow_mut()))
 }
 
+pub fn enrich_filter_graph(graph: &mut crate::renderer::RenderGraph) {
+    FILTER_JOBS.with(|j| {
+        for job in j.borrow().iter() {
+            graph.push(
+                crate::renderer::RenderPassNode::new(
+                    crate::renderer::PassKind::Effect,
+                    format!("filter-{}", job.output_key),
+                )
+                .read(job.input_key.clone())
+                .write(job.output_key.clone()),
+            );
+            let has_blur = job.graph.primitives.iter().any(|p| {
+                matches!(
+                    p,
+                    crate::style::svg_filter::FilterPrimitive::GaussianBlur { .. }
+                )
+            });
+            if has_blur && cfg!(feature = "compute") {
+                graph.push(
+                    crate::renderer::RenderPassNode::new(
+                        crate::renderer::PassKind::Compute,
+                        format!("blur-cs-{}", job.output_key),
+                    )
+                    .read(job.input_key.clone())
+                    .write(job.output_key.clone()),
+                );
+            }
+        }
+    });
+}
+
 /// Content-stable id: filter list + size + subtree paint fingerprint (relative geometry).
 /// Excludes screen `x/y` so scrolling reuses the same capture / filter textures.
 fn filter_cache_id(
@@ -135,6 +166,26 @@ mod tests {
         let jobs = take_filter_jobs();
         assert_eq!(jobs.len(), 1);
         assert!(!jobs[0].graph.primitives.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "compute")]
+    fn css_blur_enriches_compute_pass() {
+        let _ = take_filter_jobs();
+        let _ = take_capture_jobs();
+        let list = parse_filter("blur(4px)").unwrap();
+        queue_css_filter_wrap(&list, [0.0, 0.0, 32.0, 16.0], Vec::new(), Vec::new());
+        let mut graph = crate::renderer::RenderGraph::default();
+        enrich_filter_graph(&mut graph);
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.kind == crate::renderer::PassKind::Compute),
+            "CSS blur must dump PassKind::Compute"
+        );
+        let _ = take_filter_jobs();
+        let _ = take_capture_jobs();
     }
 
     #[test]

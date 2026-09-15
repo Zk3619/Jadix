@@ -3,7 +3,7 @@
 //! 用户 WGSL **fragment** 画到离屏 RT，再当 `rui_shader:` 贴图合成。默认构建可编译
 //!（GLES 一等），**不是** Cargo feature。失败保留上帧或品红，禁止 panic。
 //! `.texture("src", key)` / `ui!` `texture={…}` 把 compositor 槽绑到 `t_src` / `s_src`；
-//! `.texture("src1", key)` / `ui!` `src1={…}` 绑 `t_src1` / `s_src1`（缺键 1×1 白）。
+//! `.texture("src1", key)` / `ui!` `src1={…}` 绑 `t_src1`；`src2` 绑 `t_src2`（缺键 1×1 白）。
 //! `.preset("blur")` 用具名 EffectKind FS；`.buffer(true)` 把上帧绑到空槽
 //!（不要绑本叶正在画的 `rui_shader:`）。双书写：[`shader`] Builder；
 //! `ui!` `<shader wgsl={…}>`（见 `rui_macros`）。
@@ -25,6 +25,8 @@ pub const ATTR_SHADER_CUSTOM: &str = "rui_shader_custom";
 pub const ATTR_SHADER_TEX: &str = "rui_shader_tex";
 /// Slot 1 sampled texture (`t_src1` / `s_src1`).
 pub const ATTR_SHADER_TEX1: &str = "rui_shader_tex1";
+/// Slot 2 sampled texture (`t_src2` / `s_src2`).
+pub const ATTR_SHADER_TEX2: &str = "rui_shader_tex2";
 /// `1` = ping-pong Buffer: previous frame bound to an empty src slot.
 pub const ATTR_SHADER_BUFFER: &str = "rui_shader_buffer";
 
@@ -78,6 +80,7 @@ pub struct ShaderBuilder {
     custom_len: usize,
     tex: Option<String>,
     tex1: Option<String>,
+    tex2: Option<String>,
     buffer: bool,
 }
 
@@ -93,6 +96,7 @@ pub fn shader() -> ShaderBuilder {
         custom_len: 0,
         tex: None,
         tex1: None,
+        tex2: None,
         buffer: false,
     }
 }
@@ -138,15 +142,16 @@ impl ShaderBuilder {
     /// Sample a compositor texture in `fs_main`.
     ///
     /// `name`: `"src"` / `"src0"` / empty → slot 0 (`t_src`). `"src1"` / `"1"` / `"buf"` →
-    /// slot 1 (`t_src1`). Keys: `rui_path:` / `rui_canvas:` / `rui_capture:` /
-    /// `queue_media_frame` slots. Missing key → 1×1 white. Do not pass this leaf's own
-    /// `rui_shader:` key — use [`.buffer(true)`](Self::buffer) for feedback.
+    /// slot 1 (`t_src1`). `"src2"` / `"2"` → slot 2 (`t_src2`). Keys: `rui_path:` /
+    /// `rui_canvas:` / `rui_capture:` / `queue_media_frame` slots. Missing key → 1×1 white.
+    /// Do not pass this leaf's own `rui_shader:` key — use [`.buffer(true)`](Self::buffer)
+    /// for feedback.
     pub fn texture(mut self, name: impl AsRef<str>, key: impl Into<String>) -> Self {
         let key = key.into();
-        if shader_tex_slot_is_src1(name.as_ref()) {
-            self.tex1 = Some(key);
-        } else {
-            self.tex = Some(key);
+        match shader_tex_slot(name.as_ref()) {
+            1 => self.tex1 = Some(key),
+            2 => self.tex2 = Some(key),
+            _ => self.tex = Some(key),
         }
         self
     }
@@ -167,7 +172,7 @@ impl ShaderBuilder {
     }
 
     /// Ping-pong this leaf's RT. Previous frame fills the first empty src slot
-    /// (`t_src` if no `.texture`; `t_src1` if slot 0 already has a user key).
+    /// (`t_src` / `t_src1` / `t_src2` in order).
     pub fn buffer(mut self, on: bool) -> Self {
         self.buffer = on;
         self
@@ -216,6 +221,7 @@ impl From<ShaderBuilder> for Element {
             custom_len: _,
             tex,
             tex1,
+            tex2,
             buffer,
         } = builder;
         el.children.clear();
@@ -253,6 +259,11 @@ impl From<ShaderBuilder> for Element {
                 el.set_attr(ATTR_SHADER_TEX1, key);
             }
         }
+        if let Some(key) = tex2 {
+            if !key.trim().is_empty() {
+                el.set_attr(ATTR_SHADER_TEX2, key);
+            }
+        }
         if buffer {
             el.set_attr(ATTR_SHADER_BUFFER, "1");
         }
@@ -278,6 +289,7 @@ pub struct ShaderJob {
     pub custom: [f32; 16],
     pub tex_key: Option<String>,
     pub tex_key1: Option<String>,
+    pub tex_key2: Option<String>,
     pub buffer: bool,
 }
 
@@ -350,6 +362,10 @@ pub fn shader_tex_from_element_attrs(
         .get(ATTR_SHADER_TEX1)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let tex_key2 = attrs
+        .get(ATTR_SHADER_TEX2)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let buffer = matches!(
         attrs.get(ATTR_SHADER_BUFFER).map(|s| s.trim()),
         Some("1" | "true" | "yes")
@@ -366,6 +382,7 @@ pub fn shader_tex_from_element_attrs(
             custom,
             tex_key,
             tex_key1,
+            tex_key2,
             buffer,
         });
     });
@@ -401,7 +418,12 @@ pub(crate) fn enrich_shader_graph(graph: &mut crate::renderer::RenderGraph) {
                     node = node.read(k.clone());
                 }
             }
-            let ping = job.tex_key.is_none() || job.tex_key1.is_none();
+            if let Some(k) = &job.tex_key2 {
+                if k != &job.key {
+                    node = node.read(k.clone());
+                }
+            }
+            let ping = job.tex_key.is_none() || job.tex_key1.is_none() || job.tex_key2.is_none();
             if job.buffer && ping {
                 node = node.read(format!("{}:buf", job.key));
             }
@@ -410,11 +432,12 @@ pub(crate) fn enrich_shader_graph(graph: &mut crate::renderer::RenderGraph) {
     });
 }
 
-fn shader_tex_slot_is_src1(name: &str) -> bool {
-    matches!(
-        name.trim().to_ascii_lowercase().as_str(),
-        "src1" | "1" | "buf"
-    )
+fn shader_tex_slot(name: &str) -> u32 {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "src1" | "1" | "buf" | "ichannel1" => 1,
+        "src2" | "2" | "ichannel2" => 2,
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -594,6 +617,34 @@ mod tests {
         let jobs = take_shader_jobs();
         assert_eq!(jobs[0].tex_key.as_deref(), None);
         assert_eq!(jobs[0].tex_key1.as_deref(), Some("rui_path:slot1"));
+    }
+
+    #[test]
+    fn shader_texture_src2_queues_slot2() {
+        let _ = take_shader_jobs();
+        let leaf: Element = shader()
+            .w(40.0)
+            .h(24.0)
+            .wgsl(OK_FS)
+            .texture("src2", "rui_path:slot2")
+            .into();
+        assert_eq!(
+            leaf.get_attr(ATTR_SHADER_TEX2).map(|s| s.as_str()),
+            Some("rui_path:slot2")
+        );
+        assert!(leaf.get_attr(ATTR_SHADER_TEX).is_none());
+        shader_tex_from_element_attrs(&leaf.attrs, 40.0, 24.0).expect("job");
+        let mut graph = crate::renderer::RenderGraph::default();
+        enrich_shader_graph(&mut graph);
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.reads.iter().any(|k| k == "rui_path:slot2")),
+            "graph must read the slot-2 compositor key"
+        );
+        let jobs = take_shader_jobs();
+        assert_eq!(jobs[0].tex_key2.as_deref(), Some("rui_path:slot2"));
     }
 
     #[test]

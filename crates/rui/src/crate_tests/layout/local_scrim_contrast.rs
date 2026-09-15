@@ -745,7 +745,7 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
             }
             text_renderer.render(&mut pass);
         }
-        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder, 16.0);
+        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder, 16.0, None);
         let full_tex = backdrop.blurred_texture().expect("full").clone();
         let img_blur = crate::renderer::offscreen::readback_texture(
             &gpu.device,
@@ -889,7 +889,7 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("local-scrim-backdrop-64"),
             });
-        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder_64, 64.0);
+        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder_64, 64.0, None);
         let full_64 = backdrop.blurred_texture().expect("full 64").clone();
         let img_64 = crate::renderer::offscreen::readback_texture(
             &gpu.device,

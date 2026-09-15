@@ -2,21 +2,33 @@
 //!
 //! CPU coverage raster (`paint_path_premul`) remains the golden/headless fallback.
 //! Product path is on by default; set `RUI_GPU_2D=0` to force CPU raster.
+//! Runtime pipeline failure also disables GPU 2D (`error_handling.md` E2).
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use crate::primitives::path::{tessellate_path, PathCommand, PathQuad, PathStyle};
 use crate::renderer::InstanceInput;
 
+static ENV_ON: OnceLock<bool> = OnceLock::new();
+static RUNTIME_ON: AtomicBool = AtomicBool::new(true);
+
 /// Product GPU 2D path (PathPipeline). `RUI_GPU_2D=0`/`false` forces CPU golden.
 pub fn gpu2d_enabled() -> bool {
-    static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CELL.get_or_init(|| {
+    let env_on = *ENV_ON.get_or_init(|| {
         std::env::var("RUI_GPU_2D")
             .map(|v| {
                 let t = v.trim();
                 !(t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("off"))
             })
             .unwrap_or(true)
-    })
+    });
+    env_on && RUNTIME_ON.load(Ordering::Relaxed)
+}
+
+/// Turn off GPU 2D for this process after a pipeline / stencil init failure.
+pub(crate) fn disable_gpu2d_runtime() {
+    RUNTIME_ON.store(false, Ordering::Relaxed);
 }
 
 /// Flatten + tessellate a path into SDF-rect instances (thin-stroke fallback / tests).

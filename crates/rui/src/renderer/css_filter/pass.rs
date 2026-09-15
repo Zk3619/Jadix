@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt;
 
 use super::job::FilterJob;
 use crate::app::image_registry::GpuImageTexture;
+use crate::renderer::compute::ComputeBlur;
 use crate::renderer::pipeline::VertexInput;
 use crate::renderer::TexturedQuadPipeline;
 use crate::style::svg_filter::{
@@ -233,6 +234,7 @@ impl CssFilterPassGpu {
         images: &mut HashMap<String, GpuImageTexture>,
         filters: &[FilterJob],
         ui_scale: f32,
+        mut compute: Option<&mut ComputeBlur>,
     ) -> bool {
         if filters.is_empty() {
             return false;
@@ -254,7 +256,15 @@ impl CssFilterPassGpu {
             {
                 continue;
             }
-            if self.run_filter_job(device, queue, textured, images, job, ui_scale) {
+            if self.run_filter_job(
+                device,
+                queue,
+                textured,
+                images,
+                job,
+                ui_scale,
+                compute.as_deref_mut(),
+            ) {
                 self.completed_outputs.insert(job.output_key.clone());
                 any = true;
             }
@@ -343,6 +353,7 @@ impl CssFilterPassGpu {
         images: &mut HashMap<String, GpuImageTexture>,
         job: &FilterJob,
         ui_scale: f32,
+        mut compute: Option<&mut ComputeBlur>,
     ) -> bool {
         if images.get(&job.input_key).is_none() {
             return false;
@@ -371,8 +382,20 @@ impl CssFilterPassGpu {
             use_ping = !use_ping;
 
             let ok = self.dispatch_primitive(
-                device, queue, textured, images, &named, &last_key, &dst_key, prim, texel, w, h,
-                pi, scale,
+                device,
+                queue,
+                textured,
+                images,
+                &named,
+                &last_key,
+                &dst_key,
+                prim,
+                texel,
+                w,
+                h,
+                pi,
+                scale,
+                compute.as_deref_mut(),
             );
             if !ok {
                 continue;
@@ -443,6 +466,7 @@ impl CssFilterPassGpu {
         _h: u32,
         _pi: usize,
         ui_scale: f32,
+        compute: Option<&mut ComputeBlur>,
     ) -> bool {
         let mut u = FilterUniforms::default();
         u.texel = texel;
@@ -476,12 +500,22 @@ impl CssFilterPassGpu {
                 in1, std_deviation, ..
             } => {
                 let src = self.resolve_input(named, last_key, in1);
-                // H then V into dst via temp swap: write H to dst, then V from dst to alternate then copy
-                // Use two-step with intermediate in the other ping buffer already being dst — do H into dst, V needs another buffer.
-                // Simpler: H into dst_key from src; then V from dst into a scratch then blit back.
-                // Here dst_key is the chosen ping; use the other named keys for intermediate.
+                if let Some(cs) = compute {
+                    if let Some(src_img) = images.get(&src) {
+                        let src_view = src_img
+                            ._texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        let sigma = (std_deviation.0.max(std_deviation.1) * ui_scale).max(0.5);
+                        if let Some(blurred) =
+                            cs.blur_submit(device, queue, &src_view, _w, _h, sigma)
+                        {
+                            return self.blit_from_view(
+                                device, queue, textured, images, blurred, dst_key, texel,
+                            );
+                        }
+                    }
+                }
                 let mid = format!("{dst_key}__blur_mid");
-                // ensure mid exists by cloning size from dst via ensure on images
                 if let Some(&(ww, hh)) = self.target_size.get(dst_key) {
                     self.ensure_target(device, textured, images, &mid, ww, hh);
                 }
@@ -753,6 +787,79 @@ impl CssFilterPassGpu {
                 )
             }
         }
+    }
+
+    fn blit_from_view(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textured: &TexturedQuadPipeline,
+        images: &HashMap<String, GpuImageTexture>,
+        src_view: &wgpu::TextureView,
+        dst_key: &str,
+        texel: [f32; 2],
+    ) -> bool {
+        let Some(dst) = images.get(dst_key) else {
+            return false;
+        };
+        let dst_view = dst
+            ._texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut u = FilterUniforms::default();
+        u.mode = 0.0;
+        u.texel = texel;
+        let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rui-css-filter-tex-bg"),
+            layout: &self.tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&textured.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&textured.sampler),
+                },
+            ],
+        });
+        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rui-css-filter-blit-cs"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rui-css-filter-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dst_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            pass.set_bind_group(1, &tex_bg, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        true
     }
 
     fn blit_copy(

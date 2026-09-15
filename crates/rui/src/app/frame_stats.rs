@@ -4,7 +4,7 @@
 //! ([`crate::layout::collect_cache`]). Structure / layout still FullClear GPU present.
 //! Scroll invalidates the viewport layer (scissor Clear), not the whole window.
 //!
-//! Enable a stderr line with `RUI_FRAME_STATS=1`.
+//! Enable a `log::info` line with `RUI_FRAME_STATS=1` (`--features runtime-logging`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -53,7 +53,7 @@ pub fn note_collect_skip(skipped: u32, patched: u32) {
         PATCHED_DL.fetch_add(patched as u64, Ordering::Relaxed);
     }
     if frame_stats_log_enabled() && (skipped > 0 || patched > 0) {
-        eprintln!(
+        log::info!(
             "[rui] frame_stats skipped_siblings={skipped} patched_dl={patched} \
              total_skip={} total_patch={}",
             skipped_siblings_count(),

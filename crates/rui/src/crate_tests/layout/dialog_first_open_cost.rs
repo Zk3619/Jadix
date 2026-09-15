@@ -183,7 +183,7 @@ fn dialog_first_gpu_blur_and_capture_text_ms() {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("diag-first-blur"),
             });
-        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder, 16.0);
+        backdrop.blur(&gpu.device, &gpu.queue, &mut encoder, 16.0, None);
         gpu.queue.submit(Some(encoder.finish()));
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         t.elapsed()

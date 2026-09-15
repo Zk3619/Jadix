@@ -102,3 +102,54 @@ pub(crate) fn try_shader_module(
     }
     Some(module)
 }
+
+/// Create a compute pipeline without panicking on validation failure.
+#[cfg_attr(not(feature = "compute"), allow(dead_code))]
+pub(crate) fn try_compute_pipeline(
+    device: &wgpu::Device,
+    desc: &wgpu::ComputePipelineDescriptor<'_>,
+) -> Option<wgpu::ComputePipeline> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let pipeline = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        device.create_compute_pipeline(desc)
+    })) {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = wait_error_scope(device, scope);
+            return None;
+        }
+    };
+    if wait_error_scope(device, scope).is_some() {
+        return None;
+    }
+    Some(pipeline)
+}
+
+/// Log wgpu errors instead of the default panic (`error_handling.md` E1).
+pub(crate) fn install_device_error_handlers(device: &wgpu::Device) {
+    device.on_uncaptured_error(std::sync::Arc::new(|err| {
+        log::error!("wgpu uncaptured error: {err}");
+    }));
+    device.set_device_lost_callback(|reason, msg| {
+        log::error!("wgpu device lost ({reason:?}): {msg}");
+    });
+}
+
+/// Isolate bundled / optional GPU init. Returns `None` if the closure panics or the
+/// validation scope captures an error (`error_handling.md` E2).
+pub(crate) fn try_gpu_init<T>(
+    device: &wgpu::Device,
+    warn: &str,
+    f: impl FnOnce() -> T,
+) -> Option<T> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    let scoped = wait_error_scope(device, scope);
+    match (built, scoped) {
+        (Ok(v), None) => Some(v),
+        _ => {
+            log::warn!("{warn}");
+            None
+        }
+    }
+}

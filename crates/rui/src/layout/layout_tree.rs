@@ -3683,6 +3683,7 @@ impl LayoutTree {
         let mut render_graph =
             crate::renderer::RenderGraph::standard_composite(scratch.tex_keys.clone());
         crate::renderer::enrich_render_graph(&mut render_graph);
+        crate::renderer::enrich_filter_graph(&mut render_graph);
         crate::primitives::shader::enrich_shader_graph(&mut render_graph);
         crate::primitives::path::enrich_path_graph(&mut render_graph);
         let result = RenderResult {

@@ -180,10 +180,10 @@ pub use used_layout::{ensure_used_layout_from_bounds, stamp_element_used_layout,
 pub use utility::{
     apply_class_list, apply_utility_classes, class_variant_color_overlay,
     class_variant_hover_needs_frame, classes, ensure_class_list, extend_class_list,
-    patch_class_set_base_paint, patch_class_set_base_radii, patch_class_set_base_shadow,
-    push_class_part, reapply_class_color_overrides, resolve_class_variants,
-    sync_class_variants_subtree, tick_active_css_transitions_subtree, with_class_list, ClassPart,
-    ClassSet, VariantContext, ATTR_SYNC_LABEL_FG,
+    patch_class_set_base_display, patch_class_set_base_paint, patch_class_set_base_radii,
+    patch_class_set_base_shadow, push_class_part, reapply_class_color_overrides,
+    resolve_class_variants, sync_class_variants_subtree, tick_active_css_transitions_subtree,
+    with_class_list, ClassPart, ClassSet, VariantContext, ATTR_SYNC_LABEL_FG,
 };
 pub use variant_override::{
     apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,

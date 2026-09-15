@@ -8879,6 +8879,10 @@ fn expand_node(
                     element = quote! { #element.texture("src1", #value) };
                     continue;
                 }
+                if is_shader_tag(&name_str) && matches!(attr_str.as_str(), "texture2" | "src2") {
+                    element = quote! { #element.texture("src2", #value) };
+                    continue;
+                }
                 if is_shader_tag(&name_str) && attr_str.as_str() == "preset" {
                     element = quote! { #element.preset(#value) };
                     continue;
@@ -10676,6 +10680,14 @@ mod rsx_lowering_tests {
         assert!(s.contains("texture"), "{s}");
         assert!(s.contains("src1"), "{s}");
         assert!(s.contains("rui_path:y"), "{s}");
+    }
+
+    #[test]
+    fn shader_src2_attr_calls_builder_slot2() {
+        let s = expand(r#"<shader w={80.0} h={60.0} wgsl={"fn"} src2={"rui_path:z"} />"#);
+        assert!(s.contains("texture"), "{s}");
+        assert!(s.contains("src2"), "{s}");
+        assert!(s.contains("rui_path:z"), "{s}");
     }
 
     #[test]

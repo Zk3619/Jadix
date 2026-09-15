@@ -46,13 +46,7 @@ impl OffscreenGpu {
             },
         ))
         .ok()?;
-        let adapter_limits = adapter.limits();
-        let mut required_limits = wgpu::Limits::downlevel_defaults();
-        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
-        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        // Rounded-rect VS needs >31 inter-stage components (WebGL2 default is too low).
-        required_limits.max_inter_stage_shader_variables =
-            adapter_limits.max_inter_stage_shader_variables.max(60);
+        let required_limits = super::limits_for(&adapter);
         let (device, queue) = crate::utils::block_on::block_on(adapter.request_device(
             &super::wgpu_compat::device_desc(
                 Some("rui-offscreen"),
@@ -61,6 +55,7 @@ impl OffscreenGpu {
             ),
         ))
         .ok()?;
+        super::wgpu_compat::install_device_error_handlers(&device);
         Some(Self { device, queue })
     }
 

@@ -1,6 +1,7 @@
 //! GPU 与文本渲染：管线、实例数据、glyphon 封装及每帧文本准备。
 
 pub mod backdrop_blur;
+pub mod compute;
 pub mod cpu_text;
 pub mod css_filter;
 pub mod effect;
@@ -16,6 +17,7 @@ mod extended_pictographic;
 pub mod font_loader;
 pub mod geometry2d;
 pub mod glyph_fx;
+pub mod gpu_caps;
 pub mod graph;
 pub mod offscreen;
 pub mod path_pipeline;
@@ -38,8 +40,10 @@ pub mod shader_leaf;
 pub mod yuv_convert;
 
 pub use backdrop_blur::BackdropBlurPipeline;
+pub use compute::{ComputeBlur, ComputeHistogram, ComputeParticles, ComputePipelines};
 pub use css_filter::{
-    queue_css_filter_wrap, take_filter_jobs, CssFilterPassGpu, FilterJob, FilterUniforms,
+    enrich_filter_graph, queue_css_filter_wrap, take_filter_jobs, CssFilterPassGpu, FilterJob,
+    FilterUniforms,
 };
 pub use effect::{
     enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
@@ -55,6 +59,10 @@ pub use glyph_fx::{
     GlyphFx, GlyphFxKind, ShimmerParams, ATTR_GLYPH_FX, ATTR_SHIMMER_ANGLE_DEG, ATTR_SHIMMER_BOX,
     ATTR_SHIMMER_COLOR, ATTR_SHIMMER_COUNT, ATTR_SHIMMER_DURATION_MS, ATTR_SHIMMER_EPOCH,
     ATTR_SHIMMER_ONCE, ATTR_SHIMMER_REVERSE, ATTR_SHIMMER_SPREAD_PX, SHIMMER_INHERIT_ATTRS,
+};
+pub use gpu_caps::{
+    compute_yes_no, feature_enabled as compute_feature_enabled, limits_for,
+    probe as probe_gpu_caps, GpuCaps,
 };
 pub use graph::{
     env_dump_enabled as render_graph_dump_enabled, store_last_dump as store_render_graph_dump,

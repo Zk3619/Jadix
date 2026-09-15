@@ -162,7 +162,17 @@ pub struct PathGpu {
 }
 
 impl PathGpu {
-    pub fn new(device: &wgpu::Device, sample_count: u32) -> Self {
+    /// Build the path PSO. Returns `None` (and logs) if WGSL / pipeline validation fails
+    /// so the caller can fall back to CPU raster (`error_handling.md` E2).
+    pub fn try_new(device: &wgpu::Device, sample_count: u32) -> Option<Self> {
+        crate::renderer::wgpu_compat::try_gpu_init(
+            device,
+            "path GPU pipeline failed; falling back to CPU raster",
+            || Self::build(device, sample_count),
+        )
+    }
+
+    fn build(device: &wgpu::Device, sample_count: u32) -> Self {
         let sample_count = if sample_count >= 4 { 4 } else { 1 };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rui-path-pipeline"),

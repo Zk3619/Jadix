@@ -357,6 +357,11 @@ pub(crate) fn take_scene3d_jobs() -> Vec<Scene3dJob> {
     JOBS.with(|j| std::mem::take(&mut *j.borrow_mut()))
 }
 
+#[cfg(feature = "scene3d")]
+pub(crate) fn has_scene3d_jobs() -> bool {
+    JOBS.with(|j| !j.borrow().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

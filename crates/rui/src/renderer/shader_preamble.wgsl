@@ -33,6 +33,10 @@ var s_src: sampler;
 var t_src1: texture_2d<f32>;
 @group(1) @binding(3)
 var s_src1: sampler;
+@group(1) @binding(4)
+var t_src2: texture_2d<f32>;
+@group(1) @binding(5)
+var s_src2: sampler;
 
 @vertex
 fn vs_main(v: VertexInput) -> VertexOutput {
