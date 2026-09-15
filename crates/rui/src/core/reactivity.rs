@@ -540,6 +540,11 @@ fn track_signal_read(rt: &Runtime, signal_id: SignalId) {
 }
 
 fn run_effect(rt: &Runtime, effect_id: EffectId) {
+    // Writing a subscribed signal from inside this body notifies us. Re-entering
+    // would `borrow_mut` the same `FnMut` (ComboboxInput label sync).
+    if *rt.current_effect.borrow() == Some(effect_id) {
+        return;
+    }
     let depth = rt.effect_run_depth.get() + 1;
     rt.effect_run_depth.set(depth);
     if depth > 512 {
@@ -977,7 +982,12 @@ fn notify_signal_subscribers(rt: &Runtime, signal_id: SignalId) {
     }
 
     // Outside batch: still go through pending queue so memos refresh in depth order first.
+    // Skip the in-flight effect — it already sees the write; flushing it now re-enters.
+    let running = *rt.current_effect.borrow();
     for effect_id in effects {
+        if running == Some(effect_id) {
+            continue;
+        }
         enqueue_pending_effect(rt, effect_id);
     }
     flush_pending(rt);
@@ -2822,6 +2832,34 @@ mod tests {
             }
         });
         assert_eq!(runs.get(), 2048);
+    }
+
+    #[test]
+    fn effect_set_of_own_dep_does_not_reenter() {
+        let runs = Rc::new(Cell::new(0_u32));
+        let (_handle, value) = create_root({
+            let runs = runs.clone();
+            move || {
+                let s = Signal::new(String::new());
+                create_effect({
+                    let runs = runs.clone();
+                    move || {
+                        runs.set(runs.get() + 1);
+                        let cur = s.get();
+                        if cur.is_empty() {
+                            s.set("Shanghai".into());
+                        }
+                    }
+                });
+                s.peek()
+            }
+        });
+        assert_eq!(value, "Shanghai");
+        assert_eq!(
+            runs.get(),
+            1,
+            "writing a subscribed signal must not re-enter the same effect"
+        );
     }
 
     #[test]
