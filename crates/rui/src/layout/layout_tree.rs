@@ -2403,6 +2403,9 @@ struct TextMeasureMeta {
     /// `text-overflow: clip|hidden|ellipsis`: honor definite/avail width instead of
     /// growing the leaf to the full line (buttons still use `nowrap` without this).
     clip_to_box: bool,
+    /// Native `<input>` / Combobox: crop + caret pan. Placeholder/value glyphs must
+    /// not become flex max-content (gallery wrap row reflowed after typing).
+    caret_scroll: bool,
     writing_mode: crate::style::WritingMode,
 }
 
@@ -2463,6 +2466,7 @@ fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeas
         spans: element.text_spans.clone(),
         nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
         clip_to_box: element_text_clips_to_box(element),
+        caret_scroll: element.text_style.overflow.allows_caret_scroll(),
         writing_mode: element.style.writing_mode,
     }
 }
@@ -2623,7 +2627,9 @@ fn measured_text_leaf_size_horizontal(
             intrinsic_w = (intrinsic_w + gaps * m.letter_spacing).max(0.0);
         }
         let intrinsic_w = crate::text::snap_content_text_width(intrinsic_w);
-        let min_content = if m.nowrap {
+        let min_content = if m.caret_scroll {
+            0.0
+        } else if m.nowrap {
             intrinsic_w
         } else {
             crate::text::snap_content_text_width(prepared.max_segment_width.min(intrinsic_w))
@@ -2632,8 +2638,8 @@ fn measured_text_leaf_size_horizontal(
             known_dimensions
                 .width
                 .or(avail_width)
-                .unwrap_or(intrinsic_w)
-                .max(1.0)
+                .unwrap_or(if m.caret_scroll { 0.0 } else { intrinsic_w })
+                .max(if m.caret_scroll { 0.0 } else { 1.0 })
         } else if m.nowrap {
             known_dimensions
                 .width
@@ -2678,8 +2684,13 @@ fn measured_text_leaf_size_horizontal(
             known_dimensions
                 .width
                 .or(avail_width)
-                .unwrap_or(measured_w)
-                .max(1.0)
+                .unwrap_or(if m.caret_scroll { 0.0 } else { measured_w })
+                .max(if m.caret_scroll { 0.0 } else { 1.0 })
+        } else if m.caret_scroll {
+            known_dimensions
+                .width
+                .or(avail_width)
+                .unwrap_or(0.0)
         } else {
             measured_w
         };
@@ -8296,6 +8307,7 @@ mod prepared_text_attach_tests {
             spans: None,
             nowrap: true,
             clip_to_box: true,
+            caret_scroll: false,
             writing_mode: crate::style::WritingMode::HorizontalTb,
         };
         let known = taffy::geometry::Size {
@@ -8320,6 +8332,55 @@ mod prepared_text_attach_tests {
     }
 
     #[test]
+    fn caret_scroll_max_content_ignores_placeholder_intrinsic() {
+        let text = "Placeholder…";
+        let size = 14.0;
+        let lh = 21.0;
+        let prepared = crate::text::prepare(text, size, 400, lh);
+        let intrinsic = crate::text::intrinsic_width(&prepared);
+        assert!(intrinsic > 40.0, "fixture intrinsic={intrinsic}");
+        let m = TextMeasureMeta {
+            size,
+            text: text.to_string(),
+            shape_suffix: None,
+            is_icon: false,
+            line_height_px: Some(lh),
+            line_height_scale: None,
+            weight: 400,
+            letter_spacing: 0.0,
+            spans: None,
+            nowrap: true,
+            clip_to_box: true,
+            caret_scroll: true,
+            writing_mode: crate::style::WritingMode::HorizontalTb,
+        };
+        let known = taffy::geometry::Size {
+            width: None,
+            height: None,
+        };
+        let avail = taffy::geometry::Size {
+            width: taffy::style::AvailableSpace::MaxContent,
+            height: taffy::style::AvailableSpace::MaxContent,
+        };
+        let out = measured_text_leaf_size(&m, known, avail);
+        assert!(
+            out.width < 1.0,
+            "native <input> max-content must not follow placeholder glyphs ({intrinsic}), got {}",
+            out.width
+        );
+        let min_avail = taffy::geometry::Size {
+            width: taffy::style::AvailableSpace::MinContent,
+            height: taffy::style::AvailableSpace::MinContent,
+        };
+        let min_out = measured_text_leaf_size(&m, known, min_avail);
+        assert!(
+            min_out.width < 1.0,
+            "native <input> min-content must not follow placeholder glyphs, got {}",
+            min_out.width
+        );
+    }
+
+    #[test]
     fn nowrap_without_clip_to_box_still_grows_to_intrinsic() {
         let text = "abcdefghijklmnopabcdefghijklmnop";
         let size = 14.0;
@@ -8338,6 +8399,7 @@ mod prepared_text_attach_tests {
             spans: None,
             nowrap: true,
             clip_to_box: false,
+            caret_scroll: false,
             writing_mode: crate::style::WritingMode::HorizontalTb,
         };
         let known = taffy::geometry::Size {

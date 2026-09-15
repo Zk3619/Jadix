@@ -3440,7 +3440,8 @@ impl Element {
         // opting into grow shares a wrap row instead of forcing a full-width line
         // of `overflow:hidden` siblings (gallery forms Placeholder–Search).
         if self.input_paint_sync.is_some() {
-            self = self.w("auto").min_w("0");
+            // `flex: 1 1 0` — wrap uses this basis, not placeholder/value max-content.
+            self = self.w("auto").min_w("0").flex_basis(0.0);
         }
         self
     }

@@ -46,6 +46,11 @@ impl TextOverflow {
         Self::Hidden
     }
 
+    /// Placeholder hint on a native single-line field: trailing `…` when the box is narrow.
+    pub fn editable_placeholder() -> Self {
+        Self::Ellipsis
+    }
+
     /// Input-like fields: overflow is clipped, but the caret may pan the line.
     pub fn allows_caret_scroll(self) -> bool {
         matches!(self, Self::Hidden)
@@ -901,7 +906,9 @@ mod tests {
         assert!(TextOverflow::Ellipsis.nowrap());
         assert!(!TextOverflow::Newline.nowrap());
         assert_eq!(TextOverflow::editable_single_line(), TextOverflow::Hidden);
+        assert_eq!(TextOverflow::editable_placeholder(), TextOverflow::Ellipsis);
         assert!(TextOverflow::Hidden.allows_caret_scroll());
+        assert!(!TextOverflow::editable_placeholder().allows_caret_scroll());
         assert!(!TextOverflow::Clip.allows_caret_scroll());
         assert!(TextOverflow::Ellipsis.start_align_when_line_overflows());
         assert!(!TextOverflow::Newline.start_align_when_line_overflows());

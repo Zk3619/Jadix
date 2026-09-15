@@ -1,7 +1,7 @@
 //! Off-screen descendants of an overflow clip must not be collected as instances,
 //! while Taffy content height (scroll range) stays the full column.
 
-use crate::app::ime_support::painted_ime_field_in_overflow_clip;
+use crate::app::ime_support::{painted_ime_field_in_overflow_clip, painted_text_edit_node};
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::internal::text_edit::{
     sync_text_edit_paint_subtree, sync_text_edit_paint_subtree_in_viewport,
@@ -500,6 +500,31 @@ fn clip_cull_must_keep_focused_input_caret_when_field_is_partially_clipped() {
             .any(|n| n.style.input_caret.is_some()),
         "partially clipped focused Input must stay in collect so caret WaitUntil does not die"
     );
+
+    // Wheel stop: collect is no longer `scroll_only` and skip is allowed. Dropping
+    // the caret here is the freeze (`caret_wake_at` dies → bare Wait).
+    impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "",
+        false,
+        240.0,
+        80.0,
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    tree.set_collect_skip_allowed(true);
+    let settled = tree.build_and_layout_fast(&mut root, 240.0, 80.0, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+    assert!(
+        settled
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "settle collect (skip on, not scroll_only) must keep the focused caret"
+    );
 }
 
 fn wipe_input_carets(el: &mut Element) {
@@ -764,7 +789,80 @@ fn rsx_input_flex_grow_clears_default_full_width() {
         taffy::style::Dimension::auto(),
         "RSX flex_grow on Input must match builder w(auto)"
     );
+    assert_eq!(
+        grown.style.flex_basis,
+        taffy::style::Dimension::length(0.0),
+        "grow Input is flex-basis 0 so wrap ignores placeholder max-content"
+    );
     assert!((grown.style.flex_grow - 1.0).abs() < 1e-5);
+}
+
+/// Gallery forms first wrap row: typing into Placeholder used to shrink max-content
+/// so Invalid jumped onto the same line. Native `<input>` layout ignores value/
+/// placeholder glyphs; empty and `"1"` must share the same wrap row.
+#[test]
+fn wrap_grow_inputs_must_not_reflow_when_placeholder_becomes_value() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const VW: f32 = 280.0;
+    const A: &str = "reflow-ph";
+    const B: &str = "reflow-inv";
+    use_signal(&input_value_signal_key(A), String::new).set(String::new());
+    use_signal(&input_value_signal_key(B), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+
+    let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w(VW);
+    row = row.child(
+        input(A)
+            .placeholder("Placeholder…")
+            .clearable(true)
+            .flex_grow(1.0),
+    );
+    row = row.child(
+        input(B)
+            .placeholder("Invalid")
+            .clearable(true)
+            .flex_grow(1.0),
+    );
+    let mut root: Element = row.into();
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, VW, 80.0, [-1.0, -1.0]);
+
+    let mut empty = Vec::new();
+    collect_input_bounds(&root, &mut empty);
+    empty.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(empty.len(), 2, "expected Placeholder + Invalid, got {empty:?}");
+    let empty_dy = (empty[0].1[1] - empty[1].1[1]).abs();
+    assert!(
+        empty_dy < 2.0,
+        "empty Placeholder and Invalid must share a wrap row (native input ignores placeholder max-content).\n\
+         empty={empty:?}"
+    );
+
+    use_signal(&input_value_signal_key(A), String::new).set("1".into());
+    impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, VW, 80.0, [-1.0, -1.0]);
+
+    let mut filled = Vec::new();
+    collect_input_bounds(&root, &mut filled);
+    filled.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(filled.len(), 2);
+    let filled_dy = (filled[0].1[1] - filled[1].1[1]).abs();
+    assert!(
+        filled_dy < 2.0,
+        "after typing, both fields must still share a wrap row.\n filled={filled:?}"
+    );
+    assert!(
+        (empty[0].1[1] - filled[0].1[1]).abs() < 2.0
+            && (empty[1].1[1] - filled[1].1[1]).abs() < 2.0,
+        "typing must not restack the wrap row.\n empty={empty:?}\n filled={filled:?}"
+    );
 }
 
 fn gallery_like_wrap_input(id: &str) -> Element {
@@ -947,6 +1045,107 @@ fn wrap_flex_grow_focus_move_must_repaint_chrome_after_first_field_clip() {
     );
 }
 
+/// Gallery forms first wrap row, no sliver: Placeholder → number. IME already
+/// follows `focus_id` (number placeholder leaf). Collect-skip must still move
+/// caret + ring — `request_redraw` without a hash bust replays Placeholder chrome.
+#[test]
+fn wrap_first_row_placeholder_to_number_must_move_caret_without_clip() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const REST: &str = "scroll-forms-row1-focus-move";
+    const VW: f32 = 520.0;
+    const VH: f32 = 200.0;
+    const PLACEHOLDER: &str = "row1-a";
+    const NUMBER: &str = "row1-d";
+
+    let ids = ["row1-a", "row1-b", "row1-c", "row1-d"];
+    for id in ids {
+        use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    }
+    use_signal(&input_value_signal_key(NUMBER), String::new).set("0".into());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(PLACEHOLDER));
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(0.0);
+
+    let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w("100%");
+    for id in ids {
+        row = row.child(gallery_like_wrap_input(id));
+    }
+    let mut root: Element = scroll_area(REST)
+        .flex_grow(1.0)
+        .min_h(0.0)
+        .overflow_y("auto")
+        .overflow_x("auto")
+        .w(VW)
+        .h(VH)
+        .child(row)
+        .into();
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let _ = tree.build_and_layout(&mut root, VW, VH, [-1.0, -1.0]);
+
+    impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [80.0, 40.0],
+        focus_id_for_input(PLACEHOLDER).as_str(),
+        false,
+        VW,
+        VH,
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    tree.set_collect_skip_allowed(true);
+    let focused_ph = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+    assert!(
+        text_nodes_have_caret(&focused_ph.text_nodes, PLACEHOLDER),
+        "precondition: Placeholder has the caret"
+    );
+    assert!(
+        painted_text_edit_node(&focused_ph.text_nodes, &focus_id_for_input(NUMBER)).is_some(),
+        "precondition: number placeholder leaf is already in the DL (IME can jump)"
+    );
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(NUMBER));
+    impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [400.0, 40.0],
+        focus_id_for_input(NUMBER).as_str(),
+        false,
+        VW,
+        VH,
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
+    let moved = tree.build_and_layout_fast(&mut root, VW, VH, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+
+    assert!(
+        text_nodes_have_caret(&moved.text_nodes, NUMBER),
+        "collect-skip must put the caret on number after Placeholder focus_id.set"
+    );
+    assert!(
+        !text_nodes_have_caret(&moved.text_nodes, PLACEHOLDER),
+        "Placeholder must drop its caret when focus moved to number"
+    );
+    let number_spread = input_shadow_spread(&root, NUMBER).unwrap_or(0.0);
+    let ph_spread = input_shadow_spread(&root, PLACEHOLDER).unwrap_or(0.0);
+    assert!(
+        number_spread >= 2.5,
+        "number must receive the focus ring (spread={number_spread})"
+    );
+    assert!(
+        ph_spread < 1.5,
+        "Placeholder must drop the focus ring (spread={ph_spread})"
+    );
+}
+
 /// Live `scroll_paint_only` uses `tick_active_css_transitions_subtree`, not class
 /// variants. Focus chrome must still follow `focus_id.set` on that path.
 #[test]
@@ -1060,5 +1259,156 @@ fn wrap_flex_grow_tick_active_focus_move_must_repaint_chrome() {
             .iter()
             .any(|n| n.style.input_caret.is_some()),
         "pre-move frame still had a caret to mismatch against"
+    );
+}
+
+/// Gallery forms: `scroll-forms` sits *below* the shell header, so a sliver Input
+/// still has `visual.y > 0` in window space. `painted_ime_field_in_overflow_clip`
+/// must use the ScrollArea clip — not the window Y heuristic, and not the field's
+/// own `overflow:hidden` box (the text leaf is always inside that).
+#[test]
+fn gallery_header_offset_sliver_must_not_push_imm() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    const REST: &str = "scroll-forms-header-offset";
+    const FIRST: &str = "hdr-a";
+    const WIN_W: f32 = 800.0;
+    const WIN_H: f32 = 500.0;
+    const HEADER_H: f32 = 96.0;
+
+    let ids = ["hdr-a", "hdr-b", "hdr-c", "hdr-d"];
+    for id in ids {
+        use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    }
+    use_signal(&input_value_signal_key(FIRST), String::new).set("p".into());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(FIRST));
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(0.0);
+
+    let mut row = hstack().gap("0.5rem").items("start").wrap("wrap").w("100%");
+    for id in ids {
+        row = row.child(gallery_like_wrap_input(id));
+    }
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w("100%")
+        .gap("0.75rem")
+        .child(Element::new().w("100%").h(24.0).flex_shrink(0.0))
+        .child(row)
+        .child(
+            Element::new()
+                .w("100%")
+                .h(900.0)
+                .flex_shrink(0.0)
+                .bg([0.95, 0.95, 0.95, 1.0]),
+        );
+    let sa: Element = scroll_area(REST)
+        .flex_grow(1.0)
+        .min_h(0.0)
+        .overflow_y("auto")
+        .overflow_x("auto")
+        .w(WIN_W)
+        .child(col)
+        .into();
+    let mut root = Element::new()
+        .flex_col()
+        .w(WIN_W)
+        .h(WIN_H)
+        .child(
+            Element::new()
+                .w(WIN_W)
+                .h(HEADER_H)
+                .flex_shrink(0.0)
+                .bg([0.2, 0.2, 0.2, 1.0]),
+        )
+        .child(sa);
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree_in_viewport(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        WIN_W,
+        WIN_H,
+        [0.0, 0.0],
+    );
+    let _ = tree.build_and_layout(&mut root, WIN_W, WIN_H, [-1.0, -1.0]);
+
+    let mut bounds = Vec::new();
+    collect_input_bounds(&root, &mut bounds);
+    bounds.sort_by(|a, b| {
+        a.1[1]
+            .partial_cmp(&b.1[1])
+            .unwrap()
+            .then(a.1[0].partial_cmp(&b.1[0]).unwrap())
+    });
+    assert!(!bounds.is_empty(), "expected wrap Inputs, got {bounds:?}");
+    let first = bounds[0].1;
+    assert!(
+        first[1] + 0.5 >= HEADER_H,
+        "first Input must sit in the page ScrollArea (layout y={}, header={HEADER_H})",
+        first[1]
+    );
+    // Chrome sliver at the ScrollArea top: keep a few px of the field in clip.
+    // `layout_bounds` is window-absolute; subtract the header so scroll_y is
+    // content-relative (existing tests use ScrollArea as the layout root).
+    let content_y = (first[1] - HEADER_H).max(0.0);
+    let scroll_y = (content_y + first[3] - 8.0).max(1.0);
+    use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set_silent(scroll_y);
+
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [first[0] + first[2] * 0.5, HEADER_H + 4.0],
+        focus_id_for_input(FIRST).as_str(),
+        false,
+        WIN_W,
+        WIN_H,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    sync_text_edit_paint_subtree_in_viewport(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        WIN_W,
+        WIN_H,
+        [0.0, 0.0],
+    );
+    tree.set_collect_skip_allowed(true);
+    let clipped = tree.build_and_layout_fast(&mut root, WIN_W, WIN_H, [-1.0, -1.0], false, false);
+    tree.set_collect_skip_allowed(false);
+
+    let fid = focus_id_for_input(FIRST);
+    let node = painted_text_edit_node(&clipped.text_nodes, &fid);
+    let diag = node
+        .map(|n| {
+            format!(
+                "leaf=({:.1},{:.1} {:.1}x{:.1}) clip={:?} caret={}",
+                n.x,
+                n.y,
+                n.width,
+                n.height,
+                n.clip_bounds,
+                n.style.input_caret.is_some()
+            )
+        })
+        .unwrap_or_else(|| "no painted text leaf".into());
+    assert!(
+        text_nodes_have_caret(&clipped.text_nodes, FIRST),
+        "live clip-cull exemption must keep the caret (WaitUntil). {diag} scroll_y={scroll_y} first={first:?}"
+    );
+    assert!(
+        node.is_some_and(|n| n.y > 8.0),
+        "sliver must still be below the window top so the window-Y heuristic cannot save us. {diag}"
+    );
+    assert!(
+        !painted_ime_field_in_overflow_clip(&clipped.text_nodes, &fid, WIN_W, WIN_H),
+        "header-offset chrome sliver must not ImmSetCompositionWindow (Windows WaitUntil hang). {diag} \
+         scroll_y={scroll_y} first={first:?}"
     );
 }

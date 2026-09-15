@@ -256,10 +256,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     text_el.template_id = Some(input_text_template_id(&field_id));
     text_el = text_el.w("100%").flex_shrink(0.0);
     if !multiline {
-        // Native <input> / Combobox: always Hidden (crop + caret pan).
-        // clip / ellipsis / newline belong on Label / Button, not editable fields.
+        // Value: Hidden (caret pan). Placeholder: ellipsis at inline-end (static hint).
+        let overflow = if show_placeholder {
+            crate::style::TextOverflow::editable_placeholder()
+        } else {
+            crate::style::TextOverflow::editable_single_line()
+        };
         text_el = text_el
-            .text_overflow(crate::style::TextOverflow::editable_single_line())
+            .text_overflow(overflow)
             .min_w(0.0)
             .max_w("100%")
             .flex_shrink(1.0);

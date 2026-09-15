@@ -341,6 +341,17 @@ fn sync_one_text_edit_paint(
                 .insert("text_align".into(), want_align.as_str().into());
             text_style = true;
         }
+        if !desc.multiline {
+            let want_overflow = if show_placeholder {
+                crate::style::TextOverflow::editable_placeholder()
+            } else {
+                crate::style::TextOverflow::editable_single_line()
+            };
+            if text_el.text_style.overflow != want_overflow {
+                text_el.apply_text_overflow_mode(want_overflow);
+                text_style = true;
+            }
+        }
         if desc.multiline {
             use crate::style::WhiteSpace;
             let want_ws = if desc.wrap_mode.soft_wrap() {
@@ -904,15 +915,10 @@ fn caret_scroll_anchor_x(
 }
 
 fn push_text_edit_paint_dirty(el: &Element) {
-    let b = el.layout_bounds;
-    if b[2] <= 0.0 || b[3] <= 0.0 {
-        return;
-    }
-    let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
-    crate::app::damage::push_frame_paint_key(
-        crate::app::damage::paint_element_key(el),
-        [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
-    );
+    // Same visual space as collect (`layout_bounds − scroll`). Document Y after a
+    // forms ScrollArea move dest-resets empty retain and leaves the previous
+    // field's ring/caret on screen while IME already follows `focus_id`.
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
 }
 
 /// Caret on/off is paint-only. Do not `mark_full_redraw` — that clears every other

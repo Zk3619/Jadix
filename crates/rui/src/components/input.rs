@@ -782,7 +782,12 @@ impl InputBuilder {
         // Default Input is `w(100%)` for solo fields. In a row with siblings (e.g. Button),
         // that percentage claims the full line and can crush neighbors to an empty outline.
         // Opting into flex_grow means share free space instead of forcing full width.
-        self.container = self.container.flex_grow(grow).w("auto").min_w("0");
+        self.container = self
+            .container
+            .flex_grow(grow)
+            .w("auto")
+            .min_w("0")
+            .flex_basis(0.0);
         self
     }
     pub fn flex_shrink(mut self, shrink: impl crate::core::tree::IntoF32Raw) -> Self {
@@ -881,7 +886,8 @@ impl InputBuilder {
         let _ = on;
         self
     }
-    /// Ignored: single-line Input always uses [`crate::style::TextOverflow::Hidden`].
+    /// Ignored: placeholder uses [`TextOverflow::editable_placeholder`]; committed
+    /// value uses [`TextOverflow::editable_single_line`] (caret pan).
     pub fn text_overflow(self, _mode: impl Into<crate::style::TextOverflow>) -> Self {
         self
     }
@@ -1180,19 +1186,34 @@ mod tests {
         );
     }
 
-    #[test]
-    fn input_always_uses_hidden_overflow_even_if_truncate_requested() {
-        let el: Element = input("t-ov-hidden")
-            .truncate(true)
-            .text_overflow("ellipsis")
-            .into();
-        fn find_text(el: &Element) -> Option<&Element> {
-            if el.text.is_some() {
-                return Some(el);
-            }
-            el.children.iter().find_map(find_text)
+    fn find_input_text_leaf(el: &Element) -> Option<&Element> {
+        if el.text.is_some() {
+            return Some(el);
         }
-        let leaf = find_text(&el).expect("input text leaf");
+        el.children.iter().find_map(find_input_text_leaf)
+    }
+
+    #[test]
+    fn input_placeholder_uses_ellipsis_overflow() {
+        let el: Element = input("t-ph-ellipsis")
+            .placeholder("Placeholder…")
+            .truncate(true)
+            .text_overflow("hidden")
+            .into();
+        let leaf = find_input_text_leaf(&el).expect("input text leaf");
+        assert_eq!(
+            leaf.text_style.overflow,
+            crate::style::TextOverflow::Ellipsis,
+            "empty field shows placeholder with trailing … when narrow"
+        );
+        assert!(!leaf.text_style.overflow.allows_caret_scroll());
+    }
+
+    #[test]
+    fn input_with_value_uses_hidden_overflow_for_caret_pan() {
+        let sig = use_signal("__rui_input_val_overflow", || "hello".to_string());
+        let el: Element = input("t-val-hidden").value_signal(sig).into();
+        let leaf = find_input_text_leaf(&el).expect("input text leaf");
         assert_eq!(leaf.text_style.overflow, crate::style::TextOverflow::Hidden);
         assert!(leaf.text_style.overflow.allows_caret_scroll());
     }

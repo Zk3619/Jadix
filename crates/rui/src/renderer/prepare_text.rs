@@ -2193,7 +2193,7 @@ pub fn prepare_text_frame_at(
                     font_weight,
                     logical_lh,
                     st.overflow,
-                    st.input_caret.is_none(),
+                    st.overflow == TextOverflow::Ellipsis,
                     info.width,
                 )
             }
@@ -2264,8 +2264,7 @@ pub fn prepare_text_frame_at(
         } else {
             resolve_text_align(st.align_resolved(), st.direction)
         };
-        let display_text: Cow<'_, str> =
-            if st.overflow == TextOverflow::Ellipsis && st.input_caret.is_none() {
+        let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis {
                 Cow::Owned(truncate_with_ellipsis(
                     unsafe { &mut *text_renderer.font_system },
                     info.text.as_str(),
