@@ -99,7 +99,7 @@ use crate::core::tree::{parse_color, parse_text_color, Element, Handler, LayoutS
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::{with_class_list, LineStyle};
+use crate::style::{patch_class_set_base_display, with_class_list, LineStyle};
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::lucide_glyph;
 use crate::utils::resolve_instance_id;
@@ -984,9 +984,11 @@ fn register_questionnaire_redraw(
 fn sync_display(el: &mut Element, layout_tree: &mut LayoutTree, show: bool) -> LayoutStatus {
     let want = if show { Display::Flex } else { Display::None };
     if el.style.display == want {
+        patch_class_set_base_display(el);
         return LayoutStatus::Clean;
     }
     el.style.display = want;
+    patch_class_set_base_display(el);
     if el.layout_node.is_some() {
         layout_tree.update_taffy_node_style(el);
     }
@@ -1833,6 +1835,20 @@ fn spacer() -> Element {
     el
 }
 
+fn stamp_action_attrs(el: &mut Element, show: bool, status: QuestionnaireItemStatus) {
+    if show {
+        el.attrs
+            .insert("data-visible".to_string(), "true".to_string());
+        el.attrs.remove("data-hidden");
+    } else {
+        el.attrs.remove("data-visible");
+        el.attrs
+            .insert("data-hidden".to_string(), "true".to_string());
+    }
+    el.attrs
+        .insert("data-status".to_string(), status.as_str().to_string());
+}
+
 fn wire_action_visibility(
     mut el: Element,
     slot: &str,
@@ -1841,19 +1857,13 @@ fn wire_action_visibility(
     status_of: impl Fn() -> QuestionnaireItemStatus + 'static,
 ) -> Element {
     el = apply_class(mark_slot(el, slot), class);
+    let show = visible();
+    stamp_action_attrs(&mut el, show, status_of());
+    el.style.display = if show { Display::Flex } else { Display::None };
+    patch_class_set_base_display(&mut el);
     el = el.reactive_sync(move |el, layout_tree| {
         let show = visible();
-        if show {
-            el.attrs
-                .insert("data-visible".to_string(), "true".to_string());
-            el.attrs.remove("data-hidden");
-        } else {
-            el.attrs.remove("data-visible");
-            el.attrs
-                .insert("data-hidden".to_string(), "true".to_string());
-        }
-        el.attrs
-            .insert("data-status".to_string(), status_of().as_str().to_string());
+        stamp_action_attrs(el, show, status_of());
         sync_display(el, layout_tree, show)
     });
     el
@@ -2587,6 +2597,77 @@ mod tests {
         assert!(
             find_size(&el, 20.0),
             "questionnaire_title .style(|b| b.text_size(20)) must land on the title"
+        );
+    }
+
+    #[test]
+    fn action_buttons_do_not_flash_flex_after_class_variant_restore() {
+        use crate::core::reactivity::create_root;
+        use crate::style::sync_class_variants_subtree;
+
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+        fn slot_display(root: &Element, slot: &str) -> Display {
+            find_slot(root, slot)
+                .unwrap_or_else(|| panic!("missing slot {slot}"))
+                .style
+                .display
+        }
+
+        let (_owner, mut root): (_, Element) = create_root(|| {
+            questionnaire("q-action-flash")
+                .default_item("first")
+                .question("first", "First?", |q| q.required(true).choice("a", "A"))
+                .question("second", "Second?", |q| q.choice("b", "B"))
+                .into()
+        });
+
+        assert_eq!(slot_display(&root, SLOT_PREVIOUS), Display::None);
+        assert_eq!(slot_display(&root, SLOT_SKIP), Display::None);
+        assert_eq!(slot_display(&root, SLOT_NEXT), Display::Flex);
+        assert_eq!(slot_display(&root, SLOT_SUBMIT), Display::None);
+
+        let mut layout = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        crate::core::tree::sync_reactive_elements_subtree(
+            &mut root,
+            &mut layout,
+            &mut impact,
+            800.0,
+            600.0,
+            [0.0, 0.0],
+        );
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            [-1.0e9, -1.0e9],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut layout,
+            &mut impact,
+        );
+
+        assert_eq!(
+            slot_display(&root, SLOT_PREVIOUS),
+            Display::None,
+            "Previous must stay hidden after class-variant restore"
+        );
+        assert_eq!(
+            slot_display(&root, SLOT_SKIP),
+            Display::None,
+            "Skip must stay hidden on a required first item after class-variant restore"
+        );
+        assert_eq!(slot_display(&root, SLOT_NEXT), Display::Flex);
+        assert_eq!(
+            slot_display(&root, SLOT_SUBMIT),
+            Display::None,
+            "Submit must stay hidden while not on the last item after class-variant restore"
         );
     }
 }
