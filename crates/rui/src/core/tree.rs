@@ -5,10 +5,10 @@ use winit::event::KeyEvent;
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
-    dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, lp_kind, lp_length_px, lpa_kind,
-    lpa_length_px, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim, IntoCssRectPair,
-    IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, IntoOpacity, PercentAxis, UnitCtx,
-    CSS_ROOT_FONT_SIZE_PX,
+    css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, em, lp_kind,
+    lp_length_px, lpa_kind, lpa_length_px, px, rem, CssDim, CssRectPair, DimKind, IntoBorderWidths,
+    IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage,
+    IntoOpacity, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
@@ -1044,7 +1044,9 @@ pub struct ElementInner {
     pub checkbox_sync: Option<Signal<bool>>,
     /// Radio item control: group [`Signal<String>`] + attrs `rui_radio_value`；见 `sync_radio_checked_subtree`。
     pub radio_selected_sync: Option<Signal<String>>,
-    /// Opt-in keyboard focus ring ([`crate::style::sync_focus_ring_subtree`]); not used by Button / Input.
+    /// Shared keyboard focus ring ([`crate::style::sync_focus_ring_subtree`]).
+    /// Default-on with [`.focusable(true)`](Self::focusable); Input/Textarea paint their own
+    /// always-on-focus ring and skip this flag. Button uses the same helpers in `button.rs`.
     pub focus_ring: bool,
     /// Generic component-owned signal synchronization; see [`ReactiveSync`].
     pub reactive_sync: Option<ReactiveSync>,
@@ -1975,6 +1977,20 @@ impl Element {
         self.on_hover = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
     }
+
+    /// Freeze page scroll while the pointer is over this node; leaving restores it.
+    ///
+    /// Composes with an existing [`Self::on_hover`] handler. Same as calling
+    /// [`crate::set_page_scroll_locked`] from hover.
+    pub fn lock_page_scroll_on_hover(mut self) -> Self {
+        let prev = self.on_hover.take();
+        self.on_hover(move |inside| {
+            crate::app::portal_overlay::set_page_scroll_locked(inside);
+            if let Some(ref prev) = prev {
+                (prev.borrow_mut())(inside);
+            }
+        })
+    }
     pub fn on_key_down(mut self, handler: impl FnMut(KeyEvent) -> bool + 'static) -> Self {
         self.on_key_down = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
@@ -1983,11 +1999,20 @@ impl Element {
         self.focus_id = Some(id.into());
         self
     }
+    /// Keyboard-focusable. Also enables the shared `:focus-visible` ring (same chrome as Input).
+    /// Call [`Self::focus_ring`]`(false)` afterwards to opt out.
     pub fn focusable(mut self, focusable: bool) -> Self {
-        self.focusable = focusable;
+        self.set_focusable(focusable);
         self
     }
-    /// Enable shared focus-visible ring (theme `ring`, blur 3). Keyboard Tab only; see [`crate::style::focus_ring`].
+    /// Keep [`Self::focusable`] and the shared keyboard ring in lockstep (field-assignment sites).
+    pub fn set_focusable(&mut self, focusable: bool) {
+        self.focusable = focusable;
+        self.focus_ring = focusable;
+    }
+    /// Shared focus-visible ring (theme `ring` + width, overridable via [`Self::ring_width`] /
+    /// [`Self::ring_color`] / `ring-*` classes). Keyboard Tab only, except Input-like controls;
+    /// see [`crate::style::focus_ring`].
     pub fn focus_ring(mut self, enabled: bool) -> Self {
         self.focus_ring = enabled;
         self
@@ -2059,8 +2084,8 @@ impl Element {
         self.text_style.color = Some(color.into_text_color());
         self
     }
-    pub fn text_size(mut self, size: f32) -> Self {
-        self.text_style.size = Some(size);
+    pub fn text_size(mut self, size: impl IntoF32) -> Self {
+        self.text_style.size = Some(size.into_f32());
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32Raw) -> Self {
@@ -2255,7 +2280,10 @@ impl Element {
         self.text_style.line_height_specified = true;
         self
     }
-    /// Apply `text-overflow`: `clip` / `hidden` / `ellipsis` are nowrap + box `overflow: hidden`;
+    /// Apply `text-overflow`: `clip` / `ellipsis` are nowrap + **inline** `overflow-x: hidden`
+    /// (`overflow-y` stays visible so glyph ink can overflow the line box — CSS
+    /// `text-overflow` does not scissor CJK / descenders to `leading-none`).
+    /// `hidden` is the native `<input>` field: both axes clip.
     /// `newline` restores wrapping (`white-space: normal`) and visible overflow.
     ///
     /// Default [`TextOverflow::Clip`] on a new node does **not** run this — wrapping stays
@@ -2266,7 +2294,14 @@ impl Element {
         self.attrs
             .insert("text_overflow".to_string(), overflow.as_str().to_string());
         match overflow {
-            TextOverflow::Clip | TextOverflow::Hidden | TextOverflow::Ellipsis => {
+            TextOverflow::Clip | TextOverflow::Ellipsis => {
+                self.text_style.white_space = WhiteSpace::Nowrap;
+                self.attrs
+                    .insert("white_space".to_string(), "nowrap".to_string());
+                self.style.overflow.x = taffy::style::Overflow::Hidden;
+                self.style.overflow.y = taffy::style::Overflow::Visible;
+            }
+            TextOverflow::Hidden => {
                 self.text_style.white_space = WhiteSpace::Nowrap;
                 self.attrs
                     .insert("white_space".to_string(), "nowrap".to_string());
@@ -2650,6 +2685,17 @@ impl Element {
         self.style.outline_offset = offset.into_f32();
         self
     }
+    /// Focus-ring thickness in logical px (Hard spread / Soft blur).
+    /// Overrides the theme [`crate::style::focus_ring_width`]. `class("ring-2")` sets the same field.
+    pub fn ring_width(mut self, width: impl IntoF32) -> Self {
+        self.style.focus_ring_width = Some(width.into_f32().max(0.0));
+        self
+    }
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.style.focus_ring_color = Some(color.into_paint_color());
+        self
+    }
     /// Parse CSS `outline` shorthand: `<line-width> || <line-style> || <color>` (any order).
     pub fn apply_outline_shorthand(mut self, value: impl AsRef<str>) -> Self {
         let parts: Vec<&str> = value.as_ref().split_whitespace().collect();
@@ -2731,7 +2777,7 @@ impl Element {
     }
 
     /// Backdrop blur radius (`0` disables). See [`crate::style::Style::backdrop_blur`].
-    /// RSX unitless `"1"` is 1rem (16px); builder `16.0` / `16` is 16px.
+    /// RSX unitless `"1"` is 1rem (see [`css_root_font_size_px`]); builder `16.0` / `16` is 16px.
     pub fn backdrop_blur(mut self, blur: impl IntoF32) -> Self {
         self.style.backdrop_blur = blur.into_f32().max(0.0);
         self
@@ -4265,7 +4311,22 @@ pub(crate) fn overflow_clip_contains_pointer(
         return false;
     }
     let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
-    overflow_clip_contains_point(el, [0.0, 0.0, b[2], b[3]], local)
+    let clip_x = el.style.overflow.x != taffy::style::Overflow::Visible;
+    let clip_y = el.style.overflow.y != taffy::style::Overflow::Visible
+        || el.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        });
+    if clip_x && (local[0] < 0.0 || local[0] > b[2]) {
+        return false;
+    }
+    if clip_y && (local[1] < 0.0 || local[1] > b[3]) {
+        return false;
+    }
+    if clip_x && clip_y {
+        overflow_clip_contains_point(el, [0.0, 0.0, b[2], b[3]], local)
+    } else {
+        true
+    }
 }
 
 /// Overflow clip hit: border-box AABB, then `border-radius` if any corner is rounded.
@@ -4418,6 +4479,15 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
                             element, before,
                         ));
+                    } else if element.attrs.get("data-slot").map(String::as_str)
+                        == Some("tabs-content")
+                    {
+                        // Display toggle is local to the panel. Page FullClear was the
+                        // Gallery 8b ToggleGroup one-frame text flash.
+                        crate::app::damage::push_frame_paint_key(
+                            crate::app::damage::paint_element_key(element),
+                            estimate_geom_damage(element, before),
+                        );
                     } else {
                         collect.page_layout_changed = true;
                     }
@@ -4546,6 +4616,11 @@ mod p1_builder_tests {
             crate::style::WhiteSpace::Nowrap
         );
         assert_eq!(clip.style.overflow.x, taffy::style::Overflow::Hidden);
+        assert_eq!(clip.style.overflow.y, taffy::style::Overflow::Visible);
+
+        let ellipsis = Element::new().text("hi").text_overflow_ellipsis();
+        assert_eq!(ellipsis.style.overflow.x, taffy::style::Overflow::Hidden);
+        assert_eq!(ellipsis.style.overflow.y, taffy::style::Overflow::Visible);
 
         let hidden = Element::new().text("hi").text_overflow_hidden();
         assert_eq!(hidden.text_style.overflow, TextOverflow::Hidden);
@@ -4554,6 +4629,7 @@ mod p1_builder_tests {
             crate::style::WhiteSpace::Nowrap
         );
         assert_eq!(hidden.style.overflow.x, taffy::style::Overflow::Hidden);
+        assert_eq!(hidden.style.overflow.y, taffy::style::Overflow::Hidden);
 
         let wrap = Element::new()
             .text("hi")

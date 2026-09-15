@@ -140,11 +140,14 @@ pub(crate) fn sdf_outset_shadow_pad(
     offset: [f32; 2],
     border_width: f32,
 ) -> f32 {
-    offset[0].abs().max(offset[1].abs())
-        + blur.max(0.0) * 2.0
-        + spread.abs()
-        + border_width.max(0.0)
-        + 2.0
+    sdf_painted_halo_pad(blur, spread, offset) + border_width.max(0.0) + 2.0
+}
+
+/// Painted halo beyond the layout box (CSS spread / blur / offset). Vertex AA
+/// (+2) and border sit on the box — stacking them on Hard ring spread 3 punches
+/// `form_field` labels (`gap(4)`).
+pub(crate) fn sdf_painted_halo_pad(blur: f32, spread: f32, offset: [f32; 2]) -> f32 {
+    offset[0].abs().max(offset[1].abs()) + blur.max(0.0) * 2.0 + spread.abs()
 }
 
 /// Content box ∪ drop-shadow (outset only). Coordinates match `rect_pos` space.
@@ -661,13 +664,9 @@ pub(crate) fn node_present_reset_rect(
                 continue;
             }
             if transform_is_identity(&inst.transform) && p.bounds[2] > 0.0 && p.bounds[3] > 0.0 {
-                let extra = (inst.shadow_blur.max(0.0)
-                    + inst.shadow_spread.abs()
-                    + inst.shadow_offset[0].abs()
-                    + inst.shadow_offset[1].abs()
-                    + inst.border_width.max(0.0)
-                    + 2.0)
-                    * s;
+                let extra =
+                    sdf_painted_halo_pad(inst.shadow_blur, inst.shadow_spread, inst.shadow_offset)
+                        * s;
                 match intersect_rects(b, padded_xywh(scale_xywh(p.bounds, s), extra)) {
                     Some(hit) => b = hit,
                     None => continue,
@@ -705,18 +704,19 @@ pub(crate) fn node_present_reset_rect(
             None => pb,
         });
     }
-    // SDF AA fringe around real ink. Transparent / text-only slots must not grow
-    // by RESET_PAD — that 3px eats a 1px parent border (Kbd InputAdornment).
-    // Hard ring is 3 *logical* px (spread, blur=0). RESET_PAD is 3 *physical*
-    // px; at 150%+ that is smaller than the ring. When `prev_bounds` is missing
-    // (key recycle / first present), dest-ink wipes still have to cover it.
-    let wipe_pad = if ink.is_some() {
-        let aa = pad.max(0.0);
-        if prev_bounds.is_none() {
-            aa.max(crate::style::FOCUS_RING_HARD_SPREAD * s)
-        } else {
-            aa
-        }
+    // Dest-reset wipe is the slot's real ink (SDF halo / textured wrap) union
+    // last-present. Do **not** grow that by RESET_PAD when prev is known —
+    // `instance_paint_bounds` already includes vertex AA (+2), and +3px on top
+    // punches `form_field` labels (`gap(4)`) while the Input ring blinks.
+    //
+    // Transparent / text-only slots must not grow at all (Kbd InputAdornment
+    // 1px parent border). When `prev_bounds` is missing (key recycle / first
+    // present), keep RESET_PAD so the **theme** focus-ring halo (Hard spread /
+    // Soft blur) is still covered by current blur-1 ink.
+    let wipe_pad = if ink.is_some() && prev_bounds.is_none() {
+        let (blur, spread) = crate::style::focus_ring_params(crate::style::focus_ring_style());
+        pad.max(0.0)
+            .max(sdf_painted_halo_pad(blur, spread, [0.0, 0.0]) * s)
     } else {
         0.0
     };
@@ -725,6 +725,8 @@ pub(crate) fn node_present_reset_rect(
             Some(c) => intersect_rects(r, scale_xywh(c, s)),
             None => Some(r),
         })
+        .map(|r| clip_rect_against_foreign_siblings(r, dirty_key, dirty_bounds, node_paints, s))
+        .filter(|r| r[2] > 0.5 && r[3] > 0.5)
 }
 
 /// Collect-slot visual box plus this frame's transformed instance / texture / glyph ink.
@@ -896,7 +898,7 @@ pub(crate) fn node_present_scissor_logical(
     if let Some(c) = overflow {
         scissor = intersect_rects(scissor, c).unwrap_or(scissor);
     }
-    scissor
+    clip_rect_against_foreign_siblings(scissor, dirty_key, dirty_bounds, node_paints, 1.0)
 }
 
 pub(crate) fn node_present_scissor_pad(kind: PaintDirtyKind) -> f32 {
@@ -904,6 +906,135 @@ pub(crate) fn node_present_scissor_pad(kind: PaintDirtyKind) -> f32 {
         PaintDirtyKind::Overlay => 16.0,
         PaintDirtyKind::OverlayRestore => 0.0,
         PaintDirtyKind::Node => 8.0,
+    }
+}
+
+fn aabb_contains(outer: [f32; 4], inner: [f32; 4]) -> bool {
+    outer[0] <= inner[0] + 0.5
+        && outer[1] <= inner[1] + 0.5
+        && outer[0] + outer[2] + 0.5 >= inner[0] + inner[2]
+        && outer[1] + outer[3] + 0.5 >= inner[1] + inner[3]
+}
+
+fn rect_center(r: [f32; 4]) -> [f32; 2] {
+    [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]
+}
+
+fn point_in_rect(r: [f32; 4], p: [f32; 2]) -> bool {
+    p[0] >= r[0] && p[1] >= r[1] && p[0] < r[0] + r[2] && p[1] < r[1] + r[3]
+}
+
+/// Shrink `rect` so it does not cover sibling collect slots (form_field label
+/// above Input). Skip ancestors (card contains the widget) and interiors (text
+/// leaf inside Input) — those must stay in the wipe / scissor.
+fn clip_rect_against_foreign_siblings(
+    mut rect: [f32; 4],
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    slot_scale: f32,
+) -> [f32; 4] {
+    if rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return rect;
+    }
+    let s = slot_scale.max(0.0);
+    let mut host: Option<[f32; 4]> = None;
+    for p in node_paints {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints) {
+            continue;
+        }
+        if p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
+            continue;
+        }
+        let b = scale_xywh(p.bounds, s);
+        host = Some(match host {
+            Some(prev) => union_xywh(prev, b),
+            None => b,
+        });
+    }
+    let Some(host) = host else {
+        return rect;
+    };
+    for p in node_paints {
+        if p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
+            continue;
+        }
+        if slot_matches_dirty(dirty_key, dirty_bounds, p, node_paints) {
+            continue;
+        }
+        let fb = scale_xywh(p.bounds, s);
+        if aabb_contains(fb, host) {
+            continue;
+        }
+        if point_in_rect(host, rect_center(fb)) {
+            continue;
+        }
+        if intersect_rects(rect, fb).is_none() {
+            continue;
+        }
+        rect = shrink_aabb_to_exclude(rect, fb);
+        if rect[2] <= 0.5 || rect[3] <= 0.5 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+    }
+    rect
+}
+
+fn shrink_aabb_to_exclude(wipe: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
+    if aabb_contains(cut, wipe) {
+        return [0.0, 0.0, 0.0, 0.0];
+    }
+    let w_x0 = wipe[0];
+    let w_y0 = wipe[1];
+    let w_x1 = wipe[0] + wipe[2];
+    let w_y1 = wipe[1] + wipe[3];
+    let c_x0 = cut[0];
+    let c_y0 = cut[1];
+    let c_x1 = cut[0] + cut[2];
+    let c_y1 = cut[1] + cut[3];
+    let mut best = wipe;
+    let mut best_area = -1.0_f32;
+    let consider = |r: [f32; 4], best: &mut [f32; 4], best_area: &mut f32| {
+        if r[2] > 0.5 && r[3] > 0.5 {
+            let a = r[2] * r[3];
+            if a > *best_area {
+                *best_area = a;
+                *best = r;
+            }
+        }
+    };
+    if c_y1 < w_y1 {
+        consider(
+            [w_x0, c_y1, wipe[2], w_y1 - c_y1],
+            &mut best,
+            &mut best_area,
+        );
+    }
+    if c_y0 > w_y0 {
+        consider(
+            [w_x0, w_y0, wipe[2], c_y0 - w_y0],
+            &mut best,
+            &mut best_area,
+        );
+    }
+    if c_x1 < w_x1 {
+        consider(
+            [c_x1, w_y0, w_x1 - c_x1, wipe[3]],
+            &mut best,
+            &mut best_area,
+        );
+    }
+    if c_x0 > w_x0 {
+        consider(
+            [w_x0, w_y0, c_x0 - w_x0, wipe[3]],
+            &mut best,
+            &mut best_area,
+        );
+    }
+    if best_area < 0.0 {
+        wipe
+    } else {
+        best
     }
 }
 
@@ -2143,6 +2274,118 @@ mod tests {
         assert!(
             aabb_covers(wipe, ring),
             "unfocus dest-reset must union last-present ring AABB\n wipe={wipe:?} ring={ring:?} prev={prev:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_with_last_present_must_not_pad_beyond_real_ink() {
+        // Caret blink dest-resets a focused Input with last-present. RESET_PAD on
+        // top of ring ink (spread 3 + vertex 2) punched `form_field` gap(4) labels.
+        let mut card = blank_instance(0.0, 0.0, 240.0, 80.0);
+        card.color = [0.94, 0.94, 0.95, 1.0];
+        let box_ = [8.0, 8.0, 220.0, 36.0];
+        let mut focused = input_like(box_[0], box_[1], box_[2], box_[3]);
+        focused.border_color = [0.45, 0.35, 0.95, 1.0];
+        focused.shadow_blur = 0.0;
+        focused.shadow_spread = 3.0;
+        focused.shadow_color = [0.45, 0.35, 0.95, 0.5];
+        let p = NodePaint {
+            key: 9,
+            bounds: box_,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+        };
+        let ring = instance_paint_bounds(&focused);
+        let prev = node_paint_visual_bounds(&p, &[card, focused], &[], &[], &[]);
+        let expected = super::union_xywh(ring, prev);
+        let (wipe, _) =
+            node_present_dest_reset_scaled(9, box_, &[p], &[card, focused], &[], 1.0, Some(prev))
+                .expect("card behind focused input");
+        assert!(
+            aabb_covers(wipe, ring),
+            "wipe must still cover real ring ink\n wipe={wipe:?} ring={ring:?}"
+        );
+        assert!(
+            (wipe[0] - expected[0]).abs() <= 0.5
+                && (wipe[1] - expected[1]).abs() <= 0.5
+                && (wipe[2] - expected[2]).abs() <= 0.5
+                && (wipe[3] - expected[3]).abs() <= 0.5,
+            "steady-state dest-reset must be the ink ∪ last-present box, not +RESET_PAD\n wipe={wipe:?} expected={expected:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_focus_ring_must_not_wipe_sibling_label() {
+        // WP-3.9: Hard ring spread 3 sits in form_field gap(4). Vertex AA / dest-reset
+        // pad must not punch the label slot above the Input.
+        let mut card = blank_instance(0.0, 0.0, 240.0, 80.0);
+        card.color = [0.94, 0.94, 0.95, 1.0];
+        let label = [8.0, 0.0, 40.0, 12.0];
+        let box_ = [8.0, 16.0, 220.0, 36.0];
+        let mut focused = input_like(box_[0], box_[1], box_[2], box_[3]);
+        focused.border_color = [0.45, 0.35, 0.95, 1.0];
+        focused.shadow_blur = 0.0;
+        focused.shadow_spread = 3.0;
+        focused.shadow_color = [0.45, 0.35, 0.95, 0.5];
+        let label_p = NodePaint {
+            key: 1,
+            bounds: label,
+            overlay: false,
+            instance: (0, 0),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+        };
+        let input_p = NodePaint {
+            key: 5,
+            bounds: box_,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+        };
+        let paints = [label_p, input_p];
+        let visible_ring = super::padded_xywh(box_, crate::style::FOCUS_RING_HARD_SPREAD);
+        let prev = node_paint_visual_bounds(&input_p, &[card, focused], &[], &[], &[]);
+        let (wipe, _) = node_present_dest_reset_scaled(
+            5,
+            box_,
+            &paints,
+            &[card, focused],
+            &[],
+            1.0,
+            Some(prev),
+        )
+        .expect("card behind focused input");
+        assert!(
+            aabb_covers(wipe, visible_ring),
+            "wipe must still cover the 3px Hard ring in the gap\n wipe={wipe:?} ring={visible_ring:?}"
+        );
+        assert!(
+            !super::point_in_rect(wipe, [label[0] + 8.0, label[1] + label[3] - 0.5]),
+            "focus dest-reset must not punch the label slot\n wipe={wipe:?} label={label:?}"
+        );
+        let scissor = super::node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            5,
+            [box_[0] - 3.0, box_[1] - 3.0, box_[2] + 6.0, box_[3] + 6.0],
+            &[(5, prev)],
+            &paints,
+            8.0,
+        );
+        assert!(
+            !super::point_in_rect(scissor, [label[0] + 8.0, label[1] + label[3] - 0.5]),
+            "node scissor must not cover the label after sibling clip\n scissor={scissor:?} label={label:?}"
         );
     }
 

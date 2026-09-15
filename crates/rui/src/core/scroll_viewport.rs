@@ -351,7 +351,7 @@ pub fn maybe_activate_scroll_viewport(
 }
 
 pub struct ScrollViewportBuilder {
-    id: String,
+    pub(crate) id: String,
     el: Element,
     overflow_x: String,
     overflow_y: String,

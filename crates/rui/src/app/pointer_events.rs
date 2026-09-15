@@ -8,6 +8,7 @@
 
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use winit::event::MouseButton;
@@ -386,8 +387,12 @@ pub fn click_gesture_path(
     click_dispatch_path(down, up)
 }
 
-/// Collect the hit path from root to the deepest hit node (inclusive).
-pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
+struct HitNode {
+    ptr: *const Element,
+    bounds: [f32; 4],
+}
+
+fn hit_path_nodes(el: &Element, x: f32, y: f32) -> Vec<HitNode> {
     let mut path = Vec::new();
     hit_path_rec(
         el,
@@ -401,6 +406,28 @@ pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
     path
 }
 
+/// Collect the hit path from root to the deepest hit node (inclusive).
+pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
+    hit_path_nodes(el, x, y)
+        .into_iter()
+        .map(|n| {
+            // SAFETY: `n.ptr` is a node in `el`'s tree for the duration of this call.
+            HitPathEntry::from_element(unsafe { &*n.ptr }, n.bounds)
+        })
+        .collect()
+}
+
+/// Exclusive pointer chain (root → leaf), same walk as [`hit_path`].
+///
+/// CSS `:hover` must use this set: geometric AABB alone paints covered siblings
+/// (ColorPicker popover over a DatePicker trigger).
+pub(crate) fn pointer_hit_node_set(el: &Element, x: f32, y: f32) -> HashSet<*const Element> {
+    hit_path_nodes(el, x, y)
+        .into_iter()
+        .map(|n| n.ptr)
+        .collect()
+}
+
 fn pointer_events_blocked(el: &Element) -> bool {
     !pointer_events_targets_children(el)
 }
@@ -412,7 +439,7 @@ fn hit_path_rec(
     scroll_acc: [f32; 2],
     ancestor_linear: crate::style::Mat2d,
     ancestor_scale: [f32; 2],
-    out: &mut Vec<HitPathEntry>,
+    out: &mut Vec<HitNode>,
 ) -> bool {
     if pointer_events_blocked(el) {
         return false;
@@ -465,7 +492,10 @@ fn hit_path_rec(
         ancestor_linear,
         ancestor_scale,
     );
-    out.push(HitPathEntry::from_element(el, paint_bounds));
+    out.push(HitNode {
+        ptr: el as *const Element,
+        bounds: paint_bounds,
+    });
 
     let mut child_hit = false;
     let order = {

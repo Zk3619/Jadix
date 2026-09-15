@@ -3,8 +3,9 @@
 //! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use taffy::prelude::*;
@@ -223,15 +224,14 @@ pub(crate) fn hoisted_portal_stamps(root: &Element) -> Vec<(u64, [f32; 4])> {
 }
 
 fn hoisted_portal_stamp_key(el: &Element) -> u64 {
-    el.layout_node.map(|n| u64::from(n)).unwrap_or_else(|| {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        el.layout_bounds[0].to_bits().hash(&mut h);
-        el.layout_bounds[1].to_bits().hash(&mut h);
-        el.layout_bounds[2].to_bits().hash(&mut h);
-        el.layout_bounds[3].to_bits().hash(&mut h);
-        h.finish()
-    })
+    overlay_portal_stamp_key(el)
+}
+
+/// Stable GPU stamp identity: `rui_portal_key` (not Taffy `NodeId`, not AABB).
+pub fn overlay_portal_stamp_key(el: &Element) -> u64 {
+    let mut h = DefaultHasher::new();
+    portal_key_of(el).hash(&mut h);
+    h.finish()
 }
 
 /// True while an expand panel is on its unconstrained measure frame.
@@ -1933,6 +1933,8 @@ pub struct OverlayPaintBand {
     pub backdrop_blur: f32,
     /// Underlay 有效 opacity（祖先 × 自身），用于 backdrop blur 与遮罩同步淡入淡出。
     pub underlay_opacity: f32,
+    /// [`overlay_portal_stamp_key`] of this portal-layer child. `0` = synthetic / page-stack.
+    pub stamp_key: u64,
 }
 
 fn subtree_has_backdrop_blur(el: &Element) -> bool {
@@ -1964,6 +1966,8 @@ pub struct OverlayBandRange {
     pub paint_ops: (usize, usize),
     pub backdrop_blur: f32,
     pub underlay_opacity: f32,
+    /// [`OverlayPaintBand::stamp_key`] copied through [`OverlayPaintSplit::band_ranges`].
+    pub stamp_key: u64,
 }
 
 /// Collect slots belonging to one Element (Taffy node). Present draws these
@@ -2088,6 +2092,7 @@ impl OverlayPaintSplit {
                     paint_op_start: self.paint_op_start.min(paint_op_len),
                     backdrop_blur: 0.0,
                     underlay_opacity: 1.0,
+                    stamp_key: 0,
                 }]
             } else {
                 Vec::new()
@@ -2125,6 +2130,7 @@ impl OverlayPaintSplit {
                 ),
                 backdrop_blur: b.backdrop_blur,
                 underlay_opacity: b.underlay_opacity,
+                stamp_key: b.stamp_key,
             });
         }
         out
@@ -2145,6 +2151,7 @@ impl OverlayPaintSplit {
             paint_op_start: self.paint_op_start,
             backdrop_blur: 0.0,
             underlay_opacity: 1.0,
+            stamp_key: 0,
         };
         let mut starts = Vec::with_capacity(self.page_stack_bands.len() + 1);
         let first = self.page_stack_bands[0];
@@ -2168,6 +2175,7 @@ impl OverlayPaintSplit {
                 paint_ops: (b.paint_op_start, next.paint_op_start),
                 backdrop_blur: b.backdrop_blur,
                 underlay_opacity: b.underlay_opacity,
+                stamp_key: b.stamp_key,
             });
         }
         out
@@ -2439,10 +2447,22 @@ fn text_decoration_clip_outset(style: &crate::style::TextStyle) -> f32 {
 
 fn text_leaf_clip_rect(render_rect: [f32; 4], style: &crate::style::TextStyle) -> [f32; 4] {
     let deco = text_decoration_clip_outset(style);
+    let mut r = render_rect;
+    // `text-overflow: clip|ellipsis` scissors the inline axis. Glyph ink may
+    // overflow the line box (`leading-none` + CJK / descenders) — same as CSS
+    // `overflow-y: visible`. Do not use the 1em strut as a vertical scissor.
+    if matches!(
+        style.overflow,
+        crate::style::TextOverflow::Clip | crate::style::TextOverflow::Ellipsis
+    ) {
+        let ink = style.size_resolved().max(deco);
+        r[1] -= ink;
+        r[3] += ink * 2.0;
+        return r;
+    }
     if deco <= 0.0 {
         return render_rect;
     }
-    let mut r = render_rect;
     if style.underline_resolved() {
         r[3] += deco;
     }
@@ -2687,10 +2707,7 @@ fn measured_text_leaf_size_horizontal(
                 .unwrap_or(if m.caret_scroll { 0.0 } else { measured_w })
                 .max(if m.caret_scroll { 0.0 } else { 1.0 })
         } else if m.caret_scroll {
-            known_dimensions
-                .width
-                .or(avail_width)
-                .unwrap_or(0.0)
+            known_dimensions.width.or(avail_width).unwrap_or(0.0)
         } else {
             measured_w
         };
@@ -4791,14 +4808,16 @@ impl LayoutTree {
         let layout_border = [render_x, render_y, lay_w, lay_h];
         let mut clip = parent_clip;
         let mut dest_clip = parent_dest_clip;
-        let overflow_clips = element.style.overflow.x != taffy::style::Overflow::Visible
-            || element.style.overflow.y != taffy::style::Overflow::Visible;
+        let clip_x = element.style.overflow.x != taffy::style::Overflow::Visible;
+        let clip_y = element.style.overflow.y != taffy::style::Overflow::Visible;
+        let overflow_clips = clip_x || clip_y;
         if overflow_clips {
-            clip = Some(intersect_rect(clip, layout_border));
-            dest_clip = Some(intersect_rect(
+            clip = intersect_overflow_axes(clip, layout_border, element.style.overflow);
+            dest_clip = intersect_overflow_axes(
                 dest_clip,
                 overflow_dest_aabb(layout_border, render_rect, &transform),
-            ));
+                element.style.overflow,
+            );
         }
         if !element.style.clip_path.is_none() {
             let paint_clip = !crate::style::mat2d_is_identity(&transform);
@@ -4859,6 +4878,8 @@ impl LayoutTree {
             element.style.clip_path.to_gpu(layout_border)
         };
         let overflow_clip_poly = if overflow_clips
+            && clip_x
+            && clip_y
             && !escape_overflow_clip
             && crate::style::radii_affect_clip(element.style.radii)
         {
@@ -6168,14 +6189,18 @@ impl LayoutTree {
                 (painted.clip, painted.clip_poly)
             };
         let dest_clip = if painted.filter_capture || painted.scale_layer.is_some() {
-            let overflow_clips = element.style.overflow.x != taffy::style::Overflow::Visible
-                || element.style.overflow.y != taffy::style::Overflow::Visible;
-            if overflow_clips {
-                Some(overflow_dest_aabb(
-                    painted.layout_border,
-                    painted.render_rect,
-                    &painted.transform,
-                ))
+            let clip_x = element.style.overflow.x != taffy::style::Overflow::Visible;
+            let clip_y = element.style.overflow.y != taffy::style::Overflow::Visible;
+            if clip_x || clip_y {
+                intersect_overflow_axes(
+                    None,
+                    overflow_dest_aabb(
+                        painted.layout_border,
+                        painted.render_rect,
+                        &painted.transform,
+                    ),
+                    element.style.overflow,
+                )
             } else {
                 None
             }
@@ -6281,6 +6306,15 @@ impl LayoutTree {
             paint_op_start: paint_ops_len,
             backdrop_blur: band_root.style.backdrop_blur.max(0.0),
             underlay_opacity: (ancestor_opacity * band_root.style.opacity).clamp(0.0, 1.0),
+            // Identity is the portal-layer child. Nested Select/stacking inside
+            // DatePicker stays in that child's band so calendar glyphs and
+            // ColorPicker internals are not split onto a 0-key suffix that
+            // PartialLoad then skips.
+            stamp_key: if is_body_portal_layer {
+                overlay_portal_stamp_key(band_root)
+            } else {
+                0
+            },
         };
         if is_body_portal_layer {
             overlay_split.bands.push(band);
@@ -7160,18 +7194,18 @@ fn filter_source_overflow_clip(
     lay_w: f32,
     lay_h: f32,
 ) -> (Option<[f32; 4]>, crate::style::GpuClipPoly) {
-    let overflow_clips = style.overflow.x != taffy::style::Overflow::Visible
-        || style.overflow.y != taffy::style::Overflow::Visible;
-    if !overflow_clips {
+    let clip_x = style.overflow.x != taffy::style::Overflow::Visible;
+    let clip_y = style.overflow.y != taffy::style::Overflow::Visible;
+    if !clip_x && !clip_y {
         return (None, crate::style::GpuClipPoly::NONE);
     }
     let box_r = [abs_x, abs_y, lay_w, lay_h];
-    let poly = if crate::style::radii_affect_clip(style.radii) {
+    let poly = if clip_x && clip_y && crate::style::radii_affect_clip(style.radii) {
         crate::style::GpuClipPoly::from_rounded_rect(box_r, style.radii)
     } else {
         crate::style::GpuClipPoly::NONE
     };
-    (Some(box_r), poly)
+    (intersect_overflow_axes(None, box_r, style.overflow), poly)
 }
 
 /// Native `<input>`: clip at the padding box. The text leaf is the content box —
@@ -7266,6 +7300,36 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     } else {
         rect
     }
+}
+
+/// Intersect `parent` with `layout` only on axes whose overflow is not `visible`.
+/// `overflow-x: hidden; overflow-y: visible` (static `text-overflow`) must not
+/// scissor glyph ink to the line box.
+fn intersect_overflow_axes(
+    parent: Option<[f32; 4]>,
+    layout: [f32; 4],
+    overflow: taffy::geometry::Point<taffy::style::Overflow>,
+) -> Option<[f32; 4]> {
+    let clip_x = overflow.x != taffy::style::Overflow::Visible;
+    let clip_y = overflow.y != taffy::style::Overflow::Visible;
+    if !clip_x && !clip_y {
+        return parent;
+    }
+    const UNBOUNDED: [f32; 4] = [-1.0e7, -1.0e7, 2.0e7, 2.0e7];
+    let mut r = parent.unwrap_or(UNBOUNDED);
+    if clip_x {
+        let x0 = layout[0].max(r[0]);
+        let x1 = (layout[0] + layout[2]).min(r[0] + r[2]);
+        r[2] = (x1 - x0).max(0.0);
+        r[0] = x0;
+    }
+    if clip_y {
+        let y0 = layout[1].max(r[1]);
+        let y1 = (layout[1] + layout[3]).min(r[1] + r[3]);
+        r[3] = (y1 - y0).max(0.0);
+        r[1] = y0;
+    }
+    Some(r)
 }
 
 fn stamp_clip_polys(
@@ -7476,72 +7540,120 @@ fn push_input_chrome_instances(
             bg[2] as f32 / 255.0,
             (bg[3] as f32 / 255.0) * opacity,
         ];
-        let (start_line, start_local) = line_and_local(s);
-        let (end_line, end_local) = line_and_local(e);
-        for line_i in start_line..=end_line.min(line_count.saturating_sub(1)) {
-            let (_line_start, line_body) = line_body_at(line_i);
-            let from = if line_i == start_line { start_local } else { 0 };
-            let to = if line_i == end_line {
-                end_local.min(line_body.len())
+        // BiDi / WJ: LTR prefix-width boxes sit in the wrong visual place, so
+        // `selection-foreground` paints light glyphs on the card (ink "vanishes").
+        let mut painted_visual = false;
+        if crate::text::needs_logical_prewrap(text) {
+            let source = if soft_wrap {
+                style.wrap_mode.to_line_break_source()
             } else {
-                line_body.len()
+                crate::text::LineBreakSource::None
             };
-            if from >= to && !(from == 0 && to == 0 && line_i < end_line) {
-                // Empty middle/end lines still get a thin caret-width highlight when selected through.
-                if from == to && line_body.is_empty() && start_line != end_line {
+            let slabs = crate::text::visual_selection_highlights(
+                text,
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height,
+                box_w.max(1.0),
+                source,
+                s,
+                e,
+            );
+            if !slabs.is_empty() {
+                painted_visual = true;
+                for (line_i, hx, hw, line_w) in slabs {
+                    let align_dx = style.align_inline_offset(line_w, box_w);
+                    let sel_w = if pan {
+                        hw.max(0.0)
+                    } else {
+                        hw.min((box_w - hx).max(0.0)).max(0.0)
+                    };
+                    if sel_w > 0.0 {
+                        push_chrome_rect(
+                            selection_out,
+                            clip,
+                            if pan {
+                                x + align_dx + hx
+                            } else {
+                                x + align_dx + hx.max(0.0)
+                            },
+                            line_top_y(line_i.min(line_count.saturating_sub(1))),
+                            sel_w,
+                            sel_h,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+        if !painted_visual {
+            let (start_line, start_local) = line_and_local(s);
+            let (end_line, end_local) = line_and_local(e);
+            for line_i in start_line..=end_line.min(line_count.saturating_sub(1)) {
+                let (_line_start, line_body) = line_body_at(line_i);
+                let from = if line_i == start_line { start_local } else { 0 };
+                let to = if line_i == end_line {
+                    end_local.min(line_body.len())
+                } else {
+                    line_body.len()
+                };
+                if from >= to && !(from == 0 && to == 0 && line_i < end_line) {
+                    // Empty middle/end lines still get a thin caret-width highlight when selected through.
+                    if from == to && line_body.is_empty() && start_line != end_line {
+                        push_chrome_rect(
+                            selection_out,
+                            clip,
+                            x,
+                            line_top_y(line_i),
+                            4.0_f32.min(box_w),
+                            sel_h,
+                            color,
+                        );
+                    }
+                    continue;
+                }
+                let prefix_w = prefix_width_logical(
+                    line_body,
+                    from,
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let end_w = prefix_width_logical(
+                    line_body,
+                    to,
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let line_w = prefix_width_logical(
+                    line_body,
+                    line_body.len(),
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                );
+                let align_dx = style.align_inline_offset(line_w, box_w);
+                let sel_w = if pan {
+                    (end_w - prefix_w).max(0.0)
+                } else {
+                    (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
+                };
+                if sel_w > 0.0 {
                     push_chrome_rect(
                         selection_out,
                         clip,
-                        x,
+                        if pan {
+                            x + align_dx + prefix_w
+                        } else {
+                            x + align_dx + prefix_w.min(box_w)
+                        },
                         line_top_y(line_i),
-                        4.0_f32.min(box_w),
+                        sel_w,
                         sel_h,
                         color,
                     );
                 }
-                continue;
-            }
-            let prefix_w = prefix_width_logical(
-                line_body,
-                from,
-                style.size_resolved(),
-                style.weight_resolved(),
-                line_height,
-            );
-            let end_w = prefix_width_logical(
-                line_body,
-                to,
-                style.size_resolved(),
-                style.weight_resolved(),
-                line_height,
-            );
-            let line_w = prefix_width_logical(
-                line_body,
-                line_body.len(),
-                style.size_resolved(),
-                style.weight_resolved(),
-                line_height,
-            );
-            let align_dx = style.align_inline_offset(line_w, box_w);
-            let sel_w = if pan {
-                (end_w - prefix_w).max(0.0)
-            } else {
-                (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
-            };
-            if sel_w > 0.0 {
-                push_chrome_rect(
-                    selection_out,
-                    clip,
-                    if pan {
-                        x + align_dx + prefix_w
-                    } else {
-                        x + align_dx + prefix_w.min(box_w)
-                    },
-                    line_top_y(line_i),
-                    sel_w,
-                    sel_h,
-                    color,
-                );
             }
         }
     }
@@ -7631,22 +7743,43 @@ fn push_input_chrome_instances(
     }
     let mut ix = caret.caret_byte_index.min(text.len());
     ix = text.floor_char_boundary(ix);
-    let (line_i, local) = line_and_local(ix);
-    let (_line_start, line_body) = line_body_at(line_i);
-    let prefix_w = prefix_width_logical(
-        line_body,
-        local,
-        style.size_resolved(),
-        style.weight_resolved(),
-        line_height,
-    );
-    let line_w = prefix_width_logical(
-        line_body,
-        line_body.len(),
-        style.size_resolved(),
-        style.weight_resolved(),
-        line_height,
-    );
+    let (line_i, prefix_w, line_w) = if crate::text::needs_logical_prewrap(text) {
+        let source = if soft_wrap {
+            style.wrap_mode.to_line_break_source()
+        } else {
+            crate::text::LineBreakSource::None
+        };
+        let model = crate::text::build_visual_lines(
+            text,
+            style.size_resolved(),
+            style.weight_resolved(),
+            line_height.max(1.0),
+            box_w.max(1.0),
+            source,
+        );
+        let i = crate::text::caret_visual_line_index(&model.ranges, ix);
+        (i, model.caret_x_on_line(ix), model.line_visual_width(i))
+    } else {
+        let (line_i, local) = line_and_local(ix);
+        let (_line_start, line_body) = line_body_at(line_i);
+        (
+            line_i,
+            prefix_width_logical(
+                line_body,
+                local,
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height,
+            ),
+            prefix_width_logical(
+                line_body,
+                line_body.len(),
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height,
+            ),
+        )
+    };
     let align_dx = style.align_inline_offset(line_w, box_w);
     let caret_w = 2.0_f32;
     let mut caret_x = x + align_dx + prefix_w;
@@ -7788,6 +7921,63 @@ mod prepared_text_attach_tests {
                 r.rect_size[0]
             );
         }
+    }
+
+    /// RTL paragraph: selecting the trailing LTR island must highlight the visual
+    /// left cluster, not a logical-prefix box that covers the Hebrew run.
+    #[test]
+    fn bidi_selection_rects_follow_visual_runs() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+
+        let text = "עברית Hello";
+        let Some(lo) = text.find("Hello") else {
+            return;
+        };
+        let hi = lo + "Hello".len();
+        let hebrew_prefix = prefix_width_logical(&text[..lo], lo, 14.0, 400, 21.0);
+        let lh = 21.0_f32;
+        let mut style = TextStyle::default();
+        style.size = Some(14.0);
+        style.weight = Some(400);
+        style.line_height_px = Some(lh);
+        style.color = Some([0, 0, 0, 255]);
+        style.white_space = crate::style::WhiteSpace::Normal;
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: hi,
+            selection: Some((lo, hi)),
+            selection_bg: [0, 0, 0, 255],
+            overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: false,
+            caret_color: None,
+            selection_foreground: Some([255, 255, 255, 255]),
+        });
+
+        let mut selection = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            0.0,
+            0.0,
+            280.0,
+            lh + 4.0,
+            None,
+            1.0,
+        );
+        assert!(
+            !selection.is_empty(),
+            "BiDi selection must emit at least one visual slab"
+        );
+        let x = selection[0].rect_pos[0];
+        assert!(
+            x > hebrew_prefix + 1.0,
+            "Hello glyphs are past the logical Hebrew prefix (LTR box would cover Hebrew); x={x} hebrew_prefix={hebrew_prefix}"
+        );
     }
 
     #[test]

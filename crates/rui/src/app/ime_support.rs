@@ -889,7 +889,9 @@ mod tests {
             painted_caret_matches_focus(&nodes, "input:num"),
             "caret still on the focused number field is a match"
         );
-        let none = vec![test_text_node("search", 40.0, 80.0, 320.0, 36.0, clip, false)];
+        let none = vec![test_text_node(
+            "search", 40.0, 80.0, 320.0, 36.0, clip, false,
+        )];
         assert!(
             painted_caret_matches_focus(&none, "input:search"),
             "no painted caret is not a stale-caret mismatch"

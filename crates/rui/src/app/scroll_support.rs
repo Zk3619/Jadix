@@ -9,13 +9,49 @@ use crate::core::tree::Element;
 pub(crate) enum ScrollItemAlign {
     Start,
     Center,
+    End,
+}
+
+/// When to apply a pending align.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollAlignWhen {
+    /// Snap offset as soon as metrics exist (overlay measure / Expand pin).
+    Before,
+    /// Wait for a real clipped viewport, then honor the area's smooth/jump.
+    After,
+}
+
+impl ScrollAlignWhen {
+    pub(crate) fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "after" | "enter" | "animate" => Self::After,
+            _ => Self::Before,
+        }
+    }
+}
+
+impl ScrollItemAlign {
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "false" | "0" => None,
+            "start" | "top" | "left" => Some(Self::Start),
+            "end" | "bottom" | "right" => Some(Self::End),
+            _ => Some(Self::Center),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum PendingAlignTarget {
+    UniformItems { index: usize, item_count: usize },
+    Descendant { id: String },
 }
 
 #[derive(Clone, Debug)]
 struct PendingScrollItemAlign {
-    index: usize,
-    item_count: usize,
+    target: PendingAlignTarget,
     align: ScrollItemAlign,
+    when: ScrollAlignWhen,
     tries: u8,
     /// Frames where viewport still matches content (Expand pin). Not reset by
     /// Select rebuilding the menu each frame — see [`request_scroll_item_into_view`].
@@ -26,6 +62,9 @@ struct PendingScrollItemAlign {
 thread_local! {
     static PENDING_SCROLL_ITEM_ALIGN: RefCell<HashMap<String, PendingScrollItemAlign>> =
         RefCell::new(HashMap::new());
+    /// Offset written against a placed `max_h` while Expand still pins viewport≈content.
+    /// Layout `max_y` is 0 in that window; clamp must not wipe the align.
+    static HELD_SCROLL_ALIGN_Y: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn scroll_offset_to_center_item(
@@ -40,28 +79,76 @@ pub(crate) fn scroll_offset_to_center_item(
     (center - viewport_h * 0.5).clamp(0.0, max_sy)
 }
 
-pub(crate) fn request_scroll_item_into_view(
+/// Menu chrome: Select/Combobox content `p-1` (0.25rem × 2).
+const MENU_CHROME_Y: f32 = 8.0;
+
+/// Viewport height implied by last synced floating `max_h` (viewport-available).
+fn placed_scroll_viewport_h(rest: &str) -> Option<f32> {
+    let overlay_id = rest.strip_suffix(":menu_scroll")?;
+    let cap = crate::utils::popup::peek_floating_place_max_h(overlay_id).filter(|h| *h > 1.0)?;
+    Some((cap - MENU_CHROME_Y).max(1.0))
+}
+
+fn effective_scroll_viewport_h_when(
+    rest: &str,
+    viewport_h: f32,
+    content_h: f32,
+    when: ScrollAlignWhen,
+) -> Option<f32> {
+    match when {
+        ScrollAlignWhen::After => {
+            // After enter: do not use the Expand placed-cap shortcut — wait until the
+            // layout viewport actually clips, then chase with smooth/jump.
+            if viewport_h + 0.5 < content_h {
+                let placed = placed_scroll_viewport_h(rest);
+                return Some(placed.map(|p| viewport_h.min(p)).unwrap_or(viewport_h));
+            }
+            None
+        }
+        ScrollAlignWhen::Before => {
+            let placed = placed_scroll_viewport_h(rest);
+            if let Some(p) = placed.filter(|p| *p + 0.5 < content_h) {
+                if viewport_h + 0.5 < content_h {
+                    return Some(viewport_h.min(p));
+                }
+                return Some(p);
+            }
+            if viewport_h + 0.5 < content_h {
+                return Some(viewport_h);
+            }
+            None
+        }
+    }
+}
+
+fn upsert_pending_scroll_align(
     rest: impl Into<String>,
-    index: usize,
-    item_count: usize,
+    target: PendingAlignTarget,
     align: ScrollItemAlign,
+    when: ScrollAlignWhen,
 ) {
     PENDING_SCROLL_ITEM_ALIGN.with(|m| {
         let mut map = m.borrow_mut();
         let key = rest.into();
         match map.get_mut(&key) {
             Some(pending) => {
-                pending.index = index;
-                pending.item_count = item_count.max(1);
+                let same_kind =
+                    std::mem::discriminant(&pending.target) == std::mem::discriminant(&target);
+                pending.target = target;
                 pending.align = align;
+                pending.when = when;
+                if !same_kind {
+                    pending.tries = 0;
+                    pending.clip_waits = 0;
+                }
             }
             None => {
                 map.insert(
                     key,
                     PendingScrollItemAlign {
-                        index,
-                        item_count: item_count.max(1),
+                        target,
                         align,
+                        when,
                         tries: 0,
                         clip_waits: 0,
                         requested_at: Instant::now(),
@@ -72,10 +159,67 @@ pub(crate) fn request_scroll_item_into_view(
     });
 }
 
+pub(crate) fn request_scroll_item_into_view(
+    rest: impl Into<String>,
+    index: usize,
+    item_count: usize,
+    align: ScrollItemAlign,
+) {
+    request_scroll_item_into_view_when(rest, index, item_count, align, ScrollAlignWhen::Before);
+}
+
+pub(crate) fn request_scroll_item_into_view_when(
+    rest: impl Into<String>,
+    index: usize,
+    item_count: usize,
+    align: ScrollItemAlign,
+    when: ScrollAlignWhen,
+) {
+    upsert_pending_scroll_align(
+        rest,
+        PendingAlignTarget::UniformItems {
+            index,
+            item_count: item_count.max(1),
+        },
+        align,
+        when,
+    );
+}
+
+pub(crate) fn request_scroll_descendant_into_view(
+    rest: impl Into<String>,
+    target: impl Into<String>,
+    align: ScrollItemAlign,
+) {
+    request_scroll_descendant_into_view_when(rest, target, align, ScrollAlignWhen::Before);
+}
+
+pub(crate) fn request_scroll_descendant_into_view_when(
+    rest: impl Into<String>,
+    target: impl Into<String>,
+    align: ScrollItemAlign,
+    when: ScrollAlignWhen,
+) {
+    let id = target.into();
+    if id.is_empty() {
+        return;
+    }
+    upsert_pending_scroll_align(rest, PendingAlignTarget::Descendant { id }, align, when);
+}
+
 pub(crate) fn cancel_scroll_item_into_view(rest: &str) {
     PENDING_SCROLL_ITEM_ALIGN.with(|m| {
         m.borrow_mut().remove(rest);
     });
+    HELD_SCROLL_ALIGN_Y.with(|m| {
+        m.borrow_mut().remove(rest);
+    });
+}
+
+/// On close: drop a pending align so exit does not keep rewriting the viewport.
+/// Do **not** snap offset to 0 — keep-alive Expand still paints the menu.
+pub(crate) fn reset_scroll_item_into_view(rest: &str) {
+    cancel_scroll_item_into_view(rest);
 }
 
 pub(crate) fn has_pending_scroll_item_align() -> bool {
@@ -96,10 +240,22 @@ pub(crate) fn apply_pending_scroll_item_into_view(
     viewport_h: f32,
     content_h: f32,
 ) -> bool {
+    apply_pending_scroll_align(rest, [0.0, 0.0, 0.0, viewport_h], 0.0, content_h, None)
+}
+
+pub(crate) fn apply_pending_scroll_align(
+    rest: &str,
+    viewport_bounds: [f32; 4],
+    content_w: f32,
+    content_h: f32,
+    descendant_bounds: Option<[f32; 4]>,
+) -> bool {
     let pending = PENDING_SCROLL_ITEM_ALIGN.with(|m| m.borrow_mut().remove(rest));
     let Some(mut pending) = pending else {
         return false;
     };
+    let viewport_h = viewport_bounds[3];
+    let viewport_w = viewport_bounds[2];
     if viewport_h <= 1.0 || content_h <= 1.0 {
         pending.tries = pending.tries.saturating_add(1);
         if pending.tries < 12 {
@@ -109,30 +265,169 @@ pub(crate) fn apply_pending_scroll_item_into_view(
         }
         return false;
     }
-    // Expand pins ScrollArea min-height to content, so viewport≈content and
-    // `max_sy` is 0. Consuming now writes offset 0; Idle unpin then clips and
-    // the list sits one row short until a later rebuild re-requests.
-    if viewport_h + 0.5 >= content_h {
+    let Some(effective_vh) =
+        effective_scroll_viewport_h_when(rest, viewport_h, content_h, pending.when)
+    else {
         pending.clip_waits = pending.clip_waits.saturating_add(1);
         if pending.clip_waits < 36 {
             PENDING_SCROLL_ITEM_ALIGN.with(|m| {
                 m.borrow_mut().insert(rest.to_string(), pending);
             });
-            return false;
         }
-    }
-    let item_h = content_h / pending.item_count as f32;
-    let sy = match pending.align {
-        ScrollItemAlign::Center => {
-            scroll_offset_to_center_item(pending.index, item_h, viewport_h, pending.item_count)
+        return false;
+    };
+    let (sx, sy) = match &pending.target {
+        PendingAlignTarget::UniformItems { index, item_count } => {
+            let item_h = content_h / *item_count as f32;
+            let max_sy = (content_h - effective_vh).max(0.0);
+            let sy = match pending.align {
+                ScrollItemAlign::Center => {
+                    scroll_offset_to_center_item(*index, item_h, effective_vh, *item_count)
+                }
+                ScrollItemAlign::Start => (*index as f32 * item_h).clamp(0.0, max_sy),
+                ScrollItemAlign::End => {
+                    (*index as f32 * item_h + item_h - effective_vh).clamp(0.0, max_sy)
+                }
+            };
+            (0.0, sy)
         }
-        ScrollItemAlign::Start => {
-            let max_sy = (content_h - viewport_h).max(0.0);
-            (pending.index as f32 * item_h).clamp(0.0, max_sy)
+        PendingAlignTarget::Descendant { .. } => {
+            let Some(target) = descendant_bounds.filter(|b| b[2] > 0.5 && b[3] > 0.5) else {
+                pending.clip_waits = pending.clip_waits.saturating_add(1);
+                if pending.clip_waits < 36 {
+                    PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+                        m.borrow_mut().insert(rest.to_string(), pending);
+                    });
+                }
+                return false;
+            };
+            let cur_x = crate::core::reactivity::use_signal(
+                &crate::core::scroll_viewport::scroll_offset_x_signal_key(rest),
+                || 0.0_f32,
+            )
+            .peek();
+            let cur_y = crate::core::reactivity::use_signal(
+                &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
+                || 0.0_f32,
+            )
+            .peek();
+            let mut vb = viewport_bounds;
+            vb[3] = effective_vh;
+            let max_x = (content_w - viewport_w).max(0.0);
+            let max_y = (content_h - effective_vh).max(0.0);
+            let [nx, ny] = scroll_offset_to_align_rect(
+                vb,
+                target,
+                [cur_x, cur_y],
+                [max_x, max_y],
+                pending.align,
+            );
+            (nx, ny)
         }
     };
-    set_scroll_offset_with_behavior(rest, 0.0, sy, true);
+    let immediate = match pending.when {
+        ScrollAlignWhen::Before => true,
+        ScrollAlignWhen::After => {
+            let behavior = crate::core::reactivity::use_signal(
+                &crate::core::scroll_viewport::scroll_behavior_signal_key(rest),
+                || crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
+            )
+            .peek();
+            crate::core::scroll_viewport::scroll_behavior_is_jump(&behavior)
+        }
+    };
+    set_scroll_offset_with_behavior(rest, sx, sy, immediate);
+    let layout_max = (content_h - viewport_h).max(0.0);
+    if pending.when == ScrollAlignWhen::Before && sy > layout_max + 0.5 {
+        HELD_SCROLL_ALIGN_Y.with(|m| {
+            m.borrow_mut().insert(rest.to_string(), sy);
+        });
+    } else {
+        HELD_SCROLL_ALIGN_Y.with(|m| {
+            m.borrow_mut().remove(rest);
+        });
+    }
     true
+}
+
+pub(crate) fn scroll_offset_to_align_rect(
+    viewport: [f32; 4],
+    target: [f32; 4],
+    current: [f32; 2],
+    max_scroll: [f32; 2],
+    align: ScrollItemAlign,
+) -> [f32; 2] {
+    let content_x = target[0] - viewport[0] + current[0];
+    let content_y = target[1] - viewport[1] + current[1];
+    let (dx, dy) = match align {
+        ScrollItemAlign::Start => (content_x, content_y),
+        ScrollItemAlign::Center => (
+            content_x + target[2] * 0.5 - viewport[2] * 0.5,
+            content_y + target[3] * 0.5 - viewport[3] * 0.5,
+        ),
+        ScrollItemAlign::End => (
+            content_x + target[2] - viewport[2],
+            content_y + target[3] - viewport[3],
+        ),
+    };
+    [
+        dx.clamp(0.0, max_scroll[0].max(0.0)),
+        dy.clamp(0.0, max_scroll[1].max(0.0)),
+    ]
+}
+
+fn node_matches_scroll_target(el: &Element, target: &str) -> bool {
+    el.focus_id.as_deref() == Some(target) || el.template_id.as_deref() == Some(target)
+}
+
+fn find_scroll_target_bounds(
+    root: &Element,
+    viewport_rest: &str,
+    target: &str,
+) -> Option<[f32; 4]> {
+    let want = crate::core::scroll_viewport::focus_id_for_scroll_viewport(viewport_rest);
+    let mut inside = None;
+    let mut anywhere = None;
+    fn walk(
+        el: &Element,
+        target: &str,
+        want: &str,
+        in_vp: bool,
+        inside: &mut Option<[f32; 4]>,
+        anywhere: &mut Option<[f32; 4]>,
+    ) {
+        let in_vp = in_vp || el.focus_id.as_deref() == Some(want);
+        if node_matches_scroll_target(el, target) {
+            let b = el.layout_bounds;
+            if b[2] > 0.5 && b[3] > 0.5 {
+                if in_vp {
+                    *inside = Some(b);
+                } else if anywhere.is_none() {
+                    *anywhere = Some(b);
+                }
+            }
+        }
+        for c in &el.children {
+            walk(c, target, want, in_vp, inside, anywhere);
+        }
+    }
+    walk(root, target, &want, false, &mut inside, &mut anywhere);
+    inside.or(anywhere)
+}
+
+/// Snapshot descendant target boxes before the post-render signal pass (split-borrow).
+pub(crate) fn resolve_pending_descendant_bounds(root: &Element) -> HashMap<String, [f32; 4]> {
+    PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+        let map = m.borrow();
+        map.iter()
+            .filter_map(|(rest, pending)| match &pending.target {
+                PendingAlignTarget::Descendant { id } => {
+                    find_scroll_target_bounds(root, rest, id).map(|b| (rest.clone(), b))
+                }
+                PendingAlignTarget::UniformItems { .. } => None,
+            })
+            .collect()
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -648,6 +943,23 @@ pub(crate) fn clamp_scroll_offset_and_target(offset: f32, target: f32, max: f32)
     (offset.clamp(0.0, max), target.clamp(0.0, max))
 }
 
+/// Expand pin reports `max_y=0`. Keep a just-applied align offset until the
+/// ScrollArea actually clips (otherwise the next pre-render clamp snaps to 0
+/// and the menu appears at the top, then jumps after idle).
+pub(crate) fn clamp_max_y_for_pending_align(rest: &str, raw_max_y: f32) -> f32 {
+    HELD_SCROLL_ALIGN_Y.with(|m| {
+        let mut map = m.borrow_mut();
+        let Some(&held) = map.get(rest) else {
+            return raw_max_y;
+        };
+        if raw_max_y + 0.5 >= held {
+            map.remove(rest);
+            return raw_max_y;
+        }
+        raw_max_y.max(held)
+    })
+}
+
 pub(crate) fn set_scroll_offset_with_behavior(
     rest: &str,
     target_x: f32,
@@ -681,9 +993,7 @@ pub(crate) fn set_scroll_offset_with_behavior(
 /// Drop leftover smooth-scroll chase: `target = offset` so the next frame does not
 /// interpolate. Clicking a text field after a wheel-to-clip must not dump extra
 /// page motion when the focus-chrome frame finally presents (user did not scroll).
-pub(crate) fn snap_scroll_targets_to_current_offsets<'a>(
-    rests: impl IntoIterator<Item = &'a str>,
-) {
+pub(crate) fn snap_scroll_targets_to_current_offsets<'a>(rests: impl IntoIterator<Item = &'a str>) {
     for rest in rests {
         let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(rest);
         let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(rest);
@@ -1153,8 +1463,8 @@ mod visibility_deadline_tests {
 mod scroll_item_align_tests {
     use super::{
         apply_pending_scroll_item_into_view, cancel_scroll_item_into_view,
-        has_pending_scroll_item_align, request_scroll_item_into_view, scroll_offset_to_center_item,
-        ScrollItemAlign,
+        has_pending_scroll_item_align, request_scroll_item_into_view, reset_scroll_item_into_view,
+        scroll_offset_to_center_item, set_scroll_offset_with_behavior, ScrollItemAlign,
     };
     use crate::core::reactivity::create_root;
     use crate::core::scroll_viewport::scroll_offset_y_signal_key;
@@ -1205,6 +1515,70 @@ mod scroll_item_align_tests {
     }
 
     #[test]
+    fn pending_align_uses_placed_cap_immediately_while_expand_pins() {
+        use super::clamp_max_y_for_pending_align;
+        use crate::utils::popup::seed_floating_place_max_h_for_test;
+
+        let _ = create_root(|| {
+            let overlay_id = "cal-month";
+            let rest = "cal-month:menu_scroll";
+            cancel_scroll_item_into_view(rest);
+            seed_floating_place_max_h_for_test(overlay_id, 200.0);
+            request_scroll_item_into_view(rest, 11, 12, ScrollItemAlign::Center);
+            let content_h = 12.0 * 32.0;
+            let placed_vh = 200.0 - 8.0;
+            // Expand pin: write against placed cap now (no post-open jump).
+            assert!(apply_pending_scroll_item_into_view(
+                rest, content_h, content_h
+            ));
+            assert!(!has_pending_scroll_item_align());
+            let expected = scroll_offset_to_center_item(11, 32.0, placed_vh, 12);
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "must center against placed cap while pinned, got {sy} expected {expected}"
+            );
+            assert!(
+                (clamp_max_y_for_pending_align(rest, 0.0) - expected).abs() < 0.5,
+                "pre-render clamp must not wipe the align while max_y is 0"
+            );
+            // Mid-expand layout max is only one row — still must keep the placed offset.
+            request_scroll_item_into_view(rest, 11, 12, ScrollItemAlign::Center);
+            assert!(apply_pending_scroll_item_into_view(
+                rest,
+                content_h - 32.0,
+                content_h
+            ));
+            let sy2 =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            assert!(
+                (sy2 - expected).abs() < 0.5,
+                "mid-expand must not recenter against the tall viewport, got {sy2}"
+            );
+        });
+    }
+
+    #[test]
+    fn reset_scroll_item_into_view_keeps_offset() {
+        let _ = create_root(|| {
+            let rest = "cal-month:menu_scroll";
+            cancel_scroll_item_into_view(rest);
+            set_scroll_offset_with_behavior(rest, 0.0, 140.0, true);
+            reset_scroll_item_into_view(rest);
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            assert!(
+                (sy - 140.0).abs() < 0.5,
+                "close must not wipe the menu offset, got {sy}"
+            );
+        });
+    }
+
+    #[test]
     fn pending_align_waits_while_viewport_matches_content() {
         let _ = create_root(|| {
             cancel_scroll_item_into_view("t-pin-align");
@@ -1240,6 +1614,160 @@ mod scroll_item_align_tests {
                 (sy - expected).abs() < 0.5,
                 "offset after unpin must center, got {sy} expected {expected}"
             );
+        });
+    }
+
+    #[test]
+    fn align_rect_centers_variable_height_child() {
+        let viewport = [10.0, 20.0, 120.0, 200.0];
+        let target = [10.0, 20.0 + 288.0, 120.0, 48.0];
+        let max = [0.0, (12.0 * 32.0 + 48.0) - 200.0];
+        let [_, sy] = super::scroll_offset_to_align_rect(
+            viewport,
+            target,
+            [0.0, 0.0],
+            max,
+            ScrollItemAlign::Center,
+        );
+        let expected = (288.0_f32 + 24.0 - 100.0).clamp(0.0, max[1]);
+        assert!(
+            (sy - expected).abs() < 0.5,
+            "variable-height child must center, got {sy} expected {expected}"
+        );
+    }
+
+    #[test]
+    fn descendant_align_uses_layout_bounds() {
+        use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+        use crate::core::tree::Element;
+        let _ = create_root(|| {
+            let rest = "custom-list";
+            cancel_scroll_item_into_view(rest);
+            super::request_scroll_descendant_into_view(rest, "row-9", ScrollItemAlign::Center);
+            let mut row = Element::new().template_id("row-9");
+            row.layout_bounds = [0.0, 288.0, 100.0, 32.0];
+            let mut vp = Element::new().focus_id(focus_id_for_scroll_viewport(rest));
+            vp.layout_bounds = [0.0, 0.0, 100.0, 200.0];
+            vp.children.push(row);
+            let mut root = Element::new();
+            root.children.push(vp);
+            let found = super::resolve_pending_descendant_bounds(&root);
+            let content_h = 12.0 * 32.0;
+            assert!(super::apply_pending_scroll_align(
+                rest,
+                [0.0, 0.0, 100.0, 200.0],
+                100.0,
+                content_h,
+                found.get(rest).copied(),
+            ));
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            let expected = super::scroll_offset_to_align_rect(
+                [0.0, 0.0, 100.0, 200.0],
+                [0.0, 288.0, 100.0, 32.0],
+                [0.0, 0.0],
+                [0.0, content_h - 200.0],
+                ScrollItemAlign::Center,
+            )[1];
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "descendant align must use layout box, got {sy} expected {expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn after_smooth_writes_target_not_offset() {
+        use crate::core::scroll_viewport::{
+            scroll_behavior_signal_key, scroll_target_y_signal_key, SCROLL_BEHAVIOR_SMOOTH,
+        };
+        let _ = create_root(|| {
+            let rest = "after-smooth";
+            cancel_scroll_item_into_view(rest);
+            crate::core::reactivity::use_signal(&scroll_behavior_signal_key(rest), || {
+                SCROLL_BEHAVIOR_SMOOTH.to_string()
+            })
+            .set_silent(SCROLL_BEHAVIOR_SMOOTH.to_string());
+            super::request_scroll_item_into_view_when(
+                rest,
+                8,
+                12,
+                ScrollItemAlign::Center,
+                super::ScrollAlignWhen::After,
+            );
+            let content_h = 12.0 * 32.0;
+            assert!(apply_pending_scroll_item_into_view(rest, 200.0, content_h));
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            let ty =
+                crate::core::reactivity::use_signal(&scroll_target_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            let expected = scroll_offset_to_center_item(8, 32.0, 200.0, 12);
+            assert!(
+                sy.abs() < 0.5,
+                "after+smooth must not snap offset, got {sy}"
+            );
+            assert!(
+                (ty - expected).abs() < 0.5,
+                "after+smooth must chase target, got {ty} expected {expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn after_jump_snaps_offset() {
+        use crate::core::scroll_viewport::{scroll_behavior_signal_key, SCROLL_BEHAVIOR_JUMP};
+        let _ = create_root(|| {
+            let rest = "after-jump";
+            cancel_scroll_item_into_view(rest);
+            crate::core::reactivity::use_signal(&scroll_behavior_signal_key(rest), || {
+                SCROLL_BEHAVIOR_JUMP.to_string()
+            })
+            .set_silent(SCROLL_BEHAVIOR_JUMP.to_string());
+            super::request_scroll_item_into_view_when(
+                rest,
+                8,
+                12,
+                ScrollItemAlign::Center,
+                super::ScrollAlignWhen::After,
+            );
+            let content_h = 12.0 * 32.0;
+            assert!(apply_pending_scroll_item_into_view(rest, 200.0, content_h));
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            let expected = scroll_offset_to_center_item(8, 32.0, 200.0, 12);
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "after+jump must snap, got {sy} expected {expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn after_waits_for_real_clip_not_placed_cap() {
+        use crate::utils::popup::seed_floating_place_max_h_for_test;
+        let _ = create_root(|| {
+            let overlay_id = "after-pin";
+            let rest = "after-pin:menu_scroll";
+            cancel_scroll_item_into_view(rest);
+            seed_floating_place_max_h_for_test(overlay_id, 200.0);
+            super::request_scroll_item_into_view_when(
+                rest,
+                11,
+                12,
+                ScrollItemAlign::Center,
+                super::ScrollAlignWhen::After,
+            );
+            let content_h = 12.0 * 32.0;
+            assert!(
+                !apply_pending_scroll_item_into_view(rest, content_h, content_h),
+                "after must wait until expand unpins"
+            );
+            assert!(has_pending_scroll_item_align());
+            assert!(apply_pending_scroll_item_into_view(rest, 200.0, content_h));
         });
     }
 }

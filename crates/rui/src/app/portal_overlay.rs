@@ -7,7 +7,7 @@
 //!（**不**关 Popover，以便 DatePicker 内嵌 Select）。打开 Modal 会关掉这些临时表面。
 //! Modals can still be stacked.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::core::reactivity::Signal;
@@ -61,6 +61,8 @@ struct OverlayLayer {
     keep_alive: Option<Signal<bool>>,
     #[allow(dead_code)]
     kind: OverlayKind,
+    /// When true, wheel / pan / fling must not move page content behind this surface.
+    lock_page_scroll: bool,
 }
 
 fn layer_live(s: Signal<bool>) -> bool {
@@ -74,6 +76,61 @@ fn layer_is_active(l: &OverlayLayer) -> bool {
 thread_local! {
     static OVERLAY_STACKS: RefCell<HashMap<WindowScope, Vec<OverlayLayer>>> =
         RefCell::new(HashMap::new());
+    /// App-level page-scroll lock ([`set_page_scroll_locked`]), independent of the overlay stack.
+    static CUSTOM_PAGE_SCROLL_LOCK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Menu / Modal lock the page by default; Popover / Tooltip do not.
+pub fn default_lock_page_scroll(kind: OverlayKind) -> bool {
+    matches!(kind, OverlayKind::Menu | OverlayKind::Modal)
+}
+
+/// Resolve an explicit overlay flag, falling back to [`default_lock_page_scroll`].
+pub fn resolve_lock_page_scroll(kind: OverlayKind, explicit: Option<bool>) -> bool {
+    explicit.unwrap_or_else(|| default_lock_page_scroll(kind))
+}
+
+/// Lock or unlock page scroll from app code (for example while the pointer hovers a region).
+///
+/// Public entry: [`crate::set_page_scroll_locked`] (`use rui::prelude::*;`).
+/// Combines with overlay `lock_page_scroll`: any lock wins. Wheel over a hoisted overlay
+/// panel still reaches that overlay's own ScrollArea.
+///
+/// ```ignore
+/// use rui::prelude::*;
+///
+/// // 任意节点：悬停时冻住页面
+/// Element::from(button("hint").text("?"))
+///     .lock_page_scroll_on_hover();
+///
+/// // 任意自定义条件
+/// set_page_scroll_locked(true);  // 冻
+/// set_page_scroll_locked(false); // 解
+/// ```
+pub fn set_page_scroll_locked(locked: bool) {
+    CUSTOM_PAGE_SCROLL_LOCK.set(locked);
+}
+
+/// True when page scroll is locked (custom setter or an open overlay that opted in).
+pub fn page_scroll_locked() -> bool {
+    if CUSTOM_PAGE_SCROLL_LOCK.get() {
+        return true;
+    }
+    stacked_page_scroll_locked()
+}
+
+fn stacked_page_scroll_locked() -> bool {
+    let (locked, to_close) = with_stack_mut(|stack| {
+        let to_close = prune_closed(stack);
+        let locked = stack
+            .iter()
+            .any(|l| layer_live(l.open) && l.lock_page_scroll);
+        (locked, to_close)
+    });
+    for other in to_close {
+        other.try_set(false);
+    }
+    locked
 }
 
 fn with_stack_mut<R>(f: impl FnOnce(&mut Vec<OverlayLayer>) -> R) -> R {
@@ -178,7 +235,7 @@ pub fn portal_sync(
     kind: OverlayKind,
     mode: OverlayMode,
 ) -> Option<OverlayZ> {
-    portal_sync_inner(id, open, None, kind, mode)
+    portal_sync_inner(id, open, None, kind, mode, default_lock_page_scroll(kind))
 }
 
 /// [`portal_sync`] with presence keep-alive.
@@ -192,7 +249,26 @@ pub fn portal_sync_presence(
     kind: OverlayKind,
     mode: OverlayMode,
 ) -> Option<OverlayZ> {
-    portal_sync_inner(id, open, Some(mounted), kind, mode)
+    portal_sync_inner(
+        id,
+        open,
+        Some(mounted),
+        kind,
+        mode,
+        default_lock_page_scroll(kind),
+    )
+}
+
+/// [`portal_sync_presence`] with an explicit page-scroll lock (floating overlay property).
+pub(crate) fn portal_sync_presence_lock(
+    id: impl Into<String>,
+    open: Signal<bool>,
+    mounted: Signal<bool>,
+    kind: OverlayKind,
+    mode: OverlayMode,
+    lock_page_scroll: bool,
+) -> Option<OverlayZ> {
+    portal_sync_inner(id, open, Some(mounted), kind, mode, lock_page_scroll)
 }
 
 fn portal_sync_inner(
@@ -201,6 +277,7 @@ fn portal_sync_inner(
     keep_alive: Option<Signal<bool>>,
     kind: OverlayKind,
     mode: OverlayMode,
+    lock_page_scroll: bool,
 ) -> Option<OverlayZ> {
     let id = id.into();
     let active = layer_live(open) || keep_alive.is_some_and(layer_live);
@@ -227,6 +304,7 @@ fn portal_sync_inner(
                         stack[pos].open = open;
                         stack[pos].keep_alive = keep_alive;
                         stack[pos].kind = kind;
+                        stack[pos].lock_page_scroll = lock_page_scroll;
                         (Some(z_for_index(pos)), to_close)
                     } else {
                         // Capture before retain: peer Menu already open (menubar switch).
@@ -271,6 +349,7 @@ fn portal_sync_inner(
                             open,
                             keep_alive,
                             kind,
+                            lock_page_scroll,
                         });
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
@@ -355,7 +434,7 @@ pub fn stacked_menu_or_modal_open() -> bool {
 
 /// True when wheel over the page (not a hoisted overlay) must be ignored.
 pub fn overlay_blocks_page_wheel(path: &[super::pointer_events::HitPathEntry]) -> bool {
-    stacked_menu_or_modal_open() && !path.iter().any(|e| e.hoisted_portal)
+    page_scroll_locked() && !path.iter().any(|e| e.hoisted_portal)
 }
 
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
@@ -595,6 +674,7 @@ mod tests {
 
     fn clear() {
         with_stack_mut(|s| s.clear());
+        set_page_scroll_locked(false);
         crate::utils::popup::arm_underlay_close();
     }
 
@@ -785,6 +865,78 @@ mod tests {
         assert!(
             !overlay_blocks_page_wheel(&page),
             "popover/tooltip must not lock page scroll"
+        );
+    }
+
+    #[test]
+    fn custom_set_page_scroll_locked_blocks_page_wheel() {
+        clear();
+        let page = [dummy_hit(None, None, false)];
+        assert!(!overlay_blocks_page_wheel(&page));
+        set_page_scroll_locked(true);
+        assert!(
+            overlay_blocks_page_wheel(&page),
+            "set_page_scroll_locked(true) must freeze page wheel"
+        );
+        let on_overlay = [dummy_hit(Some("panel:x"), Some("x"), true)];
+        assert!(
+            !overlay_blocks_page_wheel(&on_overlay),
+            "hoisted panel still receives wheel while the page is locked"
+        );
+        set_page_scroll_locked(false);
+        assert!(!overlay_blocks_page_wheel(&page));
+    }
+
+    #[test]
+    fn lock_page_scroll_on_hover_toggles_global() {
+        clear();
+        let mut el = crate::core::tree::Element::new().lock_page_scroll_on_hover();
+        let h = el.on_hover.take().expect("hover handler");
+        (*h.borrow_mut())(true);
+        assert!(page_scroll_locked());
+        (*h.borrow_mut())(false);
+        assert!(!page_scroll_locked());
+    }
+
+    #[test]
+    fn popover_can_opt_in_to_lock_page_scroll() {
+        clear();
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        assert!(portal_sync_presence_lock(
+            "pop-lock",
+            open,
+            mounted,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+            true,
+        )
+        .is_some());
+        let page = [dummy_hit(None, None, false)];
+        assert!(
+            overlay_blocks_page_wheel(&page),
+            "explicit lock_page_scroll on a popover must lock the page"
+        );
+    }
+
+    #[test]
+    fn menu_can_opt_out_of_lock_page_scroll() {
+        clear();
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        assert!(portal_sync_presence_lock(
+            "menu-free",
+            open,
+            mounted,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            false,
+        )
+        .is_some());
+        let page = [dummy_hit(None, None, false)];
+        assert!(
+            !overlay_blocks_page_wheel(&page),
+            "explicit lock_page_scroll=false must allow page scroll under a menu"
         );
     }
 

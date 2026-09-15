@@ -75,11 +75,11 @@ fn claims_own_bounds(el: &Element) -> bool {
     pointer_events_targets_self(el) && !portal_hit_passthrough(el)
 }
 
-/// 自身指针命中：paint AABB +（若适用）SVG path fill/stroke 几何（MDN `pointer-events`）。
+/// 自身指针命中：paint AABB 粗筛，再按 `pointer-events` 细分。
 ///
-/// Coarse hit matches [`crate::core::tree::visual_paint_aabb_with_ancestor`].
-/// Path fill / `clip-path` use layout-local coords after inverting the VS affine.
-/// Overflow stays on the layout border box.
+/// HTML 盒（默认 `auto`）与无 path 的纹理 Icon 走变换后的局部 border box
+///（[`crate::core::tree::pointer_in_paint_border_box`]），不是旋转后 AABB 的菱形空角。
+/// SVG `bounding-box` 停在 AABB。Path fill/stroke / `clip-path` 逆 VS 仿射后测局部几何。
 #[inline]
 pub(crate) fn element_self_pointer_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> bool {
     element_self_pointer_hit_with(
@@ -127,25 +127,42 @@ pub(crate) fn element_self_pointer_hit_with(
     if mode == PointerEvents::BoundingBox {
         return true;
     }
+    let has_path = crate::primitives::path::element_has_path_geometry(&el.attrs);
     // SVG leaf on CSS `auto` ≡ `visiblePainted` (MDN).
-    let geom_mode = if mode == PointerEvents::Auto
-        && crate::primitives::path::element_has_path_geometry(&el.attrs)
-    {
+    let geom_mode = if mode == PointerEvents::Auto && has_path {
         PointerEvents::VisiblePainted
     } else if mode.uses_path_geometry() {
         mode
     } else {
-        return true;
+        return crate::core::tree::pointer_in_paint_border_box(
+            el,
+            [x, y],
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
+        );
     };
     if geom_mode.requires_visibility() && el.style.opacity <= 0.0 {
         return false;
     }
     let Some(policy) = geom_mode.path_hit_policy() else {
-        return true;
+        return crate::core::tree::pointer_in_paint_border_box(
+            el,
+            [x, y],
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
+        );
     };
-    if !crate::primitives::path::element_has_path_geometry(&el.attrs) {
-        // 纯纹理 Icon / AnimatedIcon：无 path 层时回退边界盒。
-        return true;
+    if !has_path {
+        // 纯纹理 Icon / AnimatedIcon：无 path 层时回退变换后的 border box。
+        return crate::core::tree::pointer_in_paint_border_box(
+            el,
+            [x, y],
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
+        );
     }
     let local = crate::core::tree::pointer_to_layout_local(
         el,
@@ -756,18 +773,39 @@ pub(super) fn find_paint_ime_caret(
 
 /// World-space paint AABB + `scroll_acc` for `focus_id` (IME fallback / keep-focus).
 /// The AABB already subtracts ancestor scroll — do not subtract `scroll_acc` again.
-pub(super) fn find_paint_aabb_by_focus_id(
+pub(crate) fn find_paint_aabb_by_focus_id(
     el: &Element,
     focus_id: &str,
     scroll_acc: [f32; 2],
 ) -> Option<([f32; 4], [f32; 2])> {
     let mut best: Option<([f32; 4], [f32; 2])> = None;
     let mut best_score = -1.0_f32;
-    let mut stack: Vec<(&Element, [f32; 2], crate::style::Mat2d, [f32; 2])> =
-        vec![(el, scroll_acc, crate::style::MAT2D_IDENTITY, [1.0, 1.0])];
-    while let Some((el, scroll_acc, lin, sc)) = stack.pop() {
+    let mut stack: Vec<(&Element, [f32; 2], crate::style::Mat2d, [f32; 2], bool)> = vec![(
+        el,
+        scroll_acc,
+        crate::style::MAT2D_IDENTITY,
+        [1.0, 1.0],
+        false,
+    )];
+    while let Some((el, scroll_acc, lin, sc, escaped_page)) = stack.pop() {
+        // Match hit_path: portal / `position: fixed` escape ancestor scroll so a
+        // hoisted ColorPicker SV is not mapped with page offset (ty→1 / V→0).
+        let is_body_portal =
+            el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        let escaped_page = escaped_page || is_body_portal || el.style.position_fixed;
+        let scroll_acc = if is_body_portal || el.style.position_fixed {
+            [0.0_f32, 0.0_f32]
+        } else {
+            scroll_acc
+        };
         if el.focus_id.as_deref() == Some(focus_id) {
-            let score = scroll_acc[0].abs() + scroll_acc[1].abs();
+            // Overlay copies sit under the portal / fixed ancestor (scroll_acc=0).
+            // Prefer them over in-flow ghosts that still carry page scroll.
+            let score = if escaped_page {
+                1.0e9_f32
+            } else {
+                scroll_acc[0].abs() + scroll_acc[1].abs()
+            };
             if best.is_none() || score > best_score + 0.5 {
                 best_score = score;
                 let aabb =
@@ -775,13 +813,32 @@ pub(super) fn find_paint_aabb_by_focus_id(
                 best = Some((aabb, scroll_acc));
             }
         }
-        let next_acc = next_hit_scroll_acc(el, scroll_acc);
+        let next_acc = if is_body_portal {
+            scroll_acc
+        } else {
+            next_hit_scroll_acc(el, scroll_acc)
+        };
         let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(el, lin, sc);
         for c in el.children.iter().rev() {
-            stack.push((c, next_acc, child_lin, child_sc));
+            stack.push((c, next_acc, child_lin, child_sc, escaped_page));
         }
     }
     best
+}
+
+/// Hit entry for a captured `focus_id` using the painted window-space AABB.
+/// `layout_bounds` are document space and glue ColorPicker SV mapping (V→0 / V→1).
+pub(super) fn captured_pointer_hit(
+    root: &Element,
+    focus_id: &str,
+) -> Option<crate::app::pointer_events::HitPathEntry> {
+    let el = crate::app::pointer_events::find_by_focus_id(root, focus_id)?;
+    let aabb = find_paint_aabb_by_focus_id(root, focus_id, [0.0, 0.0])
+        .map(|(a, _)| a)
+        .unwrap_or(el.layout_bounds);
+    Some(crate::app::pointer_events::HitPathEntry::from_element(
+        el, aabb,
+    ))
 }
 
 /// True when the world pointer sits in the painted border box of `focus_id`.
@@ -1256,7 +1313,7 @@ fn find_selectable_text_at_hit(
 }
 
 #[inline]
-pub(super) fn update_hovers(
+pub(crate) fn update_hovers(
     el: &Element,
     x: f32,
     y: f32,
@@ -1371,7 +1428,7 @@ pub(crate) fn invalidate_hover_handlers() {
 /// Prefer [`invalidate_hover_handlers`] on live rebuild paths — hard leave here races with
 /// same-frame re-enter and spring ticks, which flickered gallery sidebar hover.
 #[cfg(test)]
-pub(super) fn clear_hover_tracking() {
+pub(crate) fn clear_hover_tracking() {
     HOVER_NEEDS_RESYNC.set(true);
     HOVER_MISS_STREAK.set(0);
     let scope = crate::core::reactivity::signal_key_scope();
@@ -2762,6 +2819,30 @@ mod ime_scroll_bounds_tests {
             (caret[0] - (paint[0] + 80.0)).abs() > 5.0,
             "IME must not use paint-AABB left + caret_x ({:.1}+80)",
             paint[0]
+        );
+    }
+
+    #[test]
+    fn find_paint_aabb_fixed_sv_ignores_ancestor_scroll() {
+        let mut sv = Element::new().w(100.0).h(80.0).fixed();
+        sv.layout_bounds = [20.0, 120.0, 100.0, 80.0];
+        sv.focus_id = Some("cp-fixed:sv".into());
+
+        let mut viewport = Element::new().w(280.0).h(200.0);
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 240.0];
+        viewport.layout_bounds = [0.0, 0.0, 280.0, 200.0];
+        viewport = viewport.child(sv);
+
+        let (aabb, sa) =
+            find_paint_aabb_by_focus_id(&viewport, "cp-fixed:sv", [0.0, 0.0]).expect("fixed sv");
+        assert!(
+            sa[0].abs() < 0.5 && sa[1].abs() < 0.5,
+            "position:fixed must drop page scroll_acc, got {sa:?}"
+        );
+        assert!(
+            (aabb[1] - 120.0).abs() < 0.5,
+            "fixed SV window y must not subtract page offset (would glue V→0); got {aabb:?}"
         );
     }
 

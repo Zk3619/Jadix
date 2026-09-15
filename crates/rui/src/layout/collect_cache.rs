@@ -389,6 +389,11 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     if let Some(v) = crate::components::scrollbar::auto_scrollbar_live_paint_alpha(el) {
         v.to_bits().hash(h);
     }
+    // Overlay thumbs are signal-driven (ViewportsOnly does not write Taffy margin).
+    // Hash live offset / metrics or skip replays a frozen rail while the list scrolls.
+    if let Some(bits) = crate::components::scrollbar::scrollbar_live_geometry_bits(el) {
+        bits.hash(h);
+    }
     hash_f32s(h, &el.style.radii);
     for s in el.style.resolved_corner_shapes() {
         std::mem::discriminant(&s).hash(h);

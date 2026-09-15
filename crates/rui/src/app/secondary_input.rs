@@ -551,7 +551,9 @@ impl super::App {
                         }
                     };
                     if should_outside {
-                        let _ = super::portal_overlay::try_dismiss_outside_press();
+                        if super::portal_overlay::try_dismiss_outside_press() {
+                            self.outside_dismiss_on_down = true;
+                        }
                     }
                 }
 
@@ -610,9 +612,10 @@ impl super::App {
                     }
                     let _ = click_path;
                     let should_outside = !on_exclusive && !on_trigger;
-                    if should_outside {
+                    if should_outside && !self.outside_dismiss_on_down {
                         let _ = super::portal_overlay::try_dismiss_outside_press();
                     }
+                    self.outside_dismiss_on_down = false;
                     crate::utils::popup::arm_underlay_close();
                     if let Some(rest) = self.input_drag_rest.take() {
                         super::window_events::apply_input_drag_release(&rest);

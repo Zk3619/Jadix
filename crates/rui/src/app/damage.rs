@@ -92,7 +92,7 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
 /// scissor in document space while ink is in visual space — dest-reset misses,
 /// PartialLoad stacks the previous offset (Marker labels after scroll).
 pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
-    let b = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+    let b = clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc));
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
@@ -105,20 +105,65 @@ pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
     } else {
         0.0
     };
-    // SDF vertex `ext` is `blur * 2 + spread + 2` (`rounded_rect.wgsl`). A 1× blur
-    // pad dest-resets the fill and leaves the halo in retain (dropdown smear).
-    let pad = (super::draw_cull::sdf_outset_shadow_pad(
-        el.style.shadow_blur,
-        el.style.shadow_spread,
-        el.style.shadow_offset,
-        0.0,
-    ) + rot_pad)
-        .max(2.0);
+    let pad = element_paint_outset_pad(el, rot_pad);
+    let kind = paint_kind_for_element(el);
+    let key = if kind == PaintDirtyKind::Overlay {
+        crate::layout::layout_tree::overlay_portal_stamp_key(el)
+    } else {
+        paint_element_key(el)
+    };
     push_paint_dirty(
-        paint_element_key(el),
+        key,
         [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
-        paint_kind_for_element(el),
+        kind,
     );
+}
+
+/// Outset beyond the visual layout box that this node actually paints (CSS
+/// shadow spread/blur/offset, outline, spin circumcircle). Vertex AA and border
+/// are not dirty outset — Hard ring spread 3 plus those pads punched
+/// `form_field` labels (`gap(4)`) on Input focus.
+fn element_paint_outset_pad(el: &Element, rot_pad: f32) -> f32 {
+    let mut halo = if el.style.shadow_inset {
+        0.0
+    } else {
+        super::draw_cull::sdf_painted_halo_pad(
+            el.style.shadow_blur,
+            el.style.shadow_spread,
+            el.style.shadow_offset,
+        )
+    };
+    for sh in &el.style.extra_shadows {
+        if sh.inset {
+            continue;
+        }
+        halo = halo.max(super::draw_cull::sdf_painted_halo_pad(
+            sh.blur, sh.spread, sh.offset,
+        ));
+    }
+    let outline = el.style.outline_width.max(0.0) + el.style.outline_offset.max(0.0);
+    halo = halo.max(outline);
+    if halo <= 0.0 {
+        rot_pad
+    } else {
+        halo + rot_pad
+    }
+}
+
+/// Expand pin / Taffy can report content height while `max-height` is the accordion clip.
+/// Overlay dirty must be that clip — the unconstrained AABB becomes a fixed transparent
+/// hole (calendar showing through) until the fill catches up.
+fn clamp_overlay_clip_box(el: &Element, mut b: [f32; 4]) -> [f32; 4] {
+    if paint_kind_for_element(el) != PaintDirtyKind::Overlay {
+        return b;
+    }
+    if let Some(h) = crate::layout::dim_length_px(el.style.max_size.height).filter(|h| *h >= 0.0) {
+        b[3] = b[3].min(h);
+    }
+    if let Some(w) = crate::layout::dim_length_px(el.style.max_size.width).filter(|w| *w >= 0.0) {
+        b[2] = b[2].min(w);
+    }
+    b
 }
 
 /// Hoisted modal/popover chrome must not dest-reset as a page `Node`.
@@ -453,6 +498,26 @@ pub fn overlay_restore_leftover_boxes(
     out
 }
 
+/// Previous portal stamps whose keys are gone this frame.
+/// Nested-inside-parent must still yield the nested box — AABB subtract of the
+/// parent stamp covers the menu and would skip dest-reset, then occupancy-union
+/// fallbacks punched the DatePicker halo.
+pub fn overlay_restore_leftover_stamps(
+    prev: &[(u64, [f32; 4])],
+    cur: &[(u64, [f32; 4])],
+) -> Vec<(u64, [f32; 4])> {
+    prev.iter()
+        .copied()
+        .filter(|(k, b)| {
+            b[2] > 0.0
+                && b[3] > 0.0
+                && !cur
+                    .iter()
+                    .any(|(ck, cb)| *ck == *k && cb[2] > 0.0 && cb[3] > 0.0)
+        })
+        .collect()
+}
+
 /// Overlay suffix is submitted once per present.
 ///
 /// Fade CSS (`push_frame_paint_element`) and portal membership each name an
@@ -541,9 +606,12 @@ pub fn overlay_page_dirty_punches_occupancy(
 
 /// Overlay suffix scissor after Restore/Node dest-reset.
 ///
-/// Fade Overlay dirty may sit in the wrong space — occupancy is the GPU footprint.
-/// Hover dest-reset that could not be clipped redraws only the punch strip (full
-/// occupancy src-over would restack the shadow halo). Idle overlay stays in retain.
+/// Fade Overlay dirty may sit in the wrong space — occupancy is the GPU footprint
+/// and unions with the dirty so the panel stays in scissor. A dirty that **strictly
+/// contains** occupancy (pinned expand overflow) keeps the stamp so the scissor is
+/// not unconstrained content height. A dirty that merely sticks *out* of occupancy
+/// (month menu flipped above the DatePicker) must union, or PartialLoad never draws
+/// it. Hover dest-reset that could not be clipped redraws only the punch strip.
 pub fn overlay_encode_scissor(
     overlay_dirty_scissor: Option<[f32; 4]>,
     overlay_occupied: Option<[f32; 4]>,
@@ -567,23 +635,52 @@ pub fn overlay_encode_scissor(
             )
         });
     match (dirty, occ, punch) {
-        (Some(d), Some(o), _) => Some(union_rects(d, o)),
+        (Some(d), Some(o), _) => {
+            let slack = overlay_stamp_slack();
+            // Accordion overflow: dirty is unconstrained content height of *this*
+            // clip stamp (same origin / width). A ColorPicker Fade dirty that
+            // merely contains a leftover DatePicker occupancy is a different
+            // portal — KEEP occupancy clips the popover off-screen (blank open).
+            if overlay_dirty_is_expand_overflow(d, o, slack) {
+                Some(o)
+            } else {
+                Some(union_rects(d, o))
+            }
+        }
         (Some(d), None, _) => Some(d),
         (None, _, Some(p)) => Some(p),
         _ => None,
     }
 }
 
-/// Portal boxes that a fade Overlay dirty actually overlaps.
-///
-/// Occupancy is the **union AABB of every hoisted portal**. Nested Select fade
-/// must Restore / encode-scissor only the fading panel — restoring the union
-/// dest-resets the parent popover and the page between them (forms / 2c heading
-/// show through an inline calendar dropdown).
-///
-/// Empty intersection (document-space fade dirty): return `None` so the caller
-/// can keep full occupancy for encode (do not clip the panel) while Restore
-/// uses the dirty itself instead of punching sibling portals.
+/// Overlay paint dirty is that portal's layout box plus shadow / Overlay scissor pad.
+fn overlay_stamp_slack() -> f32 {
+    super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay) * 2.0
+}
+
+/// Expand pin reports content height while occupancy is the accordion clip stamp.
+/// Same `x` / `y` / `w` — only height grew. Foreign leftover occupancy (DatePicker
+/// vs ColorPicker) shares neither origin nor width.
+fn overlay_dirty_is_expand_overflow(dirty: [f32; 4], occupancy: [f32; 4], slack: f32) -> bool {
+    if !overlay_box_extends_beyond(dirty, occupancy, slack)
+        || overlay_box_extends_beyond(occupancy, dirty, slack)
+    {
+        return false;
+    }
+    (dirty[0] - occupancy[0]).abs() <= slack
+        && (dirty[1] - occupancy[1]).abs() <= slack
+        && (dirty[2] - occupancy[2]).abs() <= slack
+}
+
+/// Layout box of the portal stamp `key`.
+pub fn overlay_stamp_box(stamps: &[(u64, [f32; 4])], key: u64) -> Option<[f32; 4]> {
+    stamps
+        .iter()
+        .find(|(k, b)| *k == key && b[2] > 0.0 && b[3] > 0.0)
+        .map(|(_, b)| *b)
+}
+
+/// Portal layout boxes this Overlay dirty is a keyframe of (geometry tests only).
 pub fn overlay_boxes_intersecting_dirty(
     overlay_dirty: Option<[f32; 4]>,
     portal_boxes: &[[f32; 4]],
@@ -591,49 +688,128 @@ pub fn overlay_boxes_intersecting_dirty(
     let Some(d) = overlay_dirty.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
         return Vec::new();
     };
+    let slack = overlay_stamp_slack();
     portal_boxes
         .iter()
         .copied()
-        .filter(|b| b[2] > 0.0 && b[3] > 0.0 && intersect_rects(*b, d).is_some())
+        .filter(|b| b[2] > 0.0 && b[3] > 0.0 && overlay_same_footprint(Some(*b), Some(d), slack))
+        .collect()
+}
+
+/// Overlay dirties for a portal join / leave (not a same-set CSS tick).
+///
+/// Overlay **paint** is a join: stamps in `cur` that were not in `prev`.
+///
+/// A leave is [`overlay_restore_leftover_stamps`] (OverlayRestore), not an Overlay
+/// dirty of the closed key. Painting the leftover DatePicker key while ColorPicker
+/// is opening makes `dirty_has_keyed_band` true for the DatePicker band and skips
+/// the ColorPicker band — the popover never submits (blank open).
+pub fn overlay_membership_paint_stamps(
+    prev: &[(u64, [f32; 4])],
+    cur: &[(u64, [f32; 4])],
+) -> Vec<(u64, [f32; 4])> {
+    overlay_added_portal_stamps(prev, cur)
+}
+
+/// Overlay dirties for a portal join / leave from layout boxes (geometry tests).
+pub fn overlay_membership_paint_boxes(prev: &[[f32; 4]], cur: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    let added = overlay_added_portal_boxes(prev, cur);
+    if !added.is_empty() {
+        return added;
+    }
+    let closed = overlay_added_portal_boxes(cur, prev);
+    if !closed.is_empty() {
+        return closed;
+    }
+    Vec::new()
+}
+
+/// Portals in `cur` whose stamp key was not in `prev`.
+pub fn overlay_added_portal_stamps(
+    prev: &[(u64, [f32; 4])],
+    cur: &[(u64, [f32; 4])],
+) -> Vec<(u64, [f32; 4])> {
+    cur.iter()
+        .copied()
+        .filter(|(k, b)| b[2] > 0.0 && b[3] > 0.0 && overlay_stamp_box(prev, *k).is_none())
+        .collect()
+}
+
+/// Portals in `cur` that were not already in `prev` (membership join).
+pub fn overlay_added_portal_boxes(prev: &[[f32; 4]], cur: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    cur.iter()
+        .copied()
+        .filter(|c| c[2] > 0.0 && c[3] > 0.0)
+        .filter(|c| {
+            !prev
+                .iter()
+                .any(|p| overlay_same_footprint(Some(*p), Some(*c), 2.0))
+        })
         .collect()
 }
 
 /// Occupancy fed to [`overlay_encode_scissor`] for a fade / membership Overlay dirty.
 ///
-/// Intersecting portal boxes only — sibling popovers stay in retain. No hit
-/// (wrong-space fade) falls back to full occupancy so the panel stays in scissor.
+/// Named by stamp **key**, never AABB / sibling-union occupancy. Wrong-space dirty
+/// bounds still resolve to this portal's layout box. Closed / unstamped keys use
+/// the Overlay dirty hole itself — not the remaining parent visual.
 pub fn overlay_encode_occupancy(
+    dirty_key: u64,
     overlay_dirty: Option<[f32; 4]>,
-    portal_boxes: &[[f32; 4]],
+    stamps: &[(u64, [f32; 4])],
     full_occupancy: Option<[f32; 4]>,
 ) -> Option<[f32; 4]> {
-    let hit = overlay_boxes_intersecting_dirty(overlay_dirty, portal_boxes);
-    if hit.is_empty() {
-        return full_occupancy;
+    let dirty = overlay_dirty.filter(|b| b[2] > 0.0 && b[3] > 0.0);
+    if let Some(layout) = overlay_stamp_box(stamps, dirty_key) {
+        let with_dirty = match dirty {
+            Some(d) if overlay_same_footprint(Some(d), Some(layout), overlay_stamp_slack()) => {
+                union_rects(layout, d)
+            }
+            _ => layout,
+        };
+        if stamps.len() <= 1 {
+            return Some(match full_occupancy.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+                Some(visual) if overlay_visual_is_stamp_halo(with_dirty, visual) => {
+                    union_rects(with_dirty, visual)
+                }
+                _ => with_dirty,
+            });
+        }
+        return Some(with_dirty);
     }
-    let layout = rects_union(&hit)?;
-    // One portal: Taffy layout misses the SDF halo (`blur * 2`). Dest-reset uses
-    // visual occupancy; encode must cover that hole or dest-reset white stays as
-    // a frame around the rounded panel. Several portals: intersecting layout
-    // only — full occupancy is the sibling union and would restack their shadows.
-    if portal_boxes.len() <= 1 {
-        return Some(match full_occupancy.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
-            Some(visual) => union_rects(layout, visual),
-            None => layout,
-        });
-    }
-    Some(layout)
+    dirty
 }
 
-/// Fade-replace Restore boxes: intersecting portal panels, or the Overlay dirty
-/// itself when it missed every box (never the union of sibling portals).
+/// `visual` is this portal's outset halo (contains the layout box), not a leftover
+/// sibling occupancy from a TabsContent unmount (DatePicker box vs ColorPicker).
+pub fn overlay_visual_is_stamp_halo(layout: [f32; 4], visual: [f32; 4]) -> bool {
+    let slack = overlay_stamp_slack();
+    if overlay_same_footprint(Some(layout), Some(visual), slack) {
+        return true;
+    }
+    if overlay_box_extends_beyond(layout, visual, slack) {
+        return false;
+    }
+    if !overlay_box_extends_beyond(visual, layout, slack) {
+        return false;
+    }
+    // Outset shadow, not a leftover sibling popover that happens to contain this stamp.
+    let extra_l = (layout[0] - visual[0]).max(0.0);
+    let extra_t = (layout[1] - visual[1]).max(0.0);
+    let extra_r = ((visual[0] + visual[2]) - (layout[0] + layout[2])).max(0.0);
+    let extra_b = ((visual[1] + visual[3]) - (layout[1] + layout[3])).max(0.0);
+    extra_l.max(extra_t).max(extra_r).max(extra_b) <= slack
+}
+
+/// Fade-replace Restore boxes: this dirty's stamp, or the Overlay dirty hole
+/// when the key has already left (never the union of sibling portals).
 pub fn overlay_fade_replace_restore_boxes(
+    dirty_key: u64,
     overlay_dirty: Option<[f32; 4]>,
-    portal_boxes: &[[f32; 4]],
+    stamps: &[(u64, [f32; 4])],
 ) -> Vec<[f32; 4]> {
-    let hit = overlay_boxes_intersecting_dirty(overlay_dirty, portal_boxes);
-    if !hit.is_empty() {
-        return hit;
+    if let Some(b) = overlay_stamp_box(stamps, dirty_key) {
+        return vec![b];
     }
     overlay_dirty
         .filter(|b| b[2] > 0.0 && b[3] > 0.0)
@@ -643,52 +819,136 @@ pub fn overlay_fade_replace_restore_boxes(
 
 /// GPU ink that a mounted overlay must dest-reset before redrawing.
 ///
-/// Leftover strips (`prev − cur`) are a ring around the shrinking clip: dest-reset
-/// of that ring cuts page captions and leaves the interior in retain so the next
-/// src-over stacks the outset shadow. Overlapping shrink/grow dest-resets the
-/// **union** (previous visual occupancy). Flip without overlap dest-resets the two
-/// boxes, never their AABB (that punches the page gap). Nested portals dest-reset
-/// only prev boxes that intersect the Overlay dirty.
+/// Identity is the stamp **key**. Join (no previous box for this key) dest-resets
+/// nothing — OverlayRestore of occupancy would punch the parent. Leave dest-resets
+/// the previous box of that key even when it sits inside the parent AABB.
 pub fn overlay_mounted_replace_holes(
-    prev_visual: Option<[f32; 4]>,
-    current_visual: Option<[f32; 4]>,
-    prev_boxes: &[[f32; 4]],
-    cur_boxes: &[[f32; 4]],
+    prev_stamps: &[(u64, [f32; 4])],
+    cur_stamps: &[(u64, [f32; 4])],
+    dirty_key: u64,
     overlay_dirty: Option<[f32; 4]>,
 ) -> Vec<[f32; 4]> {
-    if prev_boxes.len() > 1 || cur_boxes.len() > 1 {
-        let hit = overlay_boxes_intersecting_dirty(overlay_dirty, prev_boxes);
-        if hit.is_empty() {
-            return overlay_dirty
-                .filter(|b| b[2] > 0.0 && b[3] > 0.0)
-                .into_iter()
-                .collect();
-        }
-        return match overlay_dirty {
-            Some(d) if d[2] > 0.0 && d[3] > 0.0 => {
-                hit.into_iter().map(|b| union_rects(b, d)).collect()
-            }
-            _ => hit,
-        };
-    }
-    let prev = prev_visual.or_else(|| {
-        prev_boxes
-            .first()
-            .copied()
-            .filter(|b| b[2] > 0.0 && b[3] > 0.0)
-    });
-    match (prev, current_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0)) {
+    let prev = overlay_stamp_box(prev_stamps, dirty_key);
+    let cur = overlay_stamp_box(cur_stamps, dirty_key);
+    let dirty = overlay_dirty.filter(|b| b[2] > 0.0 && b[3] > 0.0);
+    let trust_dirty = |stamp: [f32; 4], d: [f32; 4]| {
+        overlay_same_footprint(Some(d), Some(stamp), overlay_stamp_slack())
+    };
+    match (prev, cur) {
+        // Unstamped join (measure omits the nested key, or instances still live
+        // in the parent band). Dest-reset of `dirty` is the unconstrained expand
+        // AABB — it punches the DatePicker fill and page captions behind it.
+        (None, None) => Vec::new(),
+        (None, Some(_)) => Vec::new(),
+        (Some(p), None) => match dirty {
+            Some(d) if trust_dirty(p, d) => vec![union_rects(p, d)],
+            _ => vec![p],
+        },
         (Some(p), Some(c)) => {
-            if intersect_rects(p, c).is_some() {
-                vec![union_rects(p, c)]
-            } else {
-                vec![p, c]
+            if intersect_rects(p, c).is_none() {
+                let mut out = vec![p, c];
+                if let Some(d) = dirty {
+                    if trust_dirty(c, d) {
+                        out[1] = union_rects(c, d);
+                    } else if trust_dirty(p, d) {
+                        out[0] = union_rects(p, d);
+                    }
+                }
+                return out;
             }
+            let mut hole = union_rects(p, c);
+            if let Some(d) = dirty {
+                if trust_dirty(hole, d) || trust_dirty(p, d) || trust_dirty(c, d) {
+                    hole = union_rects(hole, d);
+                }
+            }
+            vec![hole]
         }
-        (Some(p), None) => vec![p],
-        (None, Some(c)) => vec![c],
-        _ => Vec::new(),
     }
+}
+
+/// Whether this overlay paint band should be submitted.
+///
+/// Named by stamp key. A leftover Restore of a **closed** nested key still needs
+/// remaining parent bands in that hole. Never "AABB intersects encode scissor".
+///
+/// Unkeyed stacking bands belong to the preceding portal-layer stamp — see
+/// [`overlay_band_encode_flags`]. Nested Select first-open still lives in the
+/// sole DatePicker band: the dirty key has no band yet, so that host encodes.
+pub fn overlay_band_should_encode(
+    band_key: u64,
+    overlay_dirty_keys: &[u64],
+    closed_restore: bool,
+    remaining_stamp_keys: &[u64],
+    overlay_band_keys: &[u64],
+) -> bool {
+    if band_key != 0 && overlay_dirty_keys.iter().any(|k| *k == band_key) {
+        return true;
+    }
+    if closed_restore && band_key != 0 && remaining_stamp_keys.iter().any(|k| *k == band_key) {
+        return true;
+    }
+    if band_key == 0 {
+        return !overlay_dirty_keys.is_empty() || closed_restore;
+    }
+    let dirty_has_keyed_band = overlay_dirty_keys
+        .iter()
+        .any(|k| *k != 0 && overlay_band_keys.iter().any(|b| *b == *k));
+    if dirty_has_keyed_band {
+        return false;
+    }
+    let keyed_count = overlay_band_keys.iter().filter(|k| **k != 0).count();
+    keyed_count == 1 && !overlay_dirty_keys.is_empty()
+}
+
+/// Per-band encode flags. Unkeyed stacking (ColorPicker SV/hue, month-list
+/// z-index) follows the preceding keyed portal overlay: skipped when that
+/// host is skipped, submitted when that host is submitted.
+pub fn overlay_band_encode_flags(
+    overlay_band_keys: &[u64],
+    overlay_dirty_keys: &[u64],
+    closed_restore: bool,
+    remaining_stamp_keys: &[u64],
+) -> Vec<bool> {
+    let mut flags = Vec::with_capacity(overlay_band_keys.len());
+    let mut seen_keyed = false;
+    let mut keyed_host_encoding = false;
+    for &band_key in overlay_band_keys {
+        let encode = if band_key != 0 {
+            seen_keyed = true;
+            let e = overlay_band_should_encode(
+                band_key,
+                overlay_dirty_keys,
+                closed_restore,
+                remaining_stamp_keys,
+                overlay_band_keys,
+            );
+            keyed_host_encoding = e;
+            e
+        } else if seen_keyed {
+            keyed_host_encoding
+        } else {
+            overlay_band_should_encode(
+                0,
+                overlay_dirty_keys,
+                closed_restore,
+                remaining_stamp_keys,
+                overlay_band_keys,
+            )
+        };
+        flags.push(encode);
+    }
+    flags
+}
+
+/// OverlayRestore keys that are no longer mounted (closed nested hole).
+pub fn overlay_restore_is_closed_portal(
+    restore_keys: &[u64],
+    remaining_stamp_keys: &[u64],
+) -> bool {
+    restore_keys
+        .iter()
+        .any(|k| *k != 0 && !remaining_stamp_keys.contains(k))
 }
 
 /// Overlay primitives are submitted only after their own physical scissor is set.
@@ -1074,6 +1334,96 @@ pub fn node_present_dirties_moved(
             return false;
         };
         node_present_slot_moved(prev, now)
+    })
+}
+
+/// Nested island StructureChanged (Tabs panel, MessageScroller Send) must dest-reset
+/// the **island**, not the ancestor overflow clip.
+///
+/// Gallery Forms `<TabsContent>` lives in the page `ScrollArea`. Dirtying that clip
+/// punches sibling 8b ToggleGroup glyphs on PartialLoad; the next empty-damage frame
+/// FullClears — one-frame light/dark text flash. MessageScroller Footer stays safe
+/// because the island is still intersected with the scroller clip.
+///
+/// `None` = unclipped page structure (route `Show`) → caller FullClears. Empty
+/// island (0×0 hidden shell) also returns `None` so a sibling hide can name the box.
+pub fn clipped_island_structure_damage(
+    island: [f32; 4],
+    clip: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    let clip = clip?;
+    let d = intersect_rects(island, clip).unwrap_or(island);
+    if d[2] > 0.5 && d[3] > 0.5 {
+        Some(d)
+    } else {
+        None
+    }
+}
+
+/// Name every page slot that translated so node-present can dest-reset `prev∪now`
+/// instead of window-FullClearing sibling captions (Tabs height change → 8b).
+///
+/// Skip on a scroll-layer Clear — every slot moves, and expanding here would abort
+/// strip blit / pin holes.
+pub fn expand_paint_dirties_for_translated_slots(
+    dirties: &mut Vec<PaintDirty>,
+    current_slots: &[(u64, [f32; 4])],
+    previous_slots: &[(u64, [f32; 4])],
+) {
+    if previous_slots.is_empty() {
+        return;
+    }
+    for (key, now) in current_slots {
+        let Some(prev) = previous_slots
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, b)| *b)
+        else {
+            continue;
+        };
+        if !node_present_slot_moved(prev, *now) {
+            continue;
+        }
+        let bounds = union_rects(prev, *now);
+        if let Some(existing) = dirties
+            .iter_mut()
+            .find(|d| d.key == *key && d.kind == PaintDirtyKind::Node)
+        {
+            existing.bounds = union_rects(existing.bounds, bounds);
+        } else {
+            dirties.push(PaintDirty {
+                key: *key,
+                bounds,
+                kind: PaintDirtyKind::Node,
+            });
+        }
+    }
+}
+
+/// True when some page slot translated but is not a named Node dirty (dest-reset
+/// cannot wipe its previous Y). Callers FullClear unless a scroll layer owns it.
+pub fn unnamed_translated_page_slots(
+    current_slots: &[(u64, [f32; 4])],
+    previous_slots: &[(u64, [f32; 4])],
+    dirties: &[PaintDirty],
+) -> bool {
+    if previous_slots.is_empty() {
+        return false;
+    }
+    current_slots.iter().any(|(key, now)| {
+        let Some(prev) = previous_slots
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, b)| *b)
+        else {
+            return false;
+        };
+        if !node_present_slot_moved(prev, *now) {
+            return false;
+        }
+        !dirties
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == *key)
     })
 }
 
@@ -1665,6 +2015,46 @@ mod tests {
     }
 
     #[test]
+    fn push_frame_paint_element_without_halo_stays_on_layout_box() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new();
+        el.layout_bounds = [10.0, 20.0, 100.0, 30.0];
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        let dirties = take_frame_paint_nodes();
+        assert_eq!(dirties.len(), 1, "expected one dirty node, got {dirties:?}");
+        let b = dirties[0].bounds;
+        assert!(
+            (b[0] - 10.0).abs() < 0.01
+                && (b[1] - 20.0).abs() < 0.01
+                && (b[2] - 100.0).abs() < 0.01
+                && (b[3] - 30.0).abs() < 0.01,
+            "no-halo node must dirty the visual layout box, not vertex-AA pad, got {b:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_expand_clip_dirty_must_not_use_unconstrained_height() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new();
+        el.template_id = Some("cal-month__floating_panel".into());
+        el.layout_bounds = [100.0, 400.0, 144.0, 220.0];
+        el.style.max_size.height = taffy::style::Dimension::length(40.0);
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        let dirties = take_frame_paint_nodes();
+        assert_eq!(
+            dirties.len(),
+            1,
+            "expected one overlay dirty, got {dirties:?}"
+        );
+        let b = dirties[0].bounds;
+        assert_eq!(dirties[0].kind, PaintDirtyKind::Overlay);
+        assert!(
+            b[3] < 80.0,
+            "expand Overlay dirty must be the max-height clip, not pinned content height; got {b:?}"
+        );
+    }
+
+    #[test]
     fn overlay_same_size_fade_is_not_restore() {
         let panel = [90.0, 140.0, 40.0, 160.0];
         assert!(
@@ -1789,27 +2179,304 @@ mod tests {
     }
 
     #[test]
+    fn overlay_encode_scissor_clips_overflow_dirty_to_stamp() {
+        // Expand pin reports content height; accordion clip is the stamp.
+        let clip = [100.0, 400.0, 144.0, 40.0];
+        let tall = [100.0, 400.0, 144.0, 220.0];
+        let scissor = overlay_encode_scissor(Some(tall), Some(clip), None)
+            .expect("clip occupancy must keep the growing menu in scissor");
+        assert!(
+            intersect_rects(scissor, clip).is_some(),
+            "encode must still cover the clip stamp; scissor={scissor:?}"
+        );
+        assert!(
+            scissor[3] < 120.0,
+            "overflow dirty must not reopen the measured height as a transparent hole; scissor={scissor:?}"
+        );
+    }
+
+    const PARENT_KEY: u64 = 1;
+    const NESTED_KEY: u64 = 2;
+    const PANEL_KEY: u64 = 3;
+    const COLOR_KEY: u64 = 4;
+
+    #[test]
+    fn overlay_encode_scissor_must_keep_nested_menu_flipped_above_parent() {
+        // DatePicker month Select places above the popover; the boxes do not overlap.
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [88.0, 40.0, 144.0, 220.0];
+        assert!(intersect_rects(parent, nested).is_none());
+        let stamps = [(PARENT_KEY, parent)];
+        assert_eq!(
+            overlay_encode_occupancy(NESTED_KEY, Some(nested), &stamps, Some(parent)),
+            Some(nested),
+            "flip-above dirty must not fall back to the DatePicker visual occupancy"
+        );
+        let nested_scissor =
+            overlay_encode_scissor(Some(nested), Some(nested), None).expect("nested occupancy");
+        assert!(intersect_rects(nested_scissor, nested).is_some());
+        assert!(overlay_band_should_encode(
+            NESTED_KEY,
+            &[NESTED_KEY],
+            false,
+            &[PARENT_KEY, NESTED_KEY],
+            &[PARENT_KEY, NESTED_KEY],
+        ));
+        assert!(
+            !overlay_band_should_encode(
+                PARENT_KEY,
+                &[NESTED_KEY],
+                false,
+                &[PARENT_KEY, NESTED_KEY],
+                &[PARENT_KEY, NESTED_KEY],
+            ),
+            "parent must not restack the DatePicker shadow during nested encode"
+        );
+        let leftover = overlay_restore_leftover_stamps(
+            &[(PARENT_KEY, parent), (NESTED_KEY, nested)],
+            &[(PARENT_KEY, parent)],
+        );
+        assert_eq!(leftover, vec![(NESTED_KEY, nested)]);
+    }
+
+    #[test]
     fn nested_overlay_fade_replace_must_not_restore_sibling_union() {
         let parent = [80.0, 360.0, 280.0, 320.0];
         let nested = [88.0, 40.0, 144.0, 220.0];
-        let fade = [88.0, 40.0, 144.0, 220.0];
-        let boxes = [parent, nested];
-        let restore = overlay_fade_replace_restore_boxes(Some(fade), &boxes);
+        let fade = nested;
+        let stamps = [(PARENT_KEY, parent), (NESTED_KEY, nested)];
+        let restore = overlay_fade_replace_restore_boxes(NESTED_KEY, Some(fade), &stamps);
         assert_eq!(restore, vec![nested]);
         assert!(
             intersect_rects(restore[0], parent).is_none(),
             "Restore of the nested menu must not dest-reset the parent popover / page between them"
         );
-        let encode_occ = overlay_encode_occupancy(Some(fade), &boxes, rects_union(&boxes));
+        let encode_occ = overlay_encode_occupancy(
+            NESTED_KEY,
+            Some(fade),
+            &stamps,
+            rects_union(&[parent, nested]),
+        );
         assert_eq!(encode_occ, Some(nested));
+    }
+
+    #[test]
+    fn nested_overlay_over_parent_must_not_restore_or_encode_parent() {
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [100.0, 400.0, 144.0, 220.0];
+        assert!(intersect_rects(parent, nested).is_some());
+        let fade = nested;
+        let stamps = [(PARENT_KEY, parent), (NESTED_KEY, nested)];
+        let restore = overlay_fade_replace_restore_boxes(NESTED_KEY, Some(fade), &stamps);
+        assert_eq!(restore, vec![nested]);
+        assert!(
+            !rect_contains_rect(restore[0], parent),
+            "Restore of the month menu must not dest-reset the DatePicker popover"
+        );
+        let encode_occ = overlay_encode_occupancy(
+            NESTED_KEY,
+            Some(fade),
+            &stamps,
+            rects_union(&[parent, nested]),
+        );
+        assert_eq!(
+            encode_occ,
+            Some(nested),
+            "sibling-union occupancy must not replace the dirty's own portal"
+        );
+        let encode = overlay_encode_scissor(Some(fade), encode_occ, None).expect("nested scissor");
+        assert!(
+            !rect_contains_rect(encode, parent),
+            "encode scissor must not cover the parent halo (would restack the shadow); encode={encode:?}"
+        );
+
+        let parent_only = [(PARENT_KEY, parent)];
+        let join_holes =
+            overlay_mounted_replace_holes(&parent_only, &stamps, NESTED_KEY, Some(fade));
+        assert!(
+            join_holes.is_empty(),
+            "opening a nested menu has no prev stamp — OverlayRestore would punch the parent; holes={join_holes:?}"
+        );
+        let mounted_holes = overlay_mounted_replace_holes(&stamps, &stamps, NESTED_KEY, Some(fade));
+        assert_eq!(
+            mounted_holes,
+            vec![nested],
+            "nested keyframe replace dest-resets the menu stamp only"
+        );
+        let close_holes =
+            overlay_mounted_replace_holes(&stamps, &parent_only, NESTED_KEY, Some(fade));
+        assert_eq!(
+            close_holes,
+            vec![nested],
+            "closing the nested menu dest-resets the menu stamp"
+        );
+        assert!(overlay_restore_is_closed_portal(
+            &[NESTED_KEY],
+            &[PARENT_KEY]
+        ));
+        assert!(!overlay_restore_is_closed_portal(
+            &[NESTED_KEY],
+            &[PARENT_KEY, NESTED_KEY]
+        ));
+        assert!(overlay_band_should_encode(
+            NESTED_KEY,
+            &[NESTED_KEY],
+            false,
+            &[PARENT_KEY, NESTED_KEY],
+            &[PARENT_KEY, NESTED_KEY],
+        ));
+        assert!(!overlay_band_should_encode(
+            PARENT_KEY,
+            &[NESTED_KEY],
+            false,
+            &[PARENT_KEY, NESTED_KEY],
+            &[PARENT_KEY, NESTED_KEY],
+        ));
+        assert!(
+            overlay_band_should_encode(
+                PARENT_KEY,
+                &[NESTED_KEY],
+                true,
+                &[PARENT_KEY],
+                &[PARENT_KEY]
+            ),
+            "close Restore must redraw the parent calendar in the hole"
+        );
+        assert!(
+            overlay_band_should_encode(
+                PARENT_KEY,
+                &[NESTED_KEY],
+                false,
+                &[PARENT_KEY, NESTED_KEY],
+                &[PARENT_KEY],
+            ),
+            "nested first-open: menu instances still live in the sole DatePicker band"
+        );
+        assert!(
+            overlay_band_should_encode(0, &[NESTED_KEY], false, &[PARENT_KEY, NESTED_KEY], &[0]),
+            "synthetic whole-suffix band still draws the nested menu"
+        );
+        assert!(
+            overlay_band_should_encode(
+                0,
+                &[PARENT_KEY],
+                false,
+                &[PARENT_KEY],
+                &[0, NESTED_KEY],
+            ),
+            "DatePicker dirty whose portal-layer band is unkeyed must still encode when a nested Select already has a keyed band"
+        );
+        assert!(
+            overlay_band_should_encode(
+                PARENT_KEY,
+                &[PARENT_KEY],
+                false,
+                &[PARENT_KEY],
+                &[PARENT_KEY, NESTED_KEY],
+            ),
+            "opening the calendar encodes the DatePicker band, not only the nested Select"
+        );
+        assert_eq!(
+            overlay_band_encode_flags(
+                &[PARENT_KEY, 0, NESTED_KEY, 0],
+                &[NESTED_KEY],
+                false,
+                &[PARENT_KEY, NESTED_KEY],
+            ),
+            vec![false, false, true, true],
+            "ColorPicker/month stacking 0-key follows the dirty host; skipped DatePicker 0-key must not submit calendar glyphs"
+        );
+        assert_eq!(
+            overlay_band_encode_flags(&[PARENT_KEY, 0], &[PARENT_KEY], false, &[PARENT_KEY],),
+            vec![true, true],
+            "ColorPicker SV/hue unkeyed stacking must submit with the ColorPicker stamp"
+        );
+        assert_eq!(
+            overlay_band_encode_flags(
+                &[PARENT_KEY, 0, COLOR_KEY, 0],
+                &[COLOR_KEY],
+                false,
+                &[COLOR_KEY],
+            ),
+            vec![false, false, true, true],
+            "ColorPicker join dirty must encode its own stamp, not the leftover DatePicker band"
+        );
+        assert_eq!(
+            overlay_added_portal_stamps(&parent_only, &stamps)
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect::<Vec<_>>(),
+            vec![nested]
+        );
+        assert_eq!(
+            overlay_membership_paint_stamps(&parent_only, &stamps)
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect::<Vec<_>>(),
+            vec![nested],
+            "join Overlay dirty is the new menu only"
+        );
+        assert!(
+            overlay_membership_paint_stamps(&stamps, &parent_only).is_empty(),
+            "leave is OverlayRestore of leftover stamps, not an Overlay dirty of the closed key"
+        );
+        assert_eq!(
+            overlay_restore_leftover_stamps(&stamps, &parent_only)
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect::<Vec<_>>(),
+            vec![nested],
+            "leave Restore is the leftover hole, not the remaining DatePicker"
+        );
+        let color = [640.0, 120.0, 280.0, 360.0];
+        let leftover_dp = [64.0, 344.0, 312.0, 352.0];
+        let prev_dp = [(PARENT_KEY, leftover_dp)];
+        let cur_cp = [(COLOR_KEY, color)];
+        assert_eq!(
+            overlay_membership_paint_stamps(&prev_dp, &cur_cp),
+            vec![(COLOR_KEY, color)],
+            "opening ColorPicker must Overlay-paint ColorPicker, not leftover DatePicker"
+        );
+        assert_eq!(
+            overlay_band_encode_flags(
+                &[PARENT_KEY, 0, COLOR_KEY, 0],
+                &[COLOR_KEY],
+                false,
+                &[COLOR_KEY],
+            ),
+            vec![false, false, true, true],
+            "leftover DatePicker band must stay skipped while ColorPicker encodes"
+        );
+        let leftover_occ = overlay_encode_occupancy(
+            NESTED_KEY,
+            Some(nested),
+            &parent_only,
+            Some([64.0, 344.0, 312.0, 352.0]),
+        );
+        assert_eq!(
+            leftover_occ,
+            Some(nested),
+            "closed nested hole must not fall back to the parent visual occupancy"
+        );
+        let leftover_scissor =
+            overlay_encode_scissor(Some(nested), leftover_occ, None).expect("leave scissor");
+        assert!(
+            !rect_contains_rect(leftover_scissor, parent),
+            "leave encode must stay on the hole; restacking the parent halo jumps the shadow; scissor={leftover_scissor:?}"
+        );
     }
 
     #[test]
     fn overlay_encode_occupancy_single_portal_covers_visual_halo() {
         let layout = [90.0, 140.0, 40.0, 160.0];
         let visual = [74.0, 124.0, 72.0, 192.0];
-        let occ = overlay_encode_occupancy(Some(layout), &[layout], Some(visual))
-            .expect("single portal encode occupancy");
+        let occ = overlay_encode_occupancy(
+            PANEL_KEY,
+            Some(layout),
+            &[(PANEL_KEY, layout)],
+            Some(visual),
+        )
+        .expect("single portal encode occupancy");
         assert!(
             occ[0] <= visual[0] + 1e-3 && occ[1] <= visual[1] + 1e-3,
             "encode occupancy must reach the dest-reset visual halo, not just the Taffy box; occ={occ:?}"
@@ -1822,18 +2489,70 @@ mod tests {
     }
 
     #[test]
+    fn overlay_encode_occupancy_must_not_union_foreign_leftover_after_tab_switch() {
+        // TabsContent unmounts gal-date; overlay_occupied still holds that popover.
+        // Opening ColorPicker / gal-month must not clip encode to the leftover box
+        // (Inline Calendar dest-reset sliver, picker appears not to open).
+        let leftover = [80.0, 360.0, 280.0, 320.0];
+        let color = [640.0, 88.0, 36.0, 32.0];
+        assert!(intersect_rects(leftover, color).is_none());
+        let occ = overlay_encode_occupancy(
+            COLOR_KEY,
+            Some(color),
+            &[(COLOR_KEY, color)],
+            Some(leftover),
+        );
+        assert_eq!(
+            occ,
+            Some(color),
+            "leftover DatePicker occupancy is not this portal's shadow halo"
+        );
+        let scissor = overlay_encode_scissor(Some(color), occ, None).expect("color scissor");
+        assert!(intersect_rects(scissor, color).is_some());
+        assert!(
+            intersect_rects(scissor, leftover).is_none(),
+            "ColorPicker encode must not dest-reset the previous tab's DatePicker hole"
+        );
+    }
+
+    #[test]
+    fn overlay_encode_scissor_must_not_clip_color_picker_popover_to_leftover_datepicker() {
+        // Gallery 2b: ColorPicker is top-right; leftover DatePicker occupancy is the
+        // calendar below the tabs. Expand-overflow KEEP occupancy clips the popover
+        // to that leftover box — PartialLoad submits nothing where the panel is.
+        let leftover = [80.0, 360.0, 280.0, 320.0];
+        let popover = [640.0, 120.0, 280.0, 360.0];
+        assert!(intersect_rects(leftover, popover).is_none());
+        let unconstrained = union_rects(leftover, popover);
+        let scissor = overlay_encode_scissor(Some(unconstrained), Some(leftover), None)
+            .expect("ColorPicker encode scissor");
+        assert!(
+            intersect_rects(scissor, popover).is_some(),
+            "ColorPicker popover must stay in the encode scissor; leftover DatePicker clip stamp is a different portal; scissor={scissor:?} popover={popover:?}"
+        );
+        let trigger = [640.0, 88.0, 36.0, 32.0];
+        let scissor_from_trigger =
+            overlay_encode_scissor(Some(popover), Some(trigger), None).expect("popover vs trigger");
+        assert!(
+            intersect_rects(scissor_from_trigger, popover).is_some(),
+            "Fade popover dirty must not clip to the trigger-sized occupancy; scissor={scissor_from_trigger:?}"
+        );
+    }
+
+    #[test]
     fn nested_overlay_wrong_space_fade_does_not_punch_sibling_on_restore() {
         let parent = [80.0, 360.0, 280.0, 320.0];
         let nested = [88.0, 400.0, 144.0, 220.0];
         let fade_document = [0.0, 8000.0, 40.0, 160.0];
-        let boxes = [parent, nested];
-        let restore = overlay_fade_replace_restore_boxes(Some(fade_document), &boxes);
-        assert_eq!(restore, vec![fade_document]);
-        let occ = rects_union(&boxes);
-        let encode_occ = overlay_encode_occupancy(Some(fade_document), &boxes, occ);
+        let stamps = [(PARENT_KEY, parent), (NESTED_KEY, nested)];
+        let restore = overlay_fade_replace_restore_boxes(NESTED_KEY, Some(fade_document), &stamps);
+        assert_eq!(restore, vec![nested]);
+        let occ = rects_union(&[parent, nested]);
+        let encode_occ = overlay_encode_occupancy(NESTED_KEY, Some(fade_document), &stamps, occ);
         assert_eq!(
-            encode_occ, occ,
-            "wrong-space fade still unions occupancy so encode cannot clip the panel"
+            encode_occ,
+            Some(nested),
+            "wrong-space fade must resolve to the nested stamp, never sibling-union occupancy"
         );
     }
 
@@ -1850,6 +2569,14 @@ mod tests {
         );
         assert!(overlay_same_footprint(Some(below), Some(below), 2.0));
         assert!(!overlay_same_footprint(Some(below), Some(above), 2.0));
+        let holes = overlay_mounted_replace_holes(
+            &[(PANEL_KEY, below)],
+            &[(PANEL_KEY, above)],
+            PANEL_KEY,
+            Some(above),
+        );
+        assert_eq!(holes, vec![below, above]);
+        assert!(holes.iter().all(|b| intersect_rects(*b, gap).is_none()));
     }
 
     #[test]
@@ -1858,6 +2585,10 @@ mod tests {
         let grown = [90.0, 140.0, 40.0, 160.0];
         assert!(overlay_restore_leftover_boxes(&[small], &[grown]).is_empty());
         assert!(!overlay_same_footprint(Some(small), Some(grown), 2.0));
+        assert!(
+            overlay_restore_leftover_stamps(&[(PANEL_KEY, small)], &[(PANEL_KEY, grown)])
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1871,6 +2602,10 @@ mod tests {
         assert!(
             overlay_restore_leftover_boxes(&[], &[clip]).is_empty(),
             "measure frames must not enter last_overlay_boxes"
+        );
+        assert!(
+            overlay_restore_leftover_stamps(&[], &[(PANEL_KEY, clip)]).is_empty(),
+            "measure frames omit the portal key so leftover is empty"
         );
         assert!(
             !overlay_restore_needed(None, Some(clip)),
@@ -1899,8 +2634,12 @@ mod tests {
             leftover.len() > 1 || leftover.iter().any(|b| b[2] > 0.0 && b[3] > 0.0),
             "leftover of shrink is a strip/ring"
         );
-        let holes =
-            overlay_mounted_replace_holes(Some(prev), Some(cur), &[prev], &[cur], Some(cur));
+        let holes = overlay_mounted_replace_holes(
+            &[(PANEL_KEY, prev)],
+            &[(PANEL_KEY, cur)],
+            PANEL_KEY,
+            Some(cur),
+        );
         assert_eq!(holes, vec![union_rects(prev, cur)]);
         assert!(
             leftover.iter().all(|s| rect_contains_rect(holes[0], *s)),
@@ -1913,10 +2652,9 @@ mod tests {
         let below = [88.0, 400.0, 144.0, 80.0];
         let above = [88.0, 40.0, 144.0, 220.0];
         let holes = overlay_mounted_replace_holes(
-            Some(below),
-            Some(above),
-            &[below],
-            &[above],
+            &[(PANEL_KEY, below)],
+            &[(PANEL_KEY, above)],
+            PANEL_KEY,
             Some(above),
         );
         assert_eq!(holes, vec![below, above]);
@@ -1932,25 +2670,52 @@ mod tests {
         let parent = [80.0, 360.0, 280.0, 320.0];
         let nested = [88.0, 40.0, 144.0, 220.0];
         let fade = nested;
-        let holes = overlay_mounted_replace_holes(
-            Some(union_rects(parent, nested)),
-            Some(union_rects(parent, nested)),
-            &[parent, nested],
-            &[parent, nested],
-            Some(fade),
-        );
+        let stamps = [(PARENT_KEY, parent), (NESTED_KEY, nested)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, NESTED_KEY, Some(fade));
         assert_eq!(holes, vec![nested]);
         assert!(intersect_rects(holes[0], parent).is_none());
+    }
+
+    #[test]
+    fn nested_expand_unstamped_must_not_dest_reset_parent_halo() {
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [100.0, 400.0, 144.0, 80.0];
+        let parent_only = [(PARENT_KEY, parent)];
+        let join =
+            overlay_mounted_replace_holes(&parent_only, &parent_only, NESTED_KEY, Some(nested));
+        assert!(
+            join.is_empty(),
+            "unstamped nested join dest-resets nothing — the expand measure AABB would punch DatePicker fill and page captions"
+        );
+        let unconstrained = [80.0, 360.0, 280.0, 800.0];
+        assert!(overlay_mounted_replace_holes(
+            &parent_only,
+            &parent_only,
+            NESTED_KEY,
+            Some(unconstrained)
+        )
+        .is_empty());
+        let leave =
+            overlay_mounted_replace_holes(&parent_only, &parent_only, NESTED_KEY, Some(nested));
+        assert!(leave.is_empty());
+        let leftover = overlay_restore_leftover_stamps(
+            &[(PARENT_KEY, parent), (NESTED_KEY, nested)],
+            &parent_only,
+        );
+        assert_eq!(leftover, vec![(NESTED_KEY, nested)]);
+        assert!(
+            overlay_restore_leftover_stamps(&parent_only, &parent_only).is_empty(),
+            "parent outset halo must not count as a leftover of the same key"
+        );
     }
 
     #[test]
     fn overlay_mounted_replace_holes_same_size_fade() {
         let panel = [90.0, 140.0, 40.0, 160.0];
         let holes = overlay_mounted_replace_holes(
-            Some(panel),
-            Some(panel),
-            &[panel],
-            &[panel],
+            &[(PANEL_KEY, panel)],
+            &[(PANEL_KEY, panel)],
+            PANEL_KEY,
             Some(panel),
         );
         assert_eq!(holes, vec![panel]);

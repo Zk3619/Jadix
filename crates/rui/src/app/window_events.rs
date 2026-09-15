@@ -161,6 +161,7 @@ impl super::App {
         self.last_mouse_target = None;
         self.click_press_path = None;
         self.click_press_scrolled = false;
+        self.outside_dismiss_on_down = false;
         self.scrollbar_drag = None;
         self.content_scroll_drag = None;
         self.textarea_resize_drag = None;
@@ -1460,6 +1461,9 @@ impl super::App {
             (Vec::new(), [0.0_f32, 0.0])
         };
 
+        let color_dragging =
+            crate::components::color_picker::tick_color_drag_from_tree(&state.root_element, x, y);
+
         drop(state_borrow);
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
             let now = std::time::Instant::now();
@@ -1497,7 +1501,6 @@ impl super::App {
 
         let slider_dragging = crate::components::slider::tick_slider_drag(x, y);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
-        let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
         let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
         let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
         let floating_panel_dragging =
@@ -1779,6 +1782,7 @@ impl super::App {
             // (scrollbar / resize / reorder early-return).
             self.click_press_path = None;
             self.click_press_scrolled = false;
+            self.outside_dismiss_on_down = false;
         }
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -2135,12 +2139,14 @@ impl super::App {
             // Touch always; mouse only when `set_mouse_content_pan_enabled(true)`.
             let allow_content_pan =
                 self.primary_touch_id.is_some() || super::mouse_content_pan_enabled();
+            let pan_hit = super::pointer_events::hit_path(&state.root_element, x, y);
             if allow_content_pan
                 && self.scrollbar_drag.is_none()
                 && self.drag_reorder.is_none()
                 && self.textarea_resize_drag.is_none()
                 && input_drag.is_none()
                 && label_drag.is_none()
+                && !super::portal_overlay::overlay_blocks_page_wheel(&pan_hit)
             {
                 let mut chain = Vec::new();
                 super::scroll_support::collect_scroll_rest_chain_at(
@@ -2167,16 +2173,10 @@ impl super::App {
 
             let capture = super::pointer_capture_id();
             let path = if let Some(ref id) = capture {
-                if let Some(el) =
-                    super::pointer_events::find_by_focus_id(&state.root_element, id.as_str())
-                {
-                    vec![super::pointer_events::HitPathEntry::from_element(
-                        el,
-                        el.layout_bounds,
-                    )]
-                } else {
-                    super::pointer_events::hit_path(&state.root_element, x, y)
-                }
+                super::tree_hit::captured_pointer_hit(&state.root_element, id.as_str()).map_or_else(
+                    || super::pointer_events::hit_path(&state.root_element, x, y),
+                    |e| vec![e],
+                )
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
@@ -2223,6 +2223,20 @@ impl super::App {
             // Slider / other controls that stop_propagation must not also pan the scroll parent.
             if pev.is_consumed() {
                 self.content_scroll_drag = None;
+            }
+            // ColorPicker / Slider freeze a window-space chart box. Leftover smooth
+            // scroll or fling would move the page (and a Fixed overlay with it) so
+            // the frozen y maps every move to the SV bottom.
+            if crate::components::color_picker::is_color_dragging()
+                || crate::components::slider::is_slider_dragging()
+            {
+                self.content_scroll_drag = None;
+                self.smooth_active_until.clear();
+                self.scroll_velocity.clear();
+                let rests: Vec<String> = self.scroll_metrics_cache.keys().cloned().collect();
+                super::scroll_support::snap_scroll_targets_to_current_offsets(
+                    rests.iter().map(String::as_str),
+                );
             }
             // `on_click` / Label `for` fire on pointer up (DOM click timing).
 
@@ -2414,8 +2428,11 @@ impl super::App {
                 } else {
                     false
                 };
-                if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press() {
-                    need_paint_sync_redraw = true;
+                if should_outside_dismiss {
+                    if super::portal_overlay::try_dismiss_outside_press() {
+                        self.outside_dismiss_on_down = true;
+                        need_paint_sync_redraw = true;
+                    }
                 }
             }
 
@@ -2433,9 +2450,8 @@ impl super::App {
             }
 
             if need_paint_sync_redraw {
-                let fid =
-                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
-                        .peek();
+                let fid = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                    .peek();
                 if super::ime_support::is_text_edit_focus(&fid) {
                     self.caret_wake_at = None;
                     // FALLBACK — Poll if dropping WaitUntil is not enough.
@@ -2578,6 +2594,13 @@ impl super::App {
         let scale_factor = state.window.scale_factor() as f32;
         let x = self.cursor_pos.x as f32 / scale_factor.max(1.0);
         let y = self.cursor_pos.y as f32 / scale_factor.max(1.0);
+
+        if crate::components::color_picker::is_color_dragging()
+            || crate::components::slider::is_slider_dragging()
+        {
+            drop(state_borrow);
+            return;
+        }
 
         let mut target_rests = Vec::new();
         super::scroll_support::collect_scroll_rest_chain_at(
@@ -3130,9 +3153,25 @@ impl super::App {
 
         // Fling inertia: integrate `scroll_velocity` into targets, then exponential friction decay.
         // Wheel must not write here (see handle_mouse_wheel); only content-pan release seeds velocity.
+        // Color / slider drag freeze a window-space box — coasting the page glues the SV knob.
         const INERTIA_FRICTION_PER_SEC: f32 = 4.5;
+        let freeze_page_scroll = crate::components::color_picker::is_color_dragging()
+            || crate::components::slider::is_slider_dragging()
+            || super::portal_overlay::page_scroll_locked();
+        if freeze_page_scroll {
+            self.scroll_accum.clear();
+            self.scroll_velocity.clear();
+            self.smooth_active_until.clear();
+            let rests: Vec<String> = self.scroll_metrics_cache.keys().cloned().collect();
+            super::scroll_support::snap_scroll_targets_to_current_offsets(
+                rests.iter().map(String::as_str),
+            );
+        }
         let mut inertia_ops = Vec::new();
         for (rest, vel) in self.scroll_velocity.iter_mut() {
+            if freeze_page_scroll {
+                continue;
+            }
             if vel[0].abs() < 0.01 && vel[1].abs() < 0.01 {
                 continue;
             }
@@ -3219,7 +3258,10 @@ impl super::App {
                 sy.set_silent(0.0);
             }
             let raw_max_x = if mx.is_finite() { mx.max(0.0) } else { 0.0 };
-            let raw_max_y = if my.is_finite() { my.max(0.0) } else { 0.0 };
+            let raw_max_y = super::scroll_support::clamp_max_y_for_pending_align(
+                rest,
+                if my.is_finite() { my.max(0.0) } else { 0.0 },
+            );
             let lp = self
                 .scroll_max_lowpass
                 .entry(rest.clone())
@@ -3571,8 +3613,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
                 // Content moves under a stationary cursor during smooth scroll — re-diff
-                // signal-driven hover (`on_hover` / Button chrome). CSS `:hover` variants
-                // stay frozen via `tick_active_css_transitions_subtree` only.
+                // signal-driven hover (`on_hover` / Button chrome). Class geometric `:hover`
+                // (`hover:bg/text` and `hover:scale/rotate/skew`) is sampled on the freeze path.
                 super::tree_hit::reconcile_pointer_hovers(
                     &state.root_element,
                     hx,
@@ -3666,11 +3708,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         &state.root_element,
                     );
                 let gpu_presented = state.gpu_presented_this_frame;
-                let painted_caret_matches_focus = super::ime_support::painted_caret_matches_focus(
-                    &state.text_nodes,
-                    &fid,
-                );
+                let painted_caret_matches_focus =
+                    super::ime_support::painted_caret_matches_focus(&state.text_nodes, &fid);
 
+                let pending_desc =
+                    super::scroll_support::resolve_pending_descendant_bounds(&state.root_element);
                 drop(re_borrow); // CRITICAL: Free the borrow before updating signals!
 
                 // Post-render: low-pass scroll extents, viewport/content metrics, overlay scrollbar visibility.
@@ -4045,8 +4087,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         cw.set_silent(new_cw);
                         ch.set_silent(new_ch);
                     }
-                    if super::scroll_support::apply_pending_scroll_item_into_view(
-                        rest, new_vh, new_ch,
+                    if super::scroll_support::apply_pending_scroll_align(
+                        rest,
+                        *bounds,
+                        new_cw,
+                        new_ch,
+                        pending_desc.get(rest).copied(),
                     ) {
                         scrollbar_fade_animating = true;
                     }
@@ -4406,16 +4452,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             _ => return,
                         };
                         let path = if let Some(ref cap_id) = capture {
-                            if let Some(el) =
-                                super::pointer_events::find_by_focus_id(&state.root_element, cap_id)
-                            {
-                                vec![super::pointer_events::HitPathEntry::from_element(
-                                    el,
-                                    el.layout_bounds,
-                                )]
-                            } else {
-                                super::pointer_events::hit_path(&state.root_element, x, y)
-                            }
+                            super::tree_hit::captured_pointer_hit(&state.root_element, cap_id)
+                                .map_or_else(
+                                    || super::pointer_events::hit_path(&state.root_element, x, y),
+                                    |e| vec![e],
+                                )
                         } else {
                             super::pointer_events::hit_path(&state.root_element, x, y)
                         };
@@ -4498,10 +4539,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     // unmounts the Menu so a second hit looks like an outside press on the parent
                     // DatePicker / ColorPicker popover.
                     let should_outside_dismiss = !on_exclusive && !on_trigger;
-                    if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press()
-                    {
-                        super::runtime::request_redraw();
+                    if should_outside_dismiss && !self.outside_dismiss_on_down {
+                        if super::portal_overlay::try_dismiss_outside_press() {
+                            super::runtime::request_redraw();
+                        }
                     }
+                    self.outside_dismiss_on_down = false;
                     crate::utils::popup::arm_underlay_close();
                     if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();

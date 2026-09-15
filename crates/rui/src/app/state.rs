@@ -184,6 +184,8 @@ pub(super) struct AppState {
     pub(super) portal_membership_dirty: bool,
     /// Non-portal island reconcile changed page geometry this frame.
     page_geom_dirty: bool,
+    /// Last presented hoisted overlay stamps (`rui_portal_key` hash, layout box).
+    last_overlay_stamps: Vec<(u64, [f32; 4])>,
     /// Last presented hoisted overlay boxes (logical px), one per overlay node.
     last_overlay_boxes: Vec<[f32; 4]>,
     /// Union of overlay boxes while the popover has been open (expand/exit
@@ -1014,6 +1016,7 @@ mod local_backdrop_capture_tests {
             paint_ops: (0, 0),
             backdrop_blur: 0.0,
             underlay_opacity: 1.0,
+            stamp_key: 0,
         }
     }
 
@@ -1481,6 +1484,7 @@ impl AppState {
             force_full_redraw: true,
             portal_membership_dirty: false,
             page_geom_dirty: false,
+            last_overlay_stamps: Vec::new(),
             last_overlay_boxes: Vec::new(),
             overlay_occupied: None,
             last_portal_layer_damage: None,
@@ -1849,17 +1853,17 @@ impl AppState {
             .iter()
             .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay));
         let prev_occ = self.overlay_occupied;
-        let prev_boxes = self.last_overlay_boxes.clone();
+        let prev_stamps = self.last_overlay_stamps.clone();
         let had_occupancy = prev_occ.is_some();
-        let cur_boxes = crate::layout::layout_tree::hoisted_portal_boxes(&self.root_element);
+        let cur_stamps = crate::layout::layout_tree::hoisted_portal_stamps(&self.root_element);
+        let cur_boxes: Vec<[f32; 4]> = cur_stamps.iter().map(|(_, b)| *b).collect();
         let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
         let prev = self.last_portal_layer_damage;
         let membership = self.portal_membership_dirty;
         let measuring = crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element);
-        // GPU stamp this frame. Opacity-0 expand measure still emits instances at
-        // unconstrained content height — that AABB is not occupancy, and must not
-        // enter last_overlay_boxes (the next clip frame would OverlayRestore a
-        // white leftover around the growing menu).
+        // Opacity-0 expand measure still emits instances at unconstrained content
+        // height — that AABB is not occupancy. Stamps omit the measuring portal
+        // (`hoisted_portal_paint_box`); always record the remaining keys.
         let current_paint = if measuring {
             None
         } else {
@@ -1867,9 +1871,6 @@ impl AppState {
         };
         let needs_restore = super::damage::overlay_restore_needed(prev_occ, current_paint);
         let same_footprint = super::damage::overlay_same_footprint(prev_occ, current_paint, 2.0);
-        // CSS tick, portal join/leave, or a laid-out size change: the previous GPU
-        // stamp is stale. Membership / box delta without an Overlay dirty still
-        // need a replace (otherwise Load src-overs a new keyframe onto retain).
         let overlay_dirty = collect_overlay_dirty
             || membership
             || prev != cur
@@ -1889,50 +1890,70 @@ impl AppState {
             self.mark_full_redraw();
             self.overlay_restore_clear = false;
             self.overlay_occupied = current_paint;
-        } else if measuring {
-            self.overlay_restore_clear = false;
         } else if fade_replace && !self.force_full_redraw && !self.scroll_layer_clear {
-            // Dest-reset previous *visual* occupancy (instance paint AABB), not
-            // leftover strips and not a padded layout box. A ring Clear cuts
-            // captions; extra pad around a rounded fill stays as a white frame.
             self.overlay_restore_clear = false;
-            let dirty = self
+            let overlay_dirties: Vec<_> = self
                 .damage_nodes
                 .iter()
                 .filter(|d| matches!(d.kind, super::damage::PaintDirtyKind::Overlay))
-                .map(|d| d.bounds)
-                .filter(|b| b[2] > 0.0 && b[3] > 0.0)
-                .reduce(super::damage::union_rects);
-            let holes = super::damage::overlay_mounted_replace_holes(
-                prev_occ,
-                current_paint,
-                &prev_boxes,
-                &cur_boxes,
-                dirty,
-            );
-            for b in holes {
-                self.push_overlay_restore_visual(b);
+                .copied()
+                .collect();
+            if overlay_dirties.is_empty() {
+                for (key, bounds) in
+                    super::damage::overlay_membership_paint_stamps(&prev_stamps, &cur_stamps)
+                {
+                    for b in super::damage::overlay_mounted_replace_holes(
+                        &prev_stamps,
+                        &cur_stamps,
+                        key,
+                        Some(bounds),
+                    ) {
+                        self.push_overlay_restore_visual(key, b);
+                    }
+                    self.damage_nodes.push(super::damage::PaintDirty {
+                        key,
+                        bounds,
+                        kind: super::damage::PaintDirtyKind::Overlay,
+                    });
+                }
+            } else {
+                for d in overlay_dirties {
+                    for b in super::damage::overlay_mounted_replace_holes(
+                        &prev_stamps,
+                        &cur_stamps,
+                        d.key,
+                        Some(d.bounds),
+                    ) {
+                        self.push_overlay_restore_visual(d.key, b);
+                    }
+                }
             }
-            if !collect_overlay_dirty {
-                self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
+            self.push_overlay_restore_leftovers(&prev_stamps, &cur_stamps);
+            if cur_stamps.is_empty() && !overlay_present {
+                self.overlay_occupied.take();
+            } else {
+                self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
             }
-            self.overlay_occupied = current_paint.or(prev_occ);
         } else if needs_restore {
             if !self.force_full_redraw && !self.scroll_layer_clear {
-                self.push_overlay_restore_leftovers(&prev_boxes, &cur_boxes);
-                if !collect_overlay_dirty && (overlay_present || !cur_boxes.is_empty()) {
-                    self.push_portal_overlay_paint_dirties(
-                        &cur_boxes,
-                        overlay_visual,
-                        current_paint,
-                    );
+                self.push_overlay_restore_leftovers(&prev_stamps, &cur_stamps);
+                if !collect_overlay_dirty && (overlay_present || !cur_stamps.is_empty()) {
+                    for (key, bounds) in
+                        super::damage::overlay_membership_paint_stamps(&prev_stamps, &cur_stamps)
+                    {
+                        self.damage_nodes.push(super::damage::PaintDirty {
+                            key,
+                            bounds,
+                            kind: super::damage::PaintDirtyKind::Overlay,
+                        });
+                    }
                 }
             }
             self.overlay_restore_clear = self
                 .damage_nodes
                 .iter()
                 .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::OverlayRestore));
-            if cur_boxes.is_empty() && !overlay_present && !self.scroll_layer_clear {
+            if cur_stamps.is_empty() && !overlay_present && !self.scroll_layer_clear {
                 self.overlay_occupied.take();
             } else {
                 self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
@@ -1941,12 +1962,19 @@ impl AppState {
             self.overlay_restore_clear = false;
             self.overlay_occupied = current_paint.or(prev_occ.filter(|_| overlay_present));
             if !self.force_full_redraw && !self.scroll_layer_clear && (membership || prev != cur) {
-                self.push_portal_overlay_paint_dirties(&cur_boxes, overlay_visual, current_paint);
+                for (key, bounds) in
+                    super::damage::overlay_membership_paint_stamps(&prev_stamps, &cur_stamps)
+                {
+                    self.damage_nodes.push(super::damage::PaintDirty {
+                        key,
+                        bounds,
+                        kind: super::damage::PaintDirtyKind::Overlay,
+                    });
+                }
             }
         }
-        if !measuring {
-            self.last_overlay_boxes = cur_boxes;
-        }
+        self.last_overlay_stamps = cur_stamps;
+        self.last_overlay_boxes = cur_boxes;
         self.last_portal_layer_damage = cur;
         self.portal_membership_dirty = false;
         super::damage::sort_paint_dirty_nodes(&mut self.damage_nodes);
@@ -1956,61 +1984,35 @@ impl AppState {
         let Some(occ) = self.overlay_occupied else {
             return;
         };
-        self.push_overlay_restore_visual(occ);
+        self.push_overlay_restore_visual(0, occ);
     }
 
-    fn push_overlay_restore_leftovers(&mut self, prev_boxes: &[[f32; 4]], cur_boxes: &[[f32; 4]]) {
-        let leftovers = super::damage::overlay_restore_leftover_boxes(prev_boxes, cur_boxes);
+    fn push_overlay_restore_leftovers(
+        &mut self,
+        prev_stamps: &[(u64, [f32; 4])],
+        cur_stamps: &[(u64, [f32; 4])],
+    ) {
+        let leftovers = super::damage::overlay_restore_leftover_stamps(prev_stamps, cur_stamps);
         if leftovers.is_empty() {
-            if cur_boxes.is_empty() {
-                // Close with no per-box history: punch the last occupancy hole.
+            if cur_stamps.is_empty() {
                 self.push_overlay_restore_occupancy();
             }
             return;
         }
-        for b in leftovers {
-            self.push_overlay_restore_visual(b);
+        for (key, b) in leftovers {
+            self.push_overlay_restore_visual(key, b);
         }
     }
 
-    fn push_overlay_restore_visual(&mut self, bounds: [f32; 4]) {
+    fn push_overlay_restore_visual(&mut self, key: u64, bounds: [f32; 4]) {
         if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
             return;
         }
         self.damage_nodes.push(super::damage::PaintDirty {
-            key: 0xE0E1_0000,
+            key,
             bounds,
             kind: super::damage::PaintDirtyKind::OverlayRestore,
         });
-    }
-
-    fn push_portal_overlay_paint_dirties(
-        &mut self,
-        cur_boxes: &[[f32; 4]],
-        overlay_visual: Option<[f32; 4]>,
-        current_paint: Option<[f32; 4]>,
-    ) {
-        if cur_boxes.is_empty() {
-            if let Some(b) = current_paint.or(self.overlay_occupied) {
-                self.damage_nodes.push(super::damage::PaintDirty {
-                    key: 0xE0E0_0000,
-                    bounds: b,
-                    kind: super::damage::PaintDirtyKind::Overlay,
-                });
-            }
-            return;
-        }
-        for (i, b) in cur_boxes.iter().copied().enumerate() {
-            let bounds = match overlay_visual {
-                Some(v) => super::damage::union_rects(b, v),
-                None => b,
-            };
-            self.damage_nodes.push(super::damage::PaintDirty {
-                key: 0xE0E0_0000 | i as u64,
-                bounds,
-                kind: super::damage::PaintDirtyKind::Overlay,
-            });
-        }
     }
 
     /// Overlay instance/text AABB in logical px (physical collect coords ÷ `ui_scale`).
@@ -2198,7 +2200,7 @@ impl AppState {
         use super::damage::PaintDirtyKind;
         let dummy = self.pipeline.dummy_backdrop();
         let mut pending_page_glyphs = capture_text_ready;
-        let mut overlay_scissor: Option<[f32; 4]> = None;
+        let mut overlay_dirties: Vec<(u64, [f32; 4])> = Vec::new();
         let mut page_punch_overlap: Option<[f32; 4]> = None;
         for dirty in &self.damage_nodes {
             let scissor_pad = super::draw_cull::node_present_scissor_pad(dirty.kind);
@@ -2213,10 +2215,7 @@ impl AppState {
                 scissor_pad,
             );
             if dirty.kind == PaintDirtyKind::Overlay {
-                overlay_scissor = Some(match overlay_scissor {
-                    Some(prev) => super::damage::union_rects(prev, scissor_logical),
-                    None => scissor_logical,
-                });
+                overlay_dirties.push((dirty.key, scissor_logical));
                 continue;
             }
             let scissor_logical = if dirty.kind == PaintDirtyKind::Node {
@@ -2447,47 +2446,88 @@ impl AppState {
                 }
             }
         }
-        // Overlay suffix once, after Restore/Node dest-reset. Encoding it per Overlay
-        // dirty src-overs the same fill/shadow under overlapping scissors (first-frame
-        // halo too dark). Restore may be appended after collect Overlay — drawing here
-        // keeps overlay on top of the restored page. Hover dest-reset that punches
-        // occupancy must still redraw overlay; never submit under a leftover Node scissor.
-        let overlay_scissor = super::damage::overlay_encode_scissor(
-            overlay_scissor,
-            super::damage::overlay_encode_occupancy(
-                overlay_scissor,
-                &self.last_overlay_boxes,
-                self.overlay_occupied,
-            ),
-            page_punch_overlap,
-        );
-        if overlay_scissor.is_some() && pending_page_glyphs {
+        // Overlay suffix after Restore/Node dest-reset. Same portal key encodes
+        // once (fade CSS + membership). Different keys keep separate scissors so
+        // a nested accordion cannot restack the parent outset shadow.
+        let mut merged: Vec<(u64, [f32; 4])> = Vec::new();
+        for (k, b) in overlay_dirties {
+            if let Some((_, acc)) = merged.iter_mut().find(|(ek, _)| *ek == k) {
+                *acc = super::damage::union_rects(*acc, b);
+            } else {
+                merged.push((k, b));
+            }
+        }
+        let remaining_keys: Vec<u64> = self.last_overlay_stamps.iter().map(|(k, _)| *k).collect();
+        let restore_keys: Vec<u64> = self
+            .damage_nodes
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::OverlayRestore)
+            .map(|d| d.key)
+            .collect();
+        let closed_restore =
+            super::damage::overlay_restore_is_closed_portal(&restore_keys, &remaining_keys);
+        let punch_repair = merged.is_empty() && page_punch_overlap.is_some();
+        if punch_repair {
+            merged.extend(
+                self.last_overlay_stamps
+                    .iter()
+                    .copied()
+                    .filter(|(_, b)| b[2] > 0.0 && b[3] > 0.0),
+            );
+        }
+        let any_overlay = !merged.is_empty();
+        if any_overlay && pending_page_glyphs {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
             pending_page_glyphs = false;
         }
-        if let Some(scissor_logical) = overlay_scissor {
-            let physical = super::damage::damage_to_scissor_physical(
+        for (key, dirty_bounds) in merged {
+            let occupancy = super::damage::overlay_encode_occupancy(
+                key,
+                Some(dirty_bounds),
+                &self.last_overlay_stamps,
+                if self.last_overlay_stamps.len() <= 1 {
+                    self.overlay_occupied
+                } else {
+                    None
+                },
+            );
+            let punch = if punch_repair {
+                page_punch_overlap
+            } else {
+                None
+            };
+            let Some(scissor_logical) =
+                super::damage::overlay_encode_scissor(Some(dirty_bounds), occupancy, punch)
+            else {
+                continue;
+            };
+            let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
                 scissor_logical,
                 0.0,
                 ui_scale,
                 self.config.width,
                 self.config.height,
+            ) else {
+                continue;
+            };
+            render_pass.set_scissor_rect(x, y, w, h);
+            let dirty_keys = [key];
+            self.draw_node_present_overlay(
+                render_pass,
+                paint_ops,
+                scaled_instances,
+                scaled_tex,
+                overlay_inst_start,
+                overlay_tex_start,
+                overlay_paint_start,
+                overlay_band_ranges,
+                dummy,
+                allow_primitives,
+                &dirty_keys,
+                closed_restore,
+                &remaining_keys,
+                ui_scale,
             );
-            if let Some((x, y, w, h)) = physical {
-                render_pass.set_scissor_rect(x, y, w, h);
-                self.draw_node_present_overlay(
-                    render_pass,
-                    paint_ops,
-                    scaled_instances,
-                    scaled_tex,
-                    overlay_inst_start,
-                    overlay_tex_start,
-                    overlay_paint_start,
-                    overlay_band_ranges,
-                    dummy,
-                    allow_primitives,
-                );
-            }
         }
         if pending_page_glyphs {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
@@ -2506,15 +2546,34 @@ impl AppState {
         overlay_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
         dummy: &'pass wgpu::BindGroup,
         allow_primitives: bool,
+        overlay_dirty_keys: &[u64],
+        closed_restore: bool,
+        remaining_stamp_keys: &[u64],
+        ui_scale: f32,
     ) {
-        if allow_primitives {
-            for band in overlay_band_ranges {
-                let op_lo = band.paint_ops.0.max(overlay_paint_start);
-                let op_hi = band.paint_ops.1.max(op_lo);
-                let inst_lo = band.instance.0.max(overlay_inst_start);
-                let inst_hi = band.instance.1.max(inst_lo);
-                let tex_lo = band.textured.0.max(overlay_tex_start);
-                let tex_hi = band.textured.1.max(tex_lo);
+        // FullClear draws `band rects → band text → next band` so a higher menu
+        // occludes lower glyphs. Flushing every overlay fill then every glyphon
+        // renderer replays DatePicker calendar digits on top of the month menu
+        // (looks like a missing background) and src-overs the parent halo again.
+        let _ = ui_scale;
+        let overlay_band_keys: Vec<u64> = overlay_band_ranges.iter().map(|b| b.stamp_key).collect();
+        let overlay_band_encode = super::damage::overlay_band_encode_flags(
+            &overlay_band_keys,
+            overlay_dirty_keys,
+            closed_restore,
+            remaining_stamp_keys,
+        );
+        for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+            let op_lo = band.paint_ops.0.max(overlay_paint_start);
+            let op_hi = band.paint_ops.1.max(op_lo);
+            let inst_lo = band.instance.0.max(overlay_inst_start);
+            let inst_hi = band.instance.1.max(inst_lo);
+            let tex_lo = band.textured.0.max(overlay_tex_start);
+            let tex_hi = band.textured.1.max(tex_lo);
+            if !overlay_band_encode.get(band_i).copied().unwrap_or(false) {
+                continue;
+            }
+            if allow_primitives {
                 if op_lo < op_hi {
                     draw_paint_ops(
                         render_pass,
@@ -2532,8 +2591,6 @@ impl AppState {
                         None,
                     );
                 } else if inst_lo < inst_hi {
-                    // Previous dirty node may have left glyphon's strip
-                    // pipeline bound; indexed SDF draws must rebind first.
                     self.pipeline.bind_sdf(render_pass, true, dummy);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                     render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
@@ -2563,13 +2620,14 @@ impl AppState {
                     }
                 }
             }
-        }
-        if overlay_band_ranges.iter().any(|b| b.text.0 < b.text.1) {
-            self.overlay_text_renderer.render(render_pass);
-            for r in &self.overlay_band_text_renderers {
-                r.render(render_pass);
+            if band.text.0 < band.text.1 {
+                if band_i == 0 {
+                    self.overlay_text_renderer.render(render_pass);
+                } else if let Some(r) = self.overlay_band_text_renderers.get(band_i - 1) {
+                    r.render(render_pass);
+                }
+                super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
             }
-            super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
         }
     }
 
@@ -2908,6 +2966,11 @@ impl AppState {
             );
             return None;
         };
+        // Snapshot before reconcile: Tabs hide still has the last panel box; using the
+        // ancestor ScrollArea clip instead punched Gallery 8b ToggleGroup glyphs.
+        let island_key = super::damage::paint_element_key(old_subtree);
+        let island_box =
+            crate::core::tree::visual_paint_aabb(old_subtree, old_subtree.paint_scroll_acc);
 
         let mut dirty = Vec::new();
         let portal_island = crate::layout::layout_tree::subtree_declares_portal(old_subtree)
@@ -2939,11 +3002,15 @@ impl AppState {
             status,
             LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
         ) {
-            // MessageScroller Send / nested For: dirty the clip box only. FullClear
-            // of the gallery is what kept Footer on the Send present path.
-            if let Some(clip) = clip_bounds {
-                super::damage::push_frame_paint_damage(clip);
-            } else {
+            // Nested island (Tabs panel / MessageScroller Send): dest-reset the island
+            // intersected with the overflow clip — not the clip itself. Gallery Forms
+            // Tabs share the page ScrollArea with 8b ToggleGroup; dirtying that clip
+            // wiped sibling glyphs for one PartialLoad frame. Footer stays outside
+            // the MessageScroller clip. Unclipped page Show still FullClears.
+            if let Some(d) = super::damage::clipped_island_structure_damage(island_box, clip_bounds)
+            {
+                super::damage::push_frame_paint_key(island_key, d);
+            } else if clip_bounds.is_none() {
                 self.page_geom_dirty = true;
                 self.mark_full_redraw();
             }
@@ -3523,10 +3590,12 @@ impl AppState {
         // collect draws the track/thumb with the scroll signal (same path as ViewportsOnly).
         scrollbar_skip_flex_layout: bool,
         // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
-        // caret paint). Class `:hover` **enter** is frozen here — content sliding onto a still
-        // cursor must not light up every `transition-transform` tile (gallery layout WP jank +
-        // sidebar hover flash). Already-hovered nodes still **leave** when the pointer is no
-        // longer on their paint AABB. Active CSS tweens still advance via `tick_active_css_transitions`.
+        // caret paint). Class `hover:scale/rotate/skew` **enter** is frozen here — content
+        // sliding onto a still cursor must not light up every `transition-transform` tile
+        // (gallery layout WP jank + sidebar hover flash). `hover:bg/text` **does** enter
+        // (CSS `:hover` is geometric, same as Button). Already-hovered nodes still **leave**
+        // when the pointer is no longer on their paint AABB. Active CSS tweens still advance
+        // via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         self.gpu_presented_this_frame = false;
@@ -4227,6 +4296,13 @@ impl AppState {
             acc_layout_prof(&render_result.prof);
             self.window.request_redraw();
         }
+        if crate::components::color_picker::is_color_dragging() {
+            let _ = crate::components::color_picker::tick_color_drag_from_tree(
+                &self.root_element,
+                mouse_pos[0],
+                mouse_pos[1],
+            );
+        }
         drop(acc_layout_prof);
         let layout_done = Instant::now();
 
@@ -4560,16 +4636,24 @@ impl AppState {
             .filter(|p| !p.overlay)
             .map(|p| (p.key, p.bounds))
             .collect();
-        // Slot motion without a scroll layer (maximize / glyphon_fit) still
-        // FullClears: dest-reset of *now* cannot wipe the previous visual Y.
-        // A scroll layer already translated the viewport (strip blit or scissor
-        // Clear) and pins dest-reset named spin/shimmer in the copied overlap.
-        // `mark_full_redraw` here aborted B8 and window-Cleared Marker on every tick.
-        if super::damage::node_present_moved_forces_full_clear(
-            super::damage::node_present_dirties_moved(
-                &self.damage_nodes,
+        // Slot motion without a scroll layer: dest-reset `prev∪now` on every
+        // translated page slot (Tabs height change moving 8b) instead of window
+        // FullClear — FullClear was the one-frame glyph luminance flash. A scroll
+        // layer already translated the viewport; expanding every slot would abort
+        // strip blit. Unnamed leftovers still FullClear (maximize / glyphon_fit
+        // when page_geom did not already Clear).
+        if !self.scroll_layer_clear {
+            super::damage::expand_paint_dirties_for_translated_slots(
+                &mut self.damage_nodes,
                 &present_slots,
                 &self.last_present_node_bounds,
+            );
+        }
+        if super::damage::node_present_moved_forces_full_clear(
+            super::damage::unnamed_translated_page_slots(
+                &present_slots,
+                &self.last_present_node_bounds,
+                &self.damage_nodes,
             ),
             self.scroll_layer_clear,
         ) {
@@ -6949,7 +7033,7 @@ mod hot_reload_inject {
         let s = raw.trim();
         if let Some(v) = s.strip_suffix("rem") {
             let n = v.trim().parse::<f32>().ok()?;
-            return Some(n * crate::core::tree::CSS_ROOT_FONT_SIZE_PX);
+            return Some(n * crate::layout::dimension::css_root_font_size_px());
         }
         if let Some(v) = s.strip_suffix("px") {
             return v.trim().parse::<f32>().ok();

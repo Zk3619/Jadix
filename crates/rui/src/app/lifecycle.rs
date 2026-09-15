@@ -533,8 +533,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
         if let Some(wake) = self.caret_wake_at {
             let caret_wake_stale = (*self.state.borrow()).as_ref().is_some_and(|s| {
-                let fid =
-                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+                let fid = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                    .peek();
                 crate::app::ime_support::is_text_edit_focus(&fid)
                     && !crate::app::ime_support::painted_caret_matches_focus(&s.text_nodes, &fid)
             });
@@ -1166,6 +1166,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         last_mouse_path: None,
         click_press_path: None,
         click_press_scrolled: false,
+        outside_dismiss_on_down: false,
         last_click_at: None,
         last_click_pos: [0.0, 0.0],
         click_count: 0,
@@ -1264,10 +1265,7 @@ mod idle_control_flow_tests {
         let caret = Instant::now() + Duration::from_millis(520);
         let force =
             about_to_wait_force_immediate(false, false, false, false, false, true, false, false);
-        assert!(
-            force,
-            "scroll-settle force_redraw_count must Poll"
-        );
+        assert!(force, "scroll-settle force_redraw_count must Poll");
         assert_eq!(
             idle_control_flow(Some(caret), force),
             ControlFlow::Poll,
@@ -1283,10 +1281,7 @@ mod idle_control_flow_tests {
         let caret = Instant::now() + Duration::from_millis(520);
         let force =
             about_to_wait_force_immediate(false, false, false, false, false, true, false, false);
-        assert!(
-            force,
-            "text-edit click arming force_redraw_count must Poll"
-        );
+        assert!(force, "text-edit click arming force_redraw_count must Poll");
         assert_eq!(
             idle_control_flow(Some(caret), force),
             ControlFlow::Poll,
