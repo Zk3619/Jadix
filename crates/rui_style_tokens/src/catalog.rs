@@ -45,6 +45,31 @@ impl FontWeightToken {
     }
 }
 
+/// Utility length that still knows its unit. Resolve with the live CSS root (`1rem`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TwLength {
+    Px(f32),
+    Rem(f32),
+    Em(f32),
+}
+
+impl TwLength {
+    pub fn to_px(self, root_font_size_px: f32) -> f32 {
+        match self {
+            Self::Px(v) => v,
+            Self::Rem(v) | Self::Em(v) => v * root_font_size_px,
+        }
+    }
+
+    pub fn negated(self) -> Self {
+        match self {
+            Self::Px(v) => Self::Px(-v),
+            Self::Rem(v) => Self::Rem(-v),
+            Self::Em(v) => Self::Em(-v),
+        }
+    }
+}
+
 /// Classified utility (without variant prefixes).
 #[derive(Clone, Debug, PartialEq)]
 pub enum KnownUtility<'a> {
@@ -61,12 +86,12 @@ pub enum KnownUtility<'a> {
     OverflowX(&'a str),
     OverflowY(&'a str),
     RoundedFull,
-    Rounded(f32),
+    Rounded(TwLength),
     GridCols(u16),
     GridRows(u16),
     GapX(String),
     GapY(String),
-    Gap(f32),
+    Gap(String),
     Width(String),
     Height(String),
     MinWidth(String),
@@ -89,7 +114,7 @@ pub enum KnownUtility<'a> {
     MarginL(String),
     BgColor(&'a str),
     TextColor(&'a str),
-    TextSize(f32),
+    TextSize(TwLength),
     FontWeight(FontWeightToken),
     /// Tailwind `font-sans` — UI sans stack.
     FontFamilySans,
@@ -102,11 +127,11 @@ pub enum KnownUtility<'a> {
     AlignSelf(&'a str),
     Opacity(f32),
     /// Visual translate X in logical px (`translate-x-*`).
-    TranslateX(f32),
+    TranslateX(TwLength),
     /// Visual translate X as fraction of own width (`translate-x-1/2` → 0.5).
     TranslateXPct(f32),
     /// Visual translate Y in logical px (`translate-y-*`).
-    TranslateY(f32),
+    TranslateY(TwLength),
     /// Visual translate Y as fraction of own height (`translate-y-1/2` → 0.5).
     TranslateYPct(f32),
     /// Single-line ellipsis overflow (`truncate`).
@@ -158,7 +183,7 @@ pub enum KnownUtility<'a> {
     GradientFrom(&'a str),
     GradientVia(&'a str),
     GradientTo(&'a str),
-    LetterSpacing(f32),
+    LetterSpacing(TwLength),
     TextDirectionLtr,
     TextDirectionRtl,
     /// Tailwind `writing-*` → CSS `writing-mode`.
@@ -212,11 +237,19 @@ pub enum KnownUtility<'a> {
     /// `outline-0` / `outline-1` / `outline-2` / `outline-4` / `outline-8` (width in px).
     OutlineWidth(f32),
     /// `outline-offset-*` (offset in px).
-    OutlineOffset(f32),
+    OutlineOffset(TwLength),
     /// `outline-<color>` (color token).
     OutlineColor(&'a str),
+    /// `ring` / `ring-0` / `ring-1` / `ring-2` / `ring-4` / `ring-8` / `ring-[Npx]` (focus-ring width).
+    RingWidth(f32),
+    /// `ring-<color>` (focus-ring color token).
+    RingColor(&'a str),
+    /// Tailwind `underline` / `no-underline` → CSS `text-decoration-line`.
+    Underline(bool),
+    /// `underline-offset-*` (spacing rem scale: `4` = 1rem) or `underline-offset-[2px]` / `[0.25rem]` / `[1em]`.
+    UnderlineOffset(TwLength),
     /// Tailwind `blur-*` → CSS `filter: blur(...)` (v4 `--blur-*`, logical px).
-    FilterBlur(f32),
+    FilterBlur(TwLength),
     /// Tailwind `brightness-*` → CSS `filter: brightness(...)`.
     FilterBrightness(f32),
     /// Tailwind `contrast-*` → CSS `filter: contrast(...)`.
@@ -236,7 +269,7 @@ pub enum KnownUtility<'a> {
     /// Tailwind `filter-none` / `blur-none` → clear CSS `filter`.
     FilterNone,
     /// Tailwind `backdrop-blur-*` → `backdrop-filter: blur(...)` (same v4 scale as `blur-*`).
-    BackdropBlur(f32),
+    BackdropBlur(TwLength),
     /// shadcn `shimmer` — streaming-text highlight (`background-clip: text` analog).
     Shimmer,
     /// `shimmer-once` — one sweep then settle (`shimmer-count-1`).
@@ -298,16 +331,93 @@ pub fn spacing_token_to_px(token: &str) -> Option<f32> {
     }
 }
 
+/// Tailwind spacing scale as rem (`4` → `1rem`). `px` / `Npx` stay absolute.
+fn spacing_token_to_css(token: &str) -> Option<String> {
+    if token == "px" {
+        return Some("1px".into());
+    }
+    if token == "0" {
+        return Some("0".into());
+    }
+    if let Some(n) = token.strip_suffix("px") {
+        n.parse::<f32>().ok()?;
+        return Some(token.to_string());
+    }
+    if let Some(n) = token.strip_suffix("rem") {
+        n.parse::<f32>().ok()?;
+        return Some(token.to_string());
+    }
+    if let Some(n) = token.strip_suffix("em") {
+        n.parse::<f32>().ok()?;
+        return Some(token.to_string());
+    }
+    let rem = spacing_token_to_px(token)? / 16.0;
+    Some(format_rem_css(rem))
+}
+
+fn format_rem_css(v: f32) -> String {
+    if v.abs() < 1e-8 {
+        return "0".into();
+    }
+    let s = format!("{v:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}rem")
+}
+
+/// `[2px]` / `[0.25rem]` / `[1em]`. Unitless inside brackets is not a length.
+fn parse_arbitrary_tw_length(inner: &str) -> Option<TwLength> {
+    let v = inner.trim().replace('_', "");
+    if v.is_empty() {
+        return None;
+    }
+    if let Some(n) = v.strip_suffix("px") {
+        return n.trim().parse().ok().map(TwLength::Px);
+    }
+    if let Some(n) = v.strip_suffix("rem") {
+        return n.trim().parse().ok().map(TwLength::Rem);
+    }
+    if let Some(n) = v.strip_suffix("em") {
+        return n.trim().parse().ok().map(TwLength::Em);
+    }
+    None
+}
+
+fn spacing_to_tw_length(token: &str) -> Option<TwLength> {
+    if let Some(inner) = token.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return parse_arbitrary_tw_length(inner.trim());
+    }
+    if token == "px" {
+        return Some(TwLength::Px(1.0));
+    }
+    if let Some(n) = token.strip_suffix("px") {
+        return n.parse().ok().map(TwLength::Px);
+    }
+    if let Some(n) = token.strip_suffix("rem") {
+        return n.parse().ok().map(TwLength::Rem);
+    }
+    if let Some(n) = token.strip_suffix("em") {
+        return n.parse().ok().map(TwLength::Em);
+    }
+    spacing_token_to_px(token).map(|px| TwLength::Rem(px / 16.0))
+}
+
 pub fn text_size_token_to_px(token: &str) -> Option<f32> {
+    text_size_token_to_tw(token).map(|t| t.to_px(16.0))
+}
+
+fn text_size_token_to_tw(token: &str) -> Option<TwLength> {
+    if let Some(inner) = token.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return parse_arbitrary_tw_length(inner.trim());
+    }
     match token {
-        "xs" => Some(12.0),
-        "sm" => Some(14.0),
-        "base" => Some(16.0),
-        "lg" => Some(18.0),
-        "xl" => Some(20.0),
-        "2xl" => Some(24.0),
-        "3xl" => Some(30.0),
-        "4xl" => Some(36.0),
+        "xs" => Some(TwLength::Rem(0.75)),
+        "sm" => Some(TwLength::Rem(0.875)),
+        "base" => Some(TwLength::Rem(1.0)),
+        "lg" => Some(TwLength::Rem(1.125)),
+        "xl" => Some(TwLength::Rem(1.25)),
+        "2xl" => Some(TwLength::Rem(1.5)),
+        "3xl" => Some(TwLength::Rem(1.875)),
+        "4xl" => Some(TwLength::Rem(2.25)),
         _ => None,
     }
 }
@@ -333,8 +443,7 @@ fn spacing_value(token: &str, prefix: &str) -> Option<String> {
             return Some(v);
         }
     }
-    let px = spacing_token_to_px(rest)?;
-    Some(format!("{px}px"))
+    spacing_token_to_css(rest)
 }
 
 /// Tailwind size keywords → CSS dimension strings consumed by builder / class apply.
@@ -399,9 +508,9 @@ fn negate_margin_or_translate(known: KnownUtility<'_>) -> Option<KnownUtility<'_
         KnownUtility::MarginR(v) => KnownUtility::MarginR(negate_px_string(&v)),
         KnownUtility::MarginB(v) => KnownUtility::MarginB(negate_px_string(&v)),
         KnownUtility::MarginL(v) => KnownUtility::MarginL(negate_px_string(&v)),
-        KnownUtility::TranslateX(px) => KnownUtility::TranslateX(-px),
+        KnownUtility::TranslateX(len) => KnownUtility::TranslateX(len.negated()),
         KnownUtility::TranslateXPct(p) => KnownUtility::TranslateXPct(-p),
-        KnownUtility::TranslateY(px) => KnownUtility::TranslateY(-px),
+        KnownUtility::TranslateY(len) => KnownUtility::TranslateY(len.negated()),
         KnownUtility::TranslateYPct(p) => KnownUtility::TranslateYPct(-p),
         KnownUtility::SkewX(v) => KnownUtility::SkewX(-v),
         KnownUtility::SkewY(v) => KnownUtility::SkewY(-v),
@@ -447,7 +556,7 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "overflow-hidden" => return Some(KnownUtility::Overflow("hidden")),
         "overflow-auto" => return Some(KnownUtility::Overflow("auto")),
         "overflow-scroll" => return Some(KnownUtility::Overflow("scroll")),
-        "rounded" => return Some(KnownUtility::Rounded(6.0)),
+        "rounded" => return Some(KnownUtility::Rounded(TwLength::Rem(0.375))),
         "rounded-full" => return Some(KnownUtility::RoundedFull),
         "self-auto" => return Some(KnownUtility::AlignSelf("auto")),
         "self-center" => return Some(KnownUtility::AlignSelf("center")),
@@ -529,11 +638,7 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::GapY(v));
     }
     if let Some(v) = spacing_value(token, "gap-") {
-        let px = v
-            .strip_suffix("px")
-            .and_then(|s| s.parse().ok())
-            .or_else(|| spacing_token_to_px(v.trim_end_matches("px")))?;
-        return Some(KnownUtility::Gap(px));
+        return Some(KnownUtility::Gap(v));
     }
 
     if let Some(v) = spacing_value(token, "w-") {
@@ -598,17 +703,17 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     if let Some(rest) = token.strip_prefix("rounded-") {
-        let px = match rest {
-            "none" => 0.0,
-            "sm" => 2.0,
-            "md" => 6.0,
-            "lg" => 8.0,
-            "xl" => 12.0,
-            "2xl" => 16.0,
+        let len = match rest {
+            "none" => TwLength::Px(0.0),
+            "sm" => TwLength::Rem(0.125),
+            "md" => TwLength::Rem(0.375),
+            "lg" => TwLength::Rem(0.5),
+            "xl" => TwLength::Rem(0.75),
+            "2xl" => TwLength::Rem(1.0),
             "full" => return Some(KnownUtility::RoundedFull),
-            _ => spacing_token_to_px(rest)?,
+            _ => spacing_to_tw_length(rest)?,
         };
-        return Some(KnownUtility::Rounded(px));
+        return Some(KnownUtility::Rounded(len));
     }
 
     if let Some(rest) = token.strip_prefix("text-") {
@@ -626,8 +731,8 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
             }
             _ => {}
         }
-        if let Some(px) = text_size_token_to_px(rest) {
-            return Some(KnownUtility::TextSize(px));
+        if let Some(len) = text_size_token_to_tw(rest) {
+            return Some(KnownUtility::TextSize(len));
         }
         return Some(KnownUtility::TextColor(rest));
     }
@@ -810,8 +915,8 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
 
     // Outline utilities (Tailwind v4 style)
     if let Some(rest) = token.strip_prefix("outline-offset-") {
-        let px = spacing_token_to_px(rest)?;
-        return Some(KnownUtility::OutlineOffset(px));
+        let len = spacing_to_tw_length(rest)?;
+        return Some(KnownUtility::OutlineOffset(len));
     }
     if let Some(rest) = token.strip_prefix("outline-") {
         match rest {
@@ -831,6 +936,31 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
     if token == "outline" {
         return Some(KnownUtility::OutlineStyle("solid"));
+    }
+
+    match token {
+        "underline" => return Some(KnownUtility::Underline(true)),
+        "no-underline" => return Some(KnownUtility::Underline(false)),
+        _ => {}
+    }
+    if let Some(rest) = token.strip_prefix("underline-offset-") {
+        return parse_underline_offset(rest).map(KnownUtility::UnderlineOffset);
+    }
+
+    // Focus-ring utilities (Tailwind `ring-*` → authored focus-ring width/color).
+    if token == "ring" {
+        return Some(KnownUtility::RingWidth(3.0));
+    }
+    if let Some(rest) = token.strip_prefix("ring-") {
+        if rest == "inset" || rest.starts_with("offset") {
+            return None;
+        }
+        if let Some(px) = outline_width_token(rest) {
+            return Some(KnownUtility::RingWidth(px));
+        }
+        if !rest.is_empty() {
+            return Some(KnownUtility::RingColor(rest));
+        }
     }
 
     if let Some(rest) = token.strip_prefix("shimmer-count-") {
@@ -882,28 +1012,20 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
 
     if let Some(rest) = token.strip_prefix("tracking-") {
         if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            let inner = inner.trim();
-            if let Some(raw) = inner.strip_suffix("em") {
-                let em: f32 = raw.trim().parse().ok()?;
-                return Some(KnownUtility::LetterSpacing(em * 16.0));
-            }
-            if let Some(raw) = inner.strip_suffix("px") {
-                let px: f32 = raw.trim().parse().ok()?;
-                return Some(KnownUtility::LetterSpacing(px));
-            }
-            let v: f32 = inner.parse().ok()?;
-            return Some(KnownUtility::LetterSpacing(v));
+            return parse_arbitrary_tw_length(inner.trim())
+                .or_else(|| inner.trim().parse().ok().map(TwLength::Px))
+                .map(KnownUtility::LetterSpacing);
         }
-        let px = match rest {
-            "tighter" => -0.05 * 16.0,
-            "tight" => -0.025 * 16.0,
+        let em = match rest {
+            "tighter" => -0.05,
+            "tight" => -0.025,
             "normal" => 0.0,
-            "wide" => 0.025 * 16.0,
-            "wider" => 0.05 * 16.0,
-            "widest" => 0.1 * 16.0,
+            "wide" => 0.025,
+            "wider" => 0.05,
+            "widest" => 0.1,
             _ => return None,
         };
-        return Some(KnownUtility::LetterSpacing(px));
+        return Some(KnownUtility::LetterSpacing(TwLength::Em(em)));
     }
 
     // CSS `filter` / `backdrop-filter` — Tailwind v4 `--blur-*`.
@@ -912,21 +1034,21 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
     if token == "blur" {
         // v3 default `blur` ≡ v4 `blur-sm`.
-        return Some(KnownUtility::FilterBlur(8.0));
+        return Some(KnownUtility::FilterBlur(TwLength::Px(8.0)));
     }
     if let Some(rest) = token.strip_prefix("blur-") {
         return match classify_tw_blur_rest(rest)? {
             TwBlur::None => Some(KnownUtility::FilterNone),
-            TwBlur::Px(px) => Some(KnownUtility::FilterBlur(px)),
+            TwBlur::Len(len) => Some(KnownUtility::FilterBlur(len)),
         };
     }
     if token == "backdrop-blur" {
-        return Some(KnownUtility::BackdropBlur(8.0));
+        return Some(KnownUtility::BackdropBlur(TwLength::Px(8.0)));
     }
     if let Some(rest) = token.strip_prefix("backdrop-blur-") {
         return match classify_tw_blur_rest(rest)? {
-            TwBlur::None => Some(KnownUtility::BackdropBlur(0.0)),
-            TwBlur::Px(px) => Some(KnownUtility::BackdropBlur(px)),
+            TwBlur::None => Some(KnownUtility::BackdropBlur(TwLength::Px(0.0))),
+            TwBlur::Len(len) => Some(KnownUtility::BackdropBlur(len)),
         };
     }
     if let Some(rest) = token.strip_prefix("brightness-") {
@@ -986,6 +1108,14 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     None
+}
+
+/// `underline-offset-4` → spacing rem scale. `underline-offset-[4px]` / `[0.25rem]` / `[1em]` keep the unit.
+fn parse_underline_offset(rest: &str) -> Option<TwLength> {
+    if rest == "auto" {
+        return None;
+    }
+    spacing_to_tw_length(rest)
 }
 
 fn outline_width_token(rest: &str) -> Option<f32> {
@@ -1068,34 +1198,25 @@ fn parse_translate_token(rest: &str, is_x: bool) -> Option<KnownUtility<'_>> {
                 KnownUtility::TranslateYPct(v / 100.0)
             });
         }
-        if let Some(px) = inner.strip_suffix("px") {
-            let v: f32 = px.trim().parse().ok()?;
+        if let Some(len) = parse_arbitrary_tw_length(inner) {
             return Some(if is_x {
-                KnownUtility::TranslateX(v)
+                KnownUtility::TranslateX(len)
             } else {
-                KnownUtility::TranslateY(v)
-            });
-        }
-        if let Some(rem) = inner.strip_suffix("rem") {
-            let v: f32 = rem.trim().parse().ok()?;
-            return Some(if is_x {
-                KnownUtility::TranslateX(v * 16.0)
-            } else {
-                KnownUtility::TranslateY(v * 16.0)
+                KnownUtility::TranslateY(len)
             });
         }
         let v: f32 = inner.parse().ok()?;
         return Some(if is_x {
-            KnownUtility::TranslateX(v)
+            KnownUtility::TranslateX(TwLength::Px(v))
         } else {
-            KnownUtility::TranslateY(v)
+            KnownUtility::TranslateY(TwLength::Px(v))
         });
     }
-    spacing_token_to_px(rest).map(|px| {
+    spacing_to_tw_length(rest).map(|len| {
         if is_x {
-            KnownUtility::TranslateX(px)
+            KnownUtility::TranslateX(len)
         } else {
-            KnownUtility::TranslateY(px)
+            KnownUtility::TranslateY(len)
         }
     })
 }
@@ -1145,7 +1266,7 @@ fn tailwind_v4_blur_px(scale: &str) -> Option<f32> {
 
 enum TwBlur {
     None,
-    Px(f32),
+    Len(TwLength),
 }
 
 fn classify_tw_blur_rest(rest: &str) -> Option<TwBlur> {
@@ -1153,33 +1274,29 @@ fn classify_tw_blur_rest(rest: &str) -> Option<TwBlur> {
         return Some(TwBlur::None);
     }
     if let Some(px) = tailwind_v4_blur_px(rest) {
-        return Some(TwBlur::Px(px));
+        return Some(TwBlur::Len(TwLength::Px(px)));
     }
     if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        return parse_tw_blur_arbitrary_px(inner).map(TwBlur::Px);
+        return parse_tw_blur_arbitrary(inner).map(TwBlur::Len);
     }
     if let Some(inner) = rest.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        return parse_tw_blur_custom_property_px(inner).map(TwBlur::Px);
+        return parse_tw_blur_custom_property_px(inner)
+            .map(TwLength::Px)
+            .map(TwBlur::Len);
     }
     None
 }
 
 /// `blur-[<value>]`: unitless is rem (same as RSX lengths). `1px` / `1rem` / `1em` allowed.
-fn parse_tw_blur_arbitrary_px(inner: &str) -> Option<f32> {
+fn parse_tw_blur_arbitrary(inner: &str) -> Option<TwLength> {
     let inner = inner.trim().replace('_', "");
     if inner.contains('%') {
         return None;
     }
-    if let Some(raw) = inner.strip_suffix("px") {
-        return parse_nonneg_f32(raw);
+    if let Some(len) = parse_arbitrary_tw_length(&inner) {
+        return Some(len);
     }
-    if let Some(raw) = inner.strip_suffix("rem") {
-        return parse_nonneg_f32(raw).map(|v| v * 16.0);
-    }
-    if let Some(raw) = inner.strip_suffix("em") {
-        return parse_nonneg_f32(raw).map(|v| v * 16.0);
-    }
-    parse_nonneg_f32(&inner).map(|v| v * 16.0)
+    parse_nonneg_f32(&inner).map(TwLength::Rem)
 }
 
 /// `blur-(--blur-sm)` → theme scale. Unknown custom properties are not classified.
@@ -1406,6 +1523,52 @@ mod tests {
             Some(KnownUtility::BoxContent)
         ));
         assert!(!is_known_utility("not-a-real-class"));
+        assert!(matches!(
+            classify_utility("ring"),
+            Some(KnownUtility::RingWidth(w)) if (w - 3.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("ring-2"),
+            Some(KnownUtility::RingWidth(w)) if (w - 2.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("ring-[5px]"),
+            Some(KnownUtility::RingWidth(w)) if (w - 5.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("ring-primary"),
+            Some(KnownUtility::RingColor("primary"))
+        ));
+        assert!(!is_known_utility("ring-offset-2"));
+        assert!(matches!(
+            classify_utility("underline"),
+            Some(KnownUtility::Underline(true))
+        ));
+        assert!(matches!(
+            classify_utility("no-underline"),
+            Some(KnownUtility::Underline(false))
+        ));
+        assert!(matches!(
+            classify_utility("underline-offset-4"),
+            Some(KnownUtility::UnderlineOffset(TwLength::Rem(w))) if (w - 1.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("underline-offset-[4px]"),
+            Some(KnownUtility::UnderlineOffset(TwLength::Px(w))) if (w - 4.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("underline-offset-[0.25rem]"),
+            Some(KnownUtility::UnderlineOffset(TwLength::Rem(w))) if (w - 0.25).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("underline-offset-[2px]"),
+            Some(KnownUtility::UnderlineOffset(TwLength::Px(w))) if (w - 2.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("underline-offset-[0.125em]"),
+            Some(KnownUtility::UnderlineOffset(TwLength::Em(w))) if (w - 0.125).abs() < f32::EPSILON
+        ));
+        assert!(classify_utility("underline-offset-[4]").is_none());
     }
 
     #[test]
@@ -1454,7 +1617,7 @@ mod tests {
         assert_eq!(spacing_token_to_px("full"), None);
         assert!(matches!(
             classify_utility("w-64"),
-            Some(KnownUtility::Width(ref v)) if v == "256px"
+            Some(KnownUtility::Width(ref v)) if v == "16rem"
         ));
     }
 
@@ -1580,23 +1743,23 @@ mod tests {
     fn negative_margin_and_translate() {
         assert!(matches!(
             classify_utility("-m-4"),
-            Some(KnownUtility::Margin(ref v)) if v == "-16px"
+            Some(KnownUtility::Margin(ref v)) if v == "-1rem"
         ));
         assert!(matches!(
             classify_utility("-mx-2"),
-            Some(KnownUtility::MarginX(ref v)) if v == "-8px"
+            Some(KnownUtility::MarginX(ref v)) if v == "-0.5rem"
         ));
         assert!(matches!(
             classify_utility("-mt-1"),
-            Some(KnownUtility::MarginT(ref v)) if v == "-4px"
+            Some(KnownUtility::MarginT(ref v)) if v == "-0.25rem"
         ));
         assert!(matches!(
             classify_utility("-translate-x-4"),
-            Some(KnownUtility::TranslateX(px)) if (px - (-16.0)).abs() < f32::EPSILON
+            Some(KnownUtility::TranslateX(TwLength::Rem(w))) if (w + 1.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("-translate-y-2"),
-            Some(KnownUtility::TranslateY(px)) if (px - (-8.0)).abs() < f32::EPSILON
+            Some(KnownUtility::TranslateY(TwLength::Rem(w))) if (w + 0.5).abs() < f32::EPSILON
         ));
     }
 
@@ -1604,19 +1767,19 @@ mod tests {
     fn filter_utilities_classify() {
         assert!(matches!(
             classify_utility("blur"),
-            Some(KnownUtility::FilterBlur(8.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 8.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-xs"),
-            Some(KnownUtility::FilterBlur(4.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 4.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-sm"),
-            Some(KnownUtility::FilterBlur(8.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 8.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-lg"),
-            Some(KnownUtility::FilterBlur(16.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 16.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-none"),
@@ -1624,27 +1787,27 @@ mod tests {
         ));
         assert!(matches!(
             classify_utility("blur-[10px]"),
-            Some(KnownUtility::FilterBlur(10.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 10.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-[1]"),
-            Some(KnownUtility::FilterBlur(16.0))
+            Some(KnownUtility::FilterBlur(TwLength::Rem(v))) if (v - 1.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-[1rem]"),
-            Some(KnownUtility::FilterBlur(16.0))
+            Some(KnownUtility::FilterBlur(TwLength::Rem(v))) if (v - 1.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("blur-(--blur-xl)"),
-            Some(KnownUtility::FilterBlur(24.0))
+            Some(KnownUtility::FilterBlur(TwLength::Px(v))) if (v - 24.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("backdrop-blur-sm"),
-            Some(KnownUtility::BackdropBlur(8.0))
+            Some(KnownUtility::BackdropBlur(TwLength::Px(v))) if (v - 8.0).abs() < f32::EPSILON
         ));
         assert!(matches!(
             classify_utility("backdrop-blur-none"),
-            Some(KnownUtility::BackdropBlur(px)) if px == 0.0
+            Some(KnownUtility::BackdropBlur(TwLength::Px(v))) if v == 0.0
         ));
         assert!(matches!(
             classify_utility("brightness-50"),

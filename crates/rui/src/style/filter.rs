@@ -4,7 +4,7 @@
 //! SVG [`FilterGraph`](super::svg_filter::FilterGraph) (see `svg_filter::lower_css`).
 
 use crate::layout::dimension::{
-    parse_css_angle, parse_css_dim, CssAngle, CssDim, CSS_ROOT_FONT_SIZE_PX,
+    css_root_font_size_px, parse_css_angle, parse_css_dim, CssAngle, CssDim,
 };
 
 use super::color::try_parse_color;
@@ -52,7 +52,7 @@ pub fn filter_list_paint_outset(list: &FilterList, lay_w: f32, lay_h: f32) -> f3
     fn len_px(d: &CssDim) -> f32 {
         match d {
             CssDim::Px(v) => v.abs(),
-            CssDim::Rem(v) | CssDim::Em(v) => (*v * CSS_ROOT_FONT_SIZE_PX).abs(),
+            CssDim::Rem(v) | CssDim::Em(v) => (*v * css_root_font_size_px()).abs(),
             _ => 0.0,
         }
     }
@@ -319,8 +319,8 @@ impl FilterFunction {
         match self_dim {
             None => 0.0,
             Some(CssDim::Px(v)) => (*v).max(0.0),
-            Some(CssDim::Rem(v)) => (*v * CSS_ROOT_FONT_SIZE_PX).max(0.0),
-            Some(CssDim::Em(v)) => (*v * CSS_ROOT_FONT_SIZE_PX).max(0.0),
+            Some(CssDim::Rem(v)) => (*v * css_root_font_size_px()).max(0.0),
+            Some(CssDim::Em(v)) => (*v * css_root_font_size_px()).max(0.0),
             Some(_) => 0.0,
         }
     }
@@ -476,7 +476,7 @@ fn lerp_dim(a: &CssDim, b: &CssDim, t: f32) -> Option<CssDim> {
 fn dim_to_px_simple(d: &CssDim) -> Option<f32> {
     match d {
         CssDim::Px(v) => Some(*v),
-        CssDim::Rem(v) | CssDim::Em(v) => Some(*v * CSS_ROOT_FONT_SIZE_PX),
+        CssDim::Rem(v) | CssDim::Em(v) => Some(*v * css_root_font_size_px()),
         _ => None,
     }
 }

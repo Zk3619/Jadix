@@ -109,14 +109,29 @@ impl InteractiveBuilder {
         self
     }
 
+    /// Keyboard-focusable. Also enables the shared `:focus-visible` ring (same chrome as Input).
+    /// Call [`Self::focus_ring`]`(false)` afterwards to opt out.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.el = self.el.focusable(focusable);
         self
     }
 
-    /// Opt-in keyboard focus-visible ring (same chrome as Input; not shown on mouse focus).
+    /// Shared keyboard focus-visible ring (same chrome as Input; not shown on mouse focus).
+    /// Default-on with [`Self::focusable`]`(true)`.
     pub fn focus_ring(mut self, enabled: bool) -> Self {
         self.el = self.el.focus_ring(enabled);
+        self
+    }
+
+    /// Focus-ring thickness in logical px. Overrides the theme default.
+    pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
+        self.el = self.el.ring_width(width);
+        self
+    }
+
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.el = self.el.ring_color(color);
         self
     }
 

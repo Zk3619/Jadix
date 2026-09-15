@@ -1,6 +1,55 @@
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use taffy::prelude::{CompactLength, Dimension, LengthPercentage, LengthPercentageAuto};
 
+/// Default CSS root font-size (1rem) when unset. Live value is [`css_root_font_size_px`].
 pub const CSS_ROOT_FONT_SIZE_PX: f32 = 16.0;
+
+/// 0 = uninitialized (lazy-read `RUI_FONT_SIZE` / default 16). Synced from [`crate::utils::font::set_text_defaults`].
+static ROOT_FONT_SIZE_BITS: AtomicU32 = AtomicU32::new(0);
+
+/// Current CSS root font-size in logical px (`1rem`). Same slot as [`crate::utils::font::TextDefaults::size_px`].
+#[inline]
+pub fn css_root_font_size_px() -> f32 {
+    let bits = ROOT_FONT_SIZE_BITS.load(Ordering::Relaxed);
+    if bits != 0 {
+        let v = f32::from_bits(bits);
+        if v.is_finite() && v > 0.0 {
+            return v;
+        }
+    }
+    let v = std::env::var("RUI_FONT_SIZE")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|x| x.is_finite() && *x > 0.0)
+        .unwrap_or(CSS_ROOT_FONT_SIZE_PX)
+        .max(1.0);
+    ROOT_FONT_SIZE_BITS.store(v.to_bits(), Ordering::Relaxed);
+    v
+}
+
+/// Keep rem math in lockstep with [`crate::utils::font::set_text_defaults`].
+pub(crate) fn sync_root_font_size_px(px: f32) {
+    ROOT_FONT_SIZE_BITS.store(px.max(1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Builder length: logical pixels (same as a raw `f32` / `i32` on builders).
+#[inline]
+pub fn px(v: f32) -> CssDim {
+    CssDim::Px(v)
+}
+
+/// Builder length: CSS `rem` (scales with [`css_root_font_size_px`]).
+#[inline]
+pub fn rem(v: f32) -> CssDim {
+    CssDim::Rem(v)
+}
+
+/// Builder length: CSS `em` (element font-size at layout; preview uses root).
+#[inline]
+pub fn em(v: f32) -> CssDim {
+    CssDim::Em(v)
+}
 
 /// Taffy 0.13 stores length/percent/auto as a tagged pointer, not an enum.
 /// Classify so call sites can still `match` without poking `CompactLength` tags.
@@ -140,18 +189,10 @@ pub fn parse_css_angle(s: &str) -> Option<CssAngle> {
 }
 
 fn parse_css_length_px(s: &str, em_base_px: f32) -> Option<f32> {
-    let trimmed = s.trim();
-    if let Some(raw) = trimmed.strip_suffix("px") {
-        return parse_css_number(raw);
-    }
-    if let Some(raw) = trimmed.strip_suffix("rem") {
-        return parse_css_number(raw).map(|v| v * CSS_ROOT_FONT_SIZE_PX);
-    }
-    if let Some(raw) = trimmed.strip_suffix("em") {
-        return parse_css_number(raw).map(|v| v * em_base_px);
-    }
-    // Unsuffixed numeric values default to rem (ShadCN-friendly semantics).
-    parse_css_number(trimmed).map(|v| v * CSS_ROOT_FONT_SIZE_PX)
+    let dim = parse_css_dim(s)?;
+    let ctx = UnitCtx::new(0.0, 0.0, em_base_px);
+    dim.resolve_px(&ctx, PercentAxis::Inline)
+        .or_else(|| dim.preview_dimension().and_then(dim_length_px))
 }
 
 /// Convert builder / RSX size tokens into a Taffy [`Dimension`].
@@ -163,7 +204,7 @@ fn parse_css_length_px(s: &str, em_base_px: f32) -> Option<f32> {
 /// `max-width` / `min-height` / `max-height`. `"1/2"` ≡ `"50%"` of the parent.
 ///
 /// # Unsuffixed numbers (`"100"`, `"12"`)
-/// Remain **rem** (root 16px). `"100"` is **not** `100%` — write `"100%"` for
+/// Remain **rem** ([`css_root_font_size_px`]). `"100"` is **not** `100%` — write `"100%"` for
 /// a parent-relative fraction.
 ///
 /// # Content keywords (`"fit"`, `"fit-content"`, `"min-content"`, `"max-content"`)
@@ -202,6 +243,12 @@ impl IntoDimension for &str {
         parse_css_dim(self)
             .and_then(|d| d.preview_dimension())
             .unwrap_or(Dimension::auto())
+    }
+}
+
+impl IntoDimension for CssDim {
+    fn into_dimension(self) -> Dimension {
+        self.preview_dimension().unwrap_or(Dimension::auto())
     }
 }
 
@@ -268,9 +315,9 @@ impl UnitCtx {
             font_size: if font_size.is_finite() && font_size > 0.0 {
                 font_size
             } else {
-                CSS_ROOT_FONT_SIZE_PX
+                css_root_font_size_px()
             },
-            root_font_size: CSS_ROOT_FONT_SIZE_PX,
+            root_font_size: css_root_font_size_px(),
             cb_w: None,
             cb_h: None,
             size_px: None,
@@ -377,7 +424,7 @@ impl CssDim {
             }
             Self::Px(v) => Some(Dimension::length(*v)),
             Self::Percent(p) => Some(Dimension::percent(*p)),
-            Self::Rem(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
+            Self::Rem(v) => Some(Dimension::length(*v * css_root_font_size_px())),
             _ => None,
         }
     }
@@ -388,7 +435,7 @@ impl CssDim {
             return Some(d);
         }
         match self {
-            Self::Em(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
+            Self::Em(v) => Some(Dimension::length(*v * css_root_font_size_px())),
             Self::Vw(p) | Self::Vh(p) => Some(Dimension::percent(*p)),
             Self::CalcSize { .. } | Self::Size => Some(Dimension::auto()),
             _ => None,
@@ -576,14 +623,20 @@ fn parse_css_dim_ex(s: &str, allow_size: bool) -> Option<CssDim> {
         }
         return Some(CssDim::Vh(frac));
     }
-    if let Some(raw) = s.strip_suffix("rem") {
-        return parse_css_number(raw).map(CssDim::Rem);
+    if let Some(raw) = lower.strip_suffix("rem") {
+        if let Some(v) = parse_css_number(raw) {
+            return Some(CssDim::Rem(v));
+        }
     }
-    if let Some(raw) = s.strip_suffix("em") {
-        return parse_css_number(raw).map(CssDim::Em);
+    if let Some(raw) = lower.strip_suffix("em") {
+        if let Some(v) = parse_css_number(raw) {
+            return Some(CssDim::Em(v));
+        }
     }
-    if let Some(raw) = s.strip_suffix("px") {
-        return parse_css_number(raw).map(CssDim::Px);
+    if let Some(raw) = lower.strip_suffix("px") {
+        if let Some(v) = parse_css_number(raw) {
+            return Some(CssDim::Px(v));
+        }
     }
     if allow_size {
         if let Some(n) = parse_css_number(s) {
@@ -594,7 +647,7 @@ fn parse_css_dim_ex(s: &str, allow_size: bool) -> Option<CssDim> {
     if let Some(dim) = parse_css_fraction_percent(s) {
         return Some(dim);
     }
-    // Unsuffixed number = rem (root 16px). `"100"` is 100rem, not 100% of the parent.
+    // Unsuffixed number = rem (live root). `"100"` is 100rem, not 100% of the parent.
     parse_css_number(s).map(CssDim::Rem)
 }
 
@@ -813,22 +866,24 @@ mod tests {
 
     #[test]
     fn em_resolves_against_root_16px_not_element_font_size() {
-        // IntoDimension 无节点上下文：em ≡ rem ≡ 根 16px。布局期 CssDim 用本节点 font-size。
+        // IntoDimension 无节点上下文：em ≡ rem ≡ 活根字号。布局期 CssDim 用本节点 font-size。
+        let root = css_root_font_size_px();
         match dim_kind("1em".into_dimension()) {
-            DimKind::Length(px) => assert!((px - 16.0).abs() < 1e-6, "1em → {px}"),
+            DimKind::Length(px) => assert!((px - root).abs() < 1e-6, "1em → {px}"),
             other => panic!("expected length, got {other:?}"),
         }
         match dim_kind("0.5em".into_dimension()) {
-            DimKind::Length(px) => assert!((px - 8.0).abs() < 1e-6, "0.5em → {px}"),
+            DimKind::Length(px) => assert!((px - root * 0.5).abs() < 1e-6, "0.5em → {px}"),
             other => panic!("expected length, got {other:?}"),
         }
-        assert!((IntoF32::into_f32("1.25em") - 20.0).abs() < 1e-6);
+        assert!((IntoF32::into_f32("1.25em") - root * 1.25).abs() < 1e-6);
     }
 
     #[test]
     fn into_f32_unitless_string_is_rem_like_tailwind_tokens() {
         // `text-sm` ≈ 0.875rem；字符串无单位 = rem（非 spacing scale）。
-        assert!((IntoF32::into_f32("0.875") - 14.0).abs() < 1e-6);
+        let root = css_root_font_size_px();
+        assert!((IntoF32::into_f32("0.875") - 0.875 * root).abs() < 1e-6);
         assert!((IntoF32::into_f32(14) - 14.0).abs() < 1e-6); // Rust 数值 = px
     }
 
@@ -837,7 +892,7 @@ mod tests {
         assert!((IntoF32Raw::into_f32_raw("600") - 600.0).abs() < 1e-6);
         assert!((IntoF32Raw::into_f32_raw(600) - 600.0).abs() < 1e-6);
         // 对比：长度路径会把 "600" 当 600rem
-        assert!((IntoF32::into_f32("600") - 9600.0).abs() < 1e-6);
+        assert!((IntoF32::into_f32("600") - 600.0 * css_root_font_size_px()).abs() < 1e-6);
     }
 
     #[test]
@@ -856,11 +911,12 @@ mod tests {
 
     #[test]
     fn into_f32_side_offset_parity_4_eq_4px_not_unitless_1() {
-        // Radix `sideOffset={4}` = 4px；≠ 无单位 `"1"`（1rem=16px）。
+        // Builder / RSX `{4}` = 4px；无单位 `"1"` / `"0.25"` = rem（活根字号）。
+        let root = css_root_font_size_px();
         assert!((IntoF32::into_f32(4) - IntoF32::into_f32("4px")).abs() < 1e-6);
-        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("0.25")).abs() < 1e-6);
-        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("0.25rem")).abs() < 1e-6);
-        assert!((IntoF32::into_f32("1") - 16.0).abs() < 1e-6);
+        assert!((IntoF32::into_f32("0.25") - 0.25 * root).abs() < 1e-6);
+        assert!((IntoF32::into_f32("0.25rem") - 0.25 * root).abs() < 1e-6);
+        assert!((IntoF32::into_f32("1") - root).abs() < 1e-6);
         assert!((IntoF32::into_f32(4) - IntoF32::into_f32("1")).abs() > 1.0);
     }
 
@@ -979,7 +1035,7 @@ mod tests {
         }
         match dim_kind("100".into_dimension()) {
             DimKind::Length(px) => assert!(
-                (px - 100.0 * CSS_ROOT_FONT_SIZE_PX).abs() < 1e-6,
+                (px - 100.0 * css_root_font_size_px()).abs() < 1e-6,
                 "100rem → {px}"
             ),
             other => panic!("expected length, got {other:?}"),
@@ -1159,6 +1215,33 @@ mod tests {
             .expect("eval");
         assert!((px - 40.0).abs() < 1e-3, "got {px}");
     }
+
+    #[test]
+    fn px_rem_em_helpers_and_live_root() {
+        assert!(matches!(px(4.0), CssDim::Px(v) if (v - 4.0).abs() < 1e-6));
+        assert!(matches!(rem(0.5), CssDim::Rem(v) if (v - 0.5).abs() < 1e-6));
+        assert!(matches!(em(1.25), CssDim::Em(v) if (v - 1.25).abs() < 1e-6));
+        assert!((IntoF32::into_f32(px(4.0)) - 4.0).abs() < 1e-6);
+        assert_eq!(parse_css_dim("1rem"), Some(rem(1.0)));
+        let rem1 = IntoF32::into_f32(rem(1.0));
+        let rem1_str = IntoF32::into_f32("1rem");
+        assert!(
+            (rem1_str - rem1).abs() < 1e-6,
+            "rem(1)={rem1} \"1rem\"={rem1_str} root={}",
+            css_root_font_size_px()
+        );
+        assert!(rem1 > 4.0, "1rem must not collapse to 1px, got {rem1}");
+        match dim_kind(rem(1.0).into_dimension()) {
+            DimKind::Length(px) => assert!((px - rem1).abs() < 1e-6, "1rem → {px}"),
+            other => panic!("{other:?}"),
+        }
+        let ctx = UnitCtx::new(800.0, 600.0, 24.0);
+        assert!((ctx.root_font_size - css_root_font_size_px()).abs() < 1e-6);
+        match dim_kind(CssDim::Em(2.0).to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 48.0).abs() < 1e-6, "2em@24 → {px}"),
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 pub trait IntoLengthPercentage {
@@ -1199,7 +1282,7 @@ impl IntoBorderWidths for &str {
         let parts: Vec<f32> = self
             .split_whitespace()
             .map(|p| {
-                parse_css_length_px(p, CSS_ROOT_FONT_SIZE_PX)
+                parse_css_length_px(p, css_root_font_size_px())
                     .unwrap_or(0.0)
                     .max(0.0)
             })
@@ -1229,8 +1312,9 @@ impl IntoBorderWidths for &String {
 /// Length-ish `f32` for typography / borders / blur (logical px after resolve).
 ///
 /// Tailwind / ShadCN 对齐（与 [`CssDim`] / utility 一致）：
-/// - **`&str`**：`px` / `rem` / `em`；**无单位数字 = rem**（根 16px），如 `"0.875"` → 14px
+/// - **`&str`**：`px` / `rem` / `em`；**无单位数字 = rem**（[`css_root_font_size_px`]），如 `"0.875"` → 0.875rem
 /// - **Rust 数值**（`f32` / 整数 / `f64`）：**逻辑 px**（同 Radix `sideOffset={4}`、引擎 `.w(100)`）
+/// - **[`px`] / [`rem`] / [`em`]**：显式单位（builder 推荐）
 /// - **utility class**（`p-4`）：仍走 [`rui_style_tokens`] spacing scale（`n × 0.25rem`），不经本 trait
 ///
 /// 无单位 CSS 数（`font-weight` / `flex-grow` / leading 倍率）请用 [`IntoF32Raw`]。
@@ -1252,7 +1336,17 @@ impl IntoF32 for f64 {
 
 impl IntoF32 for &str {
     fn into_f32(self) -> f32 {
-        parse_css_length_px(self, CSS_ROOT_FONT_SIZE_PX).unwrap_or(0.0)
+        parse_css_length_px(self, css_root_font_size_px()).unwrap_or(0.0)
+    }
+}
+
+impl IntoF32 for CssDim {
+    fn into_f32(self) -> f32 {
+        let root = css_root_font_size_px();
+        let ctx = UnitCtx::new(0.0, 0.0, root);
+        self.resolve_px(&ctx, PercentAxis::Inline)
+            .or_else(|| self.preview_dimension().and_then(dim_length_px))
+            .unwrap_or(0.0)
     }
 }
 

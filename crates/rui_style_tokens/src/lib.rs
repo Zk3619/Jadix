@@ -10,7 +10,7 @@ mod variant;
 
 pub use catalog::{
     classify_utility, is_known_utility, spacing_token_to_px, text_size_token_to_px,
-    FontWeightToken, KnownUtility,
+    FontWeightToken, KnownUtility, TwLength,
 };
 pub use variant::{
     parse_class_list, parse_class_token, ClassToken, ParsedClassList, VariantSelector,

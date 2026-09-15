@@ -77,8 +77,7 @@ pub fn parse_box_shadow(s: impl AsRef<str>) -> BoxShadow {
         return BoxShadow::default();
     }
 
-    // Keep in sync with `CSS_ROOT_FONT_SIZE_PX` (we avoid depending on layout module here).
-    let root_font_size_px = 16.0_f32;
+    let root_font_size_px = crate::layout::dimension::css_root_font_size_px();
 
     let mut out = BoxShadow::default();
     let mut lens: Vec<f32> = Vec::with_capacity(4);
@@ -637,6 +636,10 @@ pub struct Style {
     /// Distance between the outline and the border edge (CSS `outline-offset`).
     /// Positive = outward, negative = inward. Default 0.
     pub outline_offset: f32,
+    /// Authored focus-ring thickness in logical px. `None` = theme [`crate::style::focus_ring_width`].
+    pub focus_ring_width: Option<f32>,
+    /// Authored focus-ring color. `None` = theme token `ring` (or caller invalid/destructive).
+    pub focus_ring_color: Option<[f32; 4]>,
     /// Corner radii in CSS `border-radius` order: **`[TL, TR, BR, BL]`**.
     pub radii: [f32; 4],
     pub shadow_color: [f32; 4],
@@ -1345,6 +1348,8 @@ impl Default for Style {
             outline_color: [0.0, 0.0, 0.0, 0.0],
             outline_width: 0.0,
             outline_offset: 0.0,
+            focus_ring_width: None,
+            focus_ring_color: None,
             radii: [0.0; 4],
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             shadow_offset: [0.0, 0.0],
@@ -1416,7 +1421,11 @@ impl Style {
     }
 
     pub fn to_taffy_style(&self) -> taffy::style::Style {
-        self.to_taffy_style_with(&UnitCtx::new(0.0, 0.0, CSS_FALLBACK_FONT))
+        self.to_taffy_style_with(&UnitCtx::new(
+            0.0,
+            0.0,
+            crate::layout::dimension::css_root_font_size_px(),
+        ))
     }
 
     pub fn to_taffy_style_with(&self, ctx: &UnitCtx) -> taffy::style::Style {
@@ -1881,8 +1890,6 @@ fn zoom_rect_lpa(r: Rect<LengthPercentageAuto>, z: f32) -> Rect<LengthPercentage
         left: zoom_lpa_val(r.left, z),
     }
 }
-
-const CSS_FALLBACK_FONT: f32 = 16.0;
 
 fn lp_used(lp: LengthPercentage, cb_w: Option<f32>) -> f32 {
     match lp_kind(lp) {

@@ -5,13 +5,14 @@
 //! classes against the same catalog.
 
 use rui_style_tokens::{
-    classify_utility, parse_class_list, KnownUtility, ParsedClassList, VariantSelector,
+    classify_utility, parse_class_list, KnownUtility, ParsedClassList, TwLength, VariantSelector,
 };
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::collections::HashSet;
 
-use crate::core::tree::{Element, LayoutStatus};
+use crate::core::tree::{Element, LayoutStatus, PointerEvents};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::style::{
@@ -111,6 +112,32 @@ impl ClassSet {
             hover && is_linear_xform_utility(util)
         })
     }
+
+    /// Pointer `:hover` linear xform (not `group-hover:`). Scroll-freeze enter uses this
+    /// so a child with `group-hover:scale` does not enter from its own painted AABB.
+    pub fn has_pointer_hover_linear_xform(&self) -> bool {
+        self.variants.iter().any(|(sels, util)| {
+            let hover = sels.iter().any(|s| matches!(s, VariantSelector::Hover));
+            hover && is_linear_xform_utility(util)
+        })
+    }
+
+    /// `hover:bg-*` / `hover:text-*` / `hover:underline` (ShadCN chip / link hover).
+    pub fn has_hover_color(&self) -> bool {
+        self.variants.iter().any(|(sels, util)| {
+            let hover = sels.iter().any(|s| matches!(s, VariantSelector::Hover));
+            hover && is_hover_paint_utility(util)
+        })
+    }
+}
+
+fn is_hover_paint_utility(util: &str) -> bool {
+    let u = util.trim();
+    u.starts_with("bg-")
+        || u.starts_with("text-")
+        || u == "underline"
+        || u == "no-underline"
+        || u.starts_with("underline-offset")
 }
 
 fn is_linear_xform_utility(util: &str) -> bool {
@@ -325,6 +352,177 @@ fn apply_parsed_class_list(
     impact
 }
 
+/// Append utilities onto an existing [`ClassSet`] (does not replace user `class`).
+///
+/// Used by chip chrome to restore ShadCN `hover:` / `data-[state=…]` after
+/// [`with_class_list`] replaced the snapshot.
+pub fn extend_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
+    let extra = classes.trim();
+    if extra.is_empty() {
+        return LayoutStatus::Clean;
+    }
+    if el.class_set.is_none() {
+        return apply_class_list(el, extra);
+    }
+    let parsed = parse_class_list(extra);
+    if parsed.base.is_empty() && parsed.variants.is_empty() {
+        return LayoutStatus::Clean;
+    }
+    let mut impact = LayoutStatus::Clean;
+    for token in &parsed.base {
+        impact = impact.merge(apply_known_utility(el, token));
+    }
+    let style = el.style.as_ref().clone();
+    let text_style = el.text_style.as_ref().clone();
+    if let Some(cs) = el.class_set.as_mut() {
+        cs.base.extend(parsed.base);
+        cs.variants.extend(parsed.variants);
+        cs.base_style = Some(style);
+        cs.base_text_style = Some(text_style);
+        cs.last_ctx_fp = None;
+    }
+    let merged = match el.attrs.get("rui_utility_class") {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{} {extra}", existing.trim())
+        }
+        _ => extra.to_string(),
+    };
+    el.attrs.insert("rui_utility_class".to_string(), merged);
+    impact
+}
+
+/// Ensure `classes` hover/data-state variants exist (idempotent).
+pub fn ensure_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
+    if el.class_set.as_ref().is_some_and(ClassSet::has_hover_color) {
+        return LayoutStatus::Clean;
+    }
+    extend_class_list(el, classes)
+}
+
+/// Write rest/selected paint into the class-variant restore snapshot.
+///
+/// Chrome runs before [`resolve_class_variants`]; without this, restore would
+/// revert to build-time colors and wipe the current selected/pressed state.
+pub fn patch_class_set_base_paint(
+    el: &mut Element,
+    bg: [f32; 4],
+    fg: [u8; 4],
+    shadow: ([f32; 4], f32),
+) {
+    let radii = el.style.radii;
+    let Some(cs) = el.class_set.as_mut() else {
+        return;
+    };
+    let mut dirty = false;
+    if let Some(s) = cs.base_style.as_mut() {
+        if s.bg_color != bg {
+            s.bg_color = bg;
+            dirty = true;
+        }
+        let (sh, blur) = shadow;
+        if s.shadow_color != sh || (s.shadow_blur - blur).abs() > 0.01 {
+            s.shadow_color = sh;
+            s.shadow_blur = blur;
+            s.shadow_offset = [0.0, 0.0];
+            s.shadow_spread = 0.0;
+            dirty = true;
+        }
+        if s.radii != radii {
+            s.radii = radii;
+            dirty = true;
+        }
+    }
+    if let Some(t) = cs.base_text_style.as_mut() {
+        if t.color != Some(fg) {
+            t.color = Some(fg);
+            dirty = true;
+        }
+    }
+    if dirty {
+        cs.last_ctx_fp = None;
+    }
+}
+
+/// After ButtonGroup join rewrites inner corners, keep those radii in the restore snapshot.
+pub fn patch_class_set_base_radii(el: &mut Element) {
+    let radii = el.style.radii;
+    let Some(cs) = el.class_set.as_mut() else {
+        return;
+    };
+    let Some(s) = cs.base_style.as_mut() else {
+        return;
+    };
+    if s.radii == radii {
+        return;
+    }
+    s.radii = radii;
+    cs.last_ctx_fp = None;
+}
+
+/// Keep box-shadow in the restore snapshot (no `shadow-sm` utility).
+pub fn patch_class_set_base_shadow(el: &mut Element, color: [f32; 4], blur: f32) {
+    let Some(cs) = el.class_set.as_mut() else {
+        return;
+    };
+    let Some(s) = cs.base_style.as_mut() else {
+        return;
+    };
+    if s.shadow_color == color && (s.shadow_blur - blur).abs() <= 0.01 {
+        return;
+    }
+    s.shadow_color = color;
+    s.shadow_blur = blur;
+    s.shadow_offset = [0.0, 0.0];
+    s.shadow_spread = 0.0;
+    cs.last_ctx_fp = None;
+}
+
+/// Copy the chip's resolved text color onto descendant glyphs.
+pub const ATTR_SYNC_LABEL_FG: &str = "rui_sync_label_fg";
+
+fn sync_chip_label_fg(el: &mut Element) {
+    let parent = el.text_style.clone();
+    let sync_fg = el.attrs.get(ATTR_SYNC_LABEL_FG).map(String::as_str) == Some("1");
+    if !sync_fg && parent.underline.is_none() && parent.underline_offset.is_none() {
+        return;
+    }
+    let fg = if sync_fg { parent.color } else { None };
+    for child in &mut el.children {
+        paint_label_text_tree(child, fg, &parent);
+    }
+}
+
+fn paint_label_text_tree(el: &mut Element, fg: Option<[u8; 4]>, parent: &TextStyle) {
+    if matches!(
+        el.attrs.get("data-slot").map(String::as_str),
+        Some("kbd" | "kbd-group")
+    ) {
+        return;
+    }
+    let is_lucide = el.text_style.font_family.as_deref() == Some("lucide");
+    if el.text.is_some() {
+        if let Some(fg) = fg {
+            if !crate::style::is_variant_style_overridden(&el.attrs, VariantStyleField::Fg)
+                && el.text_style.color != Some(fg)
+            {
+                el.text_style.color = Some(fg);
+            }
+        }
+        if !is_lucide {
+            el.text_style.underline = parent.underline;
+            if parent.underline_offset.is_some() {
+                el.text_style.underline_offset = parent.underline_offset;
+            }
+            if !el.text_style.decoration_color_specified {
+                el.text_style.decoration_color = parent.decoration_color;
+            }
+        }
+    }
+    for child in &mut el.children {
+        paint_label_text_tree(child, fg, parent);
+    }
+}
+
 /// Re-apply color-related base utilities after semantic variant chroming.
 ///
 /// Variant bind can repaint container fields; utilities applied via `class` / `tw` that
@@ -355,6 +553,15 @@ pub fn reapply_class_color_overrides(el: &mut Element) -> LayoutStatus {
 
 /// Restore base snapshot and apply currently-matching variant utilities.
 pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
+    // ButtonGroup / joined ToggleGroup rewrite inner corners after build. The class
+    // snapshot is often taken *before* that join, so restore would flash full
+    // `rounded-md` on shared edges (then chrome repairs next frame). Keep the live
+    // join radii across the restore.
+    let join_chrome = el
+        .attrs
+        .contains_key("rui_button_group_edge")
+        .then(|| (el.style.radii, el.style.translate, el.style.z_index));
+
     {
         let inner = &mut *el.inner;
         let Some(cs) = inner.class_set.as_ref() else {
@@ -383,9 +590,76 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
         }
     }
     for util in apply {
-        impact = impact.merge(apply_known_utility(el, &util));
+        impact = impact.merge(apply_known_utility_ex(el, &util, false));
     }
+    if let Some((r, t, z)) = join_chrome {
+        if el.style.radii != r {
+            el.style.radii = r;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.translate != t {
+            el.style.translate = t;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.z_index != z {
+            el.style.z_index = z;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+    }
+    sync_chip_label_fg(el);
     impact
+}
+
+/// Overlay matching hover paint + linear-xform variants without restoring the snapshot.
+///
+/// Scroll-freeze must not run a full [`resolve_class_variants`]: restoring the
+/// snapshot would write rest `scale` over a mid-tween used value and kill the
+/// in-flight transition. Overlay writes the *specified* hover target; tick then
+/// retargets from the last used value (`PropertyTween::written`).
+fn apply_matching_color_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
+    let mut apply: Vec<String> = Vec::new();
+    if let Some(cs) = el.class_set.as_ref() {
+        for (sels, util) in &cs.variants {
+            if !sels.iter().all(|s| ctx.matches_selector(s)) {
+                continue;
+            }
+            if is_hover_paint_utility(util) || is_linear_xform_utility(util) {
+                apply.push(util.clone());
+            }
+        }
+    }
+    let mut impact = LayoutStatus::Clean;
+    for util in apply {
+        impact = impact.merge(apply_known_utility_ex(el, &util, false));
+    }
+    sync_chip_label_fg(el);
+    impact
+}
+
+/// Last matching `bg-*` / `text-*` variant for `ctx` (author class, CSS order).
+///
+/// Button / table-row hover paint writes variant chrome every frame. Callers overlay
+/// this so `class="hover:bg-*"` wins like Tailwind `className` after CVA.
+pub fn class_variant_color_overlay(
+    el: &Element,
+    ctx: &VariantContext<'_>,
+) -> (Option<[f32; 4]>, Option<[u8; 4]>) {
+    let mut bg = None;
+    let mut fg = None;
+    let Some(cs) = el.class_set.as_ref() else {
+        return (None, None);
+    };
+    for (sels, util) in &cs.variants {
+        if !sels.iter().all(|s| ctx.matches_selector(s)) {
+            continue;
+        }
+        match classify_utility(util) {
+            Some(KnownUtility::BgColor(name)) => bg = Some(parse_color(name)),
+            Some(KnownUtility::TextColor(name)) => fg = Some(parse_text_color(name)),
+            _ => {}
+        }
+    }
+    (bg, fg)
 }
 
 fn mix_fp(h: &mut u64, x: u64) {
@@ -456,6 +730,8 @@ pub fn sync_class_variants_subtree(
     impact: &mut LayoutStatus,
 ) {
     super::animation::begin_page_css_frame();
+    let hit_nodes =
+        crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
     sync_class_variants_subtree_inner(
         el,
         mouse_pos,
@@ -467,6 +743,7 @@ pub fn sync_class_variants_subtree(
         &[],
         [0.0_f32, 0.0],
         None,
+        &hit_nodes,
         layout_tree,
         impact,
     );
@@ -484,11 +761,13 @@ fn view_timeline_progress(el: &Element, scroll_acc: [f32; 2], viewport_h: f32) -
 }
 
 /// During smooth-scroll / scrollbar-fade frames: advance already-running CSS tweens,
-/// and **leave** stale `:hover` (content slid out from under a still cursor).
+/// **leave** stale `:hover` when content slides out from under the cursor, and apply
+/// geometric `:hover` (`hover:bg/text/underline` and `hover:scale/rotate/skew`) when
+/// content slides *onto* the cursor — same as Button `{id}_hover` during scroll.
 ///
-/// Do **not** enter new `:hover`. Content sliding *onto* a still cursor would otherwise
-/// light up every `transition-transform` tile on the gallery layout page, spawning a tween
-/// storm (`mark_hover_paint_dirty` + full redraw pump) that janks hard and flickers sidebar hover.
+/// Overlay, do not full-resolve: restoring the class snapshot would snap mid-tween
+/// `scale` back to rest. Transform enter is node-present (`push_frame_paint_element`)
+/// so it no longer FullClears the window.
 pub fn tick_active_css_transitions_subtree(
     el: &mut Element,
     mouse_pos: [f32; 2],
@@ -517,6 +796,8 @@ pub fn tick_active_css_transitions_subtree(
         ancestor_linear: crate::style::MAT2D_IDENTITY,
         ancestor_scale: [1.0, 1.0],
     }];
+    let hit_nodes =
+        crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive subtree walk of the `el` passed to this function.
         let el = unsafe { &mut *frame.ptr };
@@ -543,7 +824,17 @@ pub fn tick_active_css_transitions_subtree(
             scroll_acc,
             frame.ancestor_linear,
             frame.ancestor_scale,
+            &hit_nodes,
         );
+        let force_hover_enter = !force_leave
+            && class_hover_should_enter(
+                el,
+                mouse_pos,
+                scroll_acc,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+                &hit_nodes,
+            );
         // Culled nodes still advance in-flight tweens. Spring has duration_ms=0 so the
         // duration clock cannot "catch up" after a skip — it looks like a forced pause.
         // Settled `:hover` (no active tween) must still leave when the pointer is gone.
@@ -551,7 +842,12 @@ pub fn tick_active_css_transitions_subtree(
         // `continue` the parent or idle chrome never notes `page_css` (maximize /
         // stop-scroll then WaitUntil).
         if offscreen
-            && !(has_spin || has_css_anim || has_active_css || force_leave || el.collect_skip_live)
+            && !(has_spin
+                || has_css_anim
+                || has_active_css
+                || force_leave
+                || force_hover_enter
+                || el.collect_skip_live)
         {
             continue;
         }
@@ -570,9 +866,31 @@ pub fn tick_active_css_transitions_subtree(
         let mut local = LayoutStatus::Clean;
         if force_leave {
             local = resolve_stale_class_hover_leave(el, focused_id, dark, viewport_w);
+        } else if force_hover_enter {
+            // Seed idle transform tween slots from the used (rest) value *before*
+            // overlaying `hover:scale`. Otherwise `tick` would `or_insert` with
+            // current already at 1.5 and never start a transition.
+            if !el.transition_snapshot.has_active_tweens() && !el.style.transition.is_empty() {
+                crate::style::ensure_used_layout_from_bounds(el);
+                let _ = super::animation::tick_element_transitions_with_text_used(
+                    &mut el.inner.style,
+                    &mut el.inner.text_style,
+                    Some(&el.inner.used_layout),
+                    &mut el.inner.transition_snapshot,
+                    el.inner.animation_snapshot.lock(),
+                    frame_dt(),
+                );
+            }
+            local = resolve_scroll_hover_enter(el, focused_id, dark, viewport_w);
         }
 
-        if has_spin || has_css_anim || has_active_css || css_needs || force_leave {
+        if has_spin
+            || has_css_anim
+            || has_active_css
+            || css_needs
+            || force_leave
+            || force_hover_enter
+        {
             let before = el.style.clone();
             let spun = tick_animate_spin(el);
             let css_anim = if !defer_shell_css && (has_css_anim || !el.style.animations.is_empty())
@@ -669,7 +987,9 @@ pub fn tick_active_css_transitions_subtree(
 /// `request_redraw`. Without this wake, enter waits for an unrelated frame (scrollbar
 /// auto-hide) and leave sticks until another chrome hover forces a redraw.
 pub fn class_variant_hover_needs_frame(el: &Element, mouse_pos: [f32; 2]) -> bool {
-    class_variant_hover_needs_frame_inner(el, mouse_pos, [0.0, 0.0], None)
+    let hit_nodes =
+        crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
+    class_variant_hover_needs_frame_inner(el, mouse_pos, [0.0, 0.0], None, &hit_nodes)
 }
 
 fn class_variant_hover_needs_frame_inner(
@@ -677,6 +997,7 @@ fn class_variant_hover_needs_frame_inner(
     mouse_pos: [f32; 2],
     scroll_acc: [f32; 2],
     clip: Option<[f32; 4]>,
+    hit_nodes: &HashSet<*const Element>,
 ) -> bool {
     struct Frame<'a> {
         el: &'a Element,
@@ -713,7 +1034,7 @@ fn class_variant_hover_needs_frame_inner(
             frame.ancestor_linear,
             frame.ancestor_scale,
         );
-        let inside = pointer_inside_for_class_hover(
+        let inside = class_hover_pointer_active(
             el,
             mouse_pos,
             vis_box,
@@ -722,6 +1043,7 @@ fn class_variant_hover_needs_frame_inner(
             scroll_acc,
             frame.ancestor_linear,
             frame.ancestor_scale,
+            hit_nodes,
         );
 
         if let Some(cs) = el.class_set.as_ref() {
@@ -784,6 +1106,9 @@ fn pointer_inside_for_class_hover(
     if !(in_box && in_clip) {
         return false;
     }
+    if !el.pointer_events_mode().targets_self() {
+        return false;
+    }
     if let Some((rect, radii)) = clip_round {
         if !crate::style::rounded_rect_contains(rect, radii, mouse_pos) {
             return false;
@@ -817,11 +1142,115 @@ fn pointer_inside_for_class_hover(
             ancestor_scale,
         );
     }
-    true
+    if el.pointer_events_mode() == PointerEvents::BoundingBox {
+        return true;
+    }
+    crate::core::tree::pointer_in_paint_border_box(
+        el,
+        mouse_pos,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    )
+}
+
+/// CSS `:hover` is the exclusive hit chain ([`pointer_hit_node_set`]), not raw AABB.
+/// A claiming overlay (ColorPicker popover) must not leave covered chips hovered.
+fn class_hover_pointer_active(
+    el: &Element,
+    mouse_pos: [f32; 2],
+    vis_box: [f32; 4],
+    clip: Option<[f32; 4]>,
+    clip_round: OverflowRoundClip,
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+    hit_nodes: &HashSet<*const Element>,
+) -> bool {
+    hit_nodes.contains(&(el as *const Element))
+        && pointer_inside_for_class_hover(
+            el,
+            mouse_pos,
+            vis_box,
+            clip,
+            clip_round,
+            scroll_acc,
+            ancestor_linear,
+            ancestor_scale,
+        )
+}
+
+/// Pointer is over a chip that has geometric `:hover` paint (`hover:bg/text/underline`)
+/// and/or linear transform (`hover:scale/rotate/skew`). CSS `:hover` is geometric:
+/// content sliding under a still cursor must enter those variants on the freeze path.
+fn class_hover_should_enter(
+    el: &Element,
+    mouse_pos: [f32; 2],
+    scroll_acc: [f32; 2],
+    ancestor_linear: crate::style::Mat2d,
+    ancestor_scale: [f32; 2],
+    hit_nodes: &HashSet<*const Element>,
+) -> bool {
+    let Some(cs) = el.class_set.as_ref() else {
+        return false;
+    };
+    if !cs.has_hover_color() && !cs.has_pointer_hover_linear_xform() {
+        return false;
+    }
+    let vis_box = crate::core::tree::visual_paint_aabb_with_ancestor(
+        el,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+    );
+    class_hover_pointer_active(
+        el,
+        mouse_pos,
+        vis_box,
+        None,
+        None,
+        scroll_acc,
+        ancestor_linear,
+        ancestor_scale,
+        hit_nodes,
+    )
+}
+
+fn resolve_scroll_hover_enter(
+    el: &mut Element,
+    focused_id: &str,
+    dark: bool,
+    viewport_w: f32,
+) -> LayoutStatus {
+    let focused = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty() && id == focused_id);
+    let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
+        || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
+    let attrs_snapshot = el.attrs.clone();
+    let ctx = VariantContext {
+        hovered: true,
+        focused,
+        disabled,
+        active: false,
+        dark,
+        viewport_w,
+        group_hovered: &[],
+        peer_hovered: &[],
+        attrs: Some(&attrs_snapshot),
+    };
+    let local = apply_matching_color_class_variants(el, &ctx);
+    if let Some(cs) = el.class_set.as_mut() {
+        cs.last_pointer_hover = Some(true);
+        // Full sync after scroll must still re-fingerprint remaining variants.
+        cs.last_ctx_fp = None;
+    }
+    local
 }
 
 /// Already-hovered class variants whose paint AABB no longer contains the pointer.
-/// Used on the scroll-freeze path so springs / padding can leave without entering new hovers.
+/// Used on the scroll-freeze path so springs / padding / scale can leave.
 /// Ancestor cascade matches the live hover walks (a parent rotate this frame must leave/stay
 /// against the painted box, not last-collect stamps).
 fn class_hover_should_leave(
@@ -830,6 +1259,7 @@ fn class_hover_should_leave(
     scroll_acc: [f32; 2],
     ancestor_linear: crate::style::Mat2d,
     ancestor_scale: [f32; 2],
+    hit_nodes: &HashSet<*const Element>,
 ) -> bool {
     let Some(cs) = el.class_set.as_ref() else {
         return false;
@@ -843,7 +1273,7 @@ fn class_hover_should_leave(
         ancestor_linear,
         ancestor_scale,
     );
-    !pointer_inside_for_class_hover(
+    !class_hover_pointer_active(
         el,
         mouse_pos,
         vis_box,
@@ -852,6 +1282,7 @@ fn class_hover_should_leave(
         scroll_acc,
         ancestor_linear,
         ancestor_scale,
+        hit_nodes,
     )
 }
 
@@ -935,8 +1366,12 @@ fn record_peer_hover(
     child_clip_round: OverflowRoundClip,
     ancestor_linear: crate::style::Mat2d,
     ancestor_scale: [f32; 2],
+    hit_nodes: &HashSet<*const Element>,
 ) {
     prev_peer_owned.clear();
+    if !hit_nodes.contains(&(child as *const Element)) {
+        return;
+    }
     let child_paint = crate::core::tree::visual_paint_aabb_with_ancestor(
         child,
         child_scroll_acc,
@@ -973,6 +1408,7 @@ fn sync_class_variants_subtree_inner(
     peer_hovered: &[Option<&str>],
     scroll_acc: [f32; 2],
     clip: Option<[f32; 4]>,
+    hit_nodes: &HashSet<*const Element>,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
@@ -1089,7 +1525,8 @@ fn sync_class_variants_subtree_inner(
             // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
             // while the pointer is on the scaled ink (not the unscaled Taffy box).
             // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
-            let inside = pointer_inside_for_class_hover(
+            // Exclusive hit-path membership occludes covered siblings (portal popover).
+            let inside = class_hover_pointer_active(
                 el,
                 mouse_pos,
                 vis_box,
@@ -1098,6 +1535,7 @@ fn sync_class_variants_subtree_inner(
                 scroll_acc,
                 frame.ancestor_linear,
                 frame.ancestor_scale,
+                hit_nodes,
             );
 
             let child_clip = if is_portal {
@@ -1141,8 +1579,18 @@ fn sync_class_variants_subtree_inner(
                     .as_ref()
                     .and_then(|cs| cs.last_ctx_fp)
                     .is_some_and(|fp| fp == ctx_fp);
-                // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or spin still need a tick.
-                if !ctx_unchanged || has_spin || has_css_anim || has_active_css || css_needs {
+                // Idle transform/theme variants can skip. Hover *color* cannot: Tabs/Toggle
+                // chrome restamps rest bg/fg every frame before this pass (Button does not —
+                // it writes rest-or-hover itself). Skipping would paint rest after one flash.
+                let hover_color_needs_redraw =
+                    hovered && el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
+                if !ctx_unchanged
+                    || has_spin
+                    || has_css_anim
+                    || has_active_css
+                    || css_needs
+                    || hover_color_needs_redraw
+                {
                     let attrs_snapshot = el.attrs.clone();
                     let ctx = VariantContext {
                         hovered,
@@ -1304,6 +1752,7 @@ fn sync_class_variants_subtree_inner(
                 frame.child_clip_round,
                 frame.child_ancestor_linear,
                 frame.child_ancestor_scale,
+                hit_nodes,
             );
         }
         let i = frame.next_child;
@@ -1538,6 +1987,23 @@ fn ensure_transition_entry(el: &mut Element, prop: crate::style::TransitionPrope
 }
 
 fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
+    apply_known_utility_ex(el, token, true)
+}
+
+fn tw_px(len: TwLength) -> f32 {
+    len.to_px(crate::layout::dimension::css_root_font_size_px())
+}
+
+fn tw_dim(len: TwLength) -> crate::layout::dimension::CssDim {
+    use crate::layout::dimension::CssDim;
+    match len {
+        TwLength::Px(v) => CssDim::Px(v),
+        TwLength::Rem(v) => CssDim::Rem(v),
+        TwLength::Em(v) => CssDim::Em(v),
+    }
+}
+
+fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -> LayoutStatus {
     let Some(known) = classify_utility(token) else {
         return LayoutStatus::Clean;
     };
@@ -1594,8 +2060,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             *el = std::mem::take(el).rounded_full();
             LayoutStatus::LayoutChanged
         }
-        KnownUtility::Rounded(px) => {
-            *el = std::mem::take(el).rounded(px);
+        KnownUtility::Rounded(len) => {
+            *el = std::mem::take(el).rounded(tw_px(len));
             LayoutStatus::LayoutChanged
         }
         KnownUtility::GridCols(n) => {
@@ -1618,8 +2084,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             *el = std::mem::take(el).gap_y(v.as_str());
             LayoutStatus::LayoutChanged
         }
-        KnownUtility::Gap(px) => {
-            *el = std::mem::take(el).gap(px);
+        KnownUtility::Gap(v) => {
+            *el = std::mem::take(el).gap(v.as_str());
             LayoutStatus::LayoutChanged
         }
         KnownUtility::Width(v) => {
@@ -1704,7 +2170,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::BgColor(name) => {
             let color = parse_color(name);
-            mark_variant_style_override(el, VariantStyleField::Bg);
+            if mark_overrides {
+                mark_variant_style_override(el, VariantStyleField::Bg);
+            }
             if el.style.bg_color != color {
                 el.style.bg_color = color;
                 LayoutStatus::StyleChanged
@@ -1714,7 +2182,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::TextColor(name) => {
             let color = parse_text_color(name);
-            mark_variant_style_override(el, VariantStyleField::Fg);
+            if mark_overrides {
+                mark_variant_style_override(el, VariantStyleField::Fg);
+            }
             if el.text_style.color != Some(color) {
                 el.text_style.color = Some(color);
                 LayoutStatus::StyleChanged
@@ -1722,7 +2192,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
-        KnownUtility::TextSize(px) => {
+        KnownUtility::TextSize(len) => {
+            let px = tw_px(len);
             if el.text_style.size != Some(px) {
                 el.text_style.size = Some(px);
                 LayoutStatus::LayoutChanged
@@ -1770,7 +2241,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::Leading(scale) => {
-            mark_variant_style_override(el, VariantStyleField::Leading);
+            if mark_overrides {
+                mark_variant_style_override(el, VariantStyleField::Leading);
+            }
             let next = scale.max(0.01);
             if el.text_style.line_height_scale == Some(next)
                 && el.text_style.line_height_px.is_none()
@@ -1795,7 +2268,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
-        KnownUtility::TranslateX(px) => {
+        KnownUtility::TranslateX(len) => {
+            let px = tw_px(len);
             if (el.style.translate[0] - px).abs() > f32::EPSILON {
                 el.style.translate[0] = px;
                 LayoutStatus::StyleChanged
@@ -1811,7 +2285,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
-        KnownUtility::TranslateY(px) => {
+        KnownUtility::TranslateY(len) => {
+            let px = tw_px(len);
             if (el.style.translate[1] - px).abs() > f32::EPSILON {
                 el.style.translate[1] = px;
                 LayoutStatus::StyleChanged
@@ -2017,7 +2492,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             g.as_linear_mut().set_to(color);
             LayoutStatus::StyleChanged
         }
-        KnownUtility::LetterSpacing(px) => {
+        KnownUtility::LetterSpacing(len) => {
+            let px = tw_px(len);
             el.text_style.letter_spacing_specified = true;
             if (el.text_style.letter_spacing - px).abs() > f32::EPSILON {
                 el.text_style.letter_spacing = px;
@@ -2190,7 +2666,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::StyleChanged
             }
         }
-        KnownUtility::OutlineOffset(px) => {
+        KnownUtility::OutlineOffset(len) => {
+            let px = tw_px(len);
             if (el.style.outline_offset - px).abs() < f32::EPSILON {
                 LayoutStatus::Clean
             } else {
@@ -2207,6 +2684,46 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::StyleChanged
             }
         }
+        KnownUtility::RingWidth(px) => {
+            let px = px.max(0.0);
+            if el.style.focus_ring_width == Some(px) {
+                LayoutStatus::Clean
+            } else {
+                el.style.focus_ring_width = Some(px);
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::RingColor(c) => {
+            let color = parse_color(c);
+            if el.style.focus_ring_color == Some(color) {
+                LayoutStatus::Clean
+            } else {
+                el.style.focus_ring_color = Some(color);
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::Underline(on) => {
+            if el.text_style.underline == Some(on) {
+                LayoutStatus::Clean
+            } else {
+                el.text_style.underline = Some(on);
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::UnderlineOffset(len) => {
+            let px = tw_px(len).max(0.0);
+            // Initial class apply (`mark_overrides`): don't clobber an already-authored offset
+            // (author `underline-offset-[2px]` / `.text_underline_offset()` before CVA).
+            // Variant re-resolve must still apply `hover:underline-offset-*`.
+            if mark_overrides && el.text_style.underline_offset.is_some() {
+                LayoutStatus::Clean
+            } else if el.text_style.underline_offset == Some(px) {
+                LayoutStatus::Clean
+            } else {
+                el.text_style.underline_offset = Some(px);
+                LayoutStatus::StyleChanged
+            }
+        }
         KnownUtility::FilterNone => {
             if el.style.filter.is_none() {
                 LayoutStatus::Clean
@@ -2215,12 +2732,11 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::StyleChanged
             }
         }
-        KnownUtility::FilterBlur(px) => set_single_filter(
-            el,
-            crate::style::FilterFunction::Blur(Some(crate::layout::dimension::CssDim::Px(px))),
-        ),
-        KnownUtility::BackdropBlur(px) => {
-            let px = px.max(0.0);
+        KnownUtility::FilterBlur(len) => {
+            set_single_filter(el, crate::style::FilterFunction::Blur(Some(tw_dim(len))))
+        }
+        KnownUtility::BackdropBlur(len) => {
+            let px = tw_px(len).max(0.0);
             if (el.style.backdrop_blur - px).abs() < 1e-4 {
                 LayoutStatus::Clean
             } else {
@@ -2413,6 +2929,29 @@ mod tests {
     }
 
     #[test]
+    fn apply_p4_is_rem_and_arbitrary_px_keeps_unit() {
+        let pad = |el: &Element| match crate::layout::lp_kind(el.style.to_taffy_style().padding.top)
+        {
+            crate::layout::DimKind::Length(px) => px,
+            other => panic!("{other:?}"),
+        };
+        let mut el = Element::new();
+        apply_class_list(&mut el, "p-4");
+        let root = crate::layout::dimension::css_root_font_size_px();
+        assert!(
+            (pad(&el) - root).abs() < 0.01,
+            "p-4 is 1rem = {root}px, got {}",
+            pad(&el)
+        );
+        let mut el_px = Element::new();
+        apply_class_list(&mut el_px, "underline-offset-[2px]");
+        assert_eq!(el_px.text_style.underline_offset, Some(2.0));
+        let mut el_em = Element::new();
+        apply_class_list(&mut el_em, "underline-offset-[0.125em]");
+        assert!((el_em.text_style.underline_offset.unwrap_or(0.0) - root * 0.125).abs() < 0.01);
+    }
+
+    #[test]
     fn apply_base_and_store_variants() {
         let mut el = Element::new();
         let impact = apply_class_list(&mut el, "flex p-4 hover:bg-accent dark:bg-primary");
@@ -2435,6 +2974,190 @@ mod tests {
             },
         );
         assert_ne!(el.style.bg_color, base_bg);
+    }
+
+    #[test]
+    fn class_variant_color_overlay_hover_bg_last_wins() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "hover:bg-muted hover:bg-accent");
+        let attrs = el.attrs.clone();
+        let (bg, fg) = class_variant_color_overlay(
+            &el,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(bg, Some(parse_color("accent")));
+        assert_eq!(fg, None);
+
+        let (rest_bg, _) = class_variant_color_overlay(
+            &el,
+            &VariantContext {
+                hovered: false,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(rest_bg, None, "hover:bg must not overlay while not hovered");
+    }
+
+    #[test]
+    fn hover_color_variants_redraw_after_chrome_rest_stamp() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "bg-transparent hover:bg-muted");
+        el.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [10.0, 10.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        let hover_bg = parse_color("muted");
+        assert_eq!(el.style.bg_color, hover_bg);
+        el.style.bg_color = parse_color("transparent");
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [10.0, 10.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            el.style.bg_color, hover_bg,
+            "still-hovered hover:bg must re-apply after chrome writes rest"
+        );
+    }
+
+    #[test]
+    fn claiming_overlay_blocks_class_hover_on_content_below() {
+        // Outline Button / DatePicker trigger hover is `hover:bg-accent`, resolved by
+        // geometric class sync — not `on_hover`. A claiming overlay must occlude it.
+        let mut below = Element::new();
+        apply_class_list(&mut below, "bg-transparent hover:bg-accent");
+        below.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        below.focus_id = Some("gal-date:trigger".into());
+
+        let mut overlay = Element::new().on_click(|| {});
+        overlay.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        overlay.style.z_index = 1000;
+
+        let mut root = Element::new().child(below).child(overlay);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            [50.0, 50.0],
+            "",
+            false,
+            200.0,
+            200.0,
+            &mut tree,
+            &mut impact,
+        );
+        let below = &root.children[0];
+        assert_ne!(
+            below
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "covered trigger must not sample :hover while a claiming overlay is on top"
+        );
+        assert!(
+            below.style.bg_color[3] < 0.01,
+            "covered trigger must keep rest (transparent) bg, got {:?}",
+            below.style.bg_color
+        );
+    }
+
+    #[test]
+    fn hover_variant_does_not_lock_chrome_override() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "hover:bg-muted");
+        let attrs = el.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !crate::style::is_variant_style_overridden(&el.attrs, VariantStyleField::Bg),
+            "hover: utilities must not stamp rui_override_bg (chrome still owns rest)"
+        );
+    }
+
+    #[test]
+    fn join_radii_survive_class_restore() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "rounded-md hover:bg-accent");
+        el.set_attr("rui_button_group_edge", "middle");
+        el.style.radii = [0.0; 4];
+        let attrs = el.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            el.style.radii, [0.0; 4],
+            "joined inner corners must stay square across hover: restore"
+        );
+
+        let mut start = Element::new();
+        apply_class_list(&mut start, "rounded-md hover:bg-accent");
+        start.set_attr("rui_button_group_edge", "start");
+        start.style.radii = [6.0, 6.0, 0.0, 0.0];
+        let attrs = start.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut start,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            start.style.radii,
+            [6.0, 6.0, 0.0, 0.0],
+            "joined start must keep outer rounds and inner squares"
+        );
+    }
+
+    #[test]
+    fn data_state_on_wins_over_hover_bg() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "hover:bg-muted data-[state=on]:bg-accent");
+        el.set_attr("data-state", "on");
+        let attrs = el.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.bg_color, parse_color("accent"));
     }
 
     #[test]
@@ -2498,7 +3221,7 @@ mod tests {
         apply_class_list(&mut el, "blur-[1]");
         assert_eq!(
             el.style.filter,
-            Some(vec![FilterFunction::Blur(Some(CssDim::Px(16.0)))])
+            Some(vec![FilterFunction::Blur(Some(CssDim::Rem(1.0)))])
         );
 
         apply_class_list(&mut el, "blur-(--blur-xs)");
@@ -2869,6 +3592,7 @@ mod p1_utility_tests {
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         let content_clip = Some([208.0, 0.0, 600.0, 800.0]);
+        let hit_nodes = crate::app::pointer_events::pointer_hit_node_set(&tile, 40.0, 100.0);
         sync_class_variants_subtree_inner(
             &mut tile,
             [40.0, 100.0],
@@ -2880,6 +3604,7 @@ mod p1_utility_tests {
             &[],
             [0.0, 0.0],
             content_clip,
+            &hit_nodes,
             &mut tree,
             &mut impact,
         );
@@ -2957,10 +3682,9 @@ mod p1_utility_tests {
     }
 
     #[test]
-    fn scroll_paint_freeze_does_not_start_hover_tween_from_pointer() {
-        // scroll_paint_only path must not *enter* :hover — a tile under the pointer
-        // should stay idle if it was never hovered via a full sync. Leave of an
-        // already-hovered tile is allowed (see scroll_paint_freeze_leaves_stale_hover_spring).
+    fn scroll_paint_applies_hover_scale_from_pointer() {
+        // CSS `:hover` is geometric: a tile sliding under a still cursor must enter
+        // `hover:scale` on the freeze path (same overlay as color, no snapshot restore).
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut tile = Element::new();
@@ -2983,13 +3707,137 @@ mod p1_utility_tests {
             &mut impact,
         );
         assert!(
-            (tile.style.scale[0] - 1.0).abs() < 0.01,
-            "freeze path must not apply hover:scale, got {:?}",
-            tile.style.scale
+            tile.transition_snapshot.has_active_tweens(),
+            "geometric :hover must start a transform tween on the freeze path"
         );
         assert!(
-            !tile.transition_snapshot.has_active_tweens(),
-            "freeze path must not start a tween from pointer geometry"
+            (tile.style.scale[0] - 1.0).abs() < 0.01,
+            "t=0 sample must hold rest scale, got {:?}",
+            tile.style.scale
+        );
+        crate::style::advance_css_transition_timeline_ms(80.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut tile,
+            [432.0, 232.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert!(
+            tile.style.scale[0] > 1.01 && tile.style.scale[0] < 1.5,
+            "freeze path must advance hover:scale after enter, got {:?}",
+            tile.style.scale
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn scroll_paint_freeze_applies_hover_color_from_pointer() {
+        // CSS `:hover` is geometric: content sliding under a still cursor must
+        // pick up hover:bg on the freeze path (Tabs / Toggle / ToggleGroup).
+        let mut chip = Element::new();
+        apply_class_list(&mut chip, "bg-transparent hover:bg-muted");
+        chip.layout_bounds = [400.0, 200.0, 80.0, 32.0];
+        let rest = chip.style.bg_color;
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        let hover_bg = parse_color("muted");
+        assert_eq!(
+            chip.style.bg_color, hover_bg,
+            "freeze path must apply hover:bg when the pointer is over the chip"
+        );
+        assert_ne!(chip.style.bg_color, rest);
+        assert!(chip
+            .class_set
+            .as_ref()
+            .is_some_and(|cs| cs.last_pointer_hover == Some(true)));
+
+        impact = LayoutStatus::Clean;
+        chip.style.bg_color = parse_color("transparent");
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            chip.style.bg_color, hover_bg,
+            "freeze path must re-apply hover:bg after chrome restamps rest"
+        );
+    }
+
+    #[test]
+    fn scroll_paint_applies_color_and_scale_hover() {
+        let mut chip = Element::new();
+        apply_class_list(
+            &mut chip,
+            "bg-transparent scale-100 transition-transform hover:bg-muted hover:scale-x-150",
+        );
+        chip.layout_bounds = [400.0, 200.0, 80.0, 32.0];
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(chip.style.bg_color, parse_color("muted"));
+        assert!(
+            chip.transition_snapshot.has_active_tweens(),
+            "color+scale hover must start a transform tween on the freeze path"
+        );
+        assert!(
+            (chip.style.scale[0] - 1.0).abs() < 0.01,
+            "t=0 sample must hold rest scale alongside color hover, scale={:?}",
+            chip.style.scale
+        );
+        crate::style::advance_css_transition_timeline_ms(80.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(chip.style.bg_color, parse_color("muted"));
+        assert!(
+            chip.style.scale[0] > 1.01 && chip.style.scale[0] < 1.5,
+            "freeze path must advance hover:scale with color hover, scale={:?}",
+            chip.style.scale
         );
         crate::style::set_css_transition_virtual_timeline(false);
     }
@@ -3234,8 +4082,9 @@ mod p1_utility_tests {
 
     #[test]
     fn scroll_paint_freeze_leaves_stale_hover_spring() {
-        // Wheel can slide a hovered tile out from under a still cursor. Freeze must not
-        // enter new hovers, but it must retarget the already-hovered spring back to rest.
+        // Wheel can slide a hovered tile out from under a still cursor. Freeze enters
+        // geometric `:hover` (including scale), and must retarget the spring back to rest
+        // when the painted AABB no longer contains the pointer.
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut tile = Element::new().transition("transform spring()");
@@ -3542,6 +4391,54 @@ mod p1_utility_tests {
             el.style.rotate_deg
         );
         crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn class_hover_rotate_45_misses_aabb_corner() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "bg-transparent hover:bg-muted");
+        el.layout_bounds = [0.0, 0.0, 80.0, 80.0];
+        el.style.rotate_deg = 45.0;
+        let rest = el.style.bg_color;
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [80.0, 0.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            el.style.bg_color, rest,
+            "AABB empty corner of a 45° tile must not enter geometric :hover"
+        );
+        let ink = crate::core::tree::layout_local_to_paint_world(
+            &el,
+            [40.0, 40.0],
+            [0.0, 0.0],
+            crate::style::MAT2D_IDENTITY,
+            [1.0, 1.0],
+        );
+        impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [ink[0], ink[1]],
+            "",
+            false,
+            1024.0,
+            800.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            el.style.bg_color,
+            parse_color("muted"),
+            "painted diamond center must still enter :hover"
+        );
     }
 
     #[test]

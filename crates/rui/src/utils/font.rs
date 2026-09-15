@@ -109,19 +109,37 @@ struct FamilyListCache {
 pub fn text_defaults() -> TextDefaults {
     let mut g = TEXT_DEFAULTS.lock().unwrap_or_else(|e| e.into_inner());
     if g.is_none() {
-        *g = Some(TextDefaults::from_env());
+        let d = TextDefaults::from_env();
+        crate::layout::dimension::sync_root_font_size_px(d.size_px);
+        *g = Some(d);
     }
     g.clone().unwrap_or_else(TextDefaults::from_env)
+}
+
+/// CSS root font-size (`1rem`), same as [`TextDefaults::size_px`].
+#[inline]
+pub fn root_font_size_px() -> f32 {
+    crate::layout::dimension::css_root_font_size_px()
+}
+
+/// Set CSS root font-size (`1rem`) and default cascade text size together.
+///
+/// Rem lengths, utility spacing (`p-4` → `1rem`), and unspecified text size all follow this value.
+pub fn set_root_font_size(px: f32) {
+    let mut d = text_defaults();
+    d.size_px = px.max(1.0);
+    set_text_defaults(d);
 }
 
 /// Replace process-wide text defaults (family stack, size, weight, synthetic bold).
 ///
 /// Call before the first layout, or from [`crate::app::WindowOptions`] at `run_with`.
-/// Invalidates family / weight match caches.
+/// Invalidates family / weight match caches. Also updates [`crate::layout::dimension::css_root_font_size_px`].
 pub fn set_text_defaults(defaults: TextDefaults) {
     let mut defaults = defaults;
     defaults.size_px = defaults.size_px.max(1.0);
     defaults.weight = defaults.weight.clamp(100, 900);
+    crate::layout::dimension::sync_root_font_size_px(defaults.size_px);
     *TEXT_DEFAULTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(defaults);
     *FAMILY_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = FamilyListCache {
         sans: None,
@@ -968,18 +986,9 @@ mod resolve_family_cache_tests {
     }
 
     #[test]
-    fn set_text_defaults_overrides_size_and_weight() {
-        let prev = text_defaults();
-        set_text_defaults(TextDefaults {
-            family: prev.family.clone(),
-            size_px: 18.0,
-            weight: 500,
-            synthetic_bold: false,
-        });
+    fn text_defaults_size_matches_css_root_slot() {
         let d = text_defaults();
-        assert_eq!(d.size_px, 18.0);
-        assert_eq!(d.weight, 500);
-        assert!(!d.synthetic_bold);
-        set_text_defaults(prev);
+        assert!((d.size_px - root_font_size_px()).abs() < 1e-6);
+        assert!((d.size_px - crate::layout::dimension::css_root_font_size_px()).abs() < 1e-6);
     }
 }

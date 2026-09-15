@@ -5,7 +5,7 @@
 //! 做透明度合成，**不在此硬编码采样 hex**。
 //!
 //! 支持运行时浅色 / 深色切换；[`get_theme`] 读取当前主题，[`set_theme_mode`] 切换。
-//! 焦点环几何由 [`FocusRingStyle`] 配置（Hard / Soft），与配色 token 分离。
+//! 焦点环由 [`FocusRingStyle`]（Hard / Soft）+ [`Theme::focus_ring_width`] 配置，颜色走 token `ring`。
 
 use std::cell::RefCell;
 
@@ -18,13 +18,16 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// Default Hard spread / Soft blur in logical px (ShadCN `ring-[3px]`).
+pub const DEFAULT_FOCUS_RING_WIDTH: f32 = 3.0;
+
 /// Theme-level focus-ring geometry (ShadCN v4 Hard vs RUI Soft glow).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FocusRingStyle {
-    /// ShadCN v4：硬边 `spread=3`, `blur=0`.
+    /// Hard edge: `spread = `[`Theme::focus_ring_width`], `blur = 0`.
     #[default]
     Hard,
-    /// 柔光：`blur=3`, `spread=0`.
+    /// Soft glow: `blur = `[`Theme::focus_ring_width`], `spread = 0`.
     Soft,
 }
 
@@ -55,7 +58,7 @@ pub struct DesignTokens {
     pub warning: [f32; 4],
     pub border: [f32; 4],
     pub input: [f32; 4],
-    /// `ring-ring/50` 色（几何由 [`FocusRingStyle`] 决定）。
+    /// `ring` 色（几何由 [`FocusRingStyle`] + [`Theme::focus_ring_width`] 决定）。
     pub ring: [f32; 4],
     pub chart_1: [f32; 4],
     pub chart_2: [f32; 4],
@@ -132,6 +135,8 @@ pub struct Theme {
     pub mode: ThemeMode,
     pub colors: DesignTokens,
     pub focus_ring_style: FocusRingStyle,
+    /// Logical px used as Hard `spread` or Soft `blur`. Default [`DEFAULT_FOCUS_RING_WIDTH`].
+    pub focus_ring_width: f32,
 }
 
 impl Theme {
@@ -143,6 +148,7 @@ impl Theme {
         Self {
             mode: ThemeMode::Light,
             focus_ring_style: FocusRingStyle::Hard,
+            focus_ring_width: DEFAULT_FOCUS_RING_WIDTH,
             colors: DesignTokens {
                 background,
                 foreground,
@@ -207,6 +213,7 @@ impl Theme {
         Self {
             mode: ThemeMode::Dark,
             focus_ring_style: FocusRingStyle::Hard,
+            focus_ring_width: DEFAULT_FOCUS_RING_WIDTH,
             colors: DesignTokens {
                 background,
                 foreground,
@@ -298,21 +305,32 @@ pub fn focus_ring_style() -> FocusRingStyle {
     CURRENT_THEME.with(|t| t.borrow().focus_ring_style)
 }
 
+/// Theme focus-ring thickness in logical px (Hard spread / Soft blur).
+pub fn focus_ring_width() -> f32 {
+    CURRENT_THEME.with(|t| t.borrow().focus_ring_width)
+}
+
 /// Set focus-ring geometry without replacing color tokens.
 pub fn set_focus_ring_style(style: FocusRingStyle) {
     CURRENT_THEME.with(|t| t.borrow_mut().focus_ring_style = style);
+}
+
+/// Set theme focus-ring thickness (logical px; clamped ≥ 0).
+pub fn set_focus_ring_width(width: f32) {
+    CURRENT_THEME.with(|t| t.borrow_mut().focus_ring_width = width.max(0.0));
 }
 
 pub fn set_theme(theme: Theme) {
     CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
 }
 
-/// Switch light/dark tokens while preserving the current [`FocusRingStyle`] unless
-/// [`ThemeOverrides::focus_ring_style`] is set.
+/// Switch light/dark tokens while preserving the current [`FocusRingStyle`] /
+/// width unless [`ThemeOverrides`] sets them.
 pub fn set_theme_mode(mode: ThemeMode) {
     let fallback_ring = focus_ring_style();
+    let fallback_width = focus_ring_width();
     let mut next = crate::style::theme_override::compose_theme(mode);
-    crate::style::theme_override::apply_stored_focus_ring(&mut next, fallback_ring);
+    crate::style::theme_override::apply_stored_focus_ring(&mut next, fallback_ring, fallback_width);
     set_theme(next);
 }
 
@@ -333,12 +351,17 @@ mod tests {
     fn set_theme_mode_preserves_focus_ring_style() {
         let prev_mode = theme_mode();
         let prev_style = focus_ring_style();
+        let prev_width = focus_ring_width();
         set_focus_ring_style(FocusRingStyle::Soft);
+        set_focus_ring_width(8.0);
         set_theme_mode(ThemeMode::Dark);
         assert_eq!(focus_ring_style(), FocusRingStyle::Soft);
+        assert!((focus_ring_width() - 8.0).abs() < f32::EPSILON);
         set_theme_mode(ThemeMode::Light);
         assert_eq!(focus_ring_style(), FocusRingStyle::Soft);
+        assert!((focus_ring_width() - 8.0).abs() < f32::EPSILON);
         set_focus_ring_style(prev_style);
+        set_focus_ring_width(prev_width);
         set_theme_mode(prev_mode);
     }
 

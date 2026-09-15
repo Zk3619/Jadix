@@ -111,6 +111,9 @@ pub struct ThemeOverrides {
     pub light: DesignTokensPatch,
     pub dark: DesignTokensPatch,
     pub focus_ring_style: Option<String>,
+    /// Logical px; Hard spread / Soft blur. Alias `focus-ring-width`.
+    #[serde(alias = "focus-ring-width")]
+    pub focus_ring_width: Option<f32>,
 }
 
 /// Compose built-in defaults + stored user patch for `mode`.
@@ -200,16 +203,29 @@ pub(crate) fn restore_theme_overrides(overrides: ThemeOverrides) {
 }
 
 pub(crate) fn refresh_active_theme() {
-    let fallback_ring = get_theme().focus_ring_style;
+    let t = get_theme();
+    let fallback_ring = t.focus_ring_style;
+    let fallback_width = t.focus_ring_width;
     let mode = theme_mode();
     let mut next = compose_theme(mode);
-    apply_stored_focus_ring(&mut next, fallback_ring);
+    apply_stored_focus_ring(&mut next, fallback_ring, fallback_width);
     set_theme(next);
 }
 
-pub(crate) fn apply_stored_focus_ring(theme: &mut Theme, fallback: FocusRingStyle) {
-    let override_style = USER_OVERRIDES.with(|o| o.borrow().focus_ring_style.clone());
-    theme.focus_ring_style = parse_focus_ring_style(override_style.as_deref()).unwrap_or(fallback);
+pub(crate) fn apply_stored_focus_ring(
+    theme: &mut Theme,
+    fallback_style: FocusRingStyle,
+    fallback_width: f32,
+) {
+    let (override_style, override_width) = USER_OVERRIDES.with(|o| {
+        let o = o.borrow();
+        (o.focus_ring_style.clone(), o.focus_ring_width)
+    });
+    theme.focus_ring_style =
+        parse_focus_ring_style(override_style.as_deref()).unwrap_or(fallback_style);
+    theme.focus_ring_width = override_width
+        .map(|w| w.max(0.0))
+        .unwrap_or(fallback_width.max(0.0));
 }
 
 fn validate_patch(
@@ -296,6 +312,7 @@ fn resolve_patch_color(raw: &str, tokens: &DesignTokens) -> Option<[f32; 4]> {
     set_theme(Theme {
         mode: prior.mode,
         focus_ring_style: prior.focus_ring_style,
+        focus_ring_width: prior.focus_ring_width,
         colors: *tokens,
     });
     let resolved = try_parse_color(raw);
@@ -362,6 +379,38 @@ mod tests {
         assert!(patch.light.destructive.is_some());
         assert!(patch.light.warning.is_some());
         assert!(patch.dark.primary.is_some());
+    }
+
+    #[test]
+    fn toml_focus_ring_width_and_style() {
+        let raw = r#"
+            focus_ring_style = "soft"
+            focus-ring-width = 8
+            [light]
+            ring = "oklch(0.5 0.1 250 / 0.5)"
+        "#;
+        let patch = parse_theme_overrides_str(raw).expect("toml");
+        assert_eq!(patch.focus_ring_style.as_deref(), Some("soft"));
+        assert_eq!(patch.focus_ring_width, Some(8.0));
+        assert!(patch.light.ring.is_some());
+    }
+
+    #[test]
+    fn install_focus_ring_width_updates_theme() {
+        crate::style::clear_theme_overrides();
+        let prev_style = crate::style::focus_ring_style();
+        let prev_width = crate::style::focus_ring_width();
+        let overrides = ThemeOverrides {
+            focus_ring_style: Some("soft".into()),
+            focus_ring_width: Some(8.0),
+            ..Default::default()
+        };
+        install_theme_overrides(overrides).expect("install");
+        assert_eq!(crate::style::focus_ring_style(), FocusRingStyle::Soft);
+        assert!((crate::style::focus_ring_width() - 8.0).abs() < f32::EPSILON);
+        crate::style::clear_theme_overrides();
+        crate::style::set_focus_ring_style(prev_style);
+        crate::style::set_focus_ring_width(prev_width);
     }
 
     #[test]

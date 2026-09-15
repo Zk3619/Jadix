@@ -1,6 +1,6 @@
 //! Lower CSS `filter` function lists into SVG [`FilterGraph`]s (Filter Effects L1).
 
-use crate::layout::dimension::{CssDim, CSS_ROOT_FONT_SIZE_PX};
+use crate::layout::dimension::{css_root_font_size_px, CssDim};
 use crate::style::filter::{FilterFunction, FilterList};
 
 use super::graph::{
@@ -11,8 +11,8 @@ use super::graph::{
 fn dim_to_px(d: &CssDim) -> f32 {
     match d {
         CssDim::Px(v) => *v,
-        CssDim::Rem(v) | CssDim::Em(v) => *v * CSS_ROOT_FONT_SIZE_PX,
-        CssDim::Percent(v) => *v * CSS_ROOT_FONT_SIZE_PX, // rare for blur; treat as rem-ish
+        CssDim::Rem(v) | CssDim::Em(v) => *v * css_root_font_size_px(),
+        CssDim::Percent(v) => *v * css_root_font_size_px(), // rare for blur; treat as rem-ish
         _ => 0.0,
     }
 }

@@ -451,6 +451,16 @@ impl BoxBuilder {
         self.el = self.el.outline_width(width);
         self
     }
+    /// Focus-ring thickness in logical px. Overrides the theme default.
+    pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
+        self.el = self.el.ring_width(width);
+        self
+    }
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.el = self.el.ring_color(color);
+        self
+    }
 
     pub fn rounded(mut self, radius: impl IntoF32) -> Self {
         self.el = self.el.rounded(radius);

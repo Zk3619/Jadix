@@ -95,6 +95,7 @@ pub use filter::{
 pub use focus_ring::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
+    focus_ring_params_for, focus_ring_params_for_style, focus_ring_resolved_color,
     focus_ring_shadow_matches, focus_ring_shadow_matches_color, sync_focus_ring_subtree,
     FOCUS_RING_BLUR, FOCUS_RING_HARD_SPREAD, FOCUS_RING_SOFT_BLUR,
 };
@@ -150,8 +151,9 @@ pub use text_style::{
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
 pub use theme::{
-    focus_ring_style, get_theme, is_dark_theme, set_focus_ring_style, set_theme, set_theme_mode,
-    theme_mode, toggle_theme_mode, with_theme, DesignTokens, FocusRingStyle, Theme, ThemeMode,
+    focus_ring_style, focus_ring_width, get_theme, is_dark_theme, set_focus_ring_style,
+    set_focus_ring_width, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,
+    DesignTokens, FocusRingStyle, Theme, ThemeMode, DEFAULT_FOCUS_RING_WIDTH,
 };
 pub use theme_override::{
     apply_theme_patch, clear_theme_overrides, compose_theme, install_theme_overrides,
@@ -176,10 +178,12 @@ pub use transform::{
 };
 pub use used_layout::{ensure_used_layout_from_bounds, stamp_element_used_layout, UsedLayout};
 pub use utility::{
-    apply_class_list, apply_utility_classes, class_variant_hover_needs_frame, classes,
+    apply_class_list, apply_utility_classes, class_variant_color_overlay,
+    class_variant_hover_needs_frame, classes, ensure_class_list, extend_class_list,
+    patch_class_set_base_paint, patch_class_set_base_radii, patch_class_set_base_shadow,
     push_class_part, reapply_class_color_overrides, resolve_class_variants,
     sync_class_variants_subtree, tick_active_css_transitions_subtree, with_class_list, ClassPart,
-    ClassSet, VariantContext,
+    ClassSet, VariantContext, ATTR_SYNC_LABEL_FG,
 };
 pub use variant_override::{
     apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,

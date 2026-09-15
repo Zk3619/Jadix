@@ -752,7 +752,7 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
         return (None, [0.0, 0.0], 0.0);
     }
 
-    let root_font_size_px = 16.0_f32;
+    let root_font_size_px = crate::layout::dimension::css_root_font_size_px();
     let mut lens: Vec<f32> = Vec::with_capacity(3);
     let mut color: Option<[u8; 4]> = None;
     for tok in raw.split_whitespace() {
