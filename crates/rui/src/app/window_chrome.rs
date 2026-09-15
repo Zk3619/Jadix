@@ -1,10 +1,8 @@
 //! Window chrome: frameless, transparent, and OS backdrop blur.
 //!
-//! Creation-time options live on [`WindowOptions`] (primary [`super::run_with`], secondary
-//! [`open_secondary_window_with`](super::multi_window::open_secondary_window_with)).
-//! Win32 DWM / PE stack live in `crate::platform::windows` (`platform/os/windows`). Runtime helpers
-//! ([`start_window_drag`], [`close_window`], …) act on the **active** window
-//! (the one whose UI tree is dispatching the event).
+//! 程序入口见 [`crate::prelude`]（`launch` / `app().mount` / `<App>`）。
+//! 创建期选项仍落在 [`WindowOptions`]（[`super::run_with`] 兼容、副窗
+//! [`open_secondary_window_with`](super::multi_window::open_secondary_window_with)）。
 
 use winit::dpi::LogicalSize;
 use winit::window::{Window, WindowAttributes};
@@ -25,7 +23,28 @@ pub enum WindowBackdrop {
     MicaAlt,
 }
 
+impl From<&str> for WindowBackdrop {
+    fn from(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "mica" => Self::Mica,
+            "mica-alt" | "mica_alt" | "micaalt" => Self::MicaAlt,
+            "none" => Self::None,
+            "auto" => Self::Auto,
+            _ => Self::Acrylic,
+        }
+    }
+}
+
+impl From<String> for WindowBackdrop {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
 /// Creation-time window attributes (title, size, decorations, compositor alpha).
+///
+/// 产品面通过 [`crate::prelude`] 中的 `launch` / `app().mount` / `<App>` 配置；
+/// 本类型是 [`super::run_with`] 与副窗的底层载荷。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowOptions {
     pub title: String,
@@ -45,7 +64,7 @@ pub struct WindowOptions {
     pub devtools: bool,
     /// CSS `font-family` list applied as the document default (overrides `RUI_FONT_FAMILY`).
     pub default_font_family: Option<String>,
-    /// Default font size in logical px (overrides `RUI_FONT_SIZE`, cascade root).
+    /// Default font size in logical px (overrides `RUI_FONT_SIZE`, cascade root, CSS `1rem`).
     pub default_font_size: Option<f32>,
     /// Default `font-weight` (overrides `RUI_FONT_WEIGHT`, cascade root).
     pub default_font_weight: Option<u16>,
@@ -127,7 +146,7 @@ impl WindowOptions {
         self
     }
 
-    /// Document default font size in logical pixels.
+    /// Document default font size in logical pixels (CSS root / `1rem`).
     pub fn default_font_size(mut self, px: f32) -> Self {
         self.default_font_size = Some(px.max(1.0));
         self
@@ -230,6 +249,15 @@ pub(crate) fn apply_created_window(
 
 fn with_active_window<R>(f: impl FnOnce(&Window) -> R) -> Option<R> {
     super::runtime::with_active_winit_window(f)
+}
+
+pub(crate) fn set_window_title(title: impl AsRef<str>) {
+    let title = title.as_ref();
+    with_active_window(|w| w.set_title(title));
+}
+
+pub(crate) fn request_window_inner_size(width: f64, height: f64) {
+    with_active_window(|w| w.request_inner_size(LogicalSize::new(width, height)));
 }
 
 /// Begin an OS window move. Call from **mousedown** on a custom title bar (not `click`).

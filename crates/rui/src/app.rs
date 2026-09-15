@@ -63,7 +63,8 @@ pub use ime_support::{
     apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
 };
-pub mod error_boundary;
+pub mod entry;
+mod error_boundary;
 mod glass_gpu;
 mod input_controller;
 pub mod keyed_list;
@@ -98,11 +99,13 @@ mod window_events;
 pub mod window_keys;
 pub(crate) mod window_scope;
 
+pub use entry::{app, launch, AppBuilder, AppConfig};
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use multi_window::{
     open_secondary_window, open_secondary_window_title_only, open_secondary_window_with,
     shared_slot,
 };
+pub use portal_overlay::{page_scroll_locked, set_page_scroll_locked};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
@@ -169,6 +172,9 @@ struct App {
     click_press_path: Option<Vec<pointer_events::HitPathEntry>>,
     /// User-initiated scroll (wheel / pan / keyboard) after this press; cancels `click`.
     click_press_scrolled: bool,
+    /// Outside-press already dismissed a stacked layer on pointer down; skip the
+    /// mouseup dismiss so nested Select inside DatePicker closes one layer per click.
+    outside_dismiss_on_down: bool,
     /// Last primary-button click for double-click detection.
     last_click_at: Option<std::time::Instant>,
     last_click_pos: [f32; 2],
@@ -264,11 +270,14 @@ struct App {
     hot_reload: hot_reload::HotReloadState,
 }
 
+/// 兼容：默认 [`WindowOptions`] 启动事件循环。
+///
+/// 新代码请用 [`launch`]（RSX + [`crate::components::App`]）或 [`app()`]`.mount`（Builder）。
 pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
     lifecycle::run(WindowOptions::default(), app_builder);
 }
 
-/// Like [`run`], with creation-time chrome (frameless / transparent / blur).
+/// 兼容：带创建期窗口选项启动。新代码请用 [`launch`] / [`app()`]`.mount`。
 pub fn run_with<F: FnMut() -> Element + 'static>(options: WindowOptions, app_builder: F) {
     lifecycle::run(options, app_builder);
 }

@@ -27,6 +27,7 @@
 //! - Tabs: Composite `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent` (macro `tabs_scope`); headless bands are still available [`tabs_headless`] + `<Show>`.
 //! - ToggleGroup: `<ToggleGroup>` / `ToggleGroupItem` (macro `toggle_group_scope`); `type=single|multiple`; `spacing=0` / `joined` reuses ButtonGroup fused corners. Builder [`toggle_group`].
 //! - Avatar: `<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>` (macro → [`avatar_scope`]); Builder [`avatar`].
+//! - App: 程序壳 — RSX `launch` + `<App>` 或 `app().mount`（见 [`crate::prelude`]）。
 //! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
 //! - Breadcrumb：`<Breadcrumb>` / `BreadcrumbList` / `BreadcrumbItem` / `BreadcrumbLink` / `BreadcrumbPage` / `BreadcrumbSeparator` / `BreadcrumbEllipsis`；Builder [`breadcrumb`]。
 //! - ButtonGroup：`<ButtonGroup>` / `ButtonGroupText` / `ButtonGroupSeparator`；Builder [`button_group`]。
@@ -62,6 +63,7 @@ pub(crate) mod internal;
 pub mod accordion;
 pub mod alert;
 pub mod alert_dialog;
+pub mod app;
 pub mod aspect_ratio;
 pub mod attachment;
 pub mod avatar;
@@ -163,6 +165,7 @@ pub use alert_dialog::{
     AlertDialogSize, AlertDialogTitle, AlertDialogTitleBuilder, AlertDialogTitleProps,
     AlertDialogTrigger, AlertDialogTriggerBuilder, AlertDialogTriggerProps, AlertDialogVariant,
 };
+pub use app::{App, AppProps};
 pub use aspect_ratio::{
     aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
 };
@@ -519,7 +522,10 @@ pub use resizable::{
     ResizableOrientation, ResizablePanel, ResizablePanelBuilder, ResizablePanelGroup,
     ResizablePanelGroupProps, ResizablePanelProps,
 };
-pub use scroll_area::{scroll_area, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps};
+pub use scroll_area::{
+    scroll_area, scroll_into_view, scroll_into_view_when, scroll_item_into_view,
+    scroll_item_into_view_when, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps,
+};
 pub use scroll_viewport::{
     scroll_viewport, scrollviewport, ScrollViewport, ScrollViewportBuilder, ScrollViewportProps,
     SCROLL_VIEWPORT_FOCUS_PREFIX,

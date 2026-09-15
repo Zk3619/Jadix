@@ -1,5 +1,37 @@
 //! 默认应用入口：`use rui::prelude::*;`
 //!
+//! # 程序入口（推荐）
+//!
+//! | 写法 | 启动 | 窗口 / 根字号 |
+//! |------|------|----------------|
+//! | **RSX** | [`launch`] | [`App`] 标签属性（`title` / `font_size` / `width`…） |
+//! | **Builder** | [`app`]`.mount` | builder 链（`.title` / `.font_size` / `.frameless`…） |
+//!
+//! ```ignore
+//! use rui::prelude::*;
+//!
+//! // RSX — `<App>` 即程序根（类 React `render(<App/>)`）
+//! fn main() {
+//!     launch(|| ui! {
+//!         <App title="My App" font_size={18}>
+//!             <Button variant="outline">"保存"</Button>
+//!         </App>
+//!     });
+//! }
+//!
+//! // Builder — 壳在 `app()`，`.mount` 里只写内容（类 Vue `createApp().mount`）
+//! fn main_builder() {
+//!     app().title("My App").font_size(18).mount(|| ui! {
+//!         <Button variant="outline">"保存"</Button>
+//!     });
+//! }
+//! ```
+//!
+//! **勿混用**：不要 `app().title(…).run(|| ui! { <App title=…>…</App> })`（窗口配置写了两遍）。
+//!
+//! **兼容 / 进阶**（不在默认教程里）：[`crate::run`]、[`crate::run_with`]、[`AppBuilder::run`]（整棵原始树）、
+//! [`crate::main`]（`main` 糖，prelude 以 `#[doc(hidden)]` 导出）。
+//!
 //! # 双书写面（ADR-9）
 //!
 //! 本模块**同时** re-export：
@@ -21,43 +53,40 @@
 //! | `BaseComponentBuilder`、`apply_bound_*`、信号键 helpers | 进阶 / 内部契约 |
 //! | `planned` 未落地组件（Spinner / Alert…） | 尚未 `pub use`；Skeleton / Badge 已导出 |
 //!
-//! # 示例
+//! # 组件双书写面示例
 //!
 //! ```ignore
 //! use rui::prelude::*;
 //!
 //! // A · 标签
-//! let _a = ui! { <Button variant="outline">"保存"</Button> };
 //! let _badge = ui! { <Badge variant="secondary">"New"</Badge> };
 //!
 //! // B · Builder
 //! let _b: Element = button("save").variant("outline").into();
-//! let _b2: Element = badge().variant("destructive").text("Error").into();
 //!
 //! // 互嵌：标签树里嵌入 Builder
 //! let _c = ui! {
 //!     <VStack gap="0.5rem">
 //!         { Element::from(button("x").variant("ghost").text("内嵌 Builder")) }
 //!         <Button>"标签子节点"</Button>
-//!         { Element::from(badge().text("内嵌 Badge")) }
 //!     </VStack>
 //! };
 //!
-//! // 互嵌：Builder 树里嵌入 ui!（拆文件 / 深嵌套同样安全：
-//! // 每个 `ui!` 与 `#[component]` 在独立栈帧上构建，`run` 按需扩栈。）
+//! // 互嵌：Builder 树里嵌入 ui!
 //! let _d: Element = vstack()
 //!     .gap("0.5rem")
 //!     .child(ui! { <Label>"内嵌标签"</Label> })
-//!     .child(ui! { <Badge variant="outline">"ok"</Badge> })
 //!     .into();
 //! ```
 
 #![allow(unused_imports)]
 
 // ---------------------------------------------------------------------------
-// 宏与书写面糖
+// 宏与书写面糖（`main` = 可选程序入口糖，见模块文档「兼容 / 进阶」）
 // ---------------------------------------------------------------------------
 
+#[doc(hidden)]
+pub use crate::main;
 pub use crate::{
     bind_attr, bind_style, bind_text, classes, component, for_keyed, merge_props, reactive,
     reactive_anchor_id, split_props, ui,
@@ -72,8 +101,9 @@ pub use crate::app::props::{children, resolve_children, Children, ChildrenAccess
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::app::with_ui_build_stack;
 pub use crate::app::{
-    create_resource, error_boundary, run, run_with, suspense, throw_error, throw_resource_error,
-    Resource, ResourceState, WindowBackdrop, WindowOptions,
+    app, create_resource, error_boundary, launch, page_scroll_locked, set_page_scroll_locked,
+    suspense, throw_error, throw_resource_error, AppBuilder, AppConfig, Resource, ResourceState,
+    WindowBackdrop, WindowOptions,
 };
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
@@ -95,9 +125,10 @@ pub use crate::primitives::{
     ShaderBuilder, SvgBuilder, TextBuilder,
 };
 
+pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
-    set_text_defaults, text_defaults, TextDefaults,
+    root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
 };
 pub use crate::utils::{
     animated_icon, animated_icon_names, animated_icon_recipe, clear_icon_provider,
@@ -112,10 +143,11 @@ pub use crate::utils::{
 
 pub use crate::style::{
     apply_style_file_batch, apply_stylesheet_rules, apply_stylesheet_rules_tree, apply_theme_patch,
-    classes, clear_stylesheets, clear_theme_overrides, collect_matching_rules, get_theme,
-    install_theme_overrides, is_dark_theme, load_and_install_theme_overrides, load_stylesheet,
-    load_theme_overrides, parse_stylesheet, parse_theme_overrides_str, register_stylesheet,
-    reload_stylesheets, set_theme_mode, theme_mode, toggle_theme_mode, watch_stylesheets,
+    classes, clear_stylesheets, clear_theme_overrides, collect_matching_rules, focus_ring_style,
+    focus_ring_width, get_theme, install_theme_overrides, is_dark_theme,
+    load_and_install_theme_overrides, load_stylesheet, load_theme_overrides, parse_stylesheet,
+    parse_theme_overrides_str, register_stylesheet, reload_stylesheets, set_focus_ring_style,
+    set_focus_ring_width, set_theme_mode, theme_mode, toggle_theme_mode, watch_stylesheets,
     ClassPart, DesignTokensPatch, FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap,
     IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule,
     Selector, StyleRule, Stylesheet, StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode,
@@ -450,6 +482,10 @@ pub use crate::components::{
     scale_time,
     // Scroll*
     scroll_area,
+    scroll_into_view,
+    scroll_into_view_when,
+    scroll_item_into_view,
+    scroll_item_into_view_when,
     scroll_viewport,
     scrollarea,
     scrollbar,
@@ -632,6 +668,8 @@ pub use crate::components::{
     AlertTitleBuilder,
     AlertTitleProps,
     AlertVariant,
+    App,
+    AppProps,
     AreaChart,
     AreaChartProps,
     AspectRatio,

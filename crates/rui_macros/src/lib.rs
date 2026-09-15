@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
-use syn::parse::{Parse, ParseStream};
+use syn::parse::{Parse, ParseStream, Parser};
 use syn::visit::Visit;
 use syn::{Expr, Ident, Token, braced};
 
@@ -39,7 +39,7 @@ fn expr_as_i32(value: &Expr) -> Option<i32> {
     }
 }
 
-/// CSS length / distance（`sideOffset` / blur / height…）：`4` ≡ `"4px"`；无单位字符串 = rem。
+/// CSS length / distance（`sideOffset` / blur / height…）：Rust 数值 `{4}` ≡ `"4px"`；无单位字符串 `"4"` = rem。
 fn quote_length_f32(e: &Expr) -> proc_macro2::TokenStream {
     quote! { rui::core::tree::IntoF32::into_f32(#e) }
 }
@@ -179,6 +179,7 @@ fn is_shader_tag(name: &str) -> bool {
 }
 
 /// Valueless RSX flags: `<DragProvider scroll-lock-all>` ≡ `scroll_lock="all"`.
+/// Drag edge-autoscroll only — not page wheel / pan / fling lock.
 fn is_scroll_lock_flag_attr(name: &str) -> bool {
     matches!(
         name,
@@ -492,6 +493,287 @@ fn wrap_ui_expansion(
             }
             __rui_root
         })
+    }
+}
+
+/// **可选糖**：少写一层 `launch` / `app().mount` 调用。默认教程请直接用
+/// [`rui::launch`] 或 [`rui::app::app`]`.mount`（见 [`rui::prelude`]）。
+///
+/// ```ignore
+/// // 等价于 launch(|| ui! { <App title="My App" font_size={18}>…</App> })
+/// #[rui::main]
+/// fn main() {
+///     ui! {
+///         <App title="My App" font_size={18}>
+///             <Button>"保存"</Button>
+///         </App>
+///     }
+/// }
+///
+/// // 等价于 app().title(…).mount(|| Root())；勿与框架 `<App>` 文档壳同名
+/// #[rui::main(title = "My App", font_size = 18)]
+/// #[component]
+/// fn Root() -> Element {
+///     ui! { <Button>"保存"</Button> }
+/// }
+/// ```
+///
+/// `fn main`：最后一个表达式是每帧 UI 树；前面语句只执行一次。
+/// 非 `main` 函数：生成 `fn main()` 并调用 [`rui::launch`] 或 [`rui::app::app`]`.mount`。
+/// 包 `#[component]` 时，`#[rui::main]` 写在外层。
+#[proc_macro_attribute]
+pub fn main(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match expand_rui_main(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+struct RuiMainAttr {
+    title: Option<syn::LitStr>,
+    width: Option<syn::Expr>,
+    height: Option<syn::Expr>,
+    font: Option<syn::LitStr>,
+    font_size: Option<syn::Expr>,
+    font_weight: Option<syn::Expr>,
+    frameless: bool,
+    transparent: bool,
+    crate_path: syn::Path,
+}
+
+fn parse_rui_main_attr(attr: proc_macro2::TokenStream) -> syn::Result<RuiMainAttr> {
+    let mut parsed = RuiMainAttr {
+        title: None,
+        width: None,
+        height: None,
+        font: None,
+        font_size: None,
+        font_weight: None,
+        frameless: false,
+        transparent: false,
+        crate_path: syn::parse_quote!(::rui),
+    };
+    if attr.is_empty() {
+        return Ok(parsed);
+    }
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("title") {
+            parsed.title = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("width") {
+            parsed.width = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("height") {
+            parsed.height = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("font") || meta.path.is_ident("font_family") {
+            parsed.font = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("font_size") {
+            parsed.font_size = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("font_weight") {
+            parsed.font_weight = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("frameless") {
+            parsed.frameless = true;
+        } else if meta.path.is_ident("transparent") {
+            parsed.transparent = true;
+        } else if meta.path.is_ident("crate_path") {
+            let value = meta.value()?;
+            let s: syn::LitStr = value.parse()?;
+            parsed.crate_path = s.parse()?;
+        } else {
+            return Err(meta.error(
+                "unknown #[rui::main] argument; expected title, width, height, font, font_size, font_weight, frameless, transparent, crate_path",
+            ));
+        }
+        Ok(())
+    });
+    parser.parse2(attr)?;
+    Ok(parsed)
+}
+
+impl RuiMainAttr {
+    fn has_window_config(&self) -> bool {
+        self.title.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.font.is_some()
+            || self.font_size.is_some()
+            || self.font_weight.is_some()
+            || self.frameless
+            || self.transparent
+    }
+
+    fn boot(
+        &self,
+        crate_path: &syn::Path,
+        root: proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        if !self.has_window_config() {
+            return quote! { #crate_path::launch(#root) };
+        }
+        let mut chain = quote! { #crate_path::app::app() };
+        if let Some(title) = &self.title {
+            chain = quote! { #chain.title(#title) };
+        }
+        match (&self.width, &self.height) {
+            (Some(w), Some(h)) => {
+                chain = quote! { #chain.size(#w as f64, #h as f64) };
+            }
+            (Some(w), None) => {
+                chain = quote! { #chain.width(#w as f64) };
+            }
+            (None, Some(h)) => {
+                chain = quote! { #chain.height(#h as f64) };
+            }
+            (None, None) => {}
+        }
+        if let Some(font) = &self.font {
+            chain = quote! { #chain.font(#font) };
+        }
+        if let Some(size) = &self.font_size {
+            chain = quote! { #chain.font_size(#size) };
+        }
+        if let Some(weight) = &self.font_weight {
+            chain = quote! { #chain.font_weight(#weight as u16) };
+        }
+        if self.frameless {
+            chain = quote! { #chain.frameless() };
+        }
+        if self.transparent {
+            chain = quote! { #chain.transparent(true) };
+        }
+        quote! { #chain.mount(#root) }
+    }
+}
+
+fn stmt_as_root_expr(stmt: syn::Stmt) -> syn::Result<syn::Expr> {
+    match stmt {
+        syn::Stmt::Expr(expr, _) => Ok(expr),
+        syn::Stmt::Macro(m) => Ok(syn::Expr::Macro(syn::ExprMacro {
+            attrs: m.attrs,
+            mac: m.mac,
+        })),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "#[rui::main] fn main() 的最后一个表达式必须是 UI 树，例如 `ui! { <App>...</App> }`",
+        )),
+    }
+}
+
+fn expand_rui_main(
+    attr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let args = parse_rui_main_attr(attr)?;
+    let func: syn::ItemFn = syn::parse2(item)?;
+    if func.sig.asyncness.is_some() {
+        return Err(syn::Error::new_spanned(
+            func.sig.asyncness,
+            "#[rui::main] does not wrap async fn; run setup then `launch(|| ui! { <App/> })`",
+        ));
+    }
+    let crate_path = &args.crate_path;
+    let name = &func.sig.ident;
+    let is_component = func.attrs.iter().any(|a| a.path().is_ident("component"));
+
+    if name == "main" {
+        let mut stmts = func.block.stmts.clone();
+        let last = stmts.pop().ok_or_else(|| {
+            syn::Error::new_spanned(
+                &func.sig.ident,
+                "#[rui::main] fn main() 需要以 UI 表达式结尾，例如 `ui! { <App>...</App> }`",
+            )
+        })?;
+        let last_expr = stmt_as_root_expr(last)?;
+        let boot = args.boot(crate_path, quote! { || #last_expr });
+        let vis = &func.vis;
+        let sig = &func.sig;
+        let attrs = &func.attrs;
+        Ok(quote! {
+            #(#attrs)*
+            #vis #sig {
+                #(#stmts)*
+                #boot
+            }
+        })
+    } else {
+        let root = if is_component {
+            quote! { || #name(::core::default::Default::default()) }
+        } else {
+            quote! { #name }
+        };
+        let boot = args.boot(crate_path, root);
+        Ok(quote! {
+            #func
+            fn main() {
+                #boot
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod rui_main_expand_tests {
+    use super::*;
+
+    fn compact(tokens: proc_macro2::TokenStream) -> String {
+        tokens
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    #[test]
+    fn main_fn_last_expr_goes_to_launch() {
+        let tokens = expand_rui_main(
+            quote! {},
+            quote! {
+                fn main() {
+                    setup();
+                    ui! { <App></App> }
+                }
+            },
+        )
+        .unwrap();
+        let s = compact(tokens);
+        assert!(s.contains("setup();"), "{s}");
+        assert!(s.contains("::rui::launch"), "{s}");
+        assert!(s.contains("ui!"), "{s}");
+        assert!(s.contains("<App></App>"), "{s}");
+    }
+
+    #[test]
+    fn main_attr_window_uses_app_mount() {
+        let tokens = expand_rui_main(
+            quote! { title = "Hi", font_size = 18 },
+            quote! {
+                fn main() {
+                    ui! { <Button>"x"</Button> }
+                }
+            },
+        )
+        .unwrap();
+        let s = compact(tokens);
+        assert!(s.contains("::rui::app::app()"), "{s}");
+        assert!(s.contains(".title(\"Hi\")"), "{s}");
+        assert!(s.contains(".font_size(18)"), "{s}");
+        assert!(s.contains(".mount("), "{s}");
+    }
+
+    #[test]
+    fn component_root_generates_main_and_default_props() {
+        let tokens = expand_rui_main(
+            quote! {},
+            quote! {
+                #[component]
+                fn App() -> Element {
+                    el
+                }
+            },
+        )
+        .unwrap();
+        let s = compact(tokens);
+        assert!(s.contains("fnmain()"), "{s}");
+        assert!(s.contains("Default::default()"), "{s}");
+        assert!(s.contains("::rui::launch"), "{s}");
     }
 }
 
@@ -3005,14 +3287,21 @@ fn expand_node(
                     return quote! {
                         {
                             let __rui_sidebar_variant: Option<String> = #variant_ts;
-                            rui::components::sidebar_provider_scope(
+                            let mut __rui_el = rui::components::sidebar_provider_scope(
                                 #id_ts,
                                 #open_ts,
                                 #default_open_ts,
                                 __rui_sidebar_variant.as_deref(),
-                                #class_ts,
                                 || #child_el,
-                            )
+                            );
+                            // Typed Option: bare `if let Some = None` is E0282 in gallery `ui!`.
+                            let __rui_sidebar_class: Option<String> = #class_ts;
+                            if let Some(ref __c) = __rui_sidebar_class {
+                                if !__c.trim().is_empty() {
+                                    __rui_el = rui::style::with_class_list(__rui_el, __c);
+                                }
+                            }
+                            __rui_el
                         }
                     };
                 }
@@ -4596,6 +4885,10 @@ fn expand_node(
                         .or_else(|| get_attr("w"))
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });
+                    let lock_page_scroll = get_attr("lock_page_scroll")
+                        .or_else(|| get_attr("lockPageScroll"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         // Body is rebuilt inside popover_content's reactive_anchor.
@@ -4628,6 +4921,7 @@ fn expand_node(
                                 strategy: #strategy,
                                 width: #width,
                                 style: None,
+                                lock_page_scroll: #lock_page_scroll,
                             },
                             move || #child_el,
                         )
@@ -4707,6 +5001,10 @@ fn expand_node(
                         .or_else(|| get_attr("w"))
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });
+                    let lock_page_scroll = get_attr("lock_page_scroll")
+                        .or_else(|| get_attr("lockPageScroll"))
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter, true));
@@ -4750,6 +5048,7 @@ fn expand_node(
                                 __opts.match_trigger_width = #match_trigger;
                                 __opts.max_h = #max_h;
                                 __opts.width = #width;
+                                __opts.lock_page_scroll = #lock_page_scroll;
                                 __opts
                             },
                             move || #child_el,
@@ -5902,6 +6201,8 @@ fn expand_node(
                     let class_expr = get_attr("class");
                     let content_class_expr =
                         get_attr("content_class").or_else(|| get_attr("contentClass"));
+                    let scroll_selected_expr =
+                        get_attr("scroll_selected").or_else(|| get_attr("scrollSelected"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -5960,6 +6261,11 @@ fn expand_node(
                     } else {
                         quote! { String::new() }
                     };
+                    let scroll_selected_ts = if let Some(s) = scroll_selected_expr {
+                        quote! { (#s).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
                     return quote! {
                         rui::components::combobox_scope(
                             #id_ts,
@@ -5969,6 +6275,7 @@ fn expand_node(
                             #clearable_ts,
                             #class_ts,
                             #content_class_ts,
+                            #scroll_selected_ts,
                             || #child_el,
                         )
                     };
@@ -6003,6 +6310,10 @@ fn expand_node(
                     let placement = get_attr("placement")
                         .map(|e| quote! { Some(#e) })
                         .unwrap_or_else(|| quote! { None });
+                    let scroll_selected = get_attr("scroll_selected")
+                        .or_else(|| get_attr("scrollSelected"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         // Body is rendered inside ComboboxContent's reactive_anchor.
@@ -6035,6 +6346,7 @@ fn expand_node(
                                 min_height: #min_height,
                                 max_height: #max_height,
                                 placement: #placement,
+                                scroll_selected: #scroll_selected,
                                 style: None,
                             },
                             move || #child_el,
@@ -6636,6 +6948,11 @@ fn expand_node(
                         continue;
                     }
 
+                    // Element-root hover — not a component prop.
+                    if matches!(attr_name, "on_hover" | "onHover") {
+                        continue;
+                    }
+
                     // SidebarMenuButton `isActive={sig.get() == id}` ≡ builder
                     // `bind_prop(..., apply_bound_sidebar_menu_button_active)` (live chrome, no
                     // sidebar rebuild). Plain `untrack` snapshot is not equivalent.
@@ -7092,10 +7409,35 @@ fn expand_node(
                     let toaster_own_prop = name_str == "Toaster"
                         && matches!(attr_name, "position" | "variant" | "overflow" | "limit");
 
+                    // `<App width/height/font_*>` are window / CSS-root props, not layout `w`/`h`.
+                    let app_shell_own_prop = name_str == "App"
+                        && matches!(
+                            attr_name,
+                            "width"
+                                | "height"
+                                | "font"
+                                | "font_family"
+                                | "fontFamily"
+                                | "font_size"
+                                | "fontSize"
+                                | "font_weight"
+                                | "fontWeight"
+                                | "title"
+                                | "frameless"
+                                | "decorations"
+                                | "transparent"
+                                | "blur"
+                                | "backdrop"
+                                | "synthetic_bold"
+                                | "syntheticBold"
+                                | "devtools"
+                        );
+
                     let is_base = !chart_plot_height
                         && !textarea_own_prop
                         && !table_cell_own_prop
                         && !toaster_own_prop
+                        && !app_shell_own_prop
                         && matches!(
                             attr_name,
                             "w" | "width"
@@ -7700,6 +8042,43 @@ fn expand_node(
                             continue;
                         }
 
+                        if name_str == "App" {
+                            let prop = match attr_str.as_str() {
+                                "font" | "fontFamily" => "font_family",
+                                "fontSize" => "font_size",
+                                "fontWeight" => "font_weight",
+                                "syntheticBold" => "synthetic_bold",
+                                other => other,
+                            };
+                            let ident = syn::Ident::new(prop, attr.span());
+                            let final_value = match prop {
+                                "font_size" | "width" | "height" => {
+                                    if expr_reads_get(value) {
+                                        quote! { Some(rui::core::reactivity::untrack(|| (#value) as f64)) }
+                                    } else {
+                                        quote! { Some((#value) as f64) }
+                                    }
+                                }
+                                "font_weight" => {
+                                    if expr_reads_get(value) {
+                                        quote! { Some(rui::core::reactivity::untrack(|| (#value) as u16)) }
+                                    } else {
+                                        quote! { Some((#value) as u16) }
+                                    }
+                                }
+                                _ => {
+                                    if expr_reads_get(value) {
+                                        quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
+                                    } else {
+                                        quote! { Some((#value).into()) }
+                                    }
+                                }
+                            };
+                            prop_names.push(ident);
+                            prop_values.push(final_value);
+                            continue;
+                        }
+
                         let final_attr = if name_str == "Input" && attr_str == "type" {
                             // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
                             syn::Ident::new("input_type", attr.span())
@@ -7742,6 +8121,13 @@ fn expand_node(
                                 "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
                                 "showAnimation" => syn::Ident::new("show_animation", attr.span()),
                                 "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
+                                "scrollIntoView" => {
+                                    syn::Ident::new("scroll_into_view", attr.span())
+                                }
+                                "scrollAlign" => syn::Ident::new("scroll_align", attr.span()),
+                                "scrollIntoViewWhen" => {
+                                    syn::Ident::new("scroll_into_view_when", attr.span())
+                                }
                                 // Popover / Tooltip / HoverCard / floating
                                 "openSignal" => syn::Ident::new("open_signal", attr.span()),
                                 "sideOffset" => syn::Ident::new("side_offset", attr.span()),
@@ -7829,7 +8215,7 @@ fn expand_node(
                             }
                         } else if matches!(final_attr_name.as_str(), "side_offset" | "align_offset")
                         {
-                            // Length：`4` ≡ `"4px"`；无单位字符串 = rem。
+                            // Length：`{4}` ≡ 4px；无单位字符串 `"4"` = rem。
                             let v = quote_length_f32(value);
                             if expr_reads_get(value) {
                                 quote! {
@@ -9174,6 +9560,7 @@ fn expand_node(
                     }
                     "text_align" => element = quote! { #element.text_align(#value) },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
+                    "on_hover" | "onHover" => element = quote! { #element.on_hover(#value) },
                     "on_mousedown" | "onMouseDown" => {
                         element = quote! { #element.on_mousedown(#value) }
                     }
@@ -9578,6 +9965,21 @@ mod rsx_lowering_tests {
         let root: RsxNode = syn::parse_str(src).unwrap_or_else(|e| panic!("{e} in {src}"));
         let mut c = 0usize;
         expand_node(&root, &mut c, false).to_string()
+    }
+
+    #[test]
+    fn sidebar_provider_without_class_types_option_string() {
+        let s = expand(
+            r#"<SidebarProvider id="gal-shell" variant="inset" defaultOpen={true}></SidebarProvider>"#,
+        );
+        assert!(
+            s.contains("__rui_sidebar_class"),
+            "class chrome must bind a named Option<String>: {s}"
+        );
+        assert!(
+            s.contains("Option < String >") || s.contains("Option<String>"),
+            "untyped `if let Some = None` is E0282: {s}"
+        );
     }
 
     #[test]
@@ -10112,6 +10514,23 @@ mod rsx_lowering_tests {
     }
 
     #[test]
+    fn app_shell_props_cast_numeric_and_aliases() {
+        let s = expand(
+            r#"<App title="Hi" width={1280} height={800} font="Inter" font_size={18} font_weight={500}></App>"#,
+        );
+        assert!(s.contains("App"), "{s}");
+        assert!(s.contains("title"), "{s}");
+        assert!(s.contains("font_family") || s.contains("font"), "{s}");
+        assert!(s.contains("as f64"), "{s}");
+        assert!(s.contains("as u16"), "{s}");
+        assert!(s.contains("width : Some"), "{s}");
+        assert!(!s.contains("b . w (1280)"), "{s}");
+        let camel = expand(r#"<App fontSize={20} fontFamily="Georgia"></App>"#);
+        assert!(camel.contains("font_size"), "{camel}");
+        assert!(camel.contains("font_family"), "{camel}");
+    }
+
+    #[test]
     fn hover_card_delay_casts_unsuffixed_int_to_u64() {
         let s = expand(r#"<HoverCardTrigger openDelay={10} closeDelay={100}></HoverCardTrigger>"#);
         assert!(s.contains("as u64"), "{s}");
@@ -10216,6 +10635,15 @@ mod rsx_lowering_tests {
         assert!(
             !click.contains("bind_text"),
             "event-closure get must not emit a text leaf bind: {click}"
+        );
+    }
+
+    #[test]
+    fn on_hover_maps_to_element() {
+        let hover = expand(r#"<Box onHover={|inside| { let _ = inside; }}>x</Box>"#);
+        assert!(
+            hover.contains("on_hover"),
+            "onHover must map to Element::on_hover: {hover}"
         );
     }
 

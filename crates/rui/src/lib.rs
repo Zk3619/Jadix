@@ -19,7 +19,10 @@ pub mod logging;
 /// OS hooks: desktop defaults + OS overrides (Windows DWM / PE stack, Unix metrics).
 /// 架构与重构方向见 `docs/engine/platform.md`。
 pub mod platform;
-/// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。
+/// 默认应用入口：`use rui::prelude::*;`
+///
+/// 程序启动：[`prelude::launch`] + [`components::App`]，或 [`app::app`]`.mount`。
+/// 组件双书写面见规范 §3 / ADR-9。兼容 [`run`] / [`run_with`] 在 crate 根保留。
 pub mod prelude;
 pub mod primitives;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
@@ -255,9 +258,10 @@ pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgb
     crate::style::register_cursor_rgba8(id, width, height, rgba);
 }
 
+pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
-    set_text_defaults, text_defaults, TextDefaults,
+    root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
 };
 pub use app::damage::{
     arm_policy_snapshot, full_clear_frame_count, partial_load_frame_count,
@@ -272,8 +276,9 @@ pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
 pub use app::{
-    mouse_content_pan_enabled, run, run_with, set_mouse_content_pan_enabled, with_ui_build_stack,
-    WindowBackdrop, WindowOptions,
+    launch, mouse_content_pan_enabled, page_scroll_locked, run, run_with,
+    set_mouse_content_pan_enabled, set_page_scroll_locked, with_ui_build_stack, WindowBackdrop,
+    WindowOptions,
 };
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
