@@ -1118,6 +1118,224 @@ mod tests {
     }
 
     #[test]
+    fn nested_format_select_first_open_seeds_enter_and_encodes() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::{overlay_band_encode_flags, take_frame_paint_nodes};
+        use crate::app::portal_overlay::{clear_overlay_stack, try_dismiss_outside_press};
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::find_by_template_id;
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
+        };
+        use crate::utils::floating_motion::{
+            debug_floating_registry, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{
+            arm_underlay_close, sync_floating_placement, ATTR_FLOATING_EXPAND_MEASURE,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let _ = take_frame_paint_nodes();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+            });
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn find_fmt_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t == "gal-color:fmt__floating_panel")
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_fmt_panel)
+        }
+        fn count_fmt_tids(el: &Element) -> usize {
+            let here =
+                el.template_id
+                    .as_deref()
+                    .is_some_and(|t| t == "gal-color:fmt__floating_panel") as usize;
+            here + el.children.iter().map(count_fmt_tids).sum::<usize>()
+        }
+        fn dump_fmt(el: &Element) -> String {
+            let Some(p) = find_fmt_panel(el) else {
+                return format!(
+                    "missing fmt panel; n_tid={} find_by_tid={}",
+                    count_fmt_tids(el),
+                    find_by_template_id(el, "gal-color:fmt__floating_panel").is_some()
+                );
+            };
+            let anims: Vec<_> = p.style.animations.iter().map(|a| a.name.as_str()).collect();
+            format!(
+                "tid={:?} hoisted={} opacity={} bounds={:?} measuring={} anims={:?} n_tid={}",
+                p.template_id,
+                p.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1"),
+                p.style.opacity,
+                p.layout_bounds,
+                p.attrs
+                    .get(ATTR_FLOATING_EXPAND_MEASURE)
+                    .map(String::as_str)
+                    == Some("1"),
+                anims,
+                count_fmt_tids(el),
+            )
+        }
+        fn present_pass(root: &mut Element) -> crate::layout::layout_tree::RenderResult {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let mut out = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            out
+        }
+
+        let picker_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:trigger").expect("picker trigger")
+        };
+        picker_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+        }
+
+        let fmt_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:fmt:trigger").expect("format Select trigger")
+        };
+        fmt_click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        let (band_keys, nested_key, nested_in_stamps, encode_flags) = {
+            let mut root = live.borrow_mut();
+            // Two present passes: measure then seed. Event-loop Poll is not this seam.
+            let _ = present_pass(&mut root);
+            let out = present_pass(&mut root);
+            let dump = format!(
+                "{} registry={}",
+                dump_fmt(&root),
+                debug_floating_registry(&root)
+            );
+            let panel = find_fmt_panel(&root)
+                .unwrap_or_else(|| panic!("nested format menu must exist; {dump}"));
+            let measuring = panel
+                .attrs
+                .get(ATTR_FLOATING_EXPAND_MEASURE)
+                .map(String::as_str)
+                == Some("1");
+            let has_enter = panel.style.animations.iter().any(|a| {
+                a.name.contains("accordion-down") || a.name.starts_with("rui-expand-down-")
+            });
+            assert!(
+                !measuring && (panel.style.opacity > 0.5 || has_enter),
+                "nested format Select first present must seed enter (not stay opacity-0 measure); {dump}"
+            );
+            let nested_key = overlay_portal_stamp_key(panel);
+            let stamps = crate::layout::layout_tree::hoisted_portal_stamps(&root);
+            let nested_in_stamps = stamps.iter().any(|(k, _)| *k == nested_key);
+            let band_keys: Vec<u64> = out
+                .overlay_split
+                .band_ranges(
+                    out.instances.len(),
+                    out.textured_draws.len(),
+                    out.text_nodes.len(),
+                    0,
+                    0,
+                )
+                .iter()
+                .map(|b| b.stamp_key)
+                .collect();
+            let remaining: Vec<u64> = stamps.iter().map(|(k, _)| *k).collect();
+            let flags = overlay_band_encode_flags(&band_keys, &[nested_key], false, &remaining);
+            (band_keys, nested_key, nested_in_stamps, flags)
+        };
+        assert!(
+            nested_in_stamps,
+            "seeded nested menu must be a paint stamp; key={nested_key} bands={band_keys:?}"
+        );
+        assert!(
+            encode_flags.iter().any(|e| *e),
+            "PartialLoad dirty={nested_key} must submit the nested menu; bands={band_keys:?} flags={encode_flags:?}"
+        );
+
+        arm_underlay_close();
+        assert!(
+            try_dismiss_outside_press(),
+            "outside press must dismiss the nested format Select"
+        );
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+            let dump = dump_fmt(&root);
+            if let Some(panel) = find_fmt_panel(&root) {
+                let has_exit = panel.style.animations.iter().any(|a| {
+                    a.name.contains("accordion-up") || a.name.starts_with("rui-expand-up-")
+                });
+                assert!(
+                    panel.style.opacity > 0.5 || has_exit,
+                    "dismiss must not be the first time the menu becomes visible; {dump}"
+                );
+            }
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
     fn color_picker_popover_blocks_hover_on_datepicker_trigger_below() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;

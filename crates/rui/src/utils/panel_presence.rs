@@ -4,12 +4,21 @@
 //! live here so those engines do not copy a fourth registry.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::core::reactivity::{on_cleanup, use_signal, Signal};
+use crate::core::reactivity::{current_owner, on_cleanup, use_signal, Signal};
 use crate::utils::presence::{ExitGate, PresencePhase};
+
+thread_local! {
+    /// `(cell ptr, owner)` that already has an unregister cleanup. Named `use_signal`
+    /// outlives a child owner; without this, parent-overlay rebuilds unregister the
+    /// cell and the next `use_*` returns the same Rc without re-binding the registry.
+    static REGISTRY_CLEANUP_OWNERS: RefCell<HashSet<(usize, crate::core::reactivity::OwnerId)>> =
+        RefCell::new(HashSet::new());
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct SyncPolicy {
@@ -163,19 +172,31 @@ pub fn use_panel_presence<E: 'static>(
 ) -> PanelPresence<E> {
     let cell = use_signal(cell_key, || {
         let mounted = use_signal(mounted_key, || false);
-        let rc = Rc::new(RefCell::new(PanelPresenceCell::new(
+        Rc::new(RefCell::new(PanelPresenceCell::new(
             mounted,
             exit_duration,
             extra(),
-        )));
-        register(Rc::clone(&rc));
-        let rc_cleanup = Rc::clone(&rc);
-        on_cleanup(move || unregister(rc_cleanup));
-        rc
+        )))
     });
-    PanelPresence {
-        cell: cell.try_peek().expect("panel presence cell"),
+    let rc = cell.try_peek().expect("panel presence cell");
+    // `use_signal` is process-global. A nested Select's child owner can dispose
+    // (ColorPicker overlay rebuild) and run on_cleanup unregister while the named
+    // cell survives. Re-bind every call so flush still sees the live panel.
+    register(Rc::clone(&rc));
+    if let Some(owner) = current_owner() {
+        let ptr = Rc::as_ptr(&rc) as usize;
+        let fresh = REGISTRY_CLEANUP_OWNERS.with(|s| s.borrow_mut().insert((ptr, owner)));
+        if fresh {
+            let rc_cleanup = Rc::clone(&rc);
+            on_cleanup(move || {
+                REGISTRY_CLEANUP_OWNERS.with(|s| {
+                    s.borrow_mut().remove(&(ptr, owner));
+                });
+                unregister(rc_cleanup);
+            });
+        }
     }
+    PanelPresence { cell: rc }
 }
 
 pub fn sync_panel_presence<E>(

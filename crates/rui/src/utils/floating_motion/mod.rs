@@ -12,11 +12,11 @@ mod engine;
 pub use crate::utils::floating_kind::FloatingMotionKind;
 
 pub(crate) use engine::{
-    apply_floating_panel_motion, drain_pending_floating_unmounts, floating_panel_defer_css_tick,
-    floating_portal_phase, flush_floating_motion_subtree, mark_floating_panels_layout_dirty,
-    tick_floating_presence, tick_hoisted_floating_css, use_floating_presence,
-    FloatingPresenceHandle,
+    any_floating_motion_needs_frame, apply_floating_panel_motion, drain_pending_floating_unmounts,
+    floating_panel_defer_css_tick, floating_portal_phase, flush_floating_motion_subtree,
+    mark_floating_panels_layout_dirty, sync_floating_presence, tick_floating_presence,
+    tick_hoisted_floating_css, use_floating_presence, FloatingPresenceHandle,
 };
 
 #[cfg(test)]
-pub(crate) use engine::floating_mounted_signal;
+pub(crate) use engine::{debug_floating_registry, floating_mounted_signal};

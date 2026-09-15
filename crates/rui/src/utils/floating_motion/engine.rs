@@ -6,7 +6,7 @@
 //! Portal stack uses [`crate::app::portal_overlay::portal_sync_presence`]: Esc clears logical `open`,
 //! `mounted` stays alive through exit. Do not reuse [`crate::utils::modal_motion`] (dual surface + Dialog zoom).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -222,6 +222,33 @@ thread_local! {
             OverlayMode,
         )>,
     > = const { RefCell::new(Vec::new()) };
+    /// Post-hoist CSS still sampling. Same role as `MODAL_CSS_NEEDS_FRAME` — a live
+    /// query, not a one-shot. Parent Fade settling must not swallow a nested Expand.
+    static FLOATING_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True while a stacked Popover/Menu is measuring, accordion-ing, fading, or exiting.
+///
+/// `about_to_wait` / caret `WaitUntil` must Poll on this the same way they Poll on
+/// [`crate::utils::modal_motion::any_modal_css_needs_frame`]. A one-shot armed at
+/// `Enter` is wrong: ColorPicker Fade consumes it, then the nested format Select
+/// Expand's follow-up frame is coalesced and the menu stays opacity-0 until the
+/// next pointer event.
+pub(crate) fn any_floating_motion_needs_frame() -> bool {
+    if FLOATING_CSS_NEEDS_FRAME.with(|c| c.get()) {
+        return true;
+    }
+    PRESENCE_REGISTRY.with(|reg| {
+        reg.borrow().iter().any(|cell| {
+            let c = cell.borrow();
+            c.gate.is_mounted()
+                && (c.needs_enter
+                    || c.enter_active
+                    || c.measuring
+                    || c.needs_exit_anim
+                    || c.gate.phase() == PresencePhase::Exiting)
+        })
+    })
 }
 
 pub(crate) fn use_floating_presence(
@@ -245,7 +272,12 @@ pub(crate) fn use_floating_presence(
             measuring: false,
         },
         |rc| {
-            PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(rc));
+            PRESENCE_REGISTRY.with(|r| {
+                let mut v = r.borrow_mut();
+                if !v.iter().any(|c| Rc::ptr_eq(c, &rc)) {
+                    v.push(rc);
+                }
+            });
         },
         |rc| {
             PRESENCE_REGISTRY.with(|r| {
@@ -1131,6 +1163,7 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
             }
         }
     });
+    FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(any));
     any
 }
 
@@ -1162,6 +1195,39 @@ fn find_template_id<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
     crate::core::tree::find_by_template_id(el, want)
 }
 
+#[cfg(test)]
+pub(crate) fn debug_floating_registry(root: &Element) -> String {
+    PRESENCE_REGISTRY.with(|reg| {
+        reg.borrow()
+            .iter()
+            .map(|cell| {
+                let c = cell.borrow();
+                let id = c
+                    .shell
+                    .as_ref()
+                    .map(|s| s.overlay_id.clone())
+                    .unwrap_or_else(|| "<no-shell>".into());
+                let tid = if id == "<no-shell>" {
+                    String::new()
+                } else {
+                    panel_tid(&id)
+                };
+                let found = !tid.is_empty() && find_template_id(root, &tid).is_some();
+                format!(
+                    "id={id} mounted={} phase={:?} needs_enter={} measuring={} enter_active={} found={found} kind={:?}",
+                    c.gate.is_mounted(),
+                    c.gate.phase(),
+                    c.needs_enter,
+                    c.measuring,
+                    c.enter_active,
+                    c.shell.as_ref().map(|s| s.kind),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    })
+}
+
 /// Skip pre-hoist CSS tick for live floating panels (parity with modal_shell_defer_css_tick).
 pub(crate) fn floating_panel_defer_css_tick(tid: Option<&str>) -> bool {
     let Some(t) = tid else {
@@ -1182,6 +1248,30 @@ pub(crate) fn floating_panel_defer_css_tick(tid: Option<&str>) -> bool {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn nested_child_owner_reregisters_after_parent_effect_rerun() {
+        use crate::core::reactivity::{create_effect, with_child_owner};
+        create_root(|| {
+            let tick = Signal::new(0u32);
+            create_effect(move || {
+                let _ = tick.get();
+                with_child_owner(|| {
+                    let h = use_floating_presence("rebind-fmt", FloatingMotionKind::Expand);
+                    sync_floating_presence(&h, true);
+                });
+            });
+            assert!(
+                any_floating_motion_needs_frame(),
+                "first child-owner mount must register Expand presence"
+            );
+            tick.set(1);
+            assert!(
+                any_floating_motion_needs_frame(),
+                "parent overlay rebuild disposes the Select owner; named use_signal must rebind the flush registry"
+            );
+        });
+    }
 
     #[test]
     fn fade_enter_seeds_once() {
@@ -1227,6 +1317,30 @@ mod tests {
             assert!(
                 (elapsed_after - elapsed_before).abs() < 1.0,
                 "second flush must not restart fade-in"
+            );
+        });
+    }
+
+    #[test]
+    fn expand_open_stays_busy_across_queries_unlike_one_shot_wake() {
+        create_root(|| {
+            FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(false));
+            let fade = use_floating_presence("fade-parent", FloatingMotionKind::Fade);
+            sync_floating_presence(&fade, true);
+            assert!(
+                any_floating_motion_needs_frame(),
+                "parent Fade open must be visible to about_to_wait before flush"
+            );
+            // One-shot take() would return false here and starve the nested Expand.
+            assert!(
+                any_floating_motion_needs_frame(),
+                "must be a live query, not a consumed latch"
+            );
+            let nested = use_floating_presence("nested-fmt", FloatingMotionKind::Expand);
+            sync_floating_presence(&nested, true);
+            assert!(
+                any_floating_motion_needs_frame(),
+                "nested Expand open must still pump after the parent Fade already entered"
             );
         });
     }

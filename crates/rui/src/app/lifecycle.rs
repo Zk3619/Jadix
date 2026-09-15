@@ -693,12 +693,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         let page_css_needs = crate::style::any_page_css_needs_frame();
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
+        // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
+        // armed at floating Enter is consumed by the parent Fade; query live motion.
+        let overlay_css_needs =
+            modal_css_needs || crate::utils::floating_motion::any_floating_motion_needs_frame();
         let resize_followup = (*self.state.borrow())
             .as_ref()
             .is_some_and(|s| s.needs_resize_followup());
         let force_immediate = about_to_wait_force_immediate(
             crate::utils::modal_motion::take_modal_force_immediate_wake(),
-            modal_css_needs,
+            overlay_css_needs,
             page_css_needs,
             text_edit_pump,
             self.paint_clock_active,
@@ -1359,6 +1363,46 @@ mod idle_control_flow_tests {
         assert!(!about_to_wait_force_immediate(
             false, false, false, false, false, false, false, false,
         ));
+    }
+
+    #[test]
+    fn nested_select_expand_polls_instead_of_caret_wait_until() {
+        // ColorPicker hex Input plants caret WaitUntil (~520ms). Nested format Select
+        // Expand is not Dialog CSS; about_to_wait must still Poll on live floating
+        // motion — a one-shot armed at parent Fade Enter is already gone.
+        use crate::core::reactivity::create_root;
+        use crate::utils::floating_motion::{
+            any_floating_motion_needs_frame, sync_floating_presence, use_floating_presence,
+            FloatingMotionKind,
+        };
+
+        create_root(|| {
+            let fade = use_floating_presence("cp-fade", FloatingMotionKind::Fade);
+            sync_floating_presence(&fade, true);
+            let nested = use_floating_presence("cp-fmt", FloatingMotionKind::Expand);
+            sync_floating_presence(&nested, true);
+            assert!(
+                any_floating_motion_needs_frame(),
+                "nested Expand open must be visible before the first tick"
+            );
+            let caret = Instant::now() + Duration::from_millis(520);
+            let force = about_to_wait_force_immediate(
+                false,
+                any_floating_motion_needs_frame(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+            assert!(force, "floating Expand busy must Poll like modal CSS");
+            assert_eq!(
+                idle_control_flow(Some(caret), force),
+                ControlFlow::Poll,
+                "ColorPicker nested Select cannot WaitUntil the hex caret blink"
+            );
+        });
     }
 
     #[test]

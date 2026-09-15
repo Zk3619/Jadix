@@ -4114,7 +4114,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // with the bar stuck at cubic 1. Settled cubics are inactive, so the 1.5s
                 // hold window still WaitUntil's.
                 let ui_anim_active = crate::style::any_ui_animation_active();
-                let modal_css_active = crate::utils::modal_motion::any_modal_css_needs_frame();
+                let modal_css_active = crate::utils::modal_motion::any_modal_css_needs_frame()
+                    || crate::utils::floating_motion::any_floating_motion_needs_frame();
                 let page_css_active = crate::style::any_page_css_needs_frame();
                 // `request_frame` sets WANT_REDRAW during collect (inside `render` above).
                 // Taking the flag *before* render drops the pulse and the clock freezes
@@ -4332,7 +4333,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     self.caret_wake_at = Some(wake);
                     let anim_pump = self.paint_clock_active
                         || self.force_redraw_count > 0
-                        || crate::utils::modal_motion::any_modal_css_needs_frame();
+                        || crate::utils::modal_motion::any_modal_css_needs_frame()
+                        || crate::utils::floating_motion::any_floating_motion_needs_frame();
                     if !anim_pump {
                         event_loop
                             .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));

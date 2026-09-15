@@ -162,7 +162,12 @@ pub fn use_generic_presence(scope_id: &str, exit_ms: u64) -> GenericPresenceHand
         Duration::from_millis(exit_ms.max(1)),
         || (),
         |rc| {
-            GENERIC_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(rc));
+            GENERIC_PRESENCE_REGISTRY.with(|r| {
+                let mut v = r.borrow_mut();
+                if !v.iter().any(|c| Rc::ptr_eq(c, &rc)) {
+                    v.push(rc);
+                }
+            });
         },
         |rc| {
             GENERIC_PRESENCE_REGISTRY.with(|r| {

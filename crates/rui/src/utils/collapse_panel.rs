@@ -64,7 +64,12 @@ pub fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresence {
         PANEL_EXIT,
         || (),
         |rc| {
-            PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(rc));
+            PANEL_PRESENCE_REGISTRY.with(|r| {
+                let mut v = r.borrow_mut();
+                if !v.iter().any(|c| Rc::ptr_eq(c, &rc)) {
+                    v.push(rc);
+                }
+            });
         },
         |rc| {
             PANEL_PRESENCE_REGISTRY.with(|r| {
