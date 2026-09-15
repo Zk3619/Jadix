@@ -19,7 +19,6 @@ fn rsx_string_menu_button(id: &str, label: &str) -> Element {
         is_active: None,
         variant: None,
         size: None,
-        class: None,
         on_click: None,
         children: Some(Element::from(label)),
         base: None,
@@ -98,6 +97,86 @@ fn header_footer_rsx_string_color_survives_overlay_cascade() {
             // (matches AppState: sync then hoist then build_and_layout).
             let second = layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
             assert_chrome_color(&second, "after overlay hoist cascade");
+        });
+    });
+}
+
+/// Header / Footer sit outside the Content scissor. Menu chrome stamps Tailwind
+/// `text-sm` line-height (not Label `leading-none`). Ancestor overflow (the 2rem
+/// button) must still cover that strut so Cosmic-unbounded descenders can paint.
+#[test]
+fn header_footer_clip_covers_text_sm_line_box() {
+    use crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
+    use crate::utils::text_node::apply_label_defaults;
+
+    const HEADER_LABEL: &str = "RUI Gallery";
+    const FOOTER_LABEL: &str = "Gallery";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root: Element = sidebar("gal-chrome")
+                .variant("inset")
+                .w("13rem")
+                .header(
+                    crate::components::sidebar::sidebar_menu_button("hdr").child(
+                        apply_label_defaults(
+                            Element::new()
+                                .text(HEADER_LABEL.to_string())
+                                .text_size(14.0)
+                                .font_weight(700.0),
+                        ),
+                    ),
+                )
+                .item(
+                    crate::components::sidebar::sidebar_menu_button("nav").child(
+                        apply_label_defaults(Element::new().text("导航").text_size(14.0)),
+                    ),
+                )
+                .footer(
+                    crate::components::sidebar::sidebar_menu_button("ftr").child(
+                        apply_label_defaults(
+                            Element::new()
+                                .text(FOOTER_LABEL.to_string())
+                                .text_size(14.0),
+                        ),
+                    ),
+                )
+                .into();
+
+            let mut layout = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
+                &mut root,
+                &mut layout,
+                &mut impact,
+            );
+            let result = layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+            let sm_lh = 14.0 * TAILWIND_TEXT_SM_LEADING_SCALE;
+            for label in [HEADER_LABEL, FOOTER_LABEL] {
+                let node = find_text(&result.text_nodes, label)
+                    .unwrap_or_else(|| panic!("missing `{label}`"));
+                assert!(
+                    (node.style.line_height_scale.unwrap_or(1.0) - TAILWIND_TEXT_SM_LEADING_SCALE)
+                        .abs()
+                        < 0.01,
+                    "`{label}` must use text-sm leading, got scale={:?}",
+                    node.style.line_height_scale
+                );
+                assert!(
+                    node.height + 0.5 >= sm_lh,
+                    "`{label}` leaf height {} must be the text-sm line box {sm_lh}",
+                    node.height
+                );
+                if let Some(clip) = node.clip_bounds {
+                    let clip_bottom = clip[1] + clip[3];
+                    let box_bottom = node.y + node.height;
+                    assert!(
+                        clip_bottom + 0.01 >= box_bottom,
+                        "`{label}` ancestor clip crops the line box: y={} h={} clip={clip:?}",
+                        node.y,
+                        node.height
+                    );
+                }
+            }
         });
     });
 }

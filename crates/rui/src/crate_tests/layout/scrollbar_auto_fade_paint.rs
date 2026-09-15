@@ -13,7 +13,7 @@ use crate::components::scrollbar::{SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_y_signal_key,
-    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::{Element, LayoutTree};
 use crate::layout::layout_tree::RenderResult;
@@ -283,6 +283,125 @@ fn overlay_skip_replay_keeps_signal_thumb_not_taffy_min_cap() {
                 after[3] > 20.0,
                 "skip must not crush hit to the groove top, h={}",
                 after[3]
+            );
+        });
+    });
+}
+
+fn find_viewport_mut<'a>(el: &'a mut Element, rest: &str) -> Option<&'a mut Element> {
+    let want = format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}{rest}");
+    if el.focus_id.as_deref() == Some(want.as_str()) {
+        return Some(el);
+    }
+    fn contains(el: &Element, rest: &str) -> bool {
+        let want = format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}{rest}");
+        el.focus_id.as_deref() == Some(want.as_str())
+            || el.children.iter().any(|c| contains(c, rest))
+    }
+    let n = el.children.len();
+    for i in 0..n {
+        if contains(&el.children[i], rest) {
+            return find_viewport_mut(&mut el.children[i], rest);
+        }
+    }
+    None
+}
+
+fn thumb_paint_y(result: &RenderResult, thumb: [f32; 4]) -> Option<f32> {
+    result
+        .instances
+        .iter()
+        .filter(|i| {
+            i.color[3] > 0.2
+                && (i.rect_size[0] - thumb[2]).abs() < 2.5
+                && (i.rect_size[1] - thumb[3]).abs() < 2.5
+        })
+        .min_by(|a, b| {
+            let da = (a.rect_pos[0] - thumb[0]).hypot(a.rect_pos[1] - thumb[1]);
+            let db = (b.rect_pos[0] - thumb[0]).hypot(b.rect_pos[1] - thumb[1]);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|i| i.rect_pos[1])
+}
+
+/// MessageScroller uses jump + overlay sibling rail. Jump leaves collect-skip on, so
+/// the track fingerprint must include live offset or the painted thumb freezes.
+#[test]
+fn overlay_skip_must_repaint_thumb_when_offset_changes() {
+    const REST: &str = "diag-skip-offset";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("always")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(0.0);
+
+            layout.set_collect_skip_allowed(true);
+            let first =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let thumb0 =
+                find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y").expect("Y thumb at 0");
+            let paint0 = thumb_paint_y(&first, thumb0).expect("painted thumb at 0");
+            assert!(
+                (paint0 - thumb0[1]).abs() < 2.5,
+                "precondition: overlay collect must paint the thumb at {thumb0:?}, got y={paint0}"
+            );
+
+            let max_y = (content_size[1] - bounds[3]).max(0.0);
+            assert!(
+                max_y > 40.0,
+                "precondition: content must overflow, max={max_y}"
+            );
+            let mid = max_y * 0.5;
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(mid);
+            if let Some(vp) = find_viewport_mut(&mut root, REST) {
+                vp.scroll_offset[1] = mid;
+            }
+
+            let second =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let thumb1 = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb after offset");
+            assert!(
+                thumb1[1] > thumb0[1] + 8.0,
+                "stamped hit must follow the new offset {thumb0:?} → {thumb1:?}"
+            );
+            let paint1 = thumb_paint_y(&second, thumb1).expect("painted thumb after offset");
+            assert!(
+                (paint1 - thumb1[1]).abs() < 2.5,
+                "skip must not freeze the painted thumb at y={paint0} while hit moved to {thumb1:?}; \
+                 painted y={paint1}"
             );
         });
     });

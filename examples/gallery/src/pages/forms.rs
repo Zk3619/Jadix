@@ -876,6 +876,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                                             strategy: None,
                                             width: Some("18rem".into()),
                                             style: None,
+                                            lock_page_scroll: false,
                                         },
                                         || {
                                             Element::from(

@@ -46,9 +46,6 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
     let el = Label(LabelProps {
         id: "gal-emoji-clip".into(),
         text: Some(String::new()),
-        size: None,
-        color: None,
-        weight: None,
         center: Some(false),
         for_target: None,
         truncate: None,

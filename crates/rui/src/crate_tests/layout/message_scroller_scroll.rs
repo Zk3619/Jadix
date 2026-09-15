@@ -1363,7 +1363,6 @@ fn ms_nav_btn(id: &str, label: &str) -> Element {
         is_active: None,
         variant: None,
         size: None,
-        class: None,
         on_click: None,
         children: Some(Element::from(label)),
         base: None,
@@ -1480,7 +1479,7 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
                     ),
             );
 
-        let mut root = sidebar_provider_scope("gal-shell", None, true, Some("inset"), None, || {
+        let mut root = sidebar_provider_scope("gal-shell", None, true, Some("inset"), || {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag.children(vec![
@@ -1500,7 +1499,6 @@ fn message_scroller_scroll_cull_must_not_include_sidebar_captions() {
                     .into(),
                 SidebarInset(SidebarInsetProps {
                     variant: Some("inset".into()),
-                    class: None,
                     children: Some(inset_body.into()),
                     base: None,
                 }),
@@ -1903,13 +1901,8 @@ fn gallery_send_must_not_lift_sidebar_footer() {
                     ms_nav_btn("nav-theme", "主题"),
                     ms_nav_btn("nav-about", "关于"),
                 ]);
-                let body = sidebar_provider_scope(
-                    "gal-shell",
-                    None,
-                    true,
-                    Some("inset"),
-                    None,
-                    move || {
+                let body =
+                    sidebar_provider_scope("gal-shell", None, true, Some("inset"), move || {
                         pack_ms_frag(vec![
                             Sidebar(SidebarProps {
                                 id: "gal-sidebar".into(),
@@ -1917,30 +1910,24 @@ fn gallery_send_must_not_lift_sidebar_footer() {
                                 side: None,
                                 variant: Some("inset".into()),
                                 collapsible: Some("icon".into()),
-                                class: None,
                                 children: Some(pack_ms_frag(vec![
                                     SidebarHeader(SidebarHeaderProps {
-                                        class: None,
                                         children: Some(ms_nav_btn("gal-workspace", "RUI Gallery")),
                                         base: None,
                                     }),
                                     SidebarSeparator(SidebarSeparatorProps {
-                                        class: None,
                                         children: None,
                                         base: None,
                                     }),
                                     SidebarContent(SidebarContentProps {
-                                        class: None,
                                         children: Some(nav),
                                         base: None,
                                     }),
                                     SidebarSeparator(SidebarSeparatorProps {
-                                        class: None,
                                         children: None,
                                         base: None,
                                     }),
                                     SidebarFooter(SidebarFooterProps {
-                                        class: None,
                                         children: Some(ms_nav_btn("gal-user", "Gallery")),
                                         base: None,
                                     }),
@@ -1949,13 +1936,11 @@ fn gallery_send_must_not_lift_sidebar_footer() {
                             }),
                             SidebarInset(SidebarInsetProps {
                                 variant: Some("inset".into()),
-                                class: None,
                                 children: Some(inset_body.into()),
                                 base: None,
                             }),
                         ])
-                    },
-                );
+                    });
                 *live.borrow_mut() = body;
             }
         });
@@ -2280,13 +2265,8 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                     .child(sidebar_group_label().text("导航"))
                     .child(sidebar_group_content().child(sidebar_menu().child(nav_items)))
                     .into();
-                let body = sidebar_provider_scope(
-                    "gal-shell",
-                    None,
-                    true,
-                    Some("inset"),
-                    None,
-                    move || {
+                let body =
+                    sidebar_provider_scope("gal-shell", None, true, Some("inset"), move || {
                         pack_ms_frag(vec![
                             Sidebar(SidebarProps {
                                 id: "gal-sidebar".into(),
@@ -2294,30 +2274,24 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                                 side: None,
                                 variant: Some("inset".into()),
                                 collapsible: Some("icon".into()),
-                                class: None,
                                 children: Some(pack_ms_frag(vec![
                                     SidebarHeader(SidebarHeaderProps {
-                                        class: None,
                                         children: Some(ms_nav_btn("gal-workspace", "RUI Gallery")),
                                         base: None,
                                     }),
                                     SidebarSeparator(SidebarSeparatorProps {
-                                        class: None,
                                         children: None,
                                         base: None,
                                     }),
                                     SidebarContent(SidebarContentProps {
-                                        class: None,
                                         children: Some(nav),
                                         base: None,
                                     }),
                                     SidebarSeparator(SidebarSeparatorProps {
-                                        class: None,
                                         children: None,
                                         base: None,
                                     }),
                                     SidebarFooter(SidebarFooterProps {
-                                        class: None,
                                         children: Some(ms_nav_btn("gal-user", "Gallery")),
                                         base: None,
                                     }),
@@ -2326,13 +2300,11 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                             }),
                             SidebarInset(SidebarInsetProps {
                                 variant: Some("inset".into()),
-                                class: None,
                                 children: Some(inset_body.into()),
                                 base: None,
                             }),
                         ])
-                    },
-                );
+                    });
                 *live.borrow_mut() = body;
             }
         });

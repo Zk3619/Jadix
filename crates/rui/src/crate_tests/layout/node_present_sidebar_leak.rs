@@ -5,17 +5,22 @@
 //! an inset shell so Input's dirty AABB never swallows the rail captions.
 
 use crate::app::damage::{
-    force_full_redraw_after_chrome, paint_dirty_nested_in_larger_node, paint_element_key,
-    push_frame_paint_damage, take_frame_paint_nodes, PaintDirty, PaintDirtyKind,
+    force_full_redraw_after_chrome, intersect_rects, paint_dirty_nested_in_larger_node,
+    paint_element_key, push_frame_paint_damage, push_frame_paint_element, take_frame_paint_nodes,
+    PaintDirty, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
     instance_paint_bounds, node_paint_visual_bounds, node_present_capture_text_indices,
     node_present_dest_reset, node_present_dest_reset_scaled, node_present_foreign_glyph_indices,
-    node_present_glyphs_for_dirty, node_present_needs_glyphs, text_paint_bounds,
+    node_present_glyphs_for_dirty, node_present_needs_glyphs, node_present_scissor_logical,
+    text_paint_bounds,
 };
+use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
-use crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport;
+use crate::components::internal::text_edit::{
+    push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree_in_viewport,
+};
 use crate::components::sidebar::{
     sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps, SidebarMenuButton,
     SidebarMenuButtonProps,
@@ -44,7 +49,6 @@ fn menu_btn(id: &str, label: &str) -> Element {
         is_active: None,
         variant: None,
         size: None,
-        class: None,
         on_click: None,
         children: Some(Element::from(label)),
         base: None,
@@ -52,7 +56,7 @@ fn menu_btn(id: &str, label: &str) -> Element {
 }
 
 fn leak_shell() -> Element {
-    sidebar_provider_scope("gal-shell", None, true, Some("inset"), None, || {
+    sidebar_provider_scope("gal-shell", None, true, Some("inset"), || {
         let mut frag = Element::new();
         frag.set_attr("rui_fragment", "1");
         let mut spin = Element::new().w(16.0).h(16.0);
@@ -95,7 +99,6 @@ fn leak_shell() -> Element {
                 .into(),
             SidebarInset(SidebarInsetProps {
                 variant: Some("inset".into()),
-                class: None,
                 children: Some(inset_body.into()),
                 base: None,
             }),
@@ -871,4 +874,233 @@ fn switching_input_focus_must_dest_reset_the_leave_field() {
         fmt_rect(wipe),
         fmt_rect(ring)
     );
+}
+
+fn wp39_form_field() -> Element {
+    Element::new()
+        .w(400.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .p(16.0)
+        .child(form_field(
+            "email",
+            "邮箱",
+            Element::from(input("wp39-email").placeholder("you@example.com")),
+        ))
+}
+
+fn find_text_node<'a>(el: &'a Element, s: &str) -> Option<&'a Element> {
+    if el.text.as_deref() == Some(s) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_text_node(c, s))
+}
+
+fn find_caret_leaf<'a>(el: &'a Element) -> Option<&'a Element> {
+    if el.text_style.input_caret.is_some() {
+        return Some(el);
+    }
+    el.children.iter().find_map(find_caret_leaf)
+}
+
+fn rect_contains_point(r: [f32; 4], x: f32, y: f32) -> bool {
+    x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3]
+}
+
+/// WP-3.9 `form_field` gap is 4px. Caret blink used to dirty Input chrome
+/// (Hard ring + vertex AA + dest-reset pad) and dest-reset the card color over
+/// the 「邮箱」 glyph bottoms — the label node was not in that dirty set.
+#[test]
+fn form_field_caret_blink_must_not_dirty_or_wipe_the_label() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "wp39-email";
+    use_signal(&input_value_signal_key(ID), String::new).set("you@example.com".into());
+
+    let mut root = wp39_form_field();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(ID));
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let label = find_text_node(&root, "邮箱").expect("邮箱 label");
+    let label_box = label.layout_bounds;
+    let leaf = find_caret_leaf(&root).expect("focused Input text leaf");
+    let input_el = find_input_id(&root, ID).expect("email Input");
+    assert!(
+        label_box[3] > 0.0 && leaf.layout_bounds[3] > 0.0,
+        "label and text leaf must be laid out\n label={} leaf={}",
+        fmt_rect(label_box),
+        fmt_rect(leaf.layout_bounds)
+    );
+    assert!(
+        intersect_rects(label_box, leaf.layout_bounds).is_none(),
+        "precondition: label and text leaf are separate boxes\n label={} leaf={}",
+        fmt_rect(label_box),
+        fmt_rect(leaf.layout_bounds)
+    );
+
+    push_focused_text_edit_caret_damage(&root);
+    let dirties = take_frame_paint_nodes();
+    assert!(
+        !dirties.is_empty(),
+        "caret blink must record a paint-dirty node"
+    );
+    for d in &dirties {
+        assert!(
+            intersect_rects(d.bounds, label_box).is_none(),
+            "caret dirty {} must not intersect the 邮箱 label {}",
+            fmt_rect(d.bounds),
+            fmt_rect(label_box)
+        );
+        assert_ne!(
+            d.key,
+            paint_element_key(input_el),
+            "caret blink must dirty the text leaf, not Input chrome {}\n dirty={}",
+            fmt_rect(input_el.layout_bounds),
+            fmt_rect(d.bounds)
+        );
+    }
+
+    let label_bottom = [
+        label_box[0] + label_box[2] * 0.5,
+        label_box[1] + label_box[3] - 0.5,
+    ];
+    for d in &dirties {
+        let prev = focused
+            .node_paints
+            .iter()
+            .find(|p| p.key == d.key)
+            .map(|p| {
+                node_paint_visual_bounds(
+                    p,
+                    &focused.instances,
+                    &[],
+                    &focused.text_nodes,
+                    &focused.input_chrome_instances,
+                )
+            });
+        let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &focused.node_paints,
+            &focused.instances,
+            &[],
+            1.0,
+            prev,
+        ) else {
+            continue;
+        };
+        assert!(
+            !rect_contains_point(wipe, label_bottom[0], label_bottom[1]),
+            "caret dest-reset {} must not erase the 邮箱 label bottom {:?}\n label={}",
+            fmt_rect(wipe),
+            label_bottom,
+            fmt_rect(label_box)
+        );
+    }
+}
+
+/// WP-3.9 `form_field` gap is 4px. Input Hard-ring dest-reset / 8px node scissor
+/// used to punch the 「邮箱」 glyph bottoms (vertex AA + RESET_PAD on spread 3).
+#[test]
+fn form_field_focus_ring_must_not_dirty_or_wipe_the_label() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "wp39-email";
+    use_signal(&input_value_signal_key(ID), String::new).set("you@example.com".into());
+
+    let mut root = wp39_form_field();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(ID));
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let label = find_text_node(&root, "邮箱").expect("邮箱 label");
+    let label_box = label.layout_bounds;
+    let input_el = find_input_id(&root, ID).expect("email Input");
+    let input_box = input_el.layout_bounds;
+    assert!(
+        label_box[1] + label_box[3] <= input_box[1] + 0.5,
+        "precondition: label sits above the Input\n label={} input={}",
+        fmt_rect(label_box),
+        fmt_rect(input_box)
+    );
+
+    push_frame_paint_element(input_el, input_el.paint_scroll_acc);
+    let dirties = take_frame_paint_nodes();
+    assert!(!dirties.is_empty(), "focus must dirty the Input chrome");
+    let label_bottom = [
+        label_box[0] + label_box[2] * 0.5,
+        label_box[1] + label_box[3] - 0.5,
+    ];
+    for d in &dirties {
+        assert!(
+            intersect_rects(d.bounds, label_box).is_none(),
+            "Input focus dirty {} must not intersect the 邮箱 label {}",
+            fmt_rect(d.bounds),
+            fmt_rect(label_box)
+        );
+        let prev = focused
+            .node_paints
+            .iter()
+            .find(|p| p.key == d.key)
+            .map(|p| {
+                node_paint_visual_bounds(
+                    p,
+                    &focused.instances,
+                    &[],
+                    &focused.text_nodes,
+                    &focused.input_chrome_instances,
+                )
+            });
+        if let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &focused.node_paints,
+            &focused.instances,
+            &[],
+            1.0,
+            prev,
+        ) {
+            assert!(
+                !rect_contains_point(wipe, label_bottom[0], label_bottom[1]),
+                "focus dest-reset {} must not erase the 邮箱 label bottom {:?}\n label={}",
+                fmt_rect(wipe),
+                label_bottom,
+                fmt_rect(label_box)
+            );
+        }
+        let prev_slots: Vec<(u64, [f32; 4])> = prev.map(|b| (d.key, b)).into_iter().collect();
+        let scissor = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            d.key,
+            d.bounds,
+            &prev_slots,
+            &focused.node_paints,
+            8.0,
+        );
+        assert!(
+            !rect_contains_point(scissor, label_bottom[0], label_bottom[1]),
+            "focus scissor {} must not cover the 邮箱 label bottom {:?}\n label={}",
+            fmt_rect(scissor),
+            label_bottom,
+            fmt_rect(label_box)
+        );
+    }
 }

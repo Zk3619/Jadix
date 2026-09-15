@@ -253,6 +253,8 @@ fn string_bool_props_mount_adornments_like_rsx() {
         caret_color: None,
         selection_background: None,
         selection_foreground: None,
+        ring_width: None,
+        ring_color: None,
         on_click: None,
         on_key_down: None,
         children: None,

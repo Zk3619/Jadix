@@ -301,6 +301,64 @@ fn find_click_origin_left_rotate_90_hits_painted_aabb() {
 }
 
 #[test]
+fn find_click_rotate_45_misses_aabb_corner() {
+    let mut el = Element::new().w(80.0).h(80.0).on_click(|| {});
+    el.layout_bounds = [0.0, 0.0, 80.0, 80.0];
+    el.style.rotate_deg = 45.0;
+    let id = crate::style::MAT2D_IDENTITY;
+    let sc = [1.0, 1.0];
+    let acc = [0.0, 0.0];
+    let paint = visual_paint_aabb(&el, acc);
+    let aabb_corner = [80.0, 0.0];
+    assert!(
+        aabb_contains(paint, aabb_corner),
+        "layout corner sits inside the rotated AABB, paint={paint:?}"
+    );
+    assert!(
+        !crate::core::tree::pointer_in_paint_border_box(&el, aabb_corner, acc, id, sc),
+        "layout AABB corner is outside the rotated border box"
+    );
+    assert!(
+        find_click(&el, aabb_corner[0], aabb_corner[1], acc).is_none(),
+        "click must miss the AABB empty corner"
+    );
+    assert!(!element_self_pointer_hit(
+        &el,
+        aabb_corner[0],
+        aabb_corner[1],
+        acc
+    ));
+    let ink = crate::core::tree::layout_local_to_paint_world(&el, [40.0, 4.0], acc, id, sc);
+    assert!(
+        find_click(&el, ink[0], ink[1], acc).is_some(),
+        "painted diamond ink must still click, ink={ink:?}"
+    );
+    assert!(element_self_pointer_hit(&el, ink[0], ink[1], acc));
+}
+
+#[test]
+fn bounding_box_pointer_events_keeps_aabb_corner() {
+    let mut el = Element::new()
+        .w(80.0)
+        .h(80.0)
+        .pointer_events("bounding-box")
+        .on_click(|| {});
+    el.layout_bounds = [0.0, 0.0, 80.0, 80.0];
+    el.style.rotate_deg = 45.0;
+    let aabb_corner = [80.0, 0.0];
+    assert!(
+        find_click(&el, aabb_corner[0], aabb_corner[1], [0.0, 0.0]).is_some(),
+        "SVG bounding-box must hit the entire paint AABB"
+    );
+    assert!(element_self_pointer_hit(
+        &el,
+        aabb_corner[0],
+        aabb_corner[1],
+        [0.0, 0.0]
+    ));
+}
+
+#[test]
 fn find_click_offset_distance_hits_shifted_box() {
     let mut el = Element::new().w(40.0).h(20.0).on_click(|| {});
     el.layout_bounds = [100.0, 100.0, 40.0, 20.0];

@@ -836,7 +836,11 @@ fn wrap_grow_inputs_must_not_reflow_when_placeholder_becomes_value() {
     let mut empty = Vec::new();
     collect_input_bounds(&root, &mut empty);
     empty.sort_by(|a, b| a.0.cmp(&b.0));
-    assert_eq!(empty.len(), 2, "expected Placeholder + Invalid, got {empty:?}");
+    assert_eq!(
+        empty.len(),
+        2,
+        "expected Placeholder + Invalid, got {empty:?}"
+    );
     let empty_dy = (empty[0].1[1] - empty[1].1[1]).abs();
     assert!(
         empty_dy < 2.0,

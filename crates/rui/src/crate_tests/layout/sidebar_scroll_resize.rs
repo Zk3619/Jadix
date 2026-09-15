@@ -43,37 +43,31 @@ fn gallery_like_sidebar(labels: &[&str]) -> Element {
         .child(sidebar_group_label().text("导航"))
         .child(sidebar_group_content().child(sidebar_menu().child(pack(items))))
         .into();
-    sidebar_provider_scope("gal-clip", None, true, Some("inset"), None, move || {
+    sidebar_provider_scope("gal-clip", None, true, Some("inset"), move || {
         Sidebar(SidebarProps {
             id: "gal-sidebar".into(),
             w: Some("13rem".into()),
             side: None,
             variant: Some("inset".into()),
             collapsible: Some("icon".into()),
-            class: None,
             children: Some(pack(vec![
                 SidebarHeader(SidebarHeaderProps {
-                    class: None,
                     children: Some(nav_item("hdr", "RUI Gallery")),
                     base: None,
                 }),
                 SidebarSeparator(SidebarSeparatorProps {
-                    class: None,
                     children: None,
                     base: None,
                 }),
                 SidebarContent(SidebarContentProps {
-                    class: None,
                     children: Some(group),
                     base: None,
                 }),
                 SidebarSeparator(SidebarSeparatorProps {
-                    class: None,
                     children: None,
                     base: None,
                 }),
                 SidebarFooter(SidebarFooterProps {
-                    class: None,
                     children: Some(nav_item("ftr", "Gallery")),
                     base: None,
                 }),

@@ -70,6 +70,7 @@ fn theme_override_partial_destructive_only() {
         },
         dark: Default::default(),
         focus_ring_style: None,
+        focus_ring_width: None,
     };
     install_theme_overrides(patch).expect("valid oklch patch");
     let themed = compose_theme(ThemeMode::Light);
@@ -99,6 +100,7 @@ fn destructive_shadow_follows_theme_toml_destructive_token() {
         },
         dark: Default::default(),
         focus_ring_style: None,
+        focus_ring_width: None,
     };
     install_theme_overrides(patch).expect("valid oklch patch");
     let themed_shadow = semantic_shadow(SemanticTone::Destructive);
@@ -177,6 +179,7 @@ fn set_theme_mode_preserves_user_override() {
             ..Default::default()
         },
         focus_ring_style: None,
+        focus_ring_width: None,
     };
     install_theme_overrides(patch).expect("valid patch");
     set_theme_mode(ThemeMode::Light);
@@ -221,6 +224,7 @@ fn semantic_success_follows_theme_token_not_green_shade() {
         },
         dark: Default::default(),
         focus_ring_style: None,
+        focus_ring_width: None,
     };
     install_theme_overrides(patch).expect("valid oklch patch");
     let themed = parse_color("success");

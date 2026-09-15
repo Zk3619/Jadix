@@ -64,9 +64,6 @@ fn label_base_text_shadow_reaches_layout_text_nodes() {
     let el = Label(LabelProps {
         id: String::new(),
         text: None,
-        size: None,
-        color: None,
-        weight: None,
         center: None,
         for_target: None,
         truncate: None,

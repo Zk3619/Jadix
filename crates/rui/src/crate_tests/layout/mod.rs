@@ -36,5 +36,6 @@ mod sidebar_shell_width;
 mod stack_budget;
 mod subtree_promote;
 mod svg_scene;
+mod tabs_sibling_text_present;
 mod virtual_list_scroll;
 mod virtual_masonry_scroll;

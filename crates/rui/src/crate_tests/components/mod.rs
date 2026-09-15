@@ -9,6 +9,7 @@ mod input_scroll_prepare;
 mod input_shape_suffix;
 mod label_emoji_clip;
 mod overlay_product_discipline;
+mod text_overflow_clip;
 mod textarea_empty_scroll;
 mod textarea_gallery_diag;
 mod textarea_ime_preedit_height;

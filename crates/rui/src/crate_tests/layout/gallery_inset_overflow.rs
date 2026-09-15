@@ -39,7 +39,7 @@ fn max_right_overflow(inset: &Element) -> f32 {
 }
 
 fn gallery_inset_shell(scroll: Element) -> Element {
-    sidebar_provider_scope("gal", None, true, Some("inset"), None, move || {
+    sidebar_provider_scope("gal", None, true, Some("inset"), move || {
         let trigger = Element::from(
             hstack()
                 .w("100%")
@@ -59,7 +59,6 @@ fn gallery_inset_shell(scroll: Element) -> Element {
             sidebar("gal-sidebar").variant("inset").into(),
             SidebarInset(SidebarInsetProps {
                 variant: Some("inset".into()),
-                class: None,
                 children: Some(inset_children),
                 base: None,
             }),
