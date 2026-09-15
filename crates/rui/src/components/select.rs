@@ -111,6 +111,14 @@ impl SelectScrollSelected {
             _ => Self::None,
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Start => "start",
+            Self::Center => "center",
+        }
+    }
 }
 
 fn select_context() -> Context<SelectCtx> {
@@ -425,6 +433,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion: FloatingMotionKind::Expand,
         mode: OverlayMode::Stacked,
         match_trigger_width: match_trigger,
@@ -437,7 +446,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         let rows = untrack(|| body());
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         if !ctx.open.peek() {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&scroll_id);
+            crate::app::scroll_support::reset_scroll_item_into_view(&scroll_id);
         } else if scroll_mode != SelectScrollSelected::None {
             if let Some(index) = find_select_item_index(&rows, &value.peek()) {
                 let n = count_select_items(&rows).max(1);
@@ -1564,6 +1573,7 @@ mod tests {
             let id = "sel-exit-smoke";
             let opts = AnchoredOverlayContentOpts {
                 kind: OverlayKind::Menu,
+                lock_page_scroll: Some(true),
                 motion: FloatingMotionKind::Expand,
                 mode: OverlayMode::Stacked,
                 ..Default::default()

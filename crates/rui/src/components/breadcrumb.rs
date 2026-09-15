@@ -57,7 +57,7 @@ use crate::components::button::button;
 use crate::core::tree::{parse_text_color, Element, Handler};
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
-use crate::style::{parse_text_color as theme_fg, with_class_list};
+use crate::style::parse_text_color as theme_fg;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
@@ -126,7 +126,6 @@ fn build_breadcrumb_link(
     label: &str,
     disambiguator: Option<usize>,
     mut on_click: Handler<()>,
-    class: Option<String>,
 ) -> Element {
     let btn_id = breadcrumb_link_focus_id(id, label, disambiguator);
     let muted = parse_text_color("muted-foreground");
@@ -135,15 +134,13 @@ fn build_breadcrumb_link(
         .size("inline")
         .font_weight(BREADCRUMB_TEXT_WEIGHT)
         .text_color(muted)
+        .class("underline-offset-[2px]")
         .on_click(move || on_click.call(()));
     if !label.is_empty() {
         btn = btn.text(label);
     }
     let mut el: Element = btn.into();
     el.set_attr(ATTR_SLOT, SLOT_LINK);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -202,7 +199,7 @@ pub fn Breadcrumb(
 /// 列表：`flex flex-wrap items-center gap-1.5`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn BreadcrumbList(class: Option<String>, children: Option<Element>) -> Element {
+pub fn BreadcrumbList(children: Option<Element>) -> Element {
     let kids = strip_trailing_separators(children.map(take_packed).unwrap_or_default());
     let mut row = hstack()
         .gap("0.375rem")
@@ -216,16 +213,13 @@ pub fn BreadcrumbList(class: Option<String>, children: Option<Element>) -> Eleme
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_LIST);
     el.set_attr("role", "list");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// Single item shell: `inline-flex items-center gap-1.5`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn BreadcrumbItem(class: Option<String>, children: Option<Element>) -> Element {
+pub fn BreadcrumbItem(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack().gap("0.375rem").items_center().w("auto");
     for k in kids {
@@ -234,9 +228,6 @@ pub fn BreadcrumbItem(class: Option<String>, children: Option<Element>) -> Eleme
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_ITEM);
     el.set_attr("role", "listitem");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -245,7 +236,6 @@ pub fn BreadcrumbItem(class: Option<String>, children: Option<Element>) -> Eleme
 #[allow(non_snake_case)]
 pub fn BreadcrumbLink(
     id: String,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler<()>,
     children: Option<Element>,
 ) -> Element {
@@ -254,13 +244,13 @@ pub fn BreadcrumbLink(
         .map(extract_text_leaf)
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
-    build_breadcrumb_link(&id, &label, None, on_click, class)
+    build_breadcrumb_link(&id, &label, None, on_click)
 }
 
 /// 当前页：`aria-current="page"` · 不可导航。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn BreadcrumbPage(class: Option<String>, children: Option<Element>) -> Element {
+pub fn BreadcrumbPage(children: Option<Element>) -> Element {
     let label = children
         .as_ref()
         .map(extract_text_leaf)
@@ -290,16 +280,13 @@ pub fn BreadcrumbPage(class: Option<String>, children: Option<Element>) -> Eleme
     } else if !label.is_empty() {
         el = el.child(page_text_node(&label));
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// Separator: Default chevron-right.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn BreadcrumbSeparator(class: Option<String>, children: Option<Element>) -> Element {
+pub fn BreadcrumbSeparator(children: Option<Element>) -> Element {
     let mut el: Element = hstack().items_center().justify_center().into();
     el.set_attr(ATTR_SLOT, SLOT_SEPARATOR);
     el.set_attr("role", "presentation");
@@ -316,16 +303,13 @@ pub fn BreadcrumbSeparator(class: Option<String>, children: Option<Element>) -> 
     } else {
         el = el.child(lucide_icon("chevron-right", 14.0));
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 折叠占位：more-horizontal + 屏幕阅读器 "More"。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn BreadcrumbEllipsis(class: Option<String>, children: Option<Element>) -> Element {
+pub fn BreadcrumbEllipsis(children: Option<Element>) -> Element {
     let _ = children;
     let mut el: Element = hstack()
         .items_center()
@@ -338,9 +322,6 @@ pub fn BreadcrumbEllipsis(class: Option<String>, children: Option<Element>) -> E
     el.set_attr("aria-hidden", "true");
     el = el.child(lucide_icon("more-horizontal", 16.0));
     el = el.accesskit_name("More");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -388,7 +369,6 @@ impl BreadcrumbItemBuilder {
 impl From<BreadcrumbItemBuilder> for Element {
     fn from(builder: BreadcrumbItemBuilder) -> Self {
         let el = BreadcrumbItem(BreadcrumbItemProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -434,7 +414,7 @@ impl BreadcrumbLinkBuilder {
 
 impl From<BreadcrumbLinkBuilder> for Element {
     fn from(builder: BreadcrumbLinkBuilder) -> Self {
-        let el = build_breadcrumb_link(&builder.id, &builder.label, None, builder.on_click, None);
+        let el = build_breadcrumb_link(&builder.id, &builder.label, None, builder.on_click);
         builder.chrome.apply(el)
     }
 }
@@ -468,7 +448,6 @@ impl BreadcrumbPageBuilder {
 impl From<BreadcrumbPageBuilder> for Element {
     fn from(builder: BreadcrumbPageBuilder) -> Self {
         let el = BreadcrumbPage(BreadcrumbPageProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -501,7 +480,6 @@ impl BreadcrumbSeparatorBuilder {
 impl From<BreadcrumbSeparatorBuilder> for Element {
     fn from(builder: BreadcrumbSeparatorBuilder) -> Self {
         let el = BreadcrumbSeparator(BreadcrumbSeparatorProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -527,7 +505,6 @@ impl BreadcrumbEllipsisBuilder {
 impl From<BreadcrumbEllipsisBuilder> for Element {
     fn from(builder: BreadcrumbEllipsisBuilder) -> Self {
         let el = BreadcrumbEllipsis(BreadcrumbEllipsisProps {
-            class: None,
             children: None,
             base: None,
             ..Default::default()
@@ -560,7 +537,6 @@ impl BreadcrumbListBuilder {
 impl From<BreadcrumbListBuilder> for Element {
     fn from(builder: BreadcrumbListBuilder) -> Self {
         let el = BreadcrumbList(BreadcrumbListProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -685,7 +661,6 @@ impl From<BreadcrumbBuilder> for Element {
             if part_idx > 0 {
                 list_kids.push(builder.separator_chrome.apply(BreadcrumbSeparator(
                     BreadcrumbSeparatorProps {
-                        class: None,
                         children: None,
                         base: None,
                         ..Default::default()
@@ -703,16 +678,10 @@ impl From<BreadcrumbBuilder> for Element {
                     on_click,
                     chrome,
                 } => {
-                    let link = chrome.apply(build_breadcrumb_link(
-                        "",
-                        &label,
-                        Some(part_idx),
-                        on_click,
-                        None,
-                    ));
+                    let link =
+                        chrome.apply(build_breadcrumb_link("", &label, Some(part_idx), on_click));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
-                            class: None,
                             children: Some(link),
                             base: None,
                             ..Default::default()
@@ -721,14 +690,12 @@ impl From<BreadcrumbBuilder> for Element {
                 }
                 BreadcrumbBuilderPart::Page { label, chrome } => {
                     let page = chrome.apply(BreadcrumbPage(BreadcrumbPageProps {
-                        class: None,
                         children: Some(Element::new().text(label)),
                         base: None,
                         ..Default::default()
                     }));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
-                            class: None,
                             children: Some(page),
                             base: None,
                             ..Default::default()
@@ -737,14 +704,12 @@ impl From<BreadcrumbBuilder> for Element {
                 }
                 BreadcrumbBuilderPart::Ellipsis { chrome } => {
                     let ellipsis = chrome.apply(BreadcrumbEllipsis(BreadcrumbEllipsisProps {
-                        class: None,
                         children: None,
                         base: None,
                         ..Default::default()
                     }));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
-                            class: None,
                             children: Some(ellipsis),
                             base: None,
                             ..Default::default()
@@ -756,7 +721,6 @@ impl From<BreadcrumbBuilder> for Element {
         let list = builder
             .list_chrome
             .apply(BreadcrumbList(BreadcrumbListProps {
-                class: None,
                 children: packed_children(list_kids),
                 base: None,
                 ..Default::default()
@@ -812,7 +776,6 @@ mod tests {
     #[test]
     fn breadcrumb_page_aria_current() {
         let el = BreadcrumbPage(BreadcrumbPageProps {
-            class: None,
             children: Some(Element::new().text("Current")),
             base: None,
             ..Default::default()
@@ -826,7 +789,7 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_inline_button() {
-        let el = build_breadcrumb_link("", "Home", None, Handler::default(), None);
+        let el = build_breadcrumb_link("", "Home", None, Handler::default());
         assert_eq!(
             el.focus_id.as_deref(),
             Some("breadcrumb-link:Home"),
@@ -846,16 +809,19 @@ mod tests {
             .expect("caption");
         assert_eq!(caption.pointer_events_mode(), PointerEvents::None);
         assert_eq!(
-            caption.text_style.underline_offset,
+            el.text_style.underline_offset,
             Some(2.0),
-            "link button default underline offset"
+            "author underline-offset-[2px] on the Button root"
+        );
+        assert!(
+            caption.text_style.underline_offset.is_none(),
+            "caption inherits underline-offset from the Button root"
         );
     }
 
     #[test]
     fn breadcrumb_page_uses_foreground() {
         let el = BreadcrumbPage(BreadcrumbPageProps {
-            class: None,
             children: Some(Element::new().text("Current")),
             base: None,
             ..Default::default()
@@ -872,9 +838,8 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_and_page_typography_match() {
-        let link = build_breadcrumb_link("", "Settings", None, Handler::default(), None);
+        let link = build_breadcrumb_link("", "Settings", None, Handler::default());
         let page = BreadcrumbPage(BreadcrumbPageProps {
-            class: None,
             children: Some(Element::new().text("Profile")),
             base: None,
             ..Default::default()
@@ -912,9 +877,7 @@ mod tests {
     fn list_strips_trailing_separator() {
         let mut list_kids = vec![
             BreadcrumbItem(BreadcrumbItemProps {
-                class: None,
                 children: Some(BreadcrumbPage(BreadcrumbPageProps {
-                    class: None,
                     children: Some(Element::new().text("Last")),
                     base: None,
                     ..Default::default()
@@ -923,7 +886,6 @@ mod tests {
                 ..Default::default()
             }),
             BreadcrumbSeparator(BreadcrumbSeparatorProps {
-                class: None,
                 children: None,
                 base: None,
                 ..Default::default()
@@ -1021,7 +983,6 @@ mod tests {
     fn dual_surface_compiles_shape() {
         let _b: Element = breadcrumb().page("Only").into();
         let el = BreadcrumbList(BreadcrumbListProps {
-            class: None,
             children: None,
             base: None,
             ..Default::default()

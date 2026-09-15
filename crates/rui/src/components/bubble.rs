@@ -2666,7 +2666,7 @@ mod tests {
                 .get(ATTR_FLOATING_EXPAND_FROM_H)
                 .and_then(|s| s.parse::<f32>().ok()),
             Some(reaction_collapsed_bar_height()),
-            "expand animates from collapsed bar height, not 0"
+            "expand enter/exit clip against collapsed bar height, not 0"
         );
         assert_eq!(
             overlay

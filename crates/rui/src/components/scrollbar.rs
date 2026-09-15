@@ -169,6 +169,33 @@ pub(crate) fn normalize_scrollbar_base_for_auto(
     }
 }
 
+/// Live overlay thumb geometry for paint-hash.
+///
+/// Overlay collect draws the rail from scroll signals, not Element styles / Taffy
+/// margin. Fingerprint skip would otherwise replay the last thumb while the list
+/// keeps scrolling — MessageScroller uses jump, so collect-skip stays allowed.
+pub(crate) fn scrollbar_live_geometry_bits(el: &Element) -> Option<[u32; 6]> {
+    let fid = el.focus_id.as_deref()?;
+    let prefix = fid
+        .strip_prefix(SCROLLBAR_THUMB_FOCUS_PREFIX)
+        .or_else(|| fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX))?;
+    let (rest, _axis) = prefix.rsplit_once(':').unwrap_or((prefix, "y"));
+    let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
+    let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+    let vw = use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).peek();
+    let vh = use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).peek();
+    let cw = use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).peek();
+    let ch = use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).peek();
+    Some([
+        sx.to_bits(),
+        sy.to_bits(),
+        vw.to_bits(),
+        vh.to_bits(),
+        cw.to_bits(),
+        ch.to_bits(),
+    ])
+}
+
 /// Live `auto` visibility cubic for paint / paint-hash.
 ///
 /// Overlay collect and fingerprint skip must sample this instead of baking alpha into

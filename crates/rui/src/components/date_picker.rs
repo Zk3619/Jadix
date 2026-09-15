@@ -270,7 +270,8 @@ fn time_unit_combobox(id: &str, value: Signal<String>, max: u32, placeholder: &s
         .value_signal(value)
         .placeholder(placeholder)
         .clearable(false)
-        .class("w-full min-w-0");
+        .class("w-full min-w-0")
+        .scroll_selected("center");
     for i in 0..=max {
         b = b.item(ComboboxItemData::new(format!("{i:02}"), format!("{i:02}")));
     }

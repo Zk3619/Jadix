@@ -72,7 +72,6 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, Handler, LayoutStatus, LayoutTree};
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
-use crate::style::with_class_list;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
@@ -557,7 +556,7 @@ pub fn pagination_range_simple(
 /// 根：`nav` · 全宽居中。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn Pagination(id: String, class: Option<String>, children: Option<Element>) -> Element {
+pub fn Pagination(id: String, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
         .w("100%")
@@ -573,9 +572,6 @@ pub fn Pagination(id: String, class: Option<String>, children: Option<Element>) 
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el = el.accesskit_role("navigation");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     if !id.trim().is_empty() {
         el.template_id = Some(id);
     }
@@ -585,7 +581,7 @@ pub fn Pagination(id: String, class: Option<String>, children: Option<Element>) 
 /// 内容行：`flex items-center gap-1`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn PaginationContent(class: Option<String>, children: Option<Element>) -> Element {
+pub fn PaginationContent(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack().gap("0.25rem").items_center().w("auto").min_w(0.0);
     for k in kids {
@@ -593,16 +589,13 @@ pub fn PaginationContent(class: Option<String>, children: Option<Element>) -> El
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_CONTENT);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 单项壳（对齐 `<li>`）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn PaginationItem(class: Option<String>, children: Option<Element>) -> Element {
+pub fn PaginationItem(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack().gap("0").items_center().w("auto").flex_shrink(0.0);
     for k in kids {
@@ -610,9 +603,6 @@ pub fn PaginationItem(class: Option<String>, children: Option<Element>) -> Eleme
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_ITEM);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -621,7 +611,6 @@ pub fn PaginationItem(class: Option<String>, children: Option<Element>) -> Eleme
 #[allow(non_snake_case)]
 pub fn PaginationLink(
     id: String,
-    class: Option<String>,
     is_active: bool,
     size: String,
     disabled: bool,
@@ -663,9 +652,6 @@ pub fn PaginationLink(
         el.set_attr("data-active", "true");
         el.set_attr("aria-current", "page");
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -676,7 +662,6 @@ pub fn PaginationLink(
 #[allow(non_snake_case)]
 pub fn PaginationPrevious(
     id: String,
-    class: Option<String>,
     text: String,
     hide_text: bool,
     disabled: bool,
@@ -722,9 +707,6 @@ pub fn PaginationPrevious(
     }
     el.set_attr(ATTR_SLOT, SLOT_PREV);
     el.set_attr("aria-label", "Go to previous page");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -735,7 +717,6 @@ pub fn PaginationPrevious(
 #[allow(non_snake_case)]
 pub fn PaginationNext(
     id: String,
-    class: Option<String>,
     text: String,
     hide_text: bool,
     disabled: bool,
@@ -778,16 +759,13 @@ pub fn PaginationNext(
     }
     el.set_attr(ATTR_SLOT, SLOT_NEXT);
     el.set_attr("aria-label", "Go to next page");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 省略号：`more-horizontal`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn PaginationEllipsis(class: Option<String>) -> Element {
+pub fn PaginationEllipsis() -> Element {
     let mut el: Element = hstack()
         .h("2.25rem")
         .w("2.25rem")
@@ -798,9 +776,6 @@ pub fn PaginationEllipsis(class: Option<String>) -> Element {
         .into();
     el.set_attr(ATTR_SLOT, SLOT_ELLIPSIS);
     el.set_attr("aria-hidden", "true");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -814,7 +789,6 @@ static NEXT_PAGINATION_ID: AtomicUsize = AtomicUsize::new(1);
 #[allow(non_snake_case)]
 pub fn PaginationJumper(
     id: String,
-    class: Option<String>,
     /// 总页数（1-based 最大页）。
     page_count: Option<i32>,
     /// 当前页信号；省略则按 `id` 建内部信号。
@@ -839,7 +813,7 @@ pub fn PaginationJumper(
         button_text
     };
     let on_go = Rc::new(RefCell::new(on_go));
-    let mut el = paint_jumper(
+    paint_jumper(
         &instance,
         page_sig.peek().clamp(1, page_count),
         page_count,
@@ -848,11 +822,7 @@ pub fn PaginationJumper(
         Some(Rc::new(move |_n| {
             on_go.borrow_mut().call(());
         })),
-    );
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
-    el
+    )
 }
 
 /// 构建跳转控件（number 输入 + 按钮），包在 [`PaginationItem`] 内。
@@ -940,7 +910,6 @@ fn paint_jumper(
 
     // Item 勿裁切输入焦点环；高度随内容 + 焦点阴影。
     let mut item = PaginationItem(PaginationItemProps {
-        class: None,
         children: Some(shell),
         base: None,
     });
@@ -1196,7 +1165,6 @@ fn paint_builder_content(
         .previous
         .apply(PaginationPrevious(PaginationPreviousProps {
             id: format!("{id_prefix}__prev"),
-            class: None,
             text: Some(previous_text.to_string()),
             hide_text: Some(hide_nav_text),
             disabled: Some(prev_disabled),
@@ -1210,7 +1178,6 @@ fn paint_builder_content(
             base: None,
         }));
     items.push(parts.item.apply(PaginationItem(PaginationItemProps {
-        class: None,
         children: Some(prev_el),
         base: None,
     })));
@@ -1219,10 +1186,8 @@ fn paint_builder_content(
         match entry {
             PaginationPage::Ellipsis => {
                 items.push(parts.item.apply(PaginationItem(PaginationItemProps {
-                    class: None,
                     children: Some(parts.ellipsis.apply(PaginationEllipsis(
                         PaginationEllipsisProps {
-                            class: None,
                             children: None,
                             base: None,
                         },
@@ -1233,10 +1198,8 @@ fn paint_builder_content(
             PaginationPage::Number(n) => {
                 let go = Rc::clone(&notify);
                 items.push(parts.item.apply(PaginationItem(PaginationItemProps {
-                    class: None,
                     children: Some(parts.link.apply(PaginationLink(PaginationLinkProps {
                         id: format!("{id_prefix}__p{n}"),
-                        class: None,
                         is_active: Some(n == page),
                         size: Some("icon".into()),
                         disabled: Some(false),
@@ -1256,7 +1219,6 @@ fn paint_builder_content(
     let next_count = page_count;
     let next_el = parts.next.apply(PaginationNext(PaginationNextProps {
         id: format!("{id_prefix}__next"),
-        class: None,
         text: Some(next_text.to_string()),
         hide_text: Some(hide_nav_text),
         disabled: Some(next_disabled),
@@ -1270,7 +1232,6 @@ fn paint_builder_content(
         base: None,
     }));
     items.push(parts.item.apply(PaginationItem(PaginationItemProps {
-        class: None,
         children: Some(next_el),
         base: None,
     })));
@@ -1291,7 +1252,6 @@ fn paint_builder_content(
     parts
         .content
         .apply(PaginationContent(PaginationContentProps {
-            class: None,
             children: Some(frag.children(items)),
             base: None,
         }))
@@ -1320,16 +1280,11 @@ impl From<PaginationBuilder> for Element {
             custom_body,
         } = builder;
         if let Some(body) = custom_body {
-            let mut el = Pagination(PaginationProps {
+            return SlotChrome::from_opts(class, root_style).apply(Pagination(PaginationProps {
                 id,
-                class,
                 children: Some(body()),
                 base: None,
-            });
-            if let Some(style) = root_style {
-                el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-            }
-            return el;
+            }));
         }
         let instance = if id.trim().is_empty() {
             format!(
@@ -1402,15 +1357,13 @@ impl From<PaginationBuilder> for Element {
                 on_page_change.clone(),
                 &parts_k,
             );
-            let mut root = Pagination(PaginationProps {
-                id: id_k.clone(),
-                class: class_k.clone(),
-                children: Some(content),
-                base: None,
-            });
-            if let Some(ref style) = root_style_k {
-                root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
-            }
+            let mut root = SlotChrome::from_opts(class_k.clone(), root_style_k.clone()).apply(
+                Pagination(PaginationProps {
+                    id: id_k.clone(),
+                    children: Some(content),
+                    base: None,
+                }),
+            );
             if auto_fit {
                 let fit_max_s = fit_max;
                 let fit_compact_s = fit_compact;
@@ -1697,13 +1650,9 @@ mod tests {
     fn rsx_root_exposes_slot() {
         let el = Pagination(PaginationProps {
             id: String::new(),
-            class: None,
             children: Some(PaginationContent(PaginationContentProps {
-                class: None,
                 children: Some(PaginationItem(PaginationItemProps {
-                    class: None,
                     children: Some(PaginationEllipsis(PaginationEllipsisProps {
-                        class: None,
                         children: None,
                         base: None,
                     })),
@@ -1721,7 +1670,6 @@ mod tests {
     fn link_active_sets_data_active() {
         let el = PaginationLink(PaginationLinkProps {
             id: String::new(),
-            class: None,
             is_active: Some(true),
             size: Some("icon".into()),
             disabled: Some(false),
@@ -1743,7 +1691,6 @@ mod tests {
         let hit2 = Rc::clone(&hit);
         let el = PaginationLink(PaginationLinkProps {
             id: "pg-link-click".into(),
-            class: None,
             is_active: Some(false),
             size: Some("icon".into()),
             disabled: Some(false),
@@ -1763,7 +1710,6 @@ mod tests {
         let hit_p = Rc::clone(&hit);
         let prev = PaginationPrevious(PaginationPreviousProps {
             id: "pg-prev".into(),
-            class: None,
             text: Some("上一页".into()),
             hide_text: Some(false),
             disabled: Some(false),
@@ -1782,7 +1728,6 @@ mod tests {
         let hit_n = Rc::clone(&hit);
         let next = PaginationNext(PaginationNextProps {
             id: "pg-next".into(),
-            class: None,
             text: Some("下一页".into()),
             hide_text: Some(false),
             disabled: Some(false),
@@ -1799,7 +1744,6 @@ mod tests {
     fn previous_disabled_suppresses_on_click() {
         let prev = PaginationPrevious(PaginationPreviousProps {
             id: "pg-prev-dis".into(),
-            class: None,
             text: Some("Prev".into()),
             hide_text: Some(false),
             disabled: Some(true),
@@ -1817,7 +1761,6 @@ mod tests {
     fn item_keeps_previous_button_shell_with_icon_and_caption() {
         let prev = PaginationPrevious(PaginationPreviousProps {
             id: "pg-prev-keep".into(),
-            class: None,
             text: Some("上一页".into()),
             hide_text: Some(false),
             disabled: Some(false),
@@ -1827,7 +1770,6 @@ mod tests {
         });
         assert!(prev.children.len() >= 2, "prev has icon + caption");
         let item = PaginationItem(PaginationItemProps {
-            class: None,
             children: Some(prev),
             base: None,
         });

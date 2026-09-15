@@ -517,8 +517,7 @@ pub fn ContextMenuTrigger(id: String, children: Option<Element>) -> Element {
 
     // Custom (non-Button) triggers need an explicit focus-visible ring.
     if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
-        trigger.focusable = true;
-        trigger.focus_ring = true;
+        trigger.set_focusable(true);
     }
     let fid_focus = trigger
         .focus_id
@@ -586,6 +585,7 @@ pub fn context_menu_content(
             gap: 2.0,
         }),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,
         ..Default::default()
@@ -1216,6 +1216,7 @@ pub fn context_menu_sub_content(
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,
         ..Default::default()

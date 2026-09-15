@@ -12,6 +12,18 @@
 //! ```
 //! 读偏移：`use_signal(scroll_offset_y_signal_key("sa-main"), 0.0)`。
 //!
+//! 把某一项/某个子节点滚进视口（下一帧布局后应用）：
+//! ```ignore
+//! <ScrollArea id="list" h="15rem" scrollIntoView="row-9" scrollAlign="center">
+//!   {rows}
+//! </ScrollArea>
+//! // 进入前 snap（默认）；进入后再滚并遵守 smooth/jump：
+//! scroll_area("list").h(240.0).scroll_into_view_when("row-9", "center", "after").children(rows);
+//! scroll_into_view_when("list", "row-9", "center", "after");
+//! ```
+//! `align`：`none`（忽略）| `start` | `center`（默认）| `end`。
+//! `when`：`before`（进入前写偏移）| `after`（进入后按该区域 `scroll_behavior` 滚）。
+//!
 //! ## Notes
 //! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
 //! - 默认 `scrollbar_inset="inside"`（overlay：绝对叠在视口边缘，不占 flex 槽、不内缩内容；
@@ -63,6 +75,8 @@ pub struct ScrollAreaBuilder {
     scrollbar_thumb_color: Option<String>,
     scrollbar_track_border_color: Option<String>,
     scrollbar_thumb_border_color: Option<String>,
+    pending_scroll_into_view: Option<(String, String, String)>,
+    pending_scroll_item: Option<(usize, usize, String, String)>,
 }
 
 pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
@@ -91,11 +105,80 @@ pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
         scrollbar_thumb_color: None,
         scrollbar_track_border_color: None,
         scrollbar_thumb_border_color: None,
+        pending_scroll_into_view: None,
+        pending_scroll_item: None,
     }
 }
 
 pub fn scrollarea(id: &str) -> ScrollAreaBuilder {
     scroll_area(id)
+}
+
+/// 下一帧布局后，把 `target` 滚进 `scroll_id` 视口。
+///
+/// `target` 匹配子节点 `focus_id` 或 `template_id`
+///（`Box` / `VStack` 的 `.id(...)` 会写入 `template_id`）。
+/// `align`：`none`（忽略）| `start` | `center` | `end`。
+///
+/// 默认 **进入前写偏移**（`when = "before"`）：布局就绪后立刻 snap，打开时看不到滚动。
+/// 需要进入后再滚、并遵守该区域 `scroll_behavior`（`smooth` / `jump`）时，用
+/// [`scroll_into_view_when`] 传入 `"after"`。
+///
+/// 任意滚动视口 id 都可用（[`ScrollArea`] / [`crate::components::ScrollViewport`]）。
+pub fn scroll_into_view(
+    scroll_id: impl AsRef<str>,
+    target: impl AsRef<str>,
+    align: impl AsRef<str>,
+) {
+    scroll_into_view_when(scroll_id, target, align, "before");
+}
+
+/// [`scroll_into_view`]，`when`：`before`（进入前 snap）| `after`（进入后按 smooth/jump 滚）。
+pub fn scroll_into_view_when(
+    scroll_id: impl AsRef<str>,
+    target: impl AsRef<str>,
+    align: impl AsRef<str>,
+    when: impl AsRef<str>,
+) {
+    let Some(align) = crate::app::scroll_support::ScrollItemAlign::parse(align.as_ref()) else {
+        return;
+    };
+    crate::app::scroll_support::request_scroll_descendant_into_view_when(
+        scroll_id.as_ref(),
+        target.as_ref(),
+        align,
+        crate::app::scroll_support::ScrollAlignWhen::parse(when.as_ref()),
+    );
+}
+
+/// 等高列表：按 index 把某一项滚进 `scroll_id` 视口（与 Select `scroll_selected` 同源）。
+pub fn scroll_item_into_view(
+    scroll_id: impl AsRef<str>,
+    index: usize,
+    item_count: usize,
+    align: impl AsRef<str>,
+) {
+    scroll_item_into_view_when(scroll_id, index, item_count, align, "before");
+}
+
+/// [`scroll_item_into_view`]，`when`：`before` | `after`。
+pub fn scroll_item_into_view_when(
+    scroll_id: impl AsRef<str>,
+    index: usize,
+    item_count: usize,
+    align: impl AsRef<str>,
+    when: impl AsRef<str>,
+) {
+    let Some(align) = crate::app::scroll_support::ScrollItemAlign::parse(align.as_ref()) else {
+        return;
+    };
+    crate::app::scroll_support::request_scroll_item_into_view_when(
+        scroll_id.as_ref(),
+        index,
+        item_count,
+        align,
+        crate::app::scroll_support::ScrollAlignWhen::parse(when.as_ref()),
+    );
 }
 
 /// ScrollArea：viewport + 内建滚动条。
@@ -119,6 +202,9 @@ pub fn ScrollArea(
     scrollbar_thumb_color: Option<String>,
     scrollbar_track_border_color: Option<String>,
     scrollbar_thumb_border_color: Option<String>,
+    scroll_into_view: Option<String>,
+    scroll_align: Option<String>,
+    scroll_into_view_when: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut builder = scroll_area(&id);
@@ -169,6 +255,11 @@ pub fn ScrollArea(
     }
     if let Some(c) = scrollbar_thumb_border_color {
         builder = builder.scrollbar_thumb_border_color(c);
+    }
+    if let Some(target) = scroll_into_view {
+        let align = scroll_align.unwrap_or_else(|| "center".into());
+        let when = scroll_into_view_when.unwrap_or_else(|| "before".into());
+        builder = builder.scroll_into_view_when(target, align, when);
     }
     if let Some(c) = children {
         builder = builder.child(c);
@@ -377,6 +468,54 @@ impl ScrollAreaBuilder {
         self
     }
 
+    /// 打开/构建后把子孙 `target`（`focus_id` / `template_id`）滚进视口。
+    /// `align`：`none` | `start` | `center` | `end`。默认进入前 snap。
+    pub fn scroll_into_view(self, target: impl AsRef<str>, align: impl AsRef<str>) -> Self {
+        self.scroll_into_view_when(target, align, "before")
+    }
+
+    /// [`Self::scroll_into_view`]，`when`：`before` | `after`。
+    pub fn scroll_into_view_when(
+        mut self,
+        target: impl AsRef<str>,
+        align: impl AsRef<str>,
+        when: impl AsRef<str>,
+    ) -> Self {
+        self.pending_scroll_into_view = Some((
+            target.as_ref().to_string(),
+            align.as_ref().to_string(),
+            when.as_ref().to_string(),
+        ));
+        self
+    }
+
+    /// 等高列表：按 index 滚进视口。默认进入前 snap。
+    pub fn scroll_item_into_view(
+        self,
+        index: usize,
+        item_count: usize,
+        align: impl AsRef<str>,
+    ) -> Self {
+        self.scroll_item_into_view_when(index, item_count, align, "before")
+    }
+
+    /// [`Self::scroll_item_into_view`]，`when`：`before` | `after`。
+    pub fn scroll_item_into_view_when(
+        mut self,
+        index: usize,
+        item_count: usize,
+        align: impl AsRef<str>,
+        when: impl AsRef<str>,
+    ) -> Self {
+        self.pending_scroll_item = Some((
+            index,
+            item_count,
+            align.as_ref().to_string(),
+            when.as_ref().to_string(),
+        ));
+        self
+    }
+
     pub fn children(mut self, children: impl IntoIterator<Item = Element>) -> Self {
         for c in children {
             self = self.child(c);
@@ -388,6 +527,12 @@ impl ScrollAreaBuilder {
 impl From<ScrollAreaBuilder> for Element {
     fn from(mut builder: ScrollAreaBuilder) -> Element {
         builder.id = crate::utils::resolve_instance_id(std::mem::take(&mut builder.id), "scroll");
+        if let Some((target, align, when)) = builder.pending_scroll_into_view.take() {
+            scroll_into_view_when(&builder.id, target, align, when);
+        }
+        if let Some((index, count, align, when)) = builder.pending_scroll_item.take() {
+            scroll_item_into_view_when(&builder.id, index, count, align, when);
+        }
         let inset_key = scroll_scrollbar_inset_signal_key(&builder.id);
         let inset_x_key = scroll_scrollbar_inset_x_signal_key(&builder.id);
         let inset_y_key = scroll_scrollbar_inset_y_signal_key(&builder.id);

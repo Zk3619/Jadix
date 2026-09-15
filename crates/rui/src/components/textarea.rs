@@ -52,6 +52,8 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         caret_color: None,
         selection_background: None,
         selection_foreground: None,
+        ring_width: None,
+        ring_color: None,
         chrome: SlotChrome::default(),
         #[cfg(feature = "text-undo")]
         undo: crate::utils::text_edit_history::TextUndoConfig::textarea_default(),
@@ -72,6 +74,8 @@ pub struct TextareaBuilder {
     caret_color: Option<[u8; 4]>,
     selection_background: Option<[u8; 4]>,
     selection_foreground: Option<[u8; 4]>,
+    ring_width: Option<f32>,
+    ring_color: Option<[f32; 4]>,
     chrome: SlotChrome,
     #[cfg(feature = "text-undo")]
     undo: crate::utils::text_edit_history::TextUndoConfig,
@@ -173,6 +177,18 @@ impl TextareaBuilder {
         self.selection_foreground = Some(color.into_text_color());
         self
     }
+
+    /// Focus-ring thickness in logical px. Overrides the theme default.
+    pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
+        self.ring_width = Some(width.into_f32().max(0.0));
+        self
+    }
+
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.ring_color = Some(color.into_paint_color());
+        self
+    }
 }
 
 impl From<TextareaBuilder> for Element {
@@ -191,6 +207,8 @@ impl From<TextareaBuilder> for Element {
             caret_color,
             selection_background,
             selection_foreground,
+            ring_width,
+            ring_color,
             chrome,
             #[cfg(feature = "text-undo")]
             undo,
@@ -208,7 +226,7 @@ impl From<TextareaBuilder> for Element {
 
         let resize_max_h = resize_max_h.unwrap_or(DEFAULT_RESIZE_MAX_H);
 
-        chrome.apply(build_text_edit_element(TextEditBuildParams {
+        let mut el = chrome.apply(build_text_edit_element(TextEditBuildParams {
             field_id,
             placeholder,
             disabled,
@@ -245,7 +263,14 @@ impl From<TextareaBuilder> for Element {
                     crate::utils::text_edit_history::TextUndoConfig::textarea_default()
                 }
             },
-        }))
+        }));
+        if let Some(w) = ring_width {
+            el.style.focus_ring_width = Some(w);
+        }
+        if let Some(c) = ring_color {
+            el.style.focus_ring_color = Some(c);
+        }
+        el
     }
 }
 
@@ -264,6 +289,8 @@ pub fn Textarea(
     caret_color: Option<String>,
     selection_background: Option<String>,
     selection_foreground: Option<String>,
+    ring_width: Option<f32>,
+    ring_color: Option<String>,
     value: Option<Signal<String>>,
     undo_enabled: Option<bool>,
     max_undo_entries: Option<u32>,
@@ -296,6 +323,12 @@ pub fn Textarea(
     }
     if let Some(c) = selection_foreground {
         b = b.selection_foreground(c);
+    }
+    if let Some(w) = ring_width {
+        b = b.ring_width(w);
+    }
+    if let Some(c) = ring_color {
+        b = b.ring_color(c);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);

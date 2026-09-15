@@ -48,10 +48,44 @@ pub(crate) fn is_color_dragging() -> bool {
 }
 
 pub(crate) fn tick_color_drag(x: f32, y: f32) -> bool {
+    tick_color_drag_with_bounds(x, y, None)
+}
+
+/// Remap SV from the chart's current window-space box (hit-path, else paint AABB).
+pub(crate) fn tick_color_drag_from_tree(root: &crate::core::tree::Element, x: f32, y: f32) -> bool {
+    let live = crate::utils::pointer_drag::peek()
+        .filter(|s| s.kind == crate::utils::pointer_drag::DragKind::ColorPicker)
+        .and_then(|s| {
+            let fid = format!("{}:sv", s.id);
+            let path = crate::app::pointer_events::hit_path(root, x, y);
+            if let Some(e) = path
+                .iter()
+                .rev()
+                .find(|e| e.focus_id.as_deref() == Some(fid.as_str()))
+            {
+                if e.bounds[2] > 1.0 && e.bounds[3] > 1.0 {
+                    return Some(e.bounds);
+                }
+            }
+            crate::app::tree_hit::find_paint_aabb_by_focus_id(root, &fid, [0.0, 0.0])
+                .map(|(aabb, _)| aabb)
+        });
+    tick_color_drag_with_bounds(x, y, live)
+}
+
+/// `live_bounds` is the SV chart's current window-space box (hit-path visual AABB).
+/// Pass it when the page / floating panel may have moved since pointer-down;
+/// frozen document-space y maps the pointer to V→0 (knob glued to the SV bottom).
+pub(crate) fn tick_color_drag_with_bounds(x: f32, y: f32, live_bounds: Option<[f32; 4]>) -> bool {
     COLOR_DRAG.with(|d| {
         let Some(drag) = d.borrow().clone() else {
             return false;
         };
+        if let Some(b) = live_bounds {
+            if b[2] > 1.0 && b[3] > 1.0 {
+                drag.bounds.set(b);
+            }
+        }
         apply_color_pointer(&drag, x, y);
         sync_string_from_rgba(drag.out, drag.rgba.peek(), drag.fmt_sig.peek());
         true

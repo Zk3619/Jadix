@@ -17,6 +17,17 @@
 //!
 //! ## Notes
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
+//!
+//! ## 属性分层（HTML/CSS）
+//! 通用样式不要写进各 `#[component]` 参数。三层：
+//!
+//! 1. **框架** — `Element` / `Style` / `TextStyle`（`w`、`color`、`leading`、`overflow`、`class`）。
+//! 2. **Base / 根** — RSX 走宏 `is_base` + `chrome_binds`；Builder 走 [`SlotChrome`] /
+//!    [`BaseComponentBuilder`]。`#[component]` 已注入 `base`。
+//! 3. **组件** — 只声明领域 prop（`variant`、size-token、`checked`、`value`、slots）。
+//!
+//! 新槽位对照 [`crate::components::card::Card`]：签名只有 `children`（必要时 `id`）。
+//! 不要再加 `class` / `style` / `w` / `color` / `leading`。内部消费继承值，不要 stamp 一份。
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -820,6 +831,16 @@ impl BaseComponentBuilder {
     }
     pub fn outline_width(mut self, width: f32) -> Self {
         self.el = self.el.outline_width(width);
+        self
+    }
+    /// Focus-ring thickness in logical px. Overrides the theme default.
+    pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
+        self.el = self.el.ring_width(width);
+        self
+    }
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl IntoPaintColor) -> Self {
+        self.el = self.el.ring_color(color);
         self
     }
 

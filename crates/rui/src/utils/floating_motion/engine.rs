@@ -44,9 +44,6 @@ const EXPAND_KEYS: CollapseKeyframes = CollapseKeyframes::ACCORDION;
 const EXPAND_MS: f32 = EXPAND_KEYS.duration_ms;
 const EXIT_DURATION: Duration = Duration::from_millis(FADE_EXIT_MS as u64 + 40);
 const EXPAND_EXIT_DURATION: Duration = Duration::from_millis(EXPAND_MS as u64 + 40);
-/// Last accordion-up frames keep chrome (padding/border/shadow) as a flat sliver.
-/// Hide before collect so the exit does not stall on a 0-height capsule.
-const EXPAND_EXIT_HIDE_PX: f32 = 16.0;
 
 thread_local! {
     static EXPAND_OFFSET_KEYFRAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
@@ -149,6 +146,19 @@ fn ensure_expand_down_from_keyframe(from_h: f32) -> String {
         let mut set = cache.borrow_mut();
         if !set.contains(&key) {
             register_keyframes(&key, vec![KeyframeStop::at(0.0).max_height(from_h)]);
+            set.insert(key.clone());
+        }
+    });
+    key
+}
+
+fn ensure_expand_up_to_keyframe(to_h: f32) -> String {
+    let to_h = to_h.max(0.0);
+    let key = format!("rui-expand-up-{}", to_h.round().max(1.0) as u32);
+    EXPAND_OFFSET_KEYFRAMES.with(|cache| {
+        let mut set = cache.borrow_mut();
+        if !set.contains(&key) {
+            register_keyframes(&key, vec![KeyframeStop::at(1.0).max_height(to_h)]);
             set.insert(key.clone());
         }
     });
@@ -365,12 +375,6 @@ fn seed_expand_enter(el: &mut Element, content_height: f32) {
     el.attrs.remove(ATTR_FLOATING_EXPAND_MEASURE);
 }
 
-fn expand_visual_h(el: &Element) -> f32 {
-    crate::layout::dim_length_px(el.style.max_size.height)
-        .filter(|h| *h >= 0.0)
-        .unwrap_or(el.layout_bounds[3].max(0.0))
-}
-
 fn remember_clip_height(presence: &FloatingPresenceHandle, el: &Element) {
     let h = crate::layout::dim_length_px(el.style.max_size.height)
         .filter(|v| *v >= 0.0)
@@ -378,16 +382,17 @@ fn remember_clip_height(presence: &FloatingPresenceHandle, el: &Element) {
     presence.cell.borrow_mut().clip_height = Some(h);
 }
 
-/// Hide the collapsing panel once the clip is a sliver, or when accordion-up finished.
+/// Hide the collapsing panel when accordion-up finished.
 /// Must run **before** the post-tick layout/collect; opacity 0 after collect still paints.
+/// Mid-exit must keep opacity so the clip can finish (`from_h` cover overlays land on the
+/// trigger; menus without `from_h` run to 0). Cutting off at ~16px looked like a row snap.
 fn hide_expand_exit_sliver(
     panel: &mut Element,
     presence: &FloatingPresenceHandle,
     finish: bool,
 ) -> bool {
-    let h = expand_visual_h(panel);
     let done = finish || !animation_run_active(&panel.style, &panel.animation_snapshot);
-    if !done && h >= EXPAND_EXIT_HIDE_PX {
+    if !done {
         return false;
     }
     let mut changed = false;
@@ -395,17 +400,15 @@ fn hide_expand_exit_sliver(
         panel.style.opacity = 0.0;
         changed = true;
     }
-    if done {
-        if !panel.style.animations.is_empty() {
-            panel.style.animations.clear();
-            changed = true;
-        }
-        if crate::layout::dim_length_px(panel.style.max_size.height).is_none_or(|v| v > 0.5) {
-            panel.style.max_size.height = Dimension::length(0.0);
-            changed = true;
-        }
-        finish_floating_exit(presence);
+    if !panel.style.animations.is_empty() {
+        panel.style.animations.clear();
+        changed = true;
     }
+    if crate::layout::dim_length_px(panel.style.max_size.height).is_none_or(|v| v > 0.5) {
+        panel.style.max_size.height = Dimension::length(0.0);
+        changed = true;
+    }
+    finish_floating_exit(presence);
     changed
 }
 
@@ -418,11 +421,15 @@ fn seed_expand_exit(el: &mut Element, content_height: f32) {
         .min(content_height.max(0.0))
         .max(1.0);
     el.style.max_size.height = Dimension::length(from);
-    // `from_h` is the enter baseline (trigger chip). Exit must collapse the open
-    // panel to 0 like accordion-up — not reverse into a one-row slice of the list
-    // (Select month menu parking on "March") then snap 28→0 on finish (hitch).
+    // Covered triggers (Bubble +N / AvatarGroup +N) set `from_h` so enter *and* exit
+    // clip against the pill still in flow. Accordion-up to 0 shrinks through that
+    // pill. Select menus do not set `from_h` and still use accordion-up → 0.
+    let anim = match floating_expand_from_h(el).filter(|h| *h > 0.5) {
+        Some(to_h) => ensure_expand_up_to_keyframe(to_h.min(from)),
+        None => EXPAND_KEYS.up.to_string(),
+    };
     el.style.animations = vec![keyframes_anim_entry(
-        EXPAND_KEYS.up.to_string(),
+        anim,
         EXPAND_KEYS.duration_ms,
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
@@ -962,15 +969,15 @@ pub(crate) fn apply_floating_panel_motion(
             if floating_expand_from_w(panel).is_some() {
                 panel.style.overflow.x = Overflow::Hidden;
             }
-            if let Some(h) = c.clip_height {
-                let apply = h > 1.0 || matches!(phase, PresencePhase::Present);
-                if apply {
-                    panel.style.max_size.height = Dimension::length(h.max(0.0));
-                    if matches!(phase, PresencePhase::Exiting) && h < EXPAND_EXIT_HIDE_PX {
-                        panel.style.opacity = 0.0;
-                    } else if c.enter_active || matches!(phase, PresencePhase::Exiting) {
-                        panel.style.opacity = 1.0;
-                    }
+            if let Some(h) = c.clip_height.filter(|h| *h > 1.0) {
+                // SeededEnter remembers max-height≈0. Writing that back on every
+                // island rebuild zeroes the accordion before layout — the menu
+                // stays 0-tall on PartialLoad, then snaps to the place cap (no
+                // animation; flip-above jumps to a leftover Y). CSS owns clip
+                // while enter/exit keyframes are running.
+                panel.style.max_size.height = Dimension::length(h);
+                if c.enter_active || matches!(phase, PresencePhase::Exiting) {
+                    panel.style.opacity = 1.0;
                 }
             }
             if let Some(w) = c.clip_width.filter(|w| *w > 0.0) {
@@ -993,16 +1000,31 @@ pub(crate) fn floating_portal_phase(
     presence: &FloatingPresenceHandle,
     overlay_kind: OverlayKind,
     overlay_mode: OverlayMode,
+    lock_page_scroll: bool,
 ) -> Option<(PresencePhase, crate::app::portal_overlay::OverlayZ)> {
-    use crate::app::portal_overlay::portal_sync_presence;
+    use crate::app::portal_overlay::portal_sync_presence_lock;
     let want = open.get();
     let phase = sync_floating_presence(presence, want);
     let mounted = floating_mounted_signal(presence);
     if !mounted.get() {
-        let _ = portal_sync_presence(overlay_id, open, mounted, overlay_kind, overlay_mode);
+        let _ = portal_sync_presence_lock(
+            overlay_id,
+            open,
+            mounted,
+            overlay_kind,
+            overlay_mode,
+            lock_page_scroll,
+        );
         return None;
     }
-    let oz = portal_sync_presence(overlay_id, open, mounted, overlay_kind, overlay_mode)?;
+    let oz = portal_sync_presence_lock(
+        overlay_id,
+        open,
+        mounted,
+        overlay_kind,
+        overlay_mode,
+        lock_page_scroll,
+    )?;
     Some((phase, oz))
 }
 
@@ -1079,7 +1101,16 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
                 any = true;
                 // Fade/expand ticks used to skip named Overlay dirty → Load stacked
                 // translucent fill + box-shadow into retain (calendar smear).
-                crate::app::damage::push_frame_paint_element(panel, [0.0, 0.0]);
+                // Expand measure is opacity-0 unconstrained layout — it is not a
+                // paint stamp (see `hoisted_portal_paint_box`).
+                if panel
+                    .attrs
+                    .get(crate::utils::popup::ATTR_FLOATING_EXPAND_MEASURE)
+                    .map(String::as_str)
+                    != Some("1")
+                {
+                    crate::app::damage::push_frame_paint_element(panel, [0.0, 0.0]);
+                }
             }
             if shell.kind == FloatingMotionKind::Expand {
                 apply_expand_width_clip(
@@ -1306,6 +1337,80 @@ mod tests {
     }
 
     #[test]
+    fn expand_enter_rebuild_must_not_zero_remembered_clip() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-clip0", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-clip0",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-clip0__floating_panel").unwrap();
+            panel.layout_bounds[3] = 120.0;
+            let bounds = panel.layout_bounds;
+            panel.used_layout.stamp_border_box(bounds, false);
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel = find_template_id_mut(&mut root, "exp-clip0__floating_panel").unwrap();
+                for _ in 0..4 {
+                    let _ = panel.tick_css_animations(0.016);
+                }
+            }
+            let mh = {
+                let panel = find_template_id_mut(&mut root, "exp-clip0__floating_panel").unwrap();
+                crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0)
+            };
+            assert!(mh > 16.0, "accordion-down must have grown, got {mh}");
+            {
+                let mut c = handle.cell.borrow_mut();
+                c.clip_height = Some(0.0);
+                c.needs_enter = false;
+                c.measuring = false;
+                c.enter_active = true;
+            }
+            let panel = find_template_id_mut(&mut root, "exp-clip0__floating_panel").unwrap();
+            apply_floating_panel_motion(
+                "exp-clip0",
+                panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            let panel = find_template_id_mut(&mut root, "exp-clip0__floating_panel").unwrap();
+            let mh2 = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                mh2 > 16.0,
+                "island rebuild must not write remembered 0 over accordion clip, got {mh2}"
+            );
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == EXPAND_KEYS.down),
+                "enter keyframes must survive rebuild"
+            );
+        });
+    }
+
+    #[test]
     fn expand_with_from_h_starts_at_baseline_not_zero() {
         create_root(|| {
             let mut root = Element::new();
@@ -1353,7 +1458,7 @@ mod tests {
     }
 
     #[test]
-    fn expand_from_h_exit_collapses_to_zero_not_chip() {
+    fn expand_from_h_exit_collapses_to_chip_not_zero() {
         create_root(|| {
             let mut root = Element::new();
             let mut panel = Element::new();
@@ -1416,8 +1521,8 @@ mod tests {
                     .style
                     .animations
                     .iter()
-                    .any(|a| a.name == EXPAND_KEYS.up),
-                "from_h exit must accordion-up to 0, not park at the trigger chip; anims={:?}",
+                    .any(|a| a.name.starts_with("rui-expand-up-")),
+                "from_h exit must clip to the covered trigger, not accordion-up to 0; anims={:?}",
                 panel
                     .style
                     .animations
@@ -1430,16 +1535,25 @@ mod tests {
                     .style
                     .animations
                     .iter()
-                    .any(|a| a.name.starts_with("rui-expand-up-")),
-                "exit must not target rui-expand-up-{{from_h}} (one-row list slice)"
+                    .any(|a| a.name == EXPAND_KEYS.up),
+                "cover expand must not accordion-up through the pill"
             );
             for _ in 0..8 {
                 let _ = panel.tick_css_animations(0.016);
             }
+            let mid = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                mid + 0.5 >= 28.0,
+                "visible exit must not shrink below the reaction/chip height, got {mid}"
+            );
+            assert!(mid < 120.0, "exit must actually be collapsing, got {mid}");
+            for _ in 0..16 {
+                let _ = panel.tick_css_animations(0.016);
+            }
             let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
             assert!(
-                mh < 28.0,
-                "exit max-height must pass the trigger chip toward 0, got {mh}"
+                (mh - 28.0).abs() < 3.0,
+                "from_h exit must land on the covered trigger height, got {mh}"
             );
         });
     }
@@ -1865,6 +1979,88 @@ mod tests {
             assert!(
                 panel.style.opacity < 0.01,
                 "sliver must be hidden before collect, got {}",
+                panel.style.opacity
+            );
+        });
+    }
+
+    #[test]
+    fn expand_exit_keeps_opacity_until_accordion_up_finishes() {
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.layout_bounds = [0.0, 0.0, 100.0, 120.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-exit-full", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-exit-full",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-exit-full__floating_panel").unwrap();
+            panel.layout_bounds[3] = 120.0;
+            let bounds = panel.layout_bounds;
+            panel.used_layout.stamp_border_box(bounds, false);
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-exit-full__floating_panel").unwrap();
+                panel.style.animations.clear();
+                panel.animation_snapshot = Default::default();
+                handle.cell.borrow_mut().enter_active = false;
+                handle.cell.borrow_mut().needs_enter = false;
+                handle.cell.borrow_mut().measuring = false;
+                panel.style.max_size.height = Dimension::length(120.0);
+                panel.style.opacity = 1.0;
+            }
+
+            open.set(false);
+            sync_floating_presence(&handle, false);
+            let panel = find_template_id_mut(&mut root, "exp-exit-full__floating_panel").unwrap();
+            apply_floating_panel_motion(
+                "exp-exit-full",
+                panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Exiting,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-exit-full__floating_panel").unwrap();
+                for _ in 0..4 {
+                    let _ = panel.tick_css_animations(0.016);
+                }
+                let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+                assert!(
+                    animation_run_active(&panel.style, &panel.animation_snapshot),
+                    "accordion-up must still be running"
+                );
+                assert!(
+                    mh > 16.0 && panel.style.opacity > 0.5,
+                    "mid-exit must stay visible so accordion-up can finish; mh={mh} opacity={}",
+                    panel.style.opacity
+                );
+            }
+            let _ = tick_hoisted_floating_css(&mut root);
+            let panel = find_template_id_mut(&mut root, "exp-exit-full__floating_panel").unwrap();
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                panel.style.opacity > 0.5 && mh > 16.0,
+                "hide-on-sliver must not snap opacity at ~16px; mh={mh} opacity={}",
                 panel.style.opacity
             );
         });

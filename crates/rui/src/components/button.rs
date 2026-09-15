@@ -37,11 +37,11 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    button_soft_semantic_chrome, color_mix_over_background, focus_ring_border_color,
-    focus_ring_color, focus_ring_destructive_color, focus_ring_params, focus_ring_style,
-    is_dark_theme, lerp_display_srgb_linear, lerp_paint_chrome, lerp_text_rgba,
-    mix_display_srgb_in_oklab, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
-    TransitionProperty,
+    apply_focus_ring_shadow, apply_focus_ring_shadow_color, button_soft_semantic_chrome,
+    color_mix_over_background, ensure_class_list, extend_class_list, focus_ring_border_color,
+    focus_ring_color, focus_ring_destructive_color, focus_ring_shadow_matches_color, is_dark_theme,
+    lerp_paint_chrome, lerp_text_rgba, ClassSet, PaintChrome, SemanticTone, TimingFunction,
+    TransitionEntry, TransitionProperty, ATTR_SYNC_LABEL_FG,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -61,24 +61,6 @@ fn is_preserved_button_child_slot(el: &Element) -> bool {
 /// Tailwind v4 `shadow-xs` (constants reserved for documentation/reference; current Button variants no longer have shadow by default).
 #[allow(dead_code)]
 const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
-/// Link variant hover underline spacing (logical px; default **2**).
-/// Positive pushes the line **away** from the glyph (CSS `text-underline-offset`).
-/// ShadCN Button uses `underline-offset-4` (4px); Breadcrumb / tight inline keep 2.
-const LINK_UNDERLINE_OFFSET_PX: f32 = 2.0;
-
-fn link_underline_offset_px(builder: &ButtonBuilder) -> f32 {
-    builder
-        .text_style
-        .underline_offset_px
-        .unwrap_or(LINK_UNDERLINE_OFFSET_PX)
-}
-
-fn link_caption_underline_offset(child: &Element) -> f32 {
-    child
-        .text_style
-        .underline_offset
-        .unwrap_or(LINK_UNDERLINE_OFFSET_PX)
-}
 
 trait ColorExt {
     fn with_alpha(self, alpha: f32) -> [f32; 4];
@@ -90,24 +72,14 @@ impl ColorExt for [f32; 4] {
     }
 }
 
-/// Single slot `box-shadow` for Focus ring (Hard/Soft via [`focus_ring_params`]).
-/// 当前 shadcn Base/Aria Button 文档站变体不再挂 `shadow-xs`。
-fn button_shadow_style_for_sync(
-    is_focused: bool,
-    disabled: bool,
-    variant: &str,
-) -> (f32, [f32; 4], [f32; 2], f32) {
-    if is_focused && !disabled {
-        let (blur, spread) = focus_ring_params(focus_ring_style());
-        let c = if variant == "destructive" {
-            focus_ring_destructive_color()
-        } else {
-            focus_ring_color()
-        };
-        return (blur, c, [0.0, 0.0], spread);
+/// Fallback ring color for Button (theme `ring`, or destructive). Authored
+/// [`Style::focus_ring_color`] still wins inside [`apply_focus_ring_shadow_color`].
+fn button_ring_fallback(variant: &str) -> [f32; 4] {
+    if variant == "destructive" {
+        focus_ring_destructive_color()
+    } else {
+        focus_ring_color()
     }
-    let _ = disabled;
-    (0.0, [0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 0.0)
 }
 
 /// CSS hover chrome duration (short to `transition-colors`).
@@ -159,33 +131,9 @@ fn color4_near(a: [f32; 4], b: [f32; 4]) -> bool {
     (0..4).all(|i| (a[i] - b[i]).abs() <= 1e-4)
 }
 
-fn lerp_shadow_params(
-    a: (f32, [f32; 4], [f32; 2], f32),
-    b: (f32, [f32; 4], [f32; 2], f32),
-    t: f32,
-) -> (f32, [f32; 4], [f32; 2], f32) {
-    let t = t.clamp(0.0, 1.0);
-    let col = lerp_display_srgb_linear(a.1, b.1, t);
-    let blur = a.0 * (1.0 - t) + b.0 * t;
-    let off = [
-        a.2[0] * (1.0 - t) + b.2[0] * t,
-        a.2[1] * (1.0 - t) + b.2[1] * t,
-    ];
-    let spread = a.3 * (1.0 - t) + b.3 * t;
-    (blur, col, off, spread)
-}
-
-/// `color-mix(in oklch, base, other pct%)` — pct is the proportion of other (0–100).
-fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32; 4] {
-    let t = (other_pct / 100.0).clamp(0.0, 1.0);
-    let mut out = mix_display_srgb_in_oklab(base, other, t);
-    out[3] = 1.0;
-    out
-}
-
 /// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
 /// - default: `bg-primary` → hover `primary/80`
-/// - secondary: `bg-secondary` → hover `color-mix(secondary, foreground 5%)`
+/// - secondary: `bg-secondary` → hover `secondary/80`
 /// - success / warning / destructive: soft tint via [`button_soft_semantic_chrome`] / [`SemanticTone`]
 /// - outline / ghost / link: see each branch
 pub(crate) fn button_chrome_for_variant(
@@ -229,11 +177,7 @@ pub(crate) fn button_chrome_for_variant(
                     border: None,
                 },
                 PaintChrome {
-                    bg: color_mix_oklch_pct(
-                        parse_color("secondary"),
-                        parse_color("foreground"),
-                        5.0,
-                    ),
+                    bg: parse_color("secondary/80"),
                     fg,
                     border: None,
                 },
@@ -305,6 +249,46 @@ pub(crate) fn button_chrome_for_variant(
             );
             (c.bg, c.fg, c.border)
         }
+    }
+}
+
+/// ShadCN Button CVA color classes. Hover/disabled go through class variants
+/// (same path as Tabs/Toggle), so author `class="hover:bg-*"` wins by CSS order.
+pub(crate) fn button_variant_color_classes(variant: &str) -> &'static str {
+    match variant {
+        "secondary" => {
+            "bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+        }
+        "outline" => {
+            "bg-background text-foreground hover:bg-accent hover:text-accent-foreground \
+             dark:bg-input/30 dark:hover:bg-input/50 dark:hover:text-accent-foreground \
+             disabled:opacity-50"
+        }
+        "ghost" => {
+            "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 \
+             disabled:opacity-50"
+        }
+        "link" => {
+            "text-primary underline-offset-[4px] hover:underline hover:text-primary \
+             disabled:opacity-50"
+        }
+        "destructive" => {
+            "bg-destructive/10 text-destructive hover:bg-destructive/20 \
+             dark:bg-destructive/20 dark:hover:bg-destructive/30 disabled:opacity-50"
+        }
+        "success" => {
+            "bg-success/10 text-success hover:bg-success/20 \
+             dark:bg-success/20 dark:hover:bg-success/30 disabled:opacity-50"
+        }
+        "warning" => {
+            "bg-warning/10 text-warning hover:bg-warning/20 \
+             dark:bg-warning/20 dark:hover:bg-warning/30 disabled:opacity-50"
+        }
+        "info" => {
+            "bg-info/10 text-info hover:bg-info/20 \
+             dark:bg-info/20 dark:hover:bg-info/30 disabled:opacity-50"
+        }
+        _ => "bg-primary text-primary-foreground hover:bg-primary/80 disabled:opacity-50",
     }
 }
 
@@ -668,9 +652,6 @@ impl ButtonBuilder {
 
     pub fn variant(mut self, v: impl Into<ButtonVariant>) -> Self {
         self.variant = v.into();
-        if self.variant == ButtonVariant::Link && self.text_style.underline_offset_px.is_none() {
-            self.text_style.underline_offset_px = Some(LINK_UNDERLINE_OFFSET_PX);
-        }
         self
     }
 
@@ -715,7 +696,8 @@ impl ButtonBuilder {
         self
     }
 
-    /// Link hover underline offset (logical px; CSS `text-underline-offset`, positive = down).
+    /// Link `underline-offset`. Logical px; CSS `text-underline-offset` (positive = down).
+    /// Overrides the variant class (`underline-offset-[4px]`).
     pub fn text_underline_offset(mut self, px: impl IntoF32) -> Self {
         self.text_style.underline_offset_px = Some(px.into_f32());
         self
@@ -880,11 +862,7 @@ impl ButtonBuilder {
 impl From<ButtonBuilder> for Element {
     fn from(builder: ButtonBuilder) -> Element {
         let chrome = builder.chrome.clone();
-        let caption_underline_offset = if builder.variant == ButtonVariant::Link {
-            Some(link_underline_offset_px(&builder))
-        } else {
-            builder.text_style.underline_offset_px
-        };
+        let caption_underline_offset = builder.text_style.underline_offset_px;
 
         let id_hover = format!("{}_hover", builder.id);
         let hovered = use_signal(&id_hover, || false);
@@ -896,9 +874,11 @@ impl From<ButtonBuilder> for Element {
         let is_hovered = hovered.peek() && !builder.disabled;
         let is_focused = focused.peek() == builder.id && focus_visible.peek() && !builder.disabled;
 
-        let t = hover_t_from_bool(is_hovered, builder.disabled);
-        // Focus ring is instantaneous (same frame as Tab); do not tween.
-        let focus_t = if is_focused { 1.0 } else { 0.0 };
+        // Rest chrome only at build. Hover/disabled colors are class variants
+        // (`button_variant_color_classes`) resolved like CSS `:hover`.
+        let t = 0.0_f32;
+        // Focus ring is instantaneous (same frame as Tab); applied after class list
+        // so `ring-2` / `.ring_color()` override the theme the same way as Input.
 
         // Apply size-based padding if not specified
         let mut container = builder.container;
@@ -932,19 +912,6 @@ impl From<ButtonBuilder> for Element {
                 b_color[3] *= 0.5;
             }
             container = container.border(b_color, 1.0);
-        }
-        let vkey = builder.variant.as_paint_key();
-        let rest_sh = button_shadow_style_for_sync(false, builder.disabled, vkey);
-        let ring_sh = button_shadow_style_for_sync(true, builder.disabled, vkey);
-        let (sh_blur, sh_col, sh_off, sh_spread) = lerp_shadow_params(rest_sh, ring_sh, focus_t);
-        if sh_blur > 0.0 || sh_col[3] > 0.0 {
-            container = container
-                .box_shadow_color(sh_col)
-                .box_shadow_blur(sh_blur)
-                .box_shadow_offset_x(sh_off[0])
-                .box_shadow_offset_y(sh_off[1])
-                .box_shadow_spread(sh_spread)
-                .box_shadow_inset(false);
         }
 
         let overflow_mode = if builder.truncate {
@@ -983,11 +950,6 @@ impl From<ButtonBuilder> for Element {
                     color[3] = (color[3] as f32 * 0.5) as u8;
                 }
                 let is_lucide_glyph = child.text_style.font_family.as_deref() == Some("lucide");
-                let underline = if is_lucide_glyph {
-                    false
-                } else {
-                    builder.variant == ButtonVariant::Link && is_hovered
-                };
                 let size_px = if is_lucide_glyph {
                     child.text_style.size_resolved()
                 } else {
@@ -1007,8 +969,8 @@ impl From<ButtonBuilder> for Element {
                     text_content,
                     TextNodeConfig {
                         color,
-                        underline,
-                        underline_offset_px: caption_underline_offset,
+                        underline: false,
+                        underline_offset_px: None,
                         font_family: child.text_style.font_family.clone(),
                         size_px,
                         weight: if is_lucide_glyph {
@@ -1046,6 +1008,13 @@ impl From<ButtonBuilder> for Element {
                     if builder.variant == ButtonVariant::Link {
                         text_node = text_node.pointer_events("none");
                     }
+                }
+                if is_lucide_glyph {
+                    text_node = text_node.underline(false);
+                } else {
+                    // Inherit `hover:underline` / `underline-offset-*` from the Button root.
+                    text_node.text_style.underline = None;
+                    text_node.text_style.underline_offset = None;
                 }
                 if preserve_binding {
                     if let Some(tid) = child.template_id.take() {
@@ -1105,7 +1074,70 @@ impl From<ButtonBuilder> for Element {
                 crate::core::tree::CursorKind::Pointer
             });
         }
-        chrome.apply(el)
+        let variant_key = builder.variant.as_paint_key();
+        let explicit_fg = builder.explicit_text_color;
+        let mut el = chrome.apply(el);
+        if let Some(off) = caption_underline_offset {
+            el.text_style.underline_offset = Some(off);
+        }
+        if explicit_fg.is_none() {
+            el.set_attr(ATTR_SYNC_LABEL_FG, "1");
+        }
+        if disabled {
+            el.set_attr("disabled", "true");
+        }
+        let _ = ensure_class_list(&mut el, button_variant_color_classes(variant_key));
+        if is_focused {
+            apply_focus_ring_shadow_color(&mut el, true, false, button_ring_fallback(variant_key));
+        }
+        el
+    }
+}
+
+/// Class variants own bg/fg/link underline. Still join ButtonGroup radii and explicit caption fg.
+fn paint_button_join_and_link_underline(
+    el: &mut Element,
+    _layout_tree: &mut LayoutTree,
+    desc: &ButtonHoverPaint,
+    is_hovered: bool,
+    impact: &mut LayoutStatus,
+) {
+    if desc.text_color.is_some() {
+        let t = hover_t_from_bool(is_hovered, desc.disabled);
+        let (_, variant_text_color, _) = button_chrome_for_variant(&desc.variant, t);
+        let text_color = if desc.variant == "link" {
+            link_caption_color(desc.text_color, variant_text_color, is_hovered)
+        } else {
+            desc.text_color.unwrap_or(variant_text_color)
+        };
+        let mut style_hit = false;
+        for child in &mut el.children {
+            if is_preserved_button_child_slot(child) || child.text.is_none() {
+                continue;
+            }
+            if child.text_style.font_family.as_deref() == Some("lucide") {
+                continue;
+            }
+            let old_tc = child.text_style.color_resolved();
+            let mut color = text_color;
+            if desc.disabled {
+                color[3] = ((color[3] as f32) * 0.5).round() as u8;
+            }
+            child.text_style.color = Some(color);
+            if child.text_style.color_resolved() != old_tc {
+                style_hit = true;
+            }
+        }
+        if style_hit {
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+            push_button_paint_damage(el);
+        }
+    }
+    let before_radii = el.style.radii;
+    crate::components::button_group::apply_button_group_join_chrome(el);
+    if el.style.radii != before_radii {
+        *impact = impact.merge(LayoutStatus::StyleChanged);
+        push_button_paint_damage(el);
     }
 }
 
@@ -1119,6 +1151,11 @@ fn paint_button_root_from_hover(
     impact: &mut LayoutStatus,
 ) {
     ensure_button_css_transition(el);
+    let class_owns_colors = el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
+    if class_owns_colors {
+        paint_button_join_and_link_underline(el, layout_tree, desc, is_hovered, impact);
+        return;
+    }
     let t = hover_t_from_bool(is_hovered, desc.disabled);
     let (mut bg, variant_text_color, border) = button_chrome_for_variant(&desc.variant, t);
     let text_color = if desc.variant == "link" {
@@ -1141,7 +1178,6 @@ fn paint_button_root_from_hover(
         }
         c
     });
-    let underline = desc.variant == "link" && is_hovered;
     let target_bw = if border.is_some() { 1.0_f32 } else { 0.0_f32 };
     let root_color_ok = match border {
         Some(b_color) => color4_near(el.style.border_color, b_color),
@@ -1157,21 +1193,14 @@ fn paint_button_root_from_hover(
         if child.text.is_none() {
             continue;
         }
+        if child.text_style.font_family.as_deref() == Some("lucide") {
+            continue;
+        }
         let mut c = text_color;
         if desc.disabled {
             c[3] = ((c[3] as f32) * 0.5).round() as u8;
         }
-        let want_uo = if desc.variant == "link" {
-            link_caption_underline_offset(child)
-        } else {
-            child.text_style.underline_offset_resolved()
-        };
-        // link: keep `None`(currentColor), don't pin Some(rgb).
-        if child.text_style.underline_resolved() != underline
-            || child.text_style.color_resolved() != c
-            || (desc.variant == "link" && child.text_style.decoration_color.is_some())
-            || (child.text_style.underline_offset_resolved() - want_uo).abs() > 0.01
-        {
+        if child.text_style.color_resolved() != c {
             text_children_ok = false;
             break;
         }
@@ -1205,7 +1234,7 @@ fn paint_button_root_from_hover(
     }
     // ButtonGroup conjoined: write back the border and then fillet it/draw the overlapping mark.
     crate::components::button_group::apply_button_group_join_chrome(el);
-    let mut layout_hit = el.style.border_width != old_bw;
+    let layout_hit = el.style.border_width != old_bw;
     let mut style_hit =
         !layout_hit && (el.style.bg_color != old_bg || el.style.border_color != old_bc);
     // 仅边框宽度影响布局；色值变化不必每帧刷 Taffy。
@@ -1220,46 +1249,21 @@ fn paint_button_root_from_hover(
         if child.text.is_none() {
             continue;
         }
-        let prev_u = child.text_style.underline_resolved();
+        if child.text_style.font_family.as_deref() == Some("lucide") {
+            continue;
+        }
         let old_tc = child.text_style.color_resolved();
         let mut color = text_color;
         if desc.disabled {
             color[3] = ((color[3] as f32) * 0.5).round() as u8;
         }
-        let prev_uo = child.text_style.underline_offset_resolved();
-        let prev_dc = child.text_style.decoration_color;
         child.text_style.color = Some(color);
-        child.text_style.underline = Some(underline);
-        if desc.variant == "link" {
-            if child.text_style.underline_offset.is_none() {
-                child.text_style.underline_offset = Some(LINK_UNDERLINE_OFFSET_PX);
-            }
-            // currentColor: Don't write Some(rgb), let cascade and prepare_text follow the text color.
-            child.text_style.decoration_color = None;
-            child.text_style.decoration_color_specified = false;
-        }
-        let child_layout_hit = if prev_u != underline {
-            // Link hover underline is paint-only; Taffy remeasure thrashes hit boxes
-            // (Breadcrumb link hover could spuriously leave after one miss frame).
-            desc.variant != "link"
-        } else {
-            false
-        };
-        if child_layout_hit {
-            layout_hit = true;
-        } else if child.text_style.color_resolved() != old_tc
-            || prev_u != underline
-            || prev_dc != child.text_style.decoration_color
-            || (prev_uo - child.text_style.underline_offset_resolved()).abs() > 0.01
-        {
+        if child.text_style.color_resolved() != old_tc {
             style_hit = true;
-        }
-        if child_layout_hit && child.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(child);
         }
     }
     if layout_hit {
-        // Border/underline chrome still updates Taffy above, but report StyleChanged so
+        // Border chrome still updates Taffy above, but report StyleChanged so
         // WP-2.2 keeps a local damage rect. LayoutChanged here forced FullClear on every
         // Button hover leave (including Inspector Set/Apply).
         *impact = impact.merge(LayoutStatus::StyleChanged);
@@ -1288,27 +1292,25 @@ fn sync_button_focus_ring_shadow(
     _focus_id: &str,
     impact: &mut LayoutStatus,
 ) {
-    // Instant focus-visible ring (same frame as Tab).
-    let focus_t = if is_focused { 1.0 } else { 0.0 };
-    let rest_sh = button_shadow_style_for_sync(false, disabled, variant);
-    let ring_sh = button_shadow_style_for_sync(true, disabled, variant);
-    let (want_blur, want_color, want_off, want_spread) =
-        lerp_shadow_params(rest_sh, ring_sh, focus_t);
-    let want_inset = false;
-    let blur_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01;
-    let color_ok = (el.style.shadow_color[0] - want_color[0]).abs() <= 0.001
-        && (el.style.shadow_color[1] - want_color[1]).abs() <= 0.001
-        && (el.style.shadow_color[2] - want_color[2]).abs() <= 0.001
-        && (el.style.shadow_color[3] - want_color[3]).abs() <= 0.001;
-    let off_ok = (el.style.shadow_offset[0] - want_off[0]).abs() <= 0.01
-        && (el.style.shadow_offset[1] - want_off[1]).abs() <= 0.01;
-    let spread_ok = (el.style.shadow_spread - want_spread).abs() <= 0.01;
-    let inset_ok = el.style.shadow_inset == want_inset;
+    // Instant focus-visible ring (same frame as Tab). Geometry/color match Input
+    // via `apply_focus_ring_shadow_color` (theme + per-element `ring-*` overrides).
+    let show = is_focused && !disabled;
+    let ring = button_ring_fallback(variant);
+    let mut dirty = false;
+    if show {
+        if !focus_ring_shadow_matches_color(el, true, ring) {
+            apply_focus_ring_shadow_color(el, true, false, ring);
+            dirty = true;
+        }
+    } else if focus_ring_shadow_matches_color(el, true, ring) {
+        apply_focus_ring_shadow(el, false, true);
+        dirty = true;
+    }
 
     // `focus-visible:border-ring` for variants that already have a border (e.g. outline).
     let mut border_dirty = false;
     if el.style.border_width > 0.5 {
-        let want_border = if is_focused && !disabled {
+        let want_border = if show {
             if variant == "destructive" {
                 focus_ring_destructive_color()
             } else {
@@ -1328,14 +1330,9 @@ fn sync_button_focus_ring_shadow(
         }
     }
 
-    if blur_ok && color_ok && off_ok && spread_ok && inset_ok && !border_dirty {
+    if !dirty && !border_dirty {
         return;
     }
-    el.style.shadow_color = want_color;
-    el.style.shadow_blur = want_blur;
-    el.style.shadow_offset = want_off;
-    el.style.shadow_spread = want_spread;
-    el.style.shadow_inset = want_inset;
     layout_tree.update_taffy_node_style(el);
     *impact = impact.merge(LayoutStatus::StyleChanged);
     push_button_paint_damage(el);
@@ -1347,7 +1344,7 @@ fn sync_button_focus_ring_shadow(
 /// Unknown names fall back to `default` (WP-3.8 Glossary).
 pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
     let variant = ButtonVariant::from(variant.as_ref()).as_paint_key();
-    let hovered = {
+    {
         let inner = &mut *el.inner;
         let Some(desc) = inner.button_hover_paint.as_mut() else {
             return LayoutStatus::Clean;
@@ -1356,38 +1353,18 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
             return LayoutStatus::Clean;
         }
         desc.variant = variant.to_string();
-        // Preserve live hover — painting rest chrome (t=0) while the pointer is down
-        // on the active nav item flashes secondary↔hover every bind/rebuild.
-        let disabled = desc.disabled;
-        inner
-            .focus_id
-            .as_deref()
-            .map(|fid| {
-                let sig = use_signal(&format!("{fid}_hover"), || false);
-                sig.is_alive() && sig.peek() && !disabled
-            })
-            .unwrap_or(false)
-    };
-    let desc = el.button_hover_paint.as_ref().expect("set above");
-    let hover_t = hover_t_from_bool(hovered, desc.disabled);
-    let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);
-    let text_color = desc.text_color.unwrap_or(variant_text_color);
-    el.style.bg_color = bg;
-    match border {
-        Some(b) => {
-            el.style.border_color = b;
-            el.style.border_width = 1.0;
-        }
-        None => {
-            el.style.border_width = 0.0;
-        }
     }
-    for child in &mut el.children {
-        if is_preserved_button_child_slot(child) {
-            continue;
-        }
-        if child.text.is_some() {
-            child.text_style.color = Some(text_color);
+    let desc = el.button_hover_paint.as_ref().expect("set above");
+    let explicit_fg = desc.text_color;
+    let _ = extend_class_list(el, button_variant_color_classes(variant));
+    if let Some(fg) = explicit_fg {
+        for child in &mut el.children {
+            if is_preserved_button_child_slot(child) {
+                continue;
+            }
+            if child.text.is_some() {
+                child.text_style.color = Some(fg);
+            }
         }
     }
     LayoutStatus::StyleChanged
@@ -1402,7 +1379,12 @@ pub fn apply_bound_button_disabled(el: &mut Element, disabled: bool) -> LayoutSt
         return LayoutStatus::Clean;
     }
     desc.disabled = disabled;
-    el.focusable = !disabled;
+    el.set_focusable(!disabled);
+    if disabled {
+        el.set_attr("disabled", "true");
+    } else {
+        el.attrs.remove("disabled");
+    }
     LayoutStatus::StyleChanged
 }
 
@@ -1484,7 +1466,7 @@ impl crate::core::tree::IntoElementList for ButtonBuilder {
 #[cfg(test)]
 mod chrome_tests {
     use super::{button, button_chrome_for_variant};
-    use crate::core::tree::Element;
+    use crate::core::tree::{Element, LayoutStatus};
     use crate::style::color_mix_over_background;
     use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
 
@@ -1537,14 +1519,13 @@ mod chrome_tests {
     }
 
     #[test]
-    fn secondary_hover_darkens_via_foreground_mix() {
+    fn secondary_hover_uses_secondary_80() {
         set_theme_mode(ThemeMode::Light);
         let (rest, _, _) = button_chrome_for_variant("secondary", 0.0);
         let (hover, fg, _) = button_chrome_for_variant("secondary", 1.0);
         assert_eq!(fg, parse_text_color("secondary-foreground"));
         assert_eq!(hex(rest), "#F5F5F5");
-        assert_eq!(hex(hover), "#E5E5E5");
-        assert!(luminance(hover) < luminance(rest));
+        assert_eq!(hex(hover), hex(parse_color("secondary/80")));
     }
 
     #[test]
@@ -1642,14 +1623,71 @@ mod chrome_tests {
     }
 
     #[test]
-    fn link_default_underline_offset_is_2px() {
+    fn link_default_underline_offset_is_4px() {
         let el: Element = button("link-offset").variant("link").text("Go").into();
+        assert_eq!(
+            el.text_style.underline_offset,
+            Some(4.0),
+            "shadcn link uses underline-offset-[4px] (not rem-scale 4 = 16px)"
+        );
         let caption = el
             .children
             .iter()
             .find(|c| c.text.is_some())
             .expect("caption");
-        assert_eq!(caption.text_style.underline_offset, Some(2.0));
+        assert!(
+            caption.text_style.underline.is_none(),
+            "caption inherits hover:underline from the Button root"
+        );
+    }
+
+    #[test]
+    fn link_author_underline_offset_class_wins() {
+        let el: Element = button("link-offset-author")
+            .variant("link")
+            .class("underline-offset-[8px]")
+            .text("Go")
+            .into();
+        assert_eq!(el.text_style.underline_offset, Some(8.0));
+    }
+
+    #[test]
+    fn underline_offset_bare_token_is_rem_scale() {
+        let el: Element = button("link-offset-rem")
+            .variant("link")
+            .class("underline-offset-4")
+            .text("Go")
+            .into();
+        let root = crate::layout::dimension::css_root_font_size_px();
+        assert!(
+            (el.text_style.underline_offset.unwrap_or(0.0) - root).abs() < 0.01,
+            "underline-offset-4 = 1rem = {root}px, got {:?}",
+            el.text_style.underline_offset
+        );
+    }
+
+    #[test]
+    fn link_hover_underline_is_text_style() {
+        use crate::core::reactivity::create_root;
+        use crate::style::{resolve_class_variants, VariantContext};
+
+        let (_h, mut el) =
+            create_root(|| -> Element { button("t-link-ul").variant("link").text("Go").into() });
+        let attrs = el.attrs.clone();
+        let ctx = VariantContext {
+            hovered: true,
+            attrs: Some(&attrs),
+            ..VariantContext::default()
+        };
+        let _ = resolve_class_variants(&mut el, &ctx);
+        assert_eq!(el.text_style.underline, Some(true));
+        let caption = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Go"))
+            .expect("caption");
+        assert_eq!(caption.text_style.underline, Some(true));
+        assert_eq!(caption.text_style.underline_offset, Some(4.0));
     }
 
     #[test]
@@ -1744,6 +1782,110 @@ mod chrome_tests {
         assert_eq!(
             el.children[0].attrs.get("data-slot").map(|s| s.as_str()),
             Some("kbd-group")
+        );
+    }
+
+    #[test]
+    fn button_class_hover_applies_primary_80() {
+        use crate::core::reactivity::create_root;
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::style::sync_class_variants_subtree;
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-btn-class-hover")
+                .variant("default")
+                .text("Go")
+                .into()
+        });
+        el.layout_bounds = [0.0, 0.0, 80.0, 32.0];
+        for c in &mut el.children {
+            if c.text.is_some() {
+                c.layout_bounds = [8.0, 6.0, 64.0, 20.0];
+            }
+        }
+        assert_eq!(hex(el.style.bg_color), hex(parse_color("primary")));
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [40.0, 16.0],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            hex(el.style.bg_color),
+            hex(parse_color("primary/80")),
+            "Button hover color must resolve via class hover:bg-primary/80"
+        );
+    }
+
+    #[test]
+    fn author_hover_bg_overrides_button_variant_hover() {
+        use crate::core::reactivity::create_root;
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::style::sync_class_variants_subtree;
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-btn-author-hover")
+                .variant("default")
+                .class("hover:bg-muted")
+                .text("Go")
+                .into()
+        });
+        el.layout_bounds = [0.0, 0.0, 80.0, 32.0];
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [40.0, 16.0],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            hex(el.style.bg_color),
+            hex(parse_color("muted")),
+            "author hover:bg must win over variant hover:bg-primary/80"
+        );
+    }
+
+    #[test]
+    fn button_defaults_to_keyboard_focus_ring() {
+        use crate::core::reactivity::create_root;
+        let (_h, el) = create_root(|| -> Element { button("t-btn-focus-ring").text("Go").into() });
+        assert!(el.focusable);
+        assert!(el.focus_ring);
+    }
+
+    #[test]
+    fn disabled_button_is_not_focusable() {
+        use crate::core::reactivity::create_root;
+        let (_h, el) = create_root(|| -> Element {
+            button("t-btn-focus-ring-off")
+                .disabled(true)
+                .text("Go")
+                .into()
+        });
+        assert!(!el.focusable);
+        assert!(!el.focus_ring);
+    }
+
+    #[test]
+    fn button_class_ring_width_overrides_theme() {
+        use crate::core::reactivity::create_root;
+        use crate::style::apply_focus_ring_shadow;
+        let (_h, mut el) =
+            create_root(|| -> Element { button("t-btn-ring-2").class("ring-2").text("Go").into() });
+        assert_eq!(el.style.focus_ring_width, Some(2.0));
+        apply_focus_ring_shadow(&mut el, true, true);
+        assert!(
+            (el.style.shadow_spread - 2.0).abs() < f32::EPSILON,
+            "Button ring must honor authored ring-2 like Input"
         );
     }
 

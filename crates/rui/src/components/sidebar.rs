@@ -78,7 +78,7 @@ use std::sync::OnceLock;
 
 use rui_macros::component;
 
-use crate::components::base::{ensure_data_slot, SlotStyleFn};
+use crate::components::base::{ensure_data_slot, SlotChrome, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
@@ -92,7 +92,7 @@ use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::{parse_color, with_class_list};
+use crate::style::parse_color;
 use crate::tokens;
 use crate::utils::icon_provider::ATTR_ICON_SRC;
 use crate::utils::lucide::{lucide_glyph, ATTR_ICON_NAME};
@@ -346,6 +346,15 @@ impl SidebarMenuButtonSize {
             Self::Default | Self::Lg => MENU_TEXT_SIZE_PX,
         }
     }
+
+    /// Tailwind v4 `text-sm` / `text-xs` default line-height ÷ font-size.
+    /// ShadCN `sidebarMenuButtonVariants` is `h-8 text-sm` (sm: `h-7 text-xs`).
+    pub fn leading_scale(self) -> f32 {
+        match self {
+            Self::Sm => crate::style::TAILWIND_TEXT_XS_LEADING_SCALE,
+            Self::Default | Self::Lg => crate::style::TAILWIND_TEXT_SM_LEADING_SCALE,
+        }
+    }
 }
 
 impl From<&str> for SidebarMenuButtonSize {
@@ -487,7 +496,6 @@ pub fn sidebar_provider_scope(
     open: Option<Signal<bool>>,
     default_open: bool,
     shell_variant: Option<&str>,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "sidebar-provider");
@@ -511,9 +519,6 @@ pub fn sidebar_provider_scope(
         root = root.bg(parse_color("sidebar"));
     }
     root.set_attr(ATTR_SLOT, SLOT_PROVIDER);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        root = with_class_list(root, &c);
-    }
     if !id.trim().is_empty() {
         root.template_id = Some(format!("{id}__provider"));
     }
@@ -1055,7 +1060,7 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
         .unwrap_or_default()
 }
 
-fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
+fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32, leading: f32) {
     crate::core::tree::walk_elements_mut(el, |el| {
         if el.text.is_none() {
             return;
@@ -1071,7 +1076,14 @@ fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
             el.text_style.size = Some(16.0);
             el.attrs.insert("text_size".into(), "1".into());
         } else {
+            // Button token is Tailwind `text-sm` / `text-xs` (size AND default line-height).
+            // A nested `<Label>` would otherwise keep `leading-none` (1em strut). Cosmic
+            // no longer clips to that strut (`set_size(w, None)`); the line box still
+            // needs to match the browser token so half-leading / items-center agree.
             el.text_style.size = Some(size_px);
+            el.text_style.line_height_px = None;
+            el.text_style.line_height_scale = Some(leading);
+            el.text_style.line_height_specified = true;
             el.attrs.insert("text_size".into(), "1".into());
         }
     });
@@ -1110,7 +1122,16 @@ fn apply_sidebar_menu_button_chrome(
     } else {
         parse_text_color("sidebar-foreground")
     };
-    let size_px = sidebar_menu_button_size(el).text_size_px();
+    let btn_size = sidebar_menu_button_size(el);
+    let size_px = btn_size.text_size_px();
+    let leading = btn_size.leading_scale();
+    // ShadCN puts `text-sm` / `text-xs` on the button; children inherit unless they
+    // specify otherwise. Lock it here so cascade from an unstyled Header/Footer
+    // slot cannot wipe the token before paint.
+    el.text_style.size = Some(size_px);
+    el.text_style.line_height_px = None;
+    el.text_style.line_height_scale = Some(leading);
+    el.text_style.line_height_specified = true;
 
     let mut status = LayoutStatus::Clean;
     if el.style.bg_color != want_bg {
@@ -1146,7 +1167,7 @@ fn apply_sidebar_menu_button_chrome(
         status = status.merge(LayoutStatus::StyleChanged);
     }
 
-    paint_sidebar_menu_button_fg(el, want_fg, size_px);
+    paint_sidebar_menu_button_fg(el, want_fg, size_px, leading);
     status
 }
 
@@ -1208,7 +1229,6 @@ fn paint_menu_button(
     variant: SidebarMenuButtonVariant,
     size: SidebarMenuButtonSize,
     is_active: bool,
-    class: Option<String>,
 ) -> Element {
     el = el
         .w("100%")
@@ -1226,9 +1246,6 @@ fn paint_menu_button(
     el.set_attr("data-active", if is_active { "true" } else { "false" });
     el.set_attr("data-size", size.as_str());
     el.set_attr("data-variant", variant.as_str());
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     let _ = apply_sidebar_menu_button_chrome(&mut el, None, variant, is_active, false);
     el
 }
@@ -1299,12 +1316,7 @@ fn wrap_sidebar_inner(kids: Vec<Element>, variant: SidebarVariant, _side: Sideba
     el
 }
 
-fn slot_children(
-    class: Option<String>,
-    slot: &str,
-    sidebar_part: &str,
-    kids: Vec<Element>,
-) -> Element {
+fn slot_children(slot: &str, sidebar_part: &str, kids: Vec<Element>) -> Element {
     let mut col = vstack().w("100%").flex_col();
     for k in kids {
         col = col.child(k);
@@ -1312,9 +1324,6 @@ fn slot_children(
     let mut el: Element = col.into();
     el.set_attr(ATTR_SLOT, slot);
     el.set_attr(ATTR_SIDEBAR, sidebar_part);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -1339,18 +1348,12 @@ pub fn SidebarProvider(
     open: Option<Signal<bool>>,
     default_open: Option<bool>,
     variant: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let shell = variant.as_deref();
-    sidebar_provider_scope(
-        id,
-        open,
-        default_open.unwrap_or(true),
-        shell,
-        class,
-        move || children.unwrap_or_default(),
-    )
+    sidebar_provider_scope(id, open, default_open.unwrap_or(true), shell, move || {
+        children.unwrap_or_default()
+    })
 }
 
 /// 侧栏 rail（`collapsible=none` 时为固定宽竖栏；默认 `16rem`）。
@@ -1362,7 +1365,6 @@ pub fn Sidebar(
     side: Option<String>,
     variant: Option<String>,
     collapsible: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let width = w
@@ -1386,9 +1388,6 @@ pub fn Sidebar(
     }
     let open = sidebar_ctx.as_ref().map(|c| c.open);
     let mut rail = paint_sidebar_rail(&width, side, variant, collapsible, open);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        rail = with_class_list(rail, &c);
-    }
     if !id.trim().is_empty() {
         rail.template_id = Some(id.clone());
     }
@@ -1416,9 +1415,9 @@ pub fn Sidebar(
 /// 顶区：`flex flex-col gap-2 p-2`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarHeader(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarHeader(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_HEADER, "header", kids);
+    let mut el = slot_children(SLOT_HEADER, "header", kids);
     // Inherit-lock `sidebar-foreground` so RSX string leaves (`"RUI Gallery"`) do not
     // pick up `TextStyle::default` white on the first full cascade of an overlay enter.
     el = el
@@ -1434,9 +1433,9 @@ pub fn SidebarHeader(class: Option<String>, children: Option<Element>) -> Elemen
 /// 底区：`flex flex-col gap-2 p-2`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarFooter(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarFooter(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_FOOTER, "footer", kids);
+    let mut el = slot_children(SLOT_FOOTER, "footer", kids);
     el = el
         .p("0.5rem")
         .gap("0.5rem")
@@ -1451,12 +1450,12 @@ pub fn SidebarFooter(class: Option<String>, children: Option<Element>) -> Elemen
 /// + overlay 滚动条（项溢出时可见；`z-index: 0` 以免嵌套进页面 stacking bands）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarContent(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarContent(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let scroll_id = use_sidebar()
         .map(|c| format!("{}__sidebar-content", c.id))
         .unwrap_or_else(|| "sidebar-content".to_string());
-    let mut inner = slot_children(class, SLOT_CONTENT, "content", kids);
+    let mut inner = slot_children(SLOT_CONTENT, "content", kids);
     inner = inner
         .w("100%")
         .h("100%")
@@ -1511,9 +1510,9 @@ pub fn SidebarContent(class: Option<String>, children: Option<Element>) -> Eleme
 /// 分组容器：`relative flex w-full min-w-0 flex-col p-2`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarGroup(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarGroup(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_GROUP, "group", kids);
+    let mut el = slot_children(SLOT_GROUP, "group", kids);
     el = el.p("0.5rem").min_w(0.0).relative();
     el
 }
@@ -1531,9 +1530,9 @@ fn paint_group_label_text(el: &mut Element) {
 /// 分组标题：`text-xs font-medium text-sidebar-foreground/70`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarGroupLabel(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarGroupLabel(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_GROUP_LABEL, "group-label", kids);
+    let mut el = slot_children(SLOT_GROUP_LABEL, "group-label", kids);
     el = el
         .h("2rem")
         .px("0.5rem")
@@ -1549,9 +1548,9 @@ pub fn SidebarGroupLabel(class: Option<String>, children: Option<Element>) -> El
 /// 分组内容区。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarGroupContent(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarGroupContent(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_GROUP_CONTENT, "group-content", kids);
+    let mut el = slot_children(SLOT_GROUP_CONTENT, "group-content", kids);
     el = el.text_size(MENU_TEXT_SIZE_PX);
     el
 }
@@ -1559,9 +1558,9 @@ pub fn SidebarGroupContent(class: Option<String>, children: Option<Element>) -> 
 /// 菜单列表：`flex w-full min-w-0 flex-col gap-1`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarMenu(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarMenu(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_MENU, "menu", kids);
+    let mut el = slot_children(SLOT_MENU, "menu", kids);
     el = el.gap("0.25rem").min_w(0.0);
     el
 }
@@ -1569,9 +1568,9 @@ pub fn SidebarMenu(class: Option<String>, children: Option<Element>) -> Element 
 /// 菜单项：`group/menu-item relative`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarMenuItem(class: Option<String>, children: Option<Element>) -> Element {
+pub fn SidebarMenuItem(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_MENU_ITEM, "menu-item", kids);
+    let mut el = slot_children(SLOT_MENU_ITEM, "menu-item", kids);
     el = el.relative();
     el
 }
@@ -1584,7 +1583,6 @@ pub fn SidebarMenuButton(
     is_active: Option<bool>,
     variant: Option<String>,
     size: Option<String>,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler<()>,
     children: Option<Element>,
 ) -> Element {
@@ -1609,7 +1607,7 @@ pub fn SidebarMenuButton(
     }
     let mut el = wire_sidebar_menu_button_hover(row.into(), &focus_id);
     el = el.on_click(move || on_click.call(()));
-    el = paint_menu_button(el, variant, size, is_active, class);
+    el = paint_menu_button(el, variant, size, is_active);
     if !id.trim().is_empty() {
         el.template_id = Some(id);
     }
@@ -1619,24 +1617,16 @@ pub fn SidebarMenuButton(
 /// 侧栏内分割线（`px-2` 内缩 · 可选；在 RSX 中于 Header / Content / Footer 之间手动插入）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarSeparator(class: Option<String>) -> Element {
-    let mut el = sidebar_horizontal_separator_element();
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
-    el
+pub fn SidebarSeparator() -> Element {
+    sidebar_horizontal_separator_element()
 }
 
 /// 主内容列：`relative flex w-full flex-1 flex-col min-w-0`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarInset(
-    variant: Option<String>,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn SidebarInset(variant: Option<String>, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = slot_children(class, SLOT_INSET, "inset", kids);
+    let mut el = slot_children(SLOT_INSET, "inset", kids);
     let inset_shell = variant.as_deref() == Some("inset")
         || use_sidebar()
             .and_then(|ctx| ctx.variant.is_alive().then(|| ctx.variant.peek()))
@@ -1665,11 +1655,7 @@ pub fn SidebarInset(
 /// 开合触发器（ghost · icon-sm · PanelLeft）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarTrigger(
-    id: String,
-    class: Option<String>,
-    mut on_click: Option<Handler<()>>,
-) -> Element {
+pub fn SidebarTrigger(id: String, mut on_click: Option<Handler<()>>) -> Element {
     let glyph = lucide_glyph("panel-left").unwrap_or_else(|| "☰".into());
     let icon = build_icon_text_node(glyph)
         .text_size(16.0)
@@ -1688,9 +1674,6 @@ pub fn SidebarTrigger(
     let mut el: Element = btn.into();
     el.set_attr(ATTR_SLOT, SLOT_TRIGGER);
     el.set_attr(ATTR_SIDEBAR, "trigger");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     if !id.trim().is_empty() {
         el.template_id = Some(id);
     }
@@ -1700,7 +1683,7 @@ pub fn SidebarTrigger(
 /// 侧栏搜索框：`h-8 bg-background shadow-none`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarInput(id: String, class: Option<String>, placeholder: Option<String>) -> Element {
+pub fn SidebarInput(id: String, placeholder: Option<String>) -> Element {
     let mut field = input(if id.trim().is_empty() {
         "sidebar-input"
     } else {
@@ -1714,16 +1697,13 @@ pub fn SidebarInput(id: String, class: Option<String>, placeholder: Option<Strin
     el = el.bg(parse_color("background"));
     el.set_attr(ATTR_SLOT, SLOT_INPUT);
     el.set_attr(ATTR_SIDEBAR, "input");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 桌面拖拽 rail（点击 toggle；对位 ShadCN `SidebarRail`）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarRail(class: Option<String>, mut on_click: Option<Handler<()>>) -> Element {
+pub fn SidebarRail(mut on_click: Option<Handler<()>>) -> Element {
     let mut toggle = bind_sidebar_toggle(on_click);
     let mut hit = r#box()
         .w("1rem")
@@ -1741,9 +1721,6 @@ pub fn SidebarRail(class: Option<String>, mut on_click: Option<Handler<()>>) -> 
     hit.set_attr(ATTR_SIDEBAR, "rail");
     hit.set_attr("aria-label", "Toggle Sidebar");
     hit.set_attr("title", "Toggle Sidebar");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        hit = with_class_list(hit, &c);
-    }
     hit
 }
 
@@ -1901,26 +1878,23 @@ impl From<SidebarMenuButtonBuilder> for Element {
                     } else {
                         parse_text_color("sidebar-foreground")
                     },
+                    leading_scale: Some(b.size.leading_scale()),
                     ..Default::default()
                 },
             ))
         } else {
             None
         };
-        let mut el = SidebarMenuButton(SidebarMenuButtonProps {
+        let el = SidebarMenuButton(SidebarMenuButtonProps {
             id: b.id,
             is_active: Some(b.is_active),
             variant: Some(b.variant.as_str().into()),
             size: Some(b.size.as_str().into()),
-            class: b.class,
             on_click: b.on_click,
             children,
             base: None,
         });
-        if let Some(style) = b.style {
-            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-        }
-        el
+        SlotChrome::from_opts(b.class, b.style).apply(el)
     }
 }
 
@@ -2126,13 +2100,10 @@ impl From<SidebarBuilder> for Element {
             side: Some(side.as_str().into()),
             variant: Some(variant.as_str().into()),
             collapsible: Some(collapsible.as_str().into()),
-            class,
             children: Some(frag.children(parts)),
             base: None,
         });
-        if let Some(style) = style {
-            rail = style(crate::components::base::BaseComponentBuilder::new(rail)).el;
-        }
+        rail = SlotChrome::from_opts(class, style).apply(rail);
 
         if provider {
             sidebar_provider_scope(
@@ -2140,7 +2111,6 @@ impl From<SidebarBuilder> for Element {
                 open,
                 default_open,
                 Some(variant.as_str()),
-                None,
                 move || rail,
             )
         } else {
@@ -2204,6 +2174,27 @@ mod tests {
         assert!(
             find_size(&el, 20.0),
             "menu button .style(|b| b.text_size(20)) must land on the tree"
+        );
+    }
+
+    #[test]
+    fn menu_button_text_uses_tailwind_text_sm_line_height() {
+        let el: Element = sidebar_menu_button("nav-a").text("Gallery").into();
+        fn find_label(el: &Element) -> Option<&Element> {
+            if el.text.as_deref() == Some("Gallery") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_label)
+        }
+        let label = find_label(&el).expect("label");
+        assert!(
+            (label.text_style.size_resolved() - 14.0).abs() < 0.01,
+            "text-sm size"
+        );
+        assert_eq!(
+            label.text_style.line_height_scale,
+            Some(crate::style::TAILWIND_TEXT_SM_LEADING_SCALE),
+            "ShadCN menu button is `text-sm` (line-height 1.25rem), not Label leading-none"
         );
     }
 
@@ -2390,7 +2381,6 @@ mod tests {
             is_active: None,
             variant: None,
             size: None,
-            class: None,
             on_click: None,
             children: Some(Element::from(label)),
             base: None,
@@ -2431,7 +2421,6 @@ mod tests {
     #[test]
     fn header_slot_inherits_sidebar_foreground() {
         let el = SidebarHeader(SidebarHeaderProps {
-            class: None,
             children: Some(Element::from("RUI Gallery")),
             base: None,
         });
@@ -2467,7 +2456,6 @@ mod tests {
             side: Some("left".into()),
             variant: Some("inset".into()),
             collapsible: None,
-            class: None,
             children: None,
             base: None,
         });
@@ -2498,12 +2486,10 @@ mod tests {
     #[test]
     fn header_and_footer_do_not_clip_overflow() {
         let header = SidebarHeader(SidebarHeaderProps {
-            class: None,
             children: None,
             base: None,
         });
         let footer = SidebarFooter(SidebarFooterProps {
-            class: None,
             children: None,
             base: None,
         });
@@ -2624,7 +2610,6 @@ mod tests {
         ]);
         kids = kids.children(vec![
             SidebarGroupLabel(SidebarGroupLabelProps {
-                class: None,
                 children: Some(Element::from("Nav")),
                 base: None,
             }),
@@ -2633,7 +2618,6 @@ mod tests {
                 is_active: None,
                 variant: None,
                 size: None,
-                class: None,
                 on_click: None,
                 children: Some(btn_kids),
                 base: None,
@@ -2645,7 +2629,6 @@ mod tests {
             side: None,
             variant: Some("inset".into()),
             collapsible: Some("icon".into()),
-            class: None,
             children: Some(kids),
             base: None,
         });
@@ -2858,29 +2841,26 @@ mod tests {
         }
 
         let (_handle, _) = create_root(|| {
-            let mut el =
-                sidebar_provider_scope("icon-prov", None, false, Some("inset"), None, || {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(vec![
-                        Sidebar(SidebarProps {
-                            id: "icon-nav".into(),
-                            w: Some("16rem".into()),
-                            side: None,
-                            variant: Some("inset".into()),
-                            collapsible: Some("icon".into()),
-                            class: None,
-                            children: None,
-                            base: None,
-                        }),
-                        SidebarInset(SidebarInsetProps {
-                            variant: Some("inset".into()),
-                            class: None,
-                            children: None,
-                            base: None,
-                        }),
-                    ])
-                });
+            let mut el = sidebar_provider_scope("icon-prov", None, false, Some("inset"), || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![
+                    Sidebar(SidebarProps {
+                        id: "icon-nav".into(),
+                        w: Some("16rem".into()),
+                        side: None,
+                        variant: Some("inset".into()),
+                        collapsible: Some("icon".into()),
+                        children: None,
+                        base: None,
+                    }),
+                    SidebarInset(SidebarInsetProps {
+                        variant: Some("inset".into()),
+                        children: None,
+                        base: None,
+                    }),
+                ])
+            });
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut el, 800.0, 600.0, [-1.0, -1.0]);
             let rail = find_slot(&el, SLOT_ROOT).expect("rail");
@@ -2911,14 +2891,13 @@ mod tests {
 
     #[test]
     fn provider_shell_lays_out_sidebar_and_inset_in_row() {
-        let el = sidebar_provider_scope("prov", None, true, None, None, move || {
+        let el = sidebar_provider_scope("prov", None, true, None, move || {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag.children(vec![
                 sidebar("nav").into(),
                 SidebarInset(SidebarInsetProps {
                     variant: None,
-                    class: None,
                     children: None,
                     base: None,
                 }),
@@ -2942,37 +2921,33 @@ mod tests {
 
     #[test]
     fn provider_wires_open_and_scroll_viewport_on_children() {
-        let el =
-            sidebar_provider_scope("prov-scroll", None, true, Some("inset"), None, move || {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(vec![
-                    Sidebar(SidebarProps {
-                        id: "nav".into(),
-                        w: None,
-                        side: None,
-                        variant: Some("inset".into()),
-                        collapsible: None,
-                        class: None,
-                        children: Some({
-                            let mut inner = Element::new();
-                            inner.set_attr("rui_fragment", "1");
-                            inner.children(vec![SidebarContent(SidebarContentProps {
-                                class: None,
-                                children: None,
-                                base: None,
-                            })])
-                        }),
-                        base: None,
+        let el = sidebar_provider_scope("prov-scroll", None, true, Some("inset"), move || {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                Sidebar(SidebarProps {
+                    id: "nav".into(),
+                    w: None,
+                    side: None,
+                    variant: Some("inset".into()),
+                    collapsible: None,
+                    children: Some({
+                        let mut inner = Element::new();
+                        inner.set_attr("rui_fragment", "1");
+                        inner.children(vec![SidebarContent(SidebarContentProps {
+                            children: None,
+                            base: None,
+                        })])
                     }),
-                    SidebarInset(SidebarInsetProps {
-                        variant: Some("inset".into()),
-                        class: None,
-                        children: None,
-                        base: None,
-                    }),
-                ])
-            });
+                    base: None,
+                }),
+                SidebarInset(SidebarInsetProps {
+                    variant: Some("inset".into()),
+                    children: None,
+                    base: None,
+                }),
+            ])
+        });
         fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
             if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
                 return Some(el);

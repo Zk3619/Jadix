@@ -29,6 +29,7 @@ use crate::utils::popup::{
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
 };
 
+pub use crate::app::portal_overlay::{page_scroll_locked, set_page_scroll_locked};
 pub use crate::utils::floating_kind::FloatingMotionKind;
 
 // ---------------------------------------------------------------------------
@@ -255,6 +256,8 @@ pub struct AnchoredOverlayBuilder {
     /// Toggle / open button `focus_id`. Used by Unanchored for outside-press
     /// exemption (not placement). Trigger mode prefers [`Placement::Trigger::focus_id`].
     trigger_id: String,
+    /// `None` = Menu/Modal lock the page, Popover/Tooltip do not.
+    lock_page_scroll: Option<bool>,
 }
 
 pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
@@ -268,6 +271,7 @@ pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
         max_h: None,
         width: None,
         trigger_id: String::new(),
+        lock_page_scroll: None,
     }
 }
 
@@ -320,6 +324,16 @@ impl AnchoredOverlayBuilder {
         self
     }
 
+    /// Freeze page wheel / pan / fling while this overlay is open.
+    ///
+    /// Default is off for popovers; menu-kind overlays lock unless this is `false`.
+    /// For hover-region locks that are not tied to an open overlay, use
+    /// [`crate::app::portal_overlay::set_page_scroll_locked`].
+    pub fn lock_page_scroll(mut self, yes: bool) -> Self {
+        self.lock_page_scroll = Some(yes);
+        self
+    }
+
     /// Panel body when [`Self::placement`] is set; otherwise compound Trigger/Content tree.
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
         if let Some(placement) = self.placement {
@@ -341,6 +355,7 @@ impl AnchoredOverlayBuilder {
                 match_trigger_width: self.match_trigger_width,
                 max_h: self.max_h,
                 width: self.width,
+                lock_page_scroll: self.lock_page_scroll,
             };
             anchored_overlay_scope(self.id, self.open, move || {
                 let mut frag = Element::new();
@@ -382,6 +397,9 @@ pub struct AnchoredOverlayContentOpts {
     pub match_trigger_width: bool,
     pub max_h: Option<String>,
     pub width: Option<String>,
+    /// `None` = [`crate::app::portal_overlay::default_lock_page_scroll`] for [`Self::kind`].
+    /// Popovers default off; menus / modals default on.
+    pub lock_page_scroll: Option<bool>,
 }
 
 impl Default for AnchoredOverlayContentOpts {
@@ -404,6 +422,7 @@ impl Default for AnchoredOverlayContentOpts {
             match_trigger_width: false,
             max_h: None,
             width: None,
+            lock_page_scroll: None,
         }
     }
 }
@@ -442,6 +461,19 @@ impl AnchoredOverlayContentOpts {
     pub fn width(mut self, w: impl Into<String>) -> Self {
         self.width = Some(w.into());
         self
+    }
+
+    /// Freeze page scroll while this floating layer is open.
+    ///
+    /// Default is off for popovers; menu-kind overlays lock unless this is `false`.
+    /// For hover-region locks not tied to an overlay, use [`set_page_scroll_locked`].
+    pub fn lock_page_scroll(mut self, yes: bool) -> Self {
+        self.lock_page_scroll = Some(yes);
+        self
+    }
+
+    fn resolved_lock_page_scroll(&self) -> bool {
+        crate::app::portal_overlay::resolve_lock_page_scroll(self.kind, self.lock_page_scroll)
     }
 
     fn resolve(&self, overlay_id: &str) -> Placement {
@@ -508,7 +540,14 @@ fn assemble_panel(
     opts: &AnchoredOverlayContentOpts,
     mut panel: Element,
 ) -> Element {
-    let Some((phase, oz)) = floating_portal_phase(id, open, presence, opts.kind, opts.mode) else {
+    let Some((phase, oz)) = floating_portal_phase(
+        id,
+        open,
+        presence,
+        opts.kind,
+        opts.mode,
+        opts.resolved_lock_page_scroll(),
+    ) else {
         return Element::new().w(0.0).h(0.0);
     };
 
@@ -555,7 +594,15 @@ pub(crate) fn anchored_overlay_phase(
     opts: &AnchoredOverlayContentOpts,
 ) -> Option<crate::utils::presence::PresencePhase> {
     let presence = use_floating_presence(id, opts.motion);
-    floating_portal_phase(id, open, &presence, opts.kind, opts.mode).map(|(phase, _)| phase)
+    floating_portal_phase(
+        id,
+        open,
+        &presence,
+        opts.kind,
+        opts.mode,
+        opts.resolved_lock_page_scroll(),
+    )
+    .map(|(phase, _)| phase)
 }
 
 /// Smoke: exit animation still mounted after `open` is false.
@@ -574,7 +621,14 @@ pub(crate) fn apply_anchored_overlay_panel_motion(
     open: Signal<bool>,
 ) -> bool {
     let presence = use_floating_presence(id, opts.motion);
-    let Some((phase, _)) = floating_portal_phase(id, open, &presence, opts.kind, opts.mode) else {
+    let Some((phase, _)) = floating_portal_phase(
+        id,
+        open,
+        &presence,
+        opts.kind,
+        opts.mode,
+        opts.resolved_lock_page_scroll(),
+    ) else {
         return false;
     };
     apply_floating_panel_motion(
@@ -1192,6 +1246,174 @@ mod tests {
             "first open must layout the portal panel, not skip as paint-only; hoisted bounds={:?}",
             hoisted.layout_bounds
         );
+        clear_overlay_stack();
+    }
+
+    #[test]
+    fn fade_popover_join_stamp_matches_band_above_leftover_datepicker() {
+        use crate::app::damage::{
+            overlay_band_encode_flags, overlay_membership_paint_stamps, push_frame_paint_element,
+            take_frame_paint_nodes, PaintDirtyKind,
+        };
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
+            PORTAL_LAYER_ID,
+        };
+        use crate::utils::floating_motion::{
+            flush_floating_motion_subtree, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        let _ = take_frame_paint_nodes();
+        let (_owner, mut root) = create_root(|| {
+            let dp_open = Signal::new(true);
+            let dp_presence = use_floating_presence("ao-dp-left", FloatingMotionKind::Expand);
+            let dp_opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover)
+                .motion(FloatingMotionKind::Expand);
+            let datepicker = assemble_panel(
+                "ao-dp-left",
+                dp_open,
+                Signal::new("dp-btn".into()),
+                &dp_presence,
+                &dp_opts,
+                Element::new()
+                    .text("calendar")
+                    .w(280.0)
+                    .h(320.0)
+                    .bg([1.0, 1.0, 1.0, 1.0])
+                    .fixed()
+                    .top(344.0)
+                    .left(64.0),
+            );
+
+            let cp_open = Signal::new(true);
+            let cp_presence = use_floating_presence("ao-cp-fade", FloatingMotionKind::Fade);
+            let cp_opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Unanchored)
+                .kind(OverlayKind::Popover)
+                .motion(FloatingMotionKind::Fade)
+                .width("17.5rem");
+            let mut knob = Element::new().w(12.0).h(12.0).bg([1.0, 0.0, 0.0, 1.0]);
+            knob = knob.absolute();
+            let colorpicker = assemble_panel(
+                "ao-cp-fade",
+                cp_open,
+                Signal::new("cp-btn".into()),
+                &cp_presence,
+                &cp_opts,
+                Element::new()
+                    .w(280.0)
+                    .h(360.0)
+                    .bg([1.0, 1.0, 1.0, 1.0])
+                    .child(knob)
+                    .fixed()
+                    .top(120.0)
+                    .left(640.0),
+            );
+
+            Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(datepicker)
+                .child(colorpicker)
+        });
+
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        if sync_floating_placement(&mut root, 800.0, 600.0) {
+            let _ = tree.build_and_layout_fast_ex(
+                &mut root,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                false,
+                None,
+            );
+        }
+        let _ = flush_floating_motion_subtree(&mut root);
+        let _ = tick_hoisted_floating_css(&mut root);
+        let out =
+            tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+
+        fn find_tid<'a>(el: &'a Element, suffix: &str) -> Option<&'a Element> {
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.ends_with(suffix))
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, suffix))
+        }
+        let cp = find_tid(&root, "ao-cp-fade__floating_panel")
+            .expect("ColorPicker Fade panel must keep __floating_panel tid after hoist");
+        assert!(
+            cp.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                || find_tid(&root, PORTAL_LAYER_ID).is_some(),
+            "ColorPicker Fade must live on the portal layer"
+        );
+        assert!(
+            cp.layout_bounds[2] > 8.0 && cp.layout_bounds[3] > 8.0,
+            "ColorPicker Fade box must be the popover, not 0×0; bounds={:?} opacity={}",
+            cp.layout_bounds,
+            cp.style.opacity
+        );
+
+        let panel_key = overlay_portal_stamp_key(cp);
+        let band_keys: Vec<u64> = out
+            .overlay_split
+            .band_ranges(
+                out.instances.len(),
+                out.textured_draws.len(),
+                out.text_nodes.len(),
+                0,
+                0,
+            )
+            .iter()
+            .map(|b| b.stamp_key)
+            .collect();
+        assert!(
+            band_keys.iter().any(|k| *k == panel_key),
+            "portal-layer band stamp must be overlay_portal_stamp_key of the Fade panel; panel_key={panel_key} bands={band_keys:?}"
+        );
+
+        let _ = take_frame_paint_nodes();
+        push_frame_paint_element(cp, [0.0, 0.0]);
+        let dirties = take_frame_paint_nodes();
+        let overlay_dirties: Vec<u64> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(
+            overlay_dirties,
+            vec![panel_key],
+            "Fade Overlay dirty must be the portal stamp, not tid/NodeId; dirties={dirties:?}"
+        );
+        let flags = overlay_band_encode_flags(&band_keys, &overlay_dirties, false, &[panel_key]);
+        assert!(
+            flags.iter().any(|e| *e),
+            "ColorPicker Fade band must encode; bands={band_keys:?} flags={flags:?}"
+        );
+
+        let dp = find_tid(&root, "ao-dp-left__floating_panel");
+        if let Some(dp) = dp {
+            let dp_key = overlay_portal_stamp_key(dp);
+            let color = cp.layout_bounds;
+            let leftover = dp.layout_bounds;
+            let joined =
+                overlay_membership_paint_stamps(&[(dp_key, leftover)], &[(panel_key, color)]);
+            assert_eq!(
+                joined.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+                vec![panel_key],
+                "opening ColorPicker must Overlay-paint ColorPicker, not leftover DatePicker"
+            );
+        }
         clear_overlay_stack();
     }
 }

@@ -256,8 +256,7 @@ pub fn PopoverTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
-        trigger.focusable = true;
-        trigger.focus_ring = true;
+        trigger.set_focusable(true);
     }
     let fid_focus = trigger
         .focus_id
@@ -284,6 +283,8 @@ pub struct PopoverContentOpts {
     pub width: Option<String>,
     /// Layout/paint on the panel (same surface as RSX `base`).
     pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Freeze page scroll while the popover is open. Default `false`.
+    pub lock_page_scroll: bool,
 }
 
 impl Default for PopoverContentOpts {
@@ -296,12 +297,19 @@ impl Default for PopoverContentOpts {
             strategy: None,
             width: None,
             style: None,
+            lock_page_scroll: false,
         }
     }
 }
 
 impl PopoverContentOpts {
     crate::impl_content_opts_chrome!();
+
+    /// Freeze page scroll while this popover is open. Default `false`.
+    pub fn lock_page_scroll(mut self, yes: bool) -> Self {
+        self.lock_page_scroll = yes;
+        self
+    }
 }
 
 /// ShadCN `cn-popover-content` 面板表面（无 Portal / 无 floating）。
@@ -347,6 +355,11 @@ pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 's
         motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,
         width: width.clone().or_else(|| Some("18rem".into())),
+        lock_page_scroll: if opts.lock_page_scroll {
+            Some(true)
+        } else {
+            None
+        },
         ..Default::default()
     };
     anchored_overlay_content(ao_opts, move || {

@@ -14,8 +14,11 @@
 //! <Checkbox id="terms" />
 //! <Label for="terms">"Accept terms"</Label>
 //! // 组合文案请写在 Checkbox 内：`<Checkbox>"Accept"</Checkbox>` 或内嵌 `<Label>`
-//! // Element::from(label("t").text("Hello").size(14.0).for_target("terms"))
+//! // Element::from(label("t").text("Hello").text_size(14.0).for_target("terms"))
 //! ```
+//!
+//! 字号 / 颜色 / 字重走框架 `text_size` / `text_color`（RSX 也可用 `color`）/ `font_weight`，
+//! 不要再给 Label 开 `size` / `color` / `weight` prop。Builder 仍保留 `.size()` / `.color()` 别名。
 //!
 //! ## Notes
 //! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
@@ -193,9 +196,6 @@ pub struct LabelBuilder {
 pub fn Label(
     id: String,
     text: String,
-    size: Option<f32>,
-    color: Option<[u8; 4]>,
-    weight: Option<f32>,
     center: bool,
     /// 关联控件的 `focus_id` / Checkbox `id`（RSX `for` / Builder [`LabelBuilder::for_target`]）。
     for_target: String,
@@ -204,15 +204,6 @@ pub fn Label(
     children: Option<Element>,
 ) -> Element {
     let mut builder = label(&id).text(text).for_target(for_target);
-    if let Some(s) = size {
-        builder = builder.size(s);
-    }
-    if let Some(c) = color {
-        builder = builder.color(c);
-    }
-    if let Some(w) = weight {
-        builder = builder.font_weight(w);
-    }
     if center {
         builder = builder.text_center();
     }

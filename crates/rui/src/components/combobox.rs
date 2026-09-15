@@ -49,6 +49,8 @@
 //! - 打开且输入文案仍等于当前 label 时列出全部项，便于切换；开始编辑后按 label 过滤。
 //! - 关闭时若输入为空则清空选中；否则把输入恢复为当前选中项的 label（effect 写 store，**不**重建 Input）。
 //! - 打开时 ArrowUp/Down 走 [`crate::utils::roving`]。
+//! - 打开时滚动到选中项：[`ComboboxBuilder::scroll_selected`] / `<Combobox scrollSelected>` /
+//!   `<ComboboxContent scrollSelected>`，取值 `none`（默认）| `start` | `center`。
 //! - 菜单走 [`crate::utils::anchored_overlay::anchored_overlay_content`]；触发器一次挂载（N.4：禁止用岛刷 Input 文案）。
 
 use std::collections::HashMap;
@@ -62,6 +64,7 @@ use crate::components::input::{
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
+use crate::components::select::SelectScrollSelected;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, untrack, use_context, use_signal,
@@ -122,6 +125,8 @@ pub struct ComboboxCtx {
     pub placement: PopupPlacement,
     pub trigger_class: String,
     pub content_class: String,
+    /// 打开菜单时是否把当前选中项滚进视口（`none` 默认 / `start` / `center`）。
+    pub scroll_selected: SelectScrollSelected,
 }
 
 fn combobox_context() -> Context<ComboboxCtx> {
@@ -195,12 +200,14 @@ pub fn combobox_scope(
     clearable: bool,
     trigger_class: impl Into<String>,
     content_class: impl Into<String>,
+    scroll_selected: impl Into<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = crate::utils::resolve_instance_id(id, "combo");
     let placeholder = placeholder.into();
     let trigger_class = trigger_class.into();
     let content_class = content_class.into();
+    let scroll_selected = SelectScrollSelected::parse(&scroll_selected.into());
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__combo_open").as_str(), || false));
     let value =
         value.unwrap_or_else(|| use_signal(format!("{id}__combo_value").as_str(), String::new));
@@ -246,6 +253,7 @@ pub fn combobox_scope(
                 placement: PopupPlacement::BottomStart,
                 trigger_class: trigger_class.clone(),
                 content_class,
+                scroll_selected,
             },
         );
         let mut root = body();
@@ -514,6 +522,8 @@ pub struct ComboboxContentOpts {
     pub min_height: Option<String>,
     pub max_height: Option<String>,
     pub placement: Option<PopupPlacement>,
+    /// `none` | `start` | `center`；空则用根 [`ComboboxCtx::scroll_selected`]。
+    pub scroll_selected: Option<String>,
     pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
@@ -527,6 +537,7 @@ impl Default for ComboboxContentOpts {
             min_height: None,
             max_height: None,
             placement: None,
+            scroll_selected: None,
             style: None,
         }
     }
@@ -562,6 +573,11 @@ pub fn combobox_content(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.content_class.clone());
     let content_style = opts.style.clone();
+    let scroll_mode = opts
+        .scroll_selected
+        .as_deref()
+        .map(SelectScrollSelected::parse)
+        .unwrap_or(ctx.scroll_selected);
 
     // 预扫注册 labels，避免首屏输入框闪 value id。
     if labels.peek().is_empty() {
@@ -579,6 +595,7 @@ pub fn combobox_content(
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion: FloatingMotionKind::Expand,
         mode: OverlayMode::Stacked,
         match_trigger_width: match_trigger,
@@ -607,13 +624,18 @@ pub fn combobox_content(
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         let n = visible.peek().len().max(1);
         if !open.peek() {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&scroll_id);
-        } else if n > 1 {
+            crate::app::scroll_support::reset_scroll_item_into_view(&scroll_id);
+        } else if scroll_mode != SelectScrollSelected::None && n > 1 {
+            let align = match scroll_mode {
+                SelectScrollSelected::Center => crate::app::scroll_support::ScrollItemAlign::Center,
+                SelectScrollSelected::Start => crate::app::scroll_support::ScrollItemAlign::Start,
+                SelectScrollSelected::None => unreachable!(),
+            };
             crate::app::scroll_support::request_scroll_item_into_view(
                 scroll_id.as_str(),
                 ix,
                 n,
-                crate::app::scroll_support::ScrollItemAlign::Center,
+                align,
             );
         }
         let viewport: Element = untrack(|| {
@@ -1005,6 +1027,7 @@ pub struct ComboboxBuilder {
     style: Option<SlotStyleFn>,
     content_class: String,
     content_style: Option<SlotStyleFn>,
+    scroll_selected: SelectScrollSelected,
 }
 
 pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
@@ -1020,6 +1043,7 @@ pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
         style: None,
         content_class: String::new(),
         content_style: None,
+        scroll_selected: SelectScrollSelected::None,
     }
 }
 
@@ -1104,6 +1128,11 @@ impl ComboboxBuilder {
         self.content_style = Some(std::rc::Rc::new(f));
         self
     }
+    /// 打开时滚动到当前选中项：`none`（默认）| `start` | `center`。
+    pub fn scroll_selected(mut self, v: impl AsRef<str>) -> Self {
+        self.scroll_selected = SelectScrollSelected::parse(v.as_ref());
+        self
+    }
 }
 
 fn collect_labels(entries: &[ComboboxEntry]) -> HashMap<String, String> {
@@ -1138,6 +1167,7 @@ impl From<ComboboxBuilder> for Element {
             style,
             content_class,
             content_style,
+            scroll_selected,
         } = builder;
         let labels_map = collect_labels(&entries);
         let default_initial = default_value;
@@ -1157,6 +1187,7 @@ impl From<ComboboxBuilder> for Element {
             clearable,
             class,
             content_class,
+            scroll_selected.as_str(),
             move || {
                 // Seed labels before Input sync.
                 let ctx = require_combobox("ComboboxBuilder");
@@ -1183,6 +1214,7 @@ impl From<ComboboxBuilder> for Element {
                         class: None,
                         placement: Some(placement),
                         max_height: Some("24rem".into()),
+                        scroll_selected: Some(scroll_selected.as_str().into()),
                         style: content_style,
                         ..Default::default()
                     },
@@ -1269,10 +1301,12 @@ pub fn Combobox(
     placeholder: String,
     clearable: bool,
     class: Option<String>,
+    scroll_selected: Option<String>,
     children: Option<Element>,
 ) -> Element {
     if let Some(c) = children {
         let tc = class.clone().unwrap_or_default();
+        let ss = scroll_selected.clone().unwrap_or_default();
         return combobox_scope(
             id,
             None,
@@ -1285,6 +1319,7 @@ pub fn Combobox(
             clearable,
             tc,
             String::new(),
+            ss,
             || c,
         );
     }
@@ -1299,6 +1334,9 @@ pub fn Combobox(
         .clearable(clearable);
     if let Some(sig) = value {
         b = b.value_signal(sig);
+    }
+    if let Some(s) = scroll_selected {
+        b = b.scroll_selected(s);
     }
     let _ = class;
     b.into()
@@ -1345,7 +1383,7 @@ mod tests {
         let (_owner, (id_h, id_s)) = create_root(|| {
             let id_h = Rc::new(RefCell::new(String::new()));
             let id_s = Rc::new(RefCell::new(String::new()));
-            let _h = combobox_scope("cb-hms-h", None, None, "HH", false, "", "", {
+            let _h = combobox_scope("cb-hms-h", None, None, "HH", false, "", "", "", {
                 let id_h = id_h.clone();
                 move || {
                     create_effect(move || {
@@ -1354,7 +1392,7 @@ mod tests {
                     Element::new()
                 }
             });
-            let _s = combobox_scope("cb-hms-s", None, None, "SS", false, "", "", {
+            let _s = combobox_scope("cb-hms-s", None, None, "SS", false, "", "", "", {
                 let id_s = id_s.clone();
                 move || {
                     create_effect(move || {

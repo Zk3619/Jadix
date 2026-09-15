@@ -37,6 +37,11 @@
 //!   默认主题 token `selection-foreground`，与 `selection-background` 成对相反。
 //!   Builder 与 RSX 均可设。
 //!
+//! ## 焦点环
+//! - `ring_width`：粗细（逻辑 px；Hard 为 spread，Soft 为 blur）。默认主题 [`crate::style::focus_ring_width`]（3）。
+//! - `ring_color`：颜色。默认主题 token `ring`。也可用 `class("ring-2 ring-primary")`。
+//!   Builder 与 RSX 均可设。
+//!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
 //! ## Notes
@@ -591,6 +596,8 @@ pub fn Input(
     caret_color: Option<String>,
     selection_background: Option<String>,
     selection_foreground: Option<String>,
+    ring_width: Option<f32>,
+    ring_color: Option<String>,
     value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
@@ -628,6 +635,12 @@ pub fn Input(
     }
     if let Some(c) = selection_foreground {
         builder = builder.selection_foreground(c);
+    }
+    if let Some(w) = ring_width {
+        builder = builder.ring_width(w);
+    }
+    if let Some(c) = ring_color {
+        builder = builder.ring_color(c);
     }
 
     if let Some(sig) = value {
@@ -873,6 +886,16 @@ impl InputBuilder {
     /// `selection-background`).
     pub fn selection_foreground(mut self, color: impl crate::style::IntoTextColor) -> Self {
         self.selection_foreground = Some(color.into_text_color());
+        self
+    }
+    /// Focus-ring thickness in logical px (Hard spread / Soft blur). Overrides the theme default.
+    pub fn ring_width(mut self, width: impl IntoF32) -> Self {
+        self.container = self.container.ring_width(width);
+        self
+    }
+    /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
+    pub fn ring_color(mut self, color: impl crate::style::IntoPaintColor) -> Self {
+        self.container = self.container.ring_color(color);
         self
     }
     /// 覆盖默认水平内边距（默认 `0.75rem`）。
@@ -1304,5 +1327,28 @@ mod tests {
         }
         assert!(!find_tid(&el, &input_number_inc_template_id(id)));
         assert!(!find_tid(&el, &input_number_dec_template_id(id)));
+    }
+
+    #[test]
+    fn ring_width_and_color_are_authored_on_chrome() {
+        let el: Element = input("ring-style")
+            .ring_width(5.0)
+            .ring_color("primary")
+            .into();
+        assert_eq!(el.style.focus_ring_width, Some(5.0));
+        let want = crate::style::parse_color("primary");
+        let got = el.style.focus_ring_color.expect("ring color");
+        assert!((got[0] - want[0]).abs() < 0.001);
+        assert!((got[1] - want[1]).abs() < 0.001);
+        assert!((got[2] - want[2]).abs() < 0.001);
+    }
+
+    #[test]
+    fn ring_utility_class_is_authored_on_chrome() {
+        let el: Element = input("ring-class").class("ring-2 ring-primary").into();
+        assert_eq!(el.style.focus_ring_width, Some(2.0));
+        let want = crate::style::parse_color("primary");
+        let got = el.style.focus_ring_color.expect("ring color");
+        assert!((got[0] - want[0]).abs() < 0.001);
     }
 }

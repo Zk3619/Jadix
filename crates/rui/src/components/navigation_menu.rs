@@ -411,6 +411,7 @@ pub fn navigation_menu_content(
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion: FloatingMotionKind::Expand,
         mode: OverlayMode::Stacked,
         width: Some("14rem".into()),
@@ -456,7 +457,7 @@ pub fn navigation_menu_content(
                 focus_roving_key(&ev, &ids, i, FocusRovingAxis::Vertical)
             });
             if el.button_hover_paint.is_none() {
-                el.focus_ring = true;
+                el.set_focusable(true);
             }
             list = list.child(el);
         }

@@ -66,7 +66,10 @@ use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::{is_variant_style_overridden, LineStyle, VariantStyleField, WhiteSpace};
+use crate::style::{
+    ensure_class_list, is_variant_style_overridden, patch_class_set_base_paint, ClassSet,
+    LineStyle, VariantStyleField, WhiteSpace,
+};
 use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
@@ -89,6 +92,11 @@ const SLOT_TRIGGER: &str = "tabs-trigger";
 const SLOT_CONTENT: &str = "tabs-content";
 
 const SHADOW_SM: ([f32; 4], f32) = (tokens::shadow_ink(0.05), 2.0);
+
+/// Inactive chip: `muted/30` over theme background — slightly darker than the
+/// selected `background` chip, still lighter than the muted list track.
+const TABS_TRIGGER_HOVER: &str = "hover:bg-muted/30 hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground";
+const TABS_TRIGGER_HOVER_LINE: &str = "hover:text-foreground data-[state=active]:text-foreground";
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -215,14 +223,24 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         .get(ATTR_ORIENTATION)
         .map(|s| s.as_str() == "vertical")
         .unwrap_or(false);
+    let hover_classes = if line {
+        TABS_TRIGGER_HOVER_LINE
+    } else {
+        TABS_TRIGGER_HOVER
+    };
+    let mut paint = ensure_class_list(el, hover_classes) != LayoutStatus::Clean;
+    let mut layout = false;
+    let want_state = if selected { "active" } else { "inactive" };
+    if el.attrs.get("data-state").map(String::as_str) != Some(want_state) {
+        el.set_attr("data-state", want_state);
+        paint = true;
+    }
     let (want_bg, want_fg) = trigger_colors(selected, disabled, line);
     let (want_shadow, want_blur) = if selected && !line {
         SHADOW_SM
     } else {
         (crate::style::TRANSPARENT, 0.0)
     };
-    let mut paint = false;
-    let mut layout = false;
     let lock_bg = is_variant_style_overridden(&el.attrs, VariantStyleField::Bg);
     let lock_shadow = is_variant_style_overridden(&el.attrs, VariantStyleField::Shadow);
     let lock_pad = is_variant_style_overridden(&el.attrs, VariantStyleField::Pad);
@@ -230,6 +248,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     let lock_weight = is_variant_style_overridden(&el.attrs, VariantStyleField::Weight);
     let lock_leading = is_variant_style_overridden(&el.attrs, VariantStyleField::Leading);
     let lock_border = is_variant_style_overridden(&el.attrs, VariantStyleField::Border);
+    let class_hover = el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
 
     if !lock_bg && el.style.bg_color != want_bg {
         el.style.bg_color = want_bg;
@@ -363,6 +382,9 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
             layout = true;
         }
     }
+    if class_hover && !lock_bg && !lock_fg {
+        patch_class_set_base_paint(el, want_bg, want_fg, (want_shadow, want_blur));
+    }
     (paint, layout)
 }
 
@@ -402,6 +424,10 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
     );
     chip.attrs
         .insert(ATTR_VARIANT.to_string(), "default".to_string());
+    chip.attrs.insert(
+        "data-state".to_string(),
+        if selected { "active" } else { "inactive" }.to_string(),
+    );
 
     let focus_id = format!("{}:{value}", ctx.id);
     let sel = ctx.value;
@@ -421,7 +447,8 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
         .into();
     el = el.accesskit_role("tab");
     if disabled {
-        el = el.opacity(0.5).cursor_not_allowed();
+        el = el.opacity(0.5).cursor_not_allowed().pointer_events_none();
+        el.set_attr("disabled", "true");
     } else {
         el = el.cursor_kind(crate::core::tree::CursorKind::Pointer);
     }
@@ -792,7 +819,7 @@ pub fn TabsContent(value: String, children: Option<Element>) -> Element {
             if el.layout_node.is_some() {
                 layout_tree.update_taffy_node_style(el);
             }
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
             return LayoutStatus::LayoutChanged;
         }
         LayoutStatus::Clean
@@ -1121,6 +1148,148 @@ mod tests {
         assert!(
             triggers[0].children.iter().all(|c| c.text.is_none()),
             "label on ContentBox trigger — not a shrink-wrapped caption child"
+        );
+    }
+
+    #[test]
+    fn tabs_trigger_hover_uses_shadcn_foreground() {
+        let value = use_signal("tabs_hover_value", || "account".to_string());
+        let mut el = tabs_scope(
+            "hover-tabs",
+            Some(value),
+            "account",
+            "horizontal",
+            false,
+            || {
+                let list = TabsList(TabsListProps {
+                    id: String::new(),
+                    variant: None,
+                    value: None,
+                    default_value: None,
+                    options: None,
+                    children: Some({
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("account".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("Account")),
+                                base: None,
+                            }),
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("password".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("Password")),
+                                base: None,
+                            }),
+                        ])
+                    }),
+                    base: None,
+                });
+                let mut root = Element::new();
+                root.set_attr("rui_fragment", "1");
+                root.children(vec![list])
+            },
+        );
+        let mut layout_tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_tabs_trigger_subtree(&mut el, &mut layout_tree, &mut impact);
+
+        let list = el
+            .children
+            .iter_mut()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LIST))
+            .expect("list");
+        let password = list
+            .children
+            .iter_mut()
+            .find(|c| c.attrs.get(ATTR_TABS_VALUE).map(|s| s.as_str()) == Some("password"))
+            .expect("password trigger");
+        assert!(
+            password
+                .class_set
+                .as_ref()
+                .is_some_and(ClassSet::has_hover_color),
+            "TabsTrigger must carry hover:text-foreground"
+        );
+        let rest_fg = password.text_style.color_resolved();
+        assert_eq!(rest_fg, parse_text_color("muted-foreground"));
+        let attrs = password.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            password,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            password.text_style.color_resolved(),
+            parse_text_color("foreground"),
+            "unselected trigger hover:text-foreground"
+        );
+        let hover_bg = parse_color("muted/30");
+        let selected_bg = parse_color("background");
+        let list_bg = parse_color("muted");
+        assert_eq!(
+            password.style.bg_color, hover_bg,
+            "unselected trigger hover:bg-muted/30 (slightly darker than selected chip)"
+        );
+        let dist = |a: [f32; 4], b: [f32; 4]| {
+            (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
+        };
+        assert!(
+            dist(hover_bg, selected_bg) > 0.01,
+            "hover chip must not match selected background"
+        );
+        assert!(
+            dist(hover_bg, selected_bg) < dist(list_bg, selected_bg),
+            "hover chip sits between selected background and the muted list"
+        );
+
+        apply_trigger_chrome(password, false, false);
+        assert_eq!(
+            password.style.bg_color,
+            parse_color("transparent"),
+            "chrome restamps rest; class variants must redraw hover after that"
+        );
+        let attrs = password.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            password,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            password.style.bg_color, hover_bg,
+            "hover:bg-muted/30 must re-apply after chrome restamp"
+        );
+        assert_eq!(
+            password.text_style.color_resolved(),
+            parse_text_color("foreground"),
+            "hover:text-foreground must re-apply after chrome restamp"
+        );
+
+        let account = list
+            .children
+            .iter_mut()
+            .find(|c| c.attrs.get(ATTR_TABS_VALUE).map(|s| s.as_str()) == Some("account"))
+            .expect("account trigger");
+        let attrs = account.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            account,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            account.style.bg_color, selected_bg,
+            "active trigger keeps data-[state=active]:bg-background on hover"
         );
     }
 

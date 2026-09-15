@@ -74,7 +74,10 @@ mod drag;
 mod model;
 pub mod view;
 
-pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag};
+pub(crate) use drag::{
+    clear_color_drag_if_any, is_color_dragging, tick_color_drag, tick_color_drag_from_tree,
+    tick_color_drag_with_bounds,
+};
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,
@@ -219,7 +222,9 @@ impl From<ColorPickerBuilder> for Element {
 
 #[cfg(test)]
 mod tests {
-    use super::drag::{apply_color_pointer, ColorDrag, ColorDragKind};
+    use super::drag::{
+        apply_color_pointer, begin_color_drag, end_color_drag, ColorDrag, ColorDragKind,
+    };
     use super::model::SWATCHES_GITHUB;
     use super::view::{
         build_color_picker_view, format_value_row, place_sv_knob, sv_area, sv_knob_frac,
@@ -603,6 +608,202 @@ mod tests {
         });
     }
 
+    /// Frozen press-time window box + leftover smooth-scroll: the Fixed overlay
+    /// (and SV chart) move while the pointer tracks the same S/V. Stale bounds
+    /// map the new pointer to V→1; live bounds keep V≈0.5 (跟手).
+    #[test]
+    fn tick_color_drag_uses_live_bounds_when_chart_moves() {
+        let (_handle, _) = crate::core::reactivity::create_root(|| {
+            let rgba = use_signal("sv_live_rgba", || Rgba::opaque(255, 255, 255));
+            let hue = use_signal("sv_live_hue", || 210.0f32);
+            let sat = use_signal("sv_live_sat", || 0.0f32);
+            let val = use_signal("sv_live_val", || 1.0f32);
+            let out = use_signal("sv_live_out", || "#ffffff".into());
+            let fmt_sig = use_signal("sv_live_fmt", || ColorFormat::Hex);
+            let frozen = [20.0, 200.0, 100.0, 80.0];
+            let live = [20.0, 120.0, 100.0, 80.0];
+            begin_color_drag(ColorDrag {
+                kind: ColorDragKind::Sv,
+                bounds: Rc::new(Cell::new(frozen)),
+                rgba,
+                hue,
+                sat,
+                val,
+                show_alpha: false,
+                out,
+                fmt_sig,
+                sv_id: Some("sv_live".into()),
+            });
+
+            let px = 70.0;
+            // Pointer stays on the live chart center (user tracking the same S/V
+            // while the overlay moved up 80px).
+            let py_live_center = 160.0;
+            tick_color_drag(px, py_live_center);
+            assert!(
+                (val.peek() - 1.0).abs() < 0.02,
+                "frozen y=200 maps live-center y=160 to ty→0 / V→1; got {}",
+                val.peek()
+            );
+
+            assert!(tick_color_drag_with_bounds(px, py_live_center, Some(live)));
+            assert!((sat.peek() - 0.5).abs() < 0.02, "sat={}", sat.peek());
+            assert!(
+                (val.peek() - 0.5).abs() < 0.02,
+                "live bounds must keep V≈0.5 when the pointer tracks the chart; got {}",
+                val.peek()
+            );
+
+            // Pointer held at the press-time center (y=240). The live chart has
+            // moved up, so that window point is now the SV bottom → V=0.
+            tick_color_drag_with_bounds(px, 240.0, Some(frozen));
+            assert!((val.peek() - 0.5).abs() < 0.02);
+            tick_color_drag_with_bounds(px, 240.0, Some(live));
+            assert!(
+                val.peek() < 0.02,
+                "pointer at frozen center is the live chart bottom (V→0); got {}",
+                val.peek()
+            );
+
+            end_color_drag();
+        });
+    }
+
+    fn find_cp_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+        if el.attrs.get(ATTR_CP_SLOT).map(String::as_str) == Some(slot) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_cp_slot(c, slot))
+    }
+
+    /// Percent `top` must resolve against the SV height. If Taffy treats it as auto
+    /// (indefinite CB) the absolute knob falls to static position — after the
+    /// 100%-tall texture — i.e. glued to the bottom of the SV chart.
+    #[test]
+    fn sv_knob_layout_mid_sv_is_not_glued_to_bottom() {
+        let (_handle, mut root) = crate::core::reactivity::create_root(|| {
+            let rgba = use_signal("sv_lay_rgba", || Rgba::opaque(255, 0, 0));
+            let hue = use_signal("sv_lay_hue", || 0.0f32);
+            let sat = use_signal("sv_lay_sat", || 0.5f32);
+            let val = use_signal("sv_lay_val", || 0.5f32);
+            let fmt = use_signal("sv_lay_fmt", || ColorFormat::Hex);
+            let out = use_signal("sv_lay_out", || "#ff0000".into());
+            Element::new().w(280.0).h(200.0).child(sv_area(
+                "sv_lay", "9rem", rgba, hue, sat, val, fmt, out, false, true,
+            ))
+        });
+        let mut tree = crate::layout::LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 280.0, 200.0, [0.0, 0.0]);
+        let area = root.children.first().expect("sv area");
+        let knob = find_cp_slot(&root, SLOT_SV_KNOB).expect("sv knob");
+        let ab = area.layout_bounds;
+        let kb = knob.layout_bounds;
+        assert!(
+            ab[3] > 80.0,
+            "SV area must have a definite height; got {ab:?}"
+        );
+        let frac_left = (kb[0] - ab[0]) / ab[2].max(1.0);
+        let frac_top = (kb[1] - ab[1]) / ab[3].max(1.0);
+        assert!(
+            (frac_left - 0.5).abs() < 0.08,
+            "sat=0.5 → left frac {frac_left}; area={ab:?} knob={kb:?}"
+        );
+        assert!(
+            (frac_top - 0.5).abs() < 0.08,
+            "val=0.5 → top frac {frac_top} (must not glue to SV bottom); area={ab:?} knob={kb:?}"
+        );
+    }
+
+    /// Hit-path visual box after page scroll must map the pointer to the same
+    /// S/V as an unscrolled chart. Document-space `layout_bounds` would push
+    /// V→0 (knob forced to the SV bottom) once offset_y exceeds the chart height.
+    #[test]
+    fn sv_hit_path_after_scroll_maps_visual_center() {
+        use crate::app::pointer_events::hit_path;
+        use crate::components::scroll_area;
+        use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+        use crate::core::tree::LayoutStatus;
+
+        let rest = "sv-scroll-hit";
+        let (_handle, mut root) = crate::core::reactivity::create_root(|| {
+            use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).set_silent(240.0);
+            let rgba = use_signal("sv_scr_rgba", || Rgba::opaque(255, 255, 255));
+            let hue = use_signal("sv_scr_hue", || 210.0f32);
+            let sat = use_signal("sv_scr_sat", || 0.0f32);
+            let val = use_signal("sv_scr_val", || 1.0f32);
+            let fmt = use_signal("sv_scr_fmt", || ColorFormat::Hex);
+            let out = use_signal("sv_scr_out", || "#ffffff".into());
+            let page = Element::new()
+                .w(280.0)
+                .h(800.0)
+                .flex_col()
+                .child(Element::new().h(240.0).w("100%"))
+                .child(sv_area(
+                    "sv_scr", "9rem", rgba, hue, sat, val, fmt, out, false, false,
+                ));
+            scroll_area(rest)
+                .w(280.0)
+                .h(200.0)
+                .overflow_y("scroll")
+                .child(page)
+                .into()
+        });
+        let mut tree = crate::layout::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        let _ = tree.build_and_layout(&mut root, 280.0, 200.0, [0.0, 0.0]);
+        crate::core::tree::sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            280.0,
+            200.0,
+            [0.0, 0.0],
+        );
+        let _ = tree.build_and_layout_fast(&mut root, 280.0, 200.0, [0.0, 0.0], true, false);
+
+        let knob = find_cp_slot(&root, SLOT_SV_KNOB).expect("sv knob");
+        // After 240px scroll the spacer is gone; SV sits at the viewport top.
+        let path = hit_path(&root, 140.0, 72.0);
+        let leaf = path.last().expect("hit sv after scroll");
+        let b = leaf.bounds;
+        assert!(
+            b[3] > 80.0 && b[3] < 200.0,
+            "SV hit bounds height should be the chart, not the scrolled page; {b:?}"
+        );
+        let rgba = use_signal("sv_scr_rgba", || Rgba::opaque(255, 255, 255));
+        let hue = use_signal("sv_scr_hue", || 210.0f32);
+        let sat = use_signal("sv_scr_sat", || 0.0f32);
+        let val = use_signal("sv_scr_val", || 1.0f32);
+        let out = use_signal("sv_scr_out", || "#ffffff".into());
+        let fmt_sig = use_signal("sv_scr_fmt", || ColorFormat::Hex);
+        let drag = ColorDrag {
+            kind: ColorDragKind::Sv,
+            bounds: std::rc::Rc::new(std::cell::Cell::new(b)),
+            rgba,
+            hue,
+            sat,
+            val,
+            show_alpha: false,
+            out,
+            fmt_sig,
+            sv_id: Some("sv_scr".into()),
+        };
+        let px = b[0] + b[2] * 0.5;
+        let py = b[1] + b[3] * 0.5;
+        apply_color_pointer(&drag, px, py);
+        assert!(
+            (sat.peek() - 0.5).abs() < 0.08,
+            "scrolled visual center must map S≈0.5, sat={} bounds={b:?}",
+            sat.peek()
+        );
+        assert!(
+            (val.peek() - 0.5).abs() < 0.08,
+            "scrolled visual center must map V≈0.5 (not glued to bottom V=0), val={} bounds={b:?} knob={:?}",
+            val.peek(),
+            knob.layout_bounds
+        );
+    }
+
     #[test]
     fn builder_trigger_style_reaches_trigger_slot() {
         use crate::core::reactivity::create_root;
@@ -702,5 +903,384 @@ mod tests {
             find_content_class(&el, "p-4"),
             "color_picker .slot(color-picker-content) class must land on data-slot=color-picker-content"
         );
+    }
+
+    #[test]
+    fn click_default_color_picker_hoists_fade_panel_and_encodes_its_band() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::{
+            overlay_band_encode_flags, overlay_membership_paint_stamps, push_frame_paint_element,
+            take_frame_paint_nodes, PaintDirtyKind,
+        };
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
+        };
+        use crate::utils::floating_motion::{
+            flush_floating_motion_subtree, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let _ = take_frame_paint_nodes();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+            });
+        });
+
+        drain_deferred_view_remounts();
+
+        fn find_trigger_click(
+            el: &Element,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some("gal-color:trigger") {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(find_trigger_click)
+        }
+        let click = {
+            let tree = live.borrow();
+            find_trigger_click(&tree).expect("ColorPicker trigger click")
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        fn find_hoisted_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                && el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.contains("gal-color") && t.ends_with("__floating_panel"))
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_hoisted_panel)
+        }
+        fn any_hoisted(el: &Element) -> bool {
+            el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                || el.children.iter().any(any_hoisted)
+        }
+
+        let (
+            overlay_start,
+            inst_len,
+            textured_start,
+            textured_len,
+            band_keys,
+            panel_key,
+            panel_bounds,
+            panel_opacity,
+            panel_tid,
+            panel_portal_key,
+            overlay_dirties,
+        ) = {
+            let mut root = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(&mut root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    &mut root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let _ = flush_floating_motion_subtree(&mut root);
+            let _ = tick_hoisted_floating_css(&mut root);
+            let out = tree.build_and_layout_fast_ex(
+                &mut root,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                false,
+                None,
+            );
+            let overlay_start = out.overlay_split.instance_start;
+            let inst_len = out.instances.len();
+            let textured_start = out.overlay_split.textured_start;
+            let textured_len = out.textured_draws.len();
+            let band_keys: Vec<u64> = out
+                .overlay_split
+                .band_ranges(
+                    out.instances.len(),
+                    out.textured_draws.len(),
+                    out.text_nodes.len(),
+                    0,
+                    0,
+                )
+                .iter()
+                .map(|b| b.stamp_key)
+                .collect();
+            let has_any = any_hoisted(&root);
+            let panel = find_hoisted_panel(&root);
+            let panel_bounds = panel.map(|p| p.layout_bounds).unwrap_or([0.0; 4]);
+            let panel_opacity = panel.map(|p| p.style.opacity).unwrap_or(0.0);
+            let panel_tid = panel.and_then(|p| p.template_id.clone());
+            let panel_portal_key = panel.and_then(|p| p.attrs.get("rui_portal_key").cloned());
+            let panel_key = panel.map(overlay_portal_stamp_key).unwrap_or(0);
+            let _ = take_frame_paint_nodes();
+            if let Some(p) = panel {
+                push_frame_paint_element(p, [0.0, 0.0]);
+            }
+            let overlay_dirties: Vec<u64> = take_frame_paint_nodes()
+                .into_iter()
+                .filter(|d| d.kind == PaintDirtyKind::Overlay)
+                .map(|d| d.key)
+                .collect();
+            assert!(
+                has_any,
+                "clicking #3b82f6 trigger must hoist ColorPicker portal; overlay_start={overlay_start} inst={inst_len} overlay_depth={}",
+                crate::app::portal_overlay::overlay_stack_depth_for_test(),
+            );
+            (
+                overlay_start,
+                inst_len,
+                textured_start,
+                textured_len,
+                band_keys,
+                panel_key,
+                panel_bounds,
+                panel_opacity,
+                panel_tid,
+                panel_portal_key,
+                overlay_dirties,
+            )
+        };
+
+        assert!(
+            panel_bounds[2] > 8.0 && panel_bounds[3] > 8.0,
+            "ColorPicker popover must have a box; bounds={panel_bounds:?} opacity={panel_opacity} tid={panel_tid:?} key={panel_portal_key:?}"
+        );
+        assert!(
+            overlay_start < inst_len || textured_start < textured_len,
+            "ColorPicker overlay suffix must contain instances"
+        );
+        assert_eq!(
+            overlay_dirties,
+            vec![panel_key],
+            "Fade Overlay dirty must be the portal stamp; panel_key={panel_key}"
+        );
+        assert!(
+            band_keys.iter().any(|k| *k == panel_key),
+            "portal-layer band must use the same stamp as Fade dirty; panel_key={panel_key} bands={band_keys:?}"
+        );
+        let flags = overlay_band_encode_flags(&band_keys, &overlay_dirties, false, &[panel_key]);
+        assert!(
+            flags.iter().any(|e| *e),
+            "PartialLoad must submit ColorPicker; bands={band_keys:?} flags={flags:?}"
+        );
+
+        const DP_KEY: u64 = 1;
+        let leftover = [64.0, 344.0, 312.0, 352.0];
+        let joined =
+            overlay_membership_paint_stamps(&[(DP_KEY, leftover)], &[(panel_key, panel_bounds)]);
+        assert_eq!(
+            joined.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            vec![panel_key],
+            "leftover DatePicker occupancy must not become the ColorPicker Overlay dirty"
+        );
+        let leftover_bands = {
+            let mut k = vec![DP_KEY, 0];
+            k.extend(band_keys.iter().copied());
+            k
+        };
+        let leftover_flags =
+            overlay_band_encode_flags(&leftover_bands, &overlay_dirties, false, &[panel_key]);
+        assert!(
+            leftover_flags.iter().any(|e| *e),
+            "ColorPicker must still encode above a leftover DatePicker band; flags={leftover_flags:?} bands={leftover_bands:?}"
+        );
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn color_picker_popover_blocks_hover_on_datepicker_trigger_below() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use crate::app::pointer_events::hit_path;
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::app::tree_hit::{clear_hover_tracking, update_hovers};
+        use crate::components::button::button;
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL};
+        use crate::primitives::interactive::interactive;
+        use crate::utils::floating_motion::{
+            flush_floating_motion_subtree, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        clear_hover_tracking();
+
+        let below_hover = Rc::new(Cell::new(false));
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            let below_hover = Rc::clone(&below_hover);
+            create_effect(move || {
+                let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
+                let below: Element = interactive(
+                    button("gal-date:trigger")
+                        .variant("outline")
+                        .w(800.0)
+                        .h(600.0)
+                        .text("Pick a date")
+                        .into(),
+                )
+                .on_hover({
+                    let below_hover = Rc::clone(&below_hover);
+                    move |h| below_hover.set(h)
+                })
+                .into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(below).child(picker);
+            });
+        });
+
+        drain_deferred_view_remounts();
+        fn find_trigger_click(
+            el: &Element,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some("gal-color:trigger") {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(find_trigger_click)
+        }
+        let click = {
+            let tree = live.borrow();
+            find_trigger_click(&tree).expect("ColorPicker trigger click")
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        fn find_hoisted_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                && el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.contains("gal-color") && t.ends_with("__floating_panel"))
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_hoisted_panel)
+        }
+
+        let (px, py, panel_bounds, pe) = {
+            let mut root = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(&mut root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    &mut root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let _ = flush_floating_motion_subtree(&mut root);
+            let _ = tick_hoisted_floating_css(&mut root);
+            let _ = tree.build_and_layout_fast_ex(
+                &mut root,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                false,
+                None,
+            );
+            let panel = find_hoisted_panel(&root).expect("hoisted ColorPicker panel");
+            let b = panel.layout_bounds;
+            assert!(
+                b[2] > 8.0 && b[3] > 8.0,
+                "popover must have a box; bounds={b:?}"
+            );
+            let px = b[0] + b[2] * 0.5;
+            let py = b[1] + b[3] * 0.5;
+            let pe = panel.pointer_events_mode();
+            let path = hit_path(&root, px, py);
+            assert!(
+                path.iter()
+                    .all(|e| e.focus_id.as_deref() != Some("gal-date:trigger")),
+                "hit_path must not reach DatePicker under the popover; path={:?}",
+                path.iter()
+                    .map(|e| (e.focus_id.clone(), e.portal_key.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let mut cbs = Vec::new();
+            update_hovers(&root, px, py, [0.0, 0.0], &mut cbs);
+            for (cb, is_hover) in cbs {
+                (*cb.borrow_mut())(is_hover);
+            }
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::style::sync_class_variants_subtree(
+                &mut root,
+                [px, py],
+                "",
+                false,
+                800.0,
+                600.0,
+                &mut tree,
+                &mut impact,
+            );
+            fn find_date_trigger(el: &Element) -> Option<&Element> {
+                if el.focus_id.as_deref() == Some("gal-date:trigger") {
+                    return Some(el);
+                }
+                el.children.iter().find_map(find_date_trigger)
+            }
+            let date = find_date_trigger(&root).expect("date trigger");
+            assert_ne!(
+                date.class_set.as_ref().and_then(|cs| cs.last_pointer_hover),
+                Some(true),
+                "DatePicker outline hover:bg must not apply under ColorPicker popover at ({px:.1},{py:.1})"
+            );
+            (px, py, b, pe)
+        };
+
+        assert!(
+            !below_hover.get(),
+            "ColorPicker popover must absorb hover at ({px:.1},{py:.1}) panel={panel_bounds:?} pe={pe:?}; DatePicker trigger underneath must not hover"
+        );
+
+        clear_hover_tracking();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

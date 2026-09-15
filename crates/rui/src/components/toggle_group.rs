@@ -55,7 +55,7 @@ use crate::components::base::{BaseComponentBuilder, SlotChrome};
 use crate::components::button_group::{
     apply_button_group_join, apply_button_group_join_chrome, ButtonGroupOrientation,
 };
-use crate::components::toggle::toggle_size_pad;
+use crate::components::toggle::{toggle_hover_classes, toggle_size_pad};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_scoped_signal, use_signal, with_child_owner,
     Context, Signal,
@@ -64,8 +64,10 @@ use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    control_focus_ring_active, focus_ring_color, is_variant_style_overridden, with_class_list,
-    VariantStyleField, FOCUS_RING_BLUR, TRANSPARENT,
+    control_focus_ring_active, ensure_class_list, focus_ring_color, focus_ring_params_for,
+    is_variant_style_overridden, patch_class_set_base_paint, patch_class_set_base_radii,
+    patch_class_set_base_shadow, with_class_list, ClassSet, VariantStyleField, ATTR_SYNC_LABEL_FG,
+    TRANSPARENT,
 };
 use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
@@ -516,8 +518,11 @@ fn build_toggle_group_item(
     out.set_attr("data-state", if pressed { "on" } else { "off" });
     out.set_attr("data-variant", ctx.variant.as_str());
     out.set_attr("data-size", ctx.size.as_str());
+    out.set_attr(ATTR_SYNC_LABEL_FG, "1");
+    let _ = ensure_class_list(&mut out, toggle_hover_classes(outline, segmented));
     if disabled {
-        out = out.cursor_not_allowed();
+        out = out.cursor_not_allowed().pointer_events_none();
+        out.set_attr("disabled", "true");
     } else {
         out = out.cursor_kind(crate::core::tree::CursorKind::Pointer);
     }
@@ -603,6 +608,9 @@ pub fn toggle_group_scope(
         }
         if use_button_group_join {
             apply_button_group_join(&mut kids, orientation.to_button_group());
+            for kid in kids.iter_mut() {
+                patch_class_set_base_radii(kid);
+            }
         } else if segmented {
             apply_segmented_radii(&mut kids);
         }
@@ -709,6 +717,11 @@ fn sync_toggle_group_pressed(
         };
         let (want_bg, want_border, want_fg) =
             toggle_chip_colors(pressed, disabled, outline, segmented);
+        let _ = ensure_class_list(option, toggle_hover_classes(outline, segmented));
+        let class_hover = option
+            .class_set
+            .as_ref()
+            .is_some_and(ClassSet::has_hover_color);
         if !is_variant_style_overridden(&option.attrs, VariantStyleField::Bg)
             && option.style.bg_color != want_bg
         {
@@ -743,15 +756,21 @@ fn sync_toggle_group_pressed(
                 .focus_id
                 .as_deref()
                 .is_some_and(|fid| control_focus_ring_active(fid, option.focusable, disabled));
-            let (want_shadow, want_blur) = if show_ring {
-                (focus_ring_color(), FOCUS_RING_BLUR)
+            let (want_shadow, want_blur, want_spread) = if show_ring {
+                let (blur, spread) = focus_ring_params_for(option);
+                let color = option
+                    .style
+                    .focus_ring_color
+                    .unwrap_or_else(focus_ring_color);
+                (color, blur, spread)
             } else if pressed {
-                (tokens::shadow_ink(0.08), 2.0)
+                (tokens::shadow_ink(0.08), 2.0, 0.0)
             } else {
-                (TRANSPARENT, 0.0)
+                (TRANSPARENT, 0.0, 0.0)
             };
             if !is_variant_style_overridden(&option.attrs, VariantStyleField::Shadow)
                 && ((option.style.shadow_blur - want_blur).abs() > 0.01
+                    || (option.style.shadow_spread - want_spread).abs() > 0.01
                     || (option.style.shadow_color[0] - want_shadow[0]).abs() > 0.001
                     || (option.style.shadow_color[1] - want_shadow[1]).abs() > 0.001
                     || (option.style.shadow_color[2] - want_shadow[2]).abs() > 0.001
@@ -760,14 +779,26 @@ fn sync_toggle_group_pressed(
                 option.style.shadow_color = want_shadow;
                 option.style.shadow_blur = want_blur;
                 option.style.shadow_offset = [0.0, 0.0];
-                option.style.shadow_spread = 0.0;
+                option.style.shadow_spread = want_spread;
                 changed = true;
+            }
+            if class_hover && !is_variant_style_overridden(&option.attrs, VariantStyleField::Shadow)
+            {
+                patch_class_set_base_shadow(option, want_shadow, want_blur);
             }
         } else if option.attrs.contains_key("rui_button_group_edge") {
             apply_button_group_join_chrome(option);
         }
         if !is_variant_style_overridden(&option.attrs, VariantStyleField::Fg) {
             paint_descendant_fg(option, want_fg, &mut changed);
+        }
+        if class_hover {
+            patch_class_set_base_paint(
+                option,
+                option.style.bg_color,
+                want_fg,
+                (option.style.shadow_color, option.style.shadow_blur),
+            );
         }
         item_index += 1;
     }
@@ -1242,6 +1273,91 @@ mod tests {
     }
 
     #[test]
+    fn joined_vertical_inner_corners_stay_square_on_hover() {
+        use crate::components::button_group::ATTR_PAINT_NUDGE;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_handle, mut el): (_, Element) = create_root(|| {
+            toggle_group("tg-vert-join")
+                .orientation("vertical")
+                .variant("outline")
+                .spacing(0)
+                .default_value("top")
+                .options(vec![
+                    ("top", "Top"),
+                    ("middle", "Middle"),
+                    ("bottom", "Bottom"),
+                ])
+                .into()
+        });
+        assert_eq!(el.children.len(), 3);
+        let r = el.children[0].style.radii[0];
+        assert!(r > 0.0, "start chip keeps outer rounds");
+        assert_eq!(el.children[0].style.radii, [r, r, 0.0, 0.0]);
+        assert_eq!(el.children[1].style.radii, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(el.children[2].style.radii, [0.0, 0.0, r, r]);
+        assert_eq!(
+            el.children[1]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.base_style.as_ref())
+                .map(|s| s.radii),
+            Some([0.0, 0.0, 0.0, 0.0]),
+            "join radii must be in the class restore snapshot"
+        );
+        assert_eq!(
+            el.children[1]
+                .attrs
+                .get(ATTR_PAINT_NUDGE)
+                .map(String::as_str),
+            Some("y")
+        );
+        assert_eq!(
+            el.children[2]
+                .attrs
+                .get(ATTR_PAINT_NUDGE)
+                .map(String::as_str),
+            Some("y")
+        );
+
+        for i in 0..3 {
+            let join = el.children[i].style.radii;
+            let attrs = el.children[i].attrs.clone();
+            let _ = crate::style::resolve_class_variants(
+                &mut el.children[i],
+                &crate::style::VariantContext {
+                    hovered: true,
+                    attrs: Some(&attrs),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                el.children[i].style.radii, join,
+                "item {i} inner corners must not flash rounded-md on hover restore"
+            );
+        }
+
+        let mut layout = LayoutTree::new();
+        let mut root = Element::new().w(200.0).h(200.0).child(el);
+        let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+        let group = &root.children[0];
+        let a = &group.children[0];
+        let b = &group.children[1];
+        let c = &group.children[2];
+        let seam_ab = b.layout_bounds[1] - (a.layout_bounds[1] + a.layout_bounds[3]);
+        let seam_bc = c.layout_bounds[1] - (b.layout_bounds[1] + b.layout_bounds[3]);
+        assert!(
+            seam_ab.abs() < 0.75,
+            "Top|Middle layout boxes should abut, got {seam_ab}"
+        );
+        assert!(
+            (seam_bc - seam_ab).abs() < 0.75,
+            "Middle|Bottom seam must match Top|Middle (got ab={seam_ab} bc={seam_bc})"
+        );
+    }
+
+    #[test]
     fn separated_has_no_group_edge() {
         let el: Element = toggle_group("tg-sep")
             .options(vec![("a", "A"), ("b", "B")])
@@ -1316,5 +1432,48 @@ mod tests {
             find_size(&el, 20.0),
             "toggle_option .style must land on the assembled chip"
         );
+    }
+
+    #[test]
+    fn toggle_group_item_hover_uses_shadcn_muted() {
+        let mut el: Element = toggle_group("tg-hover")
+            .default_value("a")
+            .options(vec![("a", "A"), ("b", "B")])
+            .into();
+        let off_i = el
+            .children
+            .iter()
+            .position(|c| c.attrs.get(ATTR_VALUE).map(String::as_str) == Some("b"))
+            .expect("off chip");
+        let on_i = el
+            .children
+            .iter()
+            .position(|c| c.attrs.get(ATTR_VALUE).map(String::as_str) == Some("a"))
+            .expect("on chip");
+        assert!(el.children[off_i]
+            .class_set
+            .as_ref()
+            .is_some_and(ClassSet::has_hover_color));
+        let attrs = el.children[off_i].attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            &mut el.children[off_i],
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.children[off_i].style.bg_color, parse_color("muted"));
+
+        let attrs = el.children[on_i].attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            &mut el.children[on_i],
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.children[on_i].style.bg_color, parse_color("accent"));
     }
 }

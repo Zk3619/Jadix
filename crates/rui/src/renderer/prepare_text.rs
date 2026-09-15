@@ -1147,7 +1147,11 @@ fn apply_shimmer_sweep(
 }
 
 /// Color selected glyphs via `set_rich_text` (cosmic-text has no public layout_mut).
-/// Splits `text` at `[lo, hi)` so only that range gets `fg`; other runs keep `attrs`.
+///
+/// `text` must already be the paint string (letter-spacing / direction mark /
+/// UAX#14 prewrap applied). Color-only spans stay `compatible()` for shaping, so
+/// we must not insert extra marks or per-span spacing — that split BiDi/WJ runs
+/// and dropped glyphs.
 fn set_selection_colored_buffer_text(
     buffer: &mut glyphon::Buffer,
     text: &str,
@@ -1155,9 +1159,6 @@ fn set_selection_colored_buffer_text(
     hi: usize,
     fg: [u8; 4],
     attrs: &glyphon::Attrs,
-    letter_spacing: f32,
-    direction: TextDirection,
-    scaled_size: f32,
     shaping: glyphon::Shaping,
 ) {
     let len = text.len();
@@ -1167,36 +1168,55 @@ fn set_selection_colored_buffer_text(
         buffer.set_text(text, attrs, shaping, None);
         return;
     }
-    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(3);
-    let mut first = true;
-    let mut push = |body: &str, color: Option<[u8; 4]>| {
-        if body.is_empty() {
-            return;
-        }
-        let mut s = apply_letter_spacing_approx(body, letter_spacing, scaled_size).into_owned();
-        if first {
-            let m = direction_mark(direction);
-            if !m.is_empty() {
-                s = format!("{m}{s}");
-            }
-            first = false;
-        }
-        let mut a = attrs.clone();
-        if let Some(c) = color {
-            a = a.color(glyphon::Color::rgba(c[0], c[1], c[2], c[3]));
-        }
-        owned.push((s, a));
-    };
-    push(&text[..lo], None);
-    push(&text[lo..hi], Some(fg));
-    push(&text[hi..], None);
-    if owned.is_empty() {
-        buffer.set_text(text, attrs, shaping, None);
-        return;
+    let fg = attrs
+        .clone()
+        .color(glyphon::Color::rgba(fg[0], fg[1], fg[2], fg[3]));
+    let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::with_capacity(3);
+    if lo > 0 {
+        spans.push((&text[..lo], attrs.clone()));
     }
-    let rich: Vec<(&str, glyphon::Attrs)> =
-        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
-    buffer.set_rich_text(rich, attrs, shaping, None);
+    spans.push((&text[lo..hi], fg));
+    if hi < len {
+        spans.push((&text[hi..], attrs.clone()));
+    }
+    buffer.set_rich_text(spans, attrs, shaping, None);
+}
+
+/// Map a byte range on `original` onto `paint` when UAX#14 prewrap inserted `\n`.
+fn map_original_range_to_paint(
+    original: &str,
+    paint: &str,
+    lo: usize,
+    hi: usize,
+) -> (usize, usize) {
+    if original == paint || paint.is_empty() {
+        let n = paint.len();
+        return (lo.min(n), hi.min(n));
+    }
+    let map = |orig_i: usize| -> usize {
+        let target = orig_i.min(original.len());
+        let ob = original.as_bytes();
+        let pb = paint.as_bytes();
+        let mut oi = 0usize;
+        let mut pi = 0usize;
+        while oi < target && pi < pb.len() {
+            if ob[oi] == pb[pi] {
+                oi += 1;
+                pi += 1;
+            } else if pb[pi] == b'\n' {
+                pi += 1;
+            } else {
+                oi += 1;
+            }
+        }
+        pi.min(paint.len())
+    };
+    let mut a = paint.floor_char_boundary(map(lo));
+    let mut b = paint.floor_char_boundary(map(hi));
+    if a > b {
+        std::mem::swap(&mut a, &mut b);
+    }
+    (a, b)
 }
 
 fn resolve_text_align(
@@ -2210,41 +2230,13 @@ pub fn prepare_text_frame_at(
             crate::text::snap_content_text_width(w).max(info.width.max(1.0))
         };
         let soft_w_target = (layout_w * ui_scale).max(1.0);
-        let metrics = info
-            .prepared
-            .as_ref()
-            .map(|p| crate::text::layout(p, layout_w));
-        let hard_lines = info.text.split('\n').count().max(1) as f32;
-        // Cosmic clips ink at buffer height. Keep a small pad for coverage AA.
-        // TextEdit uses a larger pad because the field scrolls; static labels must
-        // not grow the buffer past ancestor overflow:hidden (sidebar footer rule).
-        let ink_fudge = if is_input_text {
-            crate::utils::text_field::text_edit_ink_pad_px(st.size_resolved()) * ui_scale
-        } else {
-            2.0 * ui_scale
-        };
-        // Height from segment arithmetic / leaf first. glyphon_fit only on Shape miss (below).
-        let metrics_h = metrics
-            .as_ref()
-            .map(|m| {
-                (m.line_count.max(1) as f32 * line_height)
-                    .max(m.height * ui_scale)
-                    .max(hard_lines * line_height)
-                    .max(line_height)
-            })
-            .unwrap_or_else(|| (hard_lines * line_height.max(1.0)).max(line_height));
-        let buffer_soft_h = if is_input_text {
-            metrics_h + ink_fudge
-        } else {
-            metrics_h.max(scaled_h) + ink_fudge
-        };
-        // Unbounded height_opt for Input/Textarea: `Some(content soft_h)` still races with
-        // shaped_cache index reuse / stale short windows. `None` keeps every hard line.
-        let buffer_height_opt: Option<f32> = if is_input_text {
-            None
-        } else {
-            Some(buffer_soft_h)
-        };
+        // CSS: `line-height` sizes the strut / leaf. Glyph ink may overflow that line
+        // box (`overflow: visible`). Cosmic clips at buffer height, so do **not** bind
+        // the buffer to the leaf — a `Some(lh + pad)` fudge is not a line box.
+        // glyphon TextBounds follows ancestor `overflow:hidden` (sidebar Content host
+        // still scissors the last nav row off the footer separator).
+        // `Some(content_h)` also races shaped_cache reuse (Textarea hard-line drop).
+        let buffer_height_opt: Option<f32> = None;
         // CSS text-overflow: when the nowrap line is wider than the box, keep
         // inline-start in view (ellipsis/clip at inline-end). Center only applies
         // to lines that fit — otherwise a truncated caption sits in a huge gap.
@@ -2265,28 +2257,28 @@ pub fn prepare_text_frame_at(
             resolve_text_align(st.align_resolved(), st.direction)
         };
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis {
-                Cow::Owned(truncate_with_ellipsis(
-                    unsafe { &mut *text_renderer.font_system },
-                    info.text.as_str(),
-                    scaled_size,
-                    line_height,
-                    font_weight,
-                    family,
-                    scaled_w.max(0.0),
-                ))
-            } else if let Some(raw) = info.glyph_fx.as_deref() {
-                let kind = crate::renderer::GlyphFxKind::parse(raw);
-                if kind == crate::renderer::GlyphFxKind::Split {
-                    let t = crate::style::global_time_s().fract();
-                    let n = info.text.chars().count().max(1);
-                    let keep = ((n as f32) * t).ceil() as usize;
-                    Cow::Owned(info.text.chars().take(keep.max(1)).collect())
-                } else {
-                    Cow::Borrowed(info.text.as_str())
-                }
+            Cow::Owned(truncate_with_ellipsis(
+                unsafe { &mut *text_renderer.font_system },
+                info.text.as_str(),
+                scaled_size,
+                line_height,
+                font_weight,
+                family,
+                scaled_w.max(0.0),
+            ))
+        } else if let Some(raw) = info.glyph_fx.as_deref() {
+            let kind = crate::renderer::GlyphFxKind::parse(raw);
+            if kind == crate::renderer::GlyphFxKind::Split {
+                let t = crate::style::global_time_s().fract();
+                let n = info.text.chars().count().max(1);
+                let keep = ((n as f32) * t).ceil() as usize;
+                Cow::Owned(info.text.chars().take(keep.max(1)).collect())
             } else {
                 Cow::Borrowed(info.text.as_str())
-            };
+            }
+        } else {
+            Cow::Borrowed(info.text.as_str())
+        };
         let with_suffix: Cow<'_, str> = match info.shape_suffix.as_deref() {
             Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", display_text, s)),
             _ => display_text,
@@ -2838,18 +2830,31 @@ pub fn prepare_text_frame_at(
                 } else if let Some(((lo, hi), fg)) =
                     st.input_caret.as_ref().and_then(|c| c.selection_recolor())
                 {
-                    set_selection_colored_buffer_text(
-                        &mut buffer,
-                        info.text.as_str(),
-                        lo,
-                        hi,
-                        fg,
-                        &attrs,
-                        st.letter_spacing,
-                        st.direction,
-                        scaled_size,
-                        shaping,
-                    );
+                    let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
+                    if emoji_custom_glyph_enabled() && has_emoji {
+                        set_shaped_buffer_text(
+                            &mut buffer,
+                            unsafe { &mut *text_renderer.font_system },
+                            paint_text,
+                            attrs,
+                            shaping,
+                            true,
+                            scaled_size,
+                            line_height,
+                        );
+                    } else {
+                        let (slo, shi) =
+                            map_original_range_to_paint(info.text.as_str(), paint_text, lo, hi);
+                        set_selection_colored_buffer_text(
+                            &mut buffer,
+                            paint_text,
+                            slo,
+                            shi,
+                            fg,
+                            &attrs,
+                            shaping,
+                        );
+                    }
                 } else {
                     let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
                     set_shaped_buffer_text(
@@ -3878,6 +3883,70 @@ mod text_shadow_tests {
     use crate::renderer::font_loader;
     use crate::renderer::text_hit::best_font_family;
 
+    fn glyph_ink_bottom(
+        buffer: &glyphon::Buffer,
+        fs: &mut glyphon::FontSystem,
+        swash: &mut glyphon::SwashCache,
+    ) -> Option<i32> {
+        let mut max_y = i32::MIN;
+        let mut any = false;
+        for run in buffer.layout_runs() {
+            let line_y_px = run.line_y.round() as i32;
+            for g in run.glyphs.iter() {
+                let physical = g.physical((0.0, 0.0), 1.0);
+                let Some(img) = swash.get_image_uncached(fs, physical.cache_key) else {
+                    continue;
+                };
+                any = true;
+                let py = line_y_px + physical.y - img.placement.top;
+                max_y = max_y.max(py + img.placement.height as i32);
+            }
+        }
+        any.then_some(max_y)
+    }
+
+    #[test]
+    fn text_sm_line_box_covers_gallery_descenders() {
+        // Tailwind `text-sm` is 14px / 1.25rem. That strut covers Latin `g`/`y`;
+        // `leading-none` (1em) does not — but CSS still paints the overflow.
+        // Do not invent an ink pad; production `set_size(w, None)` plus the
+        // menu-button token (not a taller Cosmic buffer) is the browser model.
+        let size = 14.0_f32;
+        let sm_lh = size * crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        let family = best_font_family(&fs);
+        let mut swash = glyphon::SwashCache::new();
+        let attrs = glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(700));
+
+        let mut none_box = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, size));
+        none_box.set_size(Some(400.0), None);
+        none_box.set_text("Gallery", &attrs, glyphon::Shaping::Advanced, None);
+        none_box.shape_until_scroll(&mut fs, false);
+        let Some(ink_none) = glyph_ink_bottom(&none_box, &mut fs, &mut swash) else {
+            return;
+        };
+
+        let mut sm = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, sm_lh));
+        sm.set_size(Some(400.0), None);
+        sm.set_text("Gallery", &attrs, glyphon::Shaping::Advanced, None);
+        sm.shape_until_scroll(&mut fs, false);
+        let Some(ink_sm) = glyph_ink_bottom(&sm, &mut fs, &mut swash) else {
+            return;
+        };
+
+        assert!(
+            (ink_none as f32) > size + 0.5,
+            "Gallery descenders sit below the 1em em-box (ink={ink_none} em={size})"
+        );
+        assert!(
+            (ink_sm as f32) <= sm_lh + 1.0,
+            "text-sm line box must cover those descenders without a pad (ink={ink_sm} lh={sm_lh})"
+        );
+    }
+
     #[test]
     fn text_shadow_active_allows_zero_blur_with_offset() {
         assert!(text_shadow_active(Some([0, 0, 0, 255]), [4.0, 0.0], 0.0));
@@ -4063,9 +4132,6 @@ mod shape_cache_key_tests {
             2,
             [9, 8, 7, 255],
             &attrs,
-            0.0,
-            TextDirection::Ltr,
-            14.0,
             glyphon::Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut fs, false);
@@ -4085,6 +4151,51 @@ mod shape_cache_key_tests {
         }
         assert!(found_sel, "expected a glyph in the selected byte range");
         assert!(found_other, "expected a glyph outside the selected range");
+    }
+
+    #[test]
+    fn bidi_wj_selection_keeps_all_glyphs() {
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let text = "Hello עברית\u{2060}789 and العربية — soft wrap keeps WJ pairs.";
+        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(20, 20, 20, 255));
+        let mut plain = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        plain.set_size(Some(256.0), Some(120.0));
+        plain.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
+        plain.shape_until_scroll(&mut fs, false);
+        let plain_keys: Vec<(usize, usize)> = plain
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| (g.start, g.end)))
+            .collect();
+
+        let mut selected = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        selected.set_size(Some(256.0), Some(120.0));
+        super::set_selection_colored_buffer_text(
+            &mut selected,
+            text,
+            0,
+            text.len(),
+            [240, 240, 240, 255],
+            &attrs,
+            glyphon::Shaping::Advanced,
+        );
+        selected.shape_until_scroll(&mut fs, false);
+        let sel_keys: Vec<(usize, usize)> = selected
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| (g.start, g.end)))
+            .collect();
+        assert_eq!(
+            plain_keys, sel_keys,
+            "selection recolor must not drop or split BiDi/WJ glyphs"
+        );
+        assert!(
+            !sel_keys.is_empty(),
+            "gallery BiDi+WJ string must produce glyphs"
+        );
     }
 
     #[test]

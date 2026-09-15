@@ -1273,7 +1273,8 @@ pub(super) fn build_color_picker_view(
         show_alpha,
         disabled,
     } = props;
-    let _ = open.get();
+    // Overlay presence is `{id}__view`. Subscribing `open` here rebuilds the trigger
+    // island on click and replaces that placeholder before the panel can mount.
     let selected = ColorFormat::parse(&fmt_str.get());
     if selected != fmt_sig.peek() {
         fmt_sig.set(selected);

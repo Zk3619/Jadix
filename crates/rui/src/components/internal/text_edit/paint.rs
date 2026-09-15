@@ -14,8 +14,8 @@ use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, 
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
-    focus_ring_style, InputCaretDraw, TRANSPARENT,
+    focus_ring_destructive_color, focus_ring_params_for, focus_ring_shadow_matches_color,
+    InputCaretDraw, TRANSPARENT,
 };
 use crate::tokens;
 use crate::utils::text_field::{
@@ -245,7 +245,7 @@ fn sync_one_text_edit_paint(
         }
     } else if is_focused {
         if !focus_ring_shadow_matches_color(el, true, ring_color) {
-            let (blur, spread) = focus_ring_params(focus_ring_style());
+            let (blur, spread) = focus_ring_params_for(el);
             let geom_same = (el.style.shadow_blur - blur).abs() <= 0.01
                 && (el.style.shadow_spread - spread).abs() <= 0.01
                 && el.style.shadow_offset == [0.0, 0.0]
@@ -923,17 +923,19 @@ fn push_text_edit_paint_dirty(el: &Element) {
 
 /// Caret on/off is paint-only. Do not `mark_full_redraw` — that clears every other
 /// node's dirty list (spin, hover) and FullClears the gallery.
+///
+/// Dirty the **text leaf's visual layout box**, not the Input chrome. Hard-ring
+/// SDF pad (spread 3 + vertex 2) plus dest-reset AA punches `form_field` labels
+/// (`gap(4)` — WP-3.9「邮箱」flicker on every blink).
 pub(crate) fn push_focused_text_edit_caret_damage(el: &Element) {
-    if el.input_paint_sync.is_some() && subtree_has_input_caret(el) {
-        push_text_edit_paint_dirty(el);
+    if el.text_style.input_caret.is_some() {
+        let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+        crate::app::damage::push_frame_paint_key(crate::app::damage::paint_element_key(el), b);
+        return;
     }
     for child in &el.children {
         push_focused_text_edit_caret_damage(child);
     }
-}
-
-fn subtree_has_input_caret(el: &Element) -> bool {
-    el.text_style.input_caret.is_some() || el.children.iter().any(subtree_has_input_caret)
 }
 
 fn find_descendant_by_template_id_mut<'a>(

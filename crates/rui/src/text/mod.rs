@@ -38,7 +38,7 @@ pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};
 pub use visual_lines::{
     build_visual_lines, build_visual_lines_window, caret_visual_line_index,
     invalidate_visual_line_cache, soft_visual_line_byte_ranges, textarea_visual_content_height,
-    visual_line_cache_frame_tick, LineBreakSource, VirtHeightEstimate, VisualLineModel, WrapMode,
-    VIRT_CHAR_THRESHOLD, VIRT_LINE_THRESHOLD, VIRT_WINDOW_LINES,
+    visual_line_cache_frame_tick, visual_selection_highlights, LineBreakSource, VirtHeightEstimate,
+    VisualLineModel, WrapMode, VIRT_CHAR_THRESHOLD, VIRT_LINE_THRESHOLD, VIRT_WINDOW_LINES,
 };
 pub use wrap_variable::layout_lines_variable_width;

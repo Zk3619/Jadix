@@ -544,8 +544,7 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
-        trigger.focusable = true;
-        trigger.focus_ring = true;
+        trigger.set_focusable(true);
     }
     let fid_focus = trigger
         .focus_id
@@ -621,6 +620,7 @@ pub fn dropdown_menu_content(
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion,
         mode: OverlayMode::Stacked,
         ..Default::default()
@@ -1250,6 +1250,7 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             FloatingStrategy::Auto,
         )),
         kind: OverlayKind::Menu,
+        lock_page_scroll: Some(true),
         motion,
         mode: OverlayMode::Stacked,
         ..Default::default()

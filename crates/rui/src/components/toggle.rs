@@ -16,9 +16,10 @@
 
 use crate::components::base::SlotChrome;
 use crate::core::reactivity::Signal;
-use crate::core::tree::{parse_color, parse_text_color, Element};
+use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::hstack;
+use crate::style::{ensure_class_list, ATTR_SYNC_LABEL_FG};
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_TOGGLE};
@@ -100,12 +101,23 @@ impl ToggleSize {
         }
     }
 
-    pub(crate) fn min_px(self) -> f32 {
+    pub fn min_px(self) -> f32 {
         match self {
             Self::Sm => 32.0,
             Self::Default => 36.0,
             Self::Lg => 40.0,
         }
+    }
+}
+
+/// ShadCN `toggleVariants`: hover then `data-[state=on]` so pressed accent wins.
+pub(crate) fn toggle_hover_classes(outline: bool, segmented: bool) -> &'static str {
+    if segmented {
+        "hover:bg-muted hover:text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground"
+    } else if outline {
+        "hover:bg-accent hover:text-accent-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
+    } else {
+        "hover:bg-muted hover:text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
     }
 }
 
@@ -296,13 +308,33 @@ impl From<ToggleBuilder> for Element {
             .focus_ring(!disabled)
             .on_click(bool_on_click(sig, disabled, instance.clone()))
             .into();
+        out.set_attr("data-slot", "toggle");
+        out.set_attr("data-state", if pressed { "on" } else { "off" });
+        out.set_attr("data-variant", builder.variant.as_str());
+        out.set_attr("data-size", builder.size.as_str());
+        out.set_attr(ATTR_SYNC_LABEL_FG, "1");
+        let _ = ensure_class_list(&mut out, toggle_hover_classes(outline, false));
         if disabled {
-            out = out.cursor_not_allowed();
+            out = out.cursor_not_allowed().pointer_events_none();
+            out.set_attr("disabled", "true");
         } else {
             out = out.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
         out.template_id = Some(instance);
-        builder.chrome.apply(out)
+        let mut out = builder.chrome.apply(out);
+        let _ = ensure_class_list(&mut out, toggle_hover_classes(outline, false));
+        let sync_sig = sig;
+        out.reactive_sync(move |root, _layout_tree| {
+            let _ = ensure_class_list(root, toggle_hover_classes(outline, false));
+            let pressed = sync_sig.peek();
+            let want = if pressed { "on" } else { "off" };
+            if root.attrs.get("data-state").map(String::as_str) != Some(want) {
+                root.set_attr("data-state", want);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        })
     }
 }
 
@@ -369,6 +401,76 @@ mod tests {
         assert!(
             find_size(&el, 20.0),
             "toggle .style(|b| b.text_size(20)) must land on the toggle"
+        );
+    }
+
+    #[test]
+    fn toggle_hover_uses_shadcn_muted() {
+        let mut el: Element = toggle("t-hover").text("B").into();
+        assert!(el
+            .class_set
+            .as_ref()
+            .is_some_and(crate::style::ClassSet::has_hover_color));
+        let rest_bg = el.style.bg_color;
+        let attrs = el.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            &mut el,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.bg_color, parse_color("muted"));
+        assert_ne!(el.style.bg_color, rest_bg);
+        let mut changed = false;
+        fn child_fg(el: &Element, acc: &mut bool) {
+            if el.text.is_some() {
+                *acc = el.text_style.color == Some(parse_text_color("muted-foreground"));
+            }
+            for c in &el.children {
+                child_fg(c, acc);
+            }
+        }
+        child_fg(&el, &mut changed);
+        assert!(
+            changed,
+            "hover:text-muted-foreground must reach the caption"
+        );
+    }
+
+    #[test]
+    fn toggle_pressed_hover_keeps_accent() {
+        let mut el: Element = toggle("t-on").default_pressed(true).text("B").into();
+        assert_eq!(el.attrs.get("data-state").map(String::as_str), Some("on"));
+        let attrs = el.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            &mut el,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.bg_color, parse_color("accent"));
+    }
+
+    #[test]
+    fn toggle_outline_hover_uses_accent() {
+        let mut el: Element = toggle("t-out").variant("outline").text("B").into();
+        let attrs = el.attrs.clone();
+        let _ = crate::style::resolve_class_variants(
+            &mut el,
+            &crate::style::VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.bg_color, parse_color("accent"));
+        assert_eq!(
+            el.text_style.color,
+            Some(parse_text_color("accent-foreground"))
         );
     }
 }

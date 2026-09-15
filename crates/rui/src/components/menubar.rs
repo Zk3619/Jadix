@@ -578,8 +578,7 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
     });
 
     if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
-        trigger.focusable = true;
-        trigger.focus_ring = true;
+        trigger.set_focusable(true);
     }
     if trigger.focus_id.is_none() {
         trigger = trigger.focus_id(trigger_id.as_str());

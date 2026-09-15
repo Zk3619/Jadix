@@ -58,6 +58,14 @@ impl VisualLineModel {
         caret_x_from_table(xs, caret)
     }
 
+    /// Max recorded caret x on visual line `line_i` (approx. ink width).
+    pub fn line_visual_width(&self, line_i: usize) -> f32 {
+        self.caret_xs
+            .get(line_i)
+            .map(|xs| xs.iter().map(|(_, x)| *x).fold(0.0_f32, f32::max))
+            .unwrap_or(0.0)
+    }
+
     /// Byte index on visual line `line_i` nearest to `preferred_x` (px from line start).
     pub fn byte_at_preferred_x(&self, line_i: usize, preferred_x: f32) -> usize {
         let Some(&(start, end)) = self.ranges.get(line_i) else {
@@ -631,6 +639,123 @@ fn soft_visual_line_byte_ranges_segments_model(
     }
 }
 
+fn wrap_for_source(source: LineBreakSource) -> Wrap {
+    match source {
+        LineBreakSource::None | LineBreakSource::BiDiPrewrap => Wrap::None,
+        LineBreakSource::SoftWord => Wrap::Word,
+        LineBreakSource::SoftChar => Wrap::WordOrGlyph,
+    }
+}
+
+fn merge_x_spans(mut spans: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    if spans.len() <= 1 {
+        return spans;
+    }
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = Vec::with_capacity(spans.len());
+    let mut cur = spans[0];
+    for &(x0, x1) in spans.iter().skip(1) {
+        if x0 <= cur.1 + 1.0 {
+            cur.1 = cur.1.max(x1);
+        } else {
+            out.push(cur);
+            cur = (x0, x1);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// Visual highlight slabs for a logical UTF-8 selection `[lo, hi)`.
+///
+/// Each item is `(visual_line, x_from_line_start, width, line_visual_width)`.
+/// Mixed-direction lines may emit several slabs (one per visual run) so the
+/// dark `::selection` box sits under the glyphs that were recolored — LTR
+/// prefix-width boxes land in the wrong place and hide ink on the card.
+pub fn visual_selection_highlights(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    avail_width: f32,
+    source: LineBreakSource,
+    lo: usize,
+    hi: usize,
+) -> Vec<(usize, f32, f32, f32)> {
+    let lo = text.floor_char_boundary(lo.min(text.len()));
+    let hi = text.floor_char_boundary(hi.min(text.len()));
+    if lo >= hi || text.is_empty() {
+        return Vec::new();
+    }
+    let avail = avail_width.max(1.0);
+    let lh = line_height.max(1.0);
+    let size = size.max(1.0);
+    let source = source.resolve_for_text(text);
+    let wrap = wrap_for_source(source);
+    with_layout_font_system(|font_system| {
+        let family = crate::renderer::text_hit::best_font_family(font_system);
+        let weight =
+            crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+        ensure_coverage_for_text(font_system, text);
+        let shaping = if text.is_ascii() {
+            Shaping::Basic
+        } else {
+            Shaping::Advanced
+        };
+        let mut buffer = Buffer::new(font_system, Metrics::new(size, lh));
+        buffer.set_wrap(wrap);
+        buffer.set_text(
+            text,
+            &Attrs::new()
+                .family(family)
+                .weight(glyphon::fontdb::Weight(weight)),
+            shaping,
+            None,
+        );
+        let tall = (lh * (text.lines().count().max(1) as f32 + 4.0)).max(lh + 2.0);
+        buffer.set_size(Some(avail), Some(tall));
+        buffer.shape_until_scroll(font_system, false);
+
+        let mut hard_starts: Vec<usize> = Vec::with_capacity(buffer.lines.len().max(1));
+        let mut byte = 0usize;
+        for (li, line) in buffer.lines.iter().enumerate() {
+            hard_starts.push(byte);
+            byte = byte.saturating_add(line.text().len());
+            if li + 1 < buffer.lines.len() && text.as_bytes().get(byte) == Some(&b'\n') {
+                byte += 1;
+            }
+        }
+
+        let mut out = Vec::new();
+        for (run_i, run) in buffer.layout_runs().enumerate() {
+            let base = hard_starts.get(run.line_i).copied().unwrap_or(0);
+            let line_w = run
+                .glyphs
+                .iter()
+                .map(|g| g.x + g.w)
+                .fold(run.line_w.max(0.0), f32::max);
+            let mut spans = Vec::new();
+            for g in run.glyphs.iter() {
+                if g.w <= 0.0 {
+                    continue;
+                }
+                let gs = base.saturating_add(g.start);
+                let ge = base.saturating_add(g.end);
+                if gs < hi && ge > lo {
+                    spans.push((g.x, g.x + g.w));
+                }
+            }
+            for (x0, x1) in merge_x_spans(spans) {
+                let w = (x1 - x0).max(0.0);
+                if w > 0.0 {
+                    out.push((run_i, x0, w, line_w));
+                }
+            }
+        }
+        out
+    })
+}
+
 /// Soft-wrap visual line byte ranges for `source` (Word / Char / …).
 pub fn soft_visual_line_byte_ranges(
     text: &str,
@@ -848,5 +973,33 @@ mod tests {
         let text = "עברית\u{2060}789";
         let src = LineBreakSource::SoftChar.resolve_for_text(text);
         assert_eq!(src, LineBreakSource::SoftWord);
+    }
+
+    #[test]
+    fn visual_selection_ltr_island_in_rtl_paragraph() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+
+        let text = "עברית Hello";
+        let lo = text.find("Hello").expect("Hello");
+        let hi = lo + "Hello".len();
+        let slabs = visual_selection_highlights(
+            text,
+            14.0,
+            400,
+            21.0,
+            280.0,
+            LineBreakSource::SoftWord,
+            lo,
+            hi,
+        );
+        assert!(!slabs.is_empty(), "expected a highlight over Hello");
+        let hebrew_w = crate::text::measure_prefix_advance(&text[..lo], 14.0, 400, 21.0);
+        let x = slabs[0].1;
+        assert!(
+            x > hebrew_w + 1.0,
+            "Hello glyphs are past the logical Hebrew prefix (LTR box would cover Hebrew); x={x} hebrew_w={hebrew_w}"
+        );
     }
 }

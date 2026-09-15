@@ -84,6 +84,7 @@ use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
 use crate::primitives::text::text;
+use crate::style::ensure_class_list;
 use crate::style::parse_color;
 use crate::style::parse_text_color;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
@@ -151,6 +152,7 @@ fn wire_table_row_hover(mut row: Element, row_id: &str, selected: bool) -> Eleme
             hover_easing: "spring".into(),
             text_color: None,
         });
+        let _ = ensure_class_list(&mut row, "hover:bg-muted/50");
         row = row.on_hover(move |h| {
             hovered.set_silent(h);
             mark_hover_paint_dirty();

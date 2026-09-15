@@ -297,11 +297,11 @@ pub fn text_edit_default_leading_scale() -> f32 {
     1.5
 }
 
-/// 字形墨水余量（逻辑 px）。`leading-none` 行盒盖不住 CJK / 降部；TextEdit 内容块
-/// 用此值垫高，避免按叶高硬裁后看起来像溢出。
+/// 字形墨水余量（逻辑 px）。仅 TextEdit 内容块：滚动视口按行盒裁切时，最后一行
+/// 降部仍要可画。静态 Label **不要**用此值垫高 glyphon buffer——CSS 行盒不是 clip，
+/// Cosmic 却按 buffer 高度硬裁；静态文本应 `set_size(w, None)`，由祖先
+/// `overflow:hidden`（glyphon TextBounds）做 CSS 裁切。
 /// **不要**再做 `y += top_ink` 绘制偏移——否则叶高/裁切与字形原点脱节，表现为半截字。
-/// 静态 Label 不要共用此垫高：glyphon buffer 变高会把最后一行墨水画过祖先
-/// `overflow:hidden`（Gallery 侧栏最后一项会盖住 footer 分隔线）。
 pub fn text_edit_ink_pad_px(font_size_px: f32) -> f32 {
     (font_size_px * 0.25).max(4.0)
 }

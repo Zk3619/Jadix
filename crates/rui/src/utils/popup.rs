@@ -157,6 +157,7 @@ pub(crate) const ATTR_FLOATING_EXPAND_MEASURE: &str = "rui_floating_expand_measu
 pub(crate) const ATTR_FLOATING_ANCHOR_EDGE_Y: &str = "rui_floating_anchor_edge_y";
 /// Expand enter/exit baseline height (logical px). When set, accordion clips from this height
 /// instead of 0 so covered triggers (e.g. bubble reaction bar) continue downward/upward.
+/// Exit lands on this height (the in-flow pill), then the portal hides — not accordion-up to 0.
 pub(crate) const ATTR_FLOATING_EXPAND_FROM_H: &str = "rui_floating_expand_from_h";
 /// Expand enter/exit baseline width (logical px). When set, `max-width` interpolates with the
 /// accordion so row-wise content (e.g. AvatarGroup +N) is clipped instead of popping in/out.
@@ -1307,6 +1308,24 @@ pub fn mount_modal_layer(underlay: Element, stage: Element) -> Element {
         .child(underlay)
         .child(stage)
         .pointer_events_box_none()
+}
+
+/// Test / scroll-align helper: seed synced placement cap without a full layout pass.
+#[cfg(test)]
+pub(crate) fn seed_floating_place_max_h_for_test(id: &str, max_h: f32) {
+    let place = FloatingPlace {
+        x: 0.0,
+        y: 0.0,
+        w: 120.0,
+        max_h,
+        width_auto: false,
+        min_w: 0.0,
+    };
+    use_signal(
+        floating_place_signal_key(id).as_str(),
+        FloatingPlace::default,
+    )
+    .set_silent(place);
 }
 
 #[cfg(test)]

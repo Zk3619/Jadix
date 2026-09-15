@@ -915,7 +915,7 @@ pub fn carousel_scope(
         if px > 1.0 {
             px
         } else {
-            12.0 * crate::layout::dimension::CSS_ROOT_FONT_SIZE_PX
+            12.0 * crate::layout::dimension::css_root_font_size_px()
         }
     } else {
         0.0
