@@ -895,4 +895,34 @@ mod tests {
             "no painted caret is not a stale-caret mismatch"
         );
     }
+
+    #[test]
+    fn ime_fallback_leaf_is_on_number_while_caret_stays_on_placeholder() {
+        // Gallery forms first wrap row: click Placeholder, then Number. IME candidates
+        // jump immediately because `painted_text_edit_node` falls back to the number
+        // placeholder leaf ("0"). Ring/caret stay on Placeholder until a Poll chrome frame.
+        let clip = Some([0.0, 0.0, 520.0, 200.0]);
+        let nodes = vec![
+            test_text_node("placeholder", 16.0, 40.0, 120.0, 36.0, clip, true),
+            test_text_node("num", 400.0, 40.0, 100.0, 36.0, clip, false),
+        ];
+        let ime_leaf = painted_text_edit_node(&nodes, "input:num").expect("number leaf in DL");
+        assert!(
+            ime_leaf.style.input_caret.is_none(),
+            "IME uses the number placeholder box, not a caret"
+        );
+        assert!(
+            (ime_leaf.x - 400.0).abs() < 0.5,
+            "IME visual X must be the number field, got {}",
+            ime_leaf.x
+        );
+        assert!(
+            !painted_caret_matches_focus(&nodes, "input:num"),
+            "Placeholder caret + number focus must Poll, not WaitUntil the stale blink"
+        );
+        assert!(
+            !painted_ime_field_in_overflow_clip(&nodes, "input:num", 520.0, 200.0),
+            "idle Imm stays off until the chrome frame installs the number caret"
+        );
+    }
 }

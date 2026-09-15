@@ -31,6 +31,13 @@ thread_local! {
 
 fn mark_text_edit_frame_mutated() {
     TEXT_EDIT_FRAME_MUTATED.with(|c| c.set(true));
+    arm_text_edit_force_immediate();
+}
+
+/// One-shot `Poll`: paint-only `focus_id.set` / IME already follows the new field
+/// while the last DL still has the previous caret. `request_redraw` alone is
+/// coalesced with caret `WaitUntil` on Windows (gallery forms: Placeholder → number).
+pub(super) fn arm_text_edit_force_immediate() {
     TEXT_EDIT_FORCE_IMMEDIATE.with(|c| c.set(true));
 }
 
@@ -1468,5 +1475,19 @@ mod tests {
         clear_text_edit_frame_mutated();
         let already = TEXT_EDIT_FRAME_MUTATED.with(|c| c.get());
         assert!(text_edit_repeat_allow(true, true, already));
+    }
+
+    #[test]
+    fn focus_move_arm_is_a_one_shot_poll_latch() {
+        let _ = take_text_edit_force_immediate();
+        arm_text_edit_force_immediate();
+        assert!(
+            take_text_edit_force_immediate(),
+            "Placeholder → number click must latch Poll before caret WaitUntil"
+        );
+        assert!(
+            !take_text_edit_force_immediate(),
+            "about_to_wait consumes the latch once"
+        );
     }
 }

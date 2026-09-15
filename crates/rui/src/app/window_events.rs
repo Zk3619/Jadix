@@ -2344,7 +2344,12 @@ impl super::App {
                 super::scroll_support::snap_scroll_targets_to_current_offsets(
                     rests.iter().map(String::as_str),
                 );
-                self.force_redraw_count = self.force_redraw_count.max(1);
+                // Root: do not `WaitUntil` the previous field's caret blink. The click
+                // already `request_redraw`s; planting that deadline coalesces it on Windows.
+                self.caret_wake_at = None;
+                // FALLBACK — Poll if dropping WaitUntil is not enough (chrome still frozen).
+                // super::input_controller::arm_text_edit_force_immediate();
+                // self.force_redraw_count = self.force_redraw_count.max(2);
             } else if let Some((key, caret_ix)) = label_drag {
                 let sk = crate::components::label::label_selection_signal_key(&key);
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
@@ -2428,6 +2433,15 @@ impl super::App {
             }
 
             if need_paint_sync_redraw {
+                let fid =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                        .peek();
+                if super::ime_support::is_text_edit_focus(&fid) {
+                    self.caret_wake_at = None;
+                    // FALLBACK — Poll if dropping WaitUntil is not enough.
+                    // super::input_controller::arm_text_edit_force_immediate();
+                    // self.force_redraw_count = self.force_redraw_count.max(2);
+                }
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
@@ -3423,6 +3437,14 @@ impl super::App {
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
         let scroll_paint_only = smooth_scroll_animating || scrollbar_drag_active;
         crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
+        // Live scroll Polls via `paint_clock_active`. The first idle frame used to
+        // plant caret WaitUntil; Windows then coalesced `request_redraw` and froze
+        // focus chrome / caret blink / overlay scrollbar until the next wheel.
+        if super::lifecycle::scroll_settle_must_pump(self.prev_scroll_paint_only, scroll_paint_only)
+        {
+            self.force_redraw_count = self.force_redraw_count.max(2);
+        }
+        self.prev_scroll_paint_only = scroll_paint_only;
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(
@@ -4272,6 +4294,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 } else if has_input_caret && !painted_caret_matches_focus {
                     self.caret_wake_at = None;
                     window.request_redraw();
+                    // FALLBACK — Poll if this present still has the previous field's caret
+                    // and Windows coalesces the redraw with Wait.
+                    // self.force_redraw_count = self.force_redraw_count.max(2);
                 } else if !self
                     .secondaries
                     .borrow()

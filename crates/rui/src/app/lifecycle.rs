@@ -67,6 +67,13 @@ pub(crate) fn about_to_wait_force_immediate(
         || scrollbar_hide_wake
 }
 
+/// First idle frame after live scroll/drag. `request_redraw` inside
+/// `RedrawRequested` is coalesced on Windows with caret `WaitUntil`, so that
+/// frame must arm `force_redraw_count` (Poll) instead of sleeping.
+pub(crate) fn scroll_settle_must_pump(was_live: bool, live: bool) -> bool {
+    was_live && !live
+}
+
 impl super::App {
     /// Drop GPU resources while the window / event loop are still valid.
     ///
@@ -532,10 +539,17 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     && !crate::app::ime_support::painted_caret_matches_focus(&s.text_nodes, &fid)
             });
             if caret_wake_stale {
+                // Root: drop the previous field's blink deadline so AboutToWait does
+                // not `WaitUntil` ~520ms and swallow the click's already-queued redraw
+                // (IME already follows `focus_id`; chrome just needed that frame).
                 self.caret_wake_at = None;
-                if let Some(state) = (*self.state.borrow()).as_ref() {
-                    state.window.request_redraw();
-                }
+                // FALLBACK — Windows Poll if chrome still freezes after dropping WaitUntil.
+                // `request_redraw` inside about_to_wait is coalesced unless ControlFlow::Poll.
+                // super::input_controller::arm_text_edit_force_immediate();
+                // self.force_redraw_count = self.force_redraw_count.max(2);
+                // if let Some(state) = (*self.state.borrow()).as_ref() {
+                //     state.window.request_redraw();
+                // }
             } else if wake <= now {
                 self.caret_wake_at = None;
                 if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -1139,6 +1153,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         is_suspended: false,
         force_redraw_count: 0,
         paint_clock_active: false,
+        prev_scroll_paint_only: false,
         app_builder: std::rc::Rc::new(std::cell::RefCell::new(app_builder)),
         cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
         cursor_inside_window: false,
@@ -1205,7 +1220,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
 
 #[cfg(test)]
 mod idle_control_flow_tests {
-    use super::{about_to_wait_force_immediate, idle_control_flow};
+    use super::{about_to_wait_force_immediate, idle_control_flow, scroll_settle_must_pump};
     use std::time::{Duration, Instant};
     use winit::event_loop::ControlFlow;
 
@@ -1235,6 +1250,32 @@ mod idle_control_flow_tests {
     }
 
     #[test]
+    fn scroll_settle_force_redraw_must_poll_not_caret_wait_until() {
+        assert!(
+            scroll_settle_must_pump(true, false),
+            "wheel stop is the settle frame"
+        );
+        assert!(!scroll_settle_must_pump(true, true));
+        assert!(!scroll_settle_must_pump(false, false));
+        assert!(!scroll_settle_must_pump(false, true));
+        // Gallery forms card 2: live scroll stays fluid (paint_clock Poll). The first
+        // idle frame used to plant caret WaitUntil; Windows coalesced later clicks
+        // and froze focus chrome / caret blink / overlay scrollbar.
+        let caret = Instant::now() + Duration::from_millis(520);
+        let force =
+            about_to_wait_force_immediate(false, false, false, false, false, true, false, false);
+        assert!(
+            force,
+            "scroll-settle force_redraw_count must Poll"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), force),
+            ControlFlow::Poll,
+            "first idle frame after scroll must not WaitUntil caret blink"
+        );
+    }
+
+    #[test]
     fn paint_only_focus_chrome_does_not_sleep_on_caret_wait_until() {
         // Clicking Search after a sliver-clip: `force_redraw_count` is the existing
         // Windows coalescing pump (same as maximize). Caret WaitUntil on the previous
@@ -1250,6 +1291,41 @@ mod idle_control_flow_tests {
             idle_control_flow(Some(caret), force),
             ControlFlow::Poll,
             "paint-only focus_id.set cannot WaitUntil the previous field's caret blink"
+        );
+    }
+
+    #[test]
+    fn ime_jumped_stale_caret_wake_must_poll_via_text_edit_pump() {
+        // FALLBACK contract: if dropping WaitUntil is not enough, re-enable
+        // `arm_text_edit_force_immediate` in about_to_wait. This latch must Poll.
+        let caret = Instant::now() + Duration::from_millis(520);
+        let force =
+            about_to_wait_force_immediate(false, false, false, true, false, false, false, false);
+        assert!(
+            force,
+            "caret_wake_stale arm_text_edit_force_immediate must Poll"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), force),
+            ControlFlow::Poll,
+            "IME-jumped chrome frame cannot WaitUntil the Placeholder caret blink"
+        );
+    }
+
+    #[test]
+    fn stale_caret_wake_idles_with_wait_not_previous_blink() {
+        // Root: about_to_wait clears caret_wake_at. Idle is Wait so the click's
+        // request_redraw stays queued — not WaitUntil the previous field's blink.
+        assert_eq!(
+            idle_control_flow(None, false),
+            ControlFlow::Wait,
+            "cleared caret deadline must not plant WaitUntil"
+        );
+        let caret = Instant::now() + Duration::from_millis(520);
+        assert_eq!(
+            idle_control_flow(Some(caret), false),
+            ControlFlow::WaitUntil(caret),
+            "a live matching caret may still WaitUntil blink"
         );
     }
 

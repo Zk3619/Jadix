@@ -149,6 +149,9 @@ struct App {
     /// `RedrawRequested` is coalesced on Windows, and a scrollbar/caret `WaitUntil`
     /// planted in that same handler would otherwise sleep every CSS clock.
     paint_clock_active: bool,
+    /// Previous frame's `scroll_paint_only`. Falling edge arms `force_redraw_count`
+    /// so caret `WaitUntil` cannot swallow the first idle frame after the wheel stops.
+    prev_scroll_paint_only: bool,
     app_builder: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Element>>,
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
     /// False after `CursorLeft` until the next `CursorMoved` / enter.
