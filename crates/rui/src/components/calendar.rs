@@ -47,7 +47,7 @@ const CELL: &str = "2rem";
 /// `__days` placeholder `h:auto` will collapse to 0 before reconciliation, and the day button overflows and covers the DateTime `Separator`.
 const CALENDAR_DAY_GRID_MIN_H: &str = "17rem";
 /// 7×cell + p-3；固定宽度，避免换月/换标题文案时浮层 w-fit 跟着抖。
-const CALENDAR_W: &str = "17.5rem";
+pub(crate) const CALENDAR_W: &str = "17.5rem";
 const YEAR_SELECT_LO: i32 = 1900;
 const YEAR_SELECT_HI: i32 = 2100;
 

@@ -345,7 +345,9 @@ pub fn ComboboxInput(
                 return;
             }
             let selected = value.get();
-            let query = input_store.get();
+            // Peek: this effect writes `input_store`. `get()` would subscribe and
+            // re-enter the same FnMut on commit (Gallery forms Combobox).
+            let query = input_store.peek();
             let map = labels.get();
             let selected_label = label_for_map(&map, &selected);
             if selected.is_empty() {
@@ -1373,6 +1375,20 @@ mod tests {
             ),
             other => panic!("expected 4.75rem width, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn selected_value_mount_does_not_reenter_input_sync() {
+        use crate::core::reactivity::create_effect;
+        create_root(|| {
+            create_effect(|| {
+                let val = use_signal("cb-sync-val", || "sh".to_string());
+                let _el: Element = combobox("cb-sync")
+                    .value_signal(val)
+                    .options([("sh", "Shanghai"), ("bj", "Beijing")])
+                    .into();
+            });
+        });
     }
 
     #[test]

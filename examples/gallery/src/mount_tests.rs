@@ -731,7 +731,7 @@ fn forms_date_time_pickers_tabs_mount_only_active() {
                     "inactive DateTime picker must not be an eager declarative sibling"
                 );
                 assert!(
-                    !gallery_tid_contains(&tree, "gal-time__tp_view"),
+                    !gallery_tid_contains(&tree, "gal-time__dp_view"),
                     "inactive TimePicker must not be an eager declarative sibling"
                 );
             });

@@ -11,7 +11,7 @@
 //! - `time`：`HH:MM:SS`（24h；三个 Combobox，兼容 `HH:MM`）
 //!
 //! **键盘**：DatePicker 触发器 Enter/Space 开合、Esc 关浮层；打开后方向键改日（见 [`Calendar`]）。
-//! TimePicker 为三个 Combobox（输入过滤 + ↑↓ / Esc）。
+//! TimePicker 共用同一套触发器浮层；面板内三个 Combobox（输入过滤 + ↑↓ / Esc）。
 //!
 //! ## Usage
 //! ```ignore
@@ -33,7 +33,7 @@ use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::calendar::{
     calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
-    format_month_year, parse_ymd, weekday, CalendarCaption,
+    format_month_year, parse_ymd, weekday, CalendarCaption, CALENDAR_W,
 };
 use crate::components::combobox::{combobox, ComboboxItemData};
 use crate::components::separator::separator;
@@ -125,6 +125,7 @@ pub enum DatePickerKind {
     #[default]
     Date,
     DateTimeLocal,
+    Time,
     Month,
     Week,
 }
@@ -133,6 +134,7 @@ impl DatePickerKind {
     pub fn parse(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "datetime-local" | "datetime_local" | "datetime" => Self::DateTimeLocal,
+            "time" => Self::Time,
             "month" => Self::Month,
             "week" => Self::Week,
             _ => Self::Date,
@@ -143,6 +145,7 @@ impl DatePickerKind {
         match self {
             Self::Date => "date",
             Self::DateTimeLocal => "datetime-local",
+            Self::Time => "time",
             Self::Month => "month",
             Self::Week => "week",
         }
@@ -152,6 +155,7 @@ impl DatePickerKind {
         match self {
             Self::Date => "Pick a date",
             Self::DateTimeLocal => "Pick date & time",
+            Self::Time => "Pick a time",
             Self::Month => "Pick a month",
             Self::Week => "Pick a week",
         }
@@ -182,6 +186,9 @@ fn format_trigger_value(kind: DatePickerKind, raw: &str) -> String {
             .unwrap_or_else(|| raw.to_string()),
         DatePickerKind::Week => parse_ymd(raw)
             .map(|(y, m, d)| format!("Week of {}", format_long_date(y, m, d)))
+            .unwrap_or_else(|| raw.to_string()),
+        DatePickerKind::Time => parse_hms(raw)
+            .map(|(h, mi, s)| format!("{h:02}:{mi:02}:{s:02}"))
             .unwrap_or_else(|| raw.to_string()),
     }
 }
@@ -334,6 +341,31 @@ fn sync_datetime_value_from_hms(
     }
 }
 
+fn sync_time_value_from_hms(
+    val: Signal<String>,
+    hour: Signal<String>,
+    minute: Signal<String>,
+    second: Signal<String>,
+) {
+    let hs = hour.get();
+    let ms = minute.get();
+    let ss = second.get();
+    if hs.is_empty() && ms.is_empty() && ss.is_empty() {
+        return;
+    }
+    let next = format_hms_parts(&hs, &ms, &ss);
+    if val.peek() != next {
+        val.set(next);
+    }
+}
+
+fn picker_open_focus_id(id: &str, kind: DatePickerKind) -> String {
+    match kind {
+        DatePickerKind::Time => format!("input:{id}__time__h"),
+        _ => format!("{id}__grid__cal_focus"),
+    }
+}
+
 fn sync_hms_signals(
     raw: &str,
     hour: Signal<String>,
@@ -399,7 +431,7 @@ fn month_nav_buttons(id: &str, year: Signal<i32>, month: Signal<u32>) -> (Elemen
     (prev, next)
 }
 
-/// HTML `date` / `datetime-local` / `month` / `week` selectors.
+/// HTML `date` / `datetime-local` / `time` / `month` / `week` selectors.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DatePicker(
@@ -569,7 +601,7 @@ fn build_date_picker_view(
             if disabled {
                 return trigger;
             }
-            let cal_focus = format!("{id}__grid__cal_focus");
+            let open_focus = picker_open_focus_id(&id, kind);
             let trig = trigger_focus_id(&id);
             trigger
                 .on_click({
@@ -577,7 +609,7 @@ fn build_date_picker_view(
                     let year_t = year;
                     let month_t = month;
                     let val_peek = val;
-                    let cal_focus = cal_focus.clone();
+                    let open_focus = open_focus.clone();
                     let trig = trig.clone();
                     move || {
                         if !open_t.peek() {
@@ -586,7 +618,7 @@ fn build_date_picker_view(
                                 month_t.set(mm);
                             }
                             open_t.set(true);
-                            focus_id_only(cal_focus.clone());
+                            focus_id_only(open_focus.clone());
                         } else {
                             close_picker(open_t, trig.clone());
                         }
@@ -597,7 +629,7 @@ fn build_date_picker_view(
                     let year_k = year;
                     let month_k = month;
                     let val_k = val;
-                    let cal_focus = cal_focus.clone();
+                    let open_focus = open_focus.clone();
                     let trig = trig.clone();
                     move |ev| match &ev.logical_key {
                         Key::Named(NamedKey::Escape) => {
@@ -613,7 +645,7 @@ fn build_date_picker_view(
                                     month_k.set(mm);
                                 }
                                 open_k.set(true);
-                                focus_id_only(cal_focus.clone());
+                                focus_id_only(open_focus.clone());
                             }
                             true
                         }
@@ -628,10 +660,14 @@ fn build_date_picker_view(
         return view;
     }
 
-    if kind == DatePickerKind::DateTimeLocal {
+    if matches!(kind, DatePickerKind::DateTimeLocal | DatePickerKind::Time) {
         let to_val = format!("{id}__hms_to_val");
         reactive_anchor(to_val.clone(), move || {
-            sync_datetime_value_from_hms(val, hour, minute, second);
+            if kind == DatePickerKind::Time {
+                sync_time_value_from_hms(val, hour, minute, second);
+            } else {
+                sync_datetime_value_from_hms(val, hour, minute, second);
+            }
             Element::new().w(0.0).h(0.0)
         });
         let from_val = format!("{id}__hms_from_val");
@@ -748,19 +784,17 @@ fn build_date_picker_panel_content(
                 .into();
             panel = panel.child(cal);
             if kind == DatePickerKind::DateTimeLocal {
+                // Hairline then HMS. Calendar already has `p-0.75rem`; do not also
+                // put wrapper `pt`/`gap` on top of `time_hms_row` padding or the
+                // comboboxes sit a full extra rem below the separator.
+                let row = time_hms_row(&format!("{id}__time"), hour, minute, second, false)
+                    .pt("0.75rem")
+                    .pb("0.75rem");
                 panel = panel.child(Element::from(
                     vstack()
                         .w("100%")
-                        .pt("1rem")
-                        .gap("0.75rem")
                         .child(Element::from(separator()))
-                        .child(time_hms_row(
-                            &format!("{id}__time"),
-                            hour,
-                            minute,
-                            second,
-                            false,
-                        )),
+                        .child(row),
                 ));
             }
         }
@@ -817,13 +851,13 @@ fn build_date_picker_panel_content(
                     year.peek(),
                 ))
                 .into();
-            panel = panel.child(
-                vstack()
-                    .gap("1rem")
-                    .p("0.75rem")
-                    .child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none())
-                    .child(header),
-            );
+            // Caption selects use flex-basis:0 / min-width:0 to share leftover width.
+            // Without a definite panel width the row collapses (empty Month popover).
+            // Sync anchor is 0×0 — keep it out of a gapped column or `gap` still
+            // inserts 1rem above the only visible row.
+            panel = panel
+                .child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none())
+                .child(vstack().w(CALENDAR_W).p("0.75rem").child(header));
         }
         DatePickerKind::Week => {
             let (prev, next) = month_nav_buttons(&id, year, month);
@@ -880,6 +914,12 @@ fn build_date_picker_panel_content(
             }
             panel = panel.child(vstack().gap("1rem").p("0.75rem").child(header).child(weeks));
         }
+        DatePickerKind::Time => {
+            let row = time_hms_row(&format!("{id}__time"), hour, minute, second, false)
+                .pt("0.75rem")
+                .pb("0.75rem");
+            panel = panel.child(vstack().w(CALENDAR_W).child(row));
+        }
     }
 
     panel
@@ -902,10 +942,18 @@ impl From<DatePickerBuilder> for Element {
         let (iy, im, _) = parse_ymd(&default_value).unwrap_or((2026, 8, 1));
         let year = use_signal(format!("{id}__dp_year").as_str(), move || iy);
         let month = use_signal(format!("{id}__dp_month").as_str(), move || im);
-        let (ih, imi, is) = parse_hms(&default_value).unwrap_or((9, 0, 0));
-        let hour = use_signal(format!("{id}__dp_h").as_str(), || format!("{ih:02}"));
-        let minute = use_signal(format!("{id}__dp_mi").as_str(), || format!("{imi:02}"));
-        let second = use_signal(format!("{id}__dp_s").as_str(), || format!("{is:02}"));
+        let (hs, ms, ss) = parse_hms(&default_value)
+            .map(|(h, m, s)| (format!("{h:02}"), format!("{m:02}"), format!("{s:02}")))
+            .unwrap_or_else(|| {
+                if kind == DatePickerKind::Time {
+                    (String::new(), String::new(), String::new())
+                } else {
+                    ("09".into(), "00".into(), "00".into())
+                }
+            });
+        let hour = use_signal(format!("{id}__dp_h").as_str(), move || hs.clone());
+        let minute = use_signal(format!("{id}__dp_mi").as_str(), move || ms.clone());
+        let second = use_signal(format!("{id}__dp_s").as_str(), move || ss.clone());
         let view_id = format!("{id}__dp_view");
         let props = DatePickerRenderProps {
             id,
@@ -936,6 +984,7 @@ pub struct TimePickerBuilder {
     default_value: String,
     disabled: bool,
     chrome: SlotChrome,
+    content_chrome: SlotChrome,
 }
 
 pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
@@ -945,12 +994,30 @@ pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
         default_value: String::new(),
         disabled: false,
         chrome: SlotChrome::default(),
+        content_chrome: SlotChrome::default(),
     }
 }
 
 impl TimePickerBuilder {
     crate::impl_slot_chrome_methods!();
 
+    /// Overlay `class` on the floating panel card (not the trigger).
+    pub fn content_class(mut self, classes: impl Into<String>) -> Self {
+        self.content_chrome.class = classes.into();
+        self
+    }
+
+    /// Overlay style on the floating panel card.
+    pub fn content_style(
+        mut self,
+        f: impl Fn(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder
+            + 'static,
+    ) -> Self {
+        self.content_chrome.style = Some(std::rc::Rc::new(f));
+        self
+    }
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -965,48 +1032,6 @@ impl TimePickerBuilder {
     }
 }
 
-#[derive(Clone, PartialEq)]
-struct TimePickerRenderProps {
-    id: String,
-    disabled: bool,
-}
-
-fn build_time_picker_view(
-    props: TimePickerRenderProps,
-    val: Signal<String>,
-    hour: Signal<String>,
-    minute: Signal<String>,
-    second: Signal<String>,
-    chrome: SlotChrome,
-) -> Element {
-    let TimePickerRenderProps { id, disabled } = props;
-    let mut root: Element = vstack().gap("0").into();
-    if !disabled {
-        let to_val = format!("{id}__hms_to_val");
-        reactive_anchor(to_val.clone(), move || {
-            let hs = hour.get();
-            let ms = minute.get();
-            let ss = second.get();
-            if !hs.is_empty() || !ms.is_empty() || !ss.is_empty() {
-                let next = format_hms_parts(&hs, &ms, &ss);
-                if val.peek() != next {
-                    val.set(next);
-                }
-            }
-            Element::new().w(0.0).h(0.0)
-        });
-        let from_val = format!("{id}__hms_from_val");
-        reactive_anchor(from_val.clone(), move || {
-            sync_hms_signals(&val.get(), hour, minute, second);
-            Element::new().w(0.0).h(0.0)
-        });
-        root = root
-            .child(reactive_placeholder_sized(to_val, 0.0, 0.0).pointer_events_box_none())
-            .child(reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none());
-    }
-    chrome.apply(root.child(time_hms_row(&id, hour, minute, second, disabled)))
-}
-
 impl From<TimePickerBuilder> for Element {
     fn from(builder: TimePickerBuilder) -> Self {
         let TimePickerBuilder {
@@ -1015,23 +1040,18 @@ impl From<TimePickerBuilder> for Element {
             default_value,
             disabled,
             chrome,
+            content_chrome,
         } = builder;
-        let initial = default_value.clone();
-        let val = value.unwrap_or_else(|| {
-            use_signal(format!("{id}__tp_value").as_str(), move || initial.clone())
-        });
-        let (h0, m0, s0) = parse_hms(&default_value)
-            .or_else(|| parse_hms(&val.peek()))
-            .map(|(h, m, s)| (format!("{h:02}"), format!("{m:02}"), format!("{s:02}")))
-            .unwrap_or_else(|| (String::new(), String::new(), String::new()));
-        let hour = use_signal(format!("{id}__tp_h").as_str(), move || h0.clone());
-        let minute = use_signal(format!("{id}__tp_m").as_str(), move || m0.clone());
-        let second = use_signal(format!("{id}__tp_s").as_str(), move || s0.clone());
-        let view_id = format!("{id}__tp_view");
-        let props = TimePickerRenderProps { id, disabled };
-        reactive_component_live(view_id, props, move |p| {
-            build_time_picker_view(p, val, hour, minute, second, chrome.clone())
-        })
+        let mut dp = date_picker(id)
+            .kind(DatePickerKind::Time)
+            .disabled(disabled)
+            .default_value(default_value);
+        if let Some(s) = value {
+            dp = dp.value_signal(s);
+        }
+        dp.chrome = chrome;
+        dp.content_chrome = content_chrome;
+        dp.into()
     }
 }
 
@@ -1110,6 +1130,310 @@ mod tests {
             second.set("06".into());
             val.set("2026-08-13T10:00:06".into());
             assert_eq!(runs.get(), 1, "改 HMS/val 不得重建 DatePicker portal");
+            open.set(false);
+            assert!(runs.get() >= 2);
+        });
+    }
+
+    #[test]
+    fn month_picker_panel_keeps_caption_select_layout() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_owner, mut panel) = create_root(|| {
+            let open = use_signal("t-mp-open", || true);
+            let val = use_signal("t-mp-val", || "2026-08".to_string());
+            let year = use_signal("t-mp-y", || 2026i32);
+            let month = use_signal("t-mp-m", || 8u32);
+            let hour = use_signal("t-mp-h", || "09".to_string());
+            let minute = use_signal("t-mp-mi", || "00".to_string());
+            let second = use_signal("t-mp-s", || "00".to_string());
+            build_date_picker_panel_content(
+                "t-mp",
+                DatePickerKind::Month,
+                CalendarCaption::Label,
+                open,
+                val,
+                year,
+                month,
+                hour,
+                minute,
+                second,
+            )
+        });
+
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut panel, 400.0, 400.0, [-1.0, -1.0]);
+
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+        let month = find_tid(&panel, "t-mp:dp_m__select").expect("month select");
+        let year = find_tid(&panel, "t-mp:dp_y__select").expect("year select");
+        assert!(
+            month.layout_bounds[2] > 40.0 && year.layout_bounds[2] > 40.0,
+            "Month picker selects must not collapse (flex-basis 0 needs a definite panel width); month={:?} year={:?} panel={:?}",
+            month.layout_bounds,
+            year.layout_bounds,
+            panel.layout_bounds
+        );
+        assert!(
+            panel.layout_bounds[2] > 200.0,
+            "Month picker panel must keep calendar width, got {:?}",
+            panel.layout_bounds
+        );
+        let pad = crate::layout::dimension::css_root_font_size_px() * 0.75;
+        let top = month.layout_bounds[1] - panel.layout_bounds[1];
+        assert!(
+            top > pad - 2.0 && top < pad + 6.0,
+            "month row must sit at panel padding (not padding+gap); top={top} pad={pad} panel={:?} month={:?}",
+            panel.layout_bounds,
+            month.layout_bounds
+        );
+    }
+
+    #[test]
+    fn datetime_time_row_sits_near_separator() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_owner, mut panel) = create_root(|| {
+            let open = use_signal("t-dt-gap-open", || true);
+            let val = use_signal("t-dt-gap-val", || "2026-09-15T09:00:00".to_string());
+            let year = use_signal("t-dt-gap-y", || 2026i32);
+            let month = use_signal("t-dt-gap-m", || 9u32);
+            let hour = use_signal("t-dt-gap-h", || "09".to_string());
+            let minute = use_signal("t-dt-gap-mi", || "00".to_string());
+            let second = use_signal("t-dt-gap-s", || "00".to_string());
+            build_date_picker_panel_content(
+                "t-dt-gap",
+                DatePickerKind::DateTimeLocal,
+                CalendarCaption::Label,
+                open,
+                val,
+                year,
+                month,
+                hour,
+                minute,
+                second,
+            )
+        });
+
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut panel, 400.0, 640.0, [-1.0, -1.0]);
+
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+        fn find_hairline<'a>(el: &'a Element) -> Option<&'a Element> {
+            let h = el.layout_bounds[3];
+            let w = el.layout_bounds[2];
+            if h > 0.0 && h <= 2.0 && w > 80.0 {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_hairline(c))
+        }
+
+        let sep = find_hairline(&panel).expect("datetime separator");
+        let hour = find_tid(&panel, "t-dt-gap__time__h__combobox").expect("hour combobox");
+        let gap = hour.layout_bounds[1] - (sep.layout_bounds[1] + sep.layout_bounds[3]);
+        let pad = crate::layout::dimension::css_root_font_size_px() * 0.75;
+        assert!(
+            gap > pad - 2.0 && gap < pad + 6.0,
+            "time row must sit one padding below the hairline (not wrapper pt+gap+row py); gap={gap} pad={pad} sep={:?} hour={:?}",
+            sep.layout_bounds,
+            hour.layout_bounds
+        );
+    }
+
+    #[test]
+    fn time_kind_parses_and_formats_trigger() {
+        assert_eq!(DatePickerKind::parse("time"), DatePickerKind::Time);
+        assert_eq!(DatePickerKind::Time.as_str(), "time");
+        assert_eq!(
+            format_trigger_value(DatePickerKind::Time, "09:30"),
+            "09:30:00"
+        );
+        assert_eq!(
+            format_trigger_value(DatePickerKind::Time, "18:05:07"),
+            "18:05:07"
+        );
+    }
+
+    #[test]
+    fn time_hms_sync_writes_clock() {
+        use crate::core::reactivity::create_root;
+        let (_h, out) = create_root(|| {
+            let val = use_signal("t-tm-val", || String::new());
+            let hour = use_signal("t-tm-h", || "09".to_string());
+            let minute = use_signal("t-tm-mi", || "30".to_string());
+            let second = use_signal("t-tm-s", || "05".to_string());
+            sync_time_value_from_hms(val, hour, minute, second);
+            val.peek()
+        });
+        assert_eq!(out, "09:30:05");
+    }
+
+    #[test]
+    fn time_picker_uses_date_picker_overlay_shell() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, el) = create_root(|| {
+            let open = use_signal("t-tp-ov__open", || false);
+            let val = use_signal("t-tp-ov__value", || String::new());
+            let year = use_signal("t-tp-ov__y", || 2026i32);
+            let month = use_signal("t-tp-ov__m", || 8u32);
+            let hour = use_signal("t-tp-ov__h", || String::new());
+            let minute = use_signal("t-tp-ov__mi", || String::new());
+            let second = use_signal("t-tp-ov__s", || String::new());
+            build_date_picker_view(
+                DatePickerRenderProps {
+                    id: "t-tp-ov".into(),
+                    kind: DatePickerKind::Time,
+                    caption: CalendarCaption::Label,
+                    disabled: false,
+                },
+                open,
+                val,
+                year,
+                month,
+                hour,
+                minute,
+                second,
+                SlotChrome::default(),
+                SlotChrome::default(),
+            )
+        });
+
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+
+        assert!(
+            find_tid(&el, "t-tp-ov__trigger_view").is_some(),
+            "TimePicker must use the DatePicker trigger island"
+        );
+        assert!(
+            find_tid(&el, "t-tp-ov__view").is_some(),
+            "TimePicker must host HMS in anchored_overlay_content, not an inline row"
+        );
+        assert!(
+            find_tid(&el, "t-tp-ov__time__h__combobox").is_none(),
+            "HMS comboboxes belong in the overlay, not the closed trigger row"
+        );
+
+        let (_from_owner, live) = create_root(|| time_picker("t-tp-from").into());
+        assert!(
+            find_tid(&live, "t-tp-from__dp_view").is_some(),
+            "TimePicker builder must reuse DatePicker live view identity"
+        );
+    }
+
+    #[test]
+    fn time_picker_panel_hosts_hms_at_calendar_width() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_owner, mut panel) = create_root(|| {
+            let open = use_signal("t-tm-p-open", || true);
+            let val = use_signal("t-tm-p-val", || "09:30:00".to_string());
+            let year = use_signal("t-tm-p-y", || 2026i32);
+            let month = use_signal("t-tm-p-m", || 8u32);
+            let hour = use_signal("t-tm-p-h", || "09".to_string());
+            let minute = use_signal("t-tm-p-mi", || "30".to_string());
+            let second = use_signal("t-tm-p-s", || "00".to_string());
+            build_date_picker_panel_content(
+                "t-tm-p",
+                DatePickerKind::Time,
+                CalendarCaption::Label,
+                open,
+                val,
+                year,
+                month,
+                hour,
+                minute,
+                second,
+            )
+        });
+
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut panel, 400.0, 400.0, [-1.0, -1.0]);
+
+        fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(want) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, want))
+        }
+
+        let hour = find_tid(&panel, "t-tm-p__time__h__combobox").expect("hour combobox");
+        let minute = find_tid(&panel, "t-tm-p__time__m__combobox").expect("minute combobox");
+        let second = find_tid(&panel, "t-tm-p__time__s__combobox").expect("second combobox");
+        assert!(
+            hour.layout_bounds[2] > 40.0
+                && minute.layout_bounds[2] > 40.0
+                && second.layout_bounds[2] > 40.0,
+            "Time picker HMS comboboxes must not collapse; hour={:?} minute={:?} second={:?}",
+            hour.layout_bounds,
+            minute.layout_bounds,
+            second.layout_bounds
+        );
+        assert!(
+            panel.layout_bounds[2] > 200.0,
+            "Time picker panel must keep calendar width, got {:?}",
+            panel.layout_bounds
+        );
+    }
+
+    #[test]
+    fn time_panel_effect_ignores_hms_and_val() {
+        use crate::core::reactivity::{create_effect, create_root};
+        use std::cell::Cell;
+        use std::rc::Rc;
+        create_root(|| {
+            let open = use_signal("t-tm-fx-open", || true);
+            let val = use_signal("t-tm-fx-val", || "09:00:00".to_string());
+            let year = use_signal("t-tm-fx-y", || 2026i32);
+            let month = use_signal("t-tm-fx-m", || 8u32);
+            let hour = use_signal("t-tm-fx-h", || "09".to_string());
+            let minute = use_signal("t-tm-fx-mi", || "00".to_string());
+            let second = use_signal("t-tm-fx-s", || "00".to_string());
+            let runs = Rc::new(Cell::new(0u32));
+            create_effect({
+                let runs = runs.clone();
+                move || {
+                    runs.set(runs.get() + 1);
+                    let _ = open.get();
+                    isolate_reads(|| {
+                        let _ = build_date_picker_panel_content(
+                            "t-tm-fx",
+                            DatePickerKind::Time,
+                            CalendarCaption::Label,
+                            open,
+                            val,
+                            year,
+                            month,
+                            hour,
+                            minute,
+                            second,
+                        );
+                    });
+                }
+            });
+            assert_eq!(runs.get(), 1);
+            hour.set("10".into());
+            second.set("06".into());
+            val.set("10:00:06".into());
+            assert_eq!(runs.get(), 1, "改 HMS/val 不得重建 TimePicker portal");
             open.set(false);
             assert!(runs.get() >= 2);
         });
