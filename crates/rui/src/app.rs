@@ -105,7 +105,10 @@ pub use multi_window::{
     open_secondary_window, open_secondary_window_title_only, open_secondary_window_with,
     shared_slot,
 };
-pub use portal_overlay::{page_scroll_locked, set_page_scroll_locked};
+pub use portal_overlay::{
+    page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
+    ScrollFreeze,
+};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};

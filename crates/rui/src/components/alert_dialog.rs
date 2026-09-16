@@ -593,10 +593,8 @@ pub struct AlertDialogContentOpts {
     pub chrome: bool,
     /// Dynamic chrome toggle (`chrome_signal={sig}`).
     pub chrome_signal: Option<Signal<bool>>,
-    /// Utility class on the panel card (after default surface).
-    pub class: Option<String>,
-    /// Layout/paint on the panel card (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for AlertDialogContentOpts {
@@ -612,8 +610,7 @@ impl Default for AlertDialogContentOpts {
             filled: false,
             chrome: true,
             chrome_signal: None,
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
@@ -689,7 +686,7 @@ pub fn alert_dialog_content(
     let filled = opts.filled;
     let chrome_enabled = opts.chrome;
     let chrome_signal = opts.chrome_signal;
-    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let panel_chrome = opts.panel;
     let body = std::sync::Arc::new(body);
 
     reactive_view(view_id, move || {

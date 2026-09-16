@@ -8,8 +8,8 @@
 //!
 //! ```ignore
 //! ui! {
-//!   <Combobox id="fruit" value={fruit} placeholder="Search fruit…" clearable={true} class="w-full">
-//!     <ComboboxInput />
+//!   <Combobox id="fruit" value={fruit} placeholder="Search fruit…">
+//!     <ComboboxInput class="w-full" />
 //!     <ComboboxContent max_h="16rem">
 //!       <ComboboxList>
 //!         <ComboboxGroup>
@@ -57,7 +57,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::components::base::SlotStyleFn;
+use crate::components::base::{author_class, paint_slot, SlotMap, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::input::{
     input, input_adornment_button, input_value_signal_key, lucide_named,
@@ -90,6 +90,8 @@ use crate::utils::text_field::{commit_value, commit_value_sig};
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
+
+const SLOT_CONTENT: &str = "combobox-content";
 
 // ---------------------------------------------------------------------------
 // Context
@@ -227,10 +229,9 @@ pub fn combobox_scope(
         commit_value_sig(&id, input_store, want);
     }
 
-    // 宽度由 class 控制：默认 16rem（避免撑满卡片）；`w-full` 时吃满父级。
-    let full_width = class_is_full_width(&trigger_class);
-    let has_width = class_has_width_token(&trigger_class);
     // 实例 owner：context + Input + Content 同属这一 Combobox，下拉不是父级的。
+    // 壳宽：Builder `.class()` 的 trigger_class，或 `<ComboboxInput class="w-*">` 的 chrome。
+    // 都没有宽度 token 时默认 16rem（避免撑满卡片）。
     with_child_owner(move || {
         provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
@@ -258,6 +259,10 @@ pub fn combobox_scope(
         );
         let mut root = body();
         let kids = take_packed(root);
+        let child_class = kids.first().map(author_class).unwrap_or_default();
+        let width_src = format!("{trigger_class} {child_class}");
+        let full_width = class_is_full_width(&width_src);
+        let has_width = class_has_width_token(&width_src);
         let mut shell = vstack()
             .gap("0")
             .relative(true)
@@ -273,9 +278,10 @@ pub fn combobox_scope(
             shell.w("16rem")
         };
         root = Element::from(shell);
-        if !trigger_class.is_empty() && (full_width || has_width) {
-            // Drop `w-*` onto the shell, Input then `w-100%` to fill the shell.
-            root = with_class_list(root, &trigger_class);
+        let width_tokens = width_class_tokens(&width_src);
+        if !width_tokens.is_empty() {
+            // `w-*` 落到壳上，Input 保持 `w-100%` 填满。
+            root = with_class_list(root, &width_tokens);
         }
         root.template_id = Some(format!("{id}__combobox"));
         root
@@ -294,6 +300,17 @@ fn class_has_width_token(class: &str) -> bool {
         let t = t.trim_end_matches('!');
         t.starts_with("w-") || t.starts_with("min-w-") || t.starts_with("max-w-")
     })
+}
+
+fn width_class_tokens(class: &str) -> String {
+    class
+        .split_whitespace()
+        .filter(|t| {
+            let t = t.trim_end_matches('!');
+            t.starts_with("w-") || t.starts_with("min-w-") || t.starts_with("max-w-")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 fn extract_text_leaf(el: &Element) -> String {
     if let Some(t) = &el.text {
@@ -316,7 +333,6 @@ fn extract_text_leaf(el: &Element) -> String {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ComboboxInput(
-    class: Option<String>,
     placeholder: Option<String>,
     clearable: Option<bool>,
     children: Option<Element>,
@@ -335,20 +351,29 @@ pub fn ComboboxInput(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.placeholder.clone());
     let clearable = clearable.unwrap_or(ctx.clearable);
-    let class = class.unwrap_or_else(|| ctx.trigger_class.clone());
+    let class = ctx.trigger_class.clone();
     let input_store = use_signal(input_value_signal_key(&id).as_str(), String::new);
 
     {
         let id = id.clone();
         create_effect(move || {
-            if open.get() {
+            let Some(is_open) = open.try_get() else {
+                return;
+            };
+            if is_open {
                 return;
             }
-            let selected = value.get();
+            let Some(selected) = value.try_get() else {
+                return;
+            };
             // Peek: this effect writes `input_store`. `get()` would subscribe and
             // re-enter the same FnMut on commit (Gallery forms Combobox).
-            let query = input_store.peek();
-            let map = labels.get();
+            let Some(query) = input_store.try_peek() else {
+                return;
+            };
+            let Some(map) = labels.try_get() else {
+                return;
+            };
             let selected_label = label_for_map(&map, &selected);
             if selected.is_empty() {
                 if !query.is_empty() {
@@ -392,7 +417,8 @@ pub fn ComboboxInput(
             },
         );
         clear_btn = clear_btn.reactive_sync(move |el, _| {
-            let show = !clear_store.peek().is_empty() || !clear_val.peek().is_empty();
+            let show = !clear_store.try_peek().unwrap_or_default().is_empty()
+                || !clear_val.try_peek().unwrap_or_default().is_empty();
             let want_opacity = if show { 1.0 } else { 0.0 };
             let want_pe = if show {
                 PointerEvents::Auto
@@ -517,7 +543,7 @@ pub fn ComboboxInput(
 /// `<ComboboxContent>` / [`combobox_content`] 选项。
 #[derive(Clone)]
 pub struct ComboboxContentOpts {
-    pub class: Option<String>,
+    pub panel: crate::components::base::SlotChrome,
     pub match_trigger: Option<bool>,
     pub menu_width: Option<String>,
     pub menu_height: Option<String>,
@@ -526,13 +552,12 @@ pub struct ComboboxContentOpts {
     pub placement: Option<PopupPlacement>,
     /// `none` | `start` | `center`；空则用根 [`ComboboxCtx::scroll_selected`]。
     pub scroll_selected: Option<String>,
-    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for ComboboxContentOpts {
     fn default() -> Self {
         Self {
-            class: None,
+            panel: Default::default(),
             match_trigger: None,
             menu_width: None,
             menu_height: None,
@@ -540,13 +565,12 @@ impl Default for ComboboxContentOpts {
             max_height: None,
             placement: None,
             scroll_selected: None,
-            style: None,
         }
     }
 }
 
 impl ComboboxContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// ShadCN `ComboboxContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
@@ -570,11 +594,7 @@ pub fn combobox_content(
         .or(ctx.max_height.clone())
         .or_else(|| Some("24rem".into()));
     let placement = opts.placement.unwrap_or(ctx.placement);
-    let content_class = opts
-        .class
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| ctx.content_class.clone());
-    let content_style = opts.style.clone();
+    let panel = opts.panel.fallback_class(&ctx.content_class);
     let scroll_mode = opts
         .scroll_selected
         .as_deref()
@@ -696,12 +716,8 @@ pub fn combobox_content(
             menu.set_attr(ATTR_FLOATING_MAX_H, mh.as_str());
             menu = menu.max_h(mh.as_str());
         }
-        if !content_class.is_empty() {
-            menu = crate::components::base::SlotChrome {
-                class: content_class.clone(),
-                style: content_style.clone(),
-            }
-            .apply(menu);
+        if !panel.is_empty() {
+            menu = paint_slot(menu, SLOT_CONTENT, &panel);
         }
         menu
     });
@@ -723,14 +739,11 @@ pub fn combobox_content(
 /// ShadCN Aria `ComboboxList`（可滚动列表容器；过滤由 Item 自行隐藏）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ComboboxList(class: Option<String>, children: Option<Element>) -> Element {
+pub fn ComboboxList(children: Option<Element>) -> Element {
     let _ = require_combobox("ComboboxList");
     let kids = children.map(take_packed).unwrap_or_default();
     let mut el: Element = vstack().w("100%").gap("0").children(kids).into();
     el = el.accesskit_role("listbox");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -775,12 +788,7 @@ pub fn ComboboxLabel(children: Option<Element>) -> Element {
 /// ShadCN Aria `ComboboxItem`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ComboboxItem(
-    value: String,
-    disabled: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn ComboboxItem(value: String, disabled: bool, children: Option<Element>) -> Element {
     let ctx = require_combobox("ComboboxItem");
     let label_text = match &children {
         Some(c) => c
@@ -838,9 +846,6 @@ pub fn ComboboxItem(
             open.set(false);
         },
     );
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
     row.set_attr("rui_combobox_item", value.as_str());
     row.accesskit_role("option")
 }
@@ -1027,8 +1032,7 @@ pub struct ComboboxBuilder {
     clearable: bool,
     class: String,
     style: Option<SlotStyleFn>,
-    content_class: String,
-    content_style: Option<SlotStyleFn>,
+    slots: SlotMap,
     scroll_selected: SelectScrollSelected,
 }
 
@@ -1043,13 +1047,15 @@ pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
         clearable: false,
         class: String::new(),
         style: None,
-        content_class: String::new(),
-        content_style: None,
+        slots: SlotMap::default(),
         scroll_selected: SelectScrollSelected::None,
     }
 }
 
 impl ComboboxBuilder {
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -1101,7 +1107,8 @@ impl ComboboxBuilder {
         self
     }
 
-    /// Trigger/shell utility class（`w-*` / `min-w-*` 落到壳上，避免默认 `16rem`）。
+    /// Trigger 宽度别名（`w-*` / `min-w-*` 落到壳上，避免默认 `16rem`）。
+    /// RSX 请写在 `<ComboboxInput class="…">`。
     pub fn class(mut self, c: impl Into<String>) -> Self {
         self.class = c.into();
         self
@@ -1114,20 +1121,6 @@ impl ComboboxBuilder {
             + 'static,
     ) -> Self {
         self.style = Some(std::rc::Rc::new(f));
-        self
-    }
-    pub fn content_class(mut self, c: impl Into<String>) -> Self {
-        self.content_class = c.into();
-        self
-    }
-    pub fn content_style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.content_style = Some(std::rc::Rc::new(f));
         self
     }
     /// 打开时滚动到当前选中项：`none`（默认）| `start` | `center`。
@@ -1167,8 +1160,7 @@ impl From<ComboboxBuilder> for Element {
             clearable,
             class,
             style,
-            content_class,
-            content_style,
+            slots,
             scroll_selected,
         } = builder;
         let labels_map = collect_labels(&entries);
@@ -1181,6 +1173,8 @@ impl From<ComboboxBuilder> for Element {
         // Pre-seed labels signal via scope path.
         let id_owned = id.clone();
         let ph = placeholder.clone();
+        let content_chrome = slots.get(SLOT_CONTENT);
+        let content_class = content_chrome.class.clone();
         let mut root = combobox_scope(
             id,
             None,
@@ -1203,7 +1197,6 @@ impl From<ComboboxBuilder> for Element {
                 }
 
                 let input_el = ComboboxInput(ComboboxInputProps {
-                    class: None,
                     placeholder: Some(placeholder.clone()),
                     clearable: Some(clearable),
                     children: None,
@@ -1213,11 +1206,10 @@ impl From<ComboboxBuilder> for Element {
                 let placement = placement;
                 let content = combobox_content(
                     ComboboxContentOpts {
-                        class: None,
+                        panel: content_chrome,
                         placement: Some(placement),
                         max_height: Some("24rem".into()),
                         scroll_selected: Some(scroll_selected.as_str().into()),
-                        style: content_style,
                         ..Default::default()
                     },
                     move || build_builder_entries(&entries_body),
@@ -1241,7 +1233,6 @@ fn build_builder_entries(entries: &[ComboboxEntry]) -> Element {
                 col = col.child(ComboboxItem(ComboboxItemProps {
                     value: Some(item.value.clone()),
                     disabled: Some(item.disabled),
-                    class: None,
                     children: Some(Element::new().text(item.label.clone())),
                     base: None,
                 }));
@@ -1258,7 +1249,6 @@ fn build_builder_entries(entries: &[ComboboxEntry]) -> Element {
                     kids.push(ComboboxItem(ComboboxItemProps {
                         value: Some(item.value.clone()),
                         disabled: Some(item.disabled),
-                        class: None,
                         children: Some(Element::new().text(item.label.clone())),
                         base: None,
                     }));
@@ -1302,12 +1292,10 @@ pub fn Combobox(
     options: Vec<(String, String)>,
     placeholder: String,
     clearable: bool,
-    class: Option<String>,
     scroll_selected: Option<String>,
     children: Option<Element>,
 ) -> Element {
     if let Some(c) = children {
-        let tc = class.clone().unwrap_or_default();
         let ss = scroll_selected.clone().unwrap_or_default();
         return combobox_scope(
             id,
@@ -1319,7 +1307,7 @@ pub fn Combobox(
                 placeholder
             },
             clearable,
-            tc,
+            String::new(),
             String::new(),
             ss,
             || c,
@@ -1340,7 +1328,6 @@ pub fn Combobox(
     if let Some(s) = scroll_selected {
         b = b.scroll_selected(s);
     }
-    let _ = class;
     b.into()
 }
 
@@ -1374,6 +1361,38 @@ mod tests {
                 "class should set 4.75rem, got {px}"
             ),
             other => panic!("expected 4.75rem width, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combobox_input_class_overrides_default_16rem_shell() {
+        let (_owner, el) = create_root(|| {
+            combobox_scope(
+                "cb-input-w",
+                None,
+                None,
+                "Search…",
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+                || {
+                    let trigger = ComboboxInput(ComboboxInputProps {
+                        placeholder: None,
+                        clearable: None,
+                        children: None,
+                        base: None,
+                    });
+                    crate::style::with_class_list(trigger, "w-[4.75rem] min-w-[4.75rem]")
+                },
+            )
+        });
+        match crate::layout::dim_kind(el.style.size.width) {
+            crate::layout::DimKind::Length(px) => assert!(
+                (px - 4.75 * 16.0).abs() < 0.5,
+                "ComboboxInput class should set 4.75rem shell, got {px}"
+            ),
+            other => panic!("expected 4.75rem width from Input class, got {other:?}"),
         }
     }
 

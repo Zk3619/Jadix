@@ -98,7 +98,8 @@ impl CubicTween {
     }
 
     pub fn peek(&self) -> f32 {
-        self.0.borrow().signal.peek()
+        let s = self.0.borrow();
+        s.signal.try_peek().unwrap_or(s.value)
     }
 }
 

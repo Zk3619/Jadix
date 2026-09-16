@@ -502,6 +502,13 @@ fn height_keyframe_animation_active(el: &Element) -> bool {
     })
 }
 
+fn expand_enter_animation_active(el: &Element) -> bool {
+    el.style.animations.iter().any(|a| {
+        matches!(a.name.as_str(), "accordion-down" | "collapsible-down")
+            || a.name.starts_with("rui-expand-down-")
+    })
+}
+
 fn expand_measure_pending(el: &Element) -> bool {
     el.attrs
         .get(ATTR_FLOATING_EXPAND_MEASURE)
@@ -517,26 +524,85 @@ fn expand_from_h_set(el: &Element) -> bool {
         .is_some_and(|h| h > 0.5)
 }
 
+fn reverse_expand_edge_y(el: &Element) -> Option<f32> {
+    el.attrs
+        .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|e| *e > 0.0)
+}
+
+fn floating_content_h(el: &Element) -> Option<f32> {
+    el.attrs
+        .get(ATTR_FLOATING_CONTENT_H)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|h| *h > 0.5)
+}
+
 fn skip_placement_max_h(el: &Element) -> bool {
     // Expand panels own max-height from the first rebuild (`from_h` is on the fresh
     // tree before MEASURE / keyframes). Writing viewport cap here is a 1-frame
-    // fullscreen flash of the muted chrome.
-    height_keyframe_animation_active(el) || expand_measure_pending(el) || expand_from_h_set(el)
+    // fullscreen flash of the muted chrome. Raising a max-height that is still
+    // shorter than CONTENT_H unclips that silhouette (enter from 0 / mid-exit).
+    height_keyframe_animation_active(el)
+        || expand_measure_pending(el)
+        || expand_from_h_set(el)
+        || accordion_clip_shorter_than_content(el)
+}
+
+fn accordion_clip_shorter_than_content(el: &Element) -> bool {
+    let Some(cur) = dimension_length(el.style.max_size.height) else {
+        return false;
+    };
+    let Some(content) = floating_content_h(el) else {
+        return false;
+    };
+    cur + 0.5 < content
+}
+
+/// Painted height for reverse-expand glue: accordion clip cannot exceed intrinsic
+/// content. Author / place `max-h` (e.g. `16rem`) is a cap, not the silhouette —
+/// using it as `visual_h` floats an open menu too high. A leftover clip shorter
+/// than content is the collapsing silhouette — using CONTENT_H jumps `top` up.
+fn reverse_glue_visual_h(el: &Element, estimate_h: f32, animating_h: bool) -> f32 {
+    let content = floating_content_h(el);
+    let clip = dimension_length(el.style.max_size.height).filter(|h| *h >= 0.0);
+    if animating_h {
+        let h = clip.unwrap_or(el.layout_bounds[3].max(0.0));
+        return content.map(|c| h.min(c)).unwrap_or(h);
+    }
+    if let Some(c) = content {
+        return clip.map(|h| h.min(c)).unwrap_or(c);
+    }
+    el.layout_bounds[3].max(estimate_h)
+}
+
+/// Author `max-height` cap (`rui_floating_max_h` / legacy `rui_select_max_h`).
+fn floating_attr_max_h(el: &Element) -> Option<f32> {
+    el.attrs
+        .get(ATTR_FLOATING_MAX_H)
+        .or_else(|| el.attrs.get("rui_select_max_h"))
+        .map(|s| parse_css_px(s, 0.0))
+        .filter(|h| *h > 0.0)
 }
 
 fn floating_estimate_h(el: &Element) -> f32 {
-    if let Some(h) = el
+    let raw = if let Some(h) = el
         .attrs
         .get(ATTR_FLOATING_CONTENT_H)
         .and_then(|s| s.parse::<f32>().ok())
         .filter(|h| *h > 0.5)
     {
-        return h;
-    }
-    if el.layout_bounds[3] > 0.5 {
+        h
+    } else if el.layout_bounds[3] > 0.5 {
         el.layout_bounds[3]
     } else {
         32.0
+    };
+    // Flip / available-height must use the painted cap, not unconstrained content
+    // (calendar year list is thousands of px; Select `max-h-16rem` still fits below).
+    match floating_attr_max_h(el) {
+        Some(cap) => raw.min(cap),
+        None => raw,
     }
 }
 
@@ -575,7 +641,15 @@ pub(crate) fn clamp_animated_max_h_to_place(el: &mut Element, overlay_id: &str) 
         .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
         .and_then(|s| s.parse::<f32>().ok());
     if let Some(edge) = edge {
-        let visual_h = dimension_length(el.style.max_size.height).unwrap_or(0.0);
+        let mut visual_h = reverse_glue_visual_h(el, 0.0, true);
+        if !expand_enter_animation_active(el) {
+            if let Some(top) = inset_length(el.style.inset.top) {
+                let glued = (edge - top).max(0.0);
+                if glued > 0.5 {
+                    visual_h = visual_h.min(glued);
+                }
+            }
+        }
         let y = (edge - visual_h).max(FLOATING_VIEWPORT_MARGIN);
         if inset_length(el.style.inset.top).is_none_or(|v| (v - y).abs() > 0.5) {
             el.style.inset.top = Element::into_margin_auto(y);
@@ -940,6 +1014,7 @@ fn apply_floating_menus(
                 .map(|s| s.as_str())
                 .unwrap_or("bottom-start"),
         );
+        let attr_max_h = floating_attr_max_h(el);
         let estimate_h = floating_estimate_h(el);
         let estimate_w = if width_auto {
             if el.layout_bounds[2] > 0.5 {
@@ -990,11 +1065,8 @@ fn apply_floating_menus(
                     estimate_h,
                     gap,
                 );
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                let max_h = attr_max_h
+                    .map(|cap| available_max_h.min(cap))
                     .unwrap_or(available_max_h)
                     .max(1.0);
                 (x, y, max_h)
@@ -1024,23 +1096,14 @@ fn apply_floating_menus(
                 } else if cover {
                     el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
                 }
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| parse_css_px(s, 0.0))
-                    .filter(|h| *h > 0.0)
-                    .unwrap_or(0.0);
+                let max_h = attr_max_h.unwrap_or(0.0);
                 (x, y, max_h)
             } else {
                 let (x, y, available_max_h, _) = compute_anchored_placement(
                     tb, viewport, estimate_w, estimate_h, preferred, gap,
                 );
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                let max_h = attr_max_h
+                    .map(|cap| available_max_h.min(cap))
                     .unwrap_or(available_max_h)
                     .max(1.0);
                 (x, y, max_h)
@@ -1052,11 +1115,7 @@ fn apply_floating_menus(
             // misread as `ty - gap`.
             let skip_reverse_glue = strategy_fixed && gap < 0.0;
             if !skip_reverse_glue {
-                let existing_edge = el
-                    .attrs
-                    .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
-                    .and_then(|s| s.parse::<f32>().ok())
-                    .filter(|e| *e > 0.0);
+                let existing_edge = reverse_expand_edge_y(el);
                 let animating_h = height_keyframe_animation_active(el);
                 let placed_above = existing_edge.is_some() || y + 0.5 < tb[1];
                 if placed_above {
@@ -1066,20 +1125,18 @@ fn apply_floating_menus(
                     // Glue the trigger-facing edge to the *painted* height. `compute_anchored_placement`
                     // uses estimate.min(space_above); a stretched wrapper / viewport remainder
                     // slams `top` to the window margin (calendar month list floating over forms).
-                    let visual_h = if animating_h {
-                        dimension_length(el.style.max_size.height)
-                            .filter(|h| *h >= 0.0)
-                            .unwrap_or(el.layout_bounds[3].max(0.0))
-                    } else if let Some(content) = el
-                        .attrs
-                        .get(ATTR_FLOATING_CONTENT_H)
-                        .and_then(|s| s.parse::<f32>().ok())
-                        .filter(|h| *h > 0.5)
-                    {
-                        content
-                    } else {
-                        el.layout_bounds[3].max(estimate_h)
-                    };
+                    let mut visual_h = reverse_glue_visual_h(el, estimate_h, animating_h);
+                    // Idle Expand may write the place cap (16rem) onto max-height / CONTENT_H
+                    // while the list is shorter. Exit must not grow past the already-glued
+                    // silhouette — that slams `top` upward before accordion-up shrinks it.
+                    if !expand_enter_animation_active(el) {
+                        if let Some(top) = inset_length(el.style.inset.top) {
+                            let glued = (edge - top).max(0.0);
+                            if glued > 0.5 {
+                                visual_h = visual_h.min(glued);
+                            }
+                        }
+                    }
                     y = (edge - visual_h.min(max_h.max(0.0))).max(FLOATING_VIEWPORT_MARGIN);
                 } else if !animating_h {
                     el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
@@ -1606,6 +1663,118 @@ mod tests {
         );
     }
 
+    /// Idle reverse-expand after enter: `max-h-16rem` / place cap is 256px while the
+    /// 6-item list is ~192px. Glue must use content, not the cap — otherwise the
+    /// open menu sits too high (gap between panel bottom and trigger).
+    #[test]
+    fn sync_floating_above_idle_must_glue_content_not_place_cap() {
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("t-idle-up");
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "idle-up",
+            "t-idle-up",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "192");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
+        panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        // Idle Expand writes the place cap onto max-height; that is a cap, not paint.
+        panel.style.max_size.height = Dimension::length(256.0);
+        panel.style.inset.top = Element::into_margin_auto(236.0);
+        panel.layout_bounds = [20.0, 236.0, 80.0, 192.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        let y = inset_length(root.children[1].style.inset.top).expect("top");
+        assert!(
+            (y - 300.0).abs() < 1.0,
+            "upward idle menu must sit at edge-content (300), not edge-cap (236); y={y}"
+        );
+    }
+
+    /// Exit after idle: used-layout / clip_height can be the 16rem place cap (256)
+    /// while the panel is still glued at edge-content (top=300). Growing visual_h
+    /// to 256 slams `top` to 236 (jump up) before accordion-up shrinks it back.
+    #[test]
+    fn sync_floating_above_exit_must_not_grow_past_glued_height() {
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("t-exit-grow");
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "exit-grow",
+            "t-exit-grow",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "256");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
+        panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        panel.style.max_size.height = Dimension::length(256.0);
+        panel.style.inset.top = Element::into_margin_auto(300.0);
+        panel.layout_bounds = [20.0, 300.0, 80.0, 256.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        let y = inset_length(root.children[1].style.inset.top).expect("top");
+        assert!(
+            (y - 300.0).abs() < 1.0,
+            "exit must not grow past the glued silhouette (300), not jump to edge-cap (236); y={y}"
+        );
+    }
+
+    /// Item-pick rebuilds the panel and drops accordion-up for a frame. Using
+    /// `CONTENT_H` as visual height would slam `top` to the fully-open y (jump up)
+    /// before the next motion seed glues it back.
+    #[test]
+    fn sync_floating_exit_rebuild_without_anim_must_not_jump_up() {
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("t-exit-rebuild");
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "exit-rebuild",
+            "t-exit-rebuild",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "192");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
+        panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        // Mid-collapse clip; layout_bounds still the unconstrained list.
+        panel.style.max_size.height = Dimension::length(80.0);
+        panel.style.inset.top = Element::into_margin_auto(412.0);
+        panel.layout_bounds = [20.0, 412.0, 80.0, 192.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        let y = inset_length(root.children[1].style.inset.top).expect("top");
+        let mh = dimension_length(root.children[1].style.max_size.height);
+        assert!(
+            (y - 412.0).abs() < 1.0,
+            "mid-exit rebuild must keep the glued top, not jump to edge-CONTENT_H ({}); y={y} mh={mh:?}",
+            492.0 - 192.0
+        );
+        if let Some(h) = mh {
+            assert!(
+                (h - 80.0).abs() < 1.0,
+                "placement must not retarget accordion max-height to the viewport cap; mh={h}"
+            );
+        }
+    }
+
     #[test]
     fn write_floating_place_coerces_percent_height_to_auto() {
         let mut el = Element::new().absolute().w(160.0).h("100%").max_h(192.0);
@@ -1934,6 +2103,74 @@ mod tests {
         assert!(
             y + 0.5 < trigger[1],
             "panel must sit above the trigger, got y={y}"
+        );
+    }
+
+    #[test]
+    fn sync_floating_flip_uses_attr_max_h_not_unconstrained_content() {
+        // Nested Select (DatePicker year list): intrinsic content is thousands of px,
+        // but `max-h-16rem` (256px) fits below. Flip must not use the uncapped height
+        // or the menu jitters above/below and sticks on the roomier-but-wrong side.
+        let mut trigger = Element::new().focus_id("cal:cap_y:trigger");
+        // space_below = 600-8-(286+32)-4 = 270; space_above = 286-8-4 = 274.
+        trigger.layout_bounds = [100.0, 286.0, 80.0, 32.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "cal:cap_y",
+            "cal:cap_y:trigger",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "256px");
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "2000");
+        panel.layout_bounds = [0.0, 0.0, 80.0, 2000.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let top = inset_length(root.children[1].style.inset.top).expect("top");
+        let expect_below = 286.0 + 32.0 + FLOATING_TRIGGER_GAP;
+        assert!(
+            (top - expect_below).abs() < 0.5,
+            "capped 256px fits below (270px); must not flip above, got {top}"
+        );
+        assert!(
+            root.children[1]
+                .attrs
+                .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                .is_none(),
+            "must not glue a wrong above-edge after an unconstrained-content flip"
+        );
+    }
+
+    #[test]
+    fn sync_floating_flip_stays_stable_when_content_grows_past_attr_max_h() {
+        let mut trigger = Element::new().focus_id("t-grow");
+        trigger.layout_bounds = [100.0, 286.0, 80.0, 32.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "grow-menu",
+            "t-grow",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_MAX_H, "256px");
+        panel.layout_bounds = [0.0, 0.0, 80.0, 32.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let top0 = inset_length(root.children[1].style.inset.top).expect("top0");
+
+        root.children[1].set_attr(ATTR_FLOATING_CONTENT_H, "2000");
+        root.children[1].layout_bounds = [100.0, top0, 80.0, 2000.0];
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        let top1 = inset_length(root.children[1].style.inset.top).expect("top1");
+        assert!(
+            (top1 - top0).abs() < 0.5,
+            "expand-measure content height must not flip a menu whose cap still fits, {top0} → {top1}"
         );
     }
 

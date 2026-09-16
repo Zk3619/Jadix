@@ -83,7 +83,6 @@ use crate::core::reactivity::{
 use crate::core::tree::{parse_color, parse_text_color, Element, Handler};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::anchored_overlay::{
     anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
@@ -358,7 +357,6 @@ pub fn navigation_menu_scope(
         }
         if viewport && !has_viewport {
             shell = shell.child(NavigationMenuViewport(NavigationMenuViewportProps {
-                class: None,
                 children: None,
                 base: None,
             }));
@@ -380,8 +378,7 @@ pub fn navigation_menu_scope(
 /// `NavigationMenuContent` 选项（`ui!` / [`navigation_menu_content`] 共用）。
 #[derive(Clone, Default)]
 pub struct NavigationMenuContentOpts {
-    pub class: Option<String>,
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl NavigationMenuContentOpts {
@@ -401,7 +398,7 @@ pub fn navigation_menu_content(
     let value = item.value.clone();
     let overlay_key = format!("{}:{}", menu.id, value);
     let trigger_fid = item.trigger_fid;
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let _ = menu.viewport;
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
@@ -484,7 +481,7 @@ pub fn navigation_menu_content(
 /// 列表行：横排 hug · `justify-start` · 窄屏 `overflow-x: auto`（避免 center 对称外溢）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavigationMenuList(class: Option<String>, children: Option<Element>) -> Element {
+pub fn NavigationMenuList(children: Option<Element>) -> Element {
     let _ = require_navigation_menu("NavigationMenuList");
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
@@ -504,20 +501,13 @@ pub fn NavigationMenuList(class: Option<String>, children: Option<Element>) -> E
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_LIST);
     el.set_attr("rui_navigation_menu_list", "1");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 单项：相对定位壳；可带 `value`（Trigger/Content 关联键）。
 ///
 /// `ui!` 中由宏展开为本函数（闭包内再构建 Trigger/Content，保证上下文可用）。
-pub fn navigation_menu_item(
-    value: Option<String>,
-    class: Option<String>,
-    body: impl FnOnce() -> Element,
-) -> Element {
+pub fn navigation_menu_item(value: Option<String>, body: impl FnOnce() -> Element) -> Element {
     let menu = require_navigation_menu("NavigationMenuItem");
     let seq = next_item_seq(&menu.id);
     let value = match value {
@@ -555,9 +545,6 @@ pub fn navigation_menu_item(
         let mut el: Element = row.into();
         el.set_attr(ATTR_SLOT, SLOT_ITEM);
         el.set_attr(ATTR_ITEM_VALUE, &value);
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = with_class_list(el, &c);
-        }
         el.template_id = Some(format!("{}:item:{}", menu.id, seq));
         el
     })
@@ -566,11 +553,7 @@ pub fn navigation_menu_item(
 /// 兼容旧 RSX 组件名：请用宏 `<NavigationMenuItem>`（走 [`navigation_menu_item`]）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavigationMenuItem(
-    value: String,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn NavigationMenuItem(value: String, children: Option<Element>) -> Element {
     // Eager children already built — only safe for leaf-only Items (Link without Trigger).
     navigation_menu_item(
         if value.trim().is_empty() {
@@ -578,7 +561,6 @@ pub fn NavigationMenuItem(
         } else {
             Some(value)
         },
-        class,
         || children.unwrap_or_else(Element::new),
     )
 }
@@ -586,11 +568,7 @@ pub fn NavigationMenuItem(
 /// Trigger：`h-9` chip + chevron；点击切换本 Item 展开。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavigationMenuTrigger(
-    id: String,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn NavigationMenuTrigger(id: String, children: Option<Element>) -> Element {
     let menu = require_navigation_menu("NavigationMenuTrigger");
     let item = require_navigation_menu_item("NavigationMenuTrigger");
     let expanded = menu.expanded;
@@ -616,7 +594,6 @@ pub fn NavigationMenuTrigger(
         }
     };
     let _ = children;
-    let class = class.filter(|s| !s.trim().is_empty());
     let menu_id = menu.id.clone();
     let view_id = format!("{trigger_id}__nm_trig_view");
 
@@ -629,7 +606,6 @@ pub fn NavigationMenuTrigger(
         let value_keys = value.clone();
         let top_ids = top_focus_of(&menu_id);
         let my_ix = top_ids.iter().position(|f| f == &trigger_id).unwrap_or(0);
-        let class_k = class.clone();
 
         let bg = if is_open {
             accent_muted()
@@ -666,9 +642,6 @@ pub fn NavigationMenuTrigger(
             }
             focus_roving_key(&ev, &top_ids, my_ix, FocusRovingAxis::Horizontal)
         });
-        if let Some(ref c) = class_k {
-            chip = with_class_list(chip, c);
-        }
         chip.set_attr(ATTR_SLOT, SLOT_TRIGGER);
         chip
     });
@@ -680,7 +653,6 @@ pub fn NavigationMenuTrigger(
 #[allow(non_snake_case)]
 pub fn NavigationMenuLink(
     id: String,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] on_click: Handler<()>,
     children: Option<Element>,
 ) -> Element {
@@ -703,7 +675,6 @@ pub fn NavigationMenuLink(
         register_top_focus(&menu.id, fid.clone());
     }
 
-    let class = class.filter(|s| !s.trim().is_empty());
     let mut on_click = on_click;
     let menu_id = menu.id.clone();
 
@@ -746,9 +717,6 @@ pub fn NavigationMenuLink(
                 expanded.set(None);
             })
             .into();
-        if let Some(ref c) = class {
-            el = with_class_list(el, c);
-        }
         el.set_attr(ATTR_SLOT, SLOT_LINK);
         el
     } else {
@@ -767,9 +735,6 @@ pub fn NavigationMenuLink(
         chip = chain_key_down(chip, move |ev| {
             focus_roving_key(&ev, &top_ids, my_ix, FocusRovingAxis::Horizontal)
         });
-        if let Some(ref c) = class {
-            chip = with_class_list(chip, c);
-        }
         chip.set_attr(ATTR_SLOT, SLOT_LINK);
         chip
     }
@@ -799,14 +764,11 @@ fn split_link_children(kids: &[Element]) -> (String, Option<String>) {
 /// 必须 `w-auto`/`0`：`w-full` 会把根壳撑满 NavbarCenter，List 被居中拉开。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavigationMenuViewport(class: Option<String>) -> Element {
+pub fn NavigationMenuViewport() -> Element {
     let _ = require_navigation_menu("NavigationMenuViewport");
     let mut slot: Element = r#box().w(0.0).h(0.0).relative(true).into();
     slot.set_attr(ATTR_SLOT, SLOT_VIEWPORT);
     slot.set_attr("rui_navigation_menu_viewport", "1");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        slot = with_class_list(slot, &c);
-    }
     slot
 }
 
@@ -918,10 +880,9 @@ impl From<NavigationMenuBuilder> for Element {
                 match entry {
                     NavigationMenuEntry::Link(link) => {
                         let run = link.on_select.clone();
-                        let item = navigation_menu_item(Some(link.id.clone()), None, move || {
+                        let item = navigation_menu_item(Some(link.id.clone()), move || {
                             NavigationMenuLink(NavigationMenuLinkProps {
                                 id: link.id,
-                                class: None,
                                 on_click: Some(Handler::new(move |_| run())),
                                 children: Some(Element::new().text(link.label)),
                                 base: None,
@@ -934,10 +895,9 @@ impl From<NavigationMenuBuilder> for Element {
                         label,
                         links,
                     } => {
-                        list_kids.push(navigation_menu_item(Some(tid), None, move || {
+                        list_kids.push(navigation_menu_item(Some(tid), move || {
                             let trigger = NavigationMenuTrigger(NavigationMenuTriggerProps {
                                 id: String::new(),
-                                class: None,
                                 children: Some(Element::new().text(label)),
                                 base: None,
                             });
@@ -956,7 +916,6 @@ impl From<NavigationMenuBuilder> for Element {
                                         frag.set_attr("rui_fragment", "1");
                                         let row = NavigationMenuLink(NavigationMenuLinkProps {
                                             id: link.id.clone(),
-                                            class: None,
                                             on_click: Some(Handler::new(move |_| run())),
                                             children: Some(frag.children(kids)),
                                             base: None,
@@ -976,7 +935,6 @@ impl From<NavigationMenuBuilder> for Element {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             NavigationMenuList(NavigationMenuListProps {
-                class: None,
                 children: Some(frag.children(list_kids)),
                 base: None,
             })
@@ -998,11 +956,9 @@ mod tests {
     fn navigation_menu_scope_exposes_template() {
         let el = navigation_menu_scope("nm-scope", true, || {
             NavigationMenuList(NavigationMenuListProps {
-                class: None,
-                children: Some(navigation_menu_item(Some("docs".into()), None, || {
+                children: Some(navigation_menu_item(Some("docs".into()), || {
                     NavigationMenuLink(NavigationMenuLinkProps {
                         id: "docs".into(),
-                        class: None,
                         on_click: Some(Handler::default()),
                         children: Some(Element::new().text("Docs")),
                         base: None,

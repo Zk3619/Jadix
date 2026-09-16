@@ -58,7 +58,7 @@ use std::sync::OnceLock;
 use crate::app::reactive::{apply_bound_size, bind_prop, bind_text};
 use crate::components::base::{
     fill_default_text_color, fill_default_text_size, fill_default_text_weight, packed_children,
-    BaseComponentBuilder, SlotAuthor, SlotChrome,
+    SlotAuthor, SlotChrome,
 };
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
@@ -69,7 +69,7 @@ use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::svg::{circle, path, svg};
 use crate::primitives::text::text;
-use crate::style::{parse_text_color, with_class_list};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_packed;
@@ -216,7 +216,6 @@ pub fn progress_scope(
     value: Option<Signal<f32>>,
     default_value: f32,
     orientation: impl Into<ProgressOrientation>,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "progress");
@@ -236,7 +235,7 @@ pub fn progress_scope(
         let (header, user_track) = split_progress_body(body());
         let track = user_track.unwrap_or_else(|| {
             progress_track(ProgressTrackOpts {
-                class: None,
+                chrome: SlotChrome::default(),
                 value: Some(value),
                 id: Some(id.clone()),
                 orientation: Some(orientation),
@@ -254,11 +253,6 @@ pub fn progress_scope(
         col = col.child(track);
         let mut el: Element = col.into();
         el.set_attr(ATTR_ORIENTATION, orientation.as_str());
-        if let Some(ref c) = class {
-            if !c.trim().is_empty() {
-                el = with_class_list(el, c);
-            }
-        }
         el
     });
     if root.template_id.is_none() {
@@ -318,19 +312,16 @@ fn finish_progress(
         chrome,
         track_chrome,
     } = builder;
-    let class = if chrome.class.trim().is_empty() {
-        None
-    } else {
-        Some(chrome.class.clone())
-    };
-    let mut el = progress_scope(id, value, default_value, orientation, class, move || {
-        let raw = body.map(|b| b()).unwrap_or_else(Element::new);
-        ensure_progress_track(raw, &track_chrome)
-    });
-    if let Some(ref style) = chrome.style {
-        el = style(BaseComponentBuilder::new(el)).el;
-    }
-    el
+    chrome.apply(progress_scope(
+        id,
+        value,
+        default_value,
+        orientation,
+        move || {
+            let raw = body.map(|b| b()).unwrap_or_else(Element::new);
+            ensure_progress_track(raw, &track_chrome)
+        },
+    ))
 }
 
 fn ensure_progress_track(body: Element, chrome: &SlotChrome) -> Element {
@@ -338,21 +329,12 @@ fn ensure_progress_track(body: Element, chrome: &SlotChrome) -> Element {
     if kids.iter().any(is_progress_track) {
         return packed_children(kids).unwrap_or_else(Element::new);
     }
-    let class = if chrome.class.trim().is_empty() {
-        None
-    } else {
-        Some(chrome.class.clone())
-    };
-    let mut track = progress_track(ProgressTrackOpts {
-        class,
+    kids.push(progress_track(ProgressTrackOpts {
+        chrome: chrome.clone(),
         value: None,
         id: None,
         orientation: None,
-    });
-    if let Some(ref style) = chrome.style {
-        track = style(BaseComponentBuilder::new(track)).el;
-    }
-    kids.push(track);
+    }));
     packed_children(kids).unwrap_or_else(Element::new)
 }
 
@@ -408,7 +390,6 @@ pub fn Progress(
     value: Option<f32>,
     value_signal: Option<Signal<f32>>,
     orientation: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut b = progress().id(id);
@@ -419,9 +400,6 @@ pub fn Progress(
     }
     if let Some(o) = orientation {
         b = b.orientation(o);
-    }
-    if let Some(c) = class {
-        b = b.class(c);
     }
     if let Some(ch) = children {
         // 无宏时子节点已脱离上下文；仅作占位，复合请用 ui! 宏展开。
@@ -437,11 +415,15 @@ pub fn Progress(
 /// `ProgressTrack` 选项。
 #[derive(Clone, Default)]
 pub struct ProgressTrackOpts {
-    pub class: Option<String>,
+    pub chrome: SlotChrome,
     /// 显式值信号；`None` 时读 [`ProgressCtx`]。
     pub value: Option<Signal<f32>>,
     pub id: Option<String>,
     pub orientation: Option<ProgressOrientation>,
+}
+
+impl ProgressTrackOpts {
+    crate::impl_content_opts_chrome!(chrome);
 }
 
 /// ShadCN `cn-progress-track` + 内嵌 Indicator（响应 `value`）。
@@ -456,7 +438,7 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
         .id
         .or_else(|| use_progress().map(|c| c.id))
         .unwrap_or_else(|| "progress".into());
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = opts.chrome;
     let orientation = opts
         .orientation
         .or_else(|| use_progress().map(|c| c.orientation))
@@ -518,12 +500,9 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
     track.set_attr("rui_progress", format!("{pct0:.1}%"));
     track.set_attr(ATTR_ORIENTATION, orientation.as_str());
     track = track.accesskit_role("progressbar");
-    if let Some(ref c) = class {
-        track = with_class_list(track, c);
-    }
     track.template_id = Some(format!("{instance}__track"));
     track.set_attr(ATTR_SLOT, SLOT_TRACK);
-    bind_prop(
+    chrome.apply(bind_prop(
         track,
         format!("{instance}__progress_attr"),
         move || {
@@ -538,16 +517,16 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
                 LayoutStatus::StyleChanged
             }
         },
-    )
+    ))
 }
 
 /// RSX `<ProgressTrack class=… />`（需在 Progress 内；通常由 Root 自动注入）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ProgressTrack(class: Option<String>, children: Option<Element>) -> Element {
+pub fn ProgressTrack(children: Option<Element>) -> Element {
     let _ = children;
     progress_track(ProgressTrackOpts {
-        class,
+        chrome: SlotChrome::default(),
         value: None,
         id: None,
         orientation: None,
@@ -557,8 +536,8 @@ pub fn ProgressTrack(class: Option<String>, children: Option<Element>) -> Elemen
 /// RSX `<ProgressIndicator />` — Track 已内嵌指示条；本标签为 no-op 占位（对位导出面）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ProgressIndicator(class: Option<String>, children: Option<Element>) -> Element {
-    let _ = (class, children);
+pub fn ProgressIndicator(children: Option<Element>) -> Element {
+    let _ = children;
     Element::new().w(0.0).h(0.0)
 }
 
@@ -842,8 +821,12 @@ pub struct ProgressCircleOpts {
     pub radius: Option<f32>,
     pub stroke_width: Option<f32>,
     pub show_animation: bool,
-    pub class: Option<String>,
+    pub chrome: SlotChrome,
     pub children: Option<Element>,
+}
+
+impl ProgressCircleOpts {
+    crate::impl_content_opts_chrome!(chrome);
 }
 
 /// 渲染圆形进度（响应 `value` ∈ `0..=1`）。
@@ -862,7 +845,7 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
     let radius = opts.radius;
     let stroke_width = opts.stroke_width;
     let show_animation = opts.show_animation;
-    let class = opts.class.filter(|s| !s.trim().is_empty());
+    let chrome = opts.chrome;
     let children = opts.children;
     let (outer_r, _) = progress_circle_dims(size, radius, stroke_width);
     let diameter = outer_r * 2.0;
@@ -893,10 +876,7 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
     };
 
     root = root.accesskit_role("progressbar");
-    if let Some(ref c) = class {
-        root = with_class_list(root, c);
-    }
-    root
+    chrome.apply(root)
 }
 
 pub struct ProgressCircleBuilder {
@@ -907,7 +887,7 @@ pub struct ProgressCircleBuilder {
     radius: Option<f32>,
     stroke_width: Option<f32>,
     show_animation: bool,
-    class: String,
+    chrome: SlotChrome,
     children: Option<Element>,
 }
 
@@ -921,12 +901,14 @@ pub fn progress_circle() -> ProgressCircleBuilder {
         radius: None,
         stroke_width: None,
         show_animation: true,
-        class: String::new(),
+        chrome: SlotChrome::default(),
         children: None,
     }
 }
 
 impl ProgressCircleBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -962,11 +944,6 @@ impl ProgressCircleBuilder {
         self
     }
 
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
-        self
-    }
-
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children = Some(child.into());
         self
@@ -983,7 +960,7 @@ impl From<ProgressCircleBuilder> for Element {
             radius,
             stroke_width,
             show_animation,
-            class,
+            chrome,
             children,
         } = builder;
         progress_circle_view(ProgressCircleOpts {
@@ -994,11 +971,7 @@ impl From<ProgressCircleBuilder> for Element {
             radius,
             stroke_width,
             show_animation,
-            class: if class.trim().is_empty() {
-                None
-            } else {
-                Some(class)
-            },
+            chrome,
             children,
         })
     }
@@ -1015,7 +988,6 @@ pub fn ProgressCircle(
     radius: Option<f32>,
     stroke_width: Option<f32>,
     show_animation: Option<bool>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut b = progress_circle().id(id);
@@ -1035,9 +1007,6 @@ pub fn ProgressCircle(
     }
     if let Some(w) = stroke_width {
         b = b.stroke_width(w);
-    }
-    if let Some(c) = class {
-        b = b.class(c);
     }
     if let Some(ch) = children {
         b = b.child(ch);
@@ -1080,6 +1049,34 @@ mod tests {
         assert!(
             find_track(&el),
             "injected track must carry data-slot=progress-track"
+        );
+        fn track_h(el: &Element) -> Option<f32> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_TRACK) {
+                match crate::layout::dim_kind(el.style.size.height) {
+                    crate::layout::DimKind::Length(px) => return Some(px),
+                    _ => {}
+                }
+            }
+            el.children.iter().find_map(track_h)
+        }
+        let h = track_h(&el).expect("track height");
+        assert!(
+            (h - 0.75 * 16.0).abs() < 0.5,
+            "track_with class h-3 must override default 0.5rem, got {h}"
+        );
+    }
+
+    #[test]
+    fn progress_circle_class_lands_on_root() {
+        let el: Element = progress_circle()
+            .id("pc-chrome")
+            .default_value(0.5)
+            .class("opacity-50")
+            .into();
+        assert!(
+            (el.style.opacity - 0.5).abs() < 0.01,
+            "progress_circle().class must apply via SlotChrome, opacity={}",
+            el.style.opacity
         );
     }
 

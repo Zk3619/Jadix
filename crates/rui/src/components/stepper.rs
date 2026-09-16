@@ -71,7 +71,10 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
-use crate::components::base::{BaseComponentBuilder, SlotAuthor, SlotChrome, SlotStyleFn};
+use crate::components::base::{
+    push_pending_item_chrome, take_pending_item_chrome, BaseComponentBuilder, SlotAuthor,
+    SlotChrome,
+};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
@@ -267,8 +270,7 @@ struct StepperItemSpec {
     title: String,
     description: String,
     disabled: bool,
-    class: String,
-    style: Option<SlotStyleFn>,
+    chrome: SlotChrome,
     indicator: SlotAuthor,
     title_slot: SlotAuthor,
     description_slot: SlotAuthor,
@@ -281,7 +283,6 @@ struct StepperCollect {
 
 thread_local! {
     static STEPPER_STACK: RefCell<Vec<StepperCollect>> = const { RefCell::new(Vec::new()) };
-    static PENDING_ITEM_STYLE: RefCell<Option<SlotStyleFn>> = const { RefCell::new(None) };
 }
 
 fn stepper_context() -> Context<StepperCtx> {
@@ -477,13 +478,7 @@ fn paint_item(
     if spec.disabled {
         el = el.opacity(0.5);
     }
-    if !spec.class.trim().is_empty() {
-        el = with_class_list(el, &spec.class);
-    }
-    if let Some(ref style) = spec.style {
-        el = style(BaseComponentBuilder::new(el)).el;
-    }
-    el
+    spec.chrome.apply(el)
 }
 
 fn paint_indicator(
@@ -718,14 +713,7 @@ impl StepperItemBuilder {
 
 impl From<StepperItemBuilder> for Element {
     fn from(builder: StepperItemBuilder) -> Self {
-        PENDING_ITEM_STYLE.with(|s| {
-            *s.borrow_mut() = builder.chrome.style.clone();
-        });
-        let class = if builder.chrome.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.chrome.class.clone())
-        };
+        push_pending_item_chrome(builder.chrome);
         StepperItem(StepperItemProps {
             title: Some(builder.title),
             description: if builder.description.is_empty() {
@@ -734,7 +722,6 @@ impl From<StepperItemBuilder> for Element {
                 Some(builder.description)
             },
             disabled: Some(builder.disabled),
-            class,
             children: if builder.children.is_empty() {
                 None
             } else {
@@ -875,14 +862,7 @@ impl From<StepperBuilder> for Element {
                         .into_iter()
                         .map(|s| {
                             let chrome = item_chrome.clone().overlay(s.chrome);
-                            PENDING_ITEM_STYLE.with(|cell| {
-                                *cell.borrow_mut() = chrome.style.clone();
-                            });
-                            let class = if chrome.class.trim().is_empty() {
-                                None
-                            } else {
-                                Some(chrome.class)
-                            };
+                            push_pending_item_chrome(chrome);
                             StepperItem(StepperItemProps {
                                 title: Some(s.title),
                                 description: if s.description.is_empty() {
@@ -891,7 +871,6 @@ impl From<StepperBuilder> for Element {
                                     Some(s.description)
                                 },
                                 disabled: None,
-                                class,
                                 children: None,
                                 base: None,
                             })
@@ -922,7 +901,6 @@ pub fn Stepper(
     default_step: usize,
     orientation: Option<String>,
     clickable: Option<bool>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut b = stepper().id(id);
@@ -936,9 +914,6 @@ pub fn Stepper(
     }
     if let Some(c) = clickable {
         b = b.clickable(c);
-    }
-    if let Some(c) = class {
-        b = b.class(c);
     }
     if let Some(ch) = children {
         // Without the macro, children were built outside context; drop them.
@@ -959,7 +934,6 @@ pub fn StepperItem(
     title: Option<String>,
     description: Option<String>,
     disabled: Option<bool>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let _ctx = require_stepper("StepperItem");
@@ -1000,14 +974,13 @@ pub fn StepperItem(
         }
     }
 
-    let style = PENDING_ITEM_STYLE.with(|s| s.borrow_mut().take());
+    let chrome = take_pending_item_chrome();
     register_item(StepperItemSpec {
         index,
         title,
         description,
         disabled: disabled.unwrap_or(false),
-        class: class.unwrap_or_default(),
-        style,
+        chrome,
         indicator,
         title_slot,
         description_slot,
@@ -1156,7 +1129,6 @@ mod tests {
                 default_step: Some(0),
                 orientation: Some("horizontal".into()),
                 clickable: Some(true),
-                class: None,
                 children: None,
                 base: None,
             })
@@ -1302,7 +1274,7 @@ mod tests {
                 title: "Profile".into(),
                 description: "Your details".into(),
                 disabled: false,
-                class,
+                chrome: SlotChrome::default().class(class),
                 ..Default::default()
             };
             paint_item(
@@ -1338,7 +1310,7 @@ mod tests {
                         title: title.into(),
                         description: String::new(),
                         disabled: false,
-                        class: class.clone(),
+                        chrome: SlotChrome::default().class(class.clone()),
                         ..Default::default()
                     };
                     let el = paint_item(
@@ -1371,8 +1343,7 @@ mod tests {
                 title: s.title,
                 description: s.description,
                 disabled: false,
-                class: chrome.class,
-                style: chrome.style,
+                chrome,
                 ..Default::default()
             };
             let el = paint_item(

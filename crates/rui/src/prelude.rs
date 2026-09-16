@@ -101,9 +101,9 @@ pub use crate::app::props::{children, resolve_children, Children, ChildrenAccess
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::app::with_ui_build_stack;
 pub use crate::app::{
-    app, create_resource, error_boundary, launch, page_scroll_locked, set_page_scroll_locked,
-    suspense, throw_error, throw_resource_error, AppBuilder, AppConfig, Resource, ResourceState,
-    WindowBackdrop, WindowOptions,
+    app, create_resource, error_boundary, launch, page_scroll_locked, parse_scroll_freeze,
+    set_page_scroll_locked, set_scroll_freeze, suspense, throw_error, throw_resource_error,
+    AppBuilder, AppConfig, Resource, ResourceState, ScrollFreeze, WindowBackdrop, WindowOptions,
 };
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,

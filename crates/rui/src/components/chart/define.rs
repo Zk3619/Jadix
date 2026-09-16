@@ -162,10 +162,14 @@ impl ChartBuilder {
         self
     }
 
-    pub fn h(mut self, px: f32) -> Self {
+    pub fn plot_h(mut self, px: f32) -> Self {
         self.height = px.max(16.0);
         self.height_fluid = false;
         self
+    }
+    /// Alias of [`Self::plot_h`] (plot viewport, not layout `h`).
+    pub fn h(self, px: f32) -> Self {
+        self.plot_h(px)
     }
 
     /// 绘图区高度跟随父级（`h="full"` / `100%`）。

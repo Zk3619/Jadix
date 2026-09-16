@@ -26,6 +26,8 @@
 //!
 //! `ui!` 中 `<Table>` / `<TableRow>` / `<TableHead>` / `<TableCell>` 走通用 `*Props`；
 //! 宏对 `selected` / `align` / `density` 做 `bind_attr`（与 Button `variant` 同模式）。
+//! 列轨是领域 prop `col_w`（不是根布局 `w`）。RSX 写 `col_w`；Builder `.w()` 是别名。
+//! 见 `docs/COMPONENT_LIBRARY.md` §1.1。
 //!
 //! ## Usage (dual style · ADR-9)
 //! ```ignore
@@ -35,7 +37,7 @@
 //!         <TableCaption>"A list of your recent invoices."</TableCaption>
 //!         <TableHeader>
 //!             <TableRow id="inv-h">
-//!                 <TableHead w="100">"Invoice"</TableHead>
+//!                 <TableHead col_w="100">"Invoice"</TableHead>
 //!                 <TableHead>"Status"</TableHead>
 //!                 <TableHead align="end">"Amount"</TableHead>
 //!             </TableRow>
@@ -438,7 +440,7 @@ impl std::str::FromStr for TableDensity {
 /// 表根：`relative w-full overflow-x-auto` 外壳 + 内层 `w-full caption-bottom text-sm`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
+pub fn Table(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut caption = Vec::new();
     let mut header = Vec::new();
@@ -479,9 +481,6 @@ pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
         .into();
     wrap.set_attr("rui_table", "1");
     wrap.set_attr("data-slot", "table-container");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        wrap.set_attr("class", c);
-    }
     wrap
 }
 
@@ -572,7 +571,11 @@ fn row_uid() -> u64 {
 /// `th`：`h-10 px-2 text-left align-middle font-medium text-foreground whitespace-nowrap`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
+pub fn TableHead(
+    col_w: Option<String>,
+    align: Option<String>,
+    children: Option<Element>,
+) -> Element {
     let align = align
         .as_deref()
         .map(parse_align)
@@ -598,7 +601,7 @@ pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Elem
         .min_w(0.0)
         .children(kids)
         .into();
-    cell = apply_table_cell_width(cell, w.as_deref());
+    cell = apply_table_cell_width(cell, col_w.as_deref());
     cell = apply_cell_align(cell, align);
     cell.set_attr("data-slot", "table-head");
     cell
@@ -607,7 +610,11 @@ pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Elem
 /// `td`：`p-2 align-middle whitespace-nowrap`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
+pub fn TableCell(
+    col_w: Option<String>,
+    align: Option<String>,
+    children: Option<Element>,
+) -> Element {
     let align = align
         .as_deref()
         .map(parse_align)
@@ -630,7 +637,7 @@ pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Elem
         .min_w(0.0)
         .children(kids)
         .into();
-    cell = apply_table_cell_width(cell, w.as_deref());
+    cell = apply_table_cell_width(cell, col_w.as_deref());
     cell = apply_cell_align(cell, align);
     cell.set_attr("data-slot", "table-cell");
     cell
@@ -733,7 +740,7 @@ impl crate::core::tree::IntoElementList for TableRowBuilder {
 }
 
 pub struct TableHeadBuilder {
-    w: Option<String>,
+    col_w: Option<String>,
     align: Option<String>,
     children: Vec<Element>,
     chrome: SlotChrome,
@@ -741,7 +748,7 @@ pub struct TableHeadBuilder {
 
 pub fn table_head() -> TableHeadBuilder {
     TableHeadBuilder {
-        w: None,
+        col_w: None,
         align: None,
         children: Vec::new(),
         chrome: SlotChrome::default(),
@@ -751,9 +758,13 @@ pub fn table_head() -> TableHeadBuilder {
 impl TableHeadBuilder {
     crate::impl_slot_chrome_methods!();
 
-    pub fn w(mut self, w: impl Into<String>) -> Self {
-        self.w = Some(w.into());
+    pub fn col_w(mut self, w: impl Into<String>) -> Self {
+        self.col_w = Some(w.into());
         self
+    }
+    /// Alias of [`Self::col_w`] (column track, not layout `w`).
+    pub fn w(self, w: impl Into<String>) -> Self {
+        self.col_w(w)
     }
 
     pub fn align(mut self, a: impl Into<String>) -> Self {
@@ -776,7 +787,7 @@ impl TableHeadBuilder {
 impl From<TableHeadBuilder> for Element {
     fn from(builder: TableHeadBuilder) -> Self {
         let el = TableHead(TableHeadProps {
-            w: builder.w,
+            col_w: builder.col_w,
             align: builder.align,
             children: packed_children(builder.children),
             base: None,
@@ -793,7 +804,7 @@ impl crate::core::tree::IntoElementList for TableHeadBuilder {
 }
 
 pub struct TableCellBuilder {
-    w: Option<String>,
+    col_w: Option<String>,
     align: Option<String>,
     children: Vec<Element>,
     chrome: SlotChrome,
@@ -801,7 +812,7 @@ pub struct TableCellBuilder {
 
 pub fn table_cell() -> TableCellBuilder {
     TableCellBuilder {
-        w: None,
+        col_w: None,
         align: None,
         children: Vec::new(),
         chrome: SlotChrome::default(),
@@ -811,9 +822,13 @@ pub fn table_cell() -> TableCellBuilder {
 impl TableCellBuilder {
     crate::impl_slot_chrome_methods!();
 
-    pub fn w(mut self, w: impl Into<String>) -> Self {
-        self.w = Some(w.into());
+    pub fn col_w(mut self, w: impl Into<String>) -> Self {
+        self.col_w = Some(w.into());
         self
+    }
+    /// Alias of [`Self::col_w`] (column track, not layout `w`).
+    pub fn w(self, w: impl Into<String>) -> Self {
+        self.col_w(w)
     }
 
     pub fn align(mut self, a: impl Into<String>) -> Self {
@@ -836,7 +851,7 @@ impl TableCellBuilder {
 impl From<TableCellBuilder> for Element {
     fn from(builder: TableCellBuilder) -> Self {
         let el = TableCell(TableCellProps {
-            w: builder.w,
+            col_w: builder.col_w,
             align: builder.align,
             children: packed_children(builder.children),
             base: None,
@@ -1547,25 +1562,25 @@ mod tests {
         frag.set_attr("rui_fragment", "1");
         frag = frag.children(vec![
             TableHead(TableHeadProps {
-                w: Some("100".into()),
+                col_w: Some("100".into()),
                 align: None,
                 children: Some(Element::from(text("Invoice"))),
                 ..Default::default()
             }),
             TableHead(TableHeadProps {
-                w: None,
+                col_w: None,
                 align: None,
                 children: Some(Element::from(text("Status"))),
                 ..Default::default()
             }),
             TableHead(TableHeadProps {
-                w: None,
+                col_w: None,
                 align: None,
                 children: Some(Element::from(text("Method"))),
                 ..Default::default()
             }),
             TableHead(TableHeadProps {
-                w: None,
+                col_w: None,
                 align: Some("end".into()),
                 children: Some(Element::from(text("Amount"))),
                 ..Default::default()
@@ -1632,7 +1647,7 @@ mod tests {
         use taffy::prelude::JustifyContent;
 
         let head = TableHead(TableHeadProps {
-            w: None,
+            col_w: None,
             align: Some("end".into()),
             children: Some(Element::from(text("Amount"))),
             ..Default::default()
@@ -1657,19 +1672,19 @@ mod tests {
                     frag.set_attr("rui_fragment", "1");
                     frag = frag.children(vec![
                         TableHead(TableHeadProps {
-                            w: Some("100px".into()),
+                            col_w: Some("100px".into()),
                             align: None,
                             children: Some(Element::from(text("A"))),
                             ..Default::default()
                         }),
                         TableHead(TableHeadProps {
-                            w: None,
+                            col_w: None,
                             align: None,
                             children: Some(Element::from(text("B"))),
                             ..Default::default()
                         }),
                         TableHead(TableHeadProps {
-                            w: Some("96px".into()),
+                            col_w: Some("96px".into()),
                             align: Some("end".into()),
                             children: Some(Element::from(text("C"))),
                             ..Default::default()
@@ -1691,19 +1706,19 @@ mod tests {
                     frag.set_attr("rui_fragment", "1");
                     frag = frag.children(vec![
                         TableCell(TableCellProps {
-                            w: None,
+                            col_w: None,
                             align: None,
                             children: Some(Element::from(text("aaaaaa"))),
                             ..Default::default()
                         }),
                         TableCell(TableCellProps {
-                            w: None,
+                            col_w: None,
                             align: None,
                             children: Some(Element::from(text("b"))),
                             ..Default::default()
                         }),
                         TableCell(TableCellProps {
-                            w: None,
+                            col_w: None,
                             align: Some("end".into()),
                             children: Some(Element::from(text("1"))),
                             ..Default::default()
@@ -1719,7 +1734,6 @@ mod tests {
         kids.set_attr("rui_fragment", "1");
         kids = kids.children(vec![header, body]);
         let el = Table(TableProps {
-            class: None,
             children: Some(kids),
             ..Default::default()
         });
@@ -1769,13 +1783,13 @@ mod tests {
                             frag.set_attr("rui_fragment", "1");
                             frag = frag.children(vec![
                                 TableHead(TableHeadProps {
-                                    w: Some("100px".into()),
+                                    col_w: Some("100px".into()),
                                     align: None,
                                     children: Some(Element::from(text("Inv"))),
                                     ..Default::default()
                                 }),
                                 TableHead(TableHeadProps {
-                                    w: None,
+                                    col_w: None,
                                     align: Some("end".into()),
                                     children: Some(Element::from(text("Amt"))),
                                     ..Default::default()
@@ -1797,13 +1811,13 @@ mod tests {
                             frag.set_attr("rui_fragment", "1");
                             frag = frag.children(vec![
                                 TableCell(TableCellProps {
-                                    w: None,
+                                    col_w: None,
                                     align: None,
                                     children: Some(Element::from(text("INV001"))),
                                     ..Default::default()
                                 }),
                                 TableCell(TableCellProps {
-                                    w: None,
+                                    col_w: None,
                                     align: Some("end".into()),
                                     children: Some(Element::from(text("$1"))),
                                     ..Default::default()
@@ -1819,7 +1833,6 @@ mod tests {
                 kids.set_attr("rui_fragment", "1");
                 kids = kids.children(vec![header, body]);
                 let table = Table(TableProps {
-                    class: None,
                     children: Some(kids),
                     ..Default::default()
                 });
@@ -1874,7 +1887,7 @@ mod tests {
     #[test]
     fn composite_table_builds() {
         let head = TableHead(TableHeadProps {
-            w: Some("100".into()),
+            col_w: Some("100".into()),
             align: None,
             children: Some(Element::from(text("Invoice"))),
             ..Default::default()
@@ -1895,7 +1908,7 @@ mod tests {
                 selected: Some(true),
                 on_click: Some(Handler::default()),
                 children: Some(TableCell(TableCellProps {
-                    w: None,
+                    col_w: None,
                     align: None,
                     children: Some(Element::from(text("INV001"))),
                     ..Default::default()
@@ -1905,7 +1918,6 @@ mod tests {
             ..Default::default()
         });
         let el = Table(TableProps {
-            class: None,
             children: Some(vstack().child(header).child(body).into()),
             ..Default::default()
         });
@@ -1926,7 +1938,7 @@ classes = "underline"
         .unwrap();
         register_stylesheet(sheet).unwrap();
         let cell = TableCell(TableCellProps {
-            w: None,
+            col_w: None,
             align: None,
             children: Some(Element::from(text("INV001"))),
             ..Default::default()

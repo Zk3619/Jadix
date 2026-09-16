@@ -408,8 +408,7 @@ impl From<DrawerBuilder> for Element {
             overlay_blur: None,
             width,
             height,
-            class: None,
-            style: None,
+            panel: Default::default(),
         };
         drawer_scope(id, open, move || {
             drawer_content(opts, move || {
@@ -860,10 +859,8 @@ pub struct DrawerContentOpts {
     pub snap_to_sequential_point: bool,
     /// Aligns with Vaul `shouldScaleBackground` / shadcn `scaleBackground`.
     pub scale_background: bool,
-    /// Utility class on the drawer panel (after default surface).
-    pub class: Option<String>,
-    /// Layout/paint on the drawer panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for DrawerContentOpts {
@@ -882,8 +879,7 @@ impl Default for DrawerContentOpts {
             snap_points: vec![DrawerSnapPoint::Fraction(1.0)],
             snap_to_sequential_point: false,
             scale_background: false,
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
@@ -913,7 +909,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     let snap_points = normalize_snap_points(&opts.snap_points);
     let snap_to_sequential = opts.snap_to_sequential_point;
     let scale_background = opts.scale_background;
-    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let panel_chrome = opts.panel;
     let had_mounted_key = format!("{id}__drawer_had_mounted");
     let had_mounted = use_signal(had_mounted_key.as_str(), || false);
 

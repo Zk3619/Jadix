@@ -49,6 +49,14 @@ fn quote_unitless_f32(e: &Expr) -> proc_macro2::TokenStream {
     quote! { rui::core::tree::IntoF32Raw::into_f32_raw(#e) }
 }
 
+/// Overlay `*ContentOpts.panel` / SubContent chrome from RSX `class` (typed to avoid E0282).
+fn quote_slot_chrome(class: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    quote! {{
+        let __rui_sc_class: Option<String> = #class;
+        rui::components::base::SlotChrome::from_opts(__rui_sc_class, None)
+    }}
+}
+
 /// HTML-ish bool attrs: `true` / `"true"` / `"1"` / `"yes"` / `"on"` (and false counterparts).
 fn parse_bool_str(raw: &str) -> Option<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -1511,16 +1519,18 @@ fn expand_node(
                     } else {
                         quote! { "horizontal".to_string() }
                     };
-                    return quote! {
-                        rui::components::progress_scope(
-                            #id_ts,
-                            #value_ts,
-                            #default_ts,
-                            #orientation_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_prg_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_prg_class, None).apply(
+                            rui::components::progress_scope(
+                                #id_ts,
+                                #value_ts,
+                                #default_ts,
+                                #orientation_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "Stepper" {
@@ -1741,14 +1751,16 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::bubble_scope(
-                            #variant_ts,
-                            #align_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_bub_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_bub_class, None).apply(
+                            rui::components::bubble_scope(
+                                #variant_ts,
+                                #align_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "Avatar" {
@@ -1880,17 +1892,19 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::accordion_scope(
-                            #id_ts,
-                            #value_ts,
-                            #default_ts.unwrap_or_default(),
-                            #multiple_ts,
-                            #disabled_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_acc_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_acc_class, None).apply(
+                            rui::components::accordion_scope(
+                                #id_ts,
+                                #value_ts,
+                                #default_ts.unwrap_or_default(),
+                                #multiple_ts,
+                                #disabled_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if questionnaire_is_compound {
@@ -1969,19 +1983,21 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::questionnaire_scope(
-                            #id_ts,
-                            #item_ts,
-                            #default_ts,
-                            #shortcuts_ts,
-                            #items_ts,
-                            #class_ts,
-                            #on_submit_ts,
-                            #on_item_change_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_q_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_q_class, None).apply(
+                            rui::components::questionnaire_scope(
+                                #id_ts,
+                                #item_ts,
+                                #default_ts,
+                                #shortcuts_ts,
+                                #items_ts,
+                                #on_submit_ts,
+                                #on_item_change_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if tree_view_is_compound {
@@ -2077,23 +2093,25 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::tree_view_scope(
-                            #id_ts,
-                            #variant_ts,
-                            #expanded_ts,
-                            #expanded_storage_key_ts,
-                            #class_ts,
-                            #row_height_ts,
-                            #height_ts,
-                            #exclusive_ts,
-                            #chrome_ts,
-                            #selected_ts,
-                            None,
-                            ::std::vec::Vec::new(),
-                            || #child_el,
+                    return quote! {{
+                        let __rui_tv_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_tv_class, None).apply(
+                            rui::components::tree_view_scope(
+                                #id_ts,
+                                #variant_ts,
+                                #expanded_ts,
+                                #expanded_storage_key_ts,
+                                #row_height_ts,
+                                #height_ts,
+                                #exclusive_ts,
+                                #chrome_ts,
+                                #selected_ts,
+                                None,
+                                ::std::vec::Vec::new(),
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if collapsible_is_compound {
@@ -2177,18 +2195,20 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::collapsible_scope(
-                            #id_ts,
-                            #open_ts,
-                            #default_ts,
-                            #disabled_ts,
-                            #class_ts,
-                            #exclusive_ts,
-                            #group_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_col_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_col_class, None).apply(
+                            rui::components::collapsible_scope(
+                                #id_ts,
+                                #open_ts,
+                                #default_ts,
+                                #disabled_ts,
+                                #exclusive_ts,
+                                #group_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if message_scroller_is_compound {
@@ -2261,17 +2281,19 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::message_scroller_scope(
-                            #id_ts,
-                            #auto_ts,
-                            #pos_ts,
-                            #threshold_ts,
-                            #peek_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_ms_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_ms_class, None).apply(
+                            rui::components::message_scroller_scope(
+                                #id_ts,
+                                #auto_ts,
+                                #pos_ts,
+                                #threshold_ts,
+                                #peek_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if input_otp_is_compound {
@@ -2353,18 +2375,20 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::input_otp_scope(
-                            #id_ts,
-                            #max_ts,
-                            #value_ts,
-                            #disabled_ts,
-                            #invalid_ts,
-                            #pattern_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_otp_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_otp_class, None).apply(
+                            rui::components::input_otp_scope(
+                                #id_ts,
+                                #max_ts,
+                                #value_ts,
+                                #disabled_ts,
+                                #invalid_ts,
+                                #pattern_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "ResizablePanelGroup" {
@@ -2424,16 +2448,18 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::resizable_panel_group_scope(
-                            #id_ts,
-                            #ori_ts,
-                            #class_ts,
-                            #height_ts,
-                            #sizes_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_rz_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_rz_class, None).apply(
+                            rui::components::resizable_panel_group_scope(
+                                #id_ts,
+                                #ori_ts,
+                                #height_ts,
+                                #sizes_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "Popover" {
@@ -3506,9 +3532,12 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::navigation_menu_item(#value_ts, #class_ts, || #child_el)
-                    };
+                    return quote! {{
+                        let __rui_nmi_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_nmi_class, None).apply(
+                            rui::components::navigation_menu_item(#value_ts, || #child_el)
+                        )
+                    }};
                 }
 
                 if name_str == "MenubarMenu" {
@@ -3605,9 +3634,9 @@ fn expand_node(
                         quote! { "Select…".to_string() }
                     };
                     let class_ts = if let Some(c) = class_expr {
-                        quote! { (#c).to_string() }
+                        quote! { Some((#c).to_string()) }
                     } else {
-                        quote! { String::new() }
+                        quote! { None }
                     };
                     let content_class_ts = if let Some(c) = content_class_expr {
                         quote! { (#c).to_string() }
@@ -3619,18 +3648,21 @@ fn expand_node(
                     } else {
                         quote! { String::new() }
                     };
-                    return quote! {
-                        rui::components::select_scope(
-                            #id_ts,
-                            #open_ts,
-                            #value_ts,
-                            #placeholder_ts,
-                            #class_ts,
-                            #content_class_ts,
-                            #scroll_selected_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_sel_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_sel_class, None).apply(
+                            rui::components::select_scope(
+                                #id_ts,
+                                #open_ts,
+                                #value_ts,
+                                #placeholder_ts,
+                                String::new(),
+                                #content_class_ts,
+                                #scroll_selected_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if radio_group_is_compound {
@@ -3826,25 +3858,27 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::toggle_group_scope(
-                            #id_ts,
-                            #value_ts,
-                            #values_ts,
-                            #default_ts,
-                            #multiple_ts,
-                            #disabled_ts,
-                            #variant_ts,
-                            #size_ts,
-                            #orientation_ts,
-                            #spacing_ts,
-                            #joined_ts,
-                            false,
-                            #required_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_tg_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_tg_class, None).apply(
+                            rui::components::toggle_group_scope(
+                                #id_ts,
+                                #value_ts,
+                                #values_ts,
+                                #default_ts,
+                                #multiple_ts,
+                                #disabled_ts,
+                                #variant_ts,
+                                #size_ts,
+                                #orientation_ts,
+                                #spacing_ts,
+                                #joined_ts,
+                                false,
+                                #required_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if tabs_is_compound {
@@ -4171,6 +4205,7 @@ fn expand_node(
                 }
 
                 if name_str == "AccordionContent" {
+                    let class_expr = get_attr("class");
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter, true));
@@ -4192,12 +4227,21 @@ fn expand_node(
                             }
                         }
                     };
-                    return quote! {
-                        rui::components::accordion_content(move || #child_el)
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
                     };
+                    return quote! {{
+                        let __rui_accc_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_accc_class, None).apply(
+                            rui::components::accordion_content(move || #child_el)
+                        )
+                    }};
                 }
 
                 if name_str == "CollapsibleContent" {
+                    let class_expr = get_attr("class");
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter, true));
@@ -4219,9 +4263,17 @@ fn expand_node(
                             }
                         }
                     };
-                    return quote! {
-                        rui::components::collapsible_content(move || #child_el)
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
                     };
+                    return quote! {{
+                        let __rui_colc_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_colc_class, None).apply(
+                            rui::components::collapsible_content(move || #child_el)
+                        )
+                    }};
                 }
 
                 if name_str == "TreeViewItem" {
@@ -4272,15 +4324,17 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::tree_view_item_scope(
-                            #id_ts,
-                            #label_ts,
-                            #disabled_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_tvi_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_tvi_class, None).apply(
+                            rui::components::tree_view_item_scope(
+                                #id_ts,
+                                #label_ts,
+                                #disabled_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "AccordionItem" {
@@ -4325,14 +4379,16 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::accordion_item_scope(
-                            #value_ts,
-                            #disabled_ts,
-                            #class_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_acci_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_acci_class, None).apply(
+                            rui::components::accordion_item_scope(
+                                #value_ts,
+                                #disabled_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "QuestionnaireItem" {
@@ -4416,18 +4472,20 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        rui::components::questionnaire_item_scope(
-                            #name_ts,
-                            #required_ts,
-                            #multiple_ts,
-                            #disabled_ts,
-                            #invalid_ts,
-                            #class_ts,
-                            #on_status_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_qi_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_qi_class, None).apply(
+                            rui::components::questionnaire_item_scope(
+                                #name_ts,
+                                #required_ts,
+                                #multiple_ts,
+                                #disabled_ts,
+                                #invalid_ts,
+                                #on_status_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "DialogContent" {
@@ -4488,6 +4546,7 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::dialog_content(
                             rui::components::DialogContentOpts {
@@ -4497,8 +4556,7 @@ fn expand_node(
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
                                 hug_content: false,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -4586,6 +4644,7 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::alert_dialog_content(
                             rui::components::AlertDialogContentOpts {
@@ -4599,8 +4658,7 @@ fn expand_node(
                                 filled: #filled_static,
                                 chrome: #chrome_static,
                                 chrome_signal: #chrome_signal,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -4679,6 +4737,7 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::sheet_content(
                             rui::components::SheetContentOpts {
@@ -4690,8 +4749,7 @@ fn expand_node(
                                 overlay_blur: #overlay_blur,
                                 width: #width,
                                 height: #height,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -4797,6 +4855,7 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::drawer_content(
                             rui::components::DrawerContentOpts {
@@ -4813,8 +4872,7 @@ fn expand_node(
                                 snap_points: #snap_points,
                                 snap_to_sequential_point: #snap_to_sequential_point,
                                 scale_background: #scale_background,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -4851,12 +4909,12 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::tooltip_content(
                             rui::components::TooltipContentOpts {
                                 side: #side,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -4889,6 +4947,14 @@ fn expand_node(
                         .or_else(|| get_attr("lockPageScroll"))
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
+                    let scroll_freeze = get_attr("scroll_freeze")
+                        .or_else(|| get_attr("scrollFreeze"))
+                        .map(|e| {
+                            quote! {
+                                Some(rui::app::portal_overlay::parse_scroll_freeze(&(#e).to_string()))
+                            }
+                        })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         // Body is rebuilt inside popover_content's reactive_anchor.
@@ -4911,17 +4977,18 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::popover_content(
                             rui::components::PopoverContentOpts {
                                 side: #side,
                                 align: #align,
                                 side_offset: #side_offset,
-                                class: #class,
+                                panel: #panel,
                                 strategy: #strategy,
                                 width: #width,
-                                style: None,
                                 lock_page_scroll: #lock_page_scroll,
+                                scroll_freeze: #scroll_freeze,
                             },
                             move || #child_el,
                         )
@@ -5005,6 +5072,14 @@ fn expand_node(
                         .or_else(|| get_attr("lockPageScroll"))
                         .map(|e| quote! { Some(#e) })
                         .unwrap_or_else(|| quote! { None });
+                    let scroll_freeze = get_attr("scroll_freeze")
+                        .or_else(|| get_attr("scrollFreeze"))
+                        .map(|e| {
+                            quote! {
+                                Some(rui::app::portal_overlay::parse_scroll_freeze(&(#e).to_string()))
+                            }
+                        })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter, true));
@@ -5049,6 +5124,7 @@ fn expand_node(
                                 __opts.max_h = #max_h;
                                 __opts.width = #width;
                                 __opts.lock_page_scroll = #lock_page_scroll;
+                                __opts.scroll_freeze = #scroll_freeze;
                                 __opts
                             },
                             move || #child_el,
@@ -5571,15 +5647,15 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::hover_card_content(
                             rui::components::HoverCardContentOpts {
                                 side: #side,
                                 align: #align,
                                 side_offset: #side_offset,
-                                class: #class,
+                                panel: #panel,
                                 width: #width,
-                                style: None,
                             },
                             move || #child_el,
                         )
@@ -5893,12 +5969,12 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::context_menu_content(
                             rui::components::ContextMenuContentOpts {
                                 placement: #placement,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -5971,12 +6047,12 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::menubar_content(
                             rui::components::MenubarContentOpts {
                                 placement: #placement,
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -6008,11 +6084,11 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::navigation_menu_content(
                             rui::components::NavigationMenuContentOpts {
-                                class: #class,
-                                style: None,
+                                panel: #panel,
                             },
                             move || #child_el,
                         )
@@ -6044,9 +6120,10 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::context_menu_sub_content(
-                            #class,
+                            #panel,
                             move || #child_el,
                         )
                     };
@@ -6077,9 +6154,10 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::dropdown_menu_sub_content(
-                            #class,
+                            #panel,
                             move || #child_el,
                         )
                     };
@@ -6110,9 +6188,10 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::menubar_sub_content(
-                            #class,
+                            #panel,
                             move || #child_el,
                         )
                     };
@@ -6173,10 +6252,11 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::select_content(
                             rui::components::SelectContentOpts {
-                                class: #class,
+                                panel: #panel,
                                 match_trigger: #match_trigger,
                                 menu_width: #menu_width,
                                 menu_height: #menu_height,
@@ -6184,7 +6264,6 @@ fn expand_node(
                                 max_height: #max_height,
                                 placement: #placement,
                                 scroll_selected: #scroll_selected,
-                                style: None,
                             },
                             move || #child_el,
                         )
@@ -6252,9 +6331,9 @@ fn expand_node(
                         quote! { false }
                     };
                     let class_ts = if let Some(c) = class_expr {
-                        quote! { (#c).to_string() }
+                        quote! { Some((#c).to_string()) }
                     } else {
-                        quote! { String::new() }
+                        quote! { None }
                     };
                     let content_class_ts = if let Some(c) = content_class_expr {
                         quote! { (#c).to_string() }
@@ -6266,19 +6345,22 @@ fn expand_node(
                     } else {
                         quote! { String::new() }
                     };
-                    return quote! {
-                        rui::components::combobox_scope(
-                            #id_ts,
-                            #open_ts,
-                            #value_ts,
-                            #placeholder_ts,
-                            #clearable_ts,
-                            #class_ts,
-                            #content_class_ts,
-                            #scroll_selected_ts,
-                            || #child_el,
+                    return quote! {{
+                        let __rui_cb_class: Option<String> = #class_ts;
+                        rui::components::base::SlotChrome::from_opts(__rui_cb_class, None).apply(
+                            rui::components::combobox_scope(
+                                #id_ts,
+                                #open_ts,
+                                #value_ts,
+                                #placeholder_ts,
+                                #clearable_ts,
+                                String::new(),
+                                #content_class_ts,
+                                #scroll_selected_ts,
+                                || #child_el,
+                            )
                         )
-                    };
+                    }};
                 }
 
                 if name_str == "ComboboxContent" {
@@ -6336,10 +6418,11 @@ fn expand_node(
                             }
                         }
                     };
+                    let panel = quote_slot_chrome(&class);
                     return quote! {
                         rui::components::combobox_content(
                             rui::components::ComboboxContentOpts {
-                                class: #class,
+                                panel: #panel,
                                 match_trigger: #match_trigger,
                                 menu_width: #menu_width,
                                 menu_height: #menu_height,
@@ -6347,7 +6430,6 @@ fn expand_node(
                                 max_height: #max_height,
                                 placement: #placement,
                                 scroll_selected: #scroll_selected,
-                                style: None,
                             },
                             move || #child_el,
                         )
@@ -6931,6 +7013,7 @@ fn expand_node(
                 let mut chrome_binds: Vec<proc_macro2::TokenStream> = Vec::new();
                 let mut spread_expr: Option<&Expr> = None;
                 let mut ref_expr: Option<&Expr> = None;
+                let mut collect_item_class: Option<&Expr> = None;
 
                 for (attr, value) in &el.attributes {
                     let attr_str = attr.to_string();
@@ -6950,6 +7033,25 @@ fn expand_node(
 
                     // Element-root hover — not a component prop.
                     if matches!(attr_name, "on_hover" | "onHover") {
+                        continue;
+                    }
+
+                    // Interactive primitive: live `disabled={sig.get()}` on any #[component].
+                    if attr_name == "disabled" && expr_reads_get(value) {
+                        let idx = *node_counter;
+                        *node_counter += 1;
+                        prop_names.push(attr.clone());
+                        prop_values.push(quote! {
+                            Some(rui::core::reactivity::untrack(|| #value))
+                        });
+                        chrome_binds.push(quote! {
+                            __rui_el = rui::app::reactive::bind_attr(
+                                __rui_el,
+                                format!("{}:{}:bind_disabled#{}", file!(), line!(), #idx),
+                                move || #value,
+                                |el, d| rui::primitives::interactive::apply_disabled(el, d),
+                            );
+                        });
                         continue;
                     }
 
@@ -6999,7 +7101,6 @@ fn expand_node(
                     ) && matches!(
                         attr_name,
                         "variant"
-                            | "disabled"
                             | "invalid"
                             | "size"
                             | "shape"
@@ -7341,21 +7442,6 @@ fn expand_node(
                             });
                             continue;
                         }
-                        if name_str == "Button" && attr_name == "disabled" {
-                            prop_names.push(attr.clone());
-                            prop_values.push(quote! {
-                                Some(rui::core::reactivity::untrack(|| #value))
-                            });
-                            chrome_binds.push(quote! {
-                                __rui_el = rui::app::reactive::bind_attr(
-                                    __rui_el,
-                                    format!("{}:{}:bind_btn_disabled#{}", file!(), line!(), #idx),
-                                    move || #value,
-                                    |el, d| rui::components::apply_bound_button_disabled(el, d),
-                                );
-                            });
-                            continue;
-                        }
                         if name_str == "Input" && attr_name == "invalid" {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {
@@ -7371,39 +7457,33 @@ fn expand_node(
                             });
                             continue;
                         }
-                        if name_str == "Input" && attr_name == "disabled" {
-                            prop_names.push(attr.clone());
-                            prop_values.push(quote! {
-                                Some(rui::core::reactivity::untrack(|| #value))
-                            });
-                            chrome_binds.push(quote! {
-                                __rui_el = rui::app::reactive::bind_attr(
-                                    __rui_el,
-                                    format!("{}:{}:bind_input_disabled#{}", file!(), line!(), #idx),
-                                    move || #value,
-                                    |el, d| rui::components::apply_bound_input_disabled(el, d),
-                                );
-                            });
-                            continue;
-                        }
                     }
 
-                    // Chart `h`/`height` 是绘图区高度（轴标签在外），不能当 base 钳死整棵 vstack，
-                    // 否则 BarChart 标签会溢到下一张图的标题上。
-                    let chart_plot_height = matches!(
-                        name_str.as_str(),
-                        "BarChart" | "LineChart" | "AreaChart" | "Chart"
-                    ) && matches!(attr_name, "h" | "height");
+                    // own_prop：领域字段碰巧像 CSS，但不能进 is_base chrome。
+                    // 新的布局测量先改领域名（docs/COMPONENT_LIBRARY.md §1.1），再把新名列入此处。
+                    // Chart `plot_h` 是绘图区高度（轴标签在外），不能当 base 钳死整棵 vstack。
+                    let chart_plot_height =
+                        matches!(
+                            name_str.as_str(),
+                            "BarChart" | "LineChart" | "AreaChart" | "Chart"
+                        ) && matches!(attr_name, "plot_h" | "plotH" | "plot_height" | "plotHeight");
 
                     // Textarea: `wrap` = soft|off（单行溢出），不是 flex-wrap；
                     // `rows` = 可视行数，不是 grid-template-rows。
                     let textarea_own_prop =
                         name_str == "Textarea" && matches!(attr_name, "wrap" | "rows");
 
-                    // TableHead/TableCell：`w` / `align` 是列 prop，不是根节点 base。
+                    // TableHead/TableCell：`col_w` / `align` 是列 prop，不是根节点 base。
                     let table_cell_own_prop =
                         matches!(name_str.as_str(), "TableHead" | "TableCell")
-                            && matches!(attr_name, "w" | "width" | "align");
+                            && matches!(
+                                attr_name,
+                                "col_w" | "colW" | "column_width" | "columnWidth" | "align"
+                            );
+
+                    // Sidebar rail `rail_w` is the collapsible track width, not layout `w`.
+                    let sidebar_rail_own_prop = name_str == "Sidebar"
+                        && matches!(attr_name, "rail_w" | "railW" | "rail_width" | "railWidth");
 
                     // Toaster `position` is the Sonner anchor (`top-center`…), not CSS `position`.
                     let toaster_own_prop = name_str == "Toaster"
@@ -7436,6 +7516,7 @@ fn expand_node(
                     let is_base = !chart_plot_height
                         && !textarea_own_prop
                         && !table_cell_own_prop
+                        && !sidebar_rail_own_prop
                         && !toaster_own_prop
                         && !app_shell_own_prop
                         && matches!(
@@ -7658,6 +7739,16 @@ fn expand_node(
                                 | "text_shadow_offset_y"
                                 | "textShadowOffsetY"
                                 | "text_align"
+                                | "ring_width"
+                                | "ringWidth"
+                                | "ring_color"
+                                | "ringColor"
+                                | "caret_color"
+                                | "caretColor"
+                                | "selection_background"
+                                | "selectionBackground"
+                                | "selection_foreground"
+                                | "selectionForeground"
                                 | "class"
                                 | "className"
                                 | "tw"
@@ -7866,7 +7957,12 @@ fn expand_node(
                             for warn in parse_utility_unknown_warnings(value) {
                                 base_calls.push(warn);
                             }
-                            chrome_binds.push(quote_apply_class_list(value));
+                            if matches!(name_str.as_str(), "StepperItem" | "TimelineItem") {
+                                // Collect-then-paint: the marker is discarded by *_scope.
+                                collect_item_class = Some(value);
+                            } else {
+                                chrome_binds.push(quote_apply_class_list(value));
+                            }
                         } else if matches!(attr_name, "leading" | "text_leading") {
                             // 与原生节点分支一致：`leading="normal"` 等不能走 `IntoF32 for &str`（会按 CSS 长度解析失败 → 0 → 行高≈0，文本被裁掉）。
                             let s = if let syn::Expr::Lit(expr_lit) = value {
@@ -7989,6 +8085,11 @@ fn expand_node(
                                 "pointerEvents" => "pointer_events",
                                 "aspect-ratio" | "aspectRatio" => "aspect_ratio",
                                 "zIndex" => "z_index",
+                                "ringWidth" => "ring_width",
+                                "ringColor" => "ring_color",
+                                "caretColor" => "caret_color",
+                                "selectionBackground" => "selection_background",
+                                "selectionForeground" => "selection_foreground",
                                 _ => attr_name,
                             };
                             let method_ident = syn::Ident::new(method, attr.span());
@@ -8002,10 +8103,16 @@ fn expand_node(
                                 | "border_bottom_color"
                                 | "border_left_color"
                                 | "outline_color"
-                                | "box_shadow_color" => {
+                                | "box_shadow_color"
+                                | "ring_color" => {
                                     quote! { rui::core::tree::parse_color(#value) }
                                 }
-                                "text_color" | "text_decoration_color" | "text_shadow_color" => {
+                                "text_color"
+                                | "text_decoration_color"
+                                | "text_shadow_color"
+                                | "caret_color"
+                                | "selection_background"
+                                | "selection_foreground" => {
                                     // 字面量走 parse；`{ ... }` 表达式假定已是 `[u8; 4]`（避免双重 parse）
                                     if let syn::Expr::Lit(syn::ExprLit {
                                         lit: syn::Lit::Str(lit),
@@ -8089,9 +8196,27 @@ fn expand_node(
                             // ShadCN `type="single|multiple"` → prop `selection`（避免 Rust 关键字）。
                             syn::Ident::new("selection", attr.span())
                         } else if matches!(name_str.as_str(), "TableHead" | "TableCell")
-                            && matches!(attr_str.as_str(), "width")
+                            && matches!(
+                                attr_str.as_str(),
+                                "col_w" | "colW" | "column_width" | "columnWidth"
+                            )
                         {
-                            syn::Ident::new("w", attr.span())
+                            syn::Ident::new("col_w", attr.span())
+                        } else if matches!(
+                            name_str.as_str(),
+                            "BarChart" | "LineChart" | "AreaChart" | "Chart"
+                        ) && matches!(
+                            attr_str.as_str(),
+                            "plot_h" | "plotH" | "plot_height" | "plotHeight"
+                        ) {
+                            syn::Ident::new("plot_h", attr.span())
+                        } else if name_str == "Sidebar"
+                            && matches!(
+                                attr_str.as_str(),
+                                "rail_w" | "railW" | "rail_width" | "railWidth"
+                            )
+                        {
+                            syn::Ident::new("rail_w", attr.span())
                         } else {
                             match attr_str.as_str() {
                                 "onClick" => syn::Ident::new("on_click", attr.span()),
@@ -8338,9 +8463,23 @@ fn expand_node(
                     quote! {}
                 };
 
+                let collect_chrome_ts = if let Some(c) = collect_item_class {
+                    quote! {
+                        {
+                            let __rui_sc_class: Option<String> = Some((#c).to_string());
+                            rui::components::base::push_pending_item_chrome(
+                                rui::components::base::SlotChrome::from_opts(__rui_sc_class, None)
+                            );
+                        }
+                    }
+                } else {
+                    quote! {}
+                };
+
                 if chrome_binds.is_empty() && ref_expr.is_none() {
                     return quote! {
                         {
+                            #collect_chrome_ts
                             #[allow(clippy::needless_update)]
                             let __rui_comp = #name_ident(#props_ident {
                                 base: #base_expr,
@@ -8354,6 +8493,7 @@ fn expand_node(
                 }
                 return quote! {
                     {
+                        #collect_chrome_ts
                         #[allow(clippy::needless_update)]
                         let mut __rui_el: rui::core::tree::Element = #name_ident(#props_ident {
                             base: #base_expr,

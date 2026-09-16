@@ -35,12 +35,13 @@
 //!   `selection-background`（别名 `selection`）。
 //! - `selection_foreground`：选中文字前景色（CSS `::selection { color }`），按传入色原样使用。
 //!   默认主题 token `selection-foreground`，与 `selection-background` 成对相反。
-//!   Builder 与 RSX 均可设。
+//!   Builder 与 RSX chrome（`is_base`）均可设；会转发进 [`crate::core::tree::TextEditPaintSync`]。
 //!
-//! ## 焦点环
+//! ## 字号 / 焦点环
+//! - `text_size`：容器 `text_style` + 内层 `input_paint_sync.text_size_px`（`class("text-lg")` 同路径）。
 //! - `ring_width`：粗细（逻辑 px；Hard 为 spread，Soft 为 blur）。默认主题 [`crate::style::focus_ring_width`]（3）。
 //! - `ring_color`：颜色。默认主题 token `ring`。也可用 `class("ring-2 ring-primary")`。
-//!   Builder 与 RSX 均可设。
+//!   均走 Element chrome，不进 `#[component]` 签名。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
@@ -592,12 +593,6 @@ pub fn Input(
     number_steppers: bool,
     input_type: Option<String>,
     step: Option<f32>,
-    text_size: Option<f32>,
-    caret_color: Option<String>,
-    selection_background: Option<String>,
-    selection_foreground: Option<String>,
-    ring_width: Option<f32>,
-    ring_color: Option<String>,
     value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
@@ -622,25 +617,6 @@ pub fn Input(
     }
     if let Some(s) = step {
         builder = builder.step(s);
-    }
-
-    if let Some(s) = text_size {
-        builder = builder.text_size(s);
-    }
-    if let Some(c) = caret_color {
-        builder = builder.caret_color(c);
-    }
-    if let Some(c) = selection_background {
-        builder = builder.selection_background(c);
-    }
-    if let Some(c) = selection_foreground {
-        builder = builder.selection_foreground(c);
-    }
-    if let Some(w) = ring_width {
-        builder = builder.ring_width(w);
-    }
-    if let Some(c) = ring_color {
-        builder = builder.ring_color(c);
     }
 
     if let Some(sig) = value {
@@ -1151,21 +1127,9 @@ pub fn apply_bound_input_invalid(el: &mut Element, invalid: bool) -> LayoutStatu
 }
 
 /// Solid-style in-place bind for `<Input disabled={sig.get()}>`.
+/// Alias of [`crate::primitives::interactive::apply_disabled`].
 pub fn apply_bound_input_disabled(el: &mut Element, disabled: bool) -> LayoutStatus {
-    let Some(sync) = el.input_paint_sync.as_mut() else {
-        return LayoutStatus::Clean;
-    };
-    if sync.disabled == disabled {
-        return LayoutStatus::Clean;
-    }
-    sync.disabled = disabled;
-    el.focusable = !disabled;
-    el.cursor = Some(if disabled {
-        crate::core::tree::CursorKind::NotAllowed.into()
-    } else {
-        crate::core::tree::CursorKind::Text.into()
-    });
-    LayoutStatus::StyleChanged
+    crate::primitives::interactive::apply_disabled(el, disabled)
 }
 
 impl crate::core::tree::IntoElementList for InputBuilder {
@@ -1350,5 +1314,41 @@ mod tests {
         let want = crate::style::parse_color("primary");
         let got = el.style.focus_ring_color.expect("ring color");
         assert!((got[0] - want[0]).abs() < 0.001);
+    }
+
+    #[test]
+    fn chrome_text_size_forwards_into_paint_sync() {
+        let el: Element = input("sz-fwd").into();
+        let el = el.text_size(20.0);
+        let sync = el.input_paint_sync.as_ref().expect("paint sync");
+        assert!(
+            (sync.text_size_px - 20.0).abs() < 0.01,
+            "Element::text_size must update inner glyphs, not only container text_style"
+        );
+        assert_eq!(el.text_style.size, Some(20.0));
+    }
+
+    #[test]
+    fn text_size_utility_class_forwards_into_paint_sync() {
+        let el: Element = input("sz-class").class("text-lg").into();
+        let sync = el.input_paint_sync.as_ref().expect("paint sync");
+        assert!(
+            (sync.text_size_px - 18.0).abs() < 0.01,
+            "class text-lg (1.125rem) must land on input_paint_sync"
+        );
+    }
+
+    #[test]
+    fn chrome_caret_color_forwards_into_paint_sync() {
+        let el: Element = input("caret-fwd").into();
+        let el = el.caret_color("#111111");
+        let want = crate::core::tree::parse_text_color("#111111");
+        let got = el
+            .input_paint_sync
+            .as_ref()
+            .expect("paint sync")
+            .caret_color
+            .expect("caret");
+        assert_eq!(got, want);
     }
 }

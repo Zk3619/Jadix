@@ -2146,7 +2146,7 @@ impl super::App {
                 && self.textarea_resize_drag.is_none()
                 && input_drag.is_none()
                 && label_drag.is_none()
-                && !super::portal_overlay::overlay_blocks_page_wheel(&pan_hit)
+                && !super::portal_overlay::overlay_blocks_wheel(&pan_hit)
             {
                 let mut chain = Vec::new();
                 super::scroll_support::collect_scroll_rest_chain_at(
@@ -2155,6 +2155,14 @@ impl super::App {
                     y,
                     [0.0, 0.0],
                     &mut chain,
+                );
+                let freeze = super::portal_overlay::active_scroll_freeze();
+                let overlay_rests =
+                    super::scroll_support::collect_hoisted_scroll_rests(&state.root_element);
+                super::scroll_support::retain_unfrozen_scroll_rests(
+                    &mut chain,
+                    freeze,
+                    &overlay_rests,
                 );
                 if let Some(rest) = chain.first() {
                     let now = std::time::Instant::now();
@@ -2611,13 +2619,28 @@ impl super::App {
             &mut target_rests,
         );
 
-        // Command overlay / context menu / dropdown: page behind the surface must not scroll.
-        // Overlay-internal ScrollAreas still receive wheel when the pointer is on the hoisted panel.
+        // Command overlay / context menu / dropdown: page behind the surface must not scroll
+        // when freeze is Page (default). Overlay ScrollAreas still receive wheel.
         let wheel_path = super::pointer_events::hit_path(&state.root_element, x, y);
-        if super::portal_overlay::overlay_blocks_page_wheel(&wheel_path) {
+        if super::portal_overlay::overlay_blocks_wheel(&wheel_path) {
             self.wheel_sticky_rest = None;
             drop(state_borrow);
             return;
+        }
+        let freeze = super::portal_overlay::active_scroll_freeze();
+        let overlay_rests =
+            super::scroll_support::collect_hoisted_scroll_rests(&state.root_element);
+        super::scroll_support::retain_unfrozen_scroll_rests(
+            &mut target_rests,
+            freeze,
+            &overlay_rests,
+        );
+        if self
+            .wheel_sticky_rest
+            .as_deref()
+            .is_some_and(|rest| freeze.applies_to_rest(overlay_rests.contains(rest)))
+        {
+            self.wheel_sticky_rest = None;
         }
 
         let cursor_stable = (x - self.wheel_sticky_cursor[0]).abs() < 2.0
@@ -2824,7 +2847,7 @@ impl super::App {
         let y = self.cursor_pos.y as f32 / scale_factor.max(1.0);
 
         let wheel_path = super::pointer_events::hit_path(&state.root_element, x, y);
-        if super::portal_overlay::overlay_blocks_page_wheel(&wheel_path) {
+        if super::portal_overlay::overlay_blocks_wheel(&wheel_path) {
             return false;
         }
 
@@ -2843,6 +2866,14 @@ impl super::App {
             target_rests.retain(|r| r != rest);
             target_rests.insert(0, rest.to_string());
         }
+        let freeze = super::portal_overlay::active_scroll_freeze();
+        let overlay_rests =
+            super::scroll_support::collect_hoisted_scroll_rests(&state.root_element);
+        super::scroll_support::retain_unfrozen_scroll_rests(
+            &mut target_rests,
+            freeze,
+            &overlay_rests,
+        );
 
         let metrics_for_rest = |rest: &str| {
             super::scroll_support::wheel_metrics_for_rest(rest, &self.scroll_metrics_cache)
@@ -3095,6 +3126,8 @@ impl super::App {
             anim_dt,
         );
         let gif_tick = crate::app::pending_images::tick_gif_textures(anim_dt);
+        let overlay_scroll_rests =
+            super::scroll_support::collect_hoisted_scroll_rests(&state.root_element);
         drop(state_borrow);
 
         if input_drag_keep {
@@ -3154,22 +3187,36 @@ impl super::App {
         // Fling inertia: integrate `scroll_velocity` into targets, then exponential friction decay.
         // Wheel must not write here (see handle_mouse_wheel); only content-pan release seeds velocity.
         // Color / slider drag freeze a window-space box — coasting the page glues the SV knob.
+        // Overlay page-lock (default) must snap *page* rests only; menu ScrollAreas keep chasing.
         const INERTIA_FRICTION_PER_SEC: f32 = 4.5;
-        let freeze_page_scroll = crate::components::color_picker::is_color_dragging()
+        let freeze = if crate::components::color_picker::is_color_dragging()
             || crate::components::slider::is_slider_dragging()
-            || super::portal_overlay::page_scroll_locked();
-        if freeze_page_scroll {
-            self.scroll_accum.clear();
-            self.scroll_velocity.clear();
-            self.smooth_active_until.clear();
-            let rests: Vec<String> = self.scroll_metrics_cache.keys().cloned().collect();
+        {
+            super::portal_overlay::ScrollFreeze::All
+        } else {
+            super::portal_overlay::active_scroll_freeze()
+        };
+        let overlay_rests = overlay_scroll_rests;
+        let rest_frozen = |rest: &str| freeze.applies_to_rest(overlay_rests.contains(rest));
+        if freeze != super::portal_overlay::ScrollFreeze::None {
+            let frozen: Vec<String> = self
+                .scroll_metrics_cache
+                .keys()
+                .filter(|rest| rest_frozen(rest.as_str()))
+                .cloned()
+                .collect();
+            for rest in &frozen {
+                self.scroll_accum.remove(rest);
+                self.scroll_velocity.remove(rest);
+                self.smooth_active_until.remove(rest);
+            }
             super::scroll_support::snap_scroll_targets_to_current_offsets(
-                rests.iter().map(String::as_str),
+                frozen.iter().map(String::as_str),
             );
         }
         let mut inertia_ops = Vec::new();
         for (rest, vel) in self.scroll_velocity.iter_mut() {
-            if freeze_page_scroll {
+            if rest_frozen(rest) {
                 continue;
             }
             if vel[0].abs() < 0.01 && vel[1].abs() < 0.01 {

@@ -110,14 +110,16 @@ impl ToggleSize {
     }
 }
 
-/// ShadCN `toggleVariants`: hover then `data-[state=on]` so pressed accent wins.
+/// Hover matches observed ShadCN ghost Button: background shifts, caption stays
+/// `foreground` (not `muted-foreground` / `accent-foreground`).
+/// `hover:` then `data-[state=on]` so pressed accent still wins.
 pub(crate) fn toggle_hover_classes(outline: bool, segmented: bool) -> &'static str {
     if segmented {
-        "hover:bg-muted hover:text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground"
+        "hover:bg-muted hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground"
     } else if outline {
-        "hover:bg-accent hover:text-accent-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
+        "hover:bg-accent hover:text-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
     } else {
-        "hover:bg-muted hover:text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
+        "hover:bg-muted hover:text-foreground data-[state=on]:bg-accent data-[state=on]:text-accent-foreground"
     }
 }
 
@@ -326,7 +328,10 @@ impl From<ToggleBuilder> for Element {
         let sync_sig = sig;
         out.reactive_sync(move |root, _layout_tree| {
             let _ = ensure_class_list(root, toggle_hover_classes(outline, false));
-            let pressed = sync_sig.peek();
+            // Uncontrolled store is owner-scoped; paint may still run for a frame after dispose.
+            let Some(pressed) = sync_sig.try_peek() else {
+                return LayoutStatus::Clean;
+            };
             let want = if pressed { "on" } else { "off" };
             if root.attrs.get("data-state").map(String::as_str) != Some(want) {
                 root.set_attr("data-state", want);
@@ -405,13 +410,14 @@ mod tests {
     }
 
     #[test]
-    fn toggle_hover_uses_shadcn_muted() {
+    fn toggle_hover_keeps_foreground() {
         let mut el: Element = toggle("t-hover").text("B").into();
         assert!(el
             .class_set
             .as_ref()
             .is_some_and(crate::style::ClassSet::has_hover_color));
         let rest_bg = el.style.bg_color;
+        let rest_fg = parse_text_color("foreground");
         let attrs = el.attrs.clone();
         let _ = crate::style::resolve_class_variants(
             &mut el,
@@ -423,19 +429,30 @@ mod tests {
         );
         assert_eq!(el.style.bg_color, parse_color("muted"));
         assert_ne!(el.style.bg_color, rest_bg);
-        let mut changed = false;
-        fn child_fg(el: &Element, acc: &mut bool) {
+        let mut caption_fg = None;
+        fn child_fg(el: &Element, acc: &mut Option<[u8; 4]>) {
             if el.text.is_some() {
-                *acc = el.text_style.color == Some(parse_text_color("muted-foreground"));
+                *acc = el.text_style.color;
             }
             for c in &el.children {
                 child_fg(c, acc);
             }
         }
-        child_fg(&el, &mut changed);
-        assert!(
-            changed,
-            "hover:text-muted-foreground must reach the caption"
+        child_fg(&el, &mut caption_fg);
+        assert_eq!(
+            caption_fg,
+            Some(rest_fg),
+            "hover matches observed ShadCN ghost Button: caption stays foreground"
+        );
+        assert_ne!(
+            caption_fg,
+            Some(parse_text_color("muted-foreground")),
+            "hover must not dim the caption to muted-foreground"
+        );
+        assert_ne!(
+            caption_fg,
+            Some(parse_text_color("accent-foreground")),
+            "hover must not shift caption to accent-foreground"
         );
     }
 
@@ -453,6 +470,21 @@ mod tests {
             },
         );
         assert_eq!(el.style.bg_color, parse_color("accent"));
+        let mut caption_fg = None;
+        fn child_fg(el: &Element, acc: &mut Option<[u8; 4]>) {
+            if el.text.is_some() {
+                *acc = el.text_style.color;
+            }
+            for c in &el.children {
+                child_fg(c, acc);
+            }
+        }
+        child_fg(&el, &mut caption_fg);
+        assert_eq!(
+            caption_fg,
+            Some(parse_text_color("accent-foreground")),
+            "pressed hover must keep data-[state=on] accent-foreground"
+        );
     }
 
     #[test]
@@ -470,7 +502,8 @@ mod tests {
         assert_eq!(el.style.bg_color, parse_color("accent"));
         assert_eq!(
             el.text_style.color,
-            Some(parse_text_color("accent-foreground"))
+            Some(parse_text_color("foreground")),
+            "outline hover keeps foreground, matching ghost Button"
         );
     }
 }

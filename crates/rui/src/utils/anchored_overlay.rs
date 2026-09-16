@@ -29,7 +29,9 @@ use crate::utils::popup::{
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
 };
 
-pub use crate::app::portal_overlay::{page_scroll_locked, set_page_scroll_locked};
+pub use crate::app::portal_overlay::{
+    page_scroll_locked, set_page_scroll_locked, set_scroll_freeze, ScrollFreeze,
+};
 pub use crate::utils::floating_kind::FloatingMotionKind;
 
 // ---------------------------------------------------------------------------
@@ -256,8 +258,10 @@ pub struct AnchoredOverlayBuilder {
     /// Toggle / open button `focus_id`. Used by Unanchored for outside-press
     /// exemption (not placement). Trigger mode prefers [`Placement::Trigger::focus_id`].
     trigger_id: String,
-    /// `None` = Menu/Modal lock the page, Popover/Tooltip do not.
+    /// `None` = Menu/Modal freeze the page, Popover/Tooltip do not.
     lock_page_scroll: Option<bool>,
+    /// Explicit freeze scope; wins over [`Self::lock_page_scroll`].
+    scroll_freeze: Option<crate::app::portal_overlay::ScrollFreeze>,
 }
 
 pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
@@ -272,6 +276,7 @@ pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
         width: None,
         trigger_id: String::new(),
         lock_page_scroll: None,
+        scroll_freeze: None,
     }
 }
 
@@ -326,11 +331,18 @@ impl AnchoredOverlayBuilder {
 
     /// Freeze page wheel / pan / fling while this overlay is open.
     ///
-    /// Default is off for popovers; menu-kind overlays lock unless this is `false`.
+    /// Default is off for popovers; menu-kind overlays freeze the **page** unless this is
+    /// `false`. Overlay ScrollAreas still move. For a different scope use [`Self::scroll_freeze`].
     /// For hover-region locks that are not tied to an open overlay, use
     /// [`crate::app::portal_overlay::set_page_scroll_locked`].
     pub fn lock_page_scroll(mut self, yes: bool) -> Self {
         self.lock_page_scroll = Some(yes);
+        self
+    }
+
+    /// Freeze wheel / pan / fling for `page`, `overlay`, or the whole program.
+    pub fn scroll_freeze(mut self, scope: crate::app::portal_overlay::ScrollFreeze) -> Self {
+        self.scroll_freeze = Some(scope);
         self
     }
 
@@ -356,6 +368,7 @@ impl AnchoredOverlayBuilder {
                 max_h: self.max_h,
                 width: self.width,
                 lock_page_scroll: self.lock_page_scroll,
+                scroll_freeze: self.scroll_freeze,
             };
             anchored_overlay_scope(self.id, self.open, move || {
                 let mut frag = Element::new();
@@ -397,9 +410,11 @@ pub struct AnchoredOverlayContentOpts {
     pub match_trigger_width: bool,
     pub max_h: Option<String>,
     pub width: Option<String>,
-    /// `None` = [`crate::app::portal_overlay::default_lock_page_scroll`] for [`Self::kind`].
-    /// Popovers default off; menus / modals default on.
+    /// `None` = [`crate::app::portal_overlay::default_scroll_freeze`] for [`Self::kind`].
+    /// Popovers default off; menus / modals default to page-only freeze.
     pub lock_page_scroll: Option<bool>,
+    /// Explicit freeze scope; wins over [`Self::lock_page_scroll`] when set.
+    pub scroll_freeze: Option<crate::app::portal_overlay::ScrollFreeze>,
 }
 
 impl Default for AnchoredOverlayContentOpts {
@@ -423,6 +438,7 @@ impl Default for AnchoredOverlayContentOpts {
             max_h: None,
             width: None,
             lock_page_scroll: None,
+            scroll_freeze: None,
         }
     }
 }
@@ -465,15 +481,27 @@ impl AnchoredOverlayContentOpts {
 
     /// Freeze page scroll while this floating layer is open.
     ///
-    /// Default is off for popovers; menu-kind overlays lock unless this is `false`.
+    /// Default is off for popovers; menu-kind overlays freeze the page unless this is
+    /// `false`. Overlay ScrollAreas still move. For overlay-only or whole-program freeze,
+    /// use [`Self::scroll_freeze`].
     /// For hover-region locks not tied to an overlay, use [`set_page_scroll_locked`].
     pub fn lock_page_scroll(mut self, yes: bool) -> Self {
         self.lock_page_scroll = Some(yes);
         self
     }
 
-    fn resolved_lock_page_scroll(&self) -> bool {
-        crate::app::portal_overlay::resolve_lock_page_scroll(self.kind, self.lock_page_scroll)
+    /// Freeze wheel / pan / fling for page, overlay, or the whole program.
+    pub fn scroll_freeze(mut self, scope: crate::app::portal_overlay::ScrollFreeze) -> Self {
+        self.scroll_freeze = Some(scope);
+        self
+    }
+
+    fn resolved_scroll_freeze(&self) -> crate::app::portal_overlay::ScrollFreeze {
+        crate::app::portal_overlay::resolve_scroll_freeze(
+            self.kind,
+            self.scroll_freeze,
+            self.lock_page_scroll,
+        )
     }
 
     fn resolve(&self, overlay_id: &str) -> Placement {
@@ -512,13 +540,41 @@ pub fn anchored_overlay_content(
     let presence = use_floating_presence(&id, opts.motion);
 
     reactive_anchor(view_id.clone(), move || {
-        assemble_panel(
+        // Do not build `body()` until the portal still wants a panel. ColorPicker
+        // hex Input binds a scoped `out`; TabsContent dispose kills it while a
+        // leftover hoist can still paint. `open.try_peek()` alone is not enough:
+        // gallery `<ColorPicker>` keeps `open` on a child owner that dies with
+        // the tab, but `assemble_panel` used to evaluate `body()` first.
+        if open.try_peek().is_none() {
+            let _ = floating_portal_phase(
+                &id,
+                open,
+                &presence,
+                opts.kind,
+                opts.mode,
+                opts.resolved_scroll_freeze(),
+            );
+            return Element::new().w(0.0).h(0.0);
+        }
+        let Some((phase, oz)) = floating_portal_phase(
+            &id,
+            open,
+            &presence,
+            opts.kind,
+            opts.mode,
+            opts.resolved_scroll_freeze(),
+        ) else {
+            return Element::new().w(0.0).h(0.0);
+        };
+        assemble_mounted_panel(
             &id,
             open,
             trigger_fid,
             &presence,
             &opts,
             isolate_reads(|| body()),
+            phase,
+            oz,
         )
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
@@ -532,13 +588,14 @@ pub fn anchored_overlay_content_from_rsx(
     anchored_overlay_content(opts, body)
 }
 
+#[cfg(test)]
 fn assemble_panel(
     id: &str,
     open: Signal<bool>,
     trigger_fid: Signal<String>,
     presence: &FloatingPresenceHandle,
     opts: &AnchoredOverlayContentOpts,
-    mut panel: Element,
+    panel: Element,
 ) -> Element {
     let Some((phase, oz)) = floating_portal_phase(
         id,
@@ -546,11 +603,23 @@ fn assemble_panel(
         presence,
         opts.kind,
         opts.mode,
-        opts.resolved_lock_page_scroll(),
+        opts.resolved_scroll_freeze(),
     ) else {
         return Element::new().w(0.0).h(0.0);
     };
+    assemble_mounted_panel(id, open, trigger_fid, presence, opts, panel, phase, oz)
+}
 
+fn assemble_mounted_panel(
+    id: &str,
+    open: Signal<bool>,
+    trigger_fid: Signal<String>,
+    presence: &FloatingPresenceHandle,
+    opts: &AnchoredOverlayContentOpts,
+    mut panel: Element,
+    phase: crate::utils::presence::PresencePhase,
+    oz: crate::app::portal_overlay::OverlayZ,
+) -> Element {
     let placement = opts.resolve(id);
     apply_placement(
         &mut panel,
@@ -600,7 +669,7 @@ pub(crate) fn anchored_overlay_phase(
         &presence,
         opts.kind,
         opts.mode,
-        opts.resolved_lock_page_scroll(),
+        opts.resolved_scroll_freeze(),
     )
     .map(|(phase, _)| phase)
 }
@@ -627,7 +696,7 @@ pub(crate) fn apply_anchored_overlay_panel_motion(
         &presence,
         opts.kind,
         opts.mode,
-        opts.resolved_lock_page_scroll(),
+        opts.resolved_scroll_freeze(),
     ) else {
         return false;
     };
@@ -1415,5 +1484,162 @@ mod tests {
             );
         }
         clear_overlay_stack();
+    }
+
+    /// TabsContent dispose kills the overlay owner. The hoisted panel must still
+    /// play Fade exit (`fade-out-0`) instead of being pruned on the same frame.
+    #[test]
+    fn tab_unmount_plays_configured_floating_exit() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::tabs::{tabs_content, tabs_scope};
+        use crate::core::reactivity::{component_root, create_effect, create_root, use_signal};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, tab) = create_root(|| {
+            let tab = use_signal("ao-tab-exit__tabs", || "a".to_string());
+            let live_e = Rc::clone(&live);
+            let tab_e = tab;
+            create_effect(move || {
+                *live_e.borrow_mut() =
+                    tabs_scope("ao-tab-exit", Some(tab_e), "a", "horizontal", false, || {
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag = frag.children(vec![
+                            tabs_content("a", || {
+                                component_root(|| {
+                                    anchored_overlay("ao-tab-a")
+                                        .open(Signal::new(true))
+                                        .placement(Placement::Unanchored)
+                                        .motion(FloatingMotionKind::Fade)
+                                        .child(|| {
+                                            Element::new()
+                                                .text("keep-me")
+                                                .w(200.0)
+                                                .h(80.0)
+                                                .bg([1.0, 1.0, 1.0, 1.0])
+                                        })
+                                })
+                            }),
+                            tabs_content("b", || component_root(|| Element::new().text("other"))),
+                        ]);
+                        frag
+                    });
+            });
+            tab
+        });
+        drain_deferred_view_remounts();
+
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        fn has_anim(el: &Element, name: &str) -> bool {
+            el.style.animations.iter().any(|a| a.name == name)
+                || el.children.iter().any(|c| has_anim(c, name))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+        }
+
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+            present_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "ao-tab-a__floating_panel").is_some(),
+                "open overlay must hoist the panel before the tab switch"
+            );
+        }
+
+        tab.set("b".into());
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            let panel = find_tid(&tree, "ao-tab-a__floating_panel")
+                .expect("tab unmount must keep the hoisted panel for the configured exit");
+            assert!(
+                has_anim(panel, "fade-out-0"),
+                "tab unmount must seed fade-out-0 instead of dropping the layer"
+            );
+        }
+
+        for _ in 0..20 {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "ao-tab-a__floating_panel").is_none(),
+                "panel must drop after the exit animation completes"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

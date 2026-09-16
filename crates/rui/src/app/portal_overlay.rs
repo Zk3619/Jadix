@@ -9,6 +9,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt;
 
 use crate::core::reactivity::Signal;
 
@@ -61,8 +62,9 @@ struct OverlayLayer {
     keep_alive: Option<Signal<bool>>,
     #[allow(dead_code)]
     kind: OverlayKind,
-    /// When true, wheel / pan / fling must not move page content behind this surface.
-    lock_page_scroll: bool,
+    /// Wheel / pan / fling freeze while this layer is open. Default for Menu/Modal is
+    /// [`ScrollFreeze::Page`] (page locked, overlay ScrollAreas still move).
+    scroll_freeze: ScrollFreeze,
 }
 
 fn layer_live(s: Signal<bool>) -> bool {
@@ -76,8 +78,105 @@ fn layer_is_active(l: &OverlayLayer) -> bool {
 thread_local! {
     static OVERLAY_STACKS: RefCell<HashMap<WindowScope, Vec<OverlayLayer>>> =
         RefCell::new(HashMap::new());
-    /// App-level page-scroll lock ([`set_page_scroll_locked`]), independent of the overlay stack.
-    static CUSTOM_PAGE_SCROLL_LOCK: Cell<bool> = const { Cell::new(false) };
+    /// App-level scroll freeze ([`set_scroll_freeze`] / [`set_page_scroll_locked`]),
+    /// independent of the overlay stack.
+    static CUSTOM_SCROLL_FREEZE: Cell<ScrollFreeze> = const { Cell::new(ScrollFreeze::None) };
+}
+
+/// Where wheel / pan / fling is frozen while a surface is open.
+///
+/// Menu / Modal default to [`Self::Page`]: the page behind the surface does not
+/// move, but ScrollAreas inside the hoisted overlay still receive wheel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ScrollFreeze {
+    /// Do not freeze.
+    #[default]
+    None,
+    /// Only page (non-`rui_hoisted_portal`) scroll.
+    Page,
+    /// Only scroll inside hoisted overlay / floating panels.
+    Overlay,
+    /// Page and overlays (whole program).
+    All,
+}
+
+impl ScrollFreeze {
+    /// `lock_page_scroll(true)` means page-only freeze; `false` means none.
+    pub fn from_lock_page_scroll(yes: bool) -> Self {
+        if yes {
+            Self::Page
+        } else {
+            Self::None
+        }
+    }
+
+    pub fn freezes_page(self) -> bool {
+        matches!(self, Self::Page | Self::All)
+    }
+
+    pub fn freezes_overlay(self) -> bool {
+        matches!(self, Self::Overlay | Self::All)
+    }
+
+    /// Union of two scopes (`Page` + `Overlay` → `All`).
+    pub fn combine(self, other: Self) -> Self {
+        use ScrollFreeze::*;
+        match (self, other) {
+            (None, x) | (x, None) => x,
+            (All, _) | (_, All) => All,
+            (Page, Overlay) | (Overlay, Page) => All,
+            (Page, Page) => Page,
+            (Overlay, Overlay) => Overlay,
+        }
+    }
+
+    /// `is_overlay_rest` is true when the scroll viewport lives under a hoisted portal.
+    pub fn applies_to_rest(self, is_overlay_rest: bool) -> bool {
+        match self {
+            Self::None => false,
+            Self::Page => !is_overlay_rest,
+            Self::Overlay => is_overlay_rest,
+            Self::All => true,
+        }
+    }
+
+    /// Whether a wheel / pan over `on_overlay` must be dropped.
+    pub fn blocks_wheel(self, on_overlay: bool) -> bool {
+        if on_overlay {
+            self.freezes_overlay()
+        } else {
+            self.freezes_page()
+        }
+    }
+}
+
+impl From<bool> for ScrollFreeze {
+    fn from(lock_page: bool) -> Self {
+        Self::from_lock_page_scroll(lock_page)
+    }
+}
+
+impl fmt::Display for ScrollFreeze {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Page => "page",
+            Self::Overlay => "overlay",
+            Self::All => "all",
+        })
+    }
+}
+
+/// Parse RSX / string freeze scope (`page` / `overlay` / `all` / `none`).
+pub fn parse_scroll_freeze(s: &str) -> ScrollFreeze {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "page" | "page-only" | "page_only" | "true" | "1" | "yes" => ScrollFreeze::Page,
+        "overlay" | "floating" | "float" => ScrollFreeze::Overlay,
+        "all" | "app" | "program" | "full" | "both" => ScrollFreeze::All,
+        "none" | "off" | "false" | "0" | "no" => ScrollFreeze::None,
+        other if other.is_empty() => ScrollFreeze::None,
+        _ => ScrollFreeze::Page,
+    }
 }
 
 /// Menu / Modal lock the page by default; Popover / Tooltip do not.
@@ -85,16 +184,36 @@ pub fn default_lock_page_scroll(kind: OverlayKind) -> bool {
     matches!(kind, OverlayKind::Menu | OverlayKind::Modal)
 }
 
+/// Menu / Modal freeze **page** scroll by default; Popover / Tooltip do not freeze.
+pub fn default_scroll_freeze(kind: OverlayKind) -> ScrollFreeze {
+    if default_lock_page_scroll(kind) {
+        ScrollFreeze::Page
+    } else {
+        ScrollFreeze::None
+    }
+}
+
 /// Resolve an explicit overlay flag, falling back to [`default_lock_page_scroll`].
 pub fn resolve_lock_page_scroll(kind: OverlayKind, explicit: Option<bool>) -> bool {
     explicit.unwrap_or_else(|| default_lock_page_scroll(kind))
 }
 
+/// `scroll_freeze` wins over `lock_page_scroll`; either falls back to [`default_scroll_freeze`].
+pub fn resolve_scroll_freeze(
+    kind: OverlayKind,
+    freeze: Option<ScrollFreeze>,
+    lock_page_scroll: Option<bool>,
+) -> ScrollFreeze {
+    freeze
+        .or_else(|| lock_page_scroll.map(ScrollFreeze::from_lock_page_scroll))
+        .unwrap_or_else(|| default_scroll_freeze(kind))
+}
+
 /// Lock or unlock page scroll from app code (for example while the pointer hovers a region).
 ///
 /// Public entry: [`crate::set_page_scroll_locked`] (`use rui::prelude::*;`).
-/// Combines with overlay `lock_page_scroll`: any lock wins. Wheel over a hoisted overlay
-/// panel still reaches that overlay's own ScrollArea.
+/// Combines with overlay freeze: any lock wins. Default overlay scope is page-only, so
+/// wheel over a hoisted overlay panel still reaches that overlay's own ScrollArea.
 ///
 /// ```ignore
 /// use rui::prelude::*;
@@ -104,33 +223,42 @@ pub fn resolve_lock_page_scroll(kind: OverlayKind, explicit: Option<bool>) -> bo
 ///     .lock_page_scroll_on_hover();
 ///
 /// // 任意自定义条件
-/// set_page_scroll_locked(true);  // 冻
+/// set_page_scroll_locked(true);  // 冻页面
 /// set_page_scroll_locked(false); // 解
+/// set_scroll_freeze(ScrollFreeze::All); // 页面 + 浮层
 /// ```
 pub fn set_page_scroll_locked(locked: bool) {
-    CUSTOM_PAGE_SCROLL_LOCK.set(locked);
+    CUSTOM_SCROLL_FREEZE.set(ScrollFreeze::from_lock_page_scroll(locked));
+}
+
+/// Set the app-level wheel freeze scope (page / overlay / all / none).
+pub fn set_scroll_freeze(scope: ScrollFreeze) {
+    CUSTOM_SCROLL_FREEZE.set(scope);
+}
+
+/// Combined freeze from [`set_scroll_freeze`] and open overlay layers.
+pub fn active_scroll_freeze() -> ScrollFreeze {
+    CUSTOM_SCROLL_FREEZE.get().combine(stacked_scroll_freeze())
 }
 
 /// True when page scroll is locked (custom setter or an open overlay that opted in).
 pub fn page_scroll_locked() -> bool {
-    if CUSTOM_PAGE_SCROLL_LOCK.get() {
-        return true;
-    }
-    stacked_page_scroll_locked()
+    active_scroll_freeze().freezes_page()
 }
 
-fn stacked_page_scroll_locked() -> bool {
-    let (locked, to_close) = with_stack_mut(|stack| {
+fn stacked_scroll_freeze() -> ScrollFreeze {
+    let (freeze, to_close) = with_stack_mut(|stack| {
         let to_close = prune_closed(stack);
-        let locked = stack
+        let freeze = stack
             .iter()
-            .any(|l| layer_live(l.open) && l.lock_page_scroll);
-        (locked, to_close)
+            .filter(|l| layer_live(l.open))
+            .fold(ScrollFreeze::None, |acc, l| acc.combine(l.scroll_freeze));
+        (freeze, to_close)
     });
     for other in to_close {
         other.try_set(false);
     }
-    locked
+    freeze
 }
 
 fn with_stack_mut<R>(f: impl FnOnce(&mut Vec<OverlayLayer>) -> R) -> R {
@@ -161,33 +289,49 @@ fn z_for_index(i: usize) -> OverlayZ {
     }
 }
 
-/// Drop the first inactive layer and everything stacked above it (nested
-/// Select inside a closed DatePicker / Dialog). Return still-open signals so the
-/// caller can `try_set(false)` after releasing the stack borrow.
+/// Nested Menu / Tooltip (Select inside DatePicker, submenu, hover tip) close
+/// with the parent. A later Popover / Modal is a peer successor — exclusive
+/// keep-alive left the parent on the stack only so its exit can play.
+fn exclusive_child_closes_with_parent(parent_id: &str, child: &OverlayLayer) -> bool {
+    child.id.starts_with(&format!("{parent_id}__sub"))
+        || matches!(child.kind, OverlayKind::Menu | OverlayKind::Tooltip)
+}
+
+/// Drop `pos` and nested children stacked immediately above it. Peer Popovers
+/// above stay so finishing an exclusive exit cannot close the live successor.
+fn drain_layer_and_nested_children(
+    stack: &mut Vec<OverlayLayer>,
+    pos: usize,
+    to_close: &mut Vec<Signal<bool>>,
+) {
+    let parent_id = stack[pos].id.clone();
+    let parent = stack.remove(pos);
+    if layer_live(parent.open) {
+        to_close.push(parent.open);
+    }
+    while pos < stack.len() && exclusive_child_closes_with_parent(&parent_id, &stack[pos]) {
+        let child = stack.remove(pos);
+        if layer_live(child.open) {
+            to_close.push(child.open);
+        }
+    }
+}
+
+/// Drop inactive layers and nested children above them. Return still-open
+/// signals so the caller can `try_set(false)` after releasing the stack borrow.
 ///
 /// A layer with `open=false` but `keep_alive=true` (exit presence) stays active.
 fn prune_closed(stack: &mut Vec<OverlayLayer>) -> Vec<Signal<bool>> {
     let mut to_close = Vec::new();
-    if let Some(pos) = stack.iter().position(|l| !layer_is_active(l)) {
-        for l in stack.drain(pos..) {
-            if layer_live(l.open) {
-                to_close.push(l.open);
-            }
-            if let Some(k) = l.keep_alive {
-                if layer_live(k) {
-                    to_close.push(k);
-                }
-            }
+    let mut i = 0;
+    while i < stack.len() {
+        if layer_is_active(&stack[i]) {
+            i += 1;
+            continue;
         }
+        drain_layer_and_nested_children(stack, i, &mut to_close);
     }
     to_close
-}
-
-fn push_dismiss_signals(layer: &OverlayLayer, out: &mut Vec<Signal<bool>>) {
-    out.push(layer.open);
-    if let Some(k) = layer.keep_alive {
-        out.push(k);
-    }
 }
 
 /// Dropdown / popover style surfaces: only one should be open at a time.
@@ -235,7 +379,7 @@ pub fn portal_sync(
     kind: OverlayKind,
     mode: OverlayMode,
 ) -> Option<OverlayZ> {
-    portal_sync_inner(id, open, None, kind, mode, default_lock_page_scroll(kind))
+    portal_sync_inner(id, open, None, kind, mode, default_scroll_freeze(kind))
 }
 
 /// [`portal_sync`] with presence keep-alive.
@@ -255,20 +399,20 @@ pub fn portal_sync_presence(
         Some(mounted),
         kind,
         mode,
-        default_lock_page_scroll(kind),
+        default_scroll_freeze(kind),
     )
 }
 
-/// [`portal_sync_presence`] with an explicit page-scroll lock (floating overlay property).
+/// [`portal_sync_presence`] with an explicit freeze scope (floating overlay property).
 pub(crate) fn portal_sync_presence_lock(
     id: impl Into<String>,
     open: Signal<bool>,
     mounted: Signal<bool>,
     kind: OverlayKind,
     mode: OverlayMode,
-    lock_page_scroll: bool,
+    freeze: impl Into<ScrollFreeze>,
 ) -> Option<OverlayZ> {
-    portal_sync_inner(id, open, Some(mounted), kind, mode, lock_page_scroll)
+    portal_sync_inner(id, open, Some(mounted), kind, mode, freeze.into())
 }
 
 fn portal_sync_inner(
@@ -277,7 +421,7 @@ fn portal_sync_inner(
     keep_alive: Option<Signal<bool>>,
     kind: OverlayKind,
     mode: OverlayMode,
-    lock_page_scroll: bool,
+    scroll_freeze: ScrollFreeze,
 ) -> Option<OverlayZ> {
     let id = id.into();
     let active = layer_live(open) || keep_alive.is_some_and(layer_live);
@@ -304,7 +448,7 @@ fn portal_sync_inner(
                         stack[pos].open = open;
                         stack[pos].keep_alive = keep_alive;
                         stack[pos].kind = kind;
-                        stack[pos].lock_page_scroll = lock_page_scroll;
+                        stack[pos].scroll_freeze = scroll_freeze;
                         (Some(z_for_index(pos)), to_close)
                     } else {
                         // Capture before retain: peer Menu already open (menubar switch).
@@ -322,9 +466,10 @@ fn portal_sync_inner(
                                 return true;
                             }
                             if should_dismiss_for_incoming(l.kind, kind) {
-                                // Peer replace / exclusive: kill open + keep_alive (skip exit).
-                                push_dismiss_signals(l, &mut to_close);
-                                false
+                                // Peer replace / exclusive: close logical open and keep
+                                // the layer only while presence is still mounted.
+                                to_close.push(l.open);
+                                l.keep_alive.is_some_and(layer_live)
                             } else {
                                 true
                             }
@@ -349,25 +494,26 @@ fn portal_sync_inner(
                             open,
                             keep_alive,
                             kind,
-                            lock_page_scroll,
+                            scroll_freeze,
                         });
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
                 } else {
-                    // Closing: drop this id and anything stacked above it (nested Select
-                    // inside DatePicker). Closing a Modal also clears leftover exclusives.
+                    // Closing: drop this id and nested Menu/Tooltip above it (Select
+                    // inside DatePicker). A peer Popover above is a live successor
+                    // that opened while we were exiting — do not take it with us.
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
-                        for l in stack.drain(pos..) {
-                            if l.id != id {
-                                push_dismiss_signals(&l, &mut to_close);
-                            }
+                        if layer_live(stack[pos].open) {
+                            // Successor rebound this id with a live `open`.
+                        } else {
+                            drain_layer_and_nested_children(stack, pos, &mut to_close);
                         }
                     }
                     if matches!(kind, OverlayKind::Modal) {
                         stack.retain(|l| {
                             if is_exclusive_surface(l.kind) {
-                                push_dismiss_signals(l, &mut to_close);
-                                false
+                                to_close.push(l.open);
+                                l.keep_alive.is_some_and(layer_live)
                             } else {
                                 true
                             }
@@ -434,7 +580,12 @@ pub fn stacked_menu_or_modal_open() -> bool {
 
 /// True when wheel over the page (not a hoisted overlay) must be ignored.
 pub fn overlay_blocks_page_wheel(path: &[super::pointer_events::HitPathEntry]) -> bool {
-    page_scroll_locked() && !path.iter().any(|e| e.hoisted_portal)
+    active_scroll_freeze().freezes_page() && !hit_path_on_hoisted_portal(path)
+}
+
+/// True when this wheel / pan must be dropped for the active [`ScrollFreeze`] scope.
+pub fn overlay_blocks_wheel(path: &[super::pointer_events::HitPathEntry]) -> bool {
+    active_scroll_freeze().blocks_wheel(hit_path_on_hoisted_portal(path))
 }
 
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
@@ -941,6 +1092,96 @@ mod tests {
     }
 
     #[test]
+    fn menu_default_freeze_is_page_not_all() {
+        clear();
+        let open = Signal::new(true);
+        assert!(portal_sync("ctx", open, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(active_scroll_freeze(), ScrollFreeze::Page);
+        let on_menu = [dummy_hit(Some("panel:ctx"), Some("ctx"), true)];
+        assert!(
+            !overlay_blocks_wheel(&on_menu),
+            "default page freeze must still allow overlay wheel"
+        );
+        let page = [dummy_hit(None, None, false)];
+        assert!(overlay_blocks_wheel(&page));
+        assert!(ScrollFreeze::Page.applies_to_rest(false));
+        assert!(
+            !ScrollFreeze::Page.applies_to_rest(true),
+            "page freeze must not snap overlay scroll rests"
+        );
+    }
+
+    #[test]
+    fn scroll_freeze_overlay_blocks_only_overlay_wheel() {
+        clear();
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        assert!(portal_sync_presence_lock(
+            "ov-only",
+            open,
+            mounted,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+            ScrollFreeze::Overlay,
+        )
+        .is_some());
+        let page = [dummy_hit(None, None, false)];
+        let on_overlay = [dummy_hit(Some("panel:ov-only"), Some("ov-only"), true)];
+        assert!(!overlay_blocks_wheel(&page));
+        assert!(overlay_blocks_wheel(&on_overlay));
+        assert!(!page_scroll_locked());
+    }
+
+    #[test]
+    fn scroll_freeze_all_blocks_page_and_overlay_wheel() {
+        clear();
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        assert!(portal_sync_presence_lock(
+            "all",
+            open,
+            mounted,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            ScrollFreeze::All,
+        )
+        .is_some());
+        let page = [dummy_hit(None, None, false)];
+        let on_overlay = [dummy_hit(Some("panel:all"), Some("all"), true)];
+        assert!(overlay_blocks_wheel(&page));
+        assert!(overlay_blocks_wheel(&on_overlay));
+        assert!(ScrollFreeze::All.applies_to_rest(true));
+        assert!(ScrollFreeze::All.applies_to_rest(false));
+    }
+
+    #[test]
+    fn parse_scroll_freeze_aliases() {
+        assert_eq!(parse_scroll_freeze("page"), ScrollFreeze::Page);
+        assert_eq!(parse_scroll_freeze("overlay"), ScrollFreeze::Overlay);
+        assert_eq!(parse_scroll_freeze("all"), ScrollFreeze::All);
+        assert_eq!(parse_scroll_freeze("none"), ScrollFreeze::None);
+        assert_eq!(parse_scroll_freeze("true"), ScrollFreeze::Page);
+        assert_eq!(parse_scroll_freeze("false"), ScrollFreeze::None);
+        assert_eq!(
+            ScrollFreeze::Page.combine(ScrollFreeze::Overlay),
+            ScrollFreeze::All
+        );
+    }
+
+    #[test]
+    fn set_scroll_freeze_all_blocks_overlay_wheel() {
+        clear();
+        let page = [dummy_hit(None, None, false)];
+        let on_overlay = [dummy_hit(Some("panel:x"), Some("x"), true)];
+        set_scroll_freeze(ScrollFreeze::All);
+        assert!(overlay_blocks_wheel(&page));
+        assert!(overlay_blocks_wheel(&on_overlay));
+        set_scroll_freeze(ScrollFreeze::None);
+        assert!(!overlay_blocks_wheel(&page));
+        assert!(!overlay_blocks_wheel(&on_overlay));
+    }
+
+    #[test]
     fn dismiss_viewport_change_closes_exclusive_keeps_modal() {
         clear();
         let dialog = Signal::new(true);
@@ -1153,6 +1394,89 @@ mod tests {
         assert!(portal_sync("pop", pop, OverlayKind::Popover, OverlayMode::Stacked).is_none());
         assert!(!menu.peek(), "nested Select must close with DatePicker");
         assert_eq!(depth(), 0);
+    }
+
+    /// Exclusive keep-alive leaves the previous Popover on the stack so it can
+    /// play exit. Finishing that exit must not drain a live successor Popover
+    /// (gallery: first ColorPicker click while another overlay is still exiting).
+    #[test]
+    fn finishing_exclusive_exit_must_not_close_successor_popover() {
+        clear();
+        let leftover_open = Signal::new(false);
+        let leftover_keep = Signal::new(true);
+        assert!(portal_sync_presence(
+            "old",
+            leftover_open,
+            leftover_keep,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_some());
+
+        let fresh_open = Signal::new(true);
+        let fresh_keep = Signal::new(true);
+        assert!(portal_sync_presence(
+            "new",
+            fresh_open,
+            fresh_keep,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert!(
+            fresh_open.peek(),
+            "opening a Popover must not clear its own open"
+        );
+
+        leftover_keep.set(false);
+        assert!(portal_sync_presence(
+            "old",
+            leftover_open,
+            leftover_keep,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_none());
+        assert!(
+            fresh_open.peek(),
+            "finishing the previous Popover's exit must not close the live successor"
+        );
+        assert_eq!(depth(), 1);
+        clear();
+    }
+
+    #[test]
+    fn finishing_exclusive_exit_still_closes_nested_menu() {
+        clear();
+        let pop_open = Signal::new(false);
+        let pop_keep = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync_presence(
+            "dp",
+            pop_open,
+            pop_keep,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(depth(), 2);
+
+        pop_keep.set(false);
+        assert!(portal_sync_presence(
+            "dp",
+            pop_open,
+            pop_keep,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_none());
+        assert!(
+            !menu.peek(),
+            "nested Select must still close with DatePicker"
+        );
+        assert_eq!(depth(), 0);
+        clear();
     }
 
     fn dummy_hit(

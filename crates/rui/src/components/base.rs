@@ -19,16 +19,21 @@
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 //!
 //! ## 属性分层（HTML/CSS）
-//! 通用样式不要写进各 `#[component]` 参数。三层：
+//! 真源：仓库根 [`docs/COMPONENT_LIBRARY.md`](../../../../docs/COMPONENT_LIBRARY.md) §1。
+//! 通用样式写在元素上，不进各 `#[component]` 参数。三层：
 //!
 //! 1. **框架** — `Element` / `Style` / `TextStyle`（`w`、`color`、`leading`、`overflow`、`class`）。
 //! 2. **Base / 根** — RSX 走宏 `is_base` + `chrome_binds`；Builder 走 [`SlotChrome`] /
 //!    [`BaseComponentBuilder`]。`#[component]` 已注入 `base`。
 //! 3. **组件** — 只声明领域 prop（`variant`、size-token、`checked`、`value`、slots）。
+//!    `disabled` 走 [`crate::primitives::interactive::apply_disabled`]。
+//!    领域测量与 CSS 短名撞车时改名（Chart `plot_h`、Table `col_w`、Sidebar `rail_w`），
+//!    见规范 §1.1：领域名进 `own_prop`，CSS 短名留给根 chrome。
 //!
 //! 新槽位对照 [`crate::components::card::Card`]：签名只有 `children`（必要时 `id`）。
-//! 不要再加 `class` / `style` / `w` / `color` / `leading`。内部消费继承值，不要 stamp 一份。
+//! 根上的 `class` / `style` / `w` / `color` / `leading` 走 chrome。叶子消费继承值。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -101,6 +106,34 @@ impl SlotChrome {
     pub fn is_empty(&self) -> bool {
         self.class.trim().is_empty() && self.style.is_none()
     }
+
+    /// If `class` is still empty, copy `fallback` (Select / Combobox ctx `content_class`).
+    pub fn fallback_class(mut self, fallback: impl AsRef<str>) -> Self {
+        if self.class.trim().is_empty() {
+            self.class = fallback.as_ref().to_string();
+        }
+        self
+    }
+}
+
+thread_local! {
+    static PENDING_ITEM_CHROME: RefCell<SlotChrome> = const {
+        RefCell::new(SlotChrome {
+            class: String::new(),
+            style: None,
+        })
+    };
+}
+
+/// Stash chrome for collect-then-paint items ([`crate::components::StepperItem`] /
+/// [`crate::components::TimelineItem`]). The returned marker is discarded by
+/// `*_scope`, so RSX `chrome_binds` never reach the painted row.
+pub fn push_pending_item_chrome(chrome: SlotChrome) {
+    PENDING_ITEM_CHROME.with(|c| *c.borrow_mut() = chrome);
+}
+
+pub fn take_pending_item_chrome() -> SlotChrome {
+    PENDING_ITEM_CHROME.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 /// Cover `data-slot` then match stylesheets. Call **after** AND hooks (`data-variant`, …)
@@ -409,6 +442,28 @@ macro_rules! impl_slot_map_methods {
     };
 }
 
+/// `.content_class()` / `.content_style()` aliases that write [`SlotMap`] slot `$slot`.
+#[macro_export]
+macro_rules! impl_overlay_content_slot {
+    ($slot:expr) => {
+        /// Overlay `class` on the floating panel. Same as `.slot($slot, |c| c.class(..))`.
+        pub fn content_class(self, classes: impl Into<String>) -> Self {
+            self.slot($slot, |c| c.class(classes))
+        }
+
+        /// Overlay style on the floating panel. Same as `.slot($slot, |c| c.style(..))`.
+        pub fn content_style(
+            self,
+            f: impl Fn(
+                    $crate::components::base::BaseComponentBuilder,
+                ) -> $crate::components::base::BaseComponentBuilder
+                + 'static,
+        ) -> Self {
+            self.slot($slot, |c| c.style(f))
+        }
+    };
+}
+
 /// Chrome-only named-slot Builder (`*_with(|p| p.class(..).style(..))`).
 /// Prefer [`SlotMap`] / `.slot()` on closed roots; keep this for real Tier 1 part builders.
 #[macro_export]
@@ -453,12 +508,16 @@ macro_rules! impl_slot_chrome_methods {
     };
 }
 
-/// `.class()` / `.style()` for overlay `*ContentOpts` that store `class: Option<String>` + `style: Option<SlotStyleFn>`.
+/// `.class()` / `.style()` for opts that store chrome as `$field: SlotChrome`
+/// (overlay `panel`, Progress track/circle `chrome`).
 #[macro_export]
 macro_rules! impl_content_opts_chrome {
     () => {
+        $crate::impl_content_opts_chrome!(panel);
+    };
+    ($field:ident) => {
         pub fn class(mut self, classes: impl Into<String>) -> Self {
-            self.class = Some(classes.into());
+            self.$field.class = classes.into();
             self
         }
 
@@ -470,7 +529,7 @@ macro_rules! impl_content_opts_chrome {
                 ) -> $crate::components::base::BaseComponentBuilder
                 + 'static,
         ) -> Self {
-            self.style = Some(::std::rc::Rc::new(f));
+            self.$field.style = Some(::std::rc::Rc::new(f));
             self
         }
     };
@@ -841,6 +900,19 @@ impl BaseComponentBuilder {
     /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
     pub fn ring_color(mut self, color: impl IntoPaintColor) -> Self {
         self.el = self.el.ring_color(color);
+        self
+    }
+    /// CSS `caret-color`. Forwards into Input/Textarea paint sync.
+    pub fn caret_color(mut self, color: impl IntoTextColor) -> Self {
+        self.el = self.el.caret_color(color);
+        self
+    }
+    pub fn selection_background(mut self, color: impl IntoTextColor) -> Self {
+        self.el = self.el.selection_background(color);
+        self
+    }
+    pub fn selection_foreground(mut self, color: impl IntoTextColor) -> Self {
+        self.el = self.el.selection_foreground(color);
         self
     }
 

@@ -254,24 +254,21 @@ pub fn TooltipTrigger(
 pub struct TooltipContentOpts {
     /// `top` / `bottom` / `top-start` / …（默认 `bottom`，贴触发器下方）。
     pub side: String,
-    /// Extra class (utility).
-    pub class: Option<String>,
-    /// Layout/paint on the bubble (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for TooltipContentOpts {
     fn default() -> Self {
         Self {
             side: "bottom".into(),
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
 
 impl TooltipContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// solid-ui / shadcn `TooltipContent`：Portal + floating 面板。
@@ -279,7 +276,7 @@ impl TooltipContentOpts {
 pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tooltip("TooltipContent");
     let content_hovered = ctx.content_hovered;
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let placement = tooltip_side_to_placement(&opts.side);
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(

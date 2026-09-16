@@ -49,7 +49,6 @@ use crate::components::base::{data_slot, ensure_data_slot, packed_children, Slot
 use crate::core::tree::Element;
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
-use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::take_packed;
 
@@ -58,7 +57,7 @@ const SLOT_NAVBAR: &str = "navbar";
 const SLOT_BRAND: &str = "navbar-brand";
 const SLOT_CENTER: &str = "navbar-center";
 const SLOT_ACTIONS: &str = "navbar-actions";
-fn paint_navbar_root(mut bar: Element, id: &str, class: Option<String>) -> Element {
+fn paint_navbar_root(mut bar: Element, id: &str) -> Element {
     bar = bar
         .bg(tokens::background())
         .border_style("solid")
@@ -67,9 +66,6 @@ fn paint_navbar_root(mut bar: Element, id: &str, class: Option<String>) -> Eleme
         .overflow_x("auto")
         .overflow_y("hidden");
     bar.set_attr(ATTR_SLOT, SLOT_NAVBAR);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        bar = with_class_list(bar, &c);
-    }
     // Display shell: never write Some("") (I-1).
     if !id.trim().is_empty() {
         bar.template_id = Some(id.to_string());
@@ -80,7 +76,7 @@ fn paint_navbar_root(mut bar: Element, id: &str, class: Option<String>) -> Eleme
 /// 顶栏根容器：水平排列 Brand / Center / Actions（或任意子节点）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn Navbar(id: String, class: Option<String>, children: Option<Element>) -> Element {
+pub fn Navbar(id: String, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut bar = hstack()
         .w("100%")
@@ -92,13 +88,13 @@ pub fn Navbar(id: String, class: Option<String>, children: Option<Element>) -> E
     for k in kids {
         bar = bar.child(k);
     }
-    paint_navbar_root(bar.into(), &id, class)
+    paint_navbar_root(bar.into(), &id)
 }
 
 /// 左侧品牌区（logo / 产品名）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavbarBrand(class: Option<String>, children: Option<Element>) -> Element {
+pub fn NavbarBrand(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
         .gap("0.75rem")
@@ -110,9 +106,6 @@ pub fn NavbarBrand(class: Option<String>, children: Option<Element>) -> Element 
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_BRAND);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -124,7 +117,6 @@ pub fn NavbarBrand(class: Option<String>, children: Option<Element>) -> Element 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn NavbarCenter(
-    class: Option<String>,
     /// 主轴对齐：`start`（默认）/ `center` / `end` / `between` …
     justify: Option<String>,
     children: Option<Element>,
@@ -150,16 +142,13 @@ pub fn NavbarCenter(
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_CENTER);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 右侧动作区（按钮 / 头像等）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn NavbarActions(class: Option<String>, children: Option<Element>) -> Element {
+pub fn NavbarActions(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
         .gap("0.5rem")
@@ -171,9 +160,6 @@ pub fn NavbarActions(class: Option<String>, children: Option<Element>) -> Elemen
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_ACTIONS);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -211,7 +197,6 @@ impl crate::core::tree::IntoElementList for NavbarBrandBuilder {
 impl From<NavbarBrandBuilder> for Element {
     fn from(builder: NavbarBrandBuilder) -> Self {
         let el = NavbarBrand(NavbarBrandProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
         });
@@ -256,7 +241,6 @@ impl crate::core::tree::IntoElementList for NavbarCenterBuilder {
 impl From<NavbarCenterBuilder> for Element {
     fn from(builder: NavbarCenterBuilder) -> Self {
         let el = NavbarCenter(NavbarCenterProps {
-            class: None,
             justify: builder.justify,
             children: packed_children(builder.children),
             base: None,
@@ -295,7 +279,6 @@ impl crate::core::tree::IntoElementList for NavbarActionsBuilder {
 impl From<NavbarActionsBuilder> for Element {
     fn from(builder: NavbarActionsBuilder) -> Self {
         let el = NavbarActions(NavbarActionsProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
         });
@@ -464,7 +447,6 @@ impl From<NavbarBuilder> for Element {
         kids.extend(children);
         let el = Navbar(NavbarProps {
             id,
-            class: None,
             children: packed_children(kids),
             base: None,
         });
@@ -509,24 +491,20 @@ mod tests {
     fn navbar_rsx_parts_expose_slots() {
         let el = Navbar(NavbarProps {
             id: String::new(),
-            class: None,
             children: Some({
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
                 frag.children(vec![
                     NavbarBrand(NavbarBrandProps {
-                        class: None,
                         children: Some(Element::new().text("Brand")),
                         base: None,
                     }),
                     NavbarCenter(NavbarCenterProps {
-                        class: None,
                         justify: None,
                         children: Some(Element::new().text("Center")),
                         base: None,
                     }),
                     NavbarActions(NavbarActionsProps {
-                        class: None,
                         children: Some(Element::new().text("Go")),
                         base: None,
                     }),
@@ -587,7 +565,6 @@ mod tests {
     #[test]
     fn navbar_rsx_center_defaults_to_start() {
         let el = NavbarCenter(NavbarCenterProps {
-            class: None,
             justify: None,
             children: Some(Element::new().text("C")),
             base: None,

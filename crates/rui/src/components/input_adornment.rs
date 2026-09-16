@@ -51,7 +51,7 @@ use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_color, focus_ring_destructive_color, parse_color,
-    parse_text_color, with_class_list,
+    parse_text_color,
 };
 use crate::tokens;
 use crate::utils::take_packed;
@@ -194,7 +194,7 @@ fn wire_addon_focus(mut addon: Element, control_fid: Option<&str>) -> Element {
     addon
 }
 
-fn build_input_adornment(id: &str, class: Option<String>, children: Vec<Element>) -> Element {
+fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
     let mut block_start = Vec::new();
     let mut inline_start = Vec::new();
     let mut controls = Vec::new();
@@ -322,9 +322,6 @@ fn build_input_adornment(id: &str, class: Option<String>, children: Vec<Element>
         shell.set_attr("rui_ia_control_fid", fid.as_str());
     }
     shell = shell.accesskit_role("group");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        shell = with_class_list(shell, &c);
-    }
     if !id.trim().is_empty() {
         shell.template_id = Some(id.to_string());
     }
@@ -410,19 +407,15 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
 /// 根：共享边框 / 焦点环 · 按 Addon `align` 重排子项。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputAdornment(id: String, class: Option<String>, children: Option<Element>) -> Element {
+pub fn InputAdornment(id: String, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    build_input_adornment(&id, class, kids)
+    build_input_adornment(&id, kids)
 }
 
 /// 前后缀槽。`align`：`inline-start`（默认）/ `inline-end` / `block-start` / `block-end`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputAdornmentAddon(
-    align: Option<String>,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn InputAdornmentAddon(align: Option<String>, children: Option<Element>) -> Element {
     let align = align
         .as_deref()
         .map(InputAdornmentAlign::parse)
@@ -466,16 +459,13 @@ pub fn InputAdornmentAddon(
     el.set_attr(ATTR_SLOT, SLOT_ADDON);
     el.set_attr(ATTR_ALIGN, align.as_str());
     el = el.accesskit_role("group").cursor_text();
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
 /// 组内静默文案 / 图标容器（muted）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputAdornmentText(class: Option<String>, children: Option<Element>) -> Element {
+pub fn InputAdornmentText(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack().items_center().gap("0.25rem").flex_shrink(0.0);
 
@@ -508,9 +498,6 @@ pub fn InputAdornmentText(class: Option<String>, children: Option<Element>) -> E
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_TEXT);
     el = el.pointer_events("none");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -664,7 +651,6 @@ impl From<InputAdornmentAddonBuilder> for Element {
     fn from(builder: InputAdornmentAddonBuilder) -> Self {
         let el = InputAdornmentAddon(InputAdornmentAddonProps {
             align: Some(builder.align.as_str().to_string()),
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -708,7 +694,6 @@ impl crate::core::tree::IntoElementList for InputAdornmentTextBuilder {
 impl From<InputAdornmentTextBuilder> for Element {
     fn from(builder: InputAdornmentTextBuilder) -> Self {
         let el = InputAdornmentText(InputAdornmentTextProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -796,7 +781,7 @@ impl InputAdornmentBuilder {
 
 impl From<InputAdornmentBuilder> for Element {
     fn from(b: InputAdornmentBuilder) -> Self {
-        let el = build_input_adornment(&b.id, None, b.parts);
+        let el = build_input_adornment(&b.id, b.parts);
         b.chrome.apply(el)
     }
 }
@@ -833,16 +818,13 @@ mod tests {
         create_root(|| {
             let rsx = InputAdornment(InputAdornmentProps {
                 id: String::new(),
-                class: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
                     frag.children(vec![
                         InputAdornmentAddon(InputAdornmentAddonProps {
                             align: Some("inline-start".into()),
-                            class: None,
                             children: Some(InputAdornmentText(InputAdornmentTextProps {
-                                class: None,
                                 children: Some(Element::new().text("https://")),
                                 base: None,
                                 ..Default::default()
@@ -864,7 +846,6 @@ mod tests {
                 .addon(
                     "inline-start",
                     InputAdornmentText(InputAdornmentTextProps {
-                        class: None,
                         children: Some(Element::new().text("https://")),
                         base: None,
                         ..Default::default()
@@ -892,7 +873,6 @@ mod tests {
         create_root(|| {
             let el: Element = InputAdornment(InputAdornmentProps {
                 id: String::new(),
-                class: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("rui_fragment", "1");
@@ -904,7 +884,6 @@ mod tests {
                         }),
                         InputAdornmentAddon(InputAdornmentAddonProps {
                             align: Some("inline-start".into()),
-                            class: None,
                             children: Some(Element::new().text("pre")),
                             base: None,
                             ..Default::default()

@@ -57,11 +57,12 @@
 //!     </Questionnaire>
 //! }
 //!
-//! // B · Builder (snake_case only). `.class` is the root; `.parts` styles
-//! // auto-assembled slots. `.child(|| …)` composes parts yourself (like Dialog).
+//! // B · Builder (snake_case only). `.class` is the root; `.slot` / `.parts`
+//! // style auto-assembled slots. `.child(|| …)` composes parts yourself.
 //! questionnaire("plan")
 //!     .class("gap-8")
-//!     .parts(|p| p.choices("gap-2").actions("gap-3").title("text-lg"))
+//!     .slot("questionnaire-title", |c| c.class("text-lg"))
+//!     .parts(|p| p.choices("gap-2").actions("gap-3"))
 //!     .shortcuts("letters")
 //!     .default_item("direction")
 //!     .question("direction", "What should the agent build next?", |q| {
@@ -87,7 +88,7 @@ use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::reactive::bind_prop;
-use crate::components::base::SlotChrome;
+use crate::components::base::{SlotChrome, SlotMap};
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::components::kbd::kbd;
@@ -257,11 +258,11 @@ impl QuestionnaireAnswers {
     }
 }
 
-/// Slot `class` tokens for the convenience Builder (`From<QuestionnaireBuilder>`).
-///
-/// Root `.class()` still styles the shell. Each field here is applied to the
-/// matching auto-assembled part; a per-item / per-choice `class` is appended
-/// and wins on conflicting utilities (same order as ShadCN `cn(defaults, className)`).
+/// Sugar for [`QuestionnaireBuilder::parts`]: short names fill [`SlotMap`]
+/// entries (`questionnaire-title`, `questionnaire-choices`, …).
+/// Prefer `.slot("questionnaire-title", |c| c.class(..))` with the `data-slot` name.
+/// Per-item / per-choice `*_class` still overlays and wins on conflict
+/// (same order as ShadCN `cn(defaults, className)`).
 #[derive(Clone, Debug, Default)]
 pub struct QuestionnairePartsClass {
     pub progress: Option<String>,
@@ -340,7 +341,7 @@ impl QuestionnairePartsClass {
 }
 
 /// Optional collection passed to Root (`items`) for progress / order / shortcuts.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct QuestionnaireItemDef {
     pub name: String,
     pub title: String,
@@ -350,24 +351,19 @@ pub struct QuestionnaireItemDef {
     pub disabled: bool,
     pub choices: Vec<QuestionnaireChoiceDef>,
     pub input_placeholder: Option<String>,
-    pub class: Option<String>,
-    pub title_class: Option<String>,
-    pub description_class: Option<String>,
-    pub choices_class: Option<String>,
-    pub choice_class: Option<String>,
-    pub input_class: Option<String>,
-    pub error_class: Option<String>,
+    /// Per-item slot chrome (`questionnaire-item` / `-title` / …). `.title_class()` aliases remain.
+    pub slots: SlotMap,
 }
 
 /// Fixed-answer row in [`QuestionnaireItemDef`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct QuestionnaireChoiceDef {
     pub value: String,
     pub label: String,
     pub description: String,
     pub disabled: bool,
-    pub class: Option<String>,
-    pub description_class: Option<String>,
+    /// Per-choice slot chrome (`questionnaire-choice` / `-choice-description`).
+    pub slots: SlotMap,
 }
 
 impl QuestionnaireItemDef {
@@ -400,37 +396,37 @@ impl QuestionnaireItemDef {
     }
 
     pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_ITEM, |ch| ch.class(c));
         self
     }
 
     pub fn title_class(mut self, c: impl Into<String>) -> Self {
-        self.title_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_TITLE, |ch| ch.class(c));
         self
     }
 
     pub fn description_class(mut self, c: impl Into<String>) -> Self {
-        self.description_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_DESCRIPTION, |ch| ch.class(c));
         self
     }
 
     pub fn choices_class(mut self, c: impl Into<String>) -> Self {
-        self.choices_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_CHOICES, |ch| ch.class(c));
         self
     }
 
     pub fn choice_class(mut self, c: impl Into<String>) -> Self {
-        self.choice_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_CHOICE, |ch| ch.class(c));
         self
     }
 
     pub fn input_class(mut self, c: impl Into<String>) -> Self {
-        self.input_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_INPUT, |ch| ch.class(c));
         self
     }
 
     pub fn error_class(mut self, c: impl Into<String>) -> Self {
-        self.error_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_ERROR, |ch| ch.class(c));
         self
     }
 
@@ -481,12 +477,12 @@ impl QuestionnaireChoiceDef {
     }
 
     pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_CHOICE, |ch| ch.class(c));
         self
     }
 
     pub fn description_class(mut self, c: impl Into<String>) -> Self {
-        self.description_class = Some(c.into());
+        self.slots = self.slots.slot(SLOT_CHOICE_DESC, |ch| ch.class(c));
         self
     }
 }
@@ -1010,6 +1006,7 @@ fn apply_class(el: Element, class: Option<String>) -> Element {
 }
 
 /// `parts` first, then the local slot class (later utilities win on conflict).
+#[allow(dead_code)]
 fn merge_slot_class(part: Option<&str>, local: Option<&str>) -> Option<String> {
     let merged = crate::style::classes([part, local]);
     if merged.is_empty() {
@@ -1017,6 +1014,35 @@ fn merge_slot_class(part: Option<&str>, local: Option<&str>) -> Option<String> {
     } else {
         Some(merged)
     }
+}
+
+fn merge_parts_into_slots(mut slots: SlotMap, p: QuestionnairePartsClass) -> SlotMap {
+    let pairs = [
+        (SLOT_PROGRESS, p.progress),
+        (SLOT_ITEM, p.item),
+        (SLOT_TITLE, p.title),
+        (SLOT_DESCRIPTION, p.description),
+        (SLOT_CHOICES, p.choices),
+        (SLOT_CHOICE, p.choice),
+        (SLOT_CHOICE_DESC, p.choice_description),
+        (SLOT_INPUT, p.input),
+        (SLOT_ERROR, p.error),
+        (SLOT_ACTIONS, p.actions),
+        (SLOT_PREVIOUS, p.previous),
+        (SLOT_SKIP, p.skip),
+        (SLOT_NEXT, p.next),
+        (SLOT_SUBMIT, p.submit),
+    ];
+    for (name, class) in pairs {
+        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+            slots = slots.slot(name, |ch| ch.overlay(SlotChrome::from_opts(Some(c), None)));
+        }
+    }
+    slots
+}
+
+fn paint_named(el: Element, slots: &SlotMap, slot: &str, extra: SlotChrome) -> Element {
+    slots.get(slot).overlay(extra).apply(el)
 }
 
 fn text_leaf(content: &str, size_px: f32, weight: u16, color: &str) -> Element {
@@ -1068,7 +1094,6 @@ pub fn questionnaire_scope(
     default_item: impl Into<String>,
     shortcuts: impl Into<QuestionnaireShortcuts>,
     seed_items: Vec<QuestionnaireItemDef>,
-    class: Option<String>,
     on_submit: Option<QuestionnaireSubmitFn>,
     on_item_change: Option<QuestionnaireItemChangeFn>,
     body: impl FnOnce() -> Element,
@@ -1105,7 +1130,6 @@ pub fn questionnaire_scope(
             .gap("1.5rem")
             .children(kids)
             .into();
-        root = apply_class(root, class);
         root = mark_slot(root, SLOT_ROOT);
         if shortcuts != QuestionnaireShortcuts::None {
             root.attrs
@@ -1154,7 +1178,6 @@ pub fn questionnaire_item_scope(
     multiple: bool,
     disabled: bool,
     invalid: bool,
-    class: Option<String>,
     on_status_change: Option<QuestionnaireStatusChangeFn>,
     body: impl FnOnce() -> Element,
 ) -> Element {
@@ -1233,7 +1256,6 @@ pub fn questionnaire_item_scope(
             .gap("0.75rem")
             .children(kids)
             .into();
-        shell = apply_class(shell, class);
         shell = mark_slot(shell, SLOT_ITEM);
         shell.attrs.insert("data-name".to_string(), name.clone());
         if required {
@@ -1294,7 +1316,6 @@ pub fn Questionnaire(
     default_item: String,
     shortcuts: Option<String>,
     items: Option<Vec<QuestionnaireItemDef>>,
-    class: Option<String>,
     on_submit: Option<Handler<QuestionnaireAnswers>>,
     children: Option<Element>,
 ) -> Element {
@@ -1309,7 +1330,6 @@ pub fn Questionnaire(
         default_item,
         shortcuts,
         items.unwrap_or_default(),
-        class,
         on_submit,
         None,
         move || children.unwrap_or_else(Element::new),
@@ -1324,7 +1344,6 @@ pub fn QuestionnaireItem(
     multiple: bool,
     disabled: bool,
     invalid: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     questionnaire_item_scope(
@@ -1333,7 +1352,6 @@ pub fn QuestionnaireItem(
         multiple,
         disabled,
         invalid,
-        class,
         None,
         move || children.unwrap_or_else(Element::new),
     )
@@ -1341,17 +1359,16 @@ pub fn QuestionnaireItem(
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireProgress(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireProgress(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireProgress");
     let custom = unpack_children(children);
     if !custom.is_empty() {
         let mut wrap: Element = hstack().min_w("14ch").children(custom).into();
-        wrap = apply_class(mark_slot(wrap, SLOT_PROGRESS), class);
+        wrap = mark_slot(wrap, SLOT_PROGRESS);
         return wrap;
     }
     let mut label = text_leaf("Question 1 of 1", BODY_SIZE_PX, 500, "muted-foreground");
     label = mark_slot(label, SLOT_PROGRESS);
-    label = apply_class(label, class);
     let current = ctx.current;
     let order = ctx.item_order;
     let bind_key = format!("{}__progress", ctx.id);
@@ -1375,25 +1392,25 @@ pub fn QuestionnaireProgress(class: Option<String>, children: Option<Element>) -
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireTitle(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireTitle(children: Option<Element>) -> Element {
     let _ = require_questionnaire_item("QuestionnaireTitle");
     let mut el = children_or_text(children, "", TITLE_SIZE_PX, TITLE_WEIGHT, "foreground");
-    el = apply_class(mark_slot(el, SLOT_TITLE), class);
+    el = mark_slot(el, SLOT_TITLE);
     el.w("100%").min_w(0.0)
 }
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireDescription(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireDescription(children: Option<Element>) -> Element {
     let _ = require_questionnaire_item("QuestionnaireDescription");
     let mut el = children_or_text(children, "", BODY_SIZE_PX, 400, "muted-foreground");
-    el = apply_class(mark_slot(el, SLOT_DESCRIPTION), class);
+    el = mark_slot(el, SLOT_DESCRIPTION);
     el.w("100%").min_w(0.0)
 }
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireChoices(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireChoices(children: Option<Element>) -> Element {
     let root = require_questionnaire("QuestionnaireChoices");
     let kids = unpack_children(children);
     let mut el: Element = vstack()
@@ -1402,7 +1419,7 @@ pub fn QuestionnaireChoices(class: Option<String>, children: Option<Element>) ->
         .gap("0.25rem")
         .children(kids)
         .into();
-    el = apply_class(mark_slot(el, SLOT_CHOICES), class);
+    el = mark_slot(el, SLOT_CHOICES);
     if root.shortcuts != QuestionnaireShortcuts::None {
         el.attrs.insert(
             "data-shortcuts".to_string(),
@@ -1414,9 +1431,9 @@ pub fn QuestionnaireChoices(class: Option<String>, children: Option<Element>) ->
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireChoiceDescription(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireChoiceDescription(children: Option<Element>) -> Element {
     let mut el = children_or_text(children, "", 13.0, 400, "muted-foreground");
-    el = apply_class(mark_slot(el, SLOT_CHOICE_DESC), class);
+    el = mark_slot(el, SLOT_CHOICE_DESC);
     el.w("100%").min_w(0.0)
 }
 
@@ -1426,7 +1443,6 @@ pub fn QuestionnaireChoice(
     value: String,
     disabled: bool,
     default_checked: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let root = require_questionnaire("QuestionnaireChoice");
@@ -1502,10 +1518,7 @@ pub fn QuestionnaireChoice(
     }
     row = apply_class(
         mark_slot(row, SLOT_CHOICE),
-        Some(format!(
-            "rounded-md hover:bg-accent/50 {}",
-            class.unwrap_or_default()
-        )),
+        Some("rounded-md hover:bg-accent/50".into()),
     );
     row.attrs.insert(
         "data-type".to_string(),
@@ -1708,7 +1721,6 @@ fn sync_choice_indicator(
 pub fn QuestionnaireInput(
     placeholder: String,
     disabled: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let root = require_questionnaire("QuestionnaireInput");
@@ -1722,7 +1734,7 @@ pub fn QuestionnaireInput(
         .value_signal(item.freeform)
         .h("2.75rem")
         .into();
-    field = apply_class(mark_slot(field, SLOT_INPUT), class);
+    field = mark_slot(field, SLOT_INPUT);
     let freeform = item.freeform;
     let selected = item.selected;
     let status = item.status;
@@ -1776,7 +1788,7 @@ pub fn QuestionnaireInput(
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireError(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireError(children: Option<Element>) -> Element {
     let item = require_questionnaire_item("QuestionnaireError");
     let kids = unpack_children(children);
     let message = if kids.len() == 1 {
@@ -1787,7 +1799,7 @@ pub fn QuestionnaireError(class: Option<String>, children: Option<Element>) -> E
         caption_text(&kids[0]).unwrap_or_else(|| DEFAULT_ERROR.to_string())
     };
     let mut el = text_leaf(&message, 13.0, 400, "destructive");
-    el = apply_class(mark_slot(el, SLOT_ERROR), class);
+    el = mark_slot(el, SLOT_ERROR);
     let invalid = item.invalid_shown;
     el = el.reactive_sync(move |el, layout_tree| {
         let show = invalid.peek();
@@ -1804,7 +1816,7 @@ pub fn QuestionnaireError(class: Option<String>, children: Option<Element>) -> E
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireActions(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireActions(children: Option<Element>) -> Element {
     let _ = require_questionnaire("QuestionnaireActions");
     let kids = unpack_children(children);
     let mut el: Element = hstack()
@@ -1815,7 +1827,7 @@ pub fn QuestionnaireActions(class: Option<String>, children: Option<Element>) ->
         .items("center")
         .children(kids)
         .into();
-    el = apply_class(mark_slot(el, SLOT_ACTIONS), class);
+    el = mark_slot(el, SLOT_ACTIONS);
     el
 }
 
@@ -1852,11 +1864,10 @@ fn stamp_action_attrs(el: &mut Element, show: bool, status: QuestionnaireItemSta
 fn wire_action_visibility(
     mut el: Element,
     slot: &str,
-    class: Option<String>,
     visible: impl Fn() -> bool + 'static,
     status_of: impl Fn() -> QuestionnaireItemStatus + 'static,
 ) -> Element {
-    el = apply_class(mark_slot(el, slot), class);
+    el = mark_slot(el, slot);
     let show = visible();
     stamp_action_attrs(&mut el, show, status_of());
     el.style.display = if show { Display::Flex } else { Display::None };
@@ -1885,7 +1896,7 @@ fn current_required(ctx: &QuestionnaireCtx) -> bool {
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnairePrevious(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnairePrevious(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnairePrevious");
     let label = action_label(children, "Previous");
     let id = format!("{}__previous", ctx.id);
@@ -1901,7 +1912,6 @@ pub fn QuestionnairePrevious(class: Option<String>, children: Option<Element>) -
     wire_action_visibility(
         btn,
         SLOT_PREVIOUS,
-        class,
         move || !is_first_enabled(&order.peek(), &current.peek()),
         move || current_status(&vis_ctx),
     )
@@ -1909,7 +1919,7 @@ pub fn QuestionnairePrevious(class: Option<String>, children: Option<Element>) -
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireSkip(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireSkip(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireSkip");
     let label = action_label(children, "Skip");
     let id = format!("{}__skip", ctx.id);
@@ -1924,7 +1934,6 @@ pub fn QuestionnaireSkip(class: Option<String>, children: Option<Element>) -> El
     wire_action_visibility(
         btn,
         SLOT_SKIP,
-        class,
         move || !current_required(&vis_ctx),
         move || current_status(&vis_ctx2),
     )
@@ -1932,7 +1941,7 @@ pub fn QuestionnaireSkip(class: Option<String>, children: Option<Element>) -> El
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireNext(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireNext(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireNext");
     let label = action_label(children, "Next");
     let id = format!("{}__next", ctx.id);
@@ -1951,7 +1960,6 @@ pub fn QuestionnaireNext(class: Option<String>, children: Option<Element>) -> El
     wire_action_visibility(
         btn,
         SLOT_NEXT,
-        class,
         move || !is_last_enabled(&order.peek(), &current.peek()),
         move || current_status(&vis_ctx),
     )
@@ -1959,7 +1967,7 @@ pub fn QuestionnaireNext(class: Option<String>, children: Option<Element>) -> El
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn QuestionnaireSubmit(class: Option<String>, children: Option<Element>) -> Element {
+pub fn QuestionnaireSubmit(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireSubmit");
     let label = action_label(children, "Submit");
     let id = format!("{}__submit", ctx.id);
@@ -1978,7 +1986,6 @@ pub fn QuestionnaireSubmit(class: Option<String>, children: Option<Element>) -> 
     wire_action_visibility(
         btn,
         SLOT_SUBMIT,
-        class,
         move || is_last_enabled(&order.peek(), &current.peek()),
         move || current_status(&vis_ctx),
     )
@@ -2096,7 +2103,6 @@ impl From<QuestionnaireChoiceBuilder> for Element {
             value: Some(builder.value),
             disabled: Some(builder.disabled),
             default_checked: Some(builder.default_checked),
-            class: None,
             children: crate::components::base::packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -2135,31 +2141,31 @@ impl QuestionnaireQuestionBuilder {
         self
     }
     pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.def.class = Some(c.into());
+        self.def = self.def.class(c);
         self
     }
     pub fn title_class(mut self, c: impl Into<String>) -> Self {
-        self.def.title_class = Some(c.into());
+        self.def = self.def.title_class(c);
         self
     }
     pub fn description_class(mut self, c: impl Into<String>) -> Self {
-        self.def.description_class = Some(c.into());
+        self.def = self.def.description_class(c);
         self
     }
     pub fn choices_class(mut self, c: impl Into<String>) -> Self {
-        self.def.choices_class = Some(c.into());
+        self.def = self.def.choices_class(c);
         self
     }
     pub fn choice_class(mut self, c: impl Into<String>) -> Self {
-        self.def.choice_class = Some(c.into());
+        self.def = self.def.choice_class(c);
         self
     }
     pub fn input_class(mut self, c: impl Into<String>) -> Self {
-        self.def.input_class = Some(c.into());
+        self.def = self.def.input_class(c);
         self
     }
     pub fn error_class(mut self, c: impl Into<String>) -> Self {
-        self.def.error_class = Some(c.into());
+        self.def = self.def.error_class(c);
         self
     }
     pub fn choice(mut self, value: impl Into<String>, label: impl Into<String>) -> Self {
@@ -2190,8 +2196,8 @@ pub struct QuestionnaireBuilder {
     item: Option<Signal<String>>,
     default_item: String,
     shortcuts: QuestionnaireShortcuts,
-    class: Option<String>,
-    parts: QuestionnairePartsClass,
+    chrome: SlotChrome,
+    slots: SlotMap,
     on_submit: Option<QuestionnaireSubmitFn>,
     on_item_change: Option<QuestionnaireItemChangeFn>,
     questions: Vec<QuestionnaireItemDef>,
@@ -2204,8 +2210,8 @@ pub fn questionnaire(id: impl Into<String>) -> QuestionnaireBuilder {
         item: None,
         default_item: String::new(),
         shortcuts: QuestionnaireShortcuts::None,
-        class: None,
-        parts: QuestionnairePartsClass::default(),
+        chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
         on_submit: None,
         on_item_change: None,
         questions: Vec::new(),
@@ -2213,6 +2219,9 @@ pub fn questionnaire(id: impl Into<String>) -> QuestionnaireBuilder {
 }
 
 impl QuestionnaireBuilder {
+    crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+
     pub fn item_signal(mut self, s: Signal<String>) -> Self {
         self.item = Some(s);
         self
@@ -2225,18 +2234,13 @@ impl QuestionnaireBuilder {
         self.shortcuts = v.into();
         self
     }
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
-        self
-    }
     /// Default `class` tokens for auto-assembled slots (Progress, Title, Choices, …).
-    /// Sugar = default appearance; per-slot class/style uses the composition builders
-    /// (`questionnaire_title`, `questionnaire_choice`, …), not extra `*PartsClass` maps.
+    /// Fills [`SlotMap`]; equivalent to `.slot("questionnaire-title", …)` with the `data-slot` name.
     pub fn parts(
         mut self,
         build: impl FnOnce(QuestionnairePartsClass) -> QuestionnairePartsClass,
     ) -> Self {
-        self.parts = build(self.parts);
+        self.slots = merge_parts_into_slots(self.slots, build(QuestionnairePartsClass::default()));
         self
     }
     pub fn on_submit(mut self, f: impl FnMut(QuestionnaireAnswers) + 'static) -> Self {
@@ -2264,114 +2268,125 @@ impl QuestionnaireBuilder {
         self
     }
 
-    /// Compose Progress / Item / Actions yourself (Dialog-style). Slot `.parts()`
-    /// does not apply here — put `class` on each part. `.question()` still seeds
-    /// item order when present.
+    /// Compose Progress / Item / Actions yourself (Dialog-style). Slot `.parts()` /
+    /// `.slot()` do not apply here — put `class` on each part. `.question()` still
+    /// seeds item order when present.
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        questionnaire_scope(
+        self.chrome.apply(questionnaire_scope(
             self.id,
             self.item,
             self.default_item,
             self.shortcuts,
             self.questions,
-            self.class,
             self.on_submit,
             self.on_item_change,
             body,
-        )
+        ))
     }
 }
 
-fn render_def_item(def: QuestionnaireItemDef, parts: &QuestionnairePartsClass) -> Element {
+fn render_def_item(def: QuestionnaireItemDef, slots: &SlotMap) -> Element {
     let required = def.required;
     let multiple = def.multiple;
     let disabled = def.disabled;
     let name = def.name.clone();
-    let item_class = merge_slot_class(parts.item.as_deref(), def.class.as_deref());
-    let title_class = merge_slot_class(parts.title.as_deref(), def.title_class.as_deref());
-    let description_class = merge_slot_class(
-        parts.description.as_deref(),
-        def.description_class.as_deref(),
-    );
-    let choices_class = merge_slot_class(parts.choices.as_deref(), def.choices_class.as_deref());
-    let input_class = merge_slot_class(parts.input.as_deref(), def.input_class.as_deref());
-    let error_class = merge_slot_class(parts.error.as_deref(), def.error_class.as_deref());
-    let choice_fallback = merge_slot_class(parts.choice.as_deref(), def.choice_class.as_deref());
-    let choice_desc_part = parts.choice_description.clone();
-    questionnaire_item_scope(
-        name,
-        required,
-        multiple,
-        disabled,
-        false,
-        item_class,
-        None,
+    let slots = slots.clone();
+    let item_slots = def.slots.clone();
+    let item = questionnaire_item_scope(name, required, multiple, disabled, false, None, {
+        let slots = slots.clone();
+        let item_slots = item_slots.clone();
         move || {
             let mut kids = Vec::new();
-            kids.push(QuestionnaireTitle(QuestionnaireTitleProps {
-                class: title_class.clone(),
-                children: Some(Element::new().text(def.title.clone())),
-                base: None,
-            }));
-            if !def.description.trim().is_empty() {
-                kids.push(QuestionnaireDescription(QuestionnaireDescriptionProps {
-                    class: description_class.clone(),
-                    children: Some(Element::new().text(def.description.clone())),
+            kids.push(paint_named(
+                QuestionnaireTitle(QuestionnaireTitleProps {
+                    children: Some(Element::new().text(def.title.clone())),
                     base: None,
-                }));
+                }),
+                &slots,
+                SLOT_TITLE,
+                item_slots.get(SLOT_TITLE),
+            ));
+            if !def.description.trim().is_empty() {
+                kids.push(paint_named(
+                    QuestionnaireDescription(QuestionnaireDescriptionProps {
+                        children: Some(Element::new().text(def.description.clone())),
+                        base: None,
+                    }),
+                    &slots,
+                    SLOT_DESCRIPTION,
+                    item_slots.get(SLOT_DESCRIPTION),
+                ));
             }
             let mut choice_els = Vec::new();
             for ch in def.choices {
                 let mut choice_kids = vec![Element::new().text(ch.label)];
                 if !ch.description.trim().is_empty() {
-                    choice_kids.push(QuestionnaireChoiceDescription(
-                        QuestionnaireChoiceDescriptionProps {
-                            class: merge_slot_class(
-                                choice_desc_part.as_deref(),
-                                ch.description_class.as_deref(),
-                            ),
+                    choice_kids.push(paint_named(
+                        QuestionnaireChoiceDescription(QuestionnaireChoiceDescriptionProps {
                             children: Some(Element::new().text(ch.description)),
                             base: None,
-                        },
+                        }),
+                        &slots,
+                        SLOT_CHOICE_DESC,
+                        ch.slots.get(SLOT_CHOICE_DESC),
                     ));
                 }
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
-                choice_els.push(QuestionnaireChoice(QuestionnaireChoiceProps {
-                    value: Some(ch.value),
-                    disabled: Some(ch.disabled),
-                    default_checked: None,
-                    class: merge_slot_class(choice_fallback.as_deref(), ch.class.as_deref()),
-                    children: Some(frag.children(choice_kids)),
-                    base: None,
-                }));
+                choice_els.push(paint_named(
+                    QuestionnaireChoice(QuestionnaireChoiceProps {
+                        value: Some(ch.value),
+                        disabled: Some(ch.disabled),
+                        default_checked: None,
+                        children: Some(frag.children(choice_kids)),
+                        base: None,
+                    }),
+                    &slots,
+                    SLOT_CHOICE,
+                    item_slots
+                        .get(SLOT_CHOICE)
+                        .overlay(ch.slots.get(SLOT_CHOICE)),
+                ));
             }
             if let Some(ph) = def.input_placeholder {
-                choice_els.push(QuestionnaireInput(QuestionnaireInputProps {
-                    placeholder: Some(ph),
-                    disabled: None,
-                    class: input_class.clone(),
-                    children: None,
-                    base: None,
-                }));
+                choice_els.push(paint_named(
+                    QuestionnaireInput(QuestionnaireInputProps {
+                        placeholder: Some(ph),
+                        disabled: None,
+                        children: None,
+                        base: None,
+                    }),
+                    &slots,
+                    SLOT_INPUT,
+                    item_slots.get(SLOT_INPUT),
+                ));
             }
             let mut choices_frag = Element::new();
             choices_frag.set_attr("rui_fragment", "1");
-            kids.push(QuestionnaireChoices(QuestionnaireChoicesProps {
-                class: choices_class.clone(),
-                children: Some(choices_frag.children(choice_els)),
-                base: None,
-            }));
-            kids.push(QuestionnaireError(QuestionnaireErrorProps {
-                class: error_class.clone(),
-                children: None,
-                base: None,
-            }));
+            kids.push(paint_named(
+                QuestionnaireChoices(QuestionnaireChoicesProps {
+                    children: Some(choices_frag.children(choice_els)),
+                    base: None,
+                }),
+                &slots,
+                SLOT_CHOICES,
+                item_slots.get(SLOT_CHOICES),
+            ));
+            kids.push(paint_named(
+                QuestionnaireError(QuestionnaireErrorProps {
+                    children: None,
+                    base: None,
+                }),
+                &slots,
+                SLOT_ERROR,
+                item_slots.get(SLOT_ERROR),
+            ));
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
             frag.children(kids)
-        },
-    )
+        }
+    });
+    paint_named(item, &slots, SLOT_ITEM, item_slots.get(SLOT_ITEM))
 }
 
 impl From<QuestionnaireBuilder> for Element {
@@ -2381,68 +2396,91 @@ impl From<QuestionnaireBuilder> for Element {
             item,
             default_item,
             shortcuts,
-            class,
-            parts,
+            chrome,
+            slots,
             on_submit,
             on_item_change,
             questions,
         } = builder;
         let seed = questions.clone();
-        let parts_body = parts.clone();
-        questionnaire_scope(
+        let slots_body = slots.clone();
+        chrome.apply(questionnaire_scope(
             id,
             item,
             default_item,
             shortcuts,
             seed,
-            class,
             on_submit,
             on_item_change,
             move || {
                 let mut kids = Vec::new();
-                kids.push(QuestionnaireProgress(QuestionnaireProgressProps {
-                    class: parts_body.progress.clone(),
-                    children: None,
-                    base: None,
-                }));
+                kids.push(paint_named(
+                    QuestionnaireProgress(QuestionnaireProgressProps {
+                        children: None,
+                        base: None,
+                    }),
+                    &slots_body,
+                    SLOT_PROGRESS,
+                    SlotChrome::default(),
+                ));
                 for def in questions {
-                    kids.push(render_def_item(def, &parts_body));
+                    kids.push(render_def_item(def, &slots_body));
                 }
                 let mut actions = vec![
-                    QuestionnairePrevious(QuestionnairePreviousProps {
-                        class: parts_body.previous.clone(),
-                        children: None,
-                        base: None,
-                    }),
+                    paint_named(
+                        QuestionnairePrevious(QuestionnairePreviousProps {
+                            children: None,
+                            base: None,
+                        }),
+                        &slots_body,
+                        SLOT_PREVIOUS,
+                        SlotChrome::default(),
+                    ),
                     spacer(),
-                    QuestionnaireSkip(QuestionnaireSkipProps {
-                        class: parts_body.skip.clone(),
-                        children: None,
-                        base: None,
-                    }),
-                    QuestionnaireNext(QuestionnaireNextProps {
-                        class: parts_body.next.clone(),
-                        children: None,
-                        base: None,
-                    }),
-                    QuestionnaireSubmit(QuestionnaireSubmitProps {
-                        class: parts_body.submit.clone(),
-                        children: None,
-                        base: None,
-                    }),
+                    paint_named(
+                        QuestionnaireSkip(QuestionnaireSkipProps {
+                            children: None,
+                            base: None,
+                        }),
+                        &slots_body,
+                        SLOT_SKIP,
+                        SlotChrome::default(),
+                    ),
+                    paint_named(
+                        QuestionnaireNext(QuestionnaireNextProps {
+                            children: None,
+                            base: None,
+                        }),
+                        &slots_body,
+                        SLOT_NEXT,
+                        SlotChrome::default(),
+                    ),
+                    paint_named(
+                        QuestionnaireSubmit(QuestionnaireSubmitProps {
+                            children: None,
+                            base: None,
+                        }),
+                        &slots_body,
+                        SLOT_SUBMIT,
+                        SlotChrome::default(),
+                    ),
                 ];
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
-                kids.push(QuestionnaireActions(QuestionnaireActionsProps {
-                    class: parts_body.actions.clone(),
-                    children: Some(frag.children(std::mem::take(&mut actions))),
-                    base: None,
-                }));
+                kids.push(paint_named(
+                    QuestionnaireActions(QuestionnaireActionsProps {
+                        children: Some(frag.children(std::mem::take(&mut actions))),
+                        base: None,
+                    }),
+                    &slots_body,
+                    SLOT_ACTIONS,
+                    SlotChrome::default(),
+                ));
                 let mut out = Element::new();
                 out.set_attr("rui_fragment", "1");
                 out.children(kids)
             },
-        )
+        ))
     }
 }
 
@@ -2581,7 +2619,7 @@ mod tests {
         use crate::core::reactivity::create_root;
         let (_owner, el): (_, Element) = create_root(|| {
             questionnaire("q-chrome").child(|| {
-                questionnaire_item_scope("q1", false, false, false, false, None, None, || {
+                questionnaire_item_scope("q1", false, false, false, false, None, || {
                     questionnaire_title()
                         .style(|b| b.text_size(20.0))
                         .text("Hello")
@@ -2597,6 +2635,35 @@ mod tests {
         assert!(
             find_size(&el, 20.0),
             "questionnaire_title .style(|b| b.text_size(20)) must land on the title"
+        );
+    }
+
+    #[test]
+    fn builder_slot_and_parts_paint_classes() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el): (_, Element) = create_root(|| {
+            questionnaire("q-slots")
+                .slot(SLOT_TITLE, |c| c.class("text-lg"))
+                .parts(|p| p.choices("gap-2"))
+                .question("n", "Hello", |q| q.choice("a", "A"))
+                .into()
+        });
+        fn slot_has_class(el: &Element, slot: &str, needle: &str) -> bool {
+            let is_slot = el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot);
+            let has = crate::components::base::author_class(el).contains(needle)
+                || el
+                    .class_set
+                    .as_ref()
+                    .is_some_and(|cs| cs.base.iter().any(|t| t.contains(needle)));
+            (is_slot && has) || el.children.iter().any(|c| slot_has_class(c, slot, needle))
+        }
+        assert!(
+            slot_has_class(&el, SLOT_TITLE, "text-lg"),
+            "`.slot(questionnaire-title)` must land on the title"
+        );
+        assert!(
+            slot_has_class(&el, SLOT_CHOICES, "gap-2"),
+            "`.parts().choices` must fill SlotMap questionnaire-choices"
         );
     }
 

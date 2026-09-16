@@ -69,7 +69,10 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
-use crate::components::base::{BaseComponentBuilder, SlotAuthor, SlotChrome, SlotStyleFn};
+use crate::components::base::{
+    push_pending_item_chrome, take_pending_item_chrome, BaseComponentBuilder, SlotAuthor,
+    SlotChrome,
+};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
@@ -213,8 +216,7 @@ struct TimelineItemSpec {
     title: String,
     description: String,
     bullet: Option<String>,
-    class: String,
-    style: Option<SlotStyleFn>,
+    chrome: SlotChrome,
     bullet_slot: SlotAuthor,
     title_slot: SlotAuthor,
     description_slot: SlotAuthor,
@@ -227,7 +229,6 @@ struct TimelineCollect {
 
 thread_local! {
     static TIMELINE_STACK: RefCell<Vec<TimelineCollect>> = const { RefCell::new(Vec::new()) };
-    static PENDING_ITEM_STYLE: RefCell<Option<SlotStyleFn>> = const { RefCell::new(None) };
 }
 
 fn timeline_context() -> Context<TimelineCtx> {
@@ -422,13 +423,7 @@ fn paint_item(
     el.set_attr(ATTR_INDEX, spec.index.to_string());
     el.set_attr(ATTR_STATE, if bullet_on { "active" } else { "inactive" });
     el = el.accesskit_role("listitem");
-    if !spec.class.trim().is_empty() {
-        el = with_class_list(el, &spec.class);
-    }
-    if let Some(ref style) = spec.style {
-        el = style(BaseComponentBuilder::new(el)).el;
-    }
-    el
+    spec.chrome.apply(el)
 }
 
 fn paint_bullet(icon: Option<&str>, active: bool, bullet_size: f32, line_size: f32) -> Element {
@@ -584,14 +579,7 @@ impl TimelineItemBuilder {
 
 impl From<TimelineItemBuilder> for Element {
     fn from(builder: TimelineItemBuilder) -> Self {
-        PENDING_ITEM_STYLE.with(|s| {
-            *s.borrow_mut() = builder.chrome.style.clone();
-        });
-        let class = if builder.chrome.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.chrome.class.clone())
-        };
+        push_pending_item_chrome(builder.chrome);
         TimelineItem(TimelineItemProps {
             title: Some(builder.title),
             description: if builder.description.is_empty() {
@@ -600,7 +588,6 @@ impl From<TimelineItemBuilder> for Element {
                 Some(builder.description)
             },
             bullet: builder.bullet,
-            class,
             children: if builder.children.is_empty() {
                 None
             } else {
@@ -747,14 +734,7 @@ impl From<TimelineBuilder> for Element {
                         .into_iter()
                         .map(|s| {
                             let chrome = item_chrome.clone().overlay(s.chrome);
-                            PENDING_ITEM_STYLE.with(|cell| {
-                                *cell.borrow_mut() = chrome.style.clone();
-                            });
-                            let class = if chrome.class.trim().is_empty() {
-                                None
-                            } else {
-                                Some(chrome.class)
-                            };
+                            push_pending_item_chrome(chrome);
                             TimelineItem(TimelineItemProps {
                                 title: Some(s.title),
                                 description: if s.description.is_empty() {
@@ -763,7 +743,6 @@ impl From<TimelineBuilder> for Element {
                                     Some(s.description)
                                 },
                                 bullet: s.bullet,
-                                class,
                                 children: None,
                                 base: None,
                             })
@@ -795,7 +774,6 @@ pub fn Timeline(
     default_active: Option<i32>,
     bullet_size: Option<f32>,
     line_size: Option<f32>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut b = timeline().id(id);
@@ -809,9 +787,6 @@ pub fn Timeline(
     }
     if let Some(v) = line_size {
         b = b.line_size(v);
-    }
-    if let Some(c) = class {
-        b = b.class(c);
     }
     if let Some(ch) = children {
         let _ = ch;
@@ -830,7 +805,6 @@ pub fn TimelineItem(
     title: Option<String>,
     description: Option<String>,
     bullet: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let _ctx = require_timeline("TimelineItem");
@@ -878,14 +852,13 @@ pub fn TimelineItem(
         }
     }
 
-    let style = PENDING_ITEM_STYLE.with(|s| s.borrow_mut().take());
+    let chrome = take_pending_item_chrome();
     register_item(TimelineItemSpec {
         index,
         title,
         description,
         bullet,
-        class: class.unwrap_or_default(),
-        style,
+        chrome,
         bullet_slot,
         title_slot,
         description_slot,
@@ -1057,7 +1030,6 @@ mod tests {
                 default_active: Some(-1),
                 bullet_size: Some(16.0),
                 line_size: Some(2.0),
-                class: None,
                 children: None,
                 base: None,
             })
@@ -1077,7 +1049,7 @@ mod tests {
             title: "Packed".into(),
             description: "Warehouse".into(),
             bullet: None,
-            class,
+            chrome: SlotChrome::default().class(class),
             ..Default::default()
         };
         let el = paint_item(&spec, 0, false, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);
@@ -1101,8 +1073,7 @@ mod tests {
             title: s.title,
             description: s.description,
             bullet: s.bullet,
-            class: chrome.class,
-            style: chrome.style,
+            chrome,
             ..Default::default()
         };
         let el = paint_item(&spec, 0, false, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);

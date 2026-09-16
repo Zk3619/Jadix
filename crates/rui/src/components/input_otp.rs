@@ -40,7 +40,7 @@
 use std::cell::Cell;
 use std::sync::OnceLock;
 
-use crate::components::base::SlotStyleFn;
+use crate::components::base::SlotChrome;
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
     Context, Signal,
@@ -52,7 +52,7 @@ use crate::primitives::r#box::{hstack, r#box};
 use crate::renderer::caret_blink_visible;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, parse_color, parse_text_color, with_class_list,
+    focus_ring_destructive_color, parse_color, parse_text_color,
 };
 use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
@@ -526,7 +526,6 @@ pub fn input_otp_scope(
     disabled: bool,
     invalid: bool,
     pattern: InputOtpPattern,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "input_otp");
@@ -570,10 +569,7 @@ pub fn input_otp_scope(
         for k in kids {
             row = row.child(k);
         }
-        let mut el: Element = row.into();
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = with_class_list(el, &c);
-        }
+        let el: Element = row.into();
         el
     });
 
@@ -606,13 +602,11 @@ fn build_default_slots(max_length: usize, separator_at: Option<usize>) -> Elemen
             let mut g = Element::new();
             g.set_attr("rui_fragment", "1");
             frag_kids.push(InputOTPGroup(InputOTPGroupProps {
-                class: None,
                 children: Some(g.children(std::mem::take(&mut group_kids))),
                 base: None,
                 ..Default::default()
             }));
             frag_kids.push(InputOTPSeparator(InputOTPSeparatorProps {
-                class: None,
                 children: None,
                 base: None,
                 ..Default::default()
@@ -620,7 +614,6 @@ fn build_default_slots(max_length: usize, separator_at: Option<usize>) -> Elemen
         }
         group_kids.push(InputOTPSlot(InputOTPSlotProps {
             index: Some(i as i32),
-            class: None,
             children: None,
             base: None,
             ..Default::default()
@@ -630,7 +623,6 @@ fn build_default_slots(max_length: usize, separator_at: Option<usize>) -> Elemen
         let mut g = Element::new();
         g.set_attr("rui_fragment", "1");
         frag_kids.push(InputOTPGroup(InputOTPGroupProps {
-            class: None,
             children: Some(g.children(group_kids)),
             base: None,
             ..Default::default()
@@ -655,7 +647,6 @@ pub fn InputOTP(
     invalid: bool,
     /// `digits`（默认）| `alnum`
     pattern: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let max = max_length.unwrap_or(6).max(1) as usize;
@@ -671,7 +662,6 @@ pub fn InputOTP(
         disabled,
         invalid,
         pattern,
-        class,
         move || match body_children {
             Some(c) => c,
             None => build_default_slots(max, None),
@@ -682,7 +672,7 @@ pub fn InputOTP(
 /// 连续槽容器（`gap-0`；子 Slot 拼成连体条）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputOTPGroup(class: Option<String>, children: Option<Element>) -> Element {
+pub fn InputOTPGroup(children: Option<Element>) -> Element {
     let _ = require_input_otp("InputOTPGroup");
     let mut kids = children.map(take_otp_packed).unwrap_or_default();
     let n = kids.len();
@@ -695,9 +685,6 @@ pub fn InputOTPGroup(class: Option<String>, children: Option<Element>) -> Elemen
     }
     let mut el: Element = row.into();
     el.set_attr(ATTR_SLOT, SLOT_GROUP);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -707,11 +694,7 @@ pub fn InputOTPGroup(class: Option<String>, children: Option<Element>) -> Elemen
 /// `first:` / `last:` + ButtonGroup 连体描边）。内容与焦点态由 `reactive_sync` 每帧同步。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputOTPSlot(
-    index: Option<i32>,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn InputOTPSlot(index: Option<i32>, children: Option<Element>) -> Element {
     let _ = children;
     let ctx = require_input_otp("InputOTPSlot");
     let index = index.unwrap_or(0).max(0) as usize;
@@ -793,16 +776,13 @@ pub fn InputOTPSlot(
         )
     });
 
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        cell = with_class_list(cell, &c);
-    }
     cell
 }
 
 /// 段间分隔（Minus 图标）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn InputOTPSeparator(class: Option<String>, children: Option<Element>) -> Element {
+pub fn InputOTPSeparator(children: Option<Element>) -> Element {
     let _ = children;
     let _ = require_input_otp("InputOTPSeparator");
     let glyph = lucide_glyph("minus").unwrap_or_else(|| "—".into());
@@ -818,9 +798,6 @@ pub fn InputOTPSeparator(class: Option<String>, children: Option<Element>) -> El
         .into();
     el.set_attr(ATTR_SLOT, SLOT_SEPARATOR);
     el = el.accesskit_role("separator").pointer_events("none");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -862,7 +839,6 @@ impl From<InputOtpSlotBuilder> for Element {
     fn from(builder: InputOtpSlotBuilder) -> Self {
         let el = InputOTPSlot(InputOTPSlotProps {
             index: Some(builder.index),
-            class: None,
             children: None,
             base: None,
             ..Default::default()
@@ -886,8 +862,7 @@ pub struct InputOtpBuilder {
     disabled: bool,
     invalid: bool,
     pattern: InputOtpPattern,
-    class: String,
-    style: Option<SlotStyleFn>,
+    chrome: SlotChrome,
     /// 在该索引前插入 Separator（如 `3` → `[0,1,2] | [3,4,5]`）。
     separator_at: Option<usize>,
     custom_body: Option<Box<dyn FnOnce() -> Element>>,
@@ -902,14 +877,15 @@ pub fn input_otp(id: impl Into<String>) -> InputOtpBuilder {
         disabled: false,
         invalid: false,
         pattern: InputOtpPattern::Digits,
-        class: String::new(),
-        style: None,
+        chrome: SlotChrome::default(),
         separator_at: None,
         custom_body: None,
     }
 }
 
 impl InputOtpBuilder {
+    crate::impl_slot_chrome_methods!();
+
     pub fn max_length(mut self, n: usize) -> Self {
         self.max_length = n.clamp(1, 32);
         self
@@ -928,20 +904,6 @@ impl InputOtpBuilder {
     }
     pub fn pattern(mut self, p: impl Into<InputOtpPattern>) -> Self {
         self.pattern = p.into();
-        self
-    }
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = c.into();
-        self
-    }
-    pub fn style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.style = Some(std::rc::Rc::new(f));
         self
     }
     pub fn separator_at(mut self, index: usize) -> Self {
@@ -964,24 +926,17 @@ impl From<InputOtpBuilder> for Element {
             disabled,
             invalid,
             pattern,
-            class,
-            style,
+            chrome,
             separator_at,
             custom_body,
         } = b;
-        let class = if class.trim().is_empty() {
-            None
-        } else {
-            Some(class)
-        };
-        let mut el = input_otp_scope(
+        chrome.apply(input_otp_scope(
             id,
             max_length,
             value,
             disabled,
             invalid,
             pattern,
-            class,
             move || {
                 if let Some(body) = custom_body {
                     body()
@@ -989,11 +944,7 @@ impl From<InputOtpBuilder> for Element {
                     build_default_slots(max_length, separator_at)
                 }
             },
-        );
-        if let Some(style) = style {
-            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-        }
-        el
+        ))
     }
 }
 

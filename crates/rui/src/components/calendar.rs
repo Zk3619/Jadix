@@ -50,6 +50,8 @@ const CALENDAR_DAY_GRID_MIN_H: &str = "17rem";
 pub(crate) const CALENDAR_W: &str = "17.5rem";
 const YEAR_SELECT_LO: i32 = 1900;
 const YEAR_SELECT_HI: i32 = 2100;
+const CAPTION_MONTH_GROW: f32 = 1.0;
+const CAPTION_YEAR_GROW: f32 = 1.0;
 
 const MONTH_NAMES: [&str; 12] = [
     "January",
@@ -389,11 +391,11 @@ pub(crate) fn calendar_month_select(id: impl Into<String>, value: Signal<String>
     for (i, name) in MONTH_NAMES.iter().enumerate() {
         b = b.item(SelectItemData::new((i + 1).to_string(), *name));
     }
-    caption_select_flex_item(b.into(), 1.25)
+    caption_select_flex_item(b.into(), CAPTION_MONTH_GROW)
 }
 
 /// Aria `CalendarYearPicker`：复用产品面 [`select`]。
-/// 与月份共用 flex 槽；年份字更短，grow 略小，空间不够时同样省略。
+/// 与月份共用 flex 槽；grow 2:1（月份 : 年份），`flex-basis: 0` 让比例不受内容宽度干扰。
 pub(crate) fn calendar_year_select(
     id: impl Into<String>,
     value: Signal<String>,
@@ -410,7 +412,7 @@ pub(crate) fn calendar_year_select(
     for yy in lo..=hi {
         b = b.item(SelectItemData::new(yy.to_string(), yy.to_string()));
     }
-    caption_select_flex_item(b.into(), 0.75)
+    caption_select_flex_item(b.into(), CAPTION_YEAR_GROW)
 }
 
 fn build_calendar_view(
@@ -1104,12 +1106,14 @@ mod tests {
         );
         assert!(
             matches!(dim_kind(year.style.flex_basis), DimKind::Length(v) if v < 0.5),
-            "year flex-basis 0 so two caption selects share the row, got {:?}",
+            "year flex-basis 0 so month:year grow 2:1, got {:?}",
             dim_kind(year.style.flex_basis)
         );
         assert!(
-            year.style.flex_grow > 0.5,
-            "year select must share the caption row, grow={}",
+            (month.style.flex_grow - CAPTION_MONTH_GROW).abs() < 0.01
+                && (year.style.flex_grow - CAPTION_YEAR_GROW).abs() < 0.01,
+            "caption selects must grow 2:1, month={} year={}",
+            month.style.flex_grow,
             year.style.flex_grow
         );
         assert!(
@@ -1118,6 +1122,12 @@ mod tests {
                 DimKind::Length(px) if (px - 76.0).abs() < 1.0
             ),
             "must not pin a 4.75rem year chip"
+        );
+        assert!(
+            matches!(dim_kind(year.style.min_size.width), DimKind::Length(v) if v < 0.5)
+                || matches!(dim_kind(year.style.min_size.width), DimKind::Auto),
+            "year select min-width must follow the 2:1 slot, got {:?}",
+            dim_kind(year.style.min_size.width)
         );
     }
 
@@ -1195,6 +1205,12 @@ mod tests {
             "month select must not overlap prev nav: month={:?} prev={:?}",
             month.layout_bounds,
             prev.layout_bounds
+        );
+        assert!(
+            (month.layout_bounds[2] - year.layout_bounds[2] * 2.0).abs() < 2.0,
+            "month:year laid-out width must be 2:1, month={:?} year={:?}",
+            month.layout_bounds,
+            year.layout_bounds
         );
         assert!(
             !xywh_overlap(year.layout_bounds, next.layout_bounds),

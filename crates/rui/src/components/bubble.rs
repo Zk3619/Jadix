@@ -1504,19 +1504,12 @@ fn take_packed(mut el: Element) -> Vec<Element> {
 pub fn bubble_scope(
     variant: BubbleVariant,
     align: BubbleAlign,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     with_child_owner(|| {
         provide_context(bubble_context(), BubbleCtx { variant, align });
         let kids = finalize_bubble_children(variant, take_packed(body()));
-        let mut root = build_bubble_root(variant, align, kids);
-        if let Some(ref c) = class {
-            if !c.trim().is_empty() {
-                root = with_class_list(root, c);
-            }
-        }
-        root
+        build_bubble_root(variant, align, kids)
     })
 }
 
@@ -1624,22 +1617,14 @@ impl BubbleBuilder {
 
 impl From<BubbleBuilder> for Element {
     fn from(builder: BubbleBuilder) -> Self {
-        let class = if builder.chrome.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.chrome.class.clone())
-        };
-        let style = builder.chrome.style.clone();
-        let mut root = bubble_scope(builder.variant, builder.align, class, move || {
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children = builder.children;
-            frag
-        });
-        if let Some(style) = style {
-            root = style(crate::components::base::BaseComponentBuilder::new(root)).el;
-        }
-        root
+        builder
+            .chrome
+            .apply(bubble_scope(builder.variant, builder.align, move || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children = builder.children;
+                frag
+            }))
     }
 }
 
@@ -1781,14 +1766,9 @@ pub fn BubbleGroup(children: Option<Element>) -> Element {
 /// RSX 备用入口（复合面请走宏 → [`bubble_scope`]）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn Bubble(
-    variant: BubbleVariant,
-    align: BubbleAlign,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn Bubble(variant: BubbleVariant, align: BubbleAlign, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    bubble_scope(variant, align, class, move || {
+    bubble_scope(variant, align, move || {
         let mut frag = Element::new();
         frag.set_attr("rui_fragment", "1");
         frag.children = kids;

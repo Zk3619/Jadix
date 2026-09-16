@@ -273,12 +273,10 @@ pub struct HoverCardContentOpts {
     pub align: String,
     /// Gap between trigger and panel (logical px); default **4** (ShadCN `sideOffset`).
     pub side_offset: f32,
-    /// Extra utility class list.
-    pub class: Option<String>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
     /// Optional panel width. **Default none** (content width, base parity); pass `16rem` / `w-64` for demo / radix.
     pub width: Option<String>,
-    /// Layout/paint on the panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for HoverCardContentOpts {
@@ -287,15 +285,14 @@ impl Default for HoverCardContentOpts {
             side: "bottom".into(),
             align: "center".into(),
             side_offset: FLOATING_TRIGGER_GAP,
-            class: None,
+            panel: Default::default(),
             width: None,
-            style: None,
         }
     }
 }
 
 impl HoverCardContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// ShadCN `cn-hover-card-content` panel surface (no Portal / no floating).
@@ -349,7 +346,7 @@ pub fn hover_card_content(
 ) -> Element {
     let ctx = require_hover_card("HoverCardContent");
     let content_hovered = ctx.content_hovered;
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let width = opts.width.clone();
     let ao_opts = AnchoredOverlayContentOpts {
         side: opts.side.clone(),

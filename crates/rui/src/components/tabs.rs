@@ -68,7 +68,7 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     ensure_class_list, is_variant_style_overridden, patch_class_set_base_paint, ClassSet,
-    LineStyle, VariantStyleField, WhiteSpace,
+    LineStyle, VariantStyleField, WhiteSpace, TAILWIND_TEXT_SM_LEADING_SCALE,
 };
 use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
@@ -362,14 +362,16 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
                 .insert("text_align".to_string(), "center".to_string());
             paint = true;
         }
-        if !lock_leading
-            && (el.text_style.line_height_scale != Some(1.0)
-                || el.text_style.line_height_px.is_some())
-        {
-            el.text_style.line_height_px = None;
-            el.text_style.line_height_scale = Some(1.0);
-            el.attrs.insert("leading".to_string(), "1".to_string());
-            layout = true;
+        if !lock_leading {
+            let want = Some(TAILWIND_TEXT_SM_LEADING_SCALE);
+            if el.text_style.line_height_scale != want || el.text_style.line_height_px.is_some() {
+                // text-sm on the chip root (14px / 1.25rem). Do not stamp leading-none —
+                // that fights cascade and author `leading`.
+                el.text_style.line_height_px = None;
+                el.text_style.line_height_scale = want;
+                el.text_style.line_height_specified = true;
+                layout = true;
+            }
         }
         if el.text_style.white_space != WhiteSpace::Nowrap {
             el.text_style.white_space = WhiteSpace::Nowrap;
@@ -389,7 +391,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
 }
 
 fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> Element {
-    let selected = ctx.value.peek() == value;
+    let selected = ctx.value.try_peek().as_deref() == Some(value);
     let (bg, fg) = trigger_colors(selected, disabled, false);
     let mut chip: Element = hstack()
         .w("auto")
@@ -407,7 +409,7 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
         .text(label)
         .text_size(14.0)
         .font_weight(500.0)
-        .text_leading_none()
+        .text_leading(TAILWIND_TEXT_SM_LEADING_SCALE)
         .text_color(fg)
         .text_center()
         .whitespace_nowrap();
@@ -654,13 +656,13 @@ pub fn TabsList(
         if is_tabs_trigger(child) {
             let on = child
                 .radio_selected_sync
-                .map(|s| {
-                    s.peek()
-                        == child
-                            .attrs
-                            .get(ATTR_TABS_VALUE)
-                            .map(|v| v.as_str())
-                            .unwrap_or("")
+                .and_then(|s| s.try_peek())
+                .map(|cur| {
+                    cur == child
+                        .attrs
+                        .get(ATTR_TABS_VALUE)
+                        .map(|v| v.as_str())
+                        .unwrap_or("")
                 })
                 .unwrap_or(false);
             apply_trigger_chrome(child, on, false);
@@ -812,7 +814,10 @@ pub fn TabsContent(value: String, children: Option<Element>) -> Element {
     let selected = ctx.value;
     let want = value;
     panel = panel.reactive_sync(move |el, layout_tree| {
-        let show = selected.peek() == want;
+        let Some(current) = selected.try_peek() else {
+            return LayoutStatus::Clean;
+        };
+        let show = current == want;
         let want_d = if show { Display::Flex } else { Display::None };
         if el.style.display != want_d {
             el.style.display = want_d;
@@ -1045,6 +1050,10 @@ pub(crate) fn sync_tabs_trigger_subtree(
                 *impact = impact.merge(LayoutStatus::StructureChanged);
             }
             if let Some(sel) = el.radio_selected_sync {
+                if !sel.is_alive() {
+                    el.radio_selected_sync = None;
+                    return;
+                }
                 let item_value = el
                     .attrs
                     .get(ATTR_TABS_VALUE)
@@ -1149,6 +1158,12 @@ mod tests {
             triggers[0].children.iter().all(|c| c.text.is_none()),
             "label on ContentBox trigger — not a shrink-wrapped caption child"
         );
+        assert_eq!(
+            triggers[0].text_style.line_height_scale,
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
+            "chip root is text-sm leading, not leading-none"
+        );
+        assert_ne!(triggers[0].text_style.line_height_scale, Some(1.0));
     }
 
     #[test]

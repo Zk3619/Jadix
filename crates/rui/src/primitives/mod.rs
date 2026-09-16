@@ -1,7 +1,7 @@
 //! 原子原语层：声明式 UI 的底座。
 //!
 //! - **[`r#box`] / [`boxed`] / [`hstack`] / [`vstack`] / [`gstack`]**：布局与视觉容器。
-//! - **[`interactive`]**：点击、悬停、键盘与焦点挂载。
+//! - **[`interactive`]**：点击、悬停、键盘、焦点与 `disabled`。
 //! - **[`overlay`]**：全屏模态遮罩（色 / 透明度 / backdrop 模糊 / 点击关闭）。
 //! - **[`text`] / [`icon`]**：纯文本与图标叶子。
 //! - **[`path`]**：折线/多边形/扇区（WP-3.2 / 3.11 共用核；CPU 覆盖率光栅贴图，tessellate 回退）。
@@ -31,7 +31,7 @@ pub mod text;
 
 pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
 pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
-pub use interactive::{interactive, InteractiveBuilder};
+pub use interactive::{apply_disabled, interactive, InteractiveBuilder};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
     attach_path, attach_polyline, decode_path_d, draw_polyline_batch, draw_polyline_batch_stub,

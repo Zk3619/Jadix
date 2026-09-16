@@ -286,11 +286,6 @@ pub fn Textarea(
     resizable: Option<bool>,
     resize_max_h: Option<f32>,
     wrap: Option<String>,
-    caret_color: Option<String>,
-    selection_background: Option<String>,
-    selection_foreground: Option<String>,
-    ring_width: Option<f32>,
-    ring_color: Option<String>,
     value: Option<Signal<String>>,
     undo_enabled: Option<bool>,
     max_undo_entries: Option<u32>,
@@ -314,21 +309,6 @@ pub fn Textarea(
     }
     if let Some(w) = wrap {
         b = b.wrap(w);
-    }
-    if let Some(c) = caret_color {
-        b = b.caret_color(c);
-    }
-    if let Some(c) = selection_background {
-        b = b.selection_background(c);
-    }
-    if let Some(c) = selection_foreground {
-        b = b.selection_foreground(c);
-    }
-    if let Some(w) = ring_width {
-        b = b.ring_width(w);
-    }
-    if let Some(c) = ring_color {
-        b = b.ring_color(c);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);

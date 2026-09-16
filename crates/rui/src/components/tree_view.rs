@@ -64,8 +64,8 @@ use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, is_variant_style_overridden, parse_color, with_class_list,
-    TransitionEntry, TransitionProperty, VariantStyleField,
+    css_transition_needs_frame, is_variant_style_overridden, parse_color, TransitionEntry,
+    TransitionProperty, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::motion::ensure_motion_transitions;
@@ -735,13 +735,11 @@ fn build_collapsible_node(
         Some(open_sig),
         open_sig.try_peek().unwrap_or(false),
         false,
-        None,
         exclusive,
         group,
         move || {
             let trigger = CollapsibleTrigger(CollapsibleTriggerProps {
                 disabled: Some(false),
-                class: None,
                 base: None,
                 children: Some(row_chrome.apply(with_row_hover_chrome(
                     &ctx_trigger,
@@ -888,7 +886,6 @@ pub fn tree_view_scope(
     variant: TreeViewVariant,
     expanded: Option<Signal<HashSet<String>>>,
     expanded_storage_key: Option<String>,
-    class: Option<String>,
     row_height: f32,
     height: Option<f32>,
     exclusive: Option<bool>,
@@ -940,9 +937,6 @@ pub fn tree_view_scope(
         .gap(0.0)
         .child(tree_body)
         .into();
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        shell = with_class_list(shell, &c);
-    }
     shell
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
@@ -953,19 +947,11 @@ pub fn tree_view_scope(
     shell
 }
 
-fn apply_tree_view_style(el: Element, style: Option<SlotStyleFn>) -> Element {
-    match style {
-        Some(f) => f(BaseComponentBuilder::new(el)).el,
-        None => el,
-    }
-}
-
 /// 宏 `<TreeViewItem>`：标记节点元数据；由 [`tree_view_scope`] 统一建树。
 pub fn tree_view_item_scope(
     node_id: impl Into<String>,
     label: impl Into<String>,
     disabled: bool,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let _ctx = require_tree_view("TreeViewItem");
@@ -991,9 +977,6 @@ pub fn tree_view_item_scope(
             el.attrs
                 .insert("rui_tree_item_disabled".to_string(), "1".into());
         }
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = with_class_list(el, &c);
-        }
         el
     })
 }
@@ -1015,11 +998,17 @@ fn extract_item_nodes(kids: &[Element]) -> Vec<TreeNode> {
                 .cloned()
                 .unwrap_or_else(|| id.clone());
             let children = extract_item_nodes(&el.children);
+            let class = el
+                .class_set
+                .as_ref()
+                .map(|cs| cs.base.join(" "))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_default();
             Some(TreeNode {
                 id,
                 label,
                 children,
-                chrome: SlotChrome::default(),
+                chrome: SlotChrome { class, style: None },
             })
         })
         .collect()
@@ -1035,7 +1024,6 @@ pub fn TreeView(
     variant: Option<String>,
     expanded: Option<Signal<HashSet<String>>>,
     expanded_storage_key: Option<String>,
-    class: Option<String>,
     row_height: Option<f32>,
     height: Option<f32>,
     exclusive: Option<bool>,
@@ -1055,7 +1043,6 @@ pub fn TreeView(
         variant,
         expanded,
         expanded_storage_key,
-        class,
         row_height,
         height,
         exclusive,
@@ -1074,11 +1061,10 @@ pub fn TreeViewItem(
     id: String,
     label: Option<String>,
     disabled: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let label = label.unwrap_or_else(|| id.clone());
-    let mut el = tree_view_item_scope(id.clone(), label.clone(), disabled, class, move || {
+    let mut el = tree_view_item_scope(id.clone(), label.clone(), disabled, move || {
         children.unwrap_or_else(Element::new)
     });
     el.attrs.insert("rui_tree_item_label".to_string(), label);
@@ -1190,13 +1176,11 @@ impl TreeViewBuilder {
 
     /// 在上下文内构建任意子树（`TreeViewItem` 等）。
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        let style = self.style.clone();
-        let el = tree_view_scope(
+        SlotChrome::from_opts(self.class, self.style).apply(tree_view_scope(
             self.id,
             self.variant,
             self.expanded,
             self.expanded_storage_key,
-            self.class,
             self.row_height,
             self.height,
             self.exclusive,
@@ -1205,8 +1189,7 @@ impl TreeViewBuilder {
             self.on_select,
             Vec::new(),
             body,
-        );
-        apply_tree_view_style(el, style)
+        ))
     }
 }
 
@@ -1227,24 +1210,20 @@ impl From<TreeViewBuilder> for Element {
             selected,
             on_select,
         } = builder;
-        apply_tree_view_style(
-            tree_view_scope(
-                id,
-                variant,
-                expanded,
-                expanded_storage_key,
-                class,
-                row_height,
-                height,
-                exclusive,
-                chrome,
-                selected,
-                on_select,
-                roots,
-                Element::new,
-            ),
-            style,
-        )
+        SlotChrome::from_opts(class, style).apply(tree_view_scope(
+            id,
+            variant,
+            expanded,
+            expanded_storage_key,
+            row_height,
+            height,
+            exclusive,
+            chrome,
+            selected,
+            on_select,
+            roots,
+            Element::new,
+        ))
     }
 }
 
@@ -1740,7 +1719,6 @@ mod tests {
             variant: Some("collapsible".into()),
             expanded: None,
             expanded_storage_key: None,
-            class: None,
             row_height: None,
             height: None,
             exclusive: None,

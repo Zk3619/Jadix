@@ -13,8 +13,8 @@ use crate::core::reactivity::{
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::utils::modal_motion::{
-    apply_modal_shell_motion, default_slide_axis_px, mounted_signal, sync_modal_presence,
-    use_modal_presence, ModalPresenceHandle,
+    apply_modal_shell_motion, bind_modal_open, default_slide_axis_px, mounted_signal,
+    sync_modal_presence, use_modal_presence, ModalPresenceHandle,
 };
 use crate::utils::modal_shell::ModalShellZs;
 use crate::utils::modal_shell::{
@@ -292,10 +292,12 @@ pub(crate) struct ViewportModalPortal {
 /// `open.get()` lives here, not in the paint island. Tracking `open` in the view
 /// rebuilds overlay/panel/zoom on close (StructureChanged + zoom recapture).
 fn arm_modal_open_sync(id: &str, open: Signal<bool>, presence: &ModalPresenceHandle) {
+    bind_modal_open(presence, open);
     let presence = presence.clone();
     let id = id.to_string();
     create_computed(move || {
-        let _ = sync_modal_presence(&presence, open.get());
+        let want = open.try_get().unwrap_or(false);
+        let _ = sync_modal_presence(&presence, want);
         let mounted = mounted_signal(&presence);
         let _ = modal_sync_presence(&id, open, mounted);
     });
@@ -501,6 +503,7 @@ fn assemble_modal(
     body: Element,
 ) -> Element {
     let _ = sync_modal_presence(presence, open.peek());
+    bind_modal_open(presence, open);
     let Some(portal) = viewport_modal_portal_if_mounted(id, open, presence) else {
         return Element::new().w(0.0).h(0.0);
     };
@@ -1359,5 +1362,137 @@ mod tests {
             "portal panel must have non-zero laid-out bounds on first open"
         );
         clear_overlay_stack();
+    }
+
+    /// TabsContent dispose kills the modal owner. The hoisted overlay must still
+    /// play Dialog fade-out instead of being pruned on the same frame.
+    #[test]
+    fn tab_unmount_plays_configured_modal_exit() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::tabs::{tabs_content, tabs_scope};
+        use crate::core::reactivity::{component_root, create_effect, create_root, use_signal};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+            tick_modal_presence,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, tab) = create_root(|| {
+            let tab = use_signal("vm-tab-exit__tabs", || "a".to_string());
+            let live_e = Rc::clone(&live);
+            let tab_e = tab;
+            create_effect(move || {
+                *live_e.borrow_mut() =
+                    tabs_scope("vm-tab-exit", Some(tab_e), "a", "horizontal", false, || {
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag = frag.children(vec![
+                            tabs_content("a", || {
+                                component_root(|| {
+                                    viewport_modal("vm-tab-a")
+                                        .open(Signal::new(true))
+                                        .motion(ModalSurfaceMotion::DialogFade)
+                                        .child(|| {
+                                            Element::new()
+                                                .text("dialog")
+                                                .w(320.0)
+                                                .h(200.0)
+                                                .bg([1.0, 1.0, 1.0, 1.0])
+                                        })
+                                })
+                            }),
+                            tabs_content("b", || component_root(|| Element::new().text("other"))),
+                        ]);
+                        frag
+                    });
+            });
+            tab
+        });
+        drain_deferred_view_remounts();
+
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        fn has_anim(el: &Element, name: &str) -> bool {
+            el.style.animations.iter().any(|a| a.name == name)
+                || el.children.iter().any(|c| has_anim(c, name))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            let _ = flush_modal_shell_motion_subtree(root);
+            let _ = tick_hoisted_modal_css(root);
+        }
+
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+            present_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "vm-tab-a__modal_overlay").is_some(),
+                "open modal must hoist the overlay before the tab switch"
+            );
+        }
+
+        tab.set("b".into());
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        {
+            let _ = tick_modal_presence();
+            drain_pending_modal_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            let overlay = find_tid(&tree, "vm-tab-a__modal_overlay")
+                .expect("tab unmount must keep the hoisted overlay for the configured exit");
+            assert!(
+                has_anim(overlay, "fade-out-0"),
+                "tab unmount must seed fade-out-0 instead of dropping the modal"
+            );
+        }
+
+        for _ in 0..24 {
+            let _ = tick_modal_presence();
+            drain_pending_modal_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "vm-tab-a__modal_overlay").is_none(),
+                "overlay must drop after the exit animation completes"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

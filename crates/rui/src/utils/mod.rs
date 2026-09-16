@@ -50,7 +50,10 @@ pub mod viewport_modal;
 pub mod virtual_list;
 pub mod virtual_masonry;
 
-pub use crate::app::portal_overlay::{page_scroll_locked, set_page_scroll_locked};
+pub use crate::app::portal_overlay::{
+    page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
+    ScrollFreeze,
+};
 pub use block_on::block_on;
 pub use collapse_panel::{
     apply_collapse_motion, seed_collapse_enter_anim, seed_collapse_exit_anim,

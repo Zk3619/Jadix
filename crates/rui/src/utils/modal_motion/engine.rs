@@ -149,6 +149,8 @@ struct ModalPresenceCell {
     exit_armed: bool,
     /// The motion registered by the latest shell build (the only source of flush after hoist).
     shell: Option<ModalShellState>,
+    /// Logical `open`; used to arm exit after the viewport-modal island is disposed.
+    open: Option<Signal<bool>>,
     /// Dialog CSS exit: first frame seed `fade-out-0` / `zoom-out-95`.
     needs_exit_anim: bool,
     /// Drawer 松手后：从当前拖拽位移 CSS transition 吸附到 snap（对齐 `data-swiping:duration-0` → 恢复 duration）。
@@ -269,6 +271,7 @@ pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
             enter_started: None,
             exit_armed: false,
             shell: None,
+            open: None,
             needs_exit_anim: false,
             slide_settle: false,
             slide_settle_from: None,
@@ -276,11 +279,120 @@ pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
         PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
         rc
     });
-    ModalPresenceHandle { cell: cell.peek() }
+    let handle = ModalPresenceHandle { cell: cell.peek() };
+    take_over_stale_modal_presence(&handle);
+    handle
+}
+
+fn take_over_stale_modal_presence(handle: &ModalPresenceHandle) {
+    let stale = {
+        let c = handle.cell.borrow();
+        if !c.gate.is_mounted() {
+            return;
+        }
+        match c.open {
+            Some(s) => s.try_peek().is_none(),
+            None => false,
+        }
+    };
+    if !stale {
+        return;
+    }
+    finish_modal_exit_immediate(handle);
+    handle.cell.borrow_mut().open = None;
 }
 
 pub(crate) fn mounted_signal(handle: &ModalPresenceHandle) -> Signal<bool> {
     handle.cell.borrow().mounted
+}
+
+pub(crate) fn bind_modal_open(handle: &ModalPresenceHandle, open: Signal<bool>) {
+    handle.cell.borrow_mut().open = Some(open);
+}
+
+fn should_arm_orphan_modal_exit(c: &ModalPresenceCell) -> bool {
+    if !c.gate.is_mounted() || c.shell.is_none() {
+        return false;
+    }
+    let Some(open) = c.open else {
+        return false;
+    };
+    open.try_peek().is_none()
+}
+
+fn arm_orphaned_modal_exits() -> bool {
+    let mut armed = false;
+    PRESENCE_REGISTRY.with(|reg| {
+        for cell_rc in reg.borrow().iter() {
+            let handle = ModalPresenceHandle {
+                cell: Rc::clone(cell_rc),
+            };
+            let has_exit = {
+                let c = handle.cell.borrow();
+                if !should_arm_orphan_modal_exit(&c) {
+                    continue;
+                }
+                c.shell
+                    .as_ref()
+                    .is_some_and(|s| modal_motion_has_exit(s.motion))
+            };
+            if !has_exit {
+                finish_modal_exit_immediate(&handle);
+                continue;
+            }
+            let phase = sync_modal_presence(&handle, false);
+            if let Some(s) = handle.cell.borrow_mut().shell.as_mut() {
+                s.phase = phase;
+            }
+            if phase == PresencePhase::Exiting {
+                armed = true;
+            }
+        }
+    });
+    if armed {
+        arm_modal_event_loop_wake();
+    }
+    armed
+}
+
+fn modal_motion_has_exit(motion: ModalSurfaceMotion) -> bool {
+    match motion {
+        ModalSurfaceMotion::DialogFade
+        | ModalSurfaceMotion::SlideFromTop
+        | ModalSurfaceMotion::SlideFromBottom
+        | ModalSurfaceMotion::SlideFromLeft
+        | ModalSurfaceMotion::SlideFromRight => true,
+    }
+}
+
+fn finish_modal_exit_immediate(handle: &ModalPresenceHandle) {
+    let mounted_sig = mounted_signal(handle);
+    {
+        let mut c = handle.cell.borrow_mut();
+        c.gate.force_absent();
+        c.exit_armed = false;
+        c.needs_exit_anim = false;
+        c.enter_active = false;
+        c.shell = None;
+    }
+    if mounted_sig.try_peek() == Some(true) {
+        mounted_sig.set(false);
+    }
+}
+
+fn prune_finished_orphaned_modals() {
+    PRESENCE_REGISTRY.with(|reg| {
+        reg.borrow_mut().retain(|cell| {
+            let c = cell.borrow();
+            if c.gate.is_mounted() {
+                return true;
+            }
+            match c.open {
+                Some(open) => open.try_peek().is_some(),
+                None => true,
+            }
+        });
+    });
 }
 
 /// 同步 `open` 期望；返回当前相位。
@@ -337,8 +449,9 @@ pub(crate) fn sync_modal_presence(handle: &ModalPresenceHandle, want_open: bool)
 
 /// 事件循环推进退场计时；返回是否仍需 redraw。
 pub(crate) fn tick_modal_presence() -> bool {
+    let orphaned = arm_orphaned_modal_exits();
     let now = Instant::now();
-    let mut needs_frame = false;
+    let mut needs_frame = orphaned;
     let mut unmount: Vec<Signal<bool>> = Vec::new();
     PRESENCE_REGISTRY.with(|reg| {
         for cell in reg.borrow().iter() {
@@ -390,6 +503,7 @@ pub(crate) fn tick_modal_presence() -> bool {
         sig.set(false);
         crate::app::runtime::try_hoist_portals_now();
     }
+    prune_finished_orphaned_modals();
     needs_frame
 }
 
@@ -1622,7 +1736,7 @@ pub(crate) fn modal_shell_defer_css_tick(tid: Option<&str>) -> bool {
 
 /// After Portal hoist: Press presence registration + `template_id` to write motion to the hoisted tree.
 pub(crate) fn flush_modal_shell_motion_subtree(root: &mut Element) -> bool {
-    let mut needs_frame = false;
+    let mut needs_frame = arm_orphaned_modal_exits();
     PRESENCE_REGISTRY.with(|reg| {
         for cell_rc in reg.borrow().iter() {
             let (shell, handle) = {
@@ -1649,6 +1763,40 @@ pub(crate) fn flush_modal_shell_motion_subtree(root: &mut Element) -> bool {
         needs_frame = true;
     }
     needs_frame
+}
+
+/// Keep a hoisted modal overlay/stage after the viewport-modal island is disposed.
+pub(crate) fn hoisted_should_retain(el: &Element) -> bool {
+    PRESENCE_REGISTRY.with(|reg| {
+        reg.borrow().iter().any(|cell| {
+            let c = cell.borrow();
+            if !c.gate.is_mounted() {
+                return false;
+            }
+            let Some(id) = c.shell.as_ref().map(|s| s.modal_id.as_str()) else {
+                return false;
+            };
+            subtree_belongs_to_modal(el, id)
+        })
+    })
+}
+
+fn subtree_belongs_to_modal(el: &Element, modal_id: &str) -> bool {
+    let overlay = format!("{modal_id}__modal_overlay");
+    let panel = format!("{modal_id}__modal_panel");
+    let zoom = format!("{modal_id}__modal_zoom");
+    let mut stack: Vec<&Element> = vec![el];
+    while let Some(n) = stack.pop() {
+        if let Some(tid) = n.template_id.as_deref() {
+            if tid == overlay || tid == panel || tid == zoom {
+                return true;
+            }
+        }
+        for c in n.children.iter().rev() {
+            stack.push(c);
+        }
+    }
+    false
 }
 
 /// Register shell motion (only write presence + `template_id`; write live tree by flush after hoist).

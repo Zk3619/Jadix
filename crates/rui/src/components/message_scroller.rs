@@ -93,7 +93,6 @@ use crate::core::tree::{parse_text_color, Element, LayoutStatus, ATTR_POINTER_EV
 use crate::impl_slot_chrome_methods;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::with_class_list;
 use crate::tokens;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
@@ -784,7 +783,6 @@ pub fn message_scroller_scope(
     default_scroll_position: impl Into<MessageScrollerDefaultPosition>,
     scroll_edge_threshold: f32,
     scroll_previous_item_peek: f32,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "message-scroller");
@@ -838,9 +836,6 @@ pub fn message_scroller_scope(
             frag.set_attr("rui_fragment", "1");
             frag.children(kids)
         };
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = with_class_list(el, &c);
-        }
         el.template_id = Some(id.clone());
         el
     })
@@ -855,7 +850,6 @@ pub fn MessageScrollerProvider(
     default_scroll_position: MessageScrollerDefaultPosition,
     scroll_edge_threshold: Option<f32>,
     scroll_previous_item_peek: Option<f32>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     message_scroller_scope(
@@ -864,7 +858,6 @@ pub fn MessageScrollerProvider(
         default_scroll_position,
         scroll_edge_threshold.unwrap_or(DEFAULT_EDGE_THRESHOLD),
         scroll_previous_item_peek.unwrap_or(DEFAULT_PREVIOUS_PEEK),
-        class,
         move || children.unwrap_or_else(Element::new),
     )
 }
@@ -1172,7 +1165,6 @@ impl From<MessageScrollerProviderBuilder> for Element {
             builder.default_scroll_position,
             builder.scroll_edge_threshold,
             builder.scroll_previous_item_peek,
-            None,
             move || packed_children(collect_delayed(builder.children)).unwrap_or_else(Element::new),
         );
         chrome.apply(el)
@@ -1455,7 +1447,6 @@ mod tests {
             MessageScrollerDefaultPosition::End,
             DEFAULT_EDGE_THRESHOLD,
             DEFAULT_PREVIOUS_PEEK,
-            None,
             || {
                 message_scroller_viewport()
                     .style(|b| b.text_size(11.0))

@@ -47,19 +47,19 @@ use rui_macros::component;
 use taffy::style::{AlignItems, Display, FlexDirection, JustifyContent};
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::base::{ensure_data_slot, overlay_root_author_text, SlotStyleFn};
+use crate::components::base::{ensure_data_slot, overlay_root_author_text, SlotChrome};
 use crate::core::reactivity::{
     create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
     with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::impl_simple_slot_builder;
+use crate::impl_slot_chrome_methods;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry,
-    TransitionProperty,
+    css_transition_needs_frame, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::collapse_panel::{
@@ -267,7 +267,6 @@ pub fn collapsible_scope(
     open: Option<Signal<bool>>,
     default_open: bool,
     disabled: bool,
-    class: Option<String>,
     exclusive: bool,
     group: Option<String>,
     body: impl FnOnce() -> Element,
@@ -280,7 +279,7 @@ pub fn collapsible_scope(
             bind_collapsible_exclusive(id.clone(), g, open);
         }
     }
-    let mut root = with_child_owner(|| {
+    let mut root: Element = with_child_owner(|| {
         provide_context(
             collapsible_context(),
             CollapsibleCtx {
@@ -290,11 +289,7 @@ pub fn collapsible_scope(
             },
         );
         let kids = take_fragment(body());
-        let mut root: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            root = with_class_list(root, &c);
-        }
-        root
+        vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into()
     });
     root.attrs
         .insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
@@ -376,11 +371,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
 /// ShadCN `CollapsibleTrigger`：点击切换；纯文本行带 chevron，自定义子节点则 chain click。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn CollapsibleTrigger(
-    disabled: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn CollapsibleTrigger(disabled: bool, children: Option<Element>) -> Element {
     let ctx = require_collapsible("CollapsibleTrigger");
     let item_disabled = disabled || ctx.disabled;
     let open_sig = ctx.open;
@@ -413,9 +404,6 @@ pub fn CollapsibleTrigger(
             let mut trigger = chain_click(trigger, toggle);
             if item_disabled {
                 trigger = trigger.opacity(0.5).cursor_not_allowed();
-            }
-            if let Some(cls) = class.filter(|s| !s.trim().is_empty()) {
-                trigger = with_class_list(trigger, &cls);
             }
             trigger
                 .attrs
@@ -484,9 +472,6 @@ pub fn CollapsibleTrigger(
     } else {
         trigger = trigger.cursor_kind(crate::core::tree::CursorKind::Pointer);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        trigger = with_class_list(trigger, &c);
-    }
 
     let mut host: Element = hstack().w("100%").min_w(0.0).child(trigger).into();
     host.attrs
@@ -497,7 +482,7 @@ pub fn CollapsibleTrigger(
 /// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`collapsible_content`]）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn CollapsibleContent(class: Option<String>, children: Option<Element>) -> Element {
+pub fn CollapsibleContent(children: Option<Element>) -> Element {
     let ctx = require_collapsible("CollapsibleContent");
     let open_sig = ctx.open;
     let presence = use_collapse_panel_presence(&format!("{}:presence", ctx.id));
@@ -521,9 +506,6 @@ pub fn CollapsibleContent(class: Option<String>, children: Option<Element>) -> E
     inner = inner
         .text_size(14.0)
         .text_color(parse_text_color("muted-foreground"));
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        inner = with_class_list(inner, &c);
-    }
 
     let mut panel: Element = vstack().w("100%").min_w(0.0).min_h(0.0).child(inner).into();
     panel
@@ -551,7 +533,6 @@ pub fn Collapsible(
     open: Option<Signal<bool>>,
     default_open: bool,
     disabled: bool,
-    class: Option<String>,
     exclusive: bool,
     group: Option<String>,
     children: Option<Element>,
@@ -561,7 +542,6 @@ pub fn Collapsible(
         open,
         default_open,
         disabled,
-        class,
         exclusive,
         group,
         move || children.unwrap_or_else(Element::new),
@@ -575,8 +555,7 @@ pub struct CollapsibleBuilder {
     open: Option<Signal<bool>>,
     default_open: bool,
     disabled: bool,
-    class: Option<String>,
-    style: Option<SlotStyleFn>,
+    chrome: SlotChrome,
     exclusive: bool,
     group: Option<String>,
     trigger: Option<Box<dyn FnOnce() -> Element>>,
@@ -591,8 +570,7 @@ pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
         open: None,
         default_open: false,
         disabled: false,
-        class: None,
-        style: None,
+        chrome: SlotChrome::default(),
         exclusive: false,
         group: None,
         trigger: None,
@@ -602,6 +580,8 @@ pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
 }
 
 impl CollapsibleBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn open_signal(mut self, s: Signal<bool>) -> Self {
         self.open = Some(s);
         self
@@ -619,22 +599,6 @@ impl CollapsibleBuilder {
 
     pub fn disabled(mut self, v: bool) -> Self {
         self.disabled = v;
-        self
-    }
-
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
-        self
-    }
-
-    pub fn style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.style = Some(std::rc::Rc::new(f));
         self
     }
 
@@ -677,27 +641,16 @@ impl CollapsibleBuilder {
 
     /// 在上下文内构建任意子树（Trigger / Content 等）。
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        apply_collapsible_style(
-            collapsible_scope(
-                self.id,
-                self.open,
-                self.default_open,
-                self.disabled,
-                self.class,
-                self.exclusive,
-                self.group,
-                body,
-            ),
-            self.style,
-        )
+        self.chrome.apply(collapsible_scope(
+            self.id,
+            self.open,
+            self.default_open,
+            self.disabled,
+            self.exclusive,
+            self.group,
+            body,
+        ))
     }
-}
-
-fn apply_collapsible_style(mut el: Element, style: Option<SlotStyleFn>) -> Element {
-    if let Some(style) = style {
-        el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-    }
-    el
 }
 
 impl_simple_slot_builder!(
@@ -720,42 +673,37 @@ impl From<CollapsibleBuilder> for Element {
             open,
             default_open,
             disabled,
-            class,
-            style,
+            chrome,
             exclusive,
             group,
             trigger,
             content,
             content_slot,
         } = builder;
-        apply_collapsible_style(
-            collapsible_scope(
-                id,
-                open,
-                default_open,
-                disabled,
-                class,
-                exclusive,
-                group,
-                move || {
-                    let mut kids = Vec::new();
-                    if let Some(t) = trigger {
-                        kids.push(ensure_data_slot(t(), SLOT_TRIGGER, |el| {
-                            collapsible_trigger().child(el).into()
-                        }));
-                    }
-                    if let Some(c) = content_slot {
-                        kids.push(c());
-                    } else if let Some(c) = content {
-                        kids.push(collapsible_content(c));
-                    }
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(kids)
-                },
-            ),
-            style,
-        )
+        chrome.apply(collapsible_scope(
+            id,
+            open,
+            default_open,
+            disabled,
+            exclusive,
+            group,
+            move || {
+                let mut kids = Vec::new();
+                if let Some(t) = trigger {
+                    kids.push(ensure_data_slot(t(), SLOT_TRIGGER, |el| {
+                        collapsible_trigger().child(el).into()
+                    }));
+                }
+                if let Some(c) = content_slot {
+                    kids.push(c());
+                } else if let Some(c) = content {
+                    kids.push(collapsible_content(c));
+                }
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(kids)
+            },
+        ))
     }
 }
 
@@ -850,7 +798,6 @@ mod tests {
             disabled: Some(false),
             exclusive: Some(false),
             group: None,
-            class: None,
             children: None,
             base: None,
             ..Default::default()

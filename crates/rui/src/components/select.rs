@@ -5,8 +5,8 @@
 //!
 //! ```ignore
 //! ui! {
-//!   <Select id="fruit" value={sig} placeholder="Select a fruit" class="w-full">
-//!     <SelectTrigger>
+//!   <Select id="fruit" value={sig} placeholder="Select a fruit">
+//!     <SelectTrigger class="w-full">
 //!       <SelectValue />
 //!     </SelectTrigger>
 //!     <SelectContent max_h="12rem">
@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{bind_style, bind_text, StylePatch};
-use crate::components::base::SlotStyleFn;
+use crate::components::base::{author_class, paint_slot, SlotMap, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -61,6 +61,8 @@ use crate::utils::popup::{
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
+
+const SLOT_CONTENT: &str = "select-content";
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -193,14 +195,21 @@ pub fn select_scope(
                 min_height: None,
                 max_height: None,
                 placement: PopupPlacement::BottomStart,
-                trigger_class,
+                trigger_class: trigger_class.clone(),
                 content_class,
                 scroll_selected,
             },
         );
         let mut root = body();
         // 复合 Trigger + Content：相对定位容器；宽度吃满父级且允许收缩（避免撑破 Dialog）。
-        let kids = take_packed(root);
+        let mut kids = take_packed(root);
+        if !kids.is_empty() {
+            let merged = format!("{} {}", trigger_class, author_class(&kids[0]));
+            if class_is_full_width(&merged) {
+                let trigger = kids.remove(0);
+                kids.insert(0, trigger.min_w(0.0).overflow("hidden").flex_shrink(1.0));
+            }
+        }
         root = Element::from(
             vstack()
                 .gap("0")
@@ -215,6 +224,13 @@ pub fn select_scope(
     })
 }
 
+fn class_is_full_width(class: &str) -> bool {
+    class.split_whitespace().any(|t| {
+        let t = t.trim_end_matches('!');
+        t == "w-full" || t == "w-100" || t == "w-[100%]" || t == "w-100%"
+    })
+}
+
 // ---------------------------------------------------------------------------
 // SelectTrigger / SelectValue
 // ---------------------------------------------------------------------------
@@ -226,18 +242,12 @@ pub fn select_scope(
 /// `size`：`default`（h-8）| `sm`（h-7）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SelectTrigger(
-    class: Option<String>,
-    size: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn SelectTrigger(size: Option<String>, children: Option<Element>) -> Element {
     let ctx = require_select("SelectTrigger");
     let open = ctx.open;
     let trigger_id = format!("{}:trigger", ctx.id);
     ctx.trigger_fid.set(trigger_id.clone());
-    let class = class
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| ctx.trigger_class.clone());
+    let class = ctx.trigger_class.clone();
     let full_width = class.split_whitespace().any(|t| {
         let t = t.trim_end_matches('!');
         t == "w-full" || t == "w-100" || t == "w-[100%]" || t == "w-100%"
@@ -365,7 +375,7 @@ pub fn SelectValue(placeholder: Option<String>, children: Option<Element>) -> El
 /// `<SelectContent>` / [`select_content`] 选项。
 #[derive(Clone)]
 pub struct SelectContentOpts {
-    pub class: Option<String>,
+    pub panel: crate::components::base::SlotChrome,
     pub match_trigger: Option<bool>,
     pub menu_width: Option<String>,
     pub menu_height: Option<String>,
@@ -374,13 +384,12 @@ pub struct SelectContentOpts {
     pub placement: Option<PopupPlacement>,
     /// `none` | `start` | `center`；空则用根 [`SelectCtx::scroll_selected`]。
     pub scroll_selected: Option<String>,
-    pub style: Option<crate::components::base::SlotStyleFn>,
 }
 
 impl Default for SelectContentOpts {
     fn default() -> Self {
         Self {
-            class: None,
+            panel: Default::default(),
             match_trigger: None,
             menu_width: None,
             menu_height: None,
@@ -388,13 +397,12 @@ impl Default for SelectContentOpts {
             max_height: None,
             placement: None,
             scroll_selected: None,
-            style: None,
         }
     }
 }
 
 impl SelectContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// ShadCN `SelectContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
@@ -408,11 +416,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
     let min_height = opts.min_height.or(ctx.min_height.clone());
     let max_height = opts.max_height.or(ctx.max_height.clone());
     let placement = opts.placement.unwrap_or(ctx.placement);
-    let content_class = opts
-        .class
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| ctx.content_class.clone());
-    let content_style = opts.style.clone();
+    let panel = opts.panel.fallback_class(&ctx.content_class);
     let scroll_mode = opts
         .scroll_selected
         .as_deref()
@@ -445,10 +449,13 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
         let rows = untrack(|| body());
         let scroll_id = format!("{id_for_effect}:menu_scroll");
-        if !ctx.open.peek() {
+        let open_now = ctx.open.try_peek().unwrap_or(false);
+        if !open_now {
             crate::app::scroll_support::reset_scroll_item_into_view(&scroll_id);
         } else if scroll_mode != SelectScrollSelected::None {
-            if let Some(index) = find_select_item_index(&rows, &value.peek()) {
+            if let Some(index) =
+                find_select_item_index(&rows, &value.try_peek().unwrap_or_default())
+            {
                 let n = count_select_items(&rows).max(1);
                 let align = match scroll_mode {
                     SelectScrollSelected::Center => {
@@ -528,12 +535,8 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             menu.set_attr(ATTR_FLOATING_MAX_H, mh.as_str());
             menu = menu.max_h(mh.as_str());
         }
-        if !content_class.is_empty() {
-            menu = crate::components::base::SlotChrome {
-                class: content_class.clone(),
-                style: content_style.clone(),
-            }
-            .apply(menu);
+        if !panel.is_empty() {
+            menu = paint_slot(menu, SLOT_CONTENT, &panel);
         }
         menu
     })
@@ -589,7 +592,6 @@ pub fn SelectItem(
     value: String,
     disabled: bool,
     align: Option<String>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let ctx = require_select("SelectItem");
@@ -617,9 +619,6 @@ pub fn SelectItem(
         open.set(false);
         val_sig.set(ov.clone());
     });
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
     row.set_attr("rui_select_item", value.as_str());
     row.accesskit_role("option")
 }
@@ -821,7 +820,6 @@ impl From<SelectItemBuilder> for Element {
             value: Some(builder.value),
             disabled: Some(builder.disabled),
             align: None,
-            class: None,
             children: crate::components::base::packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -885,8 +883,7 @@ pub struct SelectBuilder {
     placement: PopupPlacement,
     trigger_class: String,
     trigger_style: Option<SlotStyleFn>,
-    content_class: String,
-    content_style: Option<SlotStyleFn>,
+    slots: SlotMap,
     scroll_selected: SelectScrollSelected,
 }
 
@@ -907,13 +904,15 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         placement: PopupPlacement::BottomStart,
         trigger_class: String::new(),
         trigger_style: None,
-        content_class: String::new(),
-        content_style: None,
+        slots: SlotMap::default(),
         scroll_selected: SelectScrollSelected::None,
     }
 }
 
 impl SelectBuilder {
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -975,7 +974,7 @@ impl SelectBuilder {
         self.placement = p;
         self
     }
-    /// Tailwind / utility class（触发器）。
+    /// Trigger 宽度别名。RSX 请写在 `<SelectTrigger class="…">`。
     pub fn class(mut self, c: impl Into<String>) -> Self {
         self.trigger_class = c.into();
         self
@@ -989,22 +988,6 @@ impl SelectBuilder {
             + 'static,
     ) -> Self {
         self.trigger_style = Some(std::rc::Rc::new(f));
-        self
-    }
-    /// Tailwind / utility class（菜单面板）。
-    pub fn content_class(mut self, c: impl Into<String>) -> Self {
-        self.content_class = c.into();
-        self
-    }
-    /// Layout/paint on the menu panel (same surface as RSX `base` on Content).
-    pub fn content_style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.content_style = Some(std::rc::Rc::new(f));
         self
     }
     /// 打开时滚动到当前选中项：`none` | `start` | `center`。
@@ -1031,8 +1014,7 @@ impl From<SelectBuilder> for Element {
             placement,
             trigger_class,
             trigger_style,
-            content_class,
-            content_style,
+            slots,
             scroll_selected,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "select");
@@ -1086,13 +1068,12 @@ impl From<SelectBuilder> for Element {
                     max_height: max_height.clone(),
                     placement,
                     trigger_class: trigger_class.clone(),
-                    content_class: content_class.clone(),
+                    content_class: slots.get(SLOT_CONTENT).class.clone(),
                     scroll_selected,
                 },
             );
 
             let mut trigger = SelectTrigger(SelectTriggerProps {
-                class: Some(trigger_class),
                 size: None,
                 children: Some(SelectValue(SelectValueProps {
                     placeholder: None,
@@ -1106,9 +1087,10 @@ impl From<SelectBuilder> for Element {
             }
             let entries_body = entries;
             let id_for_menu = id.clone();
+            let content_chrome = slots.get(SLOT_CONTENT);
             let content = select_content(
                 SelectContentOpts {
-                    class: Some(content_class).filter(|s| !s.is_empty()),
+                    panel: content_chrome,
                     match_trigger: Some(match_trigger),
                     menu_width,
                     menu_height,
@@ -1116,7 +1098,6 @@ impl From<SelectBuilder> for Element {
                     max_height,
                     placement: Some(placement),
                     scroll_selected: None,
-                    style: content_style,
                 },
                 move || build_entries_element(&id_for_menu, &entries_body, val, open, labels),
             );
@@ -1312,15 +1293,22 @@ pub fn Select(
     options: Vec<(String, String)>,
     placeholder: String,
     w: Option<String>,
-    class: Option<String>,
     scroll_selected: Option<String>,
     children: Option<Element>,
 ) -> Element {
     // 若已有复合子树（Trigger/Content），走 scope。
     if let Some(c) = children {
-        let tc = class.clone().unwrap_or_default();
         let ss = scroll_selected.clone().unwrap_or_default();
-        return select_scope(id, None, value, placeholder, tc, String::new(), ss, || c);
+        return select_scope(
+            id,
+            None,
+            value,
+            placeholder,
+            String::new(),
+            String::new(),
+            ss,
+            || c,
+        );
     }
     let mut b = select(&id)
         .default_value(default_value)
@@ -1328,9 +1316,6 @@ pub fn Select(
         .placeholder(placeholder);
     if let Some(width) = w {
         b = b.trigger_width(width);
-    }
-    if let Some(c) = class {
-        b = b.class(c);
     }
     if let Some(s) = scroll_selected {
         b = b.scroll_selected(s);

@@ -61,9 +61,7 @@ use rui_macros::component;
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::base::{
-    overlay_root_author_text, packed_children, BaseComponentBuilder, SlotChrome,
-};
+use crate::components::base::{overlay_root_author_text, packed_children, SlotChrome};
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_scoped_signal, use_signal,
     with_child_owner, Context, Signal,
@@ -75,8 +73,7 @@ use crate::layout::{first_track_fr, set_first_track_fr};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, with_class_list, TimingFunction, TransitionEntry,
-    TransitionProperty,
+    css_transition_needs_frame, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::collapse_panel::{
@@ -289,13 +286,12 @@ pub fn accordion_scope(
     default_value: Vec<String>,
     multiple: bool,
     disabled: bool,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "accordion");
     let value = resolve_open_items_signal(value, &id, default_value);
     register_accordion_open_redraw_effect(&id, value);
-    let mut root = with_child_owner(|| {
+    let mut root: Element = with_child_owner(|| {
         provide_context(
             accordion_context(),
             AccordionCtx {
@@ -306,11 +302,7 @@ pub fn accordion_scope(
             },
         );
         let kids = take_fragment(body());
-        let mut root: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            root = with_class_list(root, &c);
-        }
-        root
+        vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into()
     });
     root.attrs
         .insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
@@ -603,7 +595,6 @@ fn sync_accordion_chevron(el: &mut Element, open: bool) -> LayoutStatus {
 pub fn accordion_item_scope(
     value: impl Into<String>,
     disabled: bool,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let _acc = require_accordion("AccordionItem");
@@ -616,16 +607,11 @@ pub fn accordion_item_scope(
                 disabled,
             },
         );
-        build_accordion_item_shell(value, disabled, class, take_fragment(body()))
+        build_accordion_item_shell(value, disabled, take_fragment(body()))
     })
 }
 
-fn build_accordion_item_shell(
-    value: String,
-    _disabled: bool,
-    class: Option<String>,
-    kids: Vec<Element>,
-) -> Element {
+fn build_accordion_item_shell(value: String, _disabled: bool, kids: Vec<Element>) -> Element {
     let mut item: Element = vstack()
         .w("100%")
         .min_w(0.0)
@@ -637,22 +623,14 @@ fn build_accordion_item_shell(
     item.attrs
         .insert(ATTR_ITEM_VALUE.to_string(), value.clone());
     item.template_id = Some(format!("accordion-item:{value}"));
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        item = with_class_list(item, &c);
-    }
     item
 }
 
 /// ShadCN `AccordionItem`：`cn-accordion-item` + `border-b`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn AccordionItem(
-    value: String,
-    disabled: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
-    accordion_item_scope(value, disabled, class, move || {
+pub fn AccordionItem(value: String, disabled: bool, children: Option<Element>) -> Element {
+    accordion_item_scope(value, disabled, move || {
         children.unwrap_or_else(Element::new)
     })
 }
@@ -660,11 +638,7 @@ pub fn AccordionItem(
 /// ShadCN `AccordionTrigger`：Header + 触发器 + chevron。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn AccordionTrigger(
-    disabled: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn AccordionTrigger(disabled: bool, children: Option<Element>) -> Element {
     let acc = require_accordion("AccordionTrigger");
     let item = require_accordion_item("AccordionTrigger");
     let item_disabled = item.disabled || disabled || acc.disabled;
@@ -751,9 +725,6 @@ pub fn AccordionTrigger(
     } else {
         trigger = trigger.cursor_kind(crate::core::tree::CursorKind::Pointer);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        trigger = crate::style::with_class_list(trigger, &c);
-    }
 
     let wrap: Element = hstack().w("100%").min_w(0.0).child(trigger).into();
     wrap.reactive_sync(move |el, _| {
@@ -765,7 +736,7 @@ pub fn AccordionTrigger(
 /// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`accordion_content`]）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Element {
+pub fn AccordionContent(children: Option<Element>) -> Element {
     let acc = require_accordion("AccordionContent");
     let item = require_accordion_item("AccordionContent");
     let value = item.value.clone();
@@ -793,9 +764,6 @@ pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Ele
     inner = inner
         .text_size(14.0)
         .text_color(parse_text_color("muted-foreground"));
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        inner = crate::style::with_class_list(inner, &c);
-    }
 
     let mut panel: Element = vstack().w("100%").min_w(0.0).min_h(0.0).child(inner).into();
     panel
@@ -830,7 +798,6 @@ pub fn Accordion(
     default_value: Option<Vec<String>>,
     multiple: bool,
     disabled: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     accordion_scope(
@@ -839,7 +806,6 @@ pub fn Accordion(
         default_value.unwrap_or_default(),
         multiple,
         disabled,
-        class,
         move || children.unwrap_or_else(Element::new),
     )
 }
@@ -891,7 +857,6 @@ impl From<AccordionTriggerBuilder> for Element {
     fn from(builder: AccordionTriggerBuilder) -> Self {
         let el = AccordionTrigger(AccordionTriggerProps {
             disabled: Some(builder.disabled),
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -922,25 +887,12 @@ impl AccordionContentBuilder {
 
 impl From<AccordionContentBuilder> for Element {
     fn from(builder: AccordionContentBuilder) -> Self {
-        let class = {
-            let c = builder.chrome.class.trim();
-            if c.is_empty() {
-                None
-            } else {
-                Some(c.to_string())
-            }
-        };
         let el = AccordionContent(AccordionContentProps {
-            class,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
         });
-        if builder.chrome.style.is_some() {
-            builder.chrome.apply(el)
-        } else {
-            el
-        }
+        builder.chrome.apply(el)
     }
 }
 
@@ -1005,15 +957,10 @@ impl AccordionItemBuilder {
 
 impl From<AccordionItemBuilder> for Element {
     fn from(builder: AccordionItemBuilder) -> Self {
-        let class = if builder.chrome.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.chrome.class.clone())
-        };
-        let style = builder.chrome.style.clone();
+        let chrome = builder.chrome;
         let trigger = builder.trigger;
         let content = builder.content;
-        let mut el = accordion_item_scope(builder.value, builder.disabled, class, move || {
+        let el = accordion_item_scope(builder.value, builder.disabled, move || {
             let mut kids = Vec::new();
             if let Some(t) = trigger {
                 kids.push(t.into());
@@ -1023,10 +970,7 @@ impl From<AccordionItemBuilder> for Element {
             }
             packed_children(kids).unwrap_or_else(Element::new)
         });
-        if let Some(style) = style {
-            el = style(BaseComponentBuilder::new(el)).el;
-        }
-        el
+        chrome.apply(el)
     }
 }
 
@@ -1036,8 +980,7 @@ pub struct AccordionBuilder {
     default_value: Vec<String>,
     multiple: bool,
     disabled: bool,
-    class: Option<String>,
-    style: Option<crate::components::base::SlotStyleFn>,
+    chrome: SlotChrome,
     items: Vec<AccordionItemSpec>,
     custom_items: Vec<Box<dyn FnOnce() -> Element>>,
     body: Option<Box<dyn FnOnce() -> Element>>,
@@ -1051,8 +994,7 @@ pub fn accordion(id: impl Into<String>) -> AccordionBuilder {
         default_value: Vec::new(),
         multiple: false,
         disabled: false,
-        class: None,
-        style: None,
+        chrome: SlotChrome::default(),
         items: Vec::new(),
         custom_items: Vec::new(),
         body: None,
@@ -1060,6 +1002,8 @@ pub fn accordion(id: impl Into<String>) -> AccordionBuilder {
 }
 
 impl AccordionBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn value_signal(mut self, s: Signal<Vec<String>>) -> Self {
         self.value = Some(s);
         self
@@ -1077,19 +1021,6 @@ impl AccordionBuilder {
 
     pub fn disabled(mut self, v: bool) -> Self {
         self.disabled = v;
-        self
-    }
-
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
-        self
-    }
-
-    pub fn style(
-        mut self,
-        f: impl Fn(BaseComponentBuilder) -> BaseComponentBuilder + 'static,
-    ) -> Self {
-        self.style = Some(std::rc::Rc::new(f));
         self
     }
 
@@ -1155,58 +1086,41 @@ impl From<AccordionBuilder> for Element {
             default_value,
             multiple,
             disabled,
-            class,
-            style,
+            chrome,
             items,
             custom_items,
             body,
         } = builder;
-        let mut el = accordion_scope(
-            id,
-            value,
-            default_value,
-            multiple,
-            disabled,
-            class,
-            move || {
-                if let Some(body) = body {
-                    return body();
-                }
-                let mut out = Vec::with_capacity(items.len() + custom_items.len());
-                for spec in items {
-                    let value = spec.value.clone();
-                    let title = spec.title.clone();
-                    let body = spec.body;
-                    let item_disabled = spec.disabled;
-                    out.push(accordion_item_scope(
-                        value,
-                        item_disabled,
-                        None,
-                        move || {
-                            let mut frag = Element::new();
-                            frag.set_attr("rui_fragment", "1");
-                            frag.children(vec![
-                                AccordionTrigger(AccordionTriggerProps {
-                                    disabled: None,
-                                    class: None,
-                                    base: None,
-                                    children: Some(Element::new().text(title)),
-                                }),
-                                accordion_content(move || body()),
-                            ])
-                        },
-                    ));
-                }
-                for custom in custom_items {
-                    out.push(custom());
-                }
-                packed_children(out).unwrap_or_else(Element::new)
-            },
-        );
-        if let Some(style) = style {
-            el = style(BaseComponentBuilder::new(el)).el;
-        }
-        el
+        let el = accordion_scope(id, value, default_value, multiple, disabled, move || {
+            if let Some(body) = body {
+                return body();
+            }
+            let mut out = Vec::with_capacity(items.len() + custom_items.len());
+            for spec in items {
+                let value = spec.value.clone();
+                let title = spec.title.clone();
+                let body = spec.body;
+                let item_disabled = spec.disabled;
+                out.push(accordion_item_scope(value, item_disabled, move || {
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![
+                        AccordionTrigger(AccordionTriggerProps {
+                            disabled: None,
+                            base: None,
+                            children: Some(Element::new().text(title)),
+                            ..Default::default()
+                        }),
+                        accordion_content(move || body()),
+                    ])
+                }));
+            }
+            for custom in custom_items {
+                out.push(custom());
+            }
+            packed_children(out).unwrap_or_else(Element::new)
+        });
+        chrome.apply(el)
     }
 }
 
@@ -1295,15 +1209,9 @@ mod tests {
     #[test]
     fn scope_sets_template_and_slot() {
         let (_h, el) = create_root(|| {
-            accordion_scope(
-                "acc-test",
-                None,
-                vec!["one".into()],
-                false,
-                false,
-                None,
-                || Element::new(),
-            )
+            accordion_scope("acc-test", None, vec!["one".into()], false, false, || {
+                Element::new()
+            })
         });
         assert_eq!(el.template_id.as_deref(), Some("acc-test"));
         assert_eq!(el.attrs.get(ATTR_SLOT).map(|s| s.as_str()), Some(SLOT_ROOT));
@@ -1347,19 +1255,11 @@ mod tests {
     fn accordion_content_macro_shell_has_panel_slot() {
         let open = use_signal("__acc_content_open", || vec!["v".into()]);
         let (_h, el) = create_root(|| {
-            accordion_scope(
-                "acc-m",
-                Some(open),
-                Vec::new(),
-                false,
-                false,
-                None,
-                move || {
-                    accordion_item_scope("v", false, None, move || {
-                        accordion_content(|| Element::new().text("body"))
-                    })
-                },
-            )
+            accordion_scope("acc-m", Some(open), Vec::new(), false, false, move || {
+                accordion_item_scope("v", false, move || {
+                    accordion_content(|| Element::new().text("body"))
+                })
+            })
         });
         let panel = el
             .children

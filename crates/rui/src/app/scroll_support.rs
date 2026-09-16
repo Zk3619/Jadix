@@ -1,8 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use crate::app::portal_overlay::ScrollFreeze;
 use crate::core::tree::Element;
+use crate::layout::layout_tree::ATTR_HOISTED_PORTAL;
 
 /// 打开下拉后把某一项滚进视口（布局写出 content/viewport 后再应用，避免菜单 effect 订阅滚动信号）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,11 +109,15 @@ fn effective_scroll_viewport_h_when(
         }
         ScrollAlignWhen::Before => {
             let placed = placed_scroll_viewport_h(rest);
+            // DatePicker months overflow 16rem: align once against the idle cap.
+            // Never chase the Expand accordion sliver (that recenters every frame).
             if let Some(p) = placed.filter(|p| *p + 0.5 < content_h) {
-                if viewport_h + 0.5 < content_h {
-                    return Some(viewport_h.min(p));
-                }
                 return Some(p);
+            }
+            // ColorPicker 6 formats fit in 16rem. The accordion clip is not a
+            // scroll viewport — treating it as one scrolls HSLA while chrome grows.
+            if placed.is_some() {
+                return None;
             }
             if viewport_h + 0.5 < content_h {
                 return Some(viewport_h);
@@ -186,6 +192,7 @@ pub(crate) fn request_scroll_item_into_view_when(
     );
 }
 
+#[cfg(test)]
 pub(crate) fn request_scroll_descendant_into_view(
     rest: impl Into<String>,
     target: impl Into<String>,
@@ -235,6 +242,7 @@ pub(crate) fn has_pending_scroll_item_align() -> bool {
 }
 
 /// Aligned with real `content_h` / `viewport_h` after layout. The request is retained when the metric is not ready.
+#[cfg(test)]
 pub(crate) fn apply_pending_scroll_item_into_view(
     rest: &str,
     viewport_h: f32,
@@ -990,6 +998,42 @@ pub(crate) fn set_scroll_offset_with_behavior(
     ty.set_silent(target_y);
 }
 
+/// Scroll viewport `rest` ids that live under a `rui_hoisted_portal` subtree.
+pub(crate) fn collect_hoisted_scroll_rests(root: &Element) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack: Vec<(&Element, bool)> = vec![(root, false)];
+    while let Some((el, in_hoisted)) = stack.pop() {
+        let hoisted = in_hoisted
+            || el
+                .attrs
+                .get(ATTR_HOISTED_PORTAL)
+                .map(|s| s == "1")
+                .unwrap_or(false);
+        if hoisted {
+            if let Some(fid) = el.focus_id.as_deref() {
+                if let Some(rest) =
+                    crate::core::scroll_viewport::strip_scroll_viewport_focus_id(fid)
+                {
+                    out.insert(rest.to_string());
+                }
+            }
+        }
+        for child in el.children.iter().rev() {
+            stack.push((child, hoisted));
+        }
+    }
+    out
+}
+
+/// Drop rests the active freeze scope must not move (page-only freeze keeps overlay rests).
+pub(crate) fn retain_unfrozen_scroll_rests(
+    rests: &mut Vec<String>,
+    freeze: ScrollFreeze,
+    overlay_rests: &HashSet<String>,
+) {
+    rests.retain(|r| !freeze.applies_to_rest(overlay_rests.contains(r.as_str())));
+}
+
 /// Drop leftover smooth-scroll chase: `target = offset` so the next frame does not
 /// interpolate. Clicking a text field after a wheel-to-clip must not dump extra
 /// page motion when the focus-chrome frame finally presents (user did not scroll).
@@ -1562,6 +1606,60 @@ mod scroll_item_align_tests {
     }
 
     #[test]
+    fn pending_align_skips_expand_clip_when_content_fits_placed_cap() {
+        use crate::utils::popup::seed_floating_place_max_h_for_test;
+
+        let _ = create_root(|| {
+            // ColorPicker format Select: 6 rows (~192px) fit in max_height 16rem.
+            // DatePicker months overflow that cap, so they never hit this branch.
+            let overlay_id = "cp-fmt";
+            let rest = "cp-fmt:menu_scroll";
+            cancel_scroll_item_into_view(rest);
+            seed_floating_place_max_h_for_test(overlay_id, 256.0);
+            request_scroll_item_into_view(rest, 5, 6, ScrollItemAlign::Center);
+            let content_h = 6.0 * 32.0;
+            let accordion_vh = 48.0;
+            assert!(
+                !apply_pending_scroll_item_into_view(rest, accordion_vh, content_h),
+                "accordion clip is not a scroll viewport when the list fits the placed cap"
+            );
+            assert!(has_pending_scroll_item_align());
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            assert!(
+                sy.abs() < 0.5,
+                "must not recenter HSLA against the expanding clip, got {sy}"
+            );
+        });
+    }
+
+    #[test]
+    fn pending_align_keeps_placed_cap_when_expand_viewport_is_a_sliver() {
+        use crate::utils::popup::seed_floating_place_max_h_for_test;
+
+        let _ = create_root(|| {
+            let overlay_id = "cal-month-sliver";
+            let rest = "cal-month-sliver:menu_scroll";
+            cancel_scroll_item_into_view(rest);
+            seed_floating_place_max_h_for_test(overlay_id, 200.0);
+            request_scroll_item_into_view(rest, 11, 12, ScrollItemAlign::Center);
+            let content_h = 12.0 * 32.0;
+            let placed_vh = 200.0 - 8.0;
+            // Expand pin-grandchildren: layout viewport is the accordion sliver.
+            assert!(apply_pending_scroll_item_into_view(rest, 40.0, content_h));
+            let expected = scroll_offset_to_center_item(11, 32.0, placed_vh, 12);
+            let sy =
+                crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
+                    .peek();
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "must keep the placed-cap offset, not recenter in the sliver, got {sy} expected {expected}"
+            );
+        });
+    }
+
+    #[test]
     fn reset_scroll_item_into_view_keeps_offset() {
         let _ = create_root(|| {
             let rest = "cal-month:menu_scroll";
@@ -1769,5 +1867,33 @@ mod scroll_item_align_tests {
             assert!(has_pending_scroll_item_align());
             assert!(apply_pending_scroll_item_into_view(rest, 200.0, content_h));
         });
+    }
+}
+
+#[cfg(test)]
+mod hoisted_scroll_freeze_tests {
+    use super::{collect_hoisted_scroll_rests, retain_unfrozen_scroll_rests};
+    use crate::app::portal_overlay::ScrollFreeze;
+    use crate::core::tree::Element;
+    use crate::layout::layout_tree::ATTR_HOISTED_PORTAL;
+
+    #[test]
+    fn collect_hoisted_scroll_rests_skips_page_viewports() {
+        let mut page_vp = Element::new();
+        page_vp.focus_id = Some("scroll:page".into());
+        let mut overlay = Element::new();
+        overlay.set_attr(ATTR_HOISTED_PORTAL, "1");
+        let mut menu_vp = Element::new();
+        menu_vp.focus_id = Some("scroll:menu".into());
+        overlay.children.push(menu_vp);
+        page_vp.children.push(overlay);
+
+        let hoisted = collect_hoisted_scroll_rests(&page_vp);
+        assert!(hoisted.contains("menu"));
+        assert!(!hoisted.contains("page"));
+
+        let mut rests = vec!["page".into(), "menu".into()];
+        retain_unfrozen_scroll_rests(&mut rests, ScrollFreeze::Page, &hoisted);
+        assert_eq!(rests, vec!["menu".to_string()]);
     }
 }

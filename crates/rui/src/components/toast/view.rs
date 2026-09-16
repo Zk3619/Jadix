@@ -181,7 +181,6 @@ pub fn Toast(
     description: Option<String>,
     icon: Option<bool>,
     chrome: Option<bool>,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let _ = children;
@@ -193,7 +192,7 @@ pub fn Toast(
         tone,
         show_icon: icon,
         chrome: chrome.unwrap_or(true),
-        utility_class: class,
+        utility_class: None,
         bg_override: None,
         border_override: None,
         fg_override: None,

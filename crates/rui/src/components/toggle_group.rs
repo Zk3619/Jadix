@@ -51,7 +51,7 @@
 
 use std::sync::OnceLock;
 
-use crate::components::base::{BaseComponentBuilder, SlotChrome};
+use crate::components::base::SlotChrome;
 use crate::components::button_group::{
     apply_button_group_join, apply_button_group_join_chrome, ButtonGroupOrientation,
 };
@@ -66,8 +66,7 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
     control_focus_ring_active, ensure_class_list, focus_ring_color, focus_ring_params_for,
     is_variant_style_overridden, patch_class_set_base_paint, patch_class_set_base_radii,
-    patch_class_set_base_shadow, with_class_list, ClassSet, VariantStyleField, ATTR_SYNC_LABEL_FG,
-    TRANSPARENT,
+    patch_class_set_base_shadow, ClassSet, VariantStyleField, ATTR_SYNC_LABEL_FG, TRANSPARENT,
 };
 use crate::tokens;
 use crate::utils::controlled::resolve_string_signal;
@@ -552,7 +551,6 @@ pub fn toggle_group_scope(
     joined: bool,
     segmented: bool,
     required: bool,
-    class: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "toggle-group");
@@ -653,33 +651,30 @@ pub fn toggle_group_scope(
             el.set_attr(ATTR_TOGGLE_REQUIRED, "1");
         }
         el = el.accesskit_role("group");
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = with_class_list(el, &c);
-        }
 
         let sync_single = value_single;
         let sync_multi = value_multi;
         let sync_required = required;
         let default_sync = default_value.clone();
         el = el.reactive_sync(move |root, _layout_tree| {
+            let Some(mut single) = sync_single.try_peek() else {
+                return crate::core::tree::LayoutStatus::Clean;
+            };
+            let Some(multi) = sync_multi.try_peek() else {
+                return crate::core::tree::LayoutStatus::Clean;
+            };
             if sync_required {
                 let values = collect_item_values(root);
-                if let Some(fixed) =
-                    coerce_required_single(&sync_single.peek(), &values, &default_sync)
-                {
+                if let Some(fixed) = coerce_required_single(&single, &values, &default_sync) {
                     // Silent: paint sync may hold AppState; avoid effect flush / reconcile.
-                    sync_single.set_silent(fixed);
+                    if sync_single.try_set_silent(fixed.clone()) {
+                        single = fixed;
+                    }
                 }
             }
             let outline = variant.is_outline();
             sync_toggle_group_pressed(
-                root,
-                outline,
-                disabled,
-                segmented,
-                multiple,
-                &sync_single.peek(),
-                &sync_multi.peek(),
+                root, outline, disabled, segmented, multiple, &single, &multi,
             )
         });
         attach_focus_roving(&mut el, orientation.roving_axis());
@@ -832,7 +827,6 @@ pub fn ToggleGroup(
     spacing: Option<String>,
     joined: bool,
     required: bool,
-    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let multiple = parse_multiple_type(selection.as_deref(), multiple);
@@ -854,9 +848,6 @@ pub fn ToggleGroup(
             .joined(joined)
             .required(required)
             .options(opts);
-        if let Some(c) = class {
-            b = b.class(c);
-        }
         if let Some(sig) = value {
             b = b.value_signal(sig);
         }
@@ -879,7 +870,6 @@ pub fn ToggleGroup(
         joined,
         false,
         required,
-        class,
         || children.unwrap_or_else(Element::new),
     )
 }
@@ -1080,15 +1070,10 @@ impl ToggleGroupBuilder {
 
 impl From<ToggleGroupBuilder> for Element {
     fn from(builder: ToggleGroupBuilder) -> Self {
-        let class = if builder.chrome.class.trim().is_empty() {
-            None
-        } else {
-            Some(builder.chrome.class.clone())
-        };
-        let style = builder.chrome.style.clone();
+        let chrome = builder.chrome.clone();
         let options = builder.options;
         let child = builder.child;
-        let mut el = toggle_group_scope(
+        chrome.apply(toggle_group_scope(
             builder.id,
             builder.value_single,
             builder.value_multi,
@@ -1102,7 +1087,6 @@ impl From<ToggleGroupBuilder> for Element {
             builder.joined,
             builder.segmented,
             builder.required,
-            class,
             move || {
                 let ctx = require_toggle_group("toggle_group options");
                 let mut list = Vec::with_capacity(options.len());
@@ -1124,11 +1108,7 @@ impl From<ToggleGroupBuilder> for Element {
                 frag.set_attr("rui_fragment", "1");
                 frag.children(list)
             },
-        );
-        if let Some(style) = style {
-            el = style(BaseComponentBuilder::new(el)).el;
-        }
-        el
+        ))
     }
 }
 
@@ -1464,6 +1444,21 @@ mod tests {
             },
         );
         assert_eq!(el.children[off_i].style.bg_color, parse_color("muted"));
+        let mut off_fg = None;
+        fn child_fg(el: &Element, acc: &mut Option<[u8; 4]>) {
+            if el.text.is_some() {
+                *acc = el.text_style.color;
+            }
+            for c in &el.children {
+                child_fg(c, acc);
+            }
+        }
+        child_fg(&el.children[off_i], &mut off_fg);
+        assert_eq!(
+            off_fg,
+            Some(parse_text_color("foreground")),
+            "off-chip hover keeps foreground, matching observed ShadCN ghost Button"
+        );
 
         let attrs = el.children[on_i].attrs.clone();
         let _ = crate::style::resolve_class_variants(

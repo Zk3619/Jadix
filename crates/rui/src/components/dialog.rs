@@ -42,7 +42,7 @@
 use std::sync::OnceLock;
 
 use crate::app::reactive::reactive_view;
-use crate::components::base::{SlotChrome, SlotStyleFn};
+use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -412,10 +412,8 @@ pub struct DialogContentOpts {
     pub overlay_blur: Option<f32>,
     /// CommandDialog：按内容撑开；顶/左右 `p-0`；列表在 `max_h` 下吃掉 Input 之后的剩余高度。
     pub hug_content: bool,
-    /// Utility class on the panel card (after default surface).
-    pub class: Option<String>,
-    /// Layout/paint on the panel card (same surface as RSX `base`).
-    pub style: Option<SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: SlotChrome,
 }
 
 impl Default for DialogContentOpts {
@@ -427,8 +425,7 @@ impl Default for DialogContentOpts {
             close_on_overlay_click: true,
             overlay_blur: None,
             hug_content: false,
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
@@ -457,7 +454,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
     let overlay = dialog_shell_overlay_opts(&opts);
     let show_close = opts.show_close;
     let hug_content = opts.hug_content;
-    let panel_chrome = SlotChrome::from_opts(opts.class, opts.style);
+    let panel_chrome = opts.panel;
 
     reactive_view(view_id, move || {
         let owner = format!("dialog:{id}");

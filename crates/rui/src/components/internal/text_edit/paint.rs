@@ -199,7 +199,7 @@ fn sync_one_text_edit_paint(
     let ring_color = if invalid {
         focus_ring_destructive_color()
     } else {
-        focus_ring_color()
+        el.style.focus_ring_color.unwrap_or_else(focus_ring_color)
     };
 
     let mut container_layout = false;

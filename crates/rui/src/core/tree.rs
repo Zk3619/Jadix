@@ -2085,7 +2085,11 @@ impl Element {
         self
     }
     pub fn text_size(mut self, size: impl IntoF32) -> Self {
-        self.text_style.size = Some(size.into_f32());
+        let px = size.into_f32();
+        self.text_style.size = Some(px);
+        if let Some(sync) = self.input_paint_sync.as_mut() {
+            sync.text_size_px = px;
+        }
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32Raw) -> Self {
@@ -2694,6 +2698,30 @@ impl Element {
     /// Focus-ring color. Tokens / hex / `[f32; 4]`. Overrides theme token `ring`.
     pub fn ring_color(mut self, color: impl IntoPaintColor) -> Self {
         self.style.focus_ring_color = Some(color.into_paint_color());
+        self
+    }
+    /// CSS `caret-color`. On Input/Textarea this forwards into [`TextEditPaintSync`].
+    pub fn caret_color(mut self, color: impl IntoTextColor) -> Self {
+        let c = color.into_text_color();
+        if let Some(sync) = self.input_paint_sync.as_mut() {
+            sync.caret_color = Some(c);
+        }
+        self
+    }
+    /// Selection highlight fill. Forwards into [`TextEditPaintSync`] when present.
+    pub fn selection_background(mut self, color: impl IntoTextColor) -> Self {
+        let c = color.into_text_color();
+        if let Some(sync) = self.input_paint_sync.as_mut() {
+            sync.selection_bg = Some(c);
+        }
+        self
+    }
+    /// Selected glyph color. Forwards into [`TextEditPaintSync`] when present.
+    pub fn selection_foreground(mut self, color: impl IntoTextColor) -> Self {
+        let c = color.into_text_color();
+        if let Some(sync) = self.input_paint_sync.as_mut() {
+            sync.selection_foreground = Some(c);
+        }
         self
     }
     /// Parse CSS `outline` shorthand: `<line-width> || <line-style> || <color>` (any order).

@@ -57,7 +57,7 @@
 
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, ScrollFreeze};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
@@ -273,18 +273,19 @@ pub struct PopoverContentOpts {
     pub side: String,
     /// `start` / `center` / `end`（默认 `center`）。
     pub align: String,
-    /// 触发器与面板间距（逻辑 px）；默认 **4**（对位 ShadCN `sideOffset`）。
+    /// Gap between trigger and panel (logical px); default **4** (ShadCN `sideOffset`).
     pub side_offset: f32,
-    /// Extra class (utility).
-    pub class: Option<String>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
     /// `flip`（默认）或 `fixed`：钉在触发器首选侧，滚动不夹高度。
     pub strategy: Option<String>,
     /// 面板宽；默认 `18rem`（`w-72`）。空 / `auto` → 内容宽。
     pub width: Option<String>,
-    /// Layout/paint on the panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
     /// Freeze page scroll while the popover is open. Default `false`.
+    /// Overlay ScrollAreas still move; use [`Self::scroll_freeze`] for overlay-only or all.
     pub lock_page_scroll: bool,
+    /// Explicit freeze scope; wins over [`Self::lock_page_scroll`] when set.
+    pub scroll_freeze: Option<ScrollFreeze>,
 }
 
 impl Default for PopoverContentOpts {
@@ -293,11 +294,11 @@ impl Default for PopoverContentOpts {
             side: "bottom".into(),
             align: "center".into(),
             side_offset: FLOATING_TRIGGER_GAP,
-            class: None,
+            panel: Default::default(),
             strategy: None,
             width: None,
-            style: None,
             lock_page_scroll: false,
+            scroll_freeze: None,
         }
     }
 }
@@ -308,6 +309,12 @@ impl PopoverContentOpts {
     /// Freeze page scroll while this popover is open. Default `false`.
     pub fn lock_page_scroll(mut self, yes: bool) -> Self {
         self.lock_page_scroll = yes;
+        self
+    }
+
+    /// Freeze wheel / pan / fling for page, overlay, or the whole program.
+    pub fn scroll_freeze(mut self, scope: ScrollFreeze) -> Self {
+        self.scroll_freeze = Some(scope);
         self
     }
 }
@@ -343,7 +350,7 @@ pub fn popover_surface(mut body: Element, width: Option<&str>) -> Element {
 /// ShadCN `PopoverContent`：Portal + floating；仅在 open 时构建。
 /// `ui!` 中由宏编成此函数。
 pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 'static) -> Element {
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let width = opts.width.clone();
     let strategy = opts.strategy.clone().unwrap_or_default();
     let ao_opts = AnchoredOverlayContentOpts {
@@ -360,6 +367,7 @@ pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 's
         } else {
             None
         },
+        scroll_freeze: opts.scroll_freeze,
         ..Default::default()
     };
     anchored_overlay_content(ao_opts, move || {

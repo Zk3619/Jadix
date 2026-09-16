@@ -66,6 +66,7 @@ use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
+use crate::components::base::SlotMap;
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -81,7 +82,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::{parse_text_color, with_class_list};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::anchored_overlay::{
@@ -547,24 +548,21 @@ pub fn ContextMenuTrigger(id: String, children: Option<Element>) -> Element {
 pub struct ContextMenuContentOpts {
     /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
-    /// Extra class (utility).
-    pub class: Option<String>,
-    /// Layout/paint on the panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for ContextMenuContentOpts {
     fn default() -> Self {
         Self {
             placement: "bottom-start".into(),
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
 
 impl ContextMenuContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// solid-ui / shadcn `ContextMenuContent`：Portal + floating 面板。
@@ -578,7 +576,7 @@ pub fn context_menu_content(
     let menu_id = ctx.id.clone();
     let cursor = ctx.cursor;
     let _ = ctx.active;
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::Point {
             pos: cursor,
@@ -653,7 +651,6 @@ pub fn ContextMenuItem(
     disabled: bool,
     inset: bool,
     variant: Option<String>,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -706,9 +703,6 @@ pub fn ContextMenuItem(
     if disabled {
         row = row.opacity(0.5);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
 
     let mut hit: Element = interactive(row)
         .on_hover(move |h| {
@@ -760,7 +754,6 @@ pub fn ContextMenuCheckboxItem(
     default_checked: bool,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -814,9 +807,6 @@ pub fn ContextMenuCheckboxItem(
     let mut row: Element = row.into();
     if disabled {
         row = row.opacity(0.5);
-    }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
     }
 
     let mut hit: Element = interactive(row)
@@ -929,7 +919,6 @@ pub fn ContextMenuRadioItem(
     value: String,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -982,9 +971,6 @@ pub fn ContextMenuRadioItem(
     let mut row: Element = row.into();
     if disabled {
         row = row.opacity(0.5);
-    }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
     }
 
     let mut hit: Element = interactive(row)
@@ -1086,12 +1072,7 @@ pub fn context_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> E
 /// solid-ui / shadcn `ContextMenuSubTrigger`：右侧 chevron；悬停打开子菜单。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ContextMenuSubTrigger(
-    disabled: bool,
-    inset: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn ContextMenuSubTrigger(disabled: bool, inset: bool, children: Option<Element>) -> Element {
     let parent = require_context_menu("ContextMenuSubTrigger");
     let sub = require_context_menu_sub("ContextMenuSubTrigger");
     let active = parent.active;
@@ -1146,9 +1127,6 @@ pub fn ContextMenuSubTrigger(
     if disabled {
         row = row.opacity(0.5);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
 
     let mut hit: Element = interactive(row)
         .on_hover(move |h| {
@@ -1197,7 +1175,7 @@ pub fn ContextMenuSubTrigger(
 /// Independent [`reactive_anchor`] (registered in the parent Content's `isolate_reads`). Parent Menu **Don't**
 /// 订阅 sub open，否则整树重建会打断悬停。
 pub fn context_menu_sub_content(
-    class: Option<String>,
+    chrome: crate::components::base::SlotChrome,
     body: impl Fn() -> Element + 'static,
 ) -> Element {
     let parent = require_context_menu("ContextMenuSubContent");
@@ -1207,7 +1185,6 @@ pub fn context_menu_sub_content(
     let sid = sub.id.clone();
     let trigger_fid = sub.trigger_fid;
     let cursor = parent.cursor;
-    let class = class.filter(|s| !s.trim().is_empty());
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
             String::new(),
@@ -1276,9 +1253,7 @@ pub fn context_menu_sub_content(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
         panel.accesskit_role("menu")
     })
@@ -1515,8 +1490,7 @@ pub struct ContextMenuBuilder {
     items: Vec<ContextMenuAction>,
     open: Option<Signal<bool>>,
     placement: PopupPlacement,
-    content_class: Option<String>,
-    content_style: Option<crate::components::base::SlotStyleFn>,
+    slots: SlotMap,
 }
 
 /// Builder 入口：便捷 Trigger + Content + Items（内部接到复合实现）。
@@ -1526,12 +1500,14 @@ pub fn context_menu(id: impl Into<String>) -> ContextMenuBuilder {
         items: Vec::new(),
         open: None,
         placement: PopupPlacement::BottomStart,
-        content_class: None,
-        content_style: None,
+        slots: SlotMap::default(),
     }
 }
 
 impl ContextMenuBuilder {
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
+
     pub fn open_signal(mut self, s: Signal<bool>) -> Self {
         self.open = Some(s);
         self
@@ -1542,20 +1518,20 @@ impl ContextMenuBuilder {
         self
     }
 
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.content_class = Some(c.into());
-        self
+    /// Overlay `class` on the menu panel. Alias of [`Self::content_class`].
+    pub fn class(self, c: impl Into<String>) -> Self {
+        self.content_class(c)
     }
 
+    /// Overlay style on the menu panel. Alias of [`Self::content_style`].
     pub fn style(
-        mut self,
+        self,
         f: impl Fn(
                 crate::components::base::BaseComponentBuilder,
             ) -> crate::components::base::BaseComponentBuilder
             + 'static,
     ) -> Self {
-        self.content_style = Some(std::rc::Rc::new(f));
-        self
+        self.content_style(f)
     }
 
     /// Build Trigger / Content (and related) subtrees inside the context.
@@ -1580,8 +1556,7 @@ impl ContextMenuBuilder {
         let placement = self.placement;
         let items = self.items;
         let side = placement.as_attr().to_string();
-        let content_class = self.content_class;
-        let content_style = self.content_style;
+        let content_chrome = self.slots.get(SLOT_CONTENT);
         context_menu_scope(id, open, || {
             let trigger = ContextMenuTrigger(ContextMenuTriggerProps {
                 id: String::new(),
@@ -1591,8 +1566,7 @@ impl ContextMenuBuilder {
             let tip = context_menu_content(
                 ContextMenuContentOpts {
                     placement: side,
-                    class: content_class,
-                    style: content_style,
+                    panel: content_chrome,
                 },
                 move || {
                     let mut col = vstack().w("100%").gap("0");
@@ -1616,7 +1590,6 @@ impl ContextMenuBuilder {
                             } else {
                                 None
                             },
-                            class: None,
                             on_click: Some(Handler::new(move |_| cb())),
                             children: Some(frag),
                             base: None,
@@ -1691,7 +1664,6 @@ mod tests {
                     disabled: Some(false),
                     inset: Some(false),
                     variant: None,
-                    class: None,
                     on_click: None,
                     children: Some(Element::new().text("One")),
                     base: None,
@@ -1716,16 +1688,14 @@ mod tests {
                     let st = ContextMenuSubTrigger(ContextMenuSubTriggerProps {
                         disabled: Some(false),
                         inset: Some(false),
-                        class: None,
                         children: Some(Element::new().text("More")),
                         base: None,
                     });
-                    let sc = context_menu_sub_content(None, || {
+                    let sc = context_menu_sub_content(Default::default(), || {
                         ContextMenuItem(ContextMenuItemProps {
                             disabled: Some(false),
                             inset: Some(false),
                             variant: None,
-                            class: None,
                             on_click: None,
                             children: Some(Element::new().text("Nested")),
                             base: None,

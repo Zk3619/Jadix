@@ -742,7 +742,10 @@ impl From<SliderBuilder> for Element {
                 f();
             }
             let _ = root;
-            let value = sync_value.peek().clamp(sync_min, sync_max);
+            let Some(value) = sync_value.try_peek() else {
+                return LayoutStatus::Clean;
+            };
+            let value = value.clamp(sync_min, sync_max);
             let t = norm01(value, sync_min, sync_max);
             let want_before = if vertical {
                 (1.0 - t).max(0.0001)

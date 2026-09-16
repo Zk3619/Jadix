@@ -447,6 +447,11 @@ pub(crate) fn sync_switch_checked_subtree(
 ) {
     crate::core::tree::walk_elements_mut(el, |el| {
         if let Some(sig) = el.switch_checked_sync {
+            if !sig.is_alive() {
+                // Same teardown window as checkbox: owner gone, node still in this frame.
+                el.switch_checked_sync = None;
+                return;
+            }
             let on = sig.peek();
             let want_tx = if on { THUMB_TRAVEL } else { 0.0 };
             let want_bg = if on { track_on_bg() } else { track_off_bg() };

@@ -1,6 +1,8 @@
-//! 交互原语：包装任意 [`Element`]，为其注册指针/键盘/焦点行为（`on_click`、`on_hover`、`on_key_down`、`focusable` 等）。
+//! 交互原语：包装任意 [`Element`]，为其注册指针/键盘/焦点/`disabled` 行为（`on_click`、`on_hover`、`on_key_down`、`focusable` 等）。
 //!
 //! RSX：`<Interactive>` 从空节点起链；复合控件通常先 `r#box()` 搭视觉，再 `interactive(...)` 接事件。
+//! `disabled` 是本原语（[`apply_disabled`]）；组件签名仍声明领域状态，live RSX 由宏 `bind_attr`。
+//! 分层约定见 `docs/COMPONENT_LIBRARY.md` §1.2。
 
 use std::cell::Cell;
 
@@ -123,6 +125,16 @@ impl InteractiveBuilder {
         self
     }
 
+    /// Domain disabled: HTML attr, focus, and in-place paint descriptors.
+    /// Live RSX `disabled={sig.get()}` uses [`apply_disabled`] via `bind_attr`.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        let _ = apply_disabled(&mut self.el, disabled);
+        if disabled {
+            self.el = self.el.cursor_not_allowed();
+        }
+        self
+    }
+
     /// Focus-ring thickness in logical px. Overrides the theme default.
     pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
         self.el = self.el.ring_width(width);
@@ -167,4 +179,113 @@ impl crate::core::tree::IntoElementList for InteractiveBuilder {
 
 pub fn interactive(el: Element) -> InteractiveBuilder {
     InteractiveBuilder::new(el)
+}
+
+/// Interactive primitive: stamp `disabled`, focus, and paint-sync flags in place.
+///
+/// Button hover chrome and Input/Textarea glyphs read these fields each frame;
+/// callers do not rebuild the tree. [`crate::app::reactive::bind_attr`] uses this
+/// for every RSX `disabled={…}` on a `#[component]`.
+pub fn apply_disabled(el: &mut Element, disabled: bool) -> crate::core::tree::LayoutStatus {
+    use crate::core::tree::{CursorKind, LayoutStatus};
+
+    let mut changed = false;
+
+    let has_attr = el.attrs.get("disabled").map(String::as_str) == Some("true");
+    if disabled != has_attr {
+        if disabled {
+            el.set_attr("disabled", "true");
+        } else {
+            el.attrs.remove("disabled");
+        }
+        changed = true;
+    }
+
+    let interactive = el.button_hover_paint.is_some() || el.input_paint_sync.is_some();
+    if interactive {
+        if el.focusable == disabled {
+            el.set_focusable(!disabled);
+            changed = true;
+        }
+    } else if disabled && el.focusable {
+        el.set_focusable(false);
+        changed = true;
+    }
+
+    if let Some(desc) = el.button_hover_paint.as_mut() {
+        if desc.disabled != disabled {
+            desc.disabled = disabled;
+            changed = true;
+        }
+    }
+
+    if let Some(sync) = el.input_paint_sync.as_mut() {
+        if sync.disabled != disabled {
+            sync.disabled = disabled;
+            changed = true;
+        }
+        let want: crate::core::tree::CursorValue = if disabled {
+            CursorKind::NotAllowed.into()
+        } else {
+            CursorKind::Text.into()
+        };
+        if el.cursor.as_ref() != Some(&want) {
+            el.cursor = Some(want);
+            changed = true;
+        }
+    }
+
+    if changed {
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::tree::{CursorKind, Element, LayoutStatus};
+    use crate::primitives::r#box::hstack;
+
+    #[test]
+    fn apply_disabled_stamps_attr_and_focus() {
+        let mut el: Element = hstack().into();
+        el.set_focusable(true);
+        assert_eq!(apply_disabled(&mut el, true), LayoutStatus::StyleChanged);
+        assert_eq!(el.attrs.get("disabled").map(String::as_str), Some("true"));
+        assert!(!el.focusable);
+        assert_eq!(apply_disabled(&mut el, true), LayoutStatus::Clean);
+        assert_eq!(apply_disabled(&mut el, false), LayoutStatus::StyleChanged);
+        assert!(!el.attrs.contains_key("disabled"));
+        assert!(
+            !el.focusable,
+            "generic nodes do not gain focus just because disabled is cleared"
+        );
+    }
+
+    #[test]
+    fn apply_disabled_restores_focus_on_paint_sync_nodes() {
+        let mut el: Element = hstack().into();
+        el.button_hover_paint = Some(crate::core::tree::ButtonHoverPaint {
+            variant: "default".into(),
+            disabled: false,
+            hover_easing: "cubic".into(),
+            text_color: None,
+        });
+        el.set_focusable(true);
+        assert_eq!(apply_disabled(&mut el, true), LayoutStatus::StyleChanged);
+        assert!(!el.focusable);
+        assert!(el.button_hover_paint.as_ref().unwrap().disabled);
+        assert_eq!(apply_disabled(&mut el, false), LayoutStatus::StyleChanged);
+        assert!(el.focusable);
+        assert!(!el.button_hover_paint.as_ref().unwrap().disabled);
+    }
+
+    #[test]
+    fn interactive_builder_disabled_sets_not_allowed_cursor() {
+        let el: Element = interactive(hstack().into()).disabled(true).into();
+        assert_eq!(el.attrs.get("disabled").map(String::as_str), Some("true"));
+        assert_eq!(el.cursor, Some(CursorKind::NotAllowed.into()));
+    }
 }

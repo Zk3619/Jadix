@@ -279,8 +279,7 @@ impl From<SheetBuilder> for Element {
             overlay_blur: None,
             width,
             height,
-            class: None,
-            style: None,
+            panel: Default::default(),
         };
         sheet_scope(id, open, move || {
             sheet_content(opts, move || {
@@ -495,10 +494,8 @@ pub struct SheetContentOpts {
     pub width: Option<String>,
     /// 顶 / 底高；`None` → `auto`（`max-h: 50dvh`）。
     pub height: Option<String>,
-    /// Utility class on the sheet panel (after default surface).
-    pub class: Option<String>,
-    /// Layout/paint on the sheet panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for SheetContentOpts {
@@ -512,8 +509,7 @@ impl Default for SheetContentOpts {
             overlay_blur: None,
             width: None,
             height: None,
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
@@ -539,7 +535,7 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     let side = opts.side;
     let width = opts.width;
     let height = opts.height;
-    let panel_chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let panel_chrome = opts.panel;
 
     reactive_view(view_id, move || {
         let owner = format!("sheet:{id}");

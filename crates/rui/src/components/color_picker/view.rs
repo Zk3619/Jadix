@@ -347,7 +347,12 @@ pub(super) fn with_trigger_preview_sync(
     rgba: Signal<Rgba>,
     fmt_sig: Signal<ColorFormat>,
 ) -> Element {
-    view.reactive_sync(move |root, _| sync_trigger_preview(root, &id, rgba.peek(), fmt_sig.peek()))
+    view.reactive_sync(move |root, _| {
+        let (Some(c), Some(fmt)) = (rgba.try_peek(), fmt_sig.try_peek()) else {
+            return crate::core::tree::LayoutStatus::Clean;
+        };
+        sync_trigger_preview(root, &id, c, fmt)
+    })
 }
 
 pub(super) fn follow_hue_into_rgba(
@@ -359,17 +364,48 @@ pub(super) fn follow_hue_into_rgba(
     fmt_sig: Signal<ColorFormat>,
 ) {
     create_effect(move || {
-        let hue_v = hue.get();
-        let s = sat.peek();
-        let v = val.peek();
-        let c = rgba.peek();
+        let Some(hue_v) = hue.try_get() else {
+            return;
+        };
+        let (Some(s), Some(v), Some(c), Some(fmt)) = (
+            sat.try_peek(),
+            val.try_peek(),
+            rgba.try_peek(),
+            fmt_sig.try_peek(),
+        ) else {
+            return;
+        };
         let (r, g, b) = hsv_to_rgb(hue_v.rem_euclid(360.0), s, v);
         if r == c.r && g == c.g && b == c.b {
             return;
         }
         let next = Rgba { r, g, b, a: c.a };
         rgba.set(next);
-        sync_string_from_rgba(out, next, fmt_sig.peek());
+        sync_string_from_rgba(out, next, fmt);
+    });
+}
+
+/// Keep `fmt_sig` / `out` in sync when the nested format Select writes `fmt_str`.
+/// Must not run inside the ColorPicker live island — `.get()` there remounts the
+/// popover (and the nested Select) the same way subscribing `open` used to.
+pub(super) fn follow_fmt_str(
+    fmt_str: Signal<String>,
+    fmt_sig: Signal<ColorFormat>,
+    out: Signal<String>,
+    rgba: Signal<Rgba>,
+) {
+    create_effect(move || {
+        let Some(raw) = fmt_str.try_get() else {
+            return;
+        };
+        let selected = ColorFormat::parse(&raw);
+        let (Some(cur), Some(c)) = (fmt_sig.try_peek(), rgba.try_peek()) else {
+            return;
+        };
+        if selected != cur {
+            fmt_sig.set(selected);
+            sync_string_from_rgba(out, c, selected);
+        }
     });
 }
 
@@ -506,15 +542,15 @@ pub(super) fn wire_pointer_drag(mut el: Element, fid: String, drag: ColorDrag) -
         // (scroll already subtracted). Inline pickers inside a ScrollArea would
         // map every move to ty=0 → V=1 (knob glued to the top).
         if let Some(id) = drag.sv_id.as_deref() {
-            sync_sv_visuals(
-                root,
-                layout_tree,
-                id,
-                drag.rgba.peek(),
-                drag.hue.peek(),
-                drag.sat.peek(),
-                drag.val.peek(),
-            )
+            let (Some(rgba), Some(hue), Some(sat), Some(val)) = (
+                drag.rgba.try_peek(),
+                drag.hue.try_peek(),
+                drag.sat.try_peek(),
+                drag.val.try_peek(),
+            ) else {
+                return LayoutStatus::Clean;
+            };
+            sync_sv_visuals(root, layout_tree, id, rgba, hue, sat, val)
         } else {
             LayoutStatus::Clean
         }
@@ -721,7 +757,8 @@ pub(super) fn hsv_sliders(
     show_alpha: bool,
     disabled: bool,
 ) -> Element {
-    let alpha_on = show_alpha && fmt_sig.peek().supports_alpha();
+    // Overlay `body()` is `isolate_reads`, so a `peek()` here freezes the first format.
+    // A nested Show island tracks `fmt_sig` without remounting the format Select.
     let mut sliders = vstack()
         .gap("0.5rem")
         .w("100%")
@@ -738,9 +775,19 @@ pub(super) fn hsv_sliders(
             disabled,
         ))
         .child(hue_slider(id, rgba, hue, fmt_sig, out, disabled));
-    if alpha_on {
-        sliders = sliders.child(alpha_slider(id, rgba, fmt_sig, out, show_alpha, disabled));
-    }
+    let alpha_id = id.to_string();
+    sliders = sliders.child(show_reactive(
+        format!("{id}__cp_alpha_slot"),
+        move || show_alpha && fmt_sig.get().supports_alpha(),
+        move || {
+            vstack()
+                .w("100%")
+                .child(alpha_slider(
+                    &alpha_id, rgba, fmt_sig, out, show_alpha, disabled,
+                ))
+                .into()
+        },
+    ));
     sliders.into()
 }
 
@@ -897,9 +944,19 @@ pub(super) fn rgb_sliders(
             show_alpha,
             disabled,
         ));
-    if show_alpha && fmt_sig.peek().supports_alpha() {
-        row = row.child(alpha_slider(id, rgba, fmt_sig, out, show_alpha, disabled));
-    }
+    let alpha_id = id.to_string();
+    row = row.child(show_reactive(
+        format!("{id}__cp_alpha_slot"),
+        move || show_alpha && fmt_sig.get().supports_alpha(),
+        move || {
+            vstack()
+                .w("100%")
+                .child(alpha_slider(
+                    &alpha_id, rgba, fmt_sig, out, show_alpha, disabled,
+                ))
+                .into()
+        },
+    ));
     row.into()
 }
 
@@ -914,12 +971,7 @@ pub(super) fn format_value_row(
     out: Signal<String>,
     disabled: bool,
 ) -> Element {
-    let selected = ColorFormat::parse(&fmt_str.get());
-    if selected != fmt_sig.peek() {
-        fmt_sig.set(selected);
-        sync_string_from_rgba(out, rgba.peek(), selected);
-    }
-    let fmt = fmt_sig.peek();
+    let fmt = ColorFormat::parse(&fmt_str.peek());
 
     let mut sel = select(format!("{id}:fmt"))
         .value_signal(fmt_str)
@@ -982,78 +1034,17 @@ pub(super) fn format_value_row(
         .into()
 }
 
-pub(super) fn channel_fields(
-    id: &str,
-    rgba: Signal<Rgba>,
-    hue: Signal<f32>,
-    sat: Signal<f32>,
-    val: Signal<f32>,
-    fmt_sig: Signal<ColorFormat>,
-    out: Signal<String>,
-    disabled: bool,
-) -> Element {
-    let c = rgba.get();
-    let fields = [
-        ("r", "R", c.r.to_string()),
-        ("g", "G", c.g.to_string()),
-        ("b", "B", c.b.to_string()),
-        ("a", "A", format!("{:.0}", c.a * 100.0)),
-    ];
-    let mut row = hstack().gap("0.375rem").w("100%");
-    for (key, label, text) in fields {
-        let fid = format!("{id}__ch_{key}");
-        let sig = use_signal(input_value_signal_key(&fid).as_str(), String::new);
-        sig.set(text);
-        let mut field: Element = input(&fid)
-            .placeholder(label)
-            .disabled(disabled)
-            .flex_grow(1.0)
-            .h("2rem")
-            .into();
-        field = field.on_key_down({
-            let sig = sig;
-            let rgba_s = rgba;
-            let hue_s = hue;
-            let sat_s = sat;
-            let val_s = val;
-            let out_s = out;
-            let fmt_s = fmt_sig;
-            let key = key.to_string();
-            move |ev| {
-                if !matches!(ev.logical_key, Key::Named(NamedKey::Enter)) {
-                    return false;
-                }
-                let n: f32 = sig.peek().trim().parse().unwrap_or(f32::NAN);
-                if !n.is_finite() {
-                    return true;
-                }
-                let mut cur = rgba_s.peek();
-                match key.as_str() {
-                    "r" => cur.r = n.round().clamp(0.0, 255.0) as u8,
-                    "g" => cur.g = n.round().clamp(0.0, 255.0) as u8,
-                    "b" => cur.b = n.round().clamp(0.0, 255.0) as u8,
-                    "a" => cur.a = (n / 100.0).clamp(0.0, 1.0),
-                    _ => {}
-                }
-                apply_parsed(cur, rgba_s, hue_s, sat_s, val_s, out_s, fmt_s.peek());
-                true
-            }
-        });
-        let col = vstack()
-            .gap("0.125rem")
-            .flex_grow(1.0)
-            .min_w("0")
-            .child(trigger_label(label))
-            .child(field);
-        row = row.child(col);
-    }
-    row.into()
-}
-
-pub(super) fn preview_bar(rgba: Signal<Rgba>, fmt_sig: Signal<ColorFormat>) -> Element {
-    let c = rgba.get();
+pub(super) fn preview_bar(id: &str, rgba: Signal<Rgba>, fmt_sig: Signal<ColorFormat>) -> Element {
+    let c = rgba.peek();
     let mut bar: Element = r#box().w("100%").h("3.25rem").rounded("0.5rem").into();
     bar = bar.bg(c.to_f32()).border(tokens::border(), 1.0).relative();
+    bar = bind_style(bar, format!("{id}__cp_preview"), {
+        let rgba = rgba;
+        move || StylePatch {
+            bg: Some(rgba.get().to_f32()),
+            ..Default::default()
+        }
+    });
     bar = bar.child(
         hstack()
             .w("100%")
@@ -1061,7 +1052,15 @@ pub(super) fn preview_bar(rgba: Signal<Rgba>, fmt_sig: Signal<ColorFormat>) -> E
             .items_center()
             .justify_center()
             .pointer_events("none")
-            .child(trigger_label(&format_color(c, fmt_sig.get()))),
+            .child(
+                bind_text(format!("{id}__cp_preview_label"), {
+                    let rgba = rgba;
+                    let fmt_sig = fmt_sig;
+                    move || format_color(rgba.get(), fmt_sig.get())
+                })
+                .text_size(0.875 * 16.0)
+                .text_color(parse_text_color("foreground")),
+            ),
     );
     bar
 }
@@ -1161,10 +1160,9 @@ pub(super) fn build_panel(
     slots: &SlotMap,
 ) -> Element {
     let width = variant.panel_width();
-    let alpha_on = show_alpha && fmt_sig.peek().supports_alpha();
     let sliders = || {
         hsv_sliders(
-            id, variant, rgba, hue, sat, val, fmt_sig, out, alpha_on, disabled,
+            id, variant, rgba, hue, sat, val, fmt_sig, out, show_alpha, disabled,
         )
     };
     let controls = || {
@@ -1205,11 +1203,8 @@ pub(super) fn build_panel(
         ColorPickerVariant::Sketch => vstack()
             .gap("0.5rem")
             .w("100%")
-            .child(preview_bar(rgba, fmt_sig))
+            .child(preview_bar(id, rgba, fmt_sig))
             .child(sliders())
-            .child(channel_fields(
-                id, rgba, hue, sat, val, fmt_sig, out, disabled,
-            ))
             .child(controls())
             .into(),
         ColorPickerVariant::Github => vstack()
@@ -1273,13 +1268,11 @@ pub(super) fn build_color_picker_view(
         show_alpha,
         disabled,
     } = props;
-    // Overlay presence is `{id}__view`. Subscribing `open` here rebuilds the trigger
-    // island on click and replaces that placeholder before the panel can mount.
-    let selected = ColorFormat::parse(&fmt_str.get());
-    if selected != fmt_sig.peek() {
-        fmt_sig.set(selected);
-        sync_string_from_rgba(out, rgba.peek(), selected);
-    }
+    // Overlay presence is `{id}__view`. Subscribing `open` *or* `fmt_str` here
+    // rebuilds the trigger island and remounts the nested format Select while its
+    // overlay is still stacked (leftover labels, stuck open/close). Format sync
+    // lives in [`follow_fmt_str`].
+    let _ = fmt_str;
 
     let mut swatch: Element = r#box().w("1.25rem").h("1.25rem").rounded("0.25rem").into();
     swatch = swatch.border(tokens::border(), 1.0);
@@ -1294,7 +1287,7 @@ pub(super) fn build_color_picker_view(
     let main = bind_text(format!("{id}__cp_trig_label"), {
         let rgba = rgba;
         let fmt_sig = fmt_sig;
-        move || format_color(rgba.get(), fmt_sig.peek())
+        move || format_color(rgba.get(), fmt_sig.get())
     })
     .text_size(0.875 * 16.0)
     .text_color(parse_text_color("foreground"))

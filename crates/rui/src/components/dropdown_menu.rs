@@ -64,6 +64,7 @@ use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
+use crate::components::base::SlotMap;
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -79,7 +80,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::{parse_text_color, with_class_list};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::anchored_overlay::{
@@ -562,10 +563,8 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
 pub struct DropdownMenuContentOpts {
     /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
-    /// Extra class (utility).
-    pub class: Option<String>,
-    /// Layout/paint on the panel (same surface as RSX `base`).
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
     /// 面板动效；默认 Expand（从上到下展开）。Fade 可显式传入。
     pub(crate) motion: FloatingMotionKind,
 }
@@ -574,22 +573,20 @@ impl Default for DropdownMenuContentOpts {
     fn default() -> Self {
         Self {
             placement: "bottom-start".into(),
-            class: None,
-            style: None,
+            panel: Default::default(),
             motion: FloatingMotionKind::Expand,
         }
     }
 }
 
 impl DropdownMenuContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 
     /// `ui!` / 宏入口：只暴露 placement / class；`motion` 保持 crate 内默认 Expand。
     pub fn new(placement: impl Into<String>, class: Option<String>) -> Self {
         Self {
             placement: placement.into(),
-            class,
-            style: None,
+            panel: crate::components::base::SlotChrome::from_opts(class, None),
             motion: FloatingMotionKind::Expand,
         }
     }
@@ -610,7 +607,7 @@ pub fn dropdown_menu_content(
     } else {
         PopupPlacement::from_attr(&opts.placement)
     };
-    let chrome = crate::components::base::SlotChrome::from_opts(opts.class, opts.style);
+    let chrome = opts.panel;
     let motion = opts.motion;
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
@@ -685,7 +682,6 @@ pub fn DropdownMenuItem(
     disabled: bool,
     inset: bool,
     variant: Option<String>,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -738,9 +734,6 @@ pub fn DropdownMenuItem(
     if disabled {
         row = row.opacity(0.5);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
 
     let mut hit: Element = interactive(row)
         .on_hover(move |h| {
@@ -791,7 +784,6 @@ pub fn DropdownMenuCheckboxItem(
     default_checked: bool,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -845,9 +837,6 @@ pub fn DropdownMenuCheckboxItem(
     let mut row: Element = row.into();
     if disabled {
         row = row.opacity(0.5);
-    }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
     }
 
     let mut hit: Element = interactive(row)
@@ -959,7 +948,6 @@ pub fn DropdownMenuRadioItem(
     value: String,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -1012,9 +1000,6 @@ pub fn DropdownMenuRadioItem(
     let mut row: Element = row.into();
     if disabled {
         row = row.opacity(0.5);
-    }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
     }
 
     let mut hit: Element = interactive(row)
@@ -1115,12 +1100,7 @@ pub fn dropdown_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> 
 /// solid-ui / shadcn `DropdownMenuSubTrigger`：右侧 chevron；悬停打开子菜单。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn DropdownMenuSubTrigger(
-    disabled: bool,
-    inset: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn DropdownMenuSubTrigger(disabled: bool, inset: bool, children: Option<Element>) -> Element {
     let parent = require_dropdown_menu("DropdownMenuSubTrigger");
     let sub = require_dropdown_menu_sub("DropdownMenuSubTrigger");
     let active = parent.active;
@@ -1176,9 +1156,6 @@ pub fn DropdownMenuSubTrigger(
     if disabled {
         row = row.opacity(0.5);
     }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        row = with_class_list(row, &c);
-    }
 
     let mut hit: Element = interactive(row)
         .on_hover(move |h| {
@@ -1223,15 +1200,15 @@ pub fn DropdownMenuSubTrigger(
 
 /// solid-ui / shadcn `DropdownMenuSubContent`：相对 SubTrigger 向右弹出。
 pub fn dropdown_menu_sub_content(
-    class: Option<String>,
+    chrome: crate::components::base::SlotChrome,
     body: impl Fn() -> Element + 'static,
 ) -> Element {
-    dropdown_menu_sub_content_ex(class, FloatingMotionKind::Expand, body)
+    dropdown_menu_sub_content_ex(chrome, FloatingMotionKind::Expand, body)
 }
 
 /// SubContent with animation type (Menubar passes Expand).
 pub(crate) fn dropdown_menu_sub_content_ex(
-    class: Option<String>,
+    chrome: crate::components::base::SlotChrome,
     motion: FloatingMotionKind,
     body: impl Fn() -> Element + 'static,
 ) -> Element {
@@ -1241,7 +1218,6 @@ pub(crate) fn dropdown_menu_sub_content_ex(
     let sub_open = sub.open;
     let sid = sub.id.clone();
     let trigger_fid = sub.trigger_fid;
-    let class = class.filter(|s| !s.trim().is_empty());
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
             String::new(),
@@ -1305,9 +1281,7 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        if let Some(ref c) = class {
-            panel = with_class_list(panel, c);
-        }
+        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
         let fid = trigger_fid.peek();
         log::debug!(
@@ -1516,8 +1490,7 @@ pub struct DropdownMenuBuilder {
     menu: Box<dyn Fn() -> Element>,
     anchor_focus_id: Option<String>,
     placement: PopupPlacement,
-    content_class: Option<String>,
-    content_style: Option<crate::components::base::SlotStyleFn>,
+    slots: SlotMap,
 }
 
 /// 触发器 + 菜单壳。Esc 经 overlay 栈关闭。见模块文档。
@@ -1533,8 +1506,7 @@ pub fn dropdown_menu(
         menu: Box::new(menu),
         anchor_focus_id: None,
         placement: PopupPlacement::BottomStart,
-        content_class: None,
-        content_style: None,
+        slots: SlotMap::default(),
     }
 }
 
@@ -1548,6 +1520,9 @@ pub fn dropdown(
 }
 
 impl DropdownMenuBuilder {
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
+
     pub fn open_signal(mut self, s: Signal<bool>) -> Self {
         self.open = Some(s);
         self
@@ -1563,20 +1538,20 @@ impl DropdownMenuBuilder {
         self
     }
 
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.content_class = Some(c.into());
-        self
+    /// Overlay `class` on the menu panel. Alias of [`Self::content_class`].
+    pub fn class(self, c: impl Into<String>) -> Self {
+        self.content_class(c)
     }
 
+    /// Overlay style on the menu panel. Alias of [`Self::content_style`].
     pub fn style(
-        mut self,
+        self,
         f: impl Fn(
                 crate::components::base::BaseComponentBuilder,
             ) -> crate::components::base::BaseComponentBuilder
             + 'static,
     ) -> Self {
-        self.content_style = Some(std::rc::Rc::new(f));
-        self
+        self.content_style(f)
     }
 
     /// Build Trigger / Content (and related) subtrees inside the context.
@@ -1594,11 +1569,11 @@ impl From<DropdownMenuBuilder> for Element {
             menu,
             anchor_focus_id,
             placement,
-            content_class,
-            content_style,
+            slots,
         } = builder;
         let side = placement.as_attr().to_string();
         let trigger_fid = anchor_focus_id.unwrap_or_else(|| format!("{id}__dd_trigger"));
+        let content_chrome = slots.get(SLOT_CONTENT);
         dropdown_menu_scope(id, open, || {
             let mut trig = trigger();
             if trig.focus_id.is_none() {
@@ -1612,8 +1587,7 @@ impl From<DropdownMenuBuilder> for Element {
             let content = dropdown_menu_content(
                 DropdownMenuContentOpts {
                     placement: side,
-                    class: content_class,
-                    style: content_style,
+                    panel: content_chrome,
                     motion: FloatingMotionKind::Expand,
                 },
                 move || menu(),
@@ -1660,7 +1634,6 @@ mod tests {
                     disabled: Some(false),
                     inset: Some(false),
                     variant: None,
-                    class: None,
                     on_click: None,
                     children: Some(Element::new().text("One")),
                     base: None,
@@ -1685,16 +1658,14 @@ mod tests {
                     let st = DropdownMenuSubTrigger(DropdownMenuSubTriggerProps {
                         disabled: Some(false),
                         inset: Some(false),
-                        class: None,
                         children: Some(Element::new().text("More")),
                         base: None,
                     });
-                    let sc = dropdown_menu_sub_content(None, || {
+                    let sc = dropdown_menu_sub_content(Default::default(), || {
                         DropdownMenuItem(DropdownMenuItemProps {
                             disabled: Some(false),
                             inset: Some(false),
                             variant: None,
-                            class: None,
                             on_click: None,
                             children: Some(Element::new().text("Nested")),
                             base: None,
@@ -1742,7 +1713,6 @@ mod tests {
                             disabled: Some(false),
                             inset: Some(false),
                             variant: None,
-                            class: None,
                             on_click: None,
                             children: Some(Element::new().text("Above")),
                             base: None,
@@ -1751,16 +1721,14 @@ mod tests {
                             let st = DropdownMenuSubTrigger(DropdownMenuSubTriggerProps {
                                 disabled: Some(false),
                                 inset: Some(false),
-                                class: None,
                                 children: Some(Element::new().text("More")),
                                 base: None,
                             });
-                            let sc = dropdown_menu_sub_content(None, || {
+                            let sc = dropdown_menu_sub_content(Default::default(), || {
                                 DropdownMenuItem(DropdownMenuItemProps {
                                     disabled: Some(false),
                                     inset: Some(false),
                                     variant: None,
-                                    class: None,
                                     on_click: None,
                                     children: Some(Element::new().text("Nested")),
                                     base: None,

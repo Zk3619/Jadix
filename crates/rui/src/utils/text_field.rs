@@ -643,18 +643,32 @@ fn controlled_of(field_id: &str) -> Option<Signal<String>> {
     CONTROLLED_VALUES.with(|m| m.borrow().get(field_id).copied())
 }
 
+fn live_controlled(field_id: &str) -> Option<(Signal<String>, String)> {
+    let ext = controlled_of(field_id)?;
+    match ext.try_peek() {
+        Some(v) => Some((ext, v)),
+        None => {
+            // TabsContent / overlay unmount disposes the author Signal while a
+            // hoisted Input can still paint (ColorPicker hex field).
+            unbind_controlled_value(field_id);
+            None
+        }
+    }
+}
+
 /// 挂载时以外部 Signal 为准灌入 store，并登记对拍。
 ///
 /// 之后的外部写入只在失焦且无 IME 未提交时经 [`pull_controlled_into_store`] 进入 store（N.7）。
 pub fn bind_controlled_value(field_id: &str, external: Signal<String>) {
     let store = use_signal(&input_value_signal_key(field_id), String::new);
-    let ev = external.peek();
-    if store.peek() != ev {
-        store.set(ev);
+    if let Some(ev) = external.try_peek() {
+        if store.peek() != ev {
+            store.set(ev);
+        }
+        CONTROLLED_VALUES.with(|m| {
+            m.borrow_mut().insert(field_id.to_string(), external);
+        });
     }
-    CONTROLLED_VALUES.with(|m| {
-        m.borrow_mut().insert(field_id.to_string(), external);
-    });
 }
 
 /// Drop controlled pairing so paint sync stops pulling an external Signal into the store.
@@ -720,10 +734,10 @@ pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
 }
 
 fn mirror_store_to_controlled(field_id: &str, value: &str) {
-    let Some(ext) = controlled_of(field_id) else {
+    let Some((ext, current)) = live_controlled(field_id) else {
         return;
     };
-    if ext.peek() != value {
+    if current != value {
         // Safe outside paint / AppState borrow (e.g. input_controller key path).
         ext.set(value.to_string());
     }
@@ -809,8 +823,7 @@ pub fn pull_controlled_into_store(
     if composing {
         return None;
     }
-    let ext = controlled_of(field_id)?;
-    let ev = ext.peek();
+    let (_ext, ev) = live_controlled(field_id)?;
     if ev == store_value {
         return None;
     }
@@ -866,6 +879,23 @@ mod tests {
         assert_eq!(textarea_focus_id("a"), "textarea:a");
         assert_eq!(text_edit_rest("textarea:bio"), Some("bio"));
         assert_eq!(focus_id_for_text_edit("x", true), "textarea:x");
+    }
+
+    #[test]
+    fn pull_controlled_into_store_after_external_dispose_must_not_peek() {
+        use crate::core::reactivity::use_scoped_signal;
+
+        let field = "tf_disposed_ext";
+        let (owner, ()) = create_root(|| {
+            let ext = use_scoped_signal("tf_disposed_ext_val", || "hello".to_string());
+            bind_controlled_value(field, ext);
+        });
+        owner.dispose();
+        assert!(
+            pull_controlled_into_store(field, "hello", false).is_none(),
+            "paint sync must unbind a disposed controlled Signal instead of peeking it"
+        );
+        unbind_controlled_value(field);
     }
 
     #[test]

@@ -36,10 +36,12 @@ use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{bind_style, bind_text, reactive_component_live, StylePatch};
+use crate::app::reactive::{
+    bind_style, bind_text, reactive_component_live, show_reactive, StylePatch,
+};
 use crate::components::base::{SlotChrome, SlotMap};
 use crate::components::button::button;
-use crate::components::input::{input, input_value_signal_key};
+use crate::components::input::input;
 use crate::components::select::{select, SelectItemData};
 use crate::components::separator::separator;
 use crate::components::slider::slider;
@@ -75,15 +77,14 @@ mod model;
 pub mod view;
 
 pub(crate) use drag::{
-    clear_color_drag_if_any, is_color_dragging, tick_color_drag, tick_color_drag_from_tree,
-    tick_color_drag_with_bounds,
+    clear_color_drag_if_any, is_color_dragging, tick_color_drag_from_tree,
 };
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,
 };
 pub(crate) use view::flush_color_picker_textures;
-use view::{build_color_picker_view, follow_hue_into_rgba, ColorPickerRenderProps};
+use view::{build_color_picker_view, follow_fmt_str, follow_hue_into_rgba, ColorPickerRenderProps};
 
 /// HTML `input type="color"` + Reader 式 HSV 面板。
 #[component(crate_path = "crate")]
@@ -201,6 +202,7 @@ impl From<ColorPickerBuilder> for Element {
         let fmt_str = use_signal(format!("{id}__cp_fmt_str").as_str(), move || fmt0.clone());
         let open = resolve_open_signal(None, &id, false);
         follow_hue_into_rgba(rgba, hue, sat, val, out, fmt_sig);
+        follow_fmt_str(fmt_str, fmt_sig, out, rgba);
         // Defer SV/hue CPU ramps until the panel mounts (`sv_area` /
         // `sync_sv_visuals`). Eager generation here made every closed Gallery
         // ColorPicker pay 192×144 RGBA on forms scroll (10+ pickers → hitch).
@@ -223,7 +225,8 @@ impl From<ColorPickerBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::drag::{
-        apply_color_pointer, begin_color_drag, end_color_drag, ColorDrag, ColorDragKind,
+        apply_color_pointer, begin_color_drag, end_color_drag, tick_color_drag,
+        tick_color_drag_with_bounds, ColorDrag, ColorDragKind,
     };
     use super::model::SWATCHES_GITHUB;
     use super::view::{
@@ -453,6 +456,155 @@ mod tests {
             let in_h = row.children[1].style.size.height;
             assert_eq!(sel_h, in_h, "Select height {sel_h:?} vs Input {in_h:?}");
         });
+    }
+
+    #[test]
+    fn switching_to_alpha_format_mounts_alpha_slider() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, fmt_str) = create_root(|| {
+            let fmt_str = use_signal("cp-afmt__cp_fmt_str", || "hex".to_string());
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("cp-afmt").default_value("#3b82f6").into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+            });
+            fmt_str
+        });
+        drain_deferred_view_remounts();
+
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+        }
+        fn event_loop_pass(root: &mut Element) {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            present_pass(root);
+        }
+
+        let click = {
+            let tree = live.borrow();
+            find_click(&tree, "cp-afmt:trigger").expect("trigger")
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "cp-afmt__floating_panel").is_some(),
+                "popover must be open"
+            );
+            assert!(
+                find_tid(&tree, "cp-afmt:alpha").is_none(),
+                "HEX format must not mount the alpha slider"
+            );
+        }
+
+        fmt_str.set("hex8".into());
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "cp-afmt:alpha").is_some(),
+                "switching HEX → HEX8 must mount the alpha slider on the open popover"
+            );
+        }
+
+        fmt_str.set("hex".into());
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "cp-afmt:alpha").is_none(),
+                "switching HEX8 → HEX must unmount the alpha slider"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 
     #[test]
@@ -1259,7 +1411,7 @@ mod tests {
             let mut root = live.borrow_mut();
             // Two present passes: measure then seed. Event-loop Poll is not this seam.
             let _ = present_pass(&mut root);
-            let out = present_pass(&mut root);
+            let _ = present_pass(&mut root);
             let dump = format!(
                 "{} registry={}",
                 dump_fmt(&root),
@@ -1279,6 +1431,21 @@ mod tests {
                 !measuring && (panel.style.opacity > 0.5 || has_enter),
                 "nested format Select first present must seed enter (not stay opacity-0 measure); {dump}"
             );
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(999.0);
+            assert!(
+                mh < 2.0,
+                "seeded enter must start at max-height≈0, not one item row; mh={mh}; {dump}"
+            );
+            crate::style::utility::set_frame_dt(0.016);
+            let out = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.0);
+            let dump = format!(
+                "{} registry={}",
+                dump_fmt(&root),
+                debug_floating_registry(&root)
+            );
+            let panel = find_fmt_panel(&root)
+                .unwrap_or_else(|| panic!("nested format menu must exist after grow; {dump}"));
             let nested_key = overlay_portal_stamp_key(panel);
             let stamps = crate::layout::layout_tree::hoisted_portal_stamps(&root);
             let nested_in_stamps = stamps.iter().any(|(k, _)| *k == nested_key);
@@ -1326,6 +1493,511 @@ mod tests {
                     "dismiss must not be the first time the menu becomes visible; {dump}"
                 );
             }
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Accordion-up already shrank the format-Select chrome; HEX/RGB labels must not
+    /// keep painting below that clip (leftover ink over the swatch grid).
+    #[test]
+    fn nested_format_select_exit_clips_labels_to_accordion() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::take_frame_paint_nodes;
+        use crate::app::portal_overlay::{clear_overlay_stack, try_dismiss_outside_press};
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
+        };
+        use crate::utils::floating_motion::{
+            flush_floating_motion_subtree, mark_floating_panels_layout_dirty,
+            tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{
+            arm_underlay_close, sync_floating_placement, ATTR_FLOATING_EXPAND_MEASURE,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let _ = take_frame_paint_nodes();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+            });
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn find_fmt_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t == "gal-color:fmt__floating_panel")
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_fmt_panel)
+        }
+        fn find_fmt_panel_mut<'a>(el: &'a mut Element) -> Option<&'a mut Element> {
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t == "gal-color:fmt__floating_panel")
+            {
+                return Some(el);
+            }
+            el.children.iter_mut().find_map(find_fmt_panel_mut)
+        }
+        fn present_pass(root: &mut Element) -> crate::layout::layout_tree::RenderResult {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let mut out = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            out
+        }
+
+        let picker_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:trigger").expect("picker trigger")
+        };
+        picker_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+        }
+
+        let fmt_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:fmt:trigger").expect("format Select trigger")
+        };
+        fmt_click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+            let _ = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.016);
+            for _ in 0..16 {
+                let _ = present_pass(&mut root);
+            }
+            crate::style::utility::set_frame_dt(0.0);
+            let panel = find_fmt_panel(&root).expect("format menu after enter");
+            let measuring = panel
+                .attrs
+                .get(ATTR_FLOATING_EXPAND_MEASURE)
+                .map(String::as_str)
+                == Some("1");
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                !measuring && mh > 80.0,
+                "enter must settle past one item row before exit; mh={mh} bounds={:?} hoisted={}",
+                panel.layout_bounds,
+                panel.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1"),
+            );
+        }
+
+        arm_underlay_close();
+        assert!(
+            try_dismiss_outside_press(),
+            "outside press must dismiss the nested format Select"
+        );
+        drain_deferred_view_remounts();
+
+        let (out, clip_bottom, dump) = {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+            {
+                let panel = find_fmt_panel_mut(&mut root).expect("format menu after dismiss");
+                for _ in 0..10 {
+                    let _ = panel.tick_css_animations(0.016);
+                }
+            }
+            crate::style::utility::set_frame_dt(0.016);
+            let out = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.0);
+            let panel = find_fmt_panel(&root).expect("format menu during accordion-up");
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            let has_exit =
+                panel.style.animations.iter().any(|a| {
+                    a.name.contains("accordion-up") || a.name.starts_with("rui-expand-up-")
+                });
+            assert!(
+                has_exit && mh > 0.5 && mh < 80.0,
+                "mid-exit must still be accordion-up with a short clip; mh={mh} bounds={:?} anims={:?}",
+                panel.layout_bounds,
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            let nested_key = overlay_portal_stamp_key(panel);
+            let stamps = crate::layout::layout_tree::hoisted_portal_stamps(&root);
+            let stamp = stamps
+                .iter()
+                .find(|(k, _)| *k == nested_key)
+                .map(|(_, b)| *b)
+                .unwrap_or(panel.layout_bounds);
+            let clip_bottom = stamp[1] + stamp[3];
+            let labels = ["HEX", "HEX8", "RGB", "RGBA", "HSL", "HSLA"];
+            let texts: Vec<String> = out
+                .text_nodes
+                .iter()
+                .filter(|t| labels.iter().any(|l| t.text == *l))
+                .map(|t| {
+                    let pb = crate::app::draw_cull::text_paint_bounds(t);
+                    format!(
+                        "{} y={:.1} h={:.1} clip={:?} paint={:?}",
+                        t.text, t.y, t.height, t.clip_bounds, pb
+                    )
+                })
+                .collect();
+            let dump = format!(
+                "mh={mh:.1} bounds={:?} stamp={:?} clip_bottom={clip_bottom:.1} texts=[{}]",
+                panel.layout_bounds,
+                stamp,
+                texts.join("; ")
+            );
+            (out, clip_bottom, dump)
+        };
+
+        let labels = ["HEX", "HEX8", "RGB", "RGBA", "HSL", "HSLA"];
+        let mut saw_format = false;
+        for t in &out.text_nodes {
+            if !labels.iter().any(|l| t.text == *l) {
+                continue;
+            }
+            saw_format = true;
+            let pb = crate::app::draw_cull::text_paint_bounds(t);
+            if pb[2] <= 0.0 || pb[3] <= 0.0 {
+                continue;
+            }
+            assert!(
+                pb[1] + pb[3] <= clip_bottom + 2.0,
+                "format label {:?} must not paint below accordion chrome\n{dump}",
+                t.text
+            );
+        }
+        assert!(
+            saw_format,
+            "mid-exit must still collect the visible format row\n{dump}"
+        );
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Selecting a format remounts ColorPicker (fmt_str.get). The nested Select must
+    /// leave the overlay stack, keep the popover on-screen, and open again.
+    #[test]
+    fn nested_format_select_item_click_must_not_orphan_menu() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::take_frame_paint_nodes;
+        use crate::app::portal_overlay::{clear_overlay_stack, overlay_stack_depth_for_test};
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{sync_floating_placement, ATTR_FLOATING_EXPAND_MEASURE};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let _ = take_frame_paint_nodes();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
+                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+            });
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn find_fmt_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t == "gal-color:fmt__floating_panel")
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_fmt_panel)
+        }
+        fn find_picker_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                && el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t == "gal-color__floating_panel")
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_picker_panel)
+        }
+        fn present_pass(root: &mut Element) -> crate::layout::layout_tree::RenderResult {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let mut out = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                out = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            out
+        }
+        fn fmt_label_paint(
+            out: &crate::layout::layout_tree::RenderResult,
+        ) -> Vec<(String, [f32; 4])> {
+            let labels = ["HEX", "HEX8", "RGB", "RGBA", "HSL", "HSLA"];
+            out.text_nodes
+                .iter()
+                .filter(|t| labels.iter().any(|l| t.text == *l))
+                .map(|t| (t.text.clone(), crate::app::draw_cull::text_paint_bounds(t)))
+                .filter(|(_, b)| b[2] > 0.0 && b[3] > 0.0)
+                .collect()
+        }
+
+        let picker_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:trigger").expect("picker trigger")
+        };
+        picker_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+        }
+        let depth_picker = overlay_stack_depth_for_test();
+        assert!(
+            depth_picker >= 1,
+            "ColorPicker popover must be on the overlay stack; depth={depth_picker}"
+        );
+
+        let fmt_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:fmt:trigger").expect("format Select trigger")
+        };
+        fmt_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+            let _ = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.016);
+            for _ in 0..16 {
+                let _ = present_pass(&mut root);
+            }
+            crate::style::utility::set_frame_dt(0.0);
+        }
+        let depth_open = overlay_stack_depth_for_test();
+        assert!(
+            depth_open > depth_picker,
+            "format Select must stack above ColorPicker; picker={depth_picker} open={depth_open}"
+        );
+
+        let rgb_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:fmt:opt:rgb").expect("RGB format item")
+        };
+        rgb_click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        crate::style::utility::set_frame_dt(0.016);
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+        }
+        for _ in 0..20 {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        let _ = tick_floating_presence();
+        drain_pending_floating_unmounts();
+        drain_deferred_view_remounts();
+        let (out, picker_bounds, fmt_alive, dump) = {
+            let mut root = live.borrow_mut();
+            let out = present_pass(&mut root);
+            let picker = find_picker_panel(&root).expect("ColorPicker popover after format click");
+            let fmt = find_fmt_panel(&root);
+            let fmt_alive = fmt.is_some_and(|p| {
+                p.style.opacity > 0.05
+                    && crate::layout::dim_length_px(p.style.max_size.height)
+                        .unwrap_or(p.layout_bounds[3])
+                        > 8.0
+                    && p.attrs
+                        .get(ATTR_FLOATING_EXPAND_MEASURE)
+                        .map(String::as_str)
+                        != Some("1")
+            });
+            let labels = fmt_label_paint(&out);
+            let dump = format!(
+                "picker={:?} fmt={:?} depth={} labels={:?} measuring={}",
+                picker.layout_bounds,
+                fmt.map(|p| (p.layout_bounds, p.style.opacity)),
+                overlay_stack_depth_for_test(),
+                labels,
+                fmt.and_then(|p| p
+                    .attrs
+                    .get(ATTR_FLOATING_EXPAND_MEASURE)
+                    .map(String::as_str))
+                    == Some("1"),
+            );
+            (out, picker.layout_bounds, fmt_alive, dump)
+        };
+
+        assert!(
+            picker_bounds[2] > 80.0
+                && picker_bounds[3] > 80.0
+                && picker_bounds[0] >= -1.0
+                && picker_bounds[1] >= -1.0
+                && picker_bounds[0] + picker_bounds[2] <= 801.0
+                && picker_bounds[1] + picker_bounds[3] <= 601.0,
+            "ColorPicker popover must stay on-screen after picking RGB; {dump}"
+        );
+        assert!(
+            !fmt_alive,
+            "format menu must finish exit after picking an item (not linger as a detached list); {dump}"
+        );
+        let depth_after = overlay_stack_depth_for_test();
+        assert_eq!(
+            depth_after, depth_picker,
+            "nested Select must leave the overlay stack after pick; {dump}"
+        );
+        for (text, b) in fmt_label_paint(&out) {
+            if text == "HEX" || text == "RGB" {
+                continue;
+            }
+            let below_picker = b[1] > picker_bounds[1] + picker_bounds[3] + 8.0;
+            assert!(
+                !below_picker,
+                "format label {text:?} must not float below the ColorPicker chrome; paint={b:?}; {dump}"
+            );
+        }
+
+        let reopen = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-color:fmt:trigger").expect("format trigger after pick")
+        };
+        reopen.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            let _ = present_pass(&mut root);
+            let _ = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.016);
+            let _ = present_pass(&mut root);
+            crate::style::utility::set_frame_dt(0.0);
+            let panel = find_fmt_panel(&root);
+            let dump = format!(
+                "reopen depth={} panel={:?} opacity={:?}",
+                overlay_stack_depth_for_test(),
+                panel.map(|p| p.layout_bounds),
+                panel.map(|p| p.style.opacity),
+            );
+            assert!(
+                panel.is_some_and(|p| p.style.opacity > 0.5 || {
+                    p.style.animations.iter().any(|a| {
+                        a.name.contains("accordion-down") || a.name.starts_with("rui-expand-down-")
+                    })
+                }),
+                "format Select must open again after picking RGB; {dump}"
+            );
         }
 
         clear_test_reconcile_root();
@@ -1495,6 +2167,549 @@ mod tests {
         );
 
         clear_hover_tracking();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery ColorPicker variants Tabs: switching unmounts the open popover's
+    /// owner. Overlay `body()` used to run (and peek `fmt_sig`) before `open`.
+    #[test]
+    fn color_picker_tab_unmount_with_open_overlay_must_not_peek_disposed() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::{clear_overlay_stack, try_dismiss_outside_press};
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::tabs::{tabs_content, tabs_scope};
+        use crate::core::reactivity::{component_root, create_effect, create_root, use_signal};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{arm_underlay_close, sync_floating_placement};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, tab) = create_root(|| {
+            let tab = use_signal("gal-cp-variants__tabs", || "chrome".to_string());
+            let live_e = Rc::clone(&live);
+            let tab_e = tab;
+            create_effect(move || {
+                *live_e.borrow_mut() = tabs_scope(
+                    "gal-cp-variants",
+                    Some(tab_e),
+                    "chrome",
+                    "horizontal",
+                    false,
+                    || {
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag = frag.children(vec![
+                            tabs_content("chrome", || {
+                                // Gallery `<ColorPicker>` is `#[component]` → component_root.
+                                // Builder `.into()` in the TabsContent effect left `out` alive
+                                // after hide; the hex Input still painted the disposed Signal.
+                                component_root(|| {
+                                    color_picker("gal-cp-chrome")
+                                        .variant(ColorPickerVariant::Chrome)
+                                        .default_value("#0693E3")
+                                        .into()
+                                })
+                            }),
+                            tabs_content("github", || {
+                                component_root(|| {
+                                    color_picker("gal-cp-github")
+                                        .variant(ColorPickerVariant::Github)
+                                        .default_value("#1273DE")
+                                        .into()
+                                })
+                            }),
+                        ]);
+                        frag
+                    },
+                );
+            });
+            tab
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+        }
+
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        let chrome_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-cp-chrome:trigger").expect("chrome ColorPicker trigger")
+        };
+        chrome_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+            present_pass(&mut root);
+        }
+
+        // Gallery chip click: pointer-down outside-dismiss, then TabsTrigger set.
+        arm_underlay_close();
+        let _ = try_dismiss_outside_press();
+        tab.set("github".into());
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..8 {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+
+        {
+            let tree = live.borrow();
+            assert!(
+                find_click(&tree, "gal-cp-github:trigger").is_some(),
+                "github variant must mount after tab switch"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Regression: orphan-exit pump must not treat a live `open=true` overlay as
+    /// disposed. Gallery symptom: trigger click does nothing; tab away/back
+    /// flashes the leftover panel then immediately fades it out.
+    #[test]
+    fn color_picker_tabs_trigger_open_stays_open_after_presence_tick() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::tabs::{tabs_content, tabs_scope};
+        use crate::core::reactivity::{component_root, create_effect, create_root, use_signal};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, tab) = create_root(|| {
+            let tab = use_signal("gal-cp-openstay__tabs", || "chrome".to_string());
+            let live_e = Rc::clone(&live);
+            let tab_e = tab;
+            create_effect(move || {
+                *live_e.borrow_mut() = tabs_scope(
+                    "gal-cp-openstay",
+                    Some(tab_e),
+                    "chrome",
+                    "horizontal",
+                    false,
+                    || {
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag = frag.children(vec![
+                            tabs_content("chrome", || {
+                                component_root(|| {
+                                    color_picker("gal-cp-openstay-chrome")
+                                        .variant(ColorPickerVariant::Chrome)
+                                        .default_value("#0693E3")
+                                        .into()
+                                })
+                            }),
+                            tabs_content("github", || {
+                                component_root(|| {
+                                    color_picker("gal-cp-openstay-github")
+                                        .variant(ColorPickerVariant::Github)
+                                        .default_value("#1273DE")
+                                        .into()
+                                })
+                            }),
+                        ]);
+                        frag
+                    },
+                );
+            });
+            tab
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        fn has_anim(el: &Element, name: &str) -> bool {
+            el.style.animations.iter().any(|a| a.name == name)
+                || el.children.iter().any(|c| has_anim(c, name))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+        }
+        fn event_loop_pass(root: &mut Element) {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            present_pass(root);
+        }
+
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        let chrome_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-cp-openstay-chrome:trigger").expect("chrome trigger")
+        };
+        chrome_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            let panel = find_tid(&tree, "gal-cp-openstay-chrome__floating_panel")
+                .expect("trigger click must hoist the ColorPicker panel");
+            assert!(
+                !has_anim(panel, "fade-out-0"),
+                "live open overlay must not be orphan-exited on presence tick"
+            );
+            assert!(
+                panel.style.opacity > 0.05,
+                "open panel must not stay stuck at opacity 0 (got {})",
+                panel.style.opacity
+            );
+        }
+
+        // Switch away and back immediately — named presence is still Exiting.
+        tab.set("github".into());
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        tab.set("chrome".into());
+        drain_deferred_view_remounts();
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "gal-cp-openstay-chrome__floating_panel").is_none(),
+                "returning to the tab must not auto-open a leftover overlay"
+            );
+        }
+
+        let chrome_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-cp-openstay-chrome:trigger")
+                .expect("chrome trigger after return")
+        };
+        chrome_click.borrow_mut()();
+        drain_deferred_view_remounts();
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            let tree = live.borrow();
+            let panel = find_tid(&tree, "gal-cp-openstay-chrome__floating_panel")
+                .expect("trigger click after tab roundtrip must open the panel");
+            assert!(
+                !has_anim(panel, "fade-out-0"),
+                "reopened overlay must stay open, not immediately fade out"
+            );
+        }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery forms: enter the page, click a Tabs-hosted ColorPicker variant
+    /// trigger (`#[component]` + `tabs_content`, no tab switch). Overlay must open.
+    #[test]
+    fn color_picker_first_trigger_click_opens_before_tab_switch() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::tabs::{tabs_content, tabs_scope};
+        use crate::core::reactivity::{create_effect, create_root, isolate_reads};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                *live_e.borrow_mut() = isolate_reads(|| {
+                    tabs_scope(
+                        "gal-cp-variants",
+                        None,
+                        "sketch",
+                        "horizontal",
+                        false,
+                        || {
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag = frag.children(vec![
+                                tabs_content("sketch", || {
+                                    ColorPicker(ColorPickerProps {
+                                        id: "gal-cp-sketch".into(),
+                                        value: Some("#f47373".into()),
+                                        variant: Some("sketch".into()),
+                                        ..Default::default()
+                                    })
+                                }),
+                                tabs_content("chrome", || {
+                                    ColorPicker(ColorPickerProps {
+                                        id: "gal-cp-chrome".into(),
+                                        value: Some("#0693E3".into()),
+                                        variant: Some("chrome".into()),
+                                        ..Default::default()
+                                    })
+                                }),
+                            ]);
+                            frag
+                        },
+                    )
+                });
+            });
+        });
+        drain_deferred_view_remounts();
+
+        fn find_click(
+            el: &Element,
+            fid: &str,
+        ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(|c| find_click(c, fid))
+        }
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        fn has_anim(el: &Element, name: &str) -> bool {
+            el.style.animations.iter().any(|a| a.name == name)
+                || el.children.iter().any(|c| has_anim(c, name))
+        }
+        fn present_pass(root: &mut Element) {
+            let _ = hoist_portal_subtrees(root);
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, 600.0) {
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let floating_needs = flush_floating_motion_subtree(root);
+            let css_ticking = tick_hoisted_floating_css(root);
+            if floating_needs || css_ticking {
+                mark_floating_panels_layout_dirty(root, &mut tree);
+                let _ = tree.build_and_layout_fast_ex(
+                    root,
+                    800.0,
+                    600.0,
+                    [0.0, 0.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+        }
+        fn event_loop_pass(root: &mut Element) {
+            let _ = tick_floating_presence();
+            drain_pending_floating_unmounts();
+            drain_deferred_view_remounts();
+            present_pass(root);
+        }
+
+        {
+            let mut root = live.borrow_mut();
+            present_pass(&mut root);
+        }
+        for _ in 0..4 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        {
+            let tree = live.borrow();
+            assert!(
+                find_tid(&tree, "gal-cp-sketch__floating_panel").is_none(),
+                "idle ticks before click must not auto-open the overlay"
+            );
+        }
+
+        let sketch_click = {
+            let tree = live.borrow();
+            find_click(&tree, "gal-cp-sketch:trigger").expect("sketch trigger")
+        };
+        sketch_click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        crate::style::utility::set_frame_dt(0.016);
+        for _ in 0..6 {
+            let mut root = live.borrow_mut();
+            event_loop_pass(&mut root);
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        {
+            use crate::utils::floating_motion::debug_floating_registry;
+            let tree = live.borrow();
+            let panel = find_tid(&tree, "gal-cp-sketch__floating_panel")
+                .expect("clicking a Tabs-hosted ColorPicker variant trigger must hoist the panel");
+            let anims: Vec<&str> = panel
+                .style
+                .animations
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect();
+            let dump = debug_floating_registry(&tree);
+            assert!(
+                !has_anim(panel, "fade-out-0"),
+                "live open overlay must not play fade-out on first open; anims={anims:?} registry={dump}"
+            );
+            assert!(
+                panel.style.opacity > 0.05,
+                "open panel must not stay stuck at opacity 0 (got {}, anims={anims:?}, registry={dump})",
+                panel.style.opacity
+            );
+            assert!(
+                panel.layout_bounds[2] > 20.0 && panel.layout_bounds[3] > 20.0,
+                "open panel must have a visible box, got {:?}",
+                panel.layout_bounds
+            );
+        }
+
         clear_test_reconcile_root();
         drop(live);
         owner.dispose();

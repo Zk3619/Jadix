@@ -370,7 +370,10 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
         }
 
         for (key, node) in prev {
-            if !wanted.contains(&key) || fresh_keys.contains(&key) {
+            if fresh_keys.contains(&key) {
+                continue;
+            }
+            if !wanted.contains(&key) && !overlay_presence_retains_hoisted(&node) {
                 continue;
             }
             let mount = node
@@ -462,7 +465,7 @@ fn prune_unwanted_hoisted(root: &mut Element, wanted: &std::collections::HashSet
             if c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) != Some("1") {
                 return true;
             }
-            wanted.contains(&portal_key_of(c))
+            keep_hoisted_portal(c, wanted)
         });
         dropped += before.saturating_sub(layer.children.len());
     }
@@ -489,7 +492,9 @@ fn prune_hoisted_from_hosts(
                 .map(|s| s.as_str())
                 == Some("1")
             {
-                if wanted.contains(&portal_key_of(&node.children[i])) {
+                if wanted.contains(&portal_key_of(&node.children[i]))
+                    || overlay_presence_retains_hoisted(&node.children[i])
+                {
                     i += 1;
                 } else {
                     node.children.remove(i);
@@ -502,6 +507,15 @@ fn prune_hoisted_from_hosts(
         }
     }
     dropped
+}
+
+fn keep_hoisted_portal(el: &Element, wanted: &std::collections::HashSet<String>) -> bool {
+    wanted.contains(&portal_key_of(el)) || overlay_presence_retains_hoisted(el)
+}
+
+fn overlay_presence_retains_hoisted(el: &Element) -> bool {
+    crate::utils::floating_motion::hoisted_should_retain(el)
+        || crate::utils::modal_motion::hoisted_should_retain(el)
 }
 
 fn place_hoisted(
@@ -4807,16 +4821,17 @@ impl LayoutTree {
         // `hover:rotate-*` tiles grow/shrink the scroll clip every tween frame, which
         // jittered hit-test and flashed sidebar hover while those tiles were on screen.
         let layout_border = [render_x, render_y, lay_w, lay_h];
+        let overflow_border = overflow_clip_layout_border(element, layout_border);
         let mut clip = parent_clip;
         let mut dest_clip = parent_dest_clip;
         let clip_x = element.style.overflow.x != taffy::style::Overflow::Visible;
         let clip_y = element.style.overflow.y != taffy::style::Overflow::Visible;
         let overflow_clips = clip_x || clip_y;
         if overflow_clips {
-            clip = intersect_overflow_axes(clip, layout_border, element.style.overflow);
+            clip = intersect_overflow_axes(clip, overflow_border, element.style.overflow);
             dest_clip = intersect_overflow_axes(
                 dest_clip,
-                overflow_dest_aabb(layout_border, render_rect, &transform),
+                overflow_dest_aabb(overflow_border, render_rect, &transform),
                 element.style.overflow,
             );
         }
@@ -5961,7 +5976,7 @@ impl LayoutTree {
                                 hidden_input_text_clip(parent_clip, render_rect)
                             } else if element_text_clips_to_box(element) {
                                 Some(intersect_rect(
-                                    parent_clip,
+                                    clip.or(parent_clip),
                                     text_leaf_clip_rect(render_rect, &text_style),
                                 ))
                             } else {
@@ -5985,7 +6000,7 @@ impl LayoutTree {
                             hidden_input_text_clip(parent_clip, render_rect)
                         } else if element_text_clips_to_box(element) {
                             Some(intersect_rect(
-                                parent_clip,
+                                clip.or(parent_clip),
                                 text_leaf_clip_rect(render_rect, &text_style),
                             ))
                         } else {
@@ -7301,6 +7316,24 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     } else {
         rect
     }
+}
+
+/// Animated `max-height` is the overflow clip. Taffy may still report content
+/// height (Expand pin / short Select lists), so occupancy and Overlay dirty
+/// clamp to max-size — collect must use the same box or ellipsis labels survive
+/// accordion-up after the chrome has shrunk.
+fn overflow_clip_layout_border(element: &Element, mut layout_border: [f32; 4]) -> [f32; 4] {
+    if let Some(h) =
+        crate::layout::dim_length_px(element.style.max_size.height).filter(|h| *h >= 0.0)
+    {
+        layout_border[3] = layout_border[3].min(h);
+    }
+    if let Some(w) =
+        crate::layout::dim_length_px(element.style.max_size.width).filter(|w| *w >= 0.0)
+    {
+        layout_border[2] = layout_border[2].min(w);
+    }
+    layout_border
 }
 
 /// Intersect `parent` with `layout` only on axes whose overflow is not `visible`.

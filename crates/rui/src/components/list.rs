@@ -313,7 +313,6 @@ fn build_list_item_shell(
 #[allow(non_snake_case)]
 pub fn List(
     marker: Option<ListMarker>,
-    class: Option<String>,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
@@ -339,7 +338,7 @@ pub fn List(
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el.set_attr(ATTR_MARKER, default_marker.as_str());
     el.set_attr("role", "list");
-    el = apply_user_class(el, class);
+    el = crate::style::apply_stylesheet_rules(el);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -351,7 +350,6 @@ pub fn List(
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ListHeader(
-    class: Option<String>,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
@@ -364,7 +362,7 @@ pub fn ListHeader(
         .children(kids)
         .into();
     el.set_attr(ATTR_SLOT, SLOT_HEADER);
-    el = apply_user_class(el, class);
+    el = crate::style::apply_stylesheet_rules(el);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -376,7 +374,6 @@ pub fn ListHeader(
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ListDescription(
-    class: Option<String>,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
@@ -384,7 +381,7 @@ pub fn ListDescription(
     let kids = caption_from_children(children, &cfg);
     let mut el: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
     el.set_attr(ATTR_SLOT, SLOT_DESCRIPTION);
-    el = apply_user_class(el, class);
+    el = crate::style::apply_stylesheet_rules(el);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -397,7 +394,6 @@ pub fn ListDescription(
 #[allow(non_snake_case)]
 pub fn ListItem(
     marker: Option<ListMarker>,
-    class: Option<String>,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
@@ -410,7 +406,7 @@ pub fn ListItem(
     });
     let index = list_ctx.map(|c| c.next_index).unwrap_or(0);
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = build_list_item_shell(effective, index, kids, class);
+    let mut el = build_list_item_shell(effective, index, kids, None);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -458,7 +454,6 @@ impl From<ListHeaderBuilder> for Element {
     fn from(builder: ListHeaderBuilder) -> Self {
         let el = ListHeader(ListHeaderProps {
             children: packed_children(builder.children),
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()
@@ -503,7 +498,6 @@ impl From<ListDescriptionBuilder> for Element {
     fn from(builder: ListDescriptionBuilder) -> Self {
         let el = ListDescription(ListDescriptionProps {
             children: packed_children(builder.children),
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()
@@ -556,7 +550,6 @@ impl From<ListItemBuilder> for Element {
         let el = ListItem(ListItemProps {
             marker: builder.marker,
             children: packed_children(builder.children),
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()
@@ -660,7 +653,6 @@ impl From<ListBuilder> for Element {
         let el = List(ListProps {
             marker: Some(builder.marker),
             children: packed_children(builder.children),
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()
@@ -685,7 +677,6 @@ mod tests {
         let el = List(ListProps {
             marker: Some(ListMarker::Disc),
             children: None,
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()
@@ -700,7 +691,6 @@ mod tests {
         let el = ListItem(ListItemProps {
             marker: Some(ListMarker::Disc),
             children: Some(Element::new().text("Row")),
-            class: None,
             base: None,
             base_builder: None,
             ..Default::default()

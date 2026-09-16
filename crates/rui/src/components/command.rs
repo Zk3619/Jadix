@@ -91,7 +91,7 @@ use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
-use crate::style::{parse_color, parse_text_color};
+use crate::style::{parse_color, parse_text_color, TAILWIND_TEXT_SM_LEADING_SCALE};
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::modal_shell::ShellOverlayOpts;
@@ -1284,6 +1284,9 @@ pub fn CommandItem(
     hit.set_attr("data-slot", "command-item");
     hit.set_attr("rui_command_id", ctx.id.clone());
     hit.set_attr("rui_command_ix", ix.to_string());
+    hit = hit
+        .text_size(13.0)
+        .text_leading(TAILWIND_TEXT_SM_LEADING_SCALE);
     if disabled {
         hit.set_attr("rui_command_disabled", "1");
     }
@@ -1307,8 +1310,16 @@ fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
                 el.text_style.line_height_px = Some(14.0);
             } else {
                 el.text_style.size = Some(13.0);
-                el.text_style.line_height_px = Some(16.0);
-                el.text_style.line_height_scale = Some(1.0);
+                // Caption size stays on the leaf. Line-height lives on the item
+                // root (`text-sm`); release Label `leading-none` so cascade copies it.
+                let is_label_leading_none = el.text_style.line_height_specified
+                    && el.text_style.line_height_px.is_none()
+                    && el.text_style.line_height_scale == Some(1.0);
+                if is_label_leading_none {
+                    el.text_style.line_height_px = None;
+                    el.text_style.line_height_scale = None;
+                    el.text_style.line_height_specified = false;
+                }
             }
             el.text_style.color = Some(color);
         }
@@ -1594,6 +1605,55 @@ mod tests {
         assert!(
             find_size(&el, 20.0),
             "command_item .style(|b| b.text_size(20)) must land on the item tree"
+        );
+    }
+
+    #[test]
+    fn command_item_caption_inherits_text_sm_leading() {
+        let (_o, mut el): (_, Element) = create_root(|| {
+            command_paint(
+                "cmd-leading".into(),
+                Signal::new(true),
+                "search".into(),
+                CommandSurface::Inline,
+                Rc::new(|| {
+                    let mut cap = Element::new().text("Calendar");
+                    cap.text_style.line_height_specified = true;
+                    cap.text_style.line_height_scale = Some(1.0);
+                    command_list().child(command_item("cal").child(cap)).into()
+                }),
+            )
+        });
+        fn find_item(el: &Element) -> Option<&Element> {
+            if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_item)
+        }
+        fn find_caption(el: &Element) -> Option<&Element> {
+            if el.text.as_deref() == Some("Calendar") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_caption)
+        }
+        let item = find_item(&el).expect("command-item");
+        assert_eq!(
+            item.text_style.line_height_scale,
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
+            "item root carries text-sm leading"
+        );
+        let caption = find_caption(&el).expect("caption");
+        assert!(
+            !caption.text_style.line_height_specified,
+            "paint must release Label leading-none so the item token can inherit"
+        );
+        assert_ne!(caption.text_style.line_height_scale, Some(1.0));
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut el);
+        let caption = find_caption(&el).expect("caption after cascade");
+        assert_eq!(
+            caption.text_style.line_height_scale,
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
+            "caption copies item-root text-sm leading"
         );
     }
 

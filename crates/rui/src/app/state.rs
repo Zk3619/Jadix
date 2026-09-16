@@ -425,17 +425,23 @@ struct GpuPresentPlan {
     use_node_present: bool,
 }
 
-fn text_nodes_for_prepare(
-    nodes: &[crate::core::tree::TextLayoutInfo],
+/// Overlay glyphon ignores the occupancy wgpu scissor. Clip each band to its
+/// portal stamp so accordion-up cannot leave HEX/RGB ink after chrome shrinks.
+fn overlay_band_text_for_prepare<'a>(
+    nodes: &'a [crate::core::tree::TextLayoutInfo],
     lo: usize,
     hi: usize,
-    cull: Option<super::draw_cull::CullRects>,
-) -> Cow<'_, [crate::core::tree::TextLayoutInfo]> {
+    stamp_key: u64,
+    stamps: &[(u64, [f32; 4])],
+) -> Cow<'a, [crate::core::tree::TextLayoutInfo]> {
     let lo = lo.min(nodes.len());
     let hi = hi.min(nodes.len()).max(lo);
     let slice = &nodes[lo..hi];
-    match cull {
-        Some(d) => Cow::Owned(super::draw_cull::clip_text_nodes_to_cull(slice, d)),
+    if stamp_key == 0 {
+        return Cow::Borrowed(slice);
+    }
+    match super::damage::overlay_stamp_box(stamps, stamp_key) {
+        Some(stamp) => Cow::Owned(super::draw_cull::clip_text_nodes_to_rect(slice, stamp)),
         None => Cow::Borrowed(slice),
     }
 }
@@ -2875,6 +2881,21 @@ impl AppState {
         }
     }
 
+    /// Accordion-up can clip every overlay label while collect still lists them.
+    /// Skipping prepare left last frame's HEX/RGB mesh in the overlay renderer.
+    fn clear_overlay_band_glyphon(&mut self, band_i: usize) {
+        if band_i == 0 {
+            self.overlay_text_renderer.prepare(
+                &self.device,
+                &self.queue,
+                &self.config,
+                std::iter::empty(),
+            );
+        } else if let Some(tr) = self.overlay_band_text_renderers.get_mut(band_i - 1) {
+            tr.prepare(&self.device, &self.queue, &self.config, std::iter::empty());
+        }
+    }
+
     /// Grow shared-font page stacking pipelines (band 0 = [`Self::text_renderer`]).
     fn ensure_page_stack_band_text_renderers(&mut self, band_count: usize) {
         let extra_needed = band_count.saturating_sub(1);
@@ -5054,7 +5075,13 @@ impl AppState {
             }
             let shadow_cached_keys: std::collections::HashSet<u64> =
                 self.shadow_tex_cache.keys().copied().collect();
-            let overlay_text = text_nodes_for_prepare(&self.text_nodes, text_lo, text_hi, None);
+            let overlay_text = overlay_band_text_for_prepare(
+                &self.text_nodes,
+                text_lo,
+                text_hi,
+                band.stamp_key,
+                &self.last_overlay_stamps,
+            );
             let overlay_prep = if band_i == 0 {
                 prepare_text_frame(
                     &mut self.overlay_text_renderer,
@@ -5080,6 +5107,9 @@ impl AppState {
                     &self.shadow_rect_cache,
                 )
             };
+            if overlay_prep.culled_skip_prepare {
+                self.clear_overlay_band_glyphon(band_i);
+            }
             for bm in &overlay_prep.shadow_new_bitmaps {
                 let gpu = super::image_registry::upload_rgba8(
                     &self.device,

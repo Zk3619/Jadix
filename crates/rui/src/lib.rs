@@ -22,7 +22,8 @@ pub mod platform;
 /// 默认应用入口：`use rui::prelude::*;`
 ///
 /// 程序启动：[`prelude::launch`] + [`components::App`]，或 [`app::app`]`.mount`。
-/// 组件双书写面见规范 §3 / ADR-9。兼容 [`run`] / [`run_with`] 在 crate 根保留。
+/// 组件双书写面见 `docs/COMPONENT_LIBRARY.md` §3 / ADR-9；属性分层见同文档 §1。
+/// 兼容 [`run`] / [`run_with`] 在 crate 根保留。
 pub mod prelude;
 pub mod primitives;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
@@ -276,9 +277,9 @@ pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
 pub use app::{
-    launch, mouse_content_pan_enabled, page_scroll_locked, run, run_with,
-    set_mouse_content_pan_enabled, set_page_scroll_locked, with_ui_build_stack, WindowBackdrop,
-    WindowOptions,
+    launch, mouse_content_pan_enabled, page_scroll_locked, parse_scroll_freeze, run, run_with,
+    set_mouse_content_pan_enabled, set_page_scroll_locked, set_scroll_freeze, with_ui_build_stack,
+    ScrollFreeze, WindowBackdrop, WindowOptions,
 };
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,

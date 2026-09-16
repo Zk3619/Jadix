@@ -30,13 +30,15 @@
 //!
 //! `<Sidebar>` / `<SidebarMenuButton>` 等由 `#[component]` 宏展开；`ui!` camelCase 别名：
 //! `defaultOpen` · `isActive` · `showOnHover`。
+//! 轨宽是领域 prop `rail_w`（不是根布局 `w`）。RSX 写 `rail_w`；Builder `.w()` 是别名。
+//! 见 `docs/COMPONENT_LIBRARY.md` §1.1。
 //!
 //! ## 用法（双写法 · ADR-9）
 //! ```ignore
 //! // A · RSX / 复合标签
 //! ui! {
 //!     <SidebarProvider id="app" defaultOpen={true}>
-//!         <Sidebar id="nav" w="13rem" collapsible="icon">
+//!         <Sidebar id="nav" rail_w="13rem" collapsible="icon">
 //!             <SidebarHeader>
 //!                 <Label font_weight="700">"RUI Gallery"</Label>
 //!             </SidebarHeader>
@@ -1060,7 +1062,7 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
         .unwrap_or_default()
 }
 
-fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32, leading: f32) {
+fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
     crate::core::tree::walk_elements_mut(el, |el| {
         if el.text.is_none() {
             return;
@@ -1075,16 +1077,24 @@ fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32, lea
         if el.text_style.font_family.as_deref() == Some("lucide") {
             el.text_style.size = Some(16.0);
             el.attrs.insert("text_size".into(), "1".into());
-        } else {
-            // Button token is Tailwind `text-sm` / `text-xs` (size AND default line-height).
-            // A nested `<Label>` would otherwise keep `leading-none` (1em strut). Cosmic
-            // no longer clips to that strut (`set_size(w, None)`); the line box still
-            // needs to match the browser token so half-leading / items-center agree.
-            el.text_style.size = Some(size_px);
+            return;
+        }
+        // Size stays on the leaf (`sm` is 12px; Label defaults are 14). Line-height
+        // lives on the button root (`text-sm` / `text-xs`); caption leaves inherit.
+        el.text_style.size = Some(size_px);
+        el.attrs.insert("text_size".into(), "1".into());
+        // Label `leading-none` is specified 1em — CSS would win over the ancestor
+        // token. Release that default so cascade copies the button's leading.
+        // Author `text_leading*` other than 1em (or `text_line_height`) is kept.
+        // Do not clear already-inherited values (`specified == false`): paint runs
+        // before cascade, and hover frames must not wipe last frame's copy.
+        let is_label_leading_none = el.text_style.line_height_specified
+            && el.text_style.line_height_px.is_none()
+            && el.text_style.line_height_scale == Some(1.0);
+        if is_label_leading_none {
             el.text_style.line_height_px = None;
-            el.text_style.line_height_scale = Some(leading);
-            el.text_style.line_height_specified = true;
-            el.attrs.insert("text_size".into(), "1".into());
+            el.text_style.line_height_scale = None;
+            el.text_style.line_height_specified = false;
         }
     });
 }
@@ -1126,8 +1136,9 @@ fn apply_sidebar_menu_button_chrome(
     let size_px = btn_size.text_size_px();
     let leading = btn_size.leading_scale();
     // ShadCN puts `text-sm` / `text-xs` on the button; children inherit unless they
-    // specify otherwise. Lock it here so cascade from an unstyled Header/Footer
-    // slot cannot wipe the token before paint.
+    // specify otherwise. Lock the token on the root so cascade from an unstyled
+    // Header/Footer slot cannot wipe it before paint. Caption leaves do not get
+    // a second copy of line-height — see `paint_sidebar_menu_button_fg`.
     el.text_style.size = Some(size_px);
     el.text_style.line_height_px = None;
     el.text_style.line_height_scale = Some(leading);
@@ -1167,7 +1178,7 @@ fn apply_sidebar_menu_button_chrome(
         status = status.merge(LayoutStatus::StyleChanged);
     }
 
-    paint_sidebar_menu_button_fg(el, want_fg, size_px, leading);
+    paint_sidebar_menu_button_fg(el, want_fg, size_px);
     status
 }
 
@@ -1361,13 +1372,13 @@ pub fn SidebarProvider(
 #[allow(non_snake_case)]
 pub fn Sidebar(
     id: String,
-    w: Option<String>,
+    rail_w: Option<String>,
     side: Option<String>,
     variant: Option<String>,
     collapsible: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    let width = w
+    let width = rail_w
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| SIDEBAR_WIDTH_DEFAULT.to_string());
     let side = side.as_deref().map(SidebarSide::from).unwrap_or_default();
@@ -1878,7 +1889,6 @@ impl From<SidebarMenuButtonBuilder> for Element {
                     } else {
                         parse_text_color("sidebar-foreground")
                     },
-                    leading_scale: Some(b.size.leading_scale()),
                     ..Default::default()
                 },
             ))
@@ -1947,9 +1957,13 @@ pub fn sidebar(id: impl Into<String>) -> SidebarBuilder {
 }
 
 impl SidebarBuilder {
-    pub fn w(mut self, w: impl Into<String>) -> Self {
+    pub fn rail_w(mut self, w: impl Into<String>) -> Self {
         self.width = w.into();
         self
+    }
+    /// Alias of [`Self::rail_w`] (collapsible track, not layout `w`).
+    pub fn w(self, w: impl Into<String>) -> Self {
+        self.rail_w(w)
     }
     pub fn side(mut self, side: impl Into<SidebarSide>) -> Self {
         self.side = side.into();
@@ -2096,7 +2110,7 @@ impl From<SidebarBuilder> for Element {
         frag.set_attr("rui_fragment", "1");
         let mut rail = Sidebar(SidebarProps {
             id: id.clone(),
-            w: Some(width),
+            rail_w: Some(width),
             side: Some(side.as_str().into()),
             variant: Some(variant.as_str().into()),
             collapsible: Some(collapsible.as_str().into()),
@@ -2179,22 +2193,68 @@ mod tests {
 
     #[test]
     fn menu_button_text_uses_tailwind_text_sm_line_height() {
-        let el: Element = sidebar_menu_button("nav-a").text("Gallery").into();
-        fn find_label(el: &Element) -> Option<&Element> {
+        use crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
+        fn find_label<'a>(el: &'a Element) -> Option<&'a Element> {
             if el.text.as_deref() == Some("Gallery") {
                 return Some(el);
             }
             el.children.iter().find_map(find_label)
         }
+
+        let mut el: Element = sidebar_menu_button("nav-a").text("Gallery").into();
+        assert_eq!(
+            el.text_style.line_height_scale,
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
+            "token lives on the button root (`text-sm`)"
+        );
+        assert!(el.text_style.line_height_specified);
         let label = find_label(&el).expect("label");
         assert!(
             (label.text_style.size_resolved() - 14.0).abs() < 0.01,
             "text-sm size"
         );
+        assert!(
+            !label.text_style.line_height_specified,
+            "caption leaf must inherit, not stamp, line-height"
+        );
+
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut el);
+        let label = find_label(&el).expect("label after cascade");
         assert_eq!(
             label.text_style.line_height_scale,
-            Some(crate::style::TAILWIND_TEXT_SM_LEADING_SCALE),
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
             "ShadCN menu button is `text-sm` (line-height 1.25rem), not Label leading-none"
+        );
+    }
+
+    #[test]
+    fn nested_label_leading_none_inherits_menu_button_text_sm() {
+        use crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
+        use crate::utils::text_node::apply_label_defaults;
+        fn find_label<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.text.as_deref() == Some("Gallery") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_label)
+        }
+
+        let mut el: Element = sidebar_menu_button("nav-a")
+            .child(apply_label_defaults(
+                Element::new().text("Gallery".to_string()).text_size(14.0),
+            ))
+            .into();
+        let label = find_label(&el).expect("label");
+        assert!(
+            !label.text_style.line_height_specified,
+            "paint must release Label leading-none so the button token can inherit"
+        );
+
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut el);
+        let label = find_label(&el).expect("label after cascade");
+        assert_eq!(
+            label.text_style.line_height_scale,
+            Some(TAILWIND_TEXT_SM_LEADING_SCALE),
+            "nested Label defaults must not keep a 1em strut under `text-sm`"
         );
     }
 
@@ -2452,7 +2512,7 @@ mod tests {
     fn inset_rail_has_content_side_border() {
         let el: Element = Sidebar(SidebarProps {
             id: "inset-rail".into(),
-            w: None,
+            rail_w: None,
             side: Some("left".into()),
             variant: Some("inset".into()),
             collapsible: None,
@@ -2625,7 +2685,7 @@ mod tests {
         ]);
         let mut rail: Element = Sidebar(SidebarProps {
             id: "icon-rail".into(),
-            w: Some("16rem".into()),
+            rail_w: Some("16rem".into()),
             side: None,
             variant: Some("inset".into()),
             collapsible: Some("icon".into()),
@@ -2847,7 +2907,7 @@ mod tests {
                 frag.children(vec![
                     Sidebar(SidebarProps {
                         id: "icon-nav".into(),
-                        w: Some("16rem".into()),
+                        rail_w: Some("16rem".into()),
                         side: None,
                         variant: Some("inset".into()),
                         collapsible: Some("icon".into()),
@@ -2927,7 +2987,7 @@ mod tests {
             frag.children(vec![
                 Sidebar(SidebarProps {
                     id: "nav".into(),
-                    w: None,
+                    rail_w: None,
                     side: None,
                     variant: Some("inset".into()),
                     collapsible: None,

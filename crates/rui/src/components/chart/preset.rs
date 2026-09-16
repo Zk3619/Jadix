@@ -1,5 +1,8 @@
 //! Default charts: `bar_chart` / `line_chart` / `area_chart` / `pie_chart` / `donut_chart` /
 //! `radial_chart` 与 RSX 标签。内部都走 [`super::define_chart`]，只是固定 mark 组合。
+//!
+//! 绘图区高度是领域 prop `plot_h`（不是根布局 `h`）。RSX 写 `plot_h`；Builder `.h()` 是别名。
+//! 见 `docs/COMPONENT_LIBRARY.md` §1.1。
 
 use std::rc::Rc;
 
@@ -113,9 +116,13 @@ impl BarChartBuilder {
         self.rows = rows_from_values_labels(&values, &labels);
         self
     }
-    pub fn h(mut self, h: impl Into<String>) -> Self {
+    pub fn plot_h(mut self, h: impl Into<String>) -> Self {
         self.height = h.into();
         self
+    }
+    /// Alias of [`Self::plot_h`] (plot viewport, not layout `h`).
+    pub fn h(self, h: impl Into<String>) -> Self {
+        self.plot_h(h)
     }
     pub fn selected(mut self, i: Option<usize>) -> Self {
         self.selected = i;
@@ -259,10 +266,14 @@ impl LineChartBuilder {
         self.height = h;
         self
     }
-    pub fn h(mut self, px: f32) -> Self {
+    pub fn plot_h(mut self, px: f32) -> Self {
         self.width = None;
         self.height = px;
         self
+    }
+    /// Alias of [`Self::plot_h`] (plot viewport, not layout `h`).
+    pub fn h(self, px: f32) -> Self {
+        self.plot_h(px)
     }
     pub fn selected(mut self, i: Option<usize>) -> Self {
         self.selected = i;
@@ -578,7 +589,7 @@ fn parse_optional_indicator(s: Option<String>) -> Option<TooltipIndicator> {
     s.map(|v| TooltipIndicator::from(v.as_str()))
 }
 
-/// RSX `<BarChart data={…} h="6rem" />`
+/// RSX `<BarChart data={…} plot_h="6rem" />`
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn BarChart(
@@ -586,7 +597,7 @@ pub fn BarChart(
     data: Option<Vec<ChartDatum>>,
     values: Option<Vec<f32>>,
     labels: Option<Vec<String>>,
-    h: Option<String>,
+    plot_h: Option<String>,
     guides: Option<bool>,
     selected: Option<ChartSelected>,
     selected_signal: Option<Signal<Option<usize>>>,
@@ -601,8 +612,8 @@ pub fn BarChart(
     let mut b = bar_chart()
         .id(id)
         .data(chart_from_rows(data, values, labels));
-    if let Some(h) = h {
-        b = b.h(h);
+    if let Some(h) = plot_h {
+        b = b.plot_h(h);
     }
     if let Some(g) = guides {
         b = b.guides(g);
@@ -631,14 +642,14 @@ pub fn BarChart(
     b.into()
 }
 
-/// RSX `<LineChart values={…} h={140.0} />`
+/// RSX `<LineChart values={…} plot_h={140.0} />`
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn LineChart(
     id: String,
     data: Option<Vec<ChartDatum>>,
     values: Option<Vec<f32>>,
-    h: Option<f32>,
+    plot_h: Option<f32>,
     guides: Option<bool>,
     fill: Option<bool>,
     stroke_width: Option<f32>,
@@ -653,8 +664,8 @@ pub fn LineChart(
     let mut b = line_chart()
         .id(id)
         .data(chart_from_rows(data, values, None));
-    if let Some(h) = h {
-        b = b.h(h);
+    if let Some(h) = plot_h {
+        b = b.plot_h(h);
     }
     if let Some(g) = guides {
         b = b.guides(g);
@@ -683,14 +694,14 @@ pub fn LineChart(
     b.into()
 }
 
-/// RSX `<AreaChart values={…} h={140.0} />`
+/// RSX `<AreaChart values={…} plot_h={140.0} />`
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AreaChart(
     id: String,
     data: Option<Vec<ChartDatum>>,
     values: Option<Vec<f32>>,
-    h: Option<f32>,
+    plot_h: Option<f32>,
     guides: Option<bool>,
     stroke_width: Option<f32>,
     selected: Option<ChartSelected>,
@@ -704,8 +715,8 @@ pub fn AreaChart(
     let mut b = area_chart()
         .id(id)
         .data(chart_from_rows(data, values, None));
-    if let Some(h) = h {
-        b = b.h(h);
+    if let Some(h) = plot_h {
+        b = b.plot_h(h);
     }
     if let Some(g) = guides {
         b = b.guides(g);
@@ -880,7 +891,7 @@ pub fn RadialChart(
 pub fn Chart(
     id: String,
     definition: Option<ChartDefinition>,
-    h: Option<f32>,
+    plot_h: Option<f32>,
     guides: Option<bool>,
     selected: Option<ChartSelected>,
     selected_signal: Option<Signal<Option<usize>>>,
@@ -891,8 +902,8 @@ pub fn Chart(
 ) -> Element {
     let _ = children;
     let mut b = definition.map(|d| d.0).unwrap_or_else(define_chart).id(id);
-    if let Some(h) = h {
-        b = b.h(h);
+    if let Some(h) = plot_h {
+        b = b.plot_h(h);
     }
     if let Some(g) = guides {
         b = b.guides(g);

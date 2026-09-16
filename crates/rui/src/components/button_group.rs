@@ -47,7 +47,6 @@ use crate::components::separator::separator;
 use crate::core::tree::{CssDim, Element, UnitSlot};
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
-use crate::style::with_class_list;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -294,7 +293,6 @@ fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
 fn build_button_group(
     id: &str,
     orientation: ButtonGroupOrientation,
-    class: Option<String>,
     children: Vec<Element>,
 ) -> Element {
     let mut kids = children;
@@ -312,9 +310,6 @@ fn build_button_group(
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el.set_attr("data-orientation", orientation.as_str());
     el = el.accesskit_role("group");
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     if !id.trim().is_empty() {
         el.template_id = Some(id.to_string());
     }
@@ -328,24 +323,19 @@ fn build_button_group(
 /// Root: `role=group` · Horizontal/vertical flex · Children's rounded corners are merged.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ButtonGroup(
-    id: String,
-    orientation: Option<String>,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn ButtonGroup(id: String, orientation: Option<String>, children: Option<Element>) -> Element {
     let orient = orientation
         .as_deref()
         .map(ButtonGroupOrientation::parse)
         .unwrap_or_default();
     let kids = children.map(take_packed).unwrap_or_default();
-    build_button_group(&id, orient, class, kids)
+    build_button_group(&id, orient, kids)
 }
 
 /// Copywriting slot in the group: flex shell + copywriting sub-node (do not write text on the root with border, it will stick to the top after stretching).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ButtonGroupText(class: Option<String>, children: Option<Element>) -> Element {
+pub fn ButtonGroupText(children: Option<Element>) -> Element {
     let label = children
         .map(|c| {
             if let Some(t) = c.text.clone().filter(|s| !s.is_empty()) {
@@ -376,9 +366,6 @@ pub fn ButtonGroupText(class: Option<String>, children: Option<Element>) -> Elem
         .child(caption)
         .into();
     el.set_attr(ATTR_SLOT, SLOT_TEXT);
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
-    }
     el
 }
 
@@ -400,11 +387,7 @@ fn extract_text(el: &Element) -> String {
 /// Dividing line within the group: Default is `orientation=vertical` (vertical line in the horizontal group); can be explicitly horizontal.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn ButtonGroupSeparator(
-    orientation: Option<String>,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn ButtonGroupSeparator(orientation: Option<String>, children: Option<Element>) -> Element {
     let _ = children;
     // ShadCN defaults to vertical separator (horizontal groups share vertical lines).
     let vertical = match orientation.as_deref().map(str::trim) {
@@ -435,9 +418,6 @@ pub fn ButtonGroupSeparator(
             .min_h(0.0)
             .align_self_kw("stretch")
             .flex_shrink(0.0);
-    }
-    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-        el = with_class_list(el, &c);
     }
     el
 }
@@ -476,7 +456,6 @@ impl crate::core::tree::IntoElementList for ButtonGroupTextBuilder {
 impl From<ButtonGroupTextBuilder> for Element {
     fn from(builder: ButtonGroupTextBuilder) -> Self {
         let el = ButtonGroupText(ButtonGroupTextProps {
-            class: None,
             children: packed_children(builder.children),
             base: None,
             ..Default::default()
@@ -521,7 +500,6 @@ impl From<ButtonGroupSeparatorBuilder> for Element {
         };
         let el = ButtonGroupSeparator(ButtonGroupSeparatorProps {
             orientation: Some(orient.into()),
-            class: None,
             children: None,
             base: None,
             ..Default::default()
@@ -633,7 +611,7 @@ impl crate::core::tree::IntoElementList for ButtonGroupBuilder {
 
 impl From<ButtonGroupBuilder> for Element {
     fn from(builder: ButtonGroupBuilder) -> Self {
-        let el = build_button_group(&builder.id, builder.orientation, None, builder.parts);
+        let el = build_button_group(&builder.id, builder.orientation, builder.parts);
         builder.chrome.apply(el)
     }
 }
@@ -648,7 +626,6 @@ mod tests {
         let el = ButtonGroup(ButtonGroupProps {
             id: String::new(),
             orientation: Some("vertical".into()),
-            class: None,
             children: Some(Element::new().text("x")),
             base: None,
             ..Default::default()
@@ -705,7 +682,6 @@ mod tests {
     #[test]
     fn text_slot_is_flex_shell_with_caption_child() {
         let el = ButtonGroupText(ButtonGroupTextProps {
-            class: None,
             children: Some(Element::new().text("Archive")),
             base: None,
             ..Default::default()
@@ -771,7 +747,6 @@ mod tests {
     fn text_open_sep_delete_assigns_end_on_delete() {
         let kids = vec![
             ButtonGroupText(ButtonGroupTextProps {
-                class: None,
                 children: Some(Element::new().text("Archive")),
                 base: None,
                 ..Default::default()
@@ -779,14 +754,13 @@ mod tests {
             Element::from(button("open").variant("outline").text("Open")),
             ButtonGroupSeparator(ButtonGroupSeparatorProps {
                 orientation: None,
-                class: None,
                 children: None,
                 base: None,
                 ..Default::default()
             }),
             Element::from(button("del").variant("outline").text("Delete")),
         ];
-        let el = build_button_group("", ButtonGroupOrientation::Horizontal, None, kids);
+        let el = build_button_group("", ButtonGroupOrientation::Horizontal, kids);
         assert_eq!(el.children.len(), 4);
         assert_eq!(
             el.children[0]
@@ -943,7 +917,6 @@ mod tests {
                 .child(ButtonGroup(ButtonGroupProps {
                     id: String::new(),
                     orientation: None,
-                    class: None,
                     children: Some(packed),
                     base: None,
                     ..Default::default()
@@ -1060,9 +1033,7 @@ mod tests {
         let rsx = ButtonGroup(ButtonGroupProps {
             id: String::new(),
             orientation: None,
-            class: None,
             children: Some(ButtonGroupText(ButtonGroupTextProps {
-                class: None,
                 children: Some(Element::new().text("Label")),
                 base: None,
                 ..Default::default()

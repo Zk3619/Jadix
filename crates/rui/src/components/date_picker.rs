@@ -24,12 +24,12 @@
 //! date_picker("due").kind(DatePickerKind::Date).value_signal(sig)
 //! ```
 //!
-//! Builder `.class()` / `.style()` land on the **trigger**. Panel card: `.content_class()` /
-//! `.content_style()`. Sugar internals (day cells, HMS comboboxes) stay default chrome.
+//! Builder `.class()` / `.style()` land on the **trigger**. Panel card:
+//! `.slot("date-picker-content", …)` (aliases `.content_class()` / `.content_style()`).
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
-use crate::components::base::SlotChrome;
+use crate::components::base::{paint_slot, SlotChrome, SlotMap};
 use crate::components::button::button;
 use crate::components::calendar::{
     calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
@@ -55,6 +55,8 @@ use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
+
+const SLOT_CONTENT: &str = "date-picker-content";
 
 fn trigger_focus_id(id: &str) -> String {
     format!("{id}:trigger")
@@ -490,7 +492,7 @@ pub struct DatePickerBuilder {
     caption: CalendarCaption,
     disabled: bool,
     chrome: SlotChrome,
-    content_chrome: SlotChrome,
+    slots: SlotMap,
 }
 
 pub fn date_picker(id: impl Into<String>) -> DatePickerBuilder {
@@ -502,30 +504,15 @@ pub fn date_picker(id: impl Into<String>) -> DatePickerBuilder {
         caption: CalendarCaption::Label,
         disabled: false,
         chrome: SlotChrome::default(),
-        content_chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
     }
 }
 
 impl DatePickerBuilder {
     crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
 
-    /// Overlay `class` on the floating panel card (not the trigger).
-    pub fn content_class(mut self, classes: impl Into<String>) -> Self {
-        self.content_chrome.class = classes.into();
-        self
-    }
-
-    /// Overlay style on the floating panel card.
-    pub fn content_style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.content_chrome.style = Some(std::rc::Rc::new(f));
-        self
-    }
     pub fn kind(mut self, k: DatePickerKind) -> Self {
         self.kind = k;
         self
@@ -719,7 +706,7 @@ fn build_date_picker_view(
                 let mut panel = build_date_picker_panel_content(
                     &id, kind, caption, open, val, year, month, hour, minute, second,
                 );
-                panel = content_chrome.apply(panel);
+                panel = paint_slot(panel, SLOT_CONTENT, &content_chrome);
                 panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
                 panel.set_attr(ATTR_FLOATING_MIN_W, "0");
                 panel
@@ -935,7 +922,7 @@ impl From<DatePickerBuilder> for Element {
             caption,
             disabled,
             chrome,
-            content_chrome,
+            slots,
         } = builder;
         let open = resolve_open_signal(None, &id, false);
         let val = resolve_string_signal(value, &id, "value", default_value.clone());
@@ -972,7 +959,7 @@ impl From<DatePickerBuilder> for Element {
                 minute,
                 second,
                 chrome.clone(),
-                content_chrome.clone(),
+                slots.get(SLOT_CONTENT),
             )
         })
     }
@@ -984,7 +971,7 @@ pub struct TimePickerBuilder {
     default_value: String,
     disabled: bool,
     chrome: SlotChrome,
-    content_chrome: SlotChrome,
+    slots: SlotMap,
 }
 
 pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
@@ -994,30 +981,15 @@ pub fn time_picker(id: impl Into<String>) -> TimePickerBuilder {
         default_value: String::new(),
         disabled: false,
         chrome: SlotChrome::default(),
-        content_chrome: SlotChrome::default(),
+        slots: SlotMap::default(),
     }
 }
 
 impl TimePickerBuilder {
     crate::impl_slot_chrome_methods!();
+    crate::impl_slot_map_methods!();
+    crate::impl_overlay_content_slot!(SLOT_CONTENT);
 
-    /// Overlay `class` on the floating panel card (not the trigger).
-    pub fn content_class(mut self, classes: impl Into<String>) -> Self {
-        self.content_chrome.class = classes.into();
-        self
-    }
-
-    /// Overlay style on the floating panel card.
-    pub fn content_style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.content_chrome.style = Some(std::rc::Rc::new(f));
-        self
-    }
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -1040,7 +1012,7 @@ impl From<TimePickerBuilder> for Element {
             default_value,
             disabled,
             chrome,
-            content_chrome,
+            slots,
         } = builder;
         let mut dp = date_picker(id)
             .kind(DatePickerKind::Time)
@@ -1050,7 +1022,7 @@ impl From<TimePickerBuilder> for Element {
             dp = dp.value_signal(s);
         }
         dp.chrome = chrome;
-        dp.content_chrome = content_chrome;
+        dp.slots = slots;
         dp.into()
     }
 }

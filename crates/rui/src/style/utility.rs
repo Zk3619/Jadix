@@ -2215,8 +2215,17 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
         }
         KnownUtility::TextSize(len) => {
             let px = tw_px(len);
-            if el.text_style.size != Some(px) {
+            let mut changed = el.text_style.size != Some(px);
+            if changed {
                 el.text_style.size = Some(px);
+            }
+            if let Some(sync) = el.input_paint_sync.as_mut() {
+                if (sync.text_size_px - px).abs() > f32::EPSILON {
+                    sync.text_size_px = px;
+                    changed = true;
+                }
+            }
+            if changed {
                 LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean

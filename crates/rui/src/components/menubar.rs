@@ -67,7 +67,7 @@ use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::app::reactive::bind_prop;
-use crate::components::base::SlotStyleFn;
+use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::dropdown_menu::{
     attach_dropdown_menu_trigger_keys, dropdown_menu_active_is_sub_trigger, dropdown_menu_content,
@@ -84,8 +84,9 @@ use crate::core::reactivity::{
 };
 use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
+use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
-use crate::style::{parse_color, parse_text_color, with_class_list};
+use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::popup::disarm_underlay_close;
 use crate::utils::resolve_instance_id;
@@ -388,22 +389,21 @@ pub fn menubar_menu(
 pub struct MenubarContentOpts {
     /// `bottom-start` / …（默认 `bottom-start`；ShadCN align=start）。
     pub placement: String,
-    pub class: Option<String>,
-    pub style: Option<crate::components::base::SlotStyleFn>,
+    /// Panel chrome (RSX `class` / Builder `.class()` / `.style()`).
+    pub panel: crate::components::base::SlotChrome,
 }
 
 impl Default for MenubarContentOpts {
     fn default() -> Self {
         Self {
             placement: "bottom-start".into(),
-            class: None,
-            style: None,
+            panel: Default::default(),
         }
     }
 }
 
 impl MenubarContentOpts {
-    crate::impl_content_opts_chrome!();
+    crate::impl_content_opts_chrome!(panel);
 }
 
 /// solid-ui / shadcn `MenubarContent`: reuse DropdownMenuContent (gap≈8); expand animation.
@@ -416,8 +416,7 @@ pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 's
             } else {
                 opts.placement
             },
-            class: opts.class,
-            style: opts.style,
+            panel: opts.panel,
             motion: crate::utils::floating_kind::FloatingMotionKind::Expand,
         },
         body,
@@ -432,11 +431,14 @@ pub fn menubar_sub(id: Option<String>, body: impl FnOnce() -> Element) -> Elemen
 }
 
 /// Submenu content (expansion animation).
-pub fn menubar_sub_content(class: Option<String>, body: impl Fn() -> Element + 'static) -> Element {
+pub fn menubar_sub_content(
+    chrome: crate::components::base::SlotChrome,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
     let _ = require_dropdown_in_menubar("MenubarSubContent");
     // Keep dropdown-menu-sub-content slot / placeholder identity for floating sync.
     crate::components::dropdown_menu::dropdown_menu_sub_content_ex(
-        class,
+        chrome,
         crate::utils::floating_kind::FloatingMotionKind::Expand,
         body,
     )
@@ -460,7 +462,7 @@ pub fn menubar_radio_group(
 /// solid-ui `MenubarTrigger`：`px-3 py-1.5 text-sm font-medium`；open → accent。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Element>) -> Element {
+pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
     let bar = require_menubar("MenubarTrigger");
     let ctx = require_dropdown_in_menubar("MenubarTrigger");
     let open = ctx.open;
@@ -487,7 +489,6 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
         }
     };
     let _ = children;
-    let class = class.filter(|s| !s.trim().is_empty());
     let trigger_fid_sig = ctx.trigger_fid;
     // Capture menu_id for live registry lookup (siblings may register after this Trigger).
     let menu_id_for_ix = menu_id.clone();
@@ -510,9 +511,6 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
         .into();
     // solid-ui: rounded-sm px-3 py-1.5; open accent patches in place (WP-N.4).
     trigger = trigger.px("0.75rem").py("0.375rem").rounded("0.125rem");
-    if let Some(ref c) = class {
-        trigger = with_class_list(trigger, c);
-    }
 
     // Hover-open when another menu in this bar is already open.
     // Chain — do not replace Button's hover handler (ghost accent paint).
@@ -624,7 +622,6 @@ pub fn MenubarItem(
     disabled: bool,
     inset: bool,
     variant: Option<String>,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -633,7 +630,6 @@ pub fn MenubarItem(
         disabled: Some(disabled),
         inset: Some(inset),
         variant,
-        class,
         on_click: Some(on_click),
         children,
         base: None,
@@ -651,7 +647,6 @@ pub fn MenubarCheckboxItem(
     default_checked: bool,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -661,7 +656,6 @@ pub fn MenubarCheckboxItem(
         default_checked: Some(default_checked),
         disabled: Some(disabled),
         inset: Some(inset),
-        class,
         on_click: Some(on_click),
         children,
         base: None,
@@ -677,7 +671,6 @@ pub fn MenubarRadioItem(
     value: String,
     disabled: bool,
     inset: bool,
-    class: Option<String>,
     #[prop(default = "Handler::default()")] on_click: Handler,
     children: Option<Element>,
 ) -> Element {
@@ -686,7 +679,6 @@ pub fn MenubarRadioItem(
         value: Some(value),
         disabled: Some(disabled),
         inset: Some(inset),
-        class,
         on_click: Some(on_click),
         children,
         base: None,
@@ -757,17 +749,11 @@ pub fn MenubarGroup(children: Option<Element>) -> Element {
 /// 必须保留 `dropdown-menu-sub-trigger` slot，悬停打开与高亮 paint 都依赖它。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn MenubarSubTrigger(
-    disabled: bool,
-    inset: bool,
-    class: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn MenubarSubTrigger(disabled: bool, inset: bool, children: Option<Element>) -> Element {
     let _ = require_dropdown_in_menubar("MenubarSubTrigger");
     let mut el = DropdownMenuSubTrigger(DropdownMenuSubTriggerProps {
         disabled: Some(disabled),
         inset: Some(inset),
-        class,
         children,
         base: None,
     });
@@ -888,8 +874,7 @@ impl MenuSection {
 pub struct MenubarBuilder {
     id: String,
     sections: Vec<MenuSection>,
-    class: Option<String>,
-    style: Option<SlotStyleFn>,
+    chrome: SlotChrome,
 }
 
 /// Builder 入口：sections → [`menubar_scope`] + [`menubar_menu`]。
@@ -897,12 +882,13 @@ pub fn menubar(id: impl Into<String>) -> MenubarBuilder {
     MenubarBuilder {
         id: id.into(),
         sections: Vec::new(),
-        class: None,
-        style: None,
+        chrome: SlotChrome::default(),
     }
 }
 
 impl MenubarBuilder {
+    impl_slot_chrome_methods!();
+
     pub fn sections(mut self, sections: Vec<MenuSection>) -> Self {
         self.sections = sections;
         self
@@ -911,30 +897,9 @@ impl MenubarBuilder {
         self.sections.push(section);
         self
     }
-    pub fn class(mut self, c: impl Into<String>) -> Self {
-        self.class = Some(c.into());
-        self
-    }
-    pub fn style(
-        mut self,
-        f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
-    ) -> Self {
-        self.style = Some(std::rc::Rc::new(f));
-        self
-    }
     /// Build Menu / Trigger / Content subtrees inside the context.
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        let mut el = menubar_scope(self.id, body);
-        if let Some(c) = self.class.filter(|s| !s.trim().is_empty()) {
-            el = crate::style::with_class_list(el, &c);
-        }
-        if let Some(style) = self.style {
-            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-        }
-        el
+        self.chrome.apply(menubar_scope(self.id, body))
     }
 }
 
@@ -943,10 +908,9 @@ impl From<MenubarBuilder> for Element {
         let MenubarBuilder {
             id,
             sections,
-            class,
-            style,
+            chrome,
         } = builder;
-        let mut el = menubar_scope(id, move || {
+        let el = menubar_scope(id, move || {
             let mut menus = Vec::with_capacity(sections.len());
             for section in sections {
                 let title = section.title.clone();
@@ -955,7 +919,6 @@ impl From<MenubarBuilder> for Element {
                 menus.push(menubar_menu(Some(menu_id), None, move || {
                     let trigger = MenubarTrigger(MenubarTriggerProps {
                         id: String::new(),
-                        class: None,
                         children: Some(Element::new().text(title)),
                         base: None,
                     });
@@ -967,7 +930,6 @@ impl From<MenubarBuilder> for Element {
                                 disabled: Some(false),
                                 inset: Some(false),
                                 variant: None,
-                                class: None,
                                 on_click: Some(Handler::new(move |_| cb())),
                                 children: Some(Element::new().text(it.label.clone())),
                                 base: None,
@@ -985,13 +947,7 @@ impl From<MenubarBuilder> for Element {
             frag.set_attr("rui_fragment", "1");
             frag.children(menus)
         });
-        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
-            el = crate::style::with_class_list(el, &c);
-        }
-        if let Some(style) = style {
-            el = style(crate::components::base::BaseComponentBuilder::new(el)).el;
-        }
-        el
+        chrome.apply(el)
     }
 }
 
@@ -1011,7 +967,6 @@ mod tests {
             menubar_menu(Some("file".into()), None, || {
                 let trigger = MenubarTrigger(MenubarTriggerProps {
                     id: String::new(),
-                    class: None,
                     children: Some(Element::new().text("File")),
                     base: None,
                 });
@@ -1020,7 +975,6 @@ mod tests {
                         disabled: Some(false),
                         inset: Some(false),
                         variant: None,
-                        class: None,
                         on_click: None,
                         children: Some(Element::new().text("New")),
                         base: None,
@@ -1092,7 +1046,6 @@ mod tests {
                         menubar_menu(Some("file".into()), Some(open), || {
                             let trigger = MenubarTrigger(MenubarTriggerProps {
                                 id: String::new(),
-                                class: None,
                                 children: Some(Element::new().text("File")),
                                 base: None,
                             });
@@ -1181,7 +1134,6 @@ mod tests {
                     menubar_menu(Some("file".into()), Some(parent_open), || {
                         let trigger = MenubarTrigger(MenubarTriggerProps {
                             id: String::new(),
-                            class: None,
                             children: Some(Element::new().text("File")),
                             base: None,
                         });
@@ -1190,16 +1142,14 @@ mod tests {
                                 let st = MenubarSubTrigger(MenubarSubTriggerProps {
                                     disabled: Some(false),
                                     inset: Some(false),
-                                    class: None,
                                     children: Some(Element::new().text("Share")),
                                     base: None,
                                 });
-                                let sc = menubar_sub_content(None, || {
+                                let sc = menubar_sub_content(Default::default(), || {
                                     MenubarItem(MenubarItemProps {
                                         disabled: Some(false),
                                         inset: Some(false),
                                         variant: None,
-                                        class: None,
                                         on_click: None,
                                         children: Some(Element::new().text("Email")),
                                         base: None,
@@ -1414,7 +1364,6 @@ mod tests {
                     let file = menubar_menu(Some("file".into()), Some(file_open), || {
                         let trigger = MenubarTrigger(MenubarTriggerProps {
                             id: String::new(),
-                            class: None,
                             children: Some(Element::new().text("File")),
                             base: None,
                         });
@@ -1423,16 +1372,14 @@ mod tests {
                                 let st = MenubarSubTrigger(MenubarSubTriggerProps {
                                     disabled: Some(false),
                                     inset: Some(false),
-                                    class: None,
                                     children: Some(Element::new().text("Share")),
                                     base: None,
                                 });
-                                let sc = menubar_sub_content(None, || {
+                                let sc = menubar_sub_content(Default::default(), || {
                                     MenubarItem(MenubarItemProps {
                                         disabled: Some(false),
                                         inset: Some(false),
                                         variant: None,
-                                        class: None,
                                         on_click: None,
                                         children: Some(Element::new().text("Email")),
                                         base: None,
@@ -1451,7 +1398,6 @@ mod tests {
                     let view = menubar_menu(Some("view".into()), None, || {
                         let trigger = MenubarTrigger(MenubarTriggerProps {
                             id: String::new(),
-                            class: None,
                             children: Some(Element::new().text("View")),
                             base: None,
                         });
@@ -1460,7 +1406,6 @@ mod tests {
                                 disabled: Some(false),
                                 inset: Some(false),
                                 variant: None,
-                                class: None,
                                 on_click: None,
                                 children: Some(Element::new().text("Status Bar")),
                                 base: None,
@@ -1551,7 +1496,6 @@ mod tests {
                     menubar_menu(Some("file".into()), Some(parent_open), || {
                         let trigger = MenubarTrigger(MenubarTriggerProps {
                             id: String::new(),
-                            class: None,
                             children: Some(Element::new().text("File")),
                             base: None,
                         });
@@ -1562,7 +1506,6 @@ mod tests {
                                 disabled: Some(false),
                                 inset: Some(false),
                                 variant: None,
-                                class: None,
                                 on_click: None,
                                 children: Some(Element::new().text("New File")),
                                 base: None,
@@ -1575,16 +1518,14 @@ mod tests {
                                 let st = MenubarSubTrigger(MenubarSubTriggerProps {
                                     disabled: Some(false),
                                     inset: Some(false),
-                                    class: None,
                                     children: Some(Element::new().text("Share")),
                                     base: None,
                                 });
-                                let sc = menubar_sub_content(None, || {
+                                let sc = menubar_sub_content(Default::default(), || {
                                     MenubarItem(MenubarItemProps {
                                         disabled: Some(false),
                                         inset: Some(false),
                                         variant: None,
-                                        class: None,
                                         on_click: None,
                                         children: Some(Element::new().text("Email link")),
                                         base: None,
@@ -1746,7 +1687,6 @@ mod tests {
                     menubar_menu(Some("file".into()), Some(parent_open), || {
                         let trigger = MenubarTrigger(MenubarTriggerProps {
                             id: String::new(),
-                            class: None,
                             children: Some(Element::new().text("File")),
                             base: None,
                         });
@@ -1755,16 +1695,14 @@ mod tests {
                                 let st = MenubarSubTrigger(MenubarSubTriggerProps {
                                     disabled: Some(false),
                                     inset: Some(false),
-                                    class: None,
                                     children: Some(Element::new().text("Share")),
                                     base: None,
                                 });
-                                let sc = menubar_sub_content(None, || {
+                                let sc = menubar_sub_content(Default::default(), || {
                                     MenubarItem(MenubarItemProps {
                                         disabled: Some(false),
                                         inset: Some(false),
                                         variant: None,
-                                        class: None,
                                         on_click: None,
                                         children: Some(Element::new().text("Email link")),
                                         base: None,

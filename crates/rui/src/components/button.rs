@@ -40,8 +40,8 @@ use crate::style::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, button_soft_semantic_chrome,
     color_mix_over_background, ensure_class_list, extend_class_list, focus_ring_border_color,
     focus_ring_color, focus_ring_destructive_color, focus_ring_shadow_matches_color, is_dark_theme,
-    lerp_paint_chrome, lerp_text_rgba, ClassSet, PaintChrome, SemanticTone, TimingFunction,
-    TransitionEntry, TransitionProperty, ATTR_SYNC_LABEL_FG,
+    lerp_paint_chrome, ClassSet, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
+    TransitionProperty, ATTR_SYNC_LABEL_FG,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -199,15 +199,16 @@ pub(crate) fn button_chrome_for_variant(
                     parse_color("border"),
                 )
             };
+            let fg = parse_text_color("foreground");
             let c = lerp_paint_chrome(
                 PaintChrome {
                     bg: rest_bg,
-                    fg: parse_text_color("foreground"),
+                    fg,
                     border: Some(border),
                 },
                 PaintChrome {
                     bg: hover_bg,
-                    fg: parse_text_color("accent-foreground"),
+                    fg,
                     border: Some(border),
                 },
                 t,
@@ -224,12 +225,7 @@ pub(crate) fn button_chrome_for_variant(
             // Do not use `lerp_premultiplied` (it will fold into black when α≈0), the endpoints must retain RGB.
             let rest_bg = [hover_bg[0], hover_bg[1], hover_bg[2], 0.0];
             let bg = if t >= 0.5 { hover_bg } else { rest_bg };
-            let tc = lerp_text_rgba(
-                parse_text_color("foreground"),
-                parse_text_color("accent-foreground"),
-                t,
-            );
-            (bg, tc, None)
+            (bg, parse_text_color("foreground"), None)
         }
         "link" => ([0.0; 4], parse_text_color("primary"), None),
         _ => {
@@ -260,12 +256,12 @@ pub(crate) fn button_variant_color_classes(variant: &str) -> &'static str {
             "bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
         }
         "outline" => {
-            "bg-background text-foreground hover:bg-accent hover:text-accent-foreground \
-             dark:bg-input/30 dark:hover:bg-input/50 dark:hover:text-accent-foreground \
+            "bg-background text-foreground hover:bg-accent hover:text-foreground \
+             dark:bg-input/30 dark:hover:bg-input/50 dark:hover:text-foreground \
              disabled:opacity-50"
         }
         "ghost" => {
-            "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 \
+            "hover:bg-accent hover:text-foreground dark:hover:bg-accent/50 \
              disabled:opacity-50"
         }
         "link" => {
@@ -869,10 +865,12 @@ impl From<ButtonBuilder> for Element {
         let focused = use_signal("__rui_button_focus_id", String::new);
         let focus_visible = use_signal("__rui_focus_visible", || false);
 
-        // `peek`: Do not subscribe hover/focus to the root `create_effect` to avoid hovering, clicking the input box, Tab, etc. to trigger the entire tree `rebuild_ui`.
+        // `try_peek`: do not subscribe hover/focus to the root `create_effect`.
         // hover 由 `sync_button_hover_paint_subtree` 写回；焦点环由同函数内 `sync_button_focus_ring_shadow` 写回。
-        let is_hovered = hovered.peek() && !builder.disabled;
-        let is_focused = focused.peek() == builder.id && focus_visible.peek() && !builder.disabled;
+        let is_hovered = hovered.try_peek().unwrap_or(false) && !builder.disabled;
+        let is_focused = focused.try_peek().as_deref() == Some(builder.id.as_str())
+            && focus_visible.try_peek().unwrap_or(false)
+            && !builder.disabled;
 
         // Rest chrome only at build. Hover/disabled colors are class variants
         // (`button_variant_color_classes`) resolved like CSS `:hover`.
@@ -1052,11 +1050,14 @@ impl From<ButtonBuilder> for Element {
             .focusable(!disabled)
             .on_hover(move |h| {
                 let want = if disabled { false } else { h };
-                if hovered.peek() == want {
-                    return;
+                match hovered.try_peek() {
+                    Some(cur) if cur == want => return,
+                    None => return,
+                    Some(_) => {}
                 }
-                hovered.set_silent(want);
-                mark_hover_paint_dirty();
+                if hovered.try_set_silent(want) {
+                    mark_hover_paint_dirty();
+                }
             })
             .on_click(move || {
                 if !disabled {
@@ -1371,21 +1372,9 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
 }
 
 /// Solid-style in-place bind for `<Button disabled={sig.get()}>`.
+/// Alias of [`crate::primitives::interactive::apply_disabled`].
 pub fn apply_bound_button_disabled(el: &mut Element, disabled: bool) -> LayoutStatus {
-    let Some(desc) = el.button_hover_paint.as_mut() else {
-        return LayoutStatus::Clean;
-    };
-    if desc.disabled == disabled {
-        return LayoutStatus::Clean;
-    }
-    desc.disabled = disabled;
-    el.set_focusable(!disabled);
-    if disabled {
-        el.set_attr("disabled", "true");
-    } else {
-        el.attrs.remove("disabled");
-    }
-    LayoutStatus::StyleChanged
+    crate::primitives::interactive::apply_disabled(el, disabled)
 }
 
 /// Synchronize `{focus_id}_hover` with the global focus ring to the node with [`Element::button_hover_paint`] (without going through the root `create_effect`).
@@ -1418,14 +1407,12 @@ pub(crate) fn sync_button_hover_paint_subtree(
             if let Some(fid) = node.focus_id.clone() {
                 let key = format!("{}_hover", fid);
                 let hover_sig = use_signal(&key, || false);
-                let is_hovered = hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
+                let is_hovered = hover_sig.try_peek().unwrap_or(false) && !desc.disabled;
                 let focused = use_signal("__rui_button_focus_id", String::new);
                 let focus_visible = use_signal("__rui_focus_visible", || false);
                 let is_focused = !desc.disabled
-                    && focus_visible.is_alive()
-                    && focus_visible.peek()
-                    && focused.is_alive()
-                    && focused.peek() == fid;
+                    && focus_visible.try_peek().unwrap_or(false)
+                    && focused.try_peek().as_deref() == Some(fid.as_str());
                 paint_button_root_from_hover(
                     node,
                     layout_tree,
@@ -1531,8 +1518,8 @@ mod chrome_tests {
     #[test]
     fn ghost_rest_keeps_hover_rgb_at_zero_alpha() {
         set_theme_mode(ThemeMode::Light);
-        let (rest, _, _) = button_chrome_for_variant("ghost", 0.0);
-        let (hover, _, _) = button_chrome_for_variant("ghost", 1.0);
+        let (rest, rest_fg, _) = button_chrome_for_variant("ghost", 0.0);
+        let (hover, hover_fg, _) = button_chrome_for_variant("ghost", 1.0);
         assert!(
             (rest[0] - hover[0]).abs() < 1e-5
                 && (rest[1] - hover[1]).abs() < 1e-5
@@ -1541,6 +1528,8 @@ mod chrome_tests {
         );
         assert!(rest[3] < 0.01);
         assert!(hover[3] > 0.9);
+        assert_eq!(rest_fg, parse_text_color("foreground"));
+        assert_eq!(hover_fg, rest_fg, "ghost hover keeps caption color");
     }
 
     #[test]
@@ -1819,6 +1808,43 @@ mod chrome_tests {
             hex(el.style.bg_color),
             hex(parse_color("primary/80")),
             "Button hover color must resolve via class hover:bg-primary/80"
+        );
+    }
+
+    #[test]
+    fn ghost_hover_keeps_foreground() {
+        use crate::core::reactivity::create_root;
+        use crate::style::{resolve_class_variants, VariantContext};
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-btn-ghost-fg").variant("ghost").text("Go").into()
+        });
+        let rest = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Go"))
+            .expect("caption")
+            .text_style
+            .color;
+        assert_eq!(rest, Some(parse_text_color("foreground")));
+        let attrs = el.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        let hover = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Go"))
+            .expect("caption")
+            .text_style
+            .color;
+        assert_eq!(
+            hover, rest,
+            "observed ShadCN ghost Button: hover changes bg only, caption stays foreground"
         );
     }
 
