@@ -151,7 +151,7 @@ pub(crate) fn gallery_secondary_shell_root() -> Element {
                         </Button>
                     </HStack>
                     <Input id="gal-sec-input" placeholder="Type in secondary (focus isolated)" w="100%" />
-                    <Select id="gal-sec-select" value={fruit} placeholder="Fruit" class="w-full">
+                    <Select id="gal-sec-select" value={fruit} placeholder="Fruit">
                         <SelectTrigger class="w-full">
                             <SelectValue />
                         </SelectTrigger>
@@ -601,7 +601,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                 <Box w="100%" max_w="36rem" h="14rem" rounded="0.5rem" bg="border" p="1px">
                     <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
                         <HStack w="100%" h="100%" gap="0">
-                            <Sidebar id="gal-sidebar-demo-a" w="14rem">
+                            <Sidebar id="gal-sidebar-demo-a" rail_w="14rem">
                                 <SidebarHeader>
                                     <Label font_weight="600" text_size="0.875rem">"Projects"</Label>
                                 </SidebarHeader>
@@ -658,7 +658,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                 <Box w="100%" max_w="36rem" h="16rem" rounded="0.5rem" bg="border" p="1px">
                     <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
                         <HStack w="100%" h="100%" gap="0">
-                            <Sidebar id="gal-sidebar-demo-tree-a" w="14rem">
+                            <Sidebar id="gal-sidebar-demo-tree-a" rail_w="14rem">
                                 <SidebarHeader>
                                     <Label font_weight="600" text_size="0.875rem">"Workspace"</Label>
                                 </SidebarHeader>

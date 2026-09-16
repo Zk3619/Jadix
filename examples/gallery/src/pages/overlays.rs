@@ -342,7 +342,6 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                                 id="gal-dialog-nested-select"
                                 value={nested_select}
                                 placeholder="Pick an option"
-                                class="w-full"
                             >
                                 <SelectTrigger class="w-full">
                                     <SelectValue />
@@ -723,10 +722,10 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             side: "bottom".into(),
                             align: "center".into(),
                             side_offset: 4.0,
-                            class: Some("w-64".into()),
                             width: None,
-                            style: None,
-                        },
+                            ..Default::default()
+                        }
+                        .class("w-64"),
                         || {
                             Element::from(
                                 vstack()

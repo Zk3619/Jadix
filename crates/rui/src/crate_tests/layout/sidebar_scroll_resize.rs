@@ -46,7 +46,7 @@ fn gallery_like_sidebar(labels: &[&str]) -> Element {
     sidebar_provider_scope("gal-clip", None, true, Some("inset"), move || {
         Sidebar(SidebarProps {
             id: "gal-sidebar".into(),
-            w: Some("13rem".into()),
+            rail_w: Some("13rem".into()),
             side: None,
             variant: Some("inset".into()),
             collapsible: Some("icon".into()),

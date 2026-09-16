@@ -1906,7 +1906,7 @@ fn gallery_send_must_not_lift_sidebar_footer() {
                         pack_ms_frag(vec![
                             Sidebar(SidebarProps {
                                 id: "gal-sidebar".into(),
-                                w: Some("13rem".into()),
+                                rail_w: Some("13rem".into()),
                                 side: None,
                                 variant: Some("inset".into()),
                                 collapsible: Some("icon".into()),
@@ -2270,7 +2270,7 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
                         pack_ms_frag(vec![
                             Sidebar(SidebarProps {
                                 id: "gal-sidebar".into(),
-                                w: Some("13rem".into()),
+                                rail_w: Some("13rem".into()),
                                 side: None,
                                 variant: Some("inset".into()),
                                 collapsible: Some("icon".into()),

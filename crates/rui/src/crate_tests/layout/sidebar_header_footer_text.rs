@@ -101,9 +101,10 @@ fn header_footer_rsx_string_color_survives_overlay_cascade() {
     });
 }
 
-/// Header / Footer sit outside the Content scissor. Menu chrome stamps Tailwind
-/// `text-sm` line-height (not Label `leading-none`). Ancestor overflow (the 2rem
-/// button) must still cover that strut so Cosmic-unbounded descenders can paint.
+/// Header / Footer sit outside the Content scissor. Menu button root holds
+/// Tailwind `text-sm` line-height; nested Label `leading-none` is released so
+/// cascade inherits. Ancestor overflow (the 2rem button) must still cover that
+/// strut so Cosmic-unbounded descenders can paint.
 #[test]
 fn header_footer_clip_covers_text_sm_line_box() {
     use crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;

@@ -165,7 +165,6 @@ pub(crate) fn InputAdornmentShowcase() -> rui::core::tree::Element {
                             .addon(
                                 "inline-start",
                                 InputAdornmentText(InputAdornmentTextProps {
-                                    class: None,
                                     children: Some(Element::new().text("$")),
                                     base: None,
                                     ..Default::default()
@@ -180,7 +179,6 @@ pub(crate) fn InputAdornmentShowcase() -> rui::core::tree::Element {
                             .addon(
                                 "inline-end",
                                 InputAdornmentText(InputAdornmentTextProps {
-                                    class: None,
                                     children: Some(Element::new().text("USD")),
                                     base: None,
                                     ..Default::default()
@@ -798,7 +796,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                     <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                         "ShadCN 复合写法（SelectTrigger / Content / Item）："
                     </Label>
-                    <Select id="gallery:select_fruit" value={fruit_val} placeholder="Select a fruit" class="w-full">
+                    <Select id="gallery:select_fruit" value={fruit_val} placeholder="Select a fruit">
                         <SelectTrigger class="w-full">
                             <SelectValue />
                         </SelectTrigger>
@@ -872,11 +870,11 @@ pub(crate) fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                                             side: "bottom".into(),
                                             align: "start".into(),
                                             side_offset: 4.0,
-                                            class: None,
                                             strategy: None,
                                             width: Some("18rem".into()),
-                                            style: None,
                                             lock_page_scroll: false,
+                                            scroll_freeze: None,
+                                            ..Default::default()
                                         },
                                         || {
                                             Element::from(
@@ -1004,8 +1002,8 @@ pub(crate) fn TextareaComboboxShowcase() -> Element {
                         />
                     </VStack>
                 </HStack>
-                                <Combobox id="gal-combo" value={combo} placeholder="搜索城市…" clearable={true} class="w-full">
-                    <ComboboxInput />
+                                <Combobox id="gal-combo" value={combo} placeholder="搜索城市…" clearable={true}>
+                    <ComboboxInput class="w-full" />
                     <ComboboxContent max_h="16rem">
                         <ComboboxList>
                             <ComboboxGroup>

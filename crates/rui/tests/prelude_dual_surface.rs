@@ -281,9 +281,9 @@ fn prelude_chart_tags_and_builders_compile() {
     let pick: Option<usize> = None;
     let el = ui! {
         <VStack gap="0.5rem">
-            <BarChart values={vec![0.2, 0.8]} h="3rem" selected={pick} />
-            <LineChart values={vec![0.1, 0.9]} h={80.0} selected={pick} />
-            <AreaChart values={vec![0.2, 0.5]} h={80.0} selected={pick} />
+            <BarChart values={vec![0.2, 0.8]} plot_h="3rem" selected={pick} />
+            <LineChart values={vec![0.1, 0.9]} plot_h={80.0} selected={pick} />
+            <AreaChart values={vec![0.2, 0.5]} plot_h={80.0} selected={pick} />
             <PieChart values={vec![1.0, 2.0]} inner_radius={0.55} selected={pick} />
             <Chart definition={define_chart().mark(bar_y([("X", 1.0f32), ("Y", 2.0)])).h(60.0)} />
         </VStack>
@@ -369,7 +369,6 @@ fn prelude_input_adornment_dual_surface_compiles() {
         .addon(
             "inline-start",
             InputAdornmentText(InputAdornmentTextProps {
-                class: None,
                 children: Some(Element::new().text("https://")),
                 base: None,
                 ..Default::default()

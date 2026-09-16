@@ -442,6 +442,160 @@ fn accordion_max_height_paints_the_clip_not_content_height() {
     );
 }
 
+/// ColorPicker format Select is 6 rows that fit in `max_height: 16rem`. Pinning the
+/// ScrollArea wrapper made viewport==content, so `overflow:auto` never clipped and
+/// labels survived accordion-up. DatePicker months overflow 16rem so the same pin
+/// still clipped. Shrink the scrollport, pin the rows.
+#[test]
+fn accordion_scroll_viewport_clips_short_list_when_wrapper_shrinks() {
+    use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+
+    let mut rows = Element::new().flex_col().flex_shrink(0.0).min_h(192.0);
+    for _ in 0..6 {
+        rows = rows.child(
+            Element::new()
+                .w(80.0)
+                .h(32.0)
+                .flex_shrink(0.0)
+                .bg([1.0, 0.0, 0.0, 1.0]),
+        );
+    }
+    let viewport = Element::new()
+        .w("100%")
+        .h("100%")
+        .min_h(0.0)
+        .flex_shrink(1.0)
+        .overflow_y("auto")
+        .focus_id(focus_id_for_scroll_viewport("fmt:menu_scroll"))
+        .child(rows);
+    let mut panel = Element::new()
+        .w(80.0)
+        .max_h(40.0)
+        .overflow_y("hidden")
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(viewport);
+    panel.set_attr("rui_hoisted_portal", "1");
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut panel, 80.0, 400.0, [-1.0, -1.0]);
+    let max_bottom = result
+        .instances
+        .iter()
+        .map(|i| {
+            let b = crate::app::draw_cull::instance_paint_bounds(i);
+            b[1] + b[3]
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_bottom <= panel.layout_bounds[1] + 40.0 + 16.0,
+        "short-list rows must clip to the accordion (bottom={max_bottom} clip={})",
+        panel.layout_bounds[1] + 40.0
+    );
+}
+
+fn select_like_format_menu(max_h: f32, pin_rows: bool) -> Element {
+    use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+    use crate::utils::text_node::apply_label_defaults;
+
+    let labels = ["HEX", "HEX8", "RGB", "RGBA", "HSL", "HSLA"];
+    let mut rows = Element::new().flex_col().w(80.0);
+    if pin_rows {
+        rows = rows.flex_shrink(0.0).min_h(192.0);
+    }
+    for name in labels {
+        let text = apply_label_defaults(
+            Element::new()
+                .text(name)
+                .overflow("hidden")
+                .whitespace_nowrap()
+                .text_overflow_ellipsis(),
+        )
+        .w(80.0)
+        .h(32.0)
+        .min_h(32.0)
+        .flex_shrink(0.0);
+        rows = rows.child(text);
+    }
+    let viewport = Element::new()
+        .w("100%")
+        .h("100%")
+        .min_h(0.0)
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .overflow_y("auto")
+        .focus_id(focus_id_for_scroll_viewport("fmt:menu_scroll"))
+        .child(rows);
+    let mut panel = Element::new()
+        .w(80.0)
+        .max_h(max_h)
+        .overflow_y("hidden")
+        .p(4.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(viewport);
+    panel.set_attr("rui_hoisted_portal", "1");
+    panel
+}
+
+/// Expand enter must grow from 0, not from one Select-item min-height (~32px).
+#[test]
+fn accordion_zero_max_height_does_not_floor_to_item_row() {
+    let mut panel = select_like_format_menu(0.0, true);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut panel, 80.0, 400.0, [-1.0, -1.0]);
+    assert!(
+        panel.layout_bounds[3] <= 8.5,
+        "max-height:0 may keep padding (8px) but must not floor to a format-item row, got {}",
+        panel.layout_bounds[3]
+    );
+    let mut unpinned = select_like_format_menu(0.0, false);
+    let _ = tree.build_and_layout(&mut unpinned, 80.0, 400.0, [-1.0, -1.0]);
+    assert!(
+        unpinned.layout_bounds[3] <= 8.5,
+        "unpinned short list at max-height:0 must also not floor to an item row, got {}",
+        unpinned.layout_bounds[3]
+    );
+}
+
+/// ColorPicker format labels use ellipsis; occupancy follows max-height but glyphon
+/// used the Taffy content box, so accordion-up left HEX/RGB ink after chrome shrank.
+#[test]
+fn accordion_max_height_clips_select_ellipsis_labels() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let mut panel = select_like_format_menu(40.0, true);
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut panel, 80.0, 400.0, [-1.0, -1.0]);
+    let clip_bottom = panel.layout_bounds[1]
+        + crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(40.0);
+    let dump = format!(
+        "bounds={:?} max_h={:?} texts={}",
+        panel.layout_bounds,
+        crate::layout::dim_length_px(panel.style.max_size.height),
+        result
+            .text_nodes
+            .iter()
+            .map(|t| format!(
+                "{} y={:.1} h={:.1} clip={:?}",
+                t.text, t.y, t.height, t.clip_bounds
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    for t in &result.text_nodes {
+        let clip_b = t.clip_bounds.map(|c| c[1] + c[3]).unwrap_or(t.y + t.height);
+        assert!(
+            clip_b <= clip_bottom + 1.0,
+            "format label {:?} must clip to accordion, clip_bottom={clip_b} cap={clip_bottom}\n{dump}",
+            t.text
+        );
+    }
+    assert!(
+        result.text_nodes.iter().any(|t| t.text == "HEX"),
+        "must still paint the visible first row\n{dump}"
+    );
+}
+
 /// Gallery forms: focus an Input, scroll until the field is not fully visible.
 /// Clip-cull used to drop the text leaf (`input_caret` gone from `text_nodes`) while
 /// the chrome still peeks. `caret_wake_at` died → bare `Wait` → clicks/keys queued

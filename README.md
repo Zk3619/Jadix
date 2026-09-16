@@ -218,6 +218,12 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 ---
 
+## 组件作者约定 | Component authoring
+
+新增 `#[component]`、改 RSX 属性或宏 `own_prop` 时，遵循 [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §1（属性分层与改名）。CSS 短名（`w` / `h` / `class`）留给根节点 chrome；领域测量用 `plot_h` / `col_w` / `rail_w` 这类专名。
+
+---
+
 ## 贡献与反馈 | Contributing & Feedback
 
 - **中文**：欢迎提交 Issue / PR 讨论 API、性能与组件设计。当前版本迭代较快，建议先在 Issue 中对齐方向。  

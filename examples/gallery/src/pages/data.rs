@@ -101,10 +101,10 @@ pub(crate) fn TableShowcase() -> Element {
                     <TableCaption>"A list of your recent invoices."</TableCaption>
                     <TableHeader>
                         <TableRow id="inv-h">
-                            <TableHead w="100px">"Invoice"</TableHead>
+                            <TableHead col_w="100px">"Invoice"</TableHead>
                             <TableHead>"Status"</TableHead>
                             <TableHead>"Method"</TableHead>
-                            <TableHead align="end" w="96px">"Amount"</TableHead>
+                            <TableHead align="end" col_w="96px">"Amount"</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -112,27 +112,27 @@ pub(crate) fn TableShowcase() -> Element {
                             <TableCell>"INV001"</TableCell>
                             <TableCell>"Paid"</TableCell>
                             <TableCell>"Credit Card"</TableCell>
-                            <TableCell align="end" w="96px">"$250.00"</TableCell>
+                            <TableCell align="end" col_w="96px">"$250.00"</TableCell>
                         </TableRow>
                         <TableRow id="inv-1" selected={composite_sel.get() == Some(1)} on_click={move || pick1.set(Some(1))}>
                             <TableCell>"INV002"</TableCell>
                             <TableCell>"Pending"</TableCell>
                             <TableCell>"PayPal"</TableCell>
-                            <TableCell align="end" w="96px">"$150.00"</TableCell>
+                            <TableCell align="end" col_w="96px">"$150.00"</TableCell>
                         </TableRow>
                         <TableRow id="inv-2" selected={composite_sel.get() == Some(2)} on_click={move || pick2.set(Some(2))}>
                             <TableCell>"INV003"</TableCell>
                             <TableCell>"Unpaid"</TableCell>
                             <TableCell>"Bank Transfer"</TableCell>
-                            <TableCell align="end" w="96px">"$350.00"</TableCell>
+                            <TableCell align="end" col_w="96px">"$350.00"</TableCell>
                         </TableRow>
                     </TableBody>
                     <TableFooter>
                         <TableRow id="inv-f">
-                            <TableCell w="100px">"Total"</TableCell>
+                            <TableCell col_w="100px">"Total"</TableCell>
                             <TableCell></TableCell>
                             <TableCell></TableCell>
-                            <TableCell align="end" w="96px">"$750.00"</TableCell>
+                            <TableCell align="end" col_w="96px">"$750.00"</TableCell>
                         </TableRow>
                     </TableFooter>
                 </Table>
@@ -677,21 +677,21 @@ pub(crate) fn DataChartShowcase() -> Element {
                 <BarChart
                     id="gal-bar"
                     data={bar_rows.clone()}
-                    h="6rem"
+                    plot_h="6rem"
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "LineChart" }</Label>
                 <LineChart
                     id="gal-line"
                     values={line_vals.clone()}
-                    h={140.0}
+                    plot_h={140.0}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "AreaChart" }</Label>
                 <AreaChart
                     id="gal-area"
                     values={line_vals.clone()}
-                    h={140.0}
+                    plot_h={140.0}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "PieChart" }</Label>

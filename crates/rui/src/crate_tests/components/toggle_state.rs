@@ -87,3 +87,51 @@ fn toggle_checkbox_switch_uncontrolled_scoped_per_owner() {
         h2.dispose();
     }
 }
+
+/// Gallery-style teardown: owner is gone but the old Element still receives a paint sync.
+#[test]
+fn paint_sync_after_owner_dispose_does_not_peek_disposed_signal() {
+    use crate::app::test_support::sync_reactive_elements_subtree;
+    use crate::components::button::{button, sync_button_hover_paint_subtree};
+    use crate::components::switch::sync_switch_checked_subtree;
+    use crate::core::tree::{LayoutStatus, LayoutTree};
+
+    let (handle, mut el) = create_root(|| Element::from(toggle("wp-peek-toggle").text("B")));
+    handle.dispose();
+    let mut layout_tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree(&mut el, &mut layout_tree, &mut impact);
+
+    let (handle, mut el) = create_root(|| Element::from(switch("wp-peek-switch")));
+    handle.dispose();
+    let mut layout_tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_switch_checked_subtree(&mut el, &mut layout_tree, &mut impact);
+
+    let (handle, mut el) = create_root(|| Element::from(checkbox("wp-peek-cb")));
+    handle.dispose();
+    let mut layout_tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    crate::components::checkbox::sync_checkbox_checked_subtree(
+        &mut el,
+        &mut layout_tree,
+        &mut impact,
+    );
+
+    let (handle, mut el) = create_root(|| Element::from(button("wp-peek-btn").text("ok")));
+    handle.dispose();
+    let mut layout_tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_button_hover_paint_subtree(
+        &mut el,
+        &mut layout_tree,
+        &mut impact,
+        800.0,
+        600.0,
+        [0.0, 0.0],
+    );
+    if let Some(hover) = el.on_hover.clone() {
+        hover.borrow_mut()(true);
+        hover.borrow_mut()(false);
+    }
+}

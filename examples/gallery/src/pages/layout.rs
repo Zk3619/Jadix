@@ -860,8 +860,8 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
 /// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
 fn ensure_gallery_motion_extras() {
     use rui::style::{
-        AnimatableValue, KeyframeStop, PropertyId, parse_clip_path, register_clip_path,
-        register_keyframes,
+        parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
+        PropertyId,
     };
     register_keyframes(
         "gal-linear-slide",
@@ -2157,7 +2157,7 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
 #[component]
 pub(crate) fn FgMatrixShowcase() -> rui::core::tree::Element {
     use rui::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
-    use rui::core::reactivity::{EffectPhase, take_flushed_effects, ui_root_effect_dep_count};
+    use rui::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
 
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);
