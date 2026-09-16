@@ -1372,9 +1372,9 @@ mod idle_control_flow_tests {
         // motion — a one-shot armed at parent Fade Enter is already gone.
         use crate::core::reactivity::create_root;
         use crate::utils::floating_motion::{
-            any_floating_motion_needs_frame, use_floating_presence, FloatingMotionKind,
+            any_floating_motion_needs_frame, sync_floating_presence, use_floating_presence,
+            FloatingMotionKind,
         };
-        use crate::utils::floating_motion::engine::sync_floating_presence;
 
         create_root(|| {
             let fade = use_floating_presence("cp-fade", FloatingMotionKind::Fade);

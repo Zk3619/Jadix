@@ -253,6 +253,9 @@ thread_local! {
     /// Post-hoist CSS still sampling. Same role as `MODAL_CSS_NEEDS_FRAME` — a live
     /// query, not a one-shot. Parent Fade settling must not swallow a nested Expand.
     static FLOATING_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
+    /// Expand max-height / width-clip wrote Taffy geometry this frame.
+    /// Fade is paint-only (opacity) — must not force a second full-tree collect.
+    static FLOATING_NEEDS_RELAYOUT: Cell<bool> = const { Cell::new(false) };
 }
 
 /// True while a stacked Popover/Menu is measuring, accordion-ing, fading, or exiting.
@@ -277,6 +280,14 @@ pub(crate) fn any_floating_motion_needs_frame() -> bool {
                     || c.gate.phase() == PresencePhase::Exiting)
         })
     })
+}
+
+/// True when Expand wrote layout geometry (max-height clip / measure) this frame.
+///
+/// Fade enter/exit only samples opacity. A second `build_and_layout_fast_ex` of the
+/// whole app tree on every opacity tick is the gallery hitch with a Popover open.
+pub(crate) fn floating_motion_needs_relayout() -> bool {
+    FLOATING_NEEDS_RELAYOUT.with(|c| c.get())
 }
 
 pub(crate) fn use_floating_presence(
@@ -1340,7 +1351,9 @@ pub(crate) fn floating_portal_phase(
 
 /// After portal hoist: register seed keyframes from presence.
 pub(crate) fn flush_floating_motion_subtree(root: &mut Element) -> bool {
+    FLOATING_NEEDS_RELAYOUT.with(|c| c.set(false));
     let mut needs_frame = arm_orphaned_floating_exits();
+    let mut needs_layout = false;
     PRESENCE_REGISTRY.with(|reg| {
         for cell_rc in reg.borrow().iter() {
             let (shell, handle) = {
@@ -1365,9 +1378,13 @@ pub(crate) fn flush_floating_motion_subtree(root: &mut Element) -> bool {
             };
             if apply_floating_motion_inner(panel, &shell, &handle) {
                 needs_frame = true;
+                if shell.kind == FloatingMotionKind::Expand {
+                    needs_layout = true;
+                }
             }
         }
     });
+    FLOATING_NEEDS_RELAYOUT.with(|c| c.set(needs_layout));
     needs_frame
 }
 
@@ -1419,6 +1436,7 @@ fn tick_element_css(el: &mut Element, dt: f32) -> bool {
 pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
     let dt = crate::style::utility::frame_dt();
     let mut any = false;
+    let mut needs_layout = FLOATING_NEEDS_RELAYOUT.with(|c| c.get());
     PRESENCE_REGISTRY.with(|reg| {
         for cell_rc in reg.borrow().iter() {
             let (shell, handle) = {
@@ -1455,6 +1473,10 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
                 }
             }) {
                 any = true;
+                if shell.kind == FloatingMotionKind::Expand {
+                    // Accordion max-height / width-clip are Taffy geometry.
+                    needs_layout = true;
+                }
                 // Fade/expand ticks used to skip named Overlay dirty → Load stacked
                 // translucent fill + box-shadow into retain (calendar smear).
                 // Expand measure is opacity-0 unconstrained layout — it is not a
@@ -1478,20 +1500,26 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
             }
             if clamp_animated_max_h_to_place(panel, &shell.overlay_id) {
                 any = true;
+                needs_layout = true;
             }
             if shell.kind == FloatingMotionKind::Expand
                 && matches!(shell.phase, PresencePhase::Exiting)
                 && hide_expand_exit_sliver(panel, &handle, false)
             {
                 any = true;
+                needs_layout = true;
             }
         }
     });
     FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(any));
+    FLOATING_NEEDS_RELAYOUT.with(|c| c.set(needs_layout));
     any
 }
 
 /// After Expand max-height changes, mark the panel dirty for a same-frame second layout.
+///
+/// Fade panels are paint-only; dirtying them (and every other mounted overlay) on a
+/// sibling opacity tick used to recompute the whole gallery every Popover frame.
 pub(crate) fn mark_floating_panels_layout_dirty(
     root: &Element,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
@@ -1506,6 +1534,9 @@ pub(crate) fn mark_floating_panels_layout_dirty(
                 let Some(shell) = c.shell.as_ref() else {
                     continue;
                 };
+                if shell.kind != FloatingMotionKind::Expand {
+                    continue;
+                }
                 panel_tid(&shell.overlay_id)
             };
             if let Some(panel) = find_template_id(root, &tid) {
@@ -1712,6 +1743,74 @@ mod tests {
             assert!(
                 any_floating_motion_needs_frame(),
                 "nested Expand open must still pump after the parent Fade already entered"
+            );
+        });
+    }
+
+    #[test]
+    fn fade_css_tick_does_not_request_second_layout() {
+        create_root(|| {
+            FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(false));
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            let open = Signal::new(true);
+            let handle = use_floating_presence("fade-norel", FloatingMotionKind::Fade);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "fade-norel",
+                &mut panel,
+                FloatingMotionKind::Fade,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Popover,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(
+                flush_floating_motion_subtree(&mut root),
+                "Fade enter still needs paint frames"
+            );
+            assert!(
+                !floating_motion_needs_relayout(),
+                "Fade seed must not dirty Taffy / second collect"
+            );
+            crate::style::utility::set_frame_dt(0.016);
+            assert!(tick_hoisted_floating_css(&mut root));
+            crate::style::utility::set_frame_dt(0.0);
+            assert!(
+                !floating_motion_needs_relayout(),
+                "Fade opacity tick is paint-only"
+            );
+        });
+    }
+
+    #[test]
+    fn expand_flush_requests_second_layout_for_measure() {
+        create_root(|| {
+            FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(false));
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-relayout", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-relayout",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            assert!(
+                floating_motion_needs_relayout(),
+                "Expand measure / max-height seed must same-frame relayout"
             );
         });
     }

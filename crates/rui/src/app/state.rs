@@ -4324,8 +4324,10 @@ impl AppState {
             crate::utils::floating_motion::flush_floating_motion_subtree(&mut self.root_element);
         let floating_css_ticking =
             crate::utils::floating_motion::tick_hoisted_floating_css(&mut self.root_element);
-        if floating_needs_frame || floating_css_ticking {
-            // Expand 写入的 max-height keyframe 需再跑一趟 Taffy，本帧才能裁剪高度。
+        // Expand writes max-height keyframes that need a same-frame Taffy pass.
+        // Fade is opacity-only: a second full-tree collect here dropped frames while
+        // a Popover / ColorPicker was open (gallery scroll hitch).
+        if crate::utils::floating_motion::floating_motion_needs_relayout() {
             crate::utils::floating_motion::mark_floating_panels_layout_dirty(
                 &self.root_element,
                 &mut self.layout_tree,
@@ -4340,6 +4342,8 @@ impl AppState {
                 None,
             );
             acc_layout_prof(&render_result.prof);
+        }
+        if floating_needs_frame || floating_css_ticking {
             self.window.request_redraw();
         }
         if crate::components::color_picker::is_color_dragging() {

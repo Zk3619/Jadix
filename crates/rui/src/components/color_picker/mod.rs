@@ -1518,8 +1518,8 @@ mod tests {
             hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
         };
         use crate::utils::floating_motion::{
-            flush_floating_motion_subtree, mark_floating_panels_layout_dirty,
-            tick_hoisted_floating_css,
+            floating_motion_needs_relayout, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
         };
         use crate::utils::popup::{
             arm_underlay_close, sync_floating_placement, ATTR_FLOATING_EXPAND_MEASURE,
@@ -1586,9 +1586,10 @@ mod tests {
                     None,
                 );
             }
-            let floating_needs = flush_floating_motion_subtree(root);
-            let css_ticking = tick_hoisted_floating_css(root);
-            if floating_needs || css_ticking {
+            let _ = flush_floating_motion_subtree(root);
+            let _ = tick_hoisted_floating_css(root);
+            // Match AppState: Expand accordion geometry relayouts; Fade opacity does not.
+            if floating_motion_needs_relayout() {
                 mark_floating_panels_layout_dirty(root, &mut tree);
                 out = tree.build_and_layout_fast_ex(
                     root,
