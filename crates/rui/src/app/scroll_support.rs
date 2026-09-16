@@ -499,14 +499,14 @@ pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32
 
 /// Ease `current` toward `target` on the device-pixel grid.
 ///
-/// A hidden subpixel phase + `round()` for paint made the tail chatter against
-/// glyphon / synthetic-bold (inertia jitter). The last 16 device pixels are a
-/// regular 1px staircase — no leftover phase, and never dump 2px after a stall.
+/// First-order catch-up (`v ∝ remaining`) so the stop-chase tail decelerates
+/// toward 0 like friction — not a 16px 1px/frame crawl (constant extra sliding)
+/// and not a multi-pixel snap (too abrupt). Stall rounds up to 1 device px so
+/// the last ticks are 1px then rest; paint stays on the device grid.
 /// Returns `(paint_offset, still_animating)`.
 pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f32) -> (f32, bool) {
     const TAU_SEC: f32 = 0.14;
     const MAX_ALPHA: f32 = 0.18;
-    const TAIL_DEVICE_PX: f32 = 16.0;
     let scale = ui_scale.max(0.01);
     let device_px = 1.0 / scale;
     let target = snap_scroll_offset_to_device_px(target, scale);
@@ -515,21 +515,13 @@ pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f
     if !remaining.is_finite() {
         return (target, false);
     }
+    // Sub-pixel leftover only. 1px leftover still takes a 1px tick (inertia to 0).
     if remaining.abs() < device_px * 0.5 {
         return (target, false);
     }
 
     let sign = remaining.signum();
-    let dist_px = remaining.abs() / device_px;
     let step1 = snap_scroll_offset_to_device_px(current + device_px * sign, scale);
-
-    if dist_px <= TAIL_DEVICE_PX {
-        if (remaining > 0.0 && step1 >= target) || (remaining < 0.0 && step1 <= target) {
-            return (target, false);
-        }
-        return (step1, true);
-    }
-
     let raw_alpha = 1.0 - (-dt.max(0.0) / TAU_SEC).exp();
     let alpha = raw_alpha.min(MAX_ALPHA).clamp(0.0, 1.0);
     let mut next = snap_scroll_offset_to_device_px(current + remaining * alpha, scale);
@@ -543,6 +535,9 @@ pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f
         if (remaining > 0.0 && next >= target) || (remaining < 0.0 && next <= target) {
             return (target, false);
         }
+    }
+    if (next - target).abs() < device_px * 0.5 {
+        return (target, false);
     }
     (next, true)
 }
@@ -1239,24 +1234,84 @@ mod smooth_scroll_step_tests {
         assert!(frames > 4, "should ease over several frames, got {frames}");
     }
 
-    #[test]
-    fn tail_paint_steps_are_single_device_pixels() {
-        let scale = 1.0_f32;
-        let device_px = 1.0 / scale;
-        let target = 48.0;
-        let mut y = 0.0_f32;
-        let mut frames = 0u32;
-        loop {
-            let (next, anim) = smooth_scroll_step(y, target, 0.016, scale);
-            let remaining = (target - y).abs();
-            let delta = (next - y).abs();
-            if remaining <= 16.0 * device_px + 1e-3 {
-                assert!(
-                    delta <= device_px * 1.01 + 1e-3,
-                    "tail jumped {y} -> {next} (delta {delta}) with {remaining}px left"
-                );
+    fn collect_chase_deltas(start: f32, target: f32) -> Vec<f32> {
+        let mut y = start;
+        let mut prev = y;
+        let mut deltas = Vec::new();
+        for _ in 0..80 {
+            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
+            let delta = (next - prev).abs();
+            if delta > 1e-4 {
+                deltas.push(delta);
             }
             y = next;
+            prev = next;
+            if !anim {
+                break;
+            }
+        }
+        assert!((y - snap_scroll_offset_to_device_px(target, 1.0)).abs() < 1e-3);
+        deltas
+    }
+
+    #[test]
+    fn stop_chase_tail_decelerates_to_zero() {
+        // 16px leftover after the last wheel tick: first-order chase must slow
+        // (2px → 1px → rest), not crawl 1px×16 and not snap the last 2px.
+        let deltas = collect_chase_deltas(0.0, 16.0);
+        assert!(
+            deltas.first().copied().unwrap_or(0.0) >= 2.0 - 1e-3,
+            "tail must still be decelerating at 16px, first step {:?}",
+            deltas.first()
+        );
+        for w in deltas.windows(2) {
+            assert!(w[1] <= w[0] + 1e-3, "tail must not speed up: {w:?}");
+        }
+        let last = *deltas.last().expect("chase moved");
+        assert!(
+            (last - 1.0).abs() < 0.01,
+            "last inertia tick must be 1px, got {last}"
+        );
+        let ones = deltas.iter().filter(|d| (*d - 1.0).abs() < 0.01).count();
+        assert!(ones < 16, "1px staircase crawled {ones} frames");
+        assert!(
+            ones >= 2,
+            "need a few 1px ticks so rest is not a multi-px snap, got {ones}"
+        );
+    }
+
+    #[test]
+    fn stop_chase_two_px_leftover_ticks_not_snaps() {
+        let deltas = collect_chase_deltas(0.0, 2.0);
+        assert!(
+            deltas.iter().all(|d| *d <= 1.01),
+            "2px leftover must not jump in one frame, got {deltas:?}"
+        );
+        assert!(
+            deltas.len() >= 2,
+            "2px leftover should take two 1px ticks, got {deltas:?}"
+        );
+    }
+
+    #[test]
+    fn stop_chase_from_wheel_notch_lag_decelerates() {
+        let mut y = 0.0_f32;
+        let target = 75.0;
+        let mut tail_deltas = Vec::new();
+        let mut frames = 0u32;
+        let mut prev = y;
+        loop {
+            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
+            assert!(
+                next + 1e-4 >= prev && next <= target + 1e-4,
+                "non-monotonic or overshoot: {prev} -> {next}"
+            );
+            let delta = (next - prev).abs();
+            if (target - prev).abs() <= 20.0 + 1e-3 && delta > 1e-4 {
+                tail_deltas.push(delta);
+            }
+            y = next;
+            prev = next;
             frames += 1;
             if !anim {
                 break;
@@ -1264,6 +1319,14 @@ mod smooth_scroll_step_tests {
             assert!(frames < 400, "chase did not settle");
         }
         assert!((y - target).abs() < 1e-3);
+        assert!(
+            tail_deltas.iter().any(|d| *d >= 2.0 - 1e-3),
+            "last 20px must pass through 2px steps, got {tail_deltas:?}"
+        );
+        for w in tail_deltas.windows(2) {
+            assert!(w[1] <= w[0] + 1e-3, "tail must decelerate: {w:?}");
+        }
+        assert!(frames > 4, "75px leftover should still ease, got {frames}");
     }
 }
 
