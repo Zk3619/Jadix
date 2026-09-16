@@ -39,8 +39,9 @@
 //!   so an empty wrapper does not steal scroll/clicks; interactive children stay hittable.
 //! - Esc / z-index stacks: [`crate::app::portal_overlay`].
 //! - Positioning is the child's job — same as Solid, where `<Portal>` only relocates.
-//! - Dismissal for menus/popovers follows ShadCN/Radix “pointer outside” (stable portal key),
-//!   not a one-frame flash.
+//! - Nested portals (Select inside ColorPicker / Dialog) hoist out of the live parent
+//!   overlay and **replace** the same `rui_portal_key` on the destination layer. Appending
+//!   a second copy during keep-alive exit paints unclipped labels over the parent.
 
 #![allow(non_snake_case)]
 

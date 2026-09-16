@@ -126,6 +126,11 @@ pub const ATTR_PORTAL_SLOT: &str = "rui_portal_slot";
 /// Remembers `rui_portal_mount` on a hoisted node so remount can target the same host.
 pub(crate) const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
 
+/// Stamped with `data-stacking-context` when this crate opened a local overlay stack
+/// on a host that did not already opt in. Cleared when the last local overlay leaves
+/// so `collect_skip_live` does not keep the whole gallery column unskippable.
+const ATTR_LOCAL_OVERLAY_STACK: &str = "data-rui-local-overlay-stack";
+
 /// Opt out of ancestor overflow clip (Command / Dialog stages that must paint over the sidebar).
 pub const ATTR_ESCAPE_OVERFLOW_CLIP: &str = "rui_escape_overflow_clip";
 
@@ -418,7 +423,7 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
             // is a stacking context. Nested gallery cards already open `page_stack_depth`,
             // so z-index on a child is not enough — glyphs of earlier siblings paint
             // *after* every rect in that band (scrim under, sharp text on top).
-            host.set_attr("data-stacking-context", "1");
+            stamp_local_overlay_host_stack(host);
             host.children.append(&mut kids);
         }
 
@@ -427,8 +432,11 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     }
 
     // Dialog already on the layer + Select opens inside it: main-tree pending is 0, but a
-    // fresh `rui_portal` still sits under the hoisted stage — promote it now.
-    structure_dirty + hoist_nested_portals_from_hoisted(root, &mut wanted)
+    // fresh `rui_portal` still sits under the hoisted stage — promote it now. Same portal
+    // key replaces the keep-alive copy (nested overlay nest), it does not append a second tree.
+    let nested = hoist_nested_portals_from_hoisted(root, &mut wanted);
+    unstamp_idle_local_overlay_hosts(root);
+    structure_dirty + nested
 }
 
 fn count_rui_portal_nodes(node: &Element) -> usize {
@@ -518,6 +526,26 @@ fn overlay_presence_retains_hoisted(el: &Element) -> bool {
         || crate::utils::modal_motion::hoisted_should_retain(el)
 }
 
+/// Nested overlay rebuild (Select inside ColorPicker / Dialog) must not stack two
+/// copies of the same portal key. Keep-alive exit already occupies the layer;
+/// appending a fresh `rui_portal` paints unclipped labels over the parent.
+fn replace_or_push_hoisted(kids: &mut Vec<Element>, node: Element) {
+    let key = portal_key_of(&node);
+    if let Some(i) = kids.iter().position(|c| {
+        c.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1") && portal_key_of(c) == key
+    }) {
+        kids[i] = node;
+        return;
+    }
+    kids.push(node);
+}
+
+fn append_hoisted_replacing(dest: &mut Vec<Element>, incoming: Vec<Element>) {
+    for node in incoming {
+        replace_or_push_hoisted(dest, node);
+    }
+}
+
 fn place_hoisted(
     root: &Element,
     node: Element,
@@ -526,18 +554,18 @@ fn place_hoisted(
     host_buckets: &mut Vec<(Vec<usize>, Vec<Element>)>,
 ) {
     if mount.is_empty() {
-        root_bucket.push(node);
+        replace_or_push_hoisted(root_bucket, node);
         return;
     }
     let mut path = Vec::new();
     if find_template_id_path(root, mount, &mut path) && !path.is_empty() {
         if let Some((_, kids)) = host_buckets.iter_mut().find(|(p, _)| *p == path) {
-            kids.push(node);
+            replace_or_push_hoisted(kids, node);
         } else {
             host_buckets.push((path, vec![node]));
         }
     } else {
-        root_bucket.push(node);
+        replace_or_push_hoisted(root_bucket, node);
     }
 }
 
@@ -607,6 +635,11 @@ fn collect_portal_slot_keys(node: &Element, out: &mut std::collections::HashSet<
 /// [`hoist_portal_rec_with_slots`] skips [`PORTAL_LAYER_ID`], and
 /// [`count_rui_portal_nodes`] does too — so a Select opened inside a live Dialog never
 /// enters the main lift path. Extract here and append as siblings on the same mount.
+///
+/// A rebuild of that Select (exit presence) inserts a **fresh** `rui_portal` under the
+/// parent overlay while the previous hoisted copy is still retained. Replace + adopt
+/// the same portal key — appending a second copy paints leftover labels over the parent
+/// (ColorPicker format menu: flash then snap-unmount instead of accordion-up).
 fn hoist_nested_portals_from_hoisted(
     root: &mut Element,
     wanted: &mut std::collections::HashSet<String>,
@@ -637,6 +670,11 @@ fn hoist_nested_portals_from_hoisted(
             .unwrap_or_default();
         let key = portal_key_of(&node);
         wanted.insert(key.clone());
+        if let Some(mut prev) = take_hoisted_by_key(root, &key) {
+            if !subtree_has_drag_overlay(&node) && !subtree_has_drag_overlay(&prev) {
+                crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev);
+            }
+        }
         prepare_hoisted_node(&mut node, &key);
         place_hoisted(
             root,
@@ -653,14 +691,88 @@ fn hoist_nested_portals_from_hoisted(
             .iter_mut()
             .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
             .expect("portal layer");
-        layer.children.append(&mut root_bucket);
+        append_hoisted_replacing(&mut layer.children, root_bucket);
     }
-    for (path, mut kids) in host_buckets {
+    for (path, kids) in host_buckets {
         let host = element_mut_by_path(root, &path);
-        host.set_attr("data-stacking-context", "1");
-        host.children.append(&mut kids);
+        stamp_local_overlay_host_stack(host);
+        append_hoisted_replacing(&mut host.children, kids);
     }
     n
+}
+
+/// Pull the live hoisted copy for `key` so a nested rebuild can adopt it.
+fn take_hoisted_by_key(root: &mut Element, key: &str) -> Option<Element> {
+    if let Some(layer) = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+    {
+        if let Some(i) = layer.children.iter().position(|c| {
+            c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
+                && portal_key_of(c) == key
+        }) {
+            return Some(layer.children.remove(i));
+        }
+    }
+    take_hoisted_by_key_from_hosts(root, key)
+}
+
+fn take_hoisted_by_key_from_hosts(node: &mut Element, key: &str) -> Option<Element> {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return None;
+    }
+    let mut i = 0;
+    while i < node.children.len() {
+        if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            i += 1;
+            continue;
+        }
+        if node.children[i]
+            .attrs
+            .get(ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1")
+            && portal_key_of(&node.children[i]) == key
+        {
+            return Some(node.children.remove(i));
+        }
+        if let Some(found) = take_hoisted_by_key_from_hosts(&mut node.children[i], key) {
+            return Some(found);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn stamp_local_overlay_host_stack(host: &mut Element) {
+    if host.attrs.get("data-stacking-context").map(String::as_str) == Some("1") {
+        return;
+    }
+    host.set_attr("data-stacking-context", "1");
+    host.set_attr(ATTR_LOCAL_OVERLAY_STACK, "1");
+}
+
+fn host_has_local_hoisted_overlay(host: &Element) -> bool {
+    host.children.iter().any(|c| {
+        c.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+            && c.attrs
+                .get(ATTR_HOISTED_MOUNT)
+                .is_some_and(|s| !s.trim().is_empty())
+    })
+}
+
+fn unstamp_idle_local_overlay_hosts(root: &mut Element) {
+    crate::core::tree::walk_elements_mut(root, |node| {
+        if node.attrs.get(ATTR_LOCAL_OVERLAY_STACK).map(String::as_str) != Some("1") {
+            return;
+        }
+        if host_has_local_hoisted_overlay(node) {
+            return;
+        }
+        node.attrs.remove("data-stacking-context");
+        node.attrs.remove(ATTR_LOCAL_OVERLAY_STACK);
+    });
 }
 
 fn extract_nested_portals_from_host_hoisted(node: &mut Element, lifted: &mut Vec<Element>) {

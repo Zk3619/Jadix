@@ -234,6 +234,101 @@ fn hoist_mount_attr_attaches_to_named_host() {
 }
 
 #[test]
+fn local_mount_clears_stacking_context_when_overlay_closes() {
+    // Stamping `data-stacking-context` on the host is required for scrim/glyph order,
+    // but leaving it after close bubbles `collect_skip_live` up the gallery column
+    // and keeps page_stack_bands live — scroll hitch after a one-shot local Portal.
+    let mut host = Element::new()
+        .relative()
+        .w(400.0)
+        .h(200.0)
+        .template_id("card-host");
+    host.children
+        .push(Element::new().w(40.0).h(20.0).template_id("host-label"));
+
+    let mut portal = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("local-portal")
+        .z_index(2);
+    portal.set_attr("rui_portal", "1");
+    portal.set_attr(ATTR_PORTAL_KEY, "local-portal");
+    portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
+
+    let mut root = Element::new().w(800.0).h(600.0).child(
+        Element::new()
+            .template_id("main")
+            .children([host, portal]),
+    );
+
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    let host = find_by_tid(&root, "card-host").expect("host");
+    assert_eq!(
+        host.attrs.get("data-stacking-context").map(String::as_str),
+        Some("1"),
+        "open local overlay must split host paint bands"
+    );
+
+    fn strip_slots(el: &mut Element) {
+        el.children
+            .retain(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_none());
+        for c in &mut el.children {
+            strip_slots(c);
+        }
+    }
+    strip_slots(&mut root);
+    let _ = hoist_portal_subtrees(&mut root);
+    let host = find_by_tid(&root, "card-host").expect("host after close");
+    assert!(
+        host.attrs.get("data-stacking-context").is_none(),
+        "closed local overlay must not leave the host as a stacking context"
+    );
+    assert!(
+        host.children
+            .iter()
+            .all(|c| c.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1")),
+        "hoisted local overlay must be pruned"
+    );
+}
+
+#[test]
+fn local_mount_keeps_author_stacking_context_after_close() {
+    let mut host = Element::new()
+        .relative()
+        .w(400.0)
+        .h(200.0)
+        .template_id("card-host");
+    host.set_attr("data-stacking-context", "1");
+
+    let mut portal = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("local-portal")
+        .z_index(2);
+    portal.set_attr("rui_portal", "1");
+    portal.set_attr(ATTR_PORTAL_KEY, "local-portal");
+    portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
+
+    let mut root = Element::new().child(host.child(portal));
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    fn strip_slots(el: &mut Element) {
+        el.children
+            .retain(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_none());
+        for c in &mut el.children {
+            strip_slots(c);
+        }
+    }
+    strip_slots(&mut root);
+    let _ = hoist_portal_subtrees(&mut root);
+    let host = find_by_tid(&root, "card-host").expect("host");
+    assert_eq!(
+        host.attrs.get("data-stacking-context").map(String::as_str),
+        Some("1"),
+        "author stacking-context must survive local overlay close"
+    );
+}
+
+#[test]
 fn hoist_unknown_mount_falls_back_to_root_layer() {
     let mut portal = Element::new()
         .w("100%")
@@ -456,6 +551,93 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
     // Retention: slot inside the hoisted stage keeps the menu alive.
     assert_eq!(hoist_portal_subtrees(&mut root), 0);
     assert_eq!(count_in_layer(&root), 2);
+}
+
+/// Exit rebuild inserts a fresh `rui_portal` under the live parent overlay while the
+/// previous menu is still keep-alive on the layer. Must replace that copy, not paint both.
+#[test]
+fn hoist_nested_portal_rebuild_does_not_duplicate() {
+    let panel = Element::new().w(320.0).h(200.0).template_id("dlg-panel");
+    let mut stage = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("dlg-stage")
+        .child(panel);
+    stage.set_attr("rui_portal", "1");
+    stage.set_attr(ATTR_PORTAL_KEY, "panel:dlg");
+
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .children([Element::new().child(stage)]);
+
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+
+    {
+        let layer = root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        let stage = layer
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-stage"))
+            .expect("hoisted stage");
+        let panel = stage
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-panel"))
+            .expect("panel");
+        let mut menu = Element::new().w(160.0).h(120.0).template_id("select-menu");
+        menu.set_attr("rui_portal", "1");
+        menu.set_attr(ATTR_PORTAL_KEY, "panel:select-menu");
+        panel.children.push(menu);
+    }
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    assert_eq!(count_in_layer(&root), 2);
+
+    {
+        let layer = root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        let stage = layer
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-stage"))
+            .expect("hoisted stage");
+        let panel = stage
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-panel"))
+            .expect("panel");
+        let mut menu = Element::new().w(160.0).h(48.0).template_id("select-menu");
+        menu.set_attr("rui_portal", "1");
+        menu.set_attr(ATTR_PORTAL_KEY, "panel:select-menu");
+        menu.style.max_size.height = taffy::style::Dimension::length(48.0);
+        panel.children.push(menu);
+    }
+
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    assert_eq!(
+        count_in_layer(&root),
+        2,
+        "exit rebuild must replace the keep-alive menu, not stack a second copy"
+    );
+    let layer = portal_layer(&root).expect("portal layer");
+    let menus: Vec<_> = layer
+        .children
+        .iter()
+        .filter(|c| c.template_id.as_deref() == Some("select-menu"))
+        .collect();
+    assert_eq!(menus.len(), 1, "one format menu on the portal layer");
+    assert!(
+        crate::layout::dim_length_px(menus[0].style.max_size.height)
+            .is_some_and(|h| (h - 48.0).abs() < 0.01),
+        "replacement must be the rebuilt exit panel"
+    );
 }
 
 /// Dialog open rewrites the portal layer. That must not remasure every page text leaf

@@ -617,14 +617,69 @@ pub fn try_close_top() -> bool {
     }
 }
 
+/// Close the top exclusive surface for an outside press.
+///
+/// Presence keep-alive stays on the stack so exit can play. Layers without
+/// keep-alive still pop immediately (`portal_sync` without presence).
+///
+/// Returns whether this press was consumed — including when the top exclusive
+/// is already exiting. Overlay underlay `on_click` must not treat that as
+/// "nothing to dismiss" and close the modal (pointer-down already started exit).
+fn dismiss_exclusive_from_top(
+    stack: &mut Vec<OverlayLayer>,
+    to_close: &mut Vec<Signal<bool>>,
+) -> bool {
+    let Some(top) = stack.last() else {
+        return false;
+    };
+    match top.kind {
+        OverlayKind::Popover | OverlayKind::Menu | OverlayKind::Tooltip => {}
+        OverlayKind::Modal => return false,
+    }
+    if !layer_live(top.open) {
+        return layer_is_active(top);
+    }
+    let close_menus_below = matches!(top.kind, OverlayKind::Menu);
+    let mut i = stack.len() - 1;
+    loop {
+        let keep = stack[i].keep_alive.is_some_and(layer_live);
+        if layer_live(stack[i].open) {
+            to_close.push(stack[i].open);
+        }
+        if keep {
+            if i == 0 || !close_menus_below {
+                break;
+            }
+            i -= 1;
+            if !matches!(stack[i].kind, OverlayKind::Menu) {
+                break;
+            }
+            continue;
+        }
+        stack.remove(i);
+        if !close_menus_below || i == 0 {
+            break;
+        }
+        i -= 1;
+        if !matches!(stack[i].kind, OverlayKind::Menu) {
+            break;
+        }
+    }
+    true
+}
+
 /// Solid/Radix non-modal dismiss: close the top Stacked Popover/Menu/Tooltip when the
 /// pointer press is outside hoisted portal content (and not on its trigger).
 ///
 /// Modals keep a blocking underlay; this path must not close them.
 ///
-/// When the top surface is a **Menu**, also pops any Menu stacked under it (context-menu
-/// root + submenu close together on one outside click). Stops before Popover/Modal so a
-/// Select Menu inside a DatePicker Popover only dismisses the Select.
+/// When the top surface is a **Menu**, also dismisses any Menu stacked under it
+/// (context-menu root + submenu close together on one outside click). Stops before
+/// Popover/Modal so a Select Menu inside a DatePicker Popover only dismisses the Select.
+///
+/// Presence keep-alive is left on the stack so the panel can play exit. A second
+/// dismiss (overlay underlay `on_click` after pointer-down) consumes the press
+/// without popping that exiting layer or closing the modal underneath.
 ///
 /// Respects [`crate::utils::popup::underlay_close_is_armed`] so the opening gesture
 /// cannot instantly dismiss. `open.set` runs **after** the stack borrow is dropped.
@@ -632,40 +687,16 @@ pub fn try_dismiss_outside_press() -> bool {
     if !crate::utils::popup::underlay_close_is_armed() {
         return false;
     }
-    let (to_close, pruned) = with_stack_mut(|stack| {
+    let (to_close, pruned, consumed) = with_stack_mut(|stack| {
         let pruned = prune_closed(stack);
-        let Some(top) = stack.last() else {
-            return (Vec::new(), pruned);
-        };
-        match top.kind {
-            OverlayKind::Popover | OverlayKind::Menu | OverlayKind::Tooltip => {}
-            OverlayKind::Modal => return (Vec::new(), pruned),
-        }
         let mut closing = Vec::new();
-        // Always pop the top exclusive surface.
-        if let Some(l) = stack.pop() {
-            let close_menus_below = matches!(l.kind, OverlayKind::Menu);
-            closing.push(l.open);
-            if close_menus_below {
-                while stack
-                    .last()
-                    .is_some_and(|l| matches!(l.kind, OverlayKind::Menu))
-                {
-                    if let Some(l) = stack.pop() {
-                        closing.push(l.open);
-                    }
-                }
-            }
-        }
-        (closing, pruned)
+        let consumed = dismiss_exclusive_from_top(stack, &mut closing);
+        (closing, pruned, consumed)
     });
     for other in pruned {
         other.try_set(false);
     }
-    if to_close.is_empty() {
-        return false;
-    }
-    let mut any = false;
+    let mut any = consumed;
     for open in to_close {
         if layer_live(open) {
             open.try_set(false);
@@ -1230,6 +1261,85 @@ mod tests {
         crate::utils::popup::arm_underlay_close();
         assert!(try_dismiss_outside_press());
         assert!(!open.peek());
+    }
+
+    /// Presence keep-alive must stay stacked after outside-press so accordion-up
+    /// can play. Popping it made the next underlay click close the parent overlay
+    /// and the panel flashed then vanished.
+    #[test]
+    fn dismiss_outside_presence_keeps_layer_for_exit() {
+        clear();
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        assert!(portal_sync_presence(
+            "sel",
+            open,
+            mounted,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert!(!open.peek());
+        assert!(mounted.peek(), "keep-alive must still be mounted");
+        assert_eq!(depth(), 1, "exiting menu must stay on the stack");
+        assert!(
+            portal_sync_presence(
+                "sel",
+                open,
+                mounted,
+                OverlayKind::Menu,
+                OverlayMode::Stacked
+            )
+            .is_some(),
+            "rebuild during exit must still receive a portal z"
+        );
+        assert!(
+            try_dismiss_outside_press(),
+            "second outside press must consume the exiting layer"
+        );
+        assert!(mounted.peek());
+        assert_eq!(depth(), 1);
+        clear();
+    }
+
+    #[test]
+    fn dismiss_outside_presence_does_not_close_modal_underneath() {
+        clear();
+        let dialog = Signal::new(true);
+        let dialog_keep = Signal::new(true);
+        let menu = Signal::new(true);
+        let menu_keep = Signal::new(true);
+        assert!(portal_sync_presence(
+            "dlg",
+            dialog,
+            dialog_keep,
+            OverlayKind::Modal,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert!(portal_sync_presence(
+            "sel",
+            menu,
+            menu_keep,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert!(!menu.peek());
+        assert!(dialog.peek());
+        assert_eq!(depth(), 2);
+        assert!(
+            try_dismiss_outside_press(),
+            "mouse-up underlay must still be consumed by the exiting menu"
+        );
+        assert!(dialog.peek(), "modal must stay open during nested exit");
+        assert!(menu_keep.peek());
+        assert_eq!(depth(), 2);
+        clear();
     }
 
     #[test]

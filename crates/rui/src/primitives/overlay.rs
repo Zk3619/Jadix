@@ -78,8 +78,9 @@ impl From<OverlayBuilder> for Element {
                         return;
                     }
                     // Nested Select / Popover / Menu sits above this modal on the overlay
-                    // stack — dismiss that first; only close the dialog when nothing else
-                    // is stacked on top.
+                    // stack — dismiss that first (including an already-exiting keep-alive
+                    // layer started on pointer-down). Only close the dialog when nothing
+                    // else is stacked on top.
                     if crate::app::portal_overlay::try_dismiss_outside_press() {
                         return;
                     }
@@ -134,6 +135,66 @@ mod tests {
             "underlay click must dismiss nested menu first"
         );
         assert!(dialog.peek(), "dialog must stay open while menu was on top");
+        clear_overlay_stack();
+    }
+
+    /// Pointer-down already started the nested menu's exit (`open=false`, keep-alive).
+    /// Underlay `on_click` on mouse-up must not pop that layer or close the dialog —
+    /// that skipped accordion-up and flashed the panel.
+    #[test]
+    fn overlay_click_must_not_kill_nested_menu_exit() {
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, overlay_stack_depth_for_test, portal_sync_presence, OverlayKind,
+            OverlayMode,
+        };
+        use crate::utils::popup::arm_underlay_close;
+
+        clear_overlay_stack();
+        let dialog = Signal::new(true);
+        let dialog_keep = Signal::new(true);
+        let menu = Signal::new(true);
+        let menu_keep = Signal::new(true);
+        assert!(portal_sync_presence(
+            "dlg",
+            dialog,
+            dialog_keep,
+            OverlayKind::Modal,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert!(portal_sync_presence(
+            "sel",
+            menu,
+            menu_keep,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        arm_underlay_close();
+
+        assert!(crate::app::portal_overlay::try_dismiss_outside_press());
+        assert!(!menu.peek(), "pointer-down dismisses the nested menu");
+        assert!(menu_keep.peek(), "menu must stay mounted for exit");
+        assert!(dialog.peek());
+        assert_eq!(overlay_stack_depth_for_test(), 2);
+
+        let underlay: Element = overlay(1000).close_on_click(dialog).into();
+        if let Some(cb) = &underlay.on_click {
+            cb.borrow_mut()();
+        }
+        assert!(
+            dialog.peek(),
+            "underlay mouse-up must not close the dialog after nested dismiss"
+        );
+        assert!(
+            menu_keep.peek(),
+            "exiting menu keep-alive must survive the underlay click"
+        );
+        assert_eq!(
+            overlay_stack_depth_for_test(),
+            2,
+            "exiting menu must stay on the stack for accordion-up"
+        );
         clear_overlay_stack();
     }
 
