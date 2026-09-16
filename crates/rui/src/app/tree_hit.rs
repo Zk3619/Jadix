@@ -80,6 +80,7 @@ fn claims_own_bounds(el: &Element) -> bool {
 /// HTML 盒（默认 `auto`）与无 path 的纹理 Icon 走变换后的局部 border box
 ///（[`crate::core::tree::pointer_in_paint_border_box`]），不是旋转后 AABB 的菱形空角。
 /// SVG `bounding-box` 停在 AABB。Path fill/stroke / `clip-path` 逆 VS 仿射后测局部几何。
+#[cfg(test)]
 #[inline]
 pub(crate) fn element_self_pointer_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> bool {
     element_self_pointer_hit_with(
@@ -552,6 +553,7 @@ pub(crate) fn visual_xy(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
 ///
 /// Same formula as [`crate::core::tree::visual_paint_aabb`] so click / `on_hover`
 /// stay on the ink `:hover` already uses.
+#[cfg(test)]
 #[inline]
 pub(crate) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     crate::core::tree::visual_paint_aabb(el, scroll_acc)

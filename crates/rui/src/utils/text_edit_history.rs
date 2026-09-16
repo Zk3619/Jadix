@@ -15,6 +15,7 @@
 //!
 //! Without the feature the recording APIs are no-ops. Ctrl/Cmd+Z/Y are still consumed.
 
+#[cfg(feature = "text-undo")]
 use std::ops::Range;
 use std::time::Duration;
 
@@ -32,6 +33,7 @@ pub enum EditKind {
 }
 
 impl EditKind {
+    #[cfg(feature = "text-undo")]
     fn can_time_merge(self) -> bool {
         matches!(self, Self::Insert | Self::Delete | Self::Step)
     }
@@ -63,10 +65,13 @@ pub struct TextUndoConfig {
 const DEFAULT_MERGE: Duration = Duration::from_millis(800);
 const MIN_BYTES_IF_SET: usize = 64 * 1024;
 const MAX_ENTRIES_CAP: usize = 10_000;
-/// Single-edit `old+new` above this is a Marker, not a full delta (plan §9.2).
-const LARGE_REPLACE_HARD: usize = 16 * 1024 * 1024;
-/// When emitting a Marker, keep the smaller side if it fits (undo huge paste over a short field).
-const RETAIN_SIDE_MAX: usize = 1024 * 1024;
+#[cfg(feature = "text-undo")]
+mod undo_caps {
+    /// Single-edit `old+new` above this is a Marker, not a full delta (plan §9.2).
+    pub(super) const LARGE_REPLACE_HARD: usize = 16 * 1024 * 1024;
+    /// When emitting a Marker, keep the smaller side if it fits (undo huge paste over a short field).
+    pub(super) const RETAIN_SIDE_MAX: usize = 1024 * 1024;
+}
 
 impl TextUndoConfig {
     pub fn input_default() -> Self {
@@ -114,6 +119,7 @@ impl Default for TextUndoConfig {
     }
 }
 
+#[cfg(feature = "text-undo")]
 /// One replacement at the document coordinates that existed **when it happened**.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextChange {
@@ -122,12 +128,14 @@ pub struct TextChange {
     pub new_text: String,
 }
 
+#[cfg(feature = "text-undo")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EditPoint {
     pub caret: usize,
     pub selection: Option<(usize, usize)>,
 }
 
+#[cfg(feature = "text-undo")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UndoPayload {
     /// L1/L2: usually `len == 1`. Undo walks **reverse**, Redo **forward**.
@@ -142,12 +150,14 @@ pub enum UndoPayload {
     },
 }
 
+#[cfg(feature = "text-undo")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedSide {
     Old(String),
     New(String),
 }
 
+#[cfg(feature = "text-undo")]
 impl RetainedSide {
     fn len(&self) -> usize {
         match self {
@@ -156,6 +166,7 @@ impl RetainedSide {
     }
 }
 
+#[cfg(feature = "text-undo")]
 #[derive(Clone, Debug)]
 struct UndoGroup {
     payload: UndoPayload,
@@ -165,6 +176,7 @@ struct UndoGroup {
     at: std::time::Instant,
 }
 
+#[cfg(feature = "text-undo")]
 impl UndoGroup {
     fn payload_bytes(&self) -> usize {
         match &self.payload {
@@ -179,6 +191,7 @@ impl UndoGroup {
     }
 }
 
+#[cfg(feature = "text-undo")]
 fn hash_text(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
@@ -188,6 +201,7 @@ fn hash_text(s: &str) -> u64 {
     h
 }
 
+#[cfg(feature = "text-undo")]
 fn large_replace_hard() -> usize {
     #[cfg(test)]
     {
@@ -195,10 +209,11 @@ fn large_replace_hard() -> usize {
     }
     #[cfg(not(test))]
     {
-        LARGE_REPLACE_HARD
+        undo_caps::LARGE_REPLACE_HARD
     }
 }
 
+#[cfg(feature = "text-undo")]
 fn retain_side_max() -> usize {
     #[cfg(test)]
     {
@@ -206,16 +221,16 @@ fn retain_side_max() -> usize {
     }
     #[cfg(not(test))]
     {
-        RETAIN_SIDE_MAX
+        undo_caps::RETAIN_SIDE_MAX
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "text-undo"))]
 std::thread_local! {
     static TEST_LARGE_REPLACE_HARD: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(LARGE_REPLACE_HARD) };
+        const { std::cell::Cell::new(undo_caps::LARGE_REPLACE_HARD) };
     static TEST_RETAIN_SIDE_MAX: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(RETAIN_SIDE_MAX) };
+        const { std::cell::Cell::new(undo_caps::RETAIN_SIDE_MAX) };
 }
 
 /// Test-only caps so Marker / retain-side tests do not allocate 1–16 MiB.
@@ -234,6 +249,7 @@ pub fn with_test_replace_caps(hard: usize, retain: usize, f: impl FnOnce()) {
     });
 }
 
+#[cfg(feature = "text-undo")]
 /// Byte diff with UTF-8-safe prefix/suffix. `range` is on `before`.
 fn diff_change(before: &str, after: &str) -> Option<TextChange> {
     if before == after {
@@ -268,16 +284,19 @@ fn diff_change(before: &str, after: &str) -> Option<TextChange> {
     })
 }
 
+#[cfg(feature = "text-undo")]
 fn apply_forward(doc: &mut String, ch: &TextChange) {
     crate::utils::text_buffer::TextBuffer::replace(doc, ch.range.clone(), &ch.new_text);
 }
 
+#[cfg(feature = "text-undo")]
 fn apply_reverse(doc: &mut String, ch: &TextChange) {
     let start = ch.range.start.min(doc.len());
     let end = start.saturating_add(ch.new_text.len());
     crate::utils::text_buffer::TextBuffer::replace(doc, start..end, &ch.old_text);
 }
 
+#[cfg(feature = "text-undo")]
 fn try_merge_change(open: &mut TextChange, next: &TextChange, kind: EditKind) -> bool {
     match kind {
         EditKind::Insert => {
@@ -316,6 +335,7 @@ fn try_merge_change(open: &mut TextChange, next: &TextChange, kind: EditKind) ->
     }
 }
 
+#[cfg(feature = "text-undo")]
 fn payload_for_change(ch: TextChange) -> UndoPayload {
     let combined = ch.old_text.len().saturating_add(ch.new_text.len());
     if combined <= large_replace_hard() {
@@ -1345,7 +1365,7 @@ mod tests {
         assert!(last_payload_is_marker(id));
         assert_eq!(undo(id).unwrap().value, "hello");
         assert_eq!(undo(id).unwrap().value, "");
-        TEST_LARGE_REPLACE_HARD.with(|c| c.set(LARGE_REPLACE_HARD));
+        TEST_LARGE_REPLACE_HARD.with(|c| c.set(undo_caps::LARGE_REPLACE_HARD));
         reset(id);
     }
 
@@ -1369,7 +1389,7 @@ mod tests {
         assert_eq!(undo(id), None);
         assert_eq!(past_len(id), 2, "wall does not pop earlier groups");
         TEST_RETAIN_SIDE_MAX.with(|c| c.set(RETAIN_SIDE_MAX));
-        TEST_LARGE_REPLACE_HARD.with(|c| c.set(LARGE_REPLACE_HARD));
+        TEST_LARGE_REPLACE_HARD.with(|c| c.set(undo_caps::LARGE_REPLACE_HARD));
         reset(id);
     }
 }

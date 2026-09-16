@@ -47,6 +47,7 @@ pub(crate) fn is_color_dragging() -> bool {
     COLOR_DRAG.with(|d| d.borrow().is_some())
 }
 
+#[cfg(test)]
 pub(crate) fn tick_color_drag(x: f32, y: f32) -> bool {
     tick_color_drag_with_bounds(x, y, None)
 }

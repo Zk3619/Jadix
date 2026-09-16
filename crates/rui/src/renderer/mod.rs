@@ -295,6 +295,7 @@ pub(crate) fn aabb_of_centered_transform(rect: [f32; 4], m: &[f32; 6]) -> [f32; 
 
 /// CSS overflow discard after undoing the instance affine (`rounded_rect.wgsl` `in.p`,
 /// `textured_rect.wgsl` `affine_inv_linear`). `clip_*` stay in `rect_pos` space.
+#[cfg(test)]
 pub(crate) fn overflow_clip_contains_after_affine_inv(
     clip_pos: [f32; 2],
     clip_size: [f32; 2],

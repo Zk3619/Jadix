@@ -106,6 +106,7 @@ impl CullRects {
         self.strips().any(|r| !aabbs_disjoint(bounds, r))
     }
 
+    #[cfg(test)]
     pub(crate) fn count(self) -> usize {
         self.len as usize
     }
@@ -289,6 +290,7 @@ pub(crate) fn visible_instance_runs(
 }
 
 /// Keep text nodes whose paint box hits padded logical damage.
+#[cfg(test)]
 pub(crate) fn filter_text_nodes(
     nodes: &[TextLayoutInfo],
     damage_logical: [f32; 4],
@@ -443,6 +445,7 @@ pub(crate) fn page_stack_band_submit_text<'a>(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn page_stack_band_needs_glyphon(
     prev: &[TextLayoutInfo],
     curr: &[TextLayoutInfo],
@@ -1236,6 +1239,7 @@ fn owner_clip_for_glyph(
 
 /// Capture glyphs that `capture_text_renderer.render()` would stamp into `dirty`'s
 /// scissor even though they are not owned by that dirty node.
+#[cfg(test)]
 pub(crate) fn node_present_foreign_glyph_indices(
     dirty: &PaintDirty,
     page_text: &[TextLayoutInfo],
@@ -1582,6 +1586,39 @@ mod tests {
             kept_ms.is_empty(),
             "Y-overlapping rail caption must not follow the inner MessageScroller viewport"
         );
+    }
+
+    /// Nested Select accordion occupancy is the stamp. Overlay glyphon ignores the
+    /// wgpu scissor used for chrome, so labels below the clip survive as leftover ink.
+    #[test]
+    fn overlay_stamp_clips_select_labels_below_accordion() {
+        let mut hex = sample_text("HEX", 8.0);
+        hex.y = 8.0;
+        hex.width = 64.0;
+        hex.height = 32.0;
+        let mut rgb = sample_text("RGB", 8.0);
+        rgb.y = 80.0;
+        rgb.width = 64.0;
+        rgb.height = 32.0;
+        let stamp = [0.0, 0.0, 80.0, 40.0];
+        let kept = clip_text_nodes_to_rect(&[hex, rgb], stamp);
+        assert!(
+            kept.iter().any(|n| n.text == "HEX"),
+            "visible first row must stay, got {:?}",
+            kept.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            kept.iter().all(|n| n.text != "RGB"),
+            "labels below accordion must not enter overlay glyphon, got {:?}",
+            kept.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        for n in &kept {
+            let pb = text_paint_bounds(n);
+            assert!(
+                pb[1] + pb[3] <= stamp[1] + stamp[3] + 1.0,
+                "prepared overlay text must clip to the stamp, paint={pb:?} stamp={stamp:?}"
+            );
+        }
     }
 
     #[test]
