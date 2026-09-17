@@ -499,6 +499,23 @@ pub struct ResolvedFaceWeight {
     pub synthetic_bold: bool,
 }
 
+/// Coverage glyphon / Bake halo for [`ResolvedFaceWeight::synthetic_bold`] (logical px at scale 1).
+pub const SYNTHETIC_BOLD_OFFSET_X: f32 = 0.18;
+pub const SYNTHETIC_BOLD_OFFSET_Y: f32 = 0.0;
+pub const SYNTHETIC_BOLD_BLUR: f32 = 0.32;
+
+/// Same fake-bold stamp Coverage uses: extra 0-blur-ish shadow in text color.
+pub fn synthetic_bold_shadow(color: [u8; 4], scale: f32) -> ([u8; 4], [f32; 2], f32) {
+    (
+        color,
+        [
+            SYNTHETIC_BOLD_OFFSET_X * scale,
+            SYNTHETIC_BOLD_OFFSET_Y * scale,
+        ],
+        SYNTHETIC_BOLD_BLUR * scale,
+    )
+}
+
 #[derive(Clone, Debug)]
 struct FamilyWeightProfile {
     discrete: Vec<u16>,

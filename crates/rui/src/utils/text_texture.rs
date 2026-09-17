@@ -149,10 +149,21 @@ pub fn text_xform_pad_px(font_size_px: f32) -> f32 {
     (font_size_px * 0.22).max(2.0)
 }
 
+/// Tailwind default line box when the leaf did not set `leading-*` / `line-height`.
+pub(crate) fn bake_default_line_height_px(font_size_px: f32) -> f32 {
+    (font_size_px * crate::style::tailwind_default_leading_scale(font_size_px)).max(1.0)
+}
+
 /// Expand layout text box to a bake/draw size that fits line-height + ink pad.
 /// Returns `(bake_w, bake_h, pad)`.
 pub fn text_xform_bake_box(box_w: f32, box_h: f32, font_size_px: f32) -> (f32, f32, f32) {
-    text_xform_bake_box_ex(box_w, box_h, font_size_px, 0.0)
+    text_xform_bake_box_ex(
+        box_w,
+        box_h,
+        font_size_px,
+        0.0,
+        bake_default_line_height_px(font_size_px),
+    )
 }
 
 /// Extra pad so CSS `text-shadow` offset/blur is not clipped when baking under transform.
@@ -160,16 +171,17 @@ pub fn text_xform_shadow_pad(offset: [f32; 2], blur: f32) -> f32 {
     (blur.max(0.0) + offset[0].abs().max(offset[1].abs()) + 2.0).max(0.0)
 }
 
-/// Like [`text_xform_bake_box`] with additional uniform pad (e.g. text-shadow extent).
+/// Like [`text_xform_bake_box`] with additional uniform pad (e.g. text-shadow extent)
+/// and an explicit line box (must match Coverage `coverage_line_height`).
 pub fn text_xform_bake_box_ex(
     box_w: f32,
     box_h: f32,
     font_size_px: f32,
     extra_pad: f32,
+    line_height_px: f32,
 ) -> (f32, f32, f32) {
     let pad = text_xform_pad_px(font_size_px) + extra_pad.max(0.0);
-    let leading = font_size_px * crate::style::tailwind_default_leading_scale(font_size_px);
-    let h = box_h.max(leading) + pad * 2.0;
+    let h = box_h.max(line_height_px.max(1.0)) + pad * 2.0;
     let w = box_w.max(1.0) + pad * 2.0;
     (w, h, pad)
 }
@@ -210,7 +222,45 @@ pub fn ensure_text_xform_texture(
         as_sdf,
         None,
         glyph_dy,
+        bake_default_line_height_px(font_size_px),
     )
+}
+
+/// Coverage `font-synthesis: weight` halo, or `None` for lucide / true Medium / synth off.
+fn resolve_synthetic_bold_bake_shadow(
+    font_weight: u16,
+    color: [u8; 4],
+    scale: f32,
+    font_family: Option<&str>,
+) -> Option<([u8; 4], [f32; 2], f32)> {
+    if font_family == Some("lucide") {
+        return None;
+    }
+    crate::text::measure::with_layout_font_system(|fs| {
+        let family = match font_family {
+            Some(f) => crate::utils::font::resolve_family(fs.db(), f),
+            None => crate::renderer::text_hit::best_font_family(fs),
+        };
+        let resolved = crate::utils::font::resolve_face_weight(fs.db(), family, font_weight);
+        resolved
+            .synthetic_bold
+            .then(|| crate::utils::font::synthetic_bold_shadow(color, scale))
+    })
+}
+
+/// User `text-shadow` wins; otherwise the Coverage fake-bold halo (scale = paint/text scale).
+pub(crate) fn text_xform_effective_shadow(
+    user_shadow: Option<([u8; 4], [f32; 2], f32)>,
+    font_weight: u16,
+    color: [u8; 4],
+    text_scale: f32,
+    is_icon: bool,
+    font_family: Option<&str>,
+) -> Option<([u8; 4], [f32; 2], f32)> {
+    if user_shadow.is_some() || is_icon {
+        return user_shadow;
+    }
+    resolve_synthetic_bold_bake_shadow(font_weight, color, text_scale, font_family)
 }
 
 /// Like [`ensure_text_xform_texture`] with optional CSS `text-shadow` baked under the glyphs
@@ -230,7 +280,9 @@ pub fn ensure_text_xform_texture_with_shadow(
     as_sdf: bool,
     shadow: Option<([u8; 4], [f32; 2], f32)>,
     glyph_dy: f32,
+    line_height_px: f32,
 ) -> Option<(String, f32)> {
+    let shadow = text_xform_effective_shadow(shadow, font_weight, color, 1.0, false, None);
     if text.is_empty()
         || layout_w < 1.0
         || layout_h < 1.0
@@ -268,6 +320,8 @@ pub fn ensure_text_xform_texture_with_shadow(
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
     glyph_dy.to_bits().hash(&mut hasher);
+    let line_h = line_height_px.max(1.0);
+    ((line_h * 100.0).round() as i32).hash(&mut hasher);
     let wants_emoji_color = bake_contains_emoji(text);
     // Color emoji must stay RGBA Bake — MSDF collapses color glyphs to a tinted wireframe.
     let as_sdf = as_sdf && !wants_emoji_color;
@@ -281,8 +335,8 @@ pub fn ensure_text_xform_texture_with_shadow(
     } else {
         0u8.hash(&mut hasher);
     }
-    // Bump when bake / MSDF / emoji / shadow / layout-inset shaping semantics change.
-    10u8.hash(&mut hasher);
+    // Bump when bake / MSDF / emoji / shadow / synth-bold / oversample stem / line-height change.
+    14u8.hash(&mut hasher);
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -308,7 +362,9 @@ pub fn ensure_text_xform_texture_with_shadow(
         dpr,
         shadow,
         glyph_dy,
+        line_h,
     )?;
+    restore_bake_coverage_after_oversample(&mut rgba, w, h, dpr);
     // Reject empty bitmaps (font/shape failure); caller may fall back to Coverage glyphon.
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return None;
@@ -321,10 +377,9 @@ pub fn ensure_text_xform_texture_with_shadow(
     Some((key, bake_w))
 }
 
-/// Layout-sized shaping buffer height (≥ one line of leading).
-fn bake_shape_h(layout_h: f32, font_size_px: f32) -> f32 {
-    let leading = font_size_px * crate::style::tailwind_default_leading_scale(font_size_px);
-    layout_h.max(leading)
+/// Layout-sized shaping buffer height (≥ one line of the Coverage line box).
+fn bake_shape_h(layout_h: f32, line_height_px: f32) -> f32 {
+    layout_h.max(line_height_px.max(1.0))
 }
 
 /// Rich-inline spans (chip/mention/color) → cached bake texture for CSS transform.
@@ -342,6 +397,7 @@ pub fn ensure_text_xform_texture_spans(
     dpr: f32,
     as_sdf: bool,
     glyph_dy: f32,
+    line_height_px: f32,
 ) -> Option<(String, f32)> {
     if spans.is_empty()
         || layout_w < 1.0
@@ -391,11 +447,13 @@ pub fn ensure_text_xform_texture_spans(
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
     glyph_dy.to_bits().hash(&mut hasher);
+    let line_h = line_height_px.max(1.0);
+    ((line_h * 100.0).round() as i32).hash(&mut hasher);
     let wants_emoji_color = spans.iter().any(|s| bake_contains_emoji(&s.text));
     let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
     wants_emoji_color.hash(&mut hasher);
-    9u8.hash(&mut hasher); // rich-span + 3-channel MSDF schema
+    11u8.hash(&mut hasher); // rich-span + oversample stem + Coverage line-height
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -420,7 +478,9 @@ pub fn ensure_text_xform_texture_spans(
         align,
         dpr,
         glyph_dy,
+        line_h,
     )?;
+    restore_bake_coverage_after_oversample(&mut rgba, w, h, dpr);
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return None;
     }
@@ -672,22 +732,21 @@ pub fn flush_text_xform_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool 
 
 /// Vertical glyph offset inside a Bake texture — mirrors Coverage `dy` in `prepare_text.rs`.
 /// Uses the **layout** text box height (`layout_box_h`), not the padded bake size.
+/// `line_height_px` must be the same Coverage line box passed to rasterize.
 pub fn bake_glyph_layout_dy(
     layout_box_h: f32,
-    font_size_px: f32,
+    line_height_px: f32,
     line_count: usize,
     nowrap: bool,
     is_input_text: bool,
 ) -> f32 {
-    if is_input_text || !nowrap || line_count != 1 {
-        return 0.0;
-    }
-    let line_height = font_size_px * crate::style::tailwind_default_leading_scale(font_size_px);
-    if layout_box_h > line_height + 1.0 {
-        (layout_box_h - line_height) * 0.5
-    } else {
-        0.0
-    }
+    crate::renderer::prepare_text::coverage_nowrap_glyph_dy(
+        is_input_text,
+        nowrap,
+        line_count,
+        layout_box_h,
+        line_height_px.max(1.0),
+    )
 }
 
 /// Screen rect for a Bake/Msdf quad: expanded for ink pad, anchored on the layout text box
@@ -728,19 +787,24 @@ fn rasterize_text_rgba(
     dpr: f32,
     shadow: Option<([u8; 4], [f32; 2], f32)>,
     glyph_dy: f32,
+    line_height_px: f32,
 ) -> Option<(u32, u32, Vec<u8>)> {
     crate::text::measure::with_layout_font_system(|fs| {
         crate::renderer::font_loader::ensure_coverage_for_text(fs, text);
         let size = (font_size_px * dpr).max(1.0);
-        let lh = size * crate::style::tailwind_default_leading_scale(font_size_px);
+        let line_h = line_height_px.max(1.0);
+        let lh = (line_h * dpr).max(1.0);
         // Shape in the **layout** box (Coverage parity); blit into padded bake RT.
-        let shape_h = bake_shape_h(layout_h, font_size_px);
+        let shape_h = bake_shape_h(layout_h, line_h);
         let pw = (layout_w * dpr).ceil().max(1.0);
         let ph = (shape_h * dpr).ceil().max(lh).max(1.0);
         let tw = (bake_w * dpr).ceil().max(1.0).round().max(1.0) as u32;
         let th = (bake_h * dpr).ceil().max(1.0).round().max(1.0) as u32;
-        let pad_x_px = (pad * dpr).round() as i32;
-        let pad_y_px = (pad * dpr).round() as i32;
+        // Integer-center the shape in the RT so ceil(bake*dpr) leftover is split,
+        // not dumped on the bottom (that read as ~1px-down vs Coverage).
+        let _ = pad;
+        let pad_x_px = ((tw as f32 - pw) * 0.5).round() as i32;
+        let pad_y_px = ((th as f32 - ph) * 0.5).round() as i32;
         let v_dy_px = (glyph_dy * dpr).round() as i32;
         let origin_x = pad_x_px;
         let origin_y = pad_y_px + v_dy_px;
@@ -796,6 +860,7 @@ fn rasterize_text_rgba(
                     (sb * dpr).max(0.0),
                     origin_x,
                     origin_y,
+                    dpr,
                 );
             }
         }
@@ -880,6 +945,24 @@ fn rasterize_text_rgba(
     })
 }
 
+/// 3× Bake is hinted at a large size then bilinear-minified; 14px glyphon Coverage
+/// (and 1× bake) looks heavier. Lift mid-coverage so the ghost matches the source.
+fn restore_bake_coverage_after_oversample(rgba: &mut [u8], width: u32, height: u32, dpr: f32) {
+    if dpr <= 1.2 || width < 2 || height < 2 {
+        return;
+    }
+    // 3× box-down of font-medium CJK was ~91% of 1× ink. exp ~0.89 restores ~1.0.
+    let exp = (1.0 - 0.055 * (dpr - 1.0)).clamp(0.84, 0.96);
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3];
+        if a == 0 || a == 255 {
+            continue;
+        }
+        let boosted = (a as f32 / 255.0).powf(exp) * 255.0;
+        px[3] = boosted.round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 /// Soft/hard text-shadow stamp into a Bake RT (under subsequent glyph blits).
 fn blit_text_shadow_into_bake(
     rgba: &mut [u8],
@@ -894,6 +977,7 @@ fn blit_text_shadow_into_bake(
     shadow_blur: f32,
     origin_x: i32,
     origin_y: i32,
+    dpr: f32,
 ) {
     struct GlyphEntry {
         px: i32,
@@ -930,7 +1014,10 @@ fn blit_text_shadow_into_bake(
 
     let alpha = shadow_color[3];
     const SHARP_BLUR_EPS: f32 = 0.75;
-    let draw_blur = shadow_blur > SHARP_BLUR_EPS && alpha > 6;
+    // Threshold is logical px (Coverage `TEXTURED_SHADOW_MIN_BLUR`). Incoming
+    // `shadow_blur` is already * dpr; 0.32 synth at 3× is 0.96 bake-px and must
+    // stay a sharp duplicate, not a soft glow.
+    let draw_blur = shadow_blur > SHARP_BLUR_EPS * dpr.max(1.0) && alpha > 6;
     let [sr, sg, sb] = [shadow_color[0], shadow_color[1], shadow_color[2]];
 
     let mut stamp = |ox: f32, oy: f32, sample_alpha: u8| {
@@ -1185,6 +1272,7 @@ fn rasterize_rich_text_rgba(
     align: glyphon::cosmic_text::Align,
     dpr: f32,
     glyph_dy: f32,
+    line_height_px: f32,
 ) -> Option<(u32, u32, Vec<u8>)> {
     use crate::style::TextSpanKind;
     crate::text::measure::with_layout_font_system(|fs| {
@@ -1192,14 +1280,16 @@ fn rasterize_rich_text_rgba(
             crate::renderer::font_loader::ensure_coverage_for_text(fs, &span.text);
         }
         let size = (font_size_px * dpr).max(1.0);
-        let lh = size * crate::style::tailwind_default_leading_scale(font_size_px);
-        let shape_h = bake_shape_h(layout_h, font_size_px);
+        let line_h = line_height_px.max(1.0);
+        let lh = (line_h * dpr).max(1.0);
+        let shape_h = bake_shape_h(layout_h, line_h);
         let pw = (layout_w * dpr).ceil().max(1.0);
         let ph = (shape_h * dpr).ceil().max(lh).max(1.0);
         let tw = (bake_w * dpr).ceil().max(1.0).round().max(1.0) as u32;
         let th = (bake_h * dpr).ceil().max(1.0).round().max(1.0) as u32;
-        let pad_x_px = (pad * dpr).round() as i32;
-        let pad_y_px = (pad * dpr).round() as i32;
+        let _ = pad;
+        let pad_x_px = ((tw as f32 - pw) * 0.5).round() as i32;
+        let pad_y_px = ((th as f32 - ph) * 0.5).round() as i32;
         let v_dy_px = (glyph_dy * dpr).round() as i32;
         let origin_x = pad_x_px;
         let origin_y = pad_y_px + v_dy_px;
@@ -1591,28 +1681,41 @@ mod tests {
     #[test]
     fn bake_glyph_layout_dy_only_when_layout_taller_than_line() {
         let font = 14.0_f32;
-        let line_h = font * crate::style::tailwind_default_leading_scale(font);
+        let line_h = super::bake_default_line_height_px(font);
         assert_eq!(
-            super::bake_glyph_layout_dy(line_h, font, 1, true, false),
+            super::bake_glyph_layout_dy(line_h, line_h, 1, true, false),
             0.0,
             "intrinsic-height leaf must not get vertical dy"
         );
         let tall = line_h + 12.0;
-        let dy = super::bake_glyph_layout_dy(tall, font, 1, true, false);
+        let dy = super::bake_glyph_layout_dy(tall, line_h, 1, true, false);
         assert!((dy - (tall - line_h) * 0.5).abs() < 0.01);
-        assert_eq!(super::bake_glyph_layout_dy(tall, font, 2, true, false), 0.0);
         assert_eq!(
-            super::bake_glyph_layout_dy(tall, font, 1, false, false),
+            super::bake_glyph_layout_dy(tall, line_h, 2, true, false),
             0.0
+        );
+        assert_eq!(
+            super::bake_glyph_layout_dy(tall, line_h, 1, false, false),
+            0.0
+        );
+        // Label `leading-none`: 1em line box in a slightly taller leaf → ~1px dy,
+        // not the old Tailwind-default (~20px) which skipped dy and sat low.
+        let none = font;
+        let chip = font + 2.0;
+        let dy_none = super::bake_glyph_layout_dy(chip, none, 1, true, false);
+        assert!(
+            (dy_none - 1.0).abs() < 0.01,
+            "leading-none in a 16px leaf must dy by 1px, got {dy_none}"
         );
     }
 
     #[test]
     fn bake_glyph_layout_dy_centers_single_line_in_tall_layout_box() {
         let font = 14.0_f32;
+        let line_h = super::bake_default_line_height_px(font);
         let layout_w = 80.0_f32;
         let layout_h = 28.0_f32;
-        let dy = super::bake_glyph_layout_dy(layout_h, font, 1, true, false);
+        let dy = super::bake_glyph_layout_dy(layout_h, line_h, 1, true, false);
         assert!(
             dy > 0.0,
             "tall padded layout box should get Coverage-matching dy"
@@ -1632,6 +1735,7 @@ mod tests {
             2.0,
             None,
             dy,
+            line_h,
         ) else {
             return;
         };
@@ -1676,6 +1780,7 @@ mod tests {
             dpr,
             None,
             0.0,
+            super::bake_default_line_height_px(font),
         ) else {
             return;
         };
@@ -1740,6 +1845,7 @@ mod tests {
             2.0,
             None,
             0.0,
+            super::bake_default_line_height_px(font),
         )
         .expect("rasterize");
         let border = 1usize;
@@ -1761,6 +1867,59 @@ mod tests {
         }
         assert_eq!(top_ink, 0, "top pad row must not contain glyph ink");
         assert_eq!(bot_ink, 0, "bottom pad row must not contain glyph ink");
+    }
+
+    #[test]
+    fn bake_leading_none_ink_matches_coverage_not_default_leading() {
+        // Gallery Label is `leading-none` (1em). Bake used to shape with Tailwind
+        // text-sm leading (~1.43em) and grow the quad — cosmic half-leading plus
+        // pad-ceil leftover read as ~1px down vs Coverage.
+        let font = 14.0_f32;
+        let layout_w = 96.0_f32;
+        let layout_h = font;
+        let none = font;
+        let def = super::bake_default_line_height_px(font);
+        assert!(
+            def - none > 4.0,
+            "text-sm default leading must be distinctly taller than 1em"
+        );
+
+        let (_, bh_none, _) = super::text_xform_bake_box_ex(layout_w, layout_h, font, 0.0, none);
+        let (_, bh_def, _) = super::text_xform_bake_box_ex(layout_w, layout_h, font, 0.0, def);
+        assert!(
+            bh_none + 0.5 < bh_def,
+            "leading-none bake box must be shorter than text-sm leading ({bh_none} vs {bh_def})"
+        );
+
+        // Metrics must actually change Cosmic line_y (same RT, origin from `pad`
+        // not integer-centered shape — otherwise extra shape_h cancels half-leading).
+        let dpr = crate::renderer::BAKE_OVERSAMPLE;
+        let (bw, bh, pad) = super::text_xform_bake_box_ex(layout_w, layout_h, font, 0.0, none);
+        let line_y = |line_h: f32| -> Option<f32> {
+            crate::text::measure::with_layout_font_system(|fs| {
+                crate::renderer::font_loader::ensure_coverage_for_text(fs, "拖到四角");
+                let size = (font * dpr).max(1.0);
+                let lh = (line_h * dpr).max(1.0);
+                let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
+                buffer.set_size(Some((layout_w * dpr).ceil().max(1.0)), None);
+                let family = crate::renderer::text_hit::best_font_family(fs);
+                let attrs = glyphon::Attrs::new().family(family);
+                buffer.set_text("拖到四角", &attrs, glyphon::Shaping::Advanced, None);
+                buffer.shape_until_scroll(fs, false);
+                buffer.layout_runs().next().map(|r| r.line_y / dpr)
+            })
+        };
+        let Some(y_none) = line_y(none) else {
+            return;
+        };
+        let Some(y_def) = line_y(def) else {
+            return;
+        };
+        assert!(
+            y_def > y_none + 0.35,
+            "taller Cosmic line box must half-lead downward (none={y_none:.2} def={y_def:.2})"
+        );
+        let _ = (bw, bh, pad);
     }
 
     #[test]
@@ -1838,5 +1997,154 @@ mod tests {
         assert!(is_text_xform_texture_key(TEXT_MSDF_TEX_PREFIX));
         assert!(is_text_xform_texture_key("rui_text_xform_v3:deadbeef"));
         assert!(!is_text_xform_texture_key("rui_path:x"));
+    }
+
+    fn bake_rgba(text: &str, weight: u16, dpr: f32) -> Option<(u32, u32, Vec<u8>)> {
+        let font = 14.0_f32;
+        let layout_w = 96.0_f32;
+        let layout_h = 20.0_f32;
+        let (bw, bh, pad) = text_xform_bake_box(layout_w, layout_h, font);
+        let (key, _) = ensure_text_xform_texture(
+            text,
+            font,
+            weight,
+            [20, 20, 20, 255],
+            layout_w,
+            layout_h,
+            bw,
+            bh,
+            pad,
+            glyphon::cosmic_text::Align::Left,
+            dpr,
+            false,
+            0.0,
+        )?;
+        cache_peek(&key)
+    }
+
+    fn bake_alpha_mass(text: &str, weight: u16) -> Option<u32> {
+        bake_rgba(text, weight, 2.0)
+            .map(|(_, _, rgba)| rgba.chunks_exact(4).map(|p| p[3] as u32).sum())
+    }
+
+    fn bake_fringe_ratio(rgba: &[u8]) -> f32 {
+        let mut solid = 0u32;
+        let mut fringe = 0u32;
+        for px in rgba.chunks_exact(4) {
+            let a = px[3];
+            if a > 160 {
+                solid += 1;
+            } else if a > 12 {
+                fringe += 1;
+            }
+        }
+        let den = (solid + fringe).max(1) as f32;
+        fringe as f32 / den
+    }
+
+    #[test]
+    fn bake_font_medium_applies_synthetic_bold_when_face_missing() {
+        // Gallery Label is font-medium (500). Coverage thickens Regular with a
+        // 0.18/0.32 halo; Bake (rotate / DragOverlay 替身) must do the same or
+        // the ghost looks thinner than the source.
+        let _serial = cache_test_serial();
+        cache_clear();
+        let needs_synth = crate::text::measure::with_layout_font_system(|fs| {
+            let family = crate::renderer::text_hit::best_font_family(fs);
+            crate::utils::font::resolve_face_weight(fs.db(), family, 500).synthetic_bold
+        });
+        if !needs_synth {
+            return;
+        }
+        let mass400 = bake_alpha_mass("拖到四角", 400).expect("regular bake");
+        let mass500 = bake_alpha_mass("拖到四角", 500).expect("medium bake");
+        assert!(
+            mass500 > mass400 + mass400 / 80,
+            "Bake font-medium must apply font-synthesis:weight (400={mass400} 500={mass500})"
+        );
+    }
+
+    #[test]
+    fn bake_synthetic_bold_stays_sharp_at_oversample() {
+        // Coverage fake-bold is a 0.18px duplicate TextArea (blur 0.32 < 0.75).
+        // Bake stamps in supersampled px; 0.32 * BAKE_OVERSAMPLE (3) = 0.96 used to
+        // trip the 0.75 bake-pixel blur threshold and become a soft glow — thinner
+        // than the source after bilinear minify (DragOverlay rotate ghost).
+        let _serial = cache_test_serial();
+        cache_clear();
+        let needs_synth = crate::text::measure::with_layout_font_system(|fs| {
+            let family = crate::renderer::text_hit::best_font_family(fs);
+            crate::utils::font::resolve_face_weight(fs.db(), family, 500).synthetic_bold
+        });
+        if !needs_synth {
+            return;
+        }
+        let (_, _, rgba1) = bake_rgba("拖到四角", 500, 1.0).expect("dpr1");
+        let (_, _, rgba3) =
+            bake_rgba("拖到四角", 500, crate::renderer::BAKE_OVERSAMPLE).expect("dpr3");
+        let r1 = bake_fringe_ratio(&rgba1);
+        let r3 = bake_fringe_ratio(&rgba3);
+        assert!(
+            r3 <= r1 + 0.06,
+            "3× Bake synth must stay a sharp duplicate like Coverage, not a soft glow (fringe dpr1={r1:.3} dpr3={r3:.3})"
+        );
+    }
+
+    fn box_downscale(rgba: &[u8], w: u32, h: u32, factor: u32) -> (u32, u32, Vec<u8>) {
+        let f = factor.max(1);
+        let nw = (w / f).max(1);
+        let nh = (h / f).max(1);
+        let mut out = vec![0u8; (nw * nh * 4) as usize];
+        let f2 = (f * f) as u32;
+        for y in 0..nh {
+            for x in 0..nw {
+                let mut a = 0u32;
+                let mut r = 0u32;
+                let mut g = 0u32;
+                let mut b = 0u32;
+                for dy in 0..f {
+                    for dx in 0..f {
+                        let sx = x * f + dx;
+                        let sy = y * f + dy;
+                        if sx >= w || sy >= h {
+                            continue;
+                        }
+                        let i = ((sy * w + sx) * 4) as usize;
+                        r += rgba[i] as u32;
+                        g += rgba[i + 1] as u32;
+                        b += rgba[i + 2] as u32;
+                        a += rgba[i + 3] as u32;
+                    }
+                }
+                let o = ((y * nw + x) * 4) as usize;
+                out[o] = (r / f2) as u8;
+                out[o + 1] = (g / f2) as u8;
+                out[o + 2] = (b / f2) as u8;
+                out[o + 3] = (a / f2) as u8;
+            }
+        }
+        (nw, nh, out)
+    }
+
+    #[test]
+    fn bake_oversample_minified_keeps_label_weight() {
+        // DragOverlay rotate bakes at 3× then bilinear-minifies. Small-size glyphon
+        // Coverage (本体) is hinted at 14px and looks heavier; the ghost used to
+        // read as Regular. Minified 3× ink must stay close to 1× bake of the same label.
+        let _serial = cache_test_serial();
+        cache_clear();
+        let (_, _, r1) = bake_rgba("拖到四角", 500, 1.0).expect("dpr1");
+        let (w3, h3, r3) =
+            bake_rgba("拖到四角", 500, crate::renderer::BAKE_OVERSAMPLE).expect("dpr3");
+        let factor = crate::renderer::BAKE_OVERSAMPLE.round() as u32;
+        let (_, _, down) = box_downscale(&r3, w3, h3, factor);
+        let ink = |rgba: &[u8]| rgba.chunks_exact(4).map(|p| p[3] as u32).sum::<u32>() as f32;
+        let m1 = ink(&r1);
+        let md = ink(&down);
+        assert!(
+            md >= m1 * 0.95 && md <= m1 * 1.08,
+            "3× Bake minified must match 1× (Coverage-like) weight: 1x={m1:.0} down={md:.0} ratio={:.3}",
+            md / m1.max(1.0)
+        );
     }
 }

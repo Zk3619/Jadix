@@ -3139,10 +3139,12 @@ pub fn prepare_text_frame_at(
         // Reuses the existing 0-blur/soft shadow rasterizer; skipped if the node already
         // specified a text-shadow.
         if resolved_face.synthetic_bold && !is_icon && !user_text_shadow {
-            shadow_col = Some(st.color_resolved());
-            sdx = 0.18 * ui_scale;
-            sdy = 0.0;
-            sblur = 0.32 * ui_scale;
+            let (c, off, blur) =
+                crate::utils::font::synthetic_bold_shadow(st.color_resolved(), ui_scale);
+            shadow_col = Some(c);
+            sdx = off[0];
+            sdy = off[1];
+            sblur = blur;
         }
         let has_shadow = text_shadow_active(shadow_col, [sdx, sdy], sblur);
 
