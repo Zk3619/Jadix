@@ -32,11 +32,16 @@ impl RgbaImage {
 pub struct OffscreenGpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub adapter_info: wgpu::AdapterInfo,
 }
 
 impl OffscreenGpu {
     pub fn new() -> Option<Self> {
-        let instance = super::wgpu_compat::instance(wgpu::Backends::all());
+        Self::with_backends(wgpu::Backends::all())
+    }
+
+    pub fn with_backends(backends: wgpu::Backends) -> Option<Self> {
+        let instance = super::wgpu_compat::instance(backends);
         let adapter = crate::utils::block_on::block_on(instance.request_adapter(
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -56,7 +61,11 @@ impl OffscreenGpu {
         ))
         .ok()?;
         super::wgpu_compat::install_device_error_handlers(&device);
-        Some(Self { device, queue })
+        Some(Self {
+            device,
+            queue,
+            adapter_info: adapter.get_info(),
+        })
     }
 
     /// Clear an offscreen texture to `clear` and read back RGBA8 bytes.

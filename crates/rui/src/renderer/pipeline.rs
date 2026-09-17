@@ -97,6 +97,14 @@ impl InstanceInput {
     }
 
     pub fn with_clip(mut self, clip: Option<[f32; 4]>) -> Self {
+        // Rotated instances test overflow in world space via `clip_poly`
+        // (`frag_px`). Local `clip_pos` vs `in.p` would treat an unrotated
+        // ancestor AABB as a local box and leak rotated corners / chop bake.
+        let clip = if crate::style::mat2d_is_axis_aligned(&self.transform) {
+            clip
+        } else {
+            None
+        };
         match clip {
             Some([x, y, w, h]) if w > 0.0 && h > 0.0 => {
                 self.clip_pos = [x, y];

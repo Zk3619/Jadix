@@ -229,6 +229,9 @@ pub(super) struct AppState {
     pub(super) composition_swapchain: bool,
     /// Creation chrome; re-applied after surface configure (Windows DWM punch-through).
     chrome: super::window_chrome::WindowOptions,
+    /// `backdrop_blur.full` still holds last local frost. Skip recapture when
+    /// PartialLoad damage misses the host (gallery hover on another card).
+    local_backdrop_valid: bool,
 }
 
 /// `queue.write_buffer` is executed before render pass during submit; the same buffer is written to offset 0 multiple times.
@@ -759,9 +762,14 @@ fn capture_page_stack_local_backdrop(
     text_renderer: &crate::renderer::RuiTextRenderer,
     page_stack_band_text_renderers: &[crate::renderer::RuiTextRenderer],
     compute: Option<&mut crate::renderer::ComputePipelines>,
+    instances: &[InstanceInput],
+    capture_region: Option<(u32, u32, u32, u32)>,
 ) {
     let dummy = pipeline.dummy_backdrop();
     backdrop.ensure_size(device, surface_w, surface_h, surface_format);
+    let capture_cull = capture_region.map(|sc| {
+        super::draw_cull::CullRects::one([sc.0 as f32, sc.1 as f32, sc.2 as f32, sc.3 as f32])
+    });
 
     // Own encoder + submit, same as `effect_pass::render_capture`. Prefix glyphon and the
     // later surface pass share vertex buffers / atlas; recording both into the frame encoder
@@ -789,6 +797,9 @@ fn capture_page_stack_local_backdrop(
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some((x, y, w, h)) = capture_region {
+            scene_pass.set_scissor_rect(x, y, w, h);
+        }
 
         // `band_i == 0`: only intra-band SDF prefix exists (no prior paint band).
         if band_i == 0 {
@@ -805,6 +816,8 @@ fn capture_page_stack_local_backdrop(
                 scaled_input_chrome,
                 device,
                 dummy,
+                instances,
+                capture_cull,
             );
         }
         for (j, prev) in page_stack_band_ranges.iter().enumerate().take(band_i) {
@@ -825,8 +838,8 @@ fn capture_page_stack_local_backdrop(
                 page_stack_band_shadows,
                 shadow_tex_cache,
                 dummy,
-                &[],
-                None,
+                instances,
+                capture_cull,
             );
             if prev.text.0 < prev.text.1 {
                 if j == 0 {
@@ -838,7 +851,14 @@ fn capture_page_stack_local_backdrop(
         }
     }
 
-    backdrop.blur(device, queue, &mut cap_encoder, radius_px, compute);
+    backdrop.blur_with_region(
+        device,
+        queue,
+        &mut cap_encoder,
+        radius_px,
+        compute,
+        capture_region,
+    );
     queue.submit(std::iter::once(cap_encoder.finish()));
 }
 
@@ -855,6 +875,8 @@ fn draw_page_stack_prefix_to_pass<'pass>(
     scaled_input_chrome: &'pass [InstanceInput],
     device: &'pass wgpu::Device,
     backdrop: &'pass wgpu::BindGroup,
+    instances: &[InstanceInput],
+    cull: Option<super::draw_cull::CullRects>,
 ) {
     if band.paint_ops.0 > 0 {
         draw_paint_ops(
@@ -869,15 +891,15 @@ fn draw_page_stack_prefix_to_pass<'pass>(
             image_textures,
             scaled_tex,
             backdrop,
-            &[],
-            None,
+            instances,
+            cull,
         );
     } else if band.instance.0 > 0 {
         pipeline.bind_sdf(pass, true, backdrop);
         pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, instance_buffer.slice(..));
         pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..pipeline.num_indices, 0, 0..band.instance.0 as u32);
+        draw_instance_range(pass, pipeline, instances, 0, band.instance.0 as u32, cull);
         if band.textured.0 > 0 {
             draw_packed_textured_runs(
                 pass,
@@ -887,22 +909,24 @@ fn draw_page_stack_prefix_to_pass<'pass>(
                 scaled_tex,
                 0,
                 band.textured.0,
-                None,
+                cull,
             );
         }
     }
     if band.chrome.0 > 0 {
         pipeline.bind_sdf(pass, false, backdrop);
         pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
-        let chrome_slice = &scaled_input_chrome[0..band.chrome.0];
-        let chrome_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Page Stack Prefix Chrome Buffer"),
-            contents: bytemuck::cast_slice(chrome_slice),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..pipeline.num_indices, 0, 0..chrome_slice.len() as u32);
+        let chrome_slice = instances_for_upload(&scaled_input_chrome[0..band.chrome.0], cull);
+        if !chrome_slice.is_empty() {
+            let chrome_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Page Stack Prefix Chrome Buffer"),
+                contents: bytemuck::cast_slice(chrome_slice.as_ref()),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+            pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..pipeline.num_indices, 0, 0..chrome_slice.len() as u32);
+        }
     }
 }
 
@@ -950,9 +974,7 @@ fn page_stack_band_backdrop<'a>(
 /// Physical scissor for local `backdrop-filter` capture: the host overflow clip of
 /// blur instances in `band`. `instances` must already be in framebuffer pixels
 /// (the layout buffer is `take`n into `scaled_instances` before capture).
-/// Kept for regression tests; the capture pass itself uses a full-surface scissor
-/// so glyphon prefix glyphs are not dropped.
-#[cfg(test)]
+/// Expanded by the blur kernel so edge taps do not sample empty texels.
 fn local_backdrop_host_scissor_physical(
     instances: &[InstanceInput],
     band: &crate::layout::layout_tree::OverlayBandRange,
@@ -1008,6 +1030,68 @@ fn local_backdrop_host_scissor_physical(
         return None;
     }
     Some((x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)))
+}
+
+fn local_backdrop_kernel_pad_px(radius_px: f32) -> u32 {
+    (radius_px * 3.0).ceil() as u32 + 2
+}
+
+fn expand_physical_scissor(
+    sc: (u32, u32, u32, u32),
+    pad: u32,
+    surface_w: u32,
+    surface_h: u32,
+) -> (u32, u32, u32, u32) {
+    let x0 = sc.0.saturating_sub(pad);
+    let y0 = sc.1.saturating_sub(pad);
+    let x1 = (sc.0.saturating_add(sc.2).saturating_add(pad)).min(surface_w);
+    let y1 = (sc.1.saturating_add(sc.3).saturating_add(pad)).min(surface_h);
+    if x1 <= x0 || y1 <= y0 {
+        sc
+    } else {
+        (x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+fn physical_scissor_aabb(sc: (u32, u32, u32, u32)) -> [f32; 4] {
+    [sc.0 as f32, sc.1 as f32, sc.2 as f32, sc.3 as f32]
+}
+
+fn logical_rect_hits_physical_scissor(
+    damage_logical: [f32; 4],
+    ui_scale: f32,
+    host: (u32, u32, u32, u32),
+) -> bool {
+    let s = ui_scale.max(0.0);
+    let phys = [
+        damage_logical[0] * s,
+        damage_logical[1] * s,
+        damage_logical[2] * s,
+        damage_logical[3] * s,
+    ];
+    !crate::renderer::aabbs_disjoint(phys, physical_scissor_aabb(host))
+}
+
+/// Recapture when the pixels *behind* the local scrim may have changed.
+/// Hover / overlay ticks elsewhere keep last frame's frost.
+fn local_backdrop_must_recapture(
+    has_valid_blur: bool,
+    use_partial_damage: bool,
+    scroll_source_moved: bool,
+    overlay_restore_clear: bool,
+    host: Option<(u32, u32, u32, u32)>,
+    dirty_logical: &[[f32; 4]],
+    ui_scale: f32,
+) -> bool {
+    if !has_valid_blur || !use_partial_damage || scroll_source_moved || overlay_restore_clear {
+        return true;
+    }
+    let Some(host) = host else {
+        return true;
+    };
+    dirty_logical
+        .iter()
+        .any(|d| logical_rect_hits_physical_scissor(*d, ui_scale, host))
 }
 
 #[cfg(test)]
@@ -1066,6 +1150,61 @@ mod local_backdrop_capture_tests {
         let band = band_instances(0, 1);
         let sc = local_backdrop_host_scissor_physical(&[inst], &band, 800, 600).expect("scissor");
         assert_eq!(sc, (100, 200, 220, 140));
+    }
+
+    #[test]
+    fn kernel_pad_covers_three_sigma() {
+        assert_eq!(local_backdrop_kernel_pad_px(2.0), 8);
+        assert_eq!(local_backdrop_kernel_pad_px(12.0), 38);
+    }
+
+    #[test]
+    fn expand_scissor_clamps_to_surface() {
+        let expanded = expand_physical_scissor((10, 10, 20, 20), 8, 800, 600);
+        assert_eq!(expanded, (2, 2, 36, 36));
+        let edge = expand_physical_scissor((0, 0, 10, 10), 8, 800, 600);
+        assert_eq!(edge, (0, 0, 18, 18));
+    }
+
+    #[test]
+    fn skip_recapture_when_partial_damage_misses_host() {
+        let host = Some((100, 200, 220, 140));
+        assert!(
+            !local_backdrop_must_recapture(
+                true,
+                true,
+                false,
+                false,
+                host,
+                &[[10.0, 10.0, 40.0, 20.0]],
+                1.0,
+            ),
+            "hover elsewhere must keep last frost"
+        );
+        assert!(
+            local_backdrop_must_recapture(
+                true,
+                true,
+                false,
+                false,
+                host,
+                &[[120.0, 220.0, 10.0, 10.0]],
+                1.0,
+            ),
+            "damage on the host must recapture"
+        );
+        assert!(
+            local_backdrop_must_recapture(true, true, true, false, host, &[], 1.0),
+            "scroll blit moves pixels under the scrim"
+        );
+        assert!(
+            local_backdrop_must_recapture(false, true, false, false, host, &[], 1.0),
+            "first frame has no cached frost"
+        );
+        assert!(
+            !local_backdrop_must_recapture(true, true, false, false, host, &[], 1.0),
+            "overlay-only PartialLoad with empty dirty keeps frost"
+        );
     }
 }
 
@@ -1534,6 +1673,7 @@ impl AppState {
             compositor_alpha,
             composition_swapchain,
             chrome,
+            local_backdrop_valid: false,
         }
     }
 
@@ -3610,6 +3750,7 @@ impl AppState {
             );
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             self.page_geom_dirty = true;
+            self.local_backdrop_valid = false;
             self.mark_full_redraw();
         }
     }
@@ -5453,6 +5594,14 @@ impl AppState {
         // same vertex buffers. Must run **before** modal frost: the modal scene pass
         // samples these bind groups so local + modal blurs stack.
         if should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands) {
+            let scroll_source_moved = self.scroll_layer_clear || !self.scroll_strip_blit.is_empty();
+            let mut dirty_logical: Vec<[f32; 4]> = Vec::new();
+            if let Some(r) = self.damage_rect {
+                dirty_logical.push(r);
+            }
+            for n in &self.damage_nodes {
+                dirty_logical.push(n.bounds);
+            }
             for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
                 // `render_result.instances` was `take`n into `scaled_instances` (physical).
                 // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
@@ -5460,37 +5609,66 @@ impl AppState {
                 if local_blur <= 0.5 {
                     continue;
                 }
-                capture_page_stack_local_backdrop(
-                    &mut self.backdrop_blur,
-                    &self.device,
-                    &self.queue,
+                let radius_px = local_blur * ui_scale;
+                let host = local_backdrop_host_scissor_physical(
+                    &scaled_instances,
+                    band,
                     self.config.width,
                     self.config.height,
-                    self.config.format,
-                    band,
-                    &page_stack_band_ranges,
-                    band_i,
-                    local_blur * ui_scale,
-                    clear_color,
-                    &render_result.paint_ops,
-                    &self.pipeline,
-                    &self.instance_buffer,
-                    &self.textured_pipeline,
-                    &self.textured_instance_buffer,
-                    &self.image_textures,
-                    &scaled_tex,
-                    &scaled_input_chrome,
-                    &page_stack_band_underlines,
-                    &page_stack_band_shadows,
-                    &self.shadow_tex_cache,
-                    &self.text_renderer,
-                    &self.page_stack_band_text_renderers,
-                    if self.gpu_caps.compute {
-                        Some(&mut self.compute)
-                    } else {
-                        None
-                    },
                 );
+                let capture_region = host.map(|sc| {
+                    expand_physical_scissor(
+                        sc,
+                        local_backdrop_kernel_pad_px(radius_px),
+                        self.config.width,
+                        self.config.height,
+                    )
+                });
+                let recapture = local_backdrop_must_recapture(
+                    self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
+                    use_partial_damage,
+                    scroll_source_moved,
+                    self.overlay_restore_clear,
+                    capture_region,
+                    &dirty_logical,
+                    ui_scale,
+                );
+                if recapture {
+                    capture_page_stack_local_backdrop(
+                        &mut self.backdrop_blur,
+                        &self.device,
+                        &self.queue,
+                        self.config.width,
+                        self.config.height,
+                        self.config.format,
+                        band,
+                        &page_stack_band_ranges,
+                        band_i,
+                        radius_px,
+                        clear_color,
+                        &render_result.paint_ops,
+                        &self.pipeline,
+                        &self.instance_buffer,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        &scaled_tex,
+                        &scaled_input_chrome,
+                        &page_stack_band_underlines,
+                        &page_stack_band_shadows,
+                        &self.shadow_tex_cache,
+                        &self.text_renderer,
+                        &self.page_stack_band_text_renderers,
+                        if self.gpu_caps.compute {
+                            Some(&mut self.compute)
+                        } else {
+                            None
+                        },
+                        &scaled_instances,
+                        capture_region,
+                    );
+                    self.local_backdrop_valid = self.backdrop_blur.blurred_view().is_some();
+                }
                 if let Some(view) = self.backdrop_blur.blurred_view() {
                     let idx = live_backdrops.len();
                     live_backdrops.push(self.pipeline.make_backdrop_bind_group(

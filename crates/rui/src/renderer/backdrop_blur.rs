@@ -1,4 +1,4 @@
-﻿//! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
+//! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
 //!
 //! Local `mount=` scrims: capture prefix → `blur()` → the scrim SDF samples it.
 //! Modal underlays: capture the **already-frosted** page → `blur()` → [`Self::blit_to`].
@@ -363,6 +363,35 @@ impl BackdropBlurPipeline {
         self.scene.as_ref().map(|r| &r.view)
     }
 
+    /// Map a scene-pixel scissor onto a (possibly downsampled) render target.
+    pub(crate) fn map_scissor(
+        region: (u32, u32, u32, u32),
+        src_w: u32,
+        src_h: u32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Option<(u32, u32, u32, u32)> {
+        if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+            return None;
+        }
+        let sx = dst_w as f32 / src_w as f32;
+        let sy = dst_h as f32 / src_h as f32;
+        let x0 = (region.0 as f32 * sx).floor().max(0.0) as u32;
+        let y0 = (region.1 as f32 * sy).floor().max(0.0) as u32;
+        let x1 = ((region.0 as f32 + region.2 as f32) * sx)
+            .ceil()
+            .min(dst_w as f32)
+            .max(0.0) as u32;
+        let y1 = ((region.1 as f32 + region.3 as f32) * sy)
+            .ceil()
+            .min(dst_h as f32)
+            .max(0.0) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        Some((x0, y0, x1 - x0, y1 - y0))
+    }
+
     /// Blur `scene` with a CSS-like Gaussian (σ ≈ radius_px).
     ///
     /// With `--features compute` and a live [`ComputePipelines`], H/V (and large-image
@@ -373,7 +402,22 @@ impl BackdropBlurPipeline {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         radius_px: f32,
+        compute: Option<&mut ComputePipelines>,
+    ) {
+        self.blur_with_region(device, queue, encoder, radius_px, compute, None);
+    }
+
+    /// Like [`Self::blur`], but each fragment pass is scissored to `region` in scene
+    /// pixels. Local `mount=` frost only samples that AABB; filling the whole
+    /// window for a 22rem card is what dropped gallery「浮层 / 反馈」frames.
+    pub fn blur_with_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        radius_px: f32,
         mut compute: Option<&mut ComputePipelines>,
+        region: Option<(u32, u32, u32, u32)>,
     ) {
         let radius = radius_px.clamp(0.5, 64.0);
         let factor = Self::work_factor(radius);
@@ -398,30 +442,39 @@ impl BackdropBlurPipeline {
         let work_texel = [1.0 / work_a.width as f32, 1.0 / work_a.height as f32];
         let work_w = work_a.width;
         let work_h = work_a.height;
+        let work_scissor =
+            region.and_then(|r| Self::map_scissor(r, self.width, self.height, work_w, work_h));
+        let full_scissor = region
+            .and_then(|r| Self::map_scissor(r, self.width, self.height, full.width, full.height));
+        // Compute path fills the whole work RT; local frost stays on the fragment
+        // scissor so a 22rem card does not gaussian the gallery window.
+        let use_compute = region.is_none();
 
-        if let Some(pipes) = compute.as_mut() {
-            if Self::try_compute_from_scene(
-                device,
-                queue,
-                encoder,
-                pipes,
-                &self.pipeline,
-                &self.uniforms_buffer,
-                &self.uniforms_bind_group,
-                &self.vertex_buffer,
-                &self.index_buffer,
-                self.num_indices,
-                &self.tex_bgl,
-                &self.sampler,
-                &scene.view,
-                &full.view,
-                factor,
-                work_w,
-                work_h,
-                work_texel,
-                sigma_work,
-            ) {
-                return;
+        if use_compute {
+            if let Some(pipes) = compute.as_mut() {
+                if Self::try_compute_from_scene(
+                    device,
+                    queue,
+                    encoder,
+                    pipes,
+                    &self.pipeline,
+                    &self.uniforms_buffer,
+                    &self.uniforms_bind_group,
+                    &self.vertex_buffer,
+                    &self.index_buffer,
+                    self.num_indices,
+                    &self.tex_bgl,
+                    &self.sampler,
+                    &scene.view,
+                    &full.view,
+                    factor,
+                    work_w,
+                    work_h,
+                    work_texel,
+                    sigma_work,
+                ) {
+                    return;
+                }
             }
         }
 
@@ -446,6 +499,7 @@ impl BackdropBlurPipeline {
                 0.0,
                 1.0,
                 wgpu::Color::TRANSPARENT,
+                work_scissor,
             );
         } else {
             Self::dispatch_pass(
@@ -466,31 +520,34 @@ impl BackdropBlurPipeline {
                 2.0,
                 1.0,
                 wgpu::Color::TRANSPARENT,
+                work_scissor,
             );
         }
 
-        if let Some(pipes) = compute.as_mut() {
-            if Self::try_compute_hv(
-                device,
-                queue,
-                encoder,
-                pipes,
-                &self.pipeline,
-                &self.uniforms_buffer,
-                &self.uniforms_bind_group,
-                &self.vertex_buffer,
-                &self.index_buffer,
-                self.num_indices,
-                &self.tex_bgl,
-                &self.sampler,
-                &work_a.view,
-                &full.view,
-                work_w,
-                work_h,
-                work_texel,
-                sigma_work,
-            ) {
-                return;
+        if use_compute {
+            if let Some(pipes) = compute.as_mut() {
+                if Self::try_compute_hv(
+                    device,
+                    queue,
+                    encoder,
+                    pipes,
+                    &self.pipeline,
+                    &self.uniforms_buffer,
+                    &self.uniforms_bind_group,
+                    &self.vertex_buffer,
+                    &self.index_buffer,
+                    self.num_indices,
+                    &self.tex_bgl,
+                    &self.sampler,
+                    &work_a.view,
+                    &full.view,
+                    work_w,
+                    work_h,
+                    work_texel,
+                    sigma_work,
+                ) {
+                    return;
+                }
             }
         }
 
@@ -513,6 +570,7 @@ impl BackdropBlurPipeline {
             1.0,
             1.0,
             wgpu::Color::TRANSPARENT,
+            work_scissor,
         );
         Self::dispatch_pass(
             &mut slot,
@@ -532,6 +590,7 @@ impl BackdropBlurPipeline {
             1.0,
             1.0,
             wgpu::Color::TRANSPARENT,
+            work_scissor,
         );
 
         if sigma_work > 4.0 {
@@ -554,6 +613,7 @@ impl BackdropBlurPipeline {
                 1.0,
                 1.0,
                 wgpu::Color::TRANSPARENT,
+                work_scissor,
             );
             Self::dispatch_pass(
                 &mut slot,
@@ -573,6 +633,7 @@ impl BackdropBlurPipeline {
                 1.0,
                 1.0,
                 wgpu::Color::TRANSPARENT,
+                work_scissor,
             );
         }
 
@@ -594,6 +655,7 @@ impl BackdropBlurPipeline {
             2.0,
             1.0,
             wgpu::Color::TRANSPARENT,
+            full_scissor,
         );
     }
 
@@ -651,6 +713,7 @@ impl BackdropBlurPipeline {
             2.0,
             1.0,
             wgpu::Color::TRANSPARENT,
+            None,
         );
     }
 
@@ -820,6 +883,7 @@ impl BackdropBlurPipeline {
             2.0,
             alpha.clamp(0.0, 1.0),
             clear,
+            None,
         );
     }
 
@@ -841,6 +905,7 @@ impl BackdropBlurPipeline {
         mode: f32,
         blit_alpha: f32,
         clear: wgpu::Color,
+        scissor: Option<(u32, u32, u32, u32)>,
     ) {
         let slot = *pass_slot as u64;
         debug_assert!(slot < MAX_PASSES, "backdrop blur exceeded MAX_PASSES");
@@ -878,6 +943,9 @@ impl BackdropBlurPipeline {
         pass.set_bind_group(1, src_bg, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        if let Some((x, y, w, h)) = scissor {
+            pass.set_scissor_rect(x, y, w, h);
+        }
         pass.draw_indexed(0..num_indices, 0, 0..1);
     }
 
@@ -896,5 +964,34 @@ impl BackdropBlurPipeline {
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
+    }
+}
+
+#[cfg(test)]
+mod map_scissor_tests {
+    use super::BackdropBlurPipeline;
+
+    #[test]
+    fn identity_when_src_matches_dst() {
+        assert_eq!(
+            BackdropBlurPipeline::map_scissor((100, 80, 220, 140), 800, 600, 800, 600),
+            Some((100, 80, 220, 140))
+        );
+    }
+
+    #[test]
+    fn halves_when_work_rt_is_half_res() {
+        assert_eq!(
+            BackdropBlurPipeline::map_scissor((100, 80, 220, 140), 800, 600, 400, 300),
+            Some((50, 40, 110, 70))
+        );
+    }
+
+    #[test]
+    fn clamps_to_dst_bounds() {
+        assert_eq!(
+            BackdropBlurPipeline::map_scissor((700, 500, 200, 200), 800, 600, 800, 600),
+            Some((700, 500, 100, 100))
+        );
     }
 }
