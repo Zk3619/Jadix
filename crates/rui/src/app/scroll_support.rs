@@ -491,7 +491,9 @@ pub(super) fn decay_scroll_velocity(vx: f32, vy: f32, dt: f32, friction_per_sec:
 }
 
 /// Quantize a logical scroll offset to whole device pixels so glyphs, synthetic-bold
-/// shadows, and page fills move on the same grid (avoids chase-tail jitter).
+/// shadows, and page fills move on the same grid. Combined with
+/// [`smooth_scroll_step`]'s ≥2px stalls (no 1px crawl) this avoids both
+/// subpixel chase-tail shimmer and the 1px text vibration that crawl caused.
 pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32 {
     let s = ui_scale.max(0.01);
     (offset * s).round() / s
@@ -499,14 +501,17 @@ pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32
 
 /// Ease `current` toward `target` on the device-pixel grid.
 ///
-/// First-order catch-up (`v ∝ remaining`) so the stop-chase tail decelerates
-/// toward 0 like friction — not a 16px 1px/frame crawl (constant extra sliding)
-/// and not a multi-pixel snap (too abrupt). Stall rounds up to 1 device px so
-/// the last ticks are 1px then rest; paint stays on the device grid.
+/// First-order catch-up (`v ∝ remaining`) so a long leftover decelerates
+/// instead of sliding at a constant extra 16px. Quantizing every stall to
+/// 1 device px used to crawl the last 8–16px as a 1px staircase — page text
+/// reads as vibrating until the seek ends. Close remaining snaps in one
+/// frame; a stalled exponential step is at least 2 device px.
 /// Returns `(paint_offset, still_animating)`.
 pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f32) -> (f32, bool) {
     const TAU_SEC: f32 = 0.14;
     const MAX_ALPHA: f32 = 0.18;
+    const SETTLE_DEVICE_PX: f32 = 3.0;
+    const MIN_STEP_DEVICE_PX: f32 = 2.0;
     let scale = ui_scale.max(0.01);
     let device_px = 1.0 / scale;
     let target = snap_scroll_offset_to_device_px(target, scale);
@@ -515,26 +520,23 @@ pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f
     if !remaining.is_finite() {
         return (target, false);
     }
-    // Sub-pixel leftover only. 1px leftover still takes a 1px tick (inertia to 0).
     if remaining.abs() < device_px * 0.5 {
+        return (target, false);
+    }
+    if remaining.abs() <= SETTLE_DEVICE_PX * device_px {
         return (target, false);
     }
 
     let sign = remaining.signum();
-    let step1 = snap_scroll_offset_to_device_px(current + device_px * sign, scale);
     let raw_alpha = 1.0 - (-dt.max(0.0) / TAU_SEC).exp();
     let alpha = raw_alpha.min(MAX_ALPHA).clamp(0.0, 1.0);
-    let mut next = snap_scroll_offset_to_device_px(current + remaining * alpha, scale);
+    let min_step = MIN_STEP_DEVICE_PX * device_px;
+    let desired = (remaining * alpha).abs().max(min_step);
+    let mut next = snap_scroll_offset_to_device_px(current + desired * sign, scale);
     if remaining > 0.0 {
         next = next.min(target);
     } else {
         next = next.max(target);
-    }
-    if (next - current).abs() < device_px * 0.25 {
-        next = step1;
-        if (remaining > 0.0 && next >= target) || (remaining < 0.0 && next <= target) {
-            return (target, false);
-        }
     }
     if (next - target).abs() < device_px * 0.5 {
         return (target, false);
@@ -1198,8 +1200,8 @@ mod smooth_scroll_step_tests {
                 "non-monotonic or overshoot: {prev} -> {next} (target {snapped_t})"
             );
             assert!(
-                (next - prev).abs() <= 1.01 + 1e-3,
-                "tail must not dump >1px: {prev} -> {next}"
+                (next - prev).abs() <= 3.01 + 1e-3,
+                "settle snap must stay ≤3 device px: {prev} -> {next}"
             );
             y = next;
             prev = next;
@@ -1256,8 +1258,8 @@ mod smooth_scroll_step_tests {
 
     #[test]
     fn stop_chase_tail_decelerates_to_zero() {
-        // 16px leftover after the last wheel tick: first-order chase must slow
-        // (2px → 1px → rest), not crawl 1px×16 and not snap the last 2px.
+        // 16px leftover: first-order chase must slow (not a constant extra
+        // slide) and must not 1px-crawl. The last ≤3 device px may snap.
         let deltas = collect_chase_deltas(0.0, 16.0);
         assert!(
             deltas.first().copied().unwrap_or(0.0) >= 2.0 - 1e-3,
@@ -1269,28 +1271,38 @@ mod smooth_scroll_step_tests {
         }
         let last = *deltas.last().expect("chase moved");
         assert!(
-            (last - 1.0).abs() < 0.01,
-            "last inertia tick must be 1px, got {last}"
+            last >= 2.0 - 1e-3 && last <= 3.0 + 1e-3,
+            "last tick must be a 2–3px settle, got {last}"
         );
         let ones = deltas.iter().filter(|d| (*d - 1.0).abs() < 0.01).count();
-        assert!(ones < 16, "1px staircase crawled {ones} frames");
+        assert_eq!(ones, 0, "1px staircase crawled {ones} frames: {deltas:?}");
+    }
+
+    #[test]
+    fn stop_chase_small_leftover_settles_without_1px_crawl() {
+        let deltas = collect_chase_deltas(0.0, 2.0);
         assert!(
-            ones >= 2,
-            "need a few 1px ticks so rest is not a multi-px snap, got {ones}"
+            deltas.iter().all(|d| *d <= 3.01),
+            "2px leftover must settle in ≤3px, got {deltas:?}"
+        );
+        assert!(
+            deltas.len() <= 1,
+            "2px leftover should snap, not crawl, got {deltas:?}"
         );
     }
 
     #[test]
-    fn stop_chase_two_px_leftover_ticks_not_snaps() {
-        let deltas = collect_chase_deltas(0.0, 2.0);
-        assert!(
-            deltas.iter().all(|d| *d <= 1.01),
-            "2px leftover must not jump in one frame, got {deltas:?}"
-        );
-        assert!(
-            deltas.len() >= 2,
-            "2px leftover should take two 1px ticks, got {deltas:?}"
-        );
+    fn chase_tail_must_not_1px_crawl_text_jitter() {
+        // Device-grid chase used to tick 1px for many frames (the last ~8–16px).
+        // That reads as page text vibrating until the seek ends.
+        for target in [16.0_f32, 48.0, 75.0] {
+            let deltas = collect_chase_deltas(0.0, target);
+            let ones = deltas.iter().filter(|d| (*d - 1.0).abs() < 0.01).count();
+            assert!(
+                ones <= 1,
+                "target={target}: 1px staircase crawled {ones} frames; {deltas:?}"
+            );
+        }
     }
 
     #[test]
@@ -1323,10 +1335,79 @@ mod smooth_scroll_step_tests {
             tail_deltas.iter().any(|d| *d >= 2.0 - 1e-3),
             "last 20px must pass through 2px steps, got {tail_deltas:?}"
         );
-        for w in tail_deltas.windows(2) {
-            assert!(w[1] <= w[0] + 1e-3, "tail must decelerate: {w:?}");
+        if let Some((last, rest)) = tail_deltas.split_last() {
+            for w in rest.windows(2) {
+                assert!(w[1] <= w[0] + 1e-3, "tail must decelerate: {w:?}");
+            }
+            assert!(
+                *last <= 3.0 + 1e-3,
+                "final settle must stay ≤3 device px, got {last}"
+            );
         }
         assert!(frames > 4, "75px leftover should still ease, got {frames}");
+    }
+
+    /// glyphon `prepare_glyph` Y: `round(line_y) + trunc(glyph.y + TextArea.top)`.
+    /// Coverage path does **not** round the origin (`info.y * ui_scale`).
+    fn glyphon_quad_y(
+        layout_y: f32,
+        scroll_y: f32,
+        ui_scale: f32,
+        line_y: f32,
+        glyph_y: f32,
+    ) -> i32 {
+        let top = (layout_y - scroll_y) * ui_scale;
+        let physical_y = (glyph_y + top).trunc() as i32;
+        line_y.round() as i32 + physical_y
+    }
+
+    #[test]
+    fn chase_must_not_jitter_glyph_quad_y() {
+        // User report: page text jitters up/down for the whole smooth-scroll
+        // chase. Device-grid offsets should keep glyphon Y monotonic and keep
+        // the glyph-vs-fill fractional error stable (no 1px relative bounce).
+        let layout_ys = [10.0_f32, 10.4, 48.6, 100.3, 100.5, 217.75, 333.2];
+        let line_ys = [14.0_f32, 17.5, 20.0];
+        let scales = [1.0_f32, 1.25, 1.5, 2.0];
+        for scale in scales {
+            for &layout_y in &layout_ys {
+                for &line_y in &line_ys {
+                    let mut scroll = 0.0_f32;
+                    let target = 64.0;
+                    let mut prev_quad = glyphon_quad_y(layout_y, scroll, scale, line_y, 0.0);
+                    let fill0 = (layout_y - scroll) * scale;
+                    let err0 = prev_quad as f32 - fill0;
+                    loop {
+                        let (next, anim) = smooth_scroll_step(scroll, target, 0.016, scale);
+                        let quad = glyphon_quad_y(layout_y, next, scale, line_y, 0.0);
+                        let fill = (layout_y - next) * scale;
+                        // Visible page text sits at positive device Y. Off-screen
+                        // (negative) Y hits cosmic `truncf` toward-zero vs fill
+                        // floor-like motion — not the in-view chase jitter.
+                        if fill > 8.0 && fill < 800.0 {
+                            assert!(
+                                quad <= prev_quad,
+                                "glyph Y reversed during chase (text jitter): \
+                                 layout_y={layout_y} scale={scale} line_y={line_y} \
+                                 scroll {scroll} -> {next} quad {prev_quad} -> {quad}"
+                            );
+                            let err = quad as f32 - fill;
+                            assert!(
+                                (err - err0).abs() < 0.51,
+                                "glyph vs fill error jumped {err0} -> {err} \
+                                 (relative 1px bounce) layout_y={layout_y} scale={scale} \
+                                 scroll={next}"
+                            );
+                        }
+                        scroll = next;
+                        prev_quad = quad;
+                        if !anim {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
