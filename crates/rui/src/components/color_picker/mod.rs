@@ -76,9 +76,7 @@ mod drag;
 mod model;
 pub mod view;
 
-pub(crate) use drag::{
-    clear_color_drag_if_any, is_color_dragging, tick_color_drag_from_tree,
-};
+pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag_from_tree};
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,

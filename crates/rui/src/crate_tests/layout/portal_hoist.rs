@@ -255,11 +255,10 @@ fn local_mount_clears_stacking_context_when_overlay_closes() {
     portal.set_attr(ATTR_PORTAL_KEY, "local-portal");
     portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
 
-    let mut root = Element::new().w(800.0).h(600.0).child(
-        Element::new()
-            .template_id("main")
-            .children([host, portal]),
-    );
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .child(Element::new().template_id("main").children([host, portal]));
 
     assert!(hoist_portal_subtrees(&mut root) >= 1);
     let host = find_by_tid(&root, "card-host").expect("host");

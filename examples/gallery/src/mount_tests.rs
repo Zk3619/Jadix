@@ -1777,3 +1777,172 @@ fn overlays_local_scrim_yellow_is_in_capture_prefix() {
         rui::app::reactive::reset_registered_anchors();
     });
 }
+
+fn instance_fill_mpx(instances: &[rui::renderer::InstanceInput], vw: f32, vh: f32) -> f32 {
+    let mut area = 0.0f32;
+    for i in instances {
+        let x0 = i.rect_pos[0].max(0.0);
+        let y0 = i.rect_pos[1].max(0.0);
+        let x1 = (i.rect_pos[0] + i.rect_size[0]).min(vw);
+        let y1 = (i.rect_pos[1] + i.rect_size[1]).min(vh);
+        if x1 > x0 && y1 > y0 {
+            area += (x1 - x0) * (y1 - y0);
+        }
+    }
+    area / 1_000_000.0
+}
+
+/// Default window vs maximized: CPU layout/collect + fill. Interactive stutter
+/// after maximize is this path every hover/scroll frame, not the first mount.
+///
+/// `build_gallery_app()` is a reactive_view shell — use the live `<When>` page tree.
+#[test]
+fn gallery_layout_cost_default_vs_maximized() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                for section in ["basics", "layout", "draw"] {
+                    rui::app::reactive::reset_registered_anchors();
+                    let mut app = rui::core::reactivity::isolate_reads(|| {
+                        gallery_section_body(section)
+                    });
+                    let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let sizes = [(800.0, 600.0), (1280.0, 800.0), (1920.0, 1080.0)];
+                    let mut fast_ms = [0.0f32; 3];
+                    let mut inst = [0usize; 3];
+                    for (i, (w, h)) in sizes.iter().copied().enumerate() {
+                        let first = layout.build_and_layout(&mut app, w, h, [0.0, 0.0]);
+                        layout.set_collect_skip_allowed(true);
+                        let _ = layout.build_and_layout_fast(
+                            &mut app, w, h, [0.0, 0.0], false, false,
+                        );
+                        let t = std::time::Instant::now();
+                        let fast = layout.build_and_layout_fast(
+                            &mut app, w, h, [0.0, 0.0], false, false,
+                        );
+                        fast_ms[i] = t.elapsed().as_secs_f32() * 1000.0;
+                        inst[i] = fast.instances.len();
+                        let fill = instance_fill_mpx(&fast.instances, w, h);
+                        eprintln!(
+                            "gallery/{section} {w:.0}x{h:.0}: first taffy={:.2} collect={:.2} inst={} text={} fill={fill:.2}Mpx | fast wall={:.2}ms taffy={:.2} collect={:.2} inst={} text={}",
+                            first.prof.taffy_compute_ms,
+                            first.prof.collect_ms,
+                            first.instances.len(),
+                            first.text_nodes.len(),
+                            fast_ms[i],
+                            fast.prof.taffy_compute_ms,
+                            fast.prof.collect_ms,
+                            fast.instances.len(),
+                            fast.text_nodes.len(),
+                        );
+                    }
+                    assert!(
+                        inst[0] > 15,
+                        "gallery/{section} must collect the real page, not the shell placeholder (inst={})",
+                        inst[0]
+                    );
+                    // Paint-only frames at the maximized size must stay inside a 60Hz slice.
+                    assert!(
+                        fast_ms[2] < 12.0,
+                        "gallery/{section} maximized 1920x1080 paint-only layout {fast:.2}ms \
+                         (800x600={small:.2}ms inst {}→{}) would drop frames after maximize",
+                        inst[0],
+                        inst[2],
+                        fast = fast_ms[2],
+                        small = fast_ms[0],
+                    );
+                }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+/// Clicking the RSX ViewportModal trigger must not eat the card's VStack gap
+/// (button label toggles 打开→关闭 while DialogFade · RSX / SheetSlide stay put).
+#[test]
+fn viewport_modal_rsx_open_keeps_card_vstack_gap() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        rui::app::portal_overlay::clear_overlay_stack();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::renderer::font_loader::ensure_coverage_for_text(
+            &mut fs,
+            "打开 RSX ViewportModal 关闭 RSX 模态 视口舞台 presence DialogFade SheetSlide",
+        );
+        rui::text::install_shared_font_system(&mut fs);
+
+        let text_y = |result: &rui::layout::layout_tree::RenderResult, needle: &str| -> f32 {
+            result
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains(needle))
+                .map(|t| t.y)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing `{needle}` in {:?}",
+                        result
+                            .text_nodes
+                            .iter()
+                            .map(|t| (t.text.as_str(), t.y, t.height))
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        let layout_card = |width: f32| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut tree = ViewportModalShowcase(ViewportModalShowcaseProps::default());
+            let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+            let mut layout = rui::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut tree, width, 800.0, [0.0, 0.0])
+        };
+
+        let (_handle, _) = create_root(|| {
+            let open = use_signal("gal_vm_dlg_open", || false);
+            let closed = layout_card(180.0);
+            let gap_closed = text_y(&closed, "SheetSlide") - text_y(&closed, "DialogFade");
+            let below_closed = text_y(&closed, "SheetSlide")
+                - closed
+                    .text_nodes
+                    .iter()
+                    .find(|t| t.text.contains("打开 RSX") || t.text.contains("关闭 RSX"))
+                    .map(|t| t.y + t.height)
+                    .unwrap_or(0.0);
+
+            open.set(true);
+            let opened = layout_card(180.0);
+            let gap_open = text_y(&opened, "SheetSlide") - text_y(&opened, "DialogFade");
+
+            open.set(false);
+            let wide = layout_card(400.0);
+            let below_wide = text_y(&wide, "SheetSlide")
+                - wide
+                    .text_nodes
+                    .iter()
+                    .find(|t| t.text.contains("打开 RSX") || t.text.contains("关闭 RSX"))
+                    .map(|t| t.y + t.height)
+                    .unwrap_or(0.0);
+
+            eprintln!(
+                "gallery RSX ViewportModal closed gap={gap_closed:.1} below={below_closed:.1} open gap={gap_open:.1} wide below={below_wide:.1}"
+            );
+            assert!(
+                (gap_open - gap_closed).abs() < 1.0,
+                "opening RSX ViewportModal must not change DialogFade→SheetSlide spacing; closed={gap_closed:.1} open={gap_open:.1}"
+            );
+            assert!(
+                (below_closed - below_wide).abs() < 1.0,
+                "0×0 Content must not wrap under the trigger; narrow below={below_closed:.1} wide below={below_wide:.1}"
+            );
+        });
+
+        rui::app::portal_overlay::clear_overlay_stack();
+        rui::app::reactive::reset_registered_anchors();
+    });
+}

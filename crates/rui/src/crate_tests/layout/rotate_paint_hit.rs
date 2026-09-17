@@ -648,15 +648,25 @@ fn overflow_hidden_rotate_45_gpu_clip_matches_local_hit() {
             let mut root = Element::new().w(200.0).h(200.0).child(parent);
             let mut layout = LayoutTree::new();
             let result = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
-            let fill = result
+            let fill_i = result
                 .instances
                 .iter()
-                .find(|i| i.color[1] > 0.5 && i.rect_size[0] > 70.0)
+                .position(|i| i.color[1] > 0.5 && i.rect_size[0] > 70.0)
                 .expect("child fill");
+            let fill = &result.instances[fill_i];
             assert!(
-                fill.clip_size[0] >= 0.0 && fill.clip_size[1] >= 0.0,
-                "descendant must carry overflow clip, clip_size={:?}",
+                fill.clip_size[0] < 0.0 || fill.clip_size[1] < 0.0,
+                "rotated descendant must not local-AABB clip, clip_size={:?}",
                 fill.clip_size
+            );
+            let poly = result
+                .clip_polys
+                .get(fill_i)
+                .copied()
+                .expect("clip_poly slot");
+            assert!(
+                poly.is_active(),
+                "rotated overflow must stamp a world clip poly"
             );
             let el = &root.children[0];
             let id = crate::style::MAT2D_IDENTITY;
@@ -664,37 +674,17 @@ fn overflow_hidden_rotate_45_gpu_clip_matches_local_hit() {
             let acc = [0.0, 0.0];
             let tip = crate::core::tree::layout_local_to_paint_world(el, [4.0, 4.0], acc, id, sc);
             assert!(
-                crate::renderer::overflow_clip_contains_after_affine_inv(
-                    fill.clip_pos,
-                    fill.clip_size,
-                    fill.rect_pos,
-                    fill.rect_size,
-                    &fill.transform,
-                    tip,
-                ),
-                "GPU local clip must keep the diamond vertex, tip={tip:?} clip={:?} xform={:?}",
-                (fill.clip_pos, fill.clip_size),
-                fill.transform
+                poly.contains_point(tip),
+                "world clip poly must keep the diamond vertex, tip={tip:?} poly={poly:?}"
             );
             let aabb_corner = [80.0, 0.0];
             assert!(
-                !crate::renderer::overflow_clip_contains_after_affine_inv(
-                    fill.clip_pos,
-                    fill.clip_size,
-                    fill.rect_pos,
-                    fill.rect_size,
-                    &fill.transform,
-                    aabb_corner,
-                ),
-                "GPU local clip must drop the unrotated AABB corner"
+                !poly.contains_point(aabb_corner),
+                "world clip poly must drop the unrotated AABB corner"
             );
             assert!(
-                tip[0] < fill.clip_pos[0]
-                    || tip[0] >= fill.clip_pos[0] + fill.clip_size[0]
-                    || tip[1] < fill.clip_pos[1]
-                    || tip[1] >= fill.clip_pos[1] + fill.clip_size[1],
-                "diamond vertex must sit outside the unrotated clip AABB, tip={tip:?} clip={:?}",
-                (fill.clip_pos, fill.clip_size)
+                tip[0] < 0.0 || tip[0] >= 80.0 || tip[1] < 0.0 || tip[1] >= 80.0,
+                "diamond vertex must sit outside the unrotated layout AABB, tip={tip:?}"
             );
         });
     });

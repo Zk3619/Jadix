@@ -746,22 +746,36 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
             text_renderer.render(&mut pass);
         }
         backdrop.blur(&gpu.device, &gpu.queue, &mut encoder, 16.0, None);
+        // Production submits the capture encoder *before* anyone copies `full`.
+        // Ping-pong Gaussian + COPY_SRC in the same GLES encoder leaves `full` as
+        // the Clear (a=0) — this assert then reports sample=[0,0,0,0].
+        gpu.queue.submit(Some(encoder.finish()));
         let full_tex = backdrop.blurred_texture().expect("full").clone();
+        let read_enc = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("local-scrim-blur-readback"),
+            });
         let img_blur = crate::renderer::offscreen::readback_texture(
             &gpu.device,
             &gpu.queue,
             &full_tex,
             800,
             600,
-            encoder,
+            read_enc,
         )
         .expect("readback blur");
         let (yellow_blur, sample_blur) = count_yellow(&img_blur);
         let mut smear = 0u32;
+        let mut opaque = 0u32;
+        let corner = img_blur.pixel(x0, y0).unwrap_or([0; 4]);
         for y in y0..y1 {
             for x in x0..x1 {
                 if let Some(p) = img_blur.pixel(x, y) {
-                    if p[0] > p[2] && p[1] > 80 {
+                    if p[3] > 8 {
+                        opaque += 1;
+                    }
+                    if p[0] > p[2] && p[1] > 80 || pixel_is_yellow_smear(p) {
                         smear += 1;
                     }
                 }
@@ -770,12 +784,13 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
         let _ = std::fs::write(
             std::env::temp_dir().join("local_scrim_gpu.txt"),
             format!(
-                "{gpu_log}sdf-then-glyphon yellow_px={yellow_after_sdf} blue_px={blue_px}\nblur yellow_px={yellow_blur} smear_r>b={smear} sample={sample_blur:?}\n"
+                "{gpu_log}sdf-then-glyphon yellow_px={yellow_after_sdf} blue_px={blue_px}\nblur yellow_px={yellow_blur} smear_r>b={smear} opaque={opaque} corner={corner:?} sample={sample_blur:?} adapter={:?}\n",
+                gpu.adapter_info
             ),
         );
         assert!(
             smear > 20 || yellow_blur > 5,
-            "blur wiped host glyphs (yellow={yellow_blur} smear={smear} sample={sample_blur:?})\n{dump}"
+            "blur wiped host glyphs (yellow={yellow_blur} smear={smear} opaque={opaque} corner={corner:?} sample={sample_blur:?})\n{dump}"
         );
 
         let frost_inst = result
@@ -839,13 +854,19 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
             pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..pipeline.num_indices, 0, 0..1);
         }
+        gpu.queue.submit(Some(encoder_f.finish()));
+        let read_f = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frost-readback"),
+            });
         let img_f = crate::renderer::offscreen::readback_texture(
             &gpu.device,
             &gpu.queue,
             &texture_f,
             800,
             600,
-            encoder_f,
+            read_f,
         )
         .expect("readback frost");
         let fx0 = frost_inst.rect_pos[0].floor().max(0.0) as u32;
@@ -856,16 +877,19 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
         let fy1 = (frost_inst.rect_pos[1] + frost_inst.rect_size[1])
             .ceil()
             .min(600.0) as u32;
+        // AABB corners sit outside the rounded SDF and stay Clear black — sample the
+        // interior, and treat BGRA readback the same as RGBA yellow.
+        let cx = (fx0 + fx1) / 2;
+        let cy = (fy0 + fy1) / 2;
+        let frost_center = img_f.pixel(cx, cy).unwrap_or([0; 4]);
         let mut frost_smear = 0u32;
-        let mut frost_sample = [0u8; 4];
+        let mut frost_sample = frost_center;
         for y in fy0..fy1 {
             for x in fx0..fx1 {
                 if let Some(p) = img_f.pixel(x, y) {
-                    if p[3] > 8 {
-                        frost_sample = p;
-                    }
-                    if p[0] > p[2] && p[1] > 80 && p[3] > 8 {
+                    if pixel_is_yellow_smear(p) || (p[0] > p[2] && p[1] > 80 && p[3] > 8) {
                         frost_smear += 1;
+                        frost_sample = p;
                     }
                 }
             }
@@ -873,13 +897,13 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
         let _ = std::fs::write(
             std::env::temp_dir().join("local_scrim_gpu.txt"),
             format!(
-                "{gpu_log}sdf-then-glyphon yellow_px={yellow_after_sdf}\nblur yellow_px={yellow_blur} smear={smear} sample={sample_blur:?}\nfrost smear_r>b={frost_smear} sample={frost_sample:?} rect=({fx0},{fy0})-({fx1},{fy1}) inst_a={}\n",
+                "{gpu_log}sdf-then-glyphon yellow_px={yellow_after_sdf}\nblur yellow_px={yellow_blur} smear={smear} sample={sample_blur:?}\nfrost smear_r>b={frost_smear} center={frost_center:?} sample={frost_sample:?} rect=({fx0},{fy0})-({fx1},{fy1}) inst_a={}\n",
                 frost_inst.color[3]
             ),
         );
         assert!(
             frost_smear > 10,
-            "frost composite has no yellowish smear (smear={frost_smear} sample={frost_sample:?}) — UV/blend drops glyphs after a good capture\n{dump}"
+            "frost composite has no yellowish smear (smear={frost_smear} center={frost_center:?} sample={frost_sample:?}) — UV/blend drops glyphs after a good capture\n{dump}"
         );
 
         // RSX unitless `"16"` is 16rem (clamped to 64px). Gallery writes `"1"` (1rem = 16px).
@@ -890,14 +914,20 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
                 label: Some("local-scrim-backdrop-64"),
             });
         backdrop.blur(&gpu.device, &gpu.queue, &mut encoder_64, 64.0, None);
+        gpu.queue.submit(Some(encoder_64.finish()));
         let full_64 = backdrop.blurred_texture().expect("full 64").clone();
+        let read_64 = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("local-scrim-blur-64-readback"),
+            });
         let img_64 = crate::renderer::offscreen::readback_texture(
             &gpu.device,
             &gpu.queue,
             &full_64,
             800,
             600,
-            encoder_64,
+            read_64,
         )
         .expect("readback blur 64");
         let mut smear_64 = 0u32;
