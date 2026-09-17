@@ -3539,6 +3539,46 @@ mod tests {
     }
 
     #[test]
+    fn chase_strip_blit_delta_must_match_glyphon_quad() {
+        // Copied overlap pixels must move by the same device delta as glyphon
+        // quads. A 1px disagreement is the chase-time "text jitter" (blit then
+        // a later FullClear snaps back).
+        use crate::app::scroll_support::{smooth_scroll_step, snap_scroll_offset_to_device_px};
+
+        fn glyphon_quad_y(layout_y: f32, scroll_y: f32, ui_scale: f32) -> i32 {
+            let top = (layout_y - scroll_y) * ui_scale;
+            top.trunc() as i32
+        }
+
+        let vp = [0.0, 48.6, 200.0, 400.0];
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            let mut scroll = 0.0_f32;
+            let target = snap_scroll_offset_to_device_px(80.0, scale);
+            let layout_y = 120.4_f32;
+            loop {
+                let (next, anim) = smooth_scroll_step(scroll, target, 0.016, scale);
+                let dy = next - scroll;
+                if dy.abs() >= 0.5 {
+                    let plan = plan_scroll_strip_blit(vp, [0.0, dy]).expect("plan");
+                    let copy = scroll_strip_copy_physical(&plan, scale, 800, 1200)
+                        .expect("physical copy");
+                    let blit = copy.src_y as i32 - copy.dst_y as i32;
+                    let glyph = glyphon_quad_y(layout_y, scroll, scale)
+                        - glyphon_quad_y(layout_y, next, scale);
+                    assert_eq!(
+                        blit, glyph,
+                        "scale={scale} scroll {scroll} -> {next}: blit {blit}px vs glyph {glyph}px"
+                    );
+                }
+                scroll = next;
+                if !anim {
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
     fn note_scroll_strip_blit_counts() {
         reset_frame_policy_counters_for_test();
         note_scroll_strip_blit();
