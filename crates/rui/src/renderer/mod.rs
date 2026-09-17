@@ -209,7 +209,8 @@ pub struct TexturedDraw {
     /// CSS/`compute_combined_transform` 矩阵（绕矩形中心）；默认单位阵。
     pub transform: [f32; 6],
     /// Overflow clip in `rect` / `rect_pos` space (`clip_size[0] < 0` = off).
-    /// Fragment shaders test after undoing the instance affine (local border box).
+    /// Axis-aligned FS tests after undoing the instance affine; rotated Bake
+    /// tests world `physical` against this AABB (unshifted).
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
 }
@@ -253,7 +254,8 @@ impl TexturedDraw {
         self
     }
 
-    /// Overflow clip in `rect_pos` space. FS undoes the instance affine (local box).
+    /// Overflow clip in `rect_pos` space. Axis-aligned FS undoes the instance affine.
+    /// Rotated Bake tests world pixels against this AABB.
     /// Dest-reset / node-present scissors use `NodePaint.overflow_clip` (paint AABB).
     pub fn with_overflow_clip(mut self, clip: Option<[f32; 4]>) -> Self {
         match clip {
@@ -294,7 +296,7 @@ pub(crate) fn aabb_of_centered_transform(rect: [f32; 4], m: &[f32; 6]) -> [f32; 
 }
 
 /// CSS overflow discard after undoing the instance affine (`rounded_rect.wgsl` `in.p`,
-/// `textured_rect.wgsl` `affine_inv_linear`). `clip_*` stay in `rect_pos` space.
+/// axis-aligned `textured_rect.wgsl`). `clip_*` stay in `rect_pos` space.
 #[cfg(test)]
 pub(crate) fn overflow_clip_contains_after_affine_inv(
     clip_pos: [f32; 2],
@@ -316,6 +318,22 @@ pub(crate) fn overflow_clip_contains_after_affine_inv(
     let x0 = clip_pos[0] - cx;
     let y0 = clip_pos[1] - cy;
     lx >= x0 && lx < x0 + clip_size[0] && ly >= y0 && ly < y0 + clip_size[1]
+}
+
+/// Rotated textured overflow: FS tests world `physical` vs unshifted clip AABB.
+#[cfg(test)]
+pub(crate) fn overflow_clip_contains_world(
+    clip_pos: [f32; 2],
+    clip_size: [f32; 2],
+    world: [f32; 2],
+) -> bool {
+    if clip_size[0] < 0.0 || clip_size[1] < 0.0 {
+        return true;
+    }
+    world[0] >= clip_pos[0]
+        && world[0] < clip_pos[0] + clip_size[0]
+        && world[1] >= clip_pos[1]
+        && world[1] < clip_pos[1] + clip_size[1]
 }
 
 /// `textured_rect` 顶点：rect 顶 → `uv.y=0`（与上传图 / 离屏 RT 行序一致）。
@@ -617,41 +635,18 @@ mod textured_uv_tests {
         assert!(!super::aabbs_disjoint(vis, parent.unwrap()));
 
         let keep_rot = keep.clone().with_transform(xform);
-        let c = [
-            keep_rot.rect[0] + keep_rot.rect[2] * 0.5,
-            keep_rot.rect[1] + keep_rot.rect[3] * 0.5,
-        ];
-        let tip_local = [
-            parent.unwrap()[0] + parent.unwrap()[2] * 0.5,
-            parent.unwrap()[1] + 4.0,
-        ];
-        let d = [tip_local[0] - c[0], tip_local[1] - c[1]];
-        let (rx, ry) = crate::style::mat2d_transform_vec(&keep_rot.transform, d[0], d[1]);
-        let tip_world = [
-            c[0] + rx + keep_rot.transform[4],
-            c[1] + ry + keep_rot.transform[5],
-        ];
+        let vis_c = [vis[0] + vis[2] * 0.5, vis[1] + vis[3] * 0.5];
         assert!(
-            super::overflow_clip_contains_after_affine_inv(
-                keep_rot.clip_pos,
-                keep_rot.clip_size,
-                [keep_rot.rect[0], keep_rot.rect[1]],
-                [keep_rot.rect[2], keep_rot.rect[3]],
-                &keep_rot.transform,
-                tip_world,
-            ),
-            "GPU overflow must keep local-box ink after affine inverse, tip={tip_world:?}"
+            super::overflow_clip_contains_world(keep_rot.clip_pos, keep_rot.clip_size, vis_c,),
+            "rotated bake clips in world; visual center must stay, vis={vis:?}"
         );
         assert!(
-            !super::overflow_clip_contains_after_affine_inv(
+            !super::overflow_clip_contains_world(
                 keep_rot.clip_pos,
                 keep_rot.clip_size,
-                [keep_rot.rect[0], keep_rot.rect[1]],
-                [keep_rot.rect[2], keep_rot.rect[3]],
-                &keep_rot.transform,
                 [0.0, 40.0],
             ),
-            "unrotated bake-quad corner must miss the local overflow box"
+            "unrotated bake-quad corner must miss the world overflow AABB"
         );
     }
 
@@ -666,8 +661,30 @@ mod textured_uv_tests {
     }
 
     #[test]
-    fn gpu_overflow_clip_follows_local_box_after_affine_inv() {
-        let rect = [0.0, 0.0, 80.0, 80.0];
+    fn gpu_overflow_clip_axis_aligned_matches_world_aabb() {
+        let rect = [10.0, 20.0, 80.0, 40.0];
+        let clip = [10.0, 20.0, 80.0, 40.0];
+        let id = crate::style::MAT2D_IDENTITY;
+        assert!(super::overflow_clip_contains_after_affine_inv(
+            [clip[0], clip[1]],
+            [clip[2], clip[3]],
+            [rect[0], rect[1]],
+            [rect[2], rect[3]],
+            &id,
+            [50.0, 40.0],
+        ));
+        assert!(!super::overflow_clip_contains_after_affine_inv(
+            [clip[0], clip[1]],
+            [clip[2], clip[3]],
+            [rect[0], rect[1]],
+            [rect[2], rect[3]],
+            &id,
+            [9.0, 40.0],
+        ));
+    }
+
+    #[test]
+    fn gpu_overflow_clip_rotated_textured_uses_world_aabb() {
         let clip = [0.0, 0.0, 80.0, 80.0];
         let rot =
             crate::style::mat2d_linear(&crate::style::mat2d_rotate(std::f32::consts::FRAC_PI_4));
@@ -676,23 +693,17 @@ mod textured_uv_tests {
         let (rx, ry) = crate::style::mat2d_transform_vec(&rot, d[0], d[1]);
         let tip = [c[0] + rx, c[1] + ry];
         assert!(
-            super::overflow_clip_contains_after_affine_inv(
-                [clip[0], clip[1]],
-                [clip[2], clip[3]],
-                [rect[0], rect[1]],
-                [rect[2], rect[3]],
-                &rot,
-                tip,
-            ),
-            "local vertex must survive, tip={tip:?}"
+            super::overflow_clip_contains_world([clip[0], clip[1]], [clip[2], clip[3]], c),
+            "world AABB must keep the box center"
         );
         assert!(
-            !super::overflow_clip_contains_after_affine_inv(
+            !super::overflow_clip_contains_world([clip[0], clip[1]], [clip[2], clip[3]], tip),
+            "diamond vertex outside the unrotated restrict box must discard, tip={tip:?}"
+        );
+        assert!(
+            !super::overflow_clip_contains_world(
                 [clip[0], clip[1]],
                 [clip[2], clip[3]],
-                [rect[0], rect[1]],
-                [rect[2], rect[3]],
-                &rot,
                 [80.0, 0.0],
             ),
             "unrotated AABB corner must discard"

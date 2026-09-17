@@ -93,10 +93,18 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
         let rotated = affine_linear(local, ab, cd);
         let center = inst.rect_pos + inst.rect_size * 0.5;
         physical = center + rotated + txty;
-        // Overflow clip is in `rect_pos` space. FS tests affine-inverted local vs
-        // clip shifted to this instance's center (same contract as rounded_rect).
-        out.frag_px = affine_inv_linear(physical - center - txty, ab, cd);
-        out.clip_pos = inst.clip_pos - center;
+        // Axis-aligned: local clip (same as rounded_rect `in.p`). Rotated: world
+        // `physical` vs unshifted AABB so an unrotated ancestor (DragOverlay
+        // restrict shell) scissors the transformed quad instead of chopping
+        // local bake ink along a diagonal.
+        let axis_aligned = abs(ab.y) < 1e-5 && abs(cd.x) < 1e-5;
+        if (axis_aligned) {
+            out.frag_px = affine_inv_linear(physical - center - txty, ab, cd);
+            out.clip_pos = inst.clip_pos - center;
+        } else {
+            out.frag_px = physical;
+            out.clip_pos = inst.clip_pos;
+        }
         out.clip_size = inst.clip_size;
         let ndc_x = (physical.x / globals.resolution.x) * 2.0 - 1.0;
         let ndc_y = 1.0 - (physical.y / globals.resolution.y) * 2.0;

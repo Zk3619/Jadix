@@ -103,13 +103,24 @@ fn vs_main(
     let shadow_blur = instance.shadow_params.x;
     let shadow_spread = instance.shadow_params.y;
     let shadow_inset = instance.shadow_params.z;
-    let spread = max(0.0, shadow_spread);
-    var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
-        + vec2<f32>(shadow_blur * 2.0 + instance.border_width + spread + 2.0);
-    if (shadow_inset > 0.5) {
-        ext = vec2<f32>(
-            shadow_blur * 2.0 + instance.border_width + abs(shadow_spread) + 2.0
-        );
+    let simple_fill = instance.radii.x <= 0.0 && instance.radii.y <= 0.0
+        && instance.radii.z <= 0.0 && instance.radii.w <= 0.0
+        && instance.border_width <= 0.0
+        && instance.shadow_color.a <= 0.001
+        && instance.clip_size_and_extra.w <= 0.5
+        && instance.clip_size_and_extra.z < 0.5
+        && instance.rect_size.x > 32.0
+        && instance.rect_size.y > 32.0;
+    var ext = vec2<f32>(0.0);
+    if (!simple_fill) {
+        let spread = max(0.0, shadow_spread);
+        ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
+            + vec2<f32>(shadow_blur * 2.0 + instance.border_width + spread + 2.0);
+        if (shadow_inset > 0.5) {
+            ext = vec2<f32>(
+                shadow_blur * 2.0 + instance.border_width + abs(shadow_spread) + 2.0
+            );
+        }
     }
 
     // Grow AABB enough to cover all four transformed corners.
@@ -618,7 +629,35 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // CSS overflow clip: local border box (same space as SDF `in.p`), then VS.
+    let b = in.rect_size * 0.5;
+    // Large axis-aligned fills skip SDF; overflow still uses clip_poly + clip_pos.
+    let simple_fill = in.radii.x <= 0.0 && in.radii.y <= 0.0 && in.radii.z <= 0.0 && in.radii.w <= 0.0
+        && in.border_width <= 0.0
+        && in.shadow_color.a <= 0.001
+        && in.extra_and_id.z <= 0.5
+        && in.extra_and_id.x < 0.5
+        && b.x > 16.0
+        && b.y > 16.0;
+    // World overflow / clip-path (rotated descendants, restrict shells).
+    if (!clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
+        discard;
+    }
+    if (simple_fill) {
+        if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
+            let c1 = in.clip_pos + in.clip_size;
+            if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
+                || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
+                discard;
+            }
+        }
+        var rgb = linearize_srgb_rgb(in.color.rgb);
+        if (globals.premultiply > 0.5) {
+            rgb = rgb * in.color.a;
+        }
+        return vec4<f32>(rgb, in.color.a);
+    }
+
+    // Axis-aligned overflow: local border box (same space as SDF `in.p`).
     if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
         let c1 = in.clip_pos + in.clip_size;
         if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
@@ -626,11 +665,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             discard;
         }
     }
-    if (!clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
-        discard;
-    }
-
-    let b = in.rect_size * 0.5;
 
     // Unpack border_extra: style + shape*16 + round(param*100)*256 (stable subtract, not fmod)
     let packed = in.extra_and_id.x;

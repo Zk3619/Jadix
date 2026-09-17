@@ -642,6 +642,41 @@ impl GpuClipPoly {
             || Self::round_slot_active(self.round_rect2)
     }
 
+    /// Axis-aligned overflow box (including zero radii). World `frag_px` test.
+    pub fn from_axis_rect(box_xywh: [f32; 4]) -> Self {
+        if box_xywh[2] <= 0.5 || box_xywh[3] <= 0.5 {
+            return Self::NONE;
+        }
+        let mut packed = Self::NONE;
+        packed.round_rect = box_xywh;
+        packed.round_radii = [0.0; 4];
+        packed
+    }
+
+    /// Overflow clip in **world** pixels: rounded AABB when axis-aligned, otherwise
+    /// the four corners after the same center-pivot affine the VS uses.
+    pub fn from_overflow_box(
+        box_xywh: [f32; 4],
+        radii: [f32; 4],
+        transform: &super::transform::Mat2d,
+    ) -> Self {
+        if box_xywh[2] <= 0.0 || box_xywh[3] <= 0.0 {
+            return Self::NONE;
+        }
+        if super::transform::mat2d_is_axis_aligned(transform) {
+            if radii_affect_clip(radii) {
+                Self::from_rounded_rect(box_xywh, radii)
+            } else {
+                Self::from_axis_rect(box_xywh)
+            }
+        } else {
+            Self::from_world_points(
+                &super::transform::quad_of_centered_transform(box_xywh, transform),
+                ClipFillRule::NonZero,
+            )
+        }
+    }
+
     /// Overflow `border-radius` clip via SDF round-box (not a chordal polygon).
     /// Empty when radii are ~0.
     pub fn from_rounded_rect(box_xywh: [f32; 4], radii: [f32; 4]) -> Self {
@@ -1235,5 +1270,42 @@ mod tests {
         let both = GpuClipPoly::and_layers(a, b);
         assert!(both.contains_point([50.0, 50.0]));
         assert!(!both.contains_point([10.0, 10.0]));
+    }
+
+    #[test]
+    fn overflow_box_axis_rect_is_active_without_radii() {
+        let poly = GpuClipPoly::from_overflow_box(
+            [10.0, 20.0, 200.0, 120.0],
+            [0.0; 4],
+            &super::super::transform::MAT2D_IDENTITY,
+        );
+        assert!(poly.is_active());
+        assert!(poly.contains_point([11.0, 21.0]));
+        assert!(poly.contains_point([209.0, 139.0]));
+        assert!(!poly.contains_point([9.0, 80.0]));
+        assert!(!poly.contains_point([100.0, 141.0]));
+        assert_eq!(poly.count, 0, "axis overflow must use the round-rect slot");
+    }
+
+    #[test]
+    fn overflow_box_rotated_keeps_diamond_tip() {
+        let m = super::super::transform::mat2d_linear(&super::super::transform::mat2d_rotate(
+            std::f32::consts::FRAC_PI_4,
+        ));
+        let poly = GpuClipPoly::from_overflow_box([0.0, 0.0, 80.0, 80.0], [0.0; 4], &m);
+        assert!(poly.is_active());
+        assert!(poly.count >= 3, "rotated overflow must tessellate a quad");
+        let c = [40.0, 40.0];
+        let d = [4.0 - c[0], 4.0 - c[1]];
+        let (rx, ry) = super::super::transform::mat2d_transform_vec(&m, d[0], d[1]);
+        let tip = [c[0] + rx, c[1] + ry];
+        assert!(
+            poly.contains_point(tip),
+            "diamond vertex must stay, tip={tip:?}"
+        );
+        assert!(
+            !poly.contains_point([80.0, 0.0]),
+            "layout AABB corner must drop"
+        );
     }
 }

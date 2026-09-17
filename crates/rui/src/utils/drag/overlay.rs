@@ -1893,6 +1893,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rotated_ghost_clips_to_restrict_box_in_world() {
+        let mut inner = Element::new()
+            .w(80.0)
+            .h(80.0)
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .text("溢出隐藏");
+        inner.style.rotate_deg = -135.0;
+        let panel = place_drag_ghost(inner, "g1", [20.0, 80.0], Some([10.0, 20.0, 200.0, 120.0]));
+        let mut root = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .child(mount_anchored_overlay(panel, 902));
+        assert!(
+            crate::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1,
+            "ghost must hoist"
+        );
+        let mut tree = crate::layout::LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        let fill_i = result
+            .instances
+            .iter()
+            .position(|i| i.color[0] > 0.9 && i.rect_size[0] > 60.0)
+            .expect("rotated ghost fill");
+        let fill = &result.instances[fill_i];
+        assert!(
+            fill.clip_size[0] < 0.0 || fill.clip_size[1] < 0.0,
+            "rotated ghost must not local-AABB clip (chops internals), clip_size={:?}",
+            fill.clip_size
+        );
+        let poly = result.clip_polys[fill_i];
+        assert!(
+            poly.is_active(),
+            "restrict overflow:hidden shell must stamp a world clip poly"
+        );
+        let cx = fill.rect_pos[0] + fill.rect_size[0] * 0.5;
+        let cy = fill.rect_pos[1] + fill.rect_size[1] * 0.5;
+        let world = |lx: f32, ly: f32| -> [f32; 2] {
+            let (rx, ry) = crate::style::mat2d_transform_vec(&fill.transform, lx, ly);
+            [cx + rx + fill.transform[4], cy + ry + fill.transform[5]]
+        };
+        let inside = world(0.0, 35.0);
+        assert!(
+            inside[0] >= 10.0 && inside[0] < 210.0 && inside[1] >= 20.0 && inside[1] < 140.0,
+            "fixture: local (0,35) must land inside the restrict box, got {inside:?}"
+        );
+        assert!(
+            poly.contains_point(inside),
+            "world clip must keep ink still inside the restrict box (not a local diagonal chop), p={inside:?}"
+        );
+        let leaked = world(-40.0, -40.0);
+        assert!(
+            leaked[1] >= 140.0 || leaked[0] < 10.0 || leaked[0] >= 210.0,
+            "fixture: rotated TL must leave the restrict box, got {leaked:?}"
+        );
+        assert!(
+            !poly.contains_point(leaked),
+            "world clip must hide the rotated corner outside the dashed box, p={leaked:?}"
+        );
+        for d in &result.textured_draws {
+            if d.clip_size[0] < 0.0 || d.clip_size[1] < 0.0 {
+                continue;
+            }
+            assert!(
+                crate::renderer::overflow_clip_contains_world(d.clip_pos, d.clip_size, inside),
+                "rotated bake must world-clip to the restrict AABB, not local; p={inside:?} clip={:?}",
+                (d.clip_pos, d.clip_size)
+            );
+            assert!(
+                !crate::renderer::overflow_clip_contains_world(d.clip_pos, d.clip_size, leaked),
+                "rotated bake must discard ink outside the restrict box, p={leaked:?}"
+            );
+        }
+    }
+
     fn find_ghost(el: &Element) -> Option<&Element> {
         if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
             return Some(el);

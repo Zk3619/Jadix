@@ -4927,8 +4927,9 @@ impl LayoutTree {
         let self_tex0 = textured_draws.len();
 
         // Clipping & Visibility
-        // Overflow clips the **layout** border box in `rect_pos` space; the GPU then
-        // tests after undoing the instance affine (CSS local clip, then VS).
+        // Overflow clips the **layout** border box. GPU tests axis-aligned
+        // descendants in local `clip_pos` space; rotated descendants use world
+        // `clip_poly` (CSS: ancestor clip is in the ancestor's space).
         // Using `render_rect` (CSS scale/rotate visual) made gallery `hover:scale-*` /
         // `hover:rotate-*` tiles grow/shrink the scroll clip every tween frame, which
         // jittered hit-test and flashed sidebar hover while those tiles were on screen.
@@ -5005,13 +5006,15 @@ impl LayoutTree {
         } else {
             element.style.clip_path.to_gpu(layout_border)
         };
-        let overflow_clip_poly = if overflow_clips
-            && clip_x
-            && clip_y
-            && !escape_overflow_clip
-            && crate::style::radii_affect_clip(element.style.radii)
-        {
-            crate::style::GpuClipPoly::from_rounded_rect(layout_border, element.style.radii)
+        // Own overflow always stamps a **world** clip (AABB or transformed quad),
+        // including `rui_escape_overflow_clip` shells (DragOverlay restrict box)
+        // and zero-radius boxes. `escape` only drops *ancestor* overflow.
+        let overflow_clip_poly = if overflow_clips && clip_x && clip_y {
+            crate::style::GpuClipPoly::from_overflow_box(
+                overflow_border,
+                element.style.radii,
+                &transform,
+            )
         } else {
             crate::style::GpuClipPoly::NONE
         };
@@ -5869,24 +5872,7 @@ impl LayoutTree {
                         // Expand to line-height + ink pad (+ text-shadow extent); draw the padded
                         // quad so glyphs/shadow aren't clipped. Intersect only with ancestor scroll
                         // clip — not the text leaf's overflow:hidden (that would crop the pad).
-                        let shadow_extra = match text_style.shadow_color {
-                            Some(sc)
-                                if sc[3] > 0
-                                    && (text_style.shadow_blur > 0.0
-                                        || text_style.shadow_offset[0].abs() > 0.0
-                                        || text_style.shadow_offset[1].abs() > 0.0) =>
-                            {
-                                crate::utils::text_texture::text_xform_shadow_pad(
-                                    [
-                                        text_style.shadow_offset[0] * text_scale,
-                                        text_style.shadow_offset[1] * text_scale,
-                                    ],
-                                    text_style.shadow_blur * text_scale,
-                                )
-                            }
-                            _ => 0.0,
-                        };
-                        let bake_shadow = match text_style.shadow_color {
+                        let user_shadow = match text_style.shadow_color {
                             Some(sc)
                                 if sc[3] > 0
                                     && (text_style.shadow_blur > 0.0
@@ -5904,19 +5890,38 @@ impl LayoutTree {
                             }
                             _ => None,
                         };
+                        let bake_shadow = crate::utils::text_texture::text_xform_effective_shadow(
+                            user_shadow,
+                            text_style.weight_resolved(),
+                            text_style.color_resolved(),
+                            text_scale,
+                            is_icon,
+                            text_style.font_family.as_deref(),
+                        );
+                        let shadow_extra = bake_shadow
+                            .map(|(_, so, sb)| {
+                                crate::utils::text_texture::text_xform_shadow_pad(so, sb)
+                            })
+                            .unwrap_or(0.0);
+                        let nowrap = text_style.white_space == crate::style::WhiteSpace::Nowrap;
+                        let is_input_text = text_style.input_caret.is_some();
+                        let line_h = crate::renderer::prepare_text::coverage_line_height(
+                            &text_style,
+                            text_scale,
+                            is_input_text,
+                        );
                         let (bake_w, bake_h, pad) =
                             crate::utils::text_texture::text_xform_bake_box_ex(
                                 src_w,
                                 src_h,
                                 bake_font_size,
                                 shadow_extra,
+                                line_h,
                             );
-                        let nowrap = text_style.white_space == crate::style::WhiteSpace::Nowrap;
-                        let is_input_text = text_style.input_caret.is_some();
                         let hard_lines_n = text.split('\n').count().max(1);
                         let glyph_dy = crate::utils::text_texture::bake_glyph_layout_dy(
                             src_h,
-                            bake_font_size,
+                            line_h,
                             hard_lines_n,
                             nowrap,
                             is_input_text,
@@ -5941,6 +5946,7 @@ impl LayoutTree {
                                 dpr,
                                 as_sdf,
                                 glyph_dy,
+                                line_h,
                             )
                         } else {
                             crate::utils::text_texture::ensure_text_xform_texture_with_shadow(
@@ -5958,6 +5964,7 @@ impl LayoutTree {
                                 as_sdf,
                                 bake_shadow,
                                 glyph_dy,
+                                line_h,
                             )
                         };
                         if let Some((tex_key, _)) = bake_result {
@@ -9900,6 +9907,105 @@ mod portal_hoist_tests {
             bake.rect[3]
         );
         let _ = min_h;
+    }
+
+    #[test]
+    fn rotated_medium_label_bake_pads_synthetic_bold() {
+        // DragOverlay rotate (gallery 四角) bakes the Label. font-medium 500 on
+        // static Segoe uses Regular + synth halo — the bake quad must grow so the
+        // halo is not clipped (Coverage already had the 0.18/0.32 stamp).
+        fn bake_h(weight: u16) -> f32 {
+            let mut t = crate::utils::text_node::apply_label_defaults(
+                Element::new().text("拖到四角").w(120.0).h(24.0),
+            );
+            t.text_style.weight = Some(weight);
+            let mut shell = Element::new()
+                .w(160.0)
+                .h(48.0)
+                .absolute()
+                .left(10.0)
+                .top(10.0)
+                .child(t);
+            shell.style.rotate_deg = 15.0;
+            let mut root = Element::new().w(400.0).h(200.0).child(shell);
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+            result
+                .textured_draws
+                .iter()
+                .find(|d| {
+                    d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                        || d.texture_key
+                            .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+                })
+                .map(|d| d.rect[3])
+                .expect("baked label")
+        }
+        let needs_synth = crate::text::measure::with_layout_font_system(|fs| {
+            let family = crate::renderer::text_hit::best_font_family(fs);
+            crate::utils::font::resolve_face_weight(fs.db(), family, 500).synthetic_bold
+        });
+        if !needs_synth {
+            return;
+        }
+        let h400 = bake_h(400);
+        let h500 = bake_h(500);
+        assert!(
+            h500 > h400 + 1.0,
+            "synth-bold bake must expand shadow pad, 400={h400} 500={h500}"
+        );
+    }
+
+    #[test]
+    fn rotated_label_bake_height_uses_leading_none_not_text_sm() {
+        // DragOverlay 四角 ghost clones the Label (`leading-none` / 1em). Bake
+        // must not grow the quad to Tailwind text-sm leading (~1.43em) — that
+        // extra line box half-leads the glyphs ~1px down vs Coverage.
+        let mut t = crate::utils::text_node::apply_label_defaults(
+            Element::new().text("拖到四角").white_space("nowrap"),
+        );
+        t.style.rotate_deg = 15.0;
+        // Shrink-wrap: a stretched 200px leaf would hide the 1em vs 1.43em delta.
+        t = t.absolute().left(10.0).top(10.0);
+        let mut root = Element::new().w(400.0).h(200.0).child(t);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+        let bake = result
+            .textured_draws
+            .iter()
+            .find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            })
+            .expect("baked label");
+        let font = 14.0_f32;
+        let ink_pad = crate::utils::text_texture::text_xform_pad_px(font);
+        let needs_synth = crate::text::measure::with_layout_font_system(|fs| {
+            let family = crate::renderer::text_hit::best_font_family(fs);
+            crate::utils::font::resolve_face_weight(fs.db(), family, 500).synthetic_bold
+        });
+        let extra = if needs_synth {
+            let (_, off, blur) = crate::utils::font::synthetic_bold_shadow([20, 20, 20, 255], 1.0);
+            crate::utils::text_texture::text_xform_shadow_pad(off, blur)
+        } else {
+            0.0
+        };
+        let pad = ink_pad + extra;
+        let none_h = font + pad * 2.0;
+        let sm_h = font * crate::style::tailwind_default_leading_scale(font) + pad * 2.0;
+        assert!(
+            (bake.rect[3] - none_h).abs() < 1.0,
+            "leading-none bake h={} must match 1em+pad ({none_h}), not text-sm ({sm_h})",
+            bake.rect[3]
+        );
+        assert!(
+            bake.rect[3] + 1.0 < sm_h,
+            "must not use text-sm leading for Label ghost (h={} sm={sm_h})",
+            bake.rect[3]
+        );
     }
 
     #[test]

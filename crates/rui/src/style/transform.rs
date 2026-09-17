@@ -389,6 +389,25 @@ pub fn aabb_of_centered_transform(rect: [f32; 4], m: &Mat2d) -> [f32; 4] {
     ]
 }
 
+/// Four corners after the same center-pivot affine the VS uses (TL, TR, BR, BL).
+pub fn quad_of_centered_transform(rect: [f32; 4], m: &Mat2d) -> [[f32; 2]; 4] {
+    let [x, y, w, h] = rect;
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    let corners = [
+        [-0.5 * w, -0.5 * h],
+        [0.5 * w, -0.5 * h],
+        [0.5 * w, 0.5 * h],
+        [-0.5 * w, 0.5 * h],
+    ];
+    corners.map(|[lx, ly]| {
+        [
+            cx + m[0] * lx + m[2] * ly + m[4],
+            cy + m[1] * lx + m[3] * ly + m[5],
+        ]
+    })
+}
+
 fn origin_x_px(ox: &TransformOriginX, w: f32) -> f32 {
     match ox {
         TransformOriginX::Left => 0.0,
