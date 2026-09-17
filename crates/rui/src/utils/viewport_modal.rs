@@ -250,6 +250,18 @@ impl ViewportModalContentOpts {
 // Content
 // ---------------------------------------------------------------------------
 
+/// Keep the in-flow island host out of the parent's flex wrap. A 0×0 `static`
+/// item still wraps onto a second line; `gap` then becomes row-gap and
+/// everything below the trigger jumps with viewport width / label length.
+fn flow_hidden_portal_host(el: Element) -> Element {
+    el.absolute()
+        .w(0.0)
+        .h(0.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .pointer_events_box_none()
+}
+
 pub fn viewport_modal_content(
     opts: ViewportModalContentOpts,
     body: impl Fn() -> Element + 'static,
@@ -272,7 +284,7 @@ pub fn viewport_modal_content(
             isolate_reads(|| body()),
         )
     });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+    flow_hidden_portal_host(reactive_placeholder_sized(view_id, 0.0, 0.0))
 }
 
 /// RSX `<ViewportModalContent>` entry (same implementation as [`viewport_modal_content`]).
@@ -358,7 +370,11 @@ pub(crate) fn mount_viewport_modal_layer(
     stage: Element,
     zs: &ModalShellZs,
 ) -> Element {
-    mount_modal_layer(overlay_el, mount_viewport_portal_stage(stage, zs.panel))
+    // Portals hoist out; the leftover host must not be a wrapping flex item.
+    flow_hidden_portal_host(mount_modal_layer(
+        overlay_el,
+        mount_viewport_portal_stage(stage, zs.panel),
+    ))
 }
 
 /// Product chrome → overlay / motion / stage / mount. Callers see [`PresencePhase`], not a handle.
@@ -490,7 +506,11 @@ fn finish_viewport_modal_layer(
     if opts.overlay {
         mount_viewport_modal_layer(overlay_el, stage, &portal.zs)
     } else {
-        mount_viewport_portal_stage(stage, portal.zs.panel)
+        // Don't stamp `.absolute()` onto the portal node itself (`absolute()`
+        // clears `position_fixed`). Host is leftover after hoist.
+        flow_hidden_portal_host(
+            Element::new().child(mount_viewport_portal_stage(stage, portal.zs.panel)),
+        )
     }
 }
 
@@ -505,7 +525,7 @@ fn assemble_modal(
     let _ = sync_modal_presence(presence, open.peek());
     bind_modal_open(presence, open);
     let Some(portal) = viewport_modal_portal_if_mounted(id, open, presence) else {
-        return Element::new().w(0.0).h(0.0);
+        return flow_hidden_portal_host(Element::new());
     };
 
     let mut overlay_el = build_modal_overlay(open, portal.zs.underlay, &overlay_opts.to_internal());
@@ -1488,6 +1508,528 @@ mod tests {
                 "overlay must drop after the exit animation completes"
             );
         }
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery RSX `<ViewportModal>` unpacks Trigger + Content into the parent HStack
+    /// (`rui_fragment` + `IntoElementList`). Opening must not eat the page VStack gap.
+    #[test]
+    fn rsx_open_toggle_keeps_page_vstack_gap() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::components::button::button;
+        use crate::core::reactivity::create_effect;
+        use crate::core::tree::IntoElementList;
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::primitives::{hstack, vstack};
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+        use crate::utils::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        fn dump_abs(
+            tree: &LayoutTree,
+            el: &Element,
+            abs_x: f32,
+            abs_y: f32,
+            out: &mut Vec<(String, f32, f32, f32, f32)>,
+        ) {
+            let (x, y, w, h) = if let Some(nid) = el.layout_node {
+                if let Ok(lay) = tree.taffy.layout(nid) {
+                    (
+                        abs_x + lay.location.x,
+                        abs_y + lay.location.y,
+                        lay.size.width,
+                        lay.size.height,
+                    )
+                } else {
+                    (abs_x, abs_y, 0.0, 0.0)
+                }
+            } else {
+                (abs_x, abs_y, 0.0, 0.0)
+            };
+            let label = el
+                .text
+                .clone()
+                .or_else(|| el.template_id.clone())
+                .unwrap_or_else(|| "?".into());
+            if el.text.is_some() || el.template_id.is_some() {
+                out.push((label, x, y, w, h));
+            }
+            let child_origin_x = if let Some(nid) = el.layout_node {
+                tree.taffy
+                    .layout(nid)
+                    .map(|l| abs_x + l.location.x)
+                    .unwrap_or(abs_x)
+            } else {
+                abs_x
+            };
+            let child_origin_y = if let Some(nid) = el.layout_node {
+                tree.taffy
+                    .layout(nid)
+                    .map(|l| abs_y + l.location.y)
+                    .unwrap_or(abs_y)
+            } else {
+                abs_y
+            };
+            for c in &el.children {
+                dump_abs(tree, c, child_origin_x, child_origin_y, out);
+            }
+        }
+
+        fn y_of(rows: &[(String, f32, f32, f32, f32)], needle: &str) -> f32 {
+            rows.iter()
+                .find(|(l, _, _, _, _)| l.contains(needle))
+                .map(|(_, _, y, _, _)| *y)
+                .unwrap_or_else(|| panic!("missing `{needle}` in {rows:?}"))
+        }
+
+        fn size_of(rows: &[(String, f32, f32, f32, f32)], needle: &str) -> (f32, f32) {
+            rows.iter()
+                .find(|(l, _, _, _, _)| l.contains(needle))
+                .map(|(_, _, _, w, h)| (*w, *h))
+                .unwrap_or_else(|| panic!("missing `{needle}` in {rows:?}"))
+        }
+
+        fn build_card(open: Signal<bool>) -> Element {
+            let shell = viewport_modal_scope(
+                "gal-vm-gap",
+                Some(open),
+                ShellOverlayOpts {
+                    opacity: Some(0.28),
+                    ..Default::default()
+                },
+                || {
+                    let trigger: Element = button("gal-vm-dlg-rsx-btn")
+                        .variant("default")
+                        .size("sm")
+                        .child(Element::new().text(if open.peek() {
+                            "关闭 RSX 模态"
+                        } else {
+                            "打开 RSX ViewportModal"
+                        }))
+                        .into();
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![
+                        trigger,
+                        viewport_modal_content(
+                            ViewportModalContentOpts::default()
+                                .motion(ModalSurfaceMotion::DialogFade),
+                            || {
+                                Element::new()
+                                    .text("ViewportModal · RSX")
+                                    .w(320.0)
+                                    .h(160.0)
+                                    .bg([1.0, 1.0, 1.0, 1.0])
+                            },
+                        ),
+                    ])
+                },
+            );
+            // Match `ui!` HStack: `IntoElementList` unpacks the rui_fragment.
+            let unpacked = shell.into_element_list();
+            let mut row = hstack()
+                .gap("0.5rem")
+                .items("center")
+                .wrap("wrap")
+                .w("100%");
+            for child in unpacked {
+                row = row.child(child);
+            }
+            vstack()
+                .w(280.0)
+                .p("1rem")
+                .gap("0.5rem")
+                .child(
+                    Element::new()
+                        .text("ViewportModal 无头壳")
+                        .text_size(20.0)
+                        .font_weight(700.0)
+                        .w("100%"),
+                )
+                .child(
+                    vstack()
+                        .w("100%")
+                        .gap("0.75rem")
+                        .child(
+                            Element::new()
+                                .text("utils::viewport_modal：underlay + 视口舞台 + presence。不进 prelude。RSX 与 Builder 语义等价。")
+                                .text_size(12.0)
+                                .w("100%")
+                                .template_id("vm-gap-desc"),
+                        )
+                        .child(
+                            Element::new()
+                                .text("DialogFade · RSX")
+                                .text_size(14.0)
+                                .font_weight(600.0)
+                                .w("100%")
+                                .template_id("vm-gap-dlg-label"),
+                        )
+                        .child(row)
+                        .child(
+                            Element::new()
+                                .text("SheetSlide · Builder")
+                                .text_size(14.0)
+                                .font_weight(600.0)
+                                .w("100%")
+                                .template_id("vm-gap-sheet-label"),
+                        )
+                        .child(Element::from(
+                            button("gal-vm-sheet-btn")
+                                .variant("outline")
+                                .size("sm")
+                                .child(Element::new().text("打开 Builder ViewportModal")),
+                        )),
+                )
+                .into()
+        }
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(
+            &mut fs,
+            "打开 RSX ViewportModal 关闭 RSX 模态 视口舞台 presence",
+        );
+        install_shared_font_system(&mut fs);
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("gal_vm_gap_open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                *live_e.borrow_mut() = build_card(open);
+            });
+            open
+        });
+        drain_deferred_view_remounts();
+
+        let layout_once = |live: &RefCell<Element>, layout: &mut LayoutTree| {
+            drain_deferred_view_remounts();
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            let _ = flush_modal_shell_motion_subtree(&mut tree);
+            for _ in 0..8 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+            let _ = layout.build_and_layout(&mut tree, 280.0, 800.0, [0.0, 0.0]);
+        };
+
+        fn page_text_ys(
+            result: &crate::layout::layout_tree::RenderResult,
+        ) -> Vec<(String, f32, f32, f32)> {
+            result
+                .text_nodes
+                .iter()
+                .map(|t| (t.text.clone(), t.y, t.height, t.paint_scale))
+                .collect()
+        }
+        fn max_page_scale(el: &Element) -> f32 {
+            let mut m = el.style.scale[1];
+            for c in &el.children {
+                if c.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID) {
+                    continue;
+                }
+                m = m.max(max_page_scale(c).max(el.style.scale[1]));
+                m = m.max(c.style.scale[1]);
+            }
+            m
+        }
+
+        let mut layout = LayoutTree::new();
+        layout_once(&live, &mut layout);
+        let closed_result = {
+            let mut tree = live.borrow_mut();
+            layout.build_and_layout(&mut tree, 280.0, 800.0, [0.0, 0.0])
+        };
+        let mut closed = Vec::new();
+        dump_abs(&layout, &live.borrow(), 0.0, 0.0, &mut closed);
+        let dlg_y_closed = y_of(&closed, "DialogFade · RSX");
+        let sheet_y_closed = y_of(&closed, "SheetSlide · Builder");
+        let gap_closed = sheet_y_closed - dlg_y_closed;
+        let view_closed = size_of(&closed, "__view");
+        let closed_texts = page_text_ys(&closed_result);
+        let closed_page_scale = max_page_scale(&live.borrow());
+        eprintln!(
+            "closed: dlg_y={dlg_y_closed:.1} sheet_y={sheet_y_closed:.1} gap={gap_closed:.1} view={view_closed:?} page_scale={closed_page_scale:.3} texts={closed_texts:?}"
+        );
+
+        open.set(true);
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            let _ = flush_modal_shell_motion_subtree(&mut tree);
+            for _ in 0..8 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+        }
+        layout.set_collect_skip_allowed(true);
+        let opened_result = {
+            let mut tree = live.borrow_mut();
+            let _ = layout.build_and_layout_fast(&mut tree, 280.0, 800.0, [0.0, 0.0], false, false);
+            layout.build_and_layout_fast(&mut tree, 280.0, 800.0, [0.0, 0.0], false, false)
+        };
+        let mut opened = Vec::new();
+        dump_abs(&layout, &live.borrow(), 0.0, 0.0, &mut opened);
+        let dlg_y_open = y_of(&opened, "DialogFade · RSX");
+        let sheet_y_open = y_of(&opened, "SheetSlide · Builder");
+        let gap_open = sheet_y_open - dlg_y_open;
+        let view_open = size_of(&opened, "__view");
+        let opened_texts = page_text_ys(&opened_result);
+        let opened_page_scale = max_page_scale(&live.borrow());
+        eprintln!(
+            "open: dlg_y={dlg_y_open:.1} sheet_y={sheet_y_open:.1} gap={gap_open:.1} view={view_open:?} page_scale={opened_page_scale:.3} texts={opened_texts:?}"
+        );
+
+        let text_y = |rows: &[(String, f32, f32, f32)], needle: &str| {
+            rows.iter()
+                .find(|(t, _, _, _)| t.contains(needle))
+                .map(|(_, y, _, _)| *y)
+                .unwrap_or_else(|| panic!("missing `{needle}` in {rows:?}"))
+        };
+        let paint_gap_closed =
+            text_y(&closed_texts, "SheetSlide") - text_y(&closed_texts, "DialogFade");
+        let paint_gap_open =
+            text_y(&opened_texts, "SheetSlide") - text_y(&opened_texts, "DialogFade");
+
+        assert!(
+            (gap_open - gap_closed).abs() < 1.0,
+            "opening RSX ViewportModal must not change page VStack spacing; closed={gap_closed:.1} open={gap_open:.1} view_closed={view_closed:?} view_open={view_open:?}"
+        );
+        assert!(
+            (paint_gap_open - paint_gap_closed).abs() < 1.0,
+            "collect-skip paint Y of page labels must stay put; closed={paint_gap_closed:.1} open={paint_gap_open:.1} closed_texts={closed_texts:?} opened_texts={opened_texts:?}"
+        );
+        assert!(
+            (opened_page_scale - 1.0).abs() < 0.01,
+            "DialogFade must not scale the page tree; page_scale={opened_page_scale}"
+        );
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery `<HStack wrap>` unpacks Trigger + 0×0 Content. When the trigger is
+    /// almost as wide as the row, the placeholder wraps onto a second flex line and
+    /// `gap` becomes **row-gap**, pushing everything below the button up/down with
+    /// viewport width (and with 打开 vs 关闭 label width).
+    #[test]
+    fn content_placeholder_does_not_wrap_in_parent_hstack() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::create_effect;
+        use crate::core::tree::IntoElementList;
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::primitives::{hstack, vstack};
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        fn sheet_y(result: &crate::layout::layout_tree::RenderResult) -> f32 {
+            result
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains("SheetSlide"))
+                .map(|t| t.y)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing SheetSlide in {:?}",
+                        result
+                            .text_nodes
+                            .iter()
+                            .map(|t| t.text.as_str())
+                            .collect::<Vec<_>>()
+                    )
+                })
+        }
+        fn btn_bottom(result: &crate::layout::layout_tree::RenderResult) -> f32 {
+            result
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains("打开 RSX") || t.text.contains("关闭 RSX"))
+                .map(|t| t.y + t.height)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing trigger in {:?}",
+                        result
+                            .text_nodes
+                            .iter()
+                            .map(|t| t.text.as_str())
+                            .collect::<Vec<_>>()
+                    )
+                })
+        }
+        fn row_h_of(root: &Element, result: &crate::layout::layout_tree::RenderResult) -> f32 {
+            let from_text = result
+                .text_nodes
+                .iter()
+                .find(|t| t.template_id.as_deref() == Some("vm-wrap-row"))
+                .map(|t| t.height)
+                .unwrap_or(-1.0);
+            if from_text > 0.0 {
+                return from_text;
+            }
+            fn find_tid<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+                if el.template_id.as_deref() == Some(id) {
+                    return Some(el);
+                }
+                el.children.iter().find_map(|c| find_tid(c, id))
+            }
+            find_tid(root, "vm-wrap-row")
+                .map(|el| el.layout_bounds[3])
+                .unwrap_or(-1.0)
+        }
+
+        fn card(id: &str, open: Signal<bool>) -> Element {
+            let shell = viewport_modal_scope(id, Some(open), ShellOverlayOpts::default(), || {
+                let trigger = Element::new()
+                    .w(200.0)
+                    .h(32.0)
+                    .flex_shrink(0.0)
+                    .text(if open.peek() {
+                        "关闭 RSX 模态"
+                    } else {
+                        "打开 RSX ViewportModal"
+                    })
+                    .text_size(14.0)
+                    .template_id("vm-wrap-btn");
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![
+                    trigger,
+                    viewport_modal_content(ViewportModalContentOpts::default(), || {
+                        Element::new().text("panel").w(320.0).h(160.0)
+                    }),
+                ])
+            });
+            let mut row = hstack()
+                .gap("0.5rem")
+                .items("center")
+                .wrap("wrap")
+                .w("100%");
+            for child in shell.into_element_list() {
+                row = row.child(child);
+            }
+            let mut row: Element = row.into();
+            row.template_id = Some("vm-wrap-row".into());
+            vstack()
+                .w("100%")
+                .gap("0.75rem")
+                .child(
+                    Element::new()
+                        .text("DialogFade · RSX")
+                        .template_id("vm-wrap-dlg"),
+                )
+                .child(row)
+                .child(
+                    Element::new()
+                        .text("SheetSlide · Builder")
+                        .template_id("vm-wrap-sheet"),
+                )
+                .into()
+        }
+
+        fn gap_at(width: f32) -> (f32, f32, f32, f32) {
+            clear_overlay_stack();
+            reset_registered_anchors();
+            let (_o, mut root) =
+                create_root(|| card("vm-wrap", use_signal("vm-wrap-open", || false)));
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, width, 400.0, [0.0, 0.0]);
+            let b = btn_bottom(&result);
+            let s = sheet_y(&result);
+            (s - b, b, s, row_h_of(&root, &result))
+        }
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(
+            &mut fs,
+            "打开 RSX ViewportModal 关闭 RSX 模态 SheetSlide",
+        );
+        install_shared_font_system(&mut fs);
+
+        let (gap_narrow, btn_n, sheet_n, row_n) = gap_at(180.0);
+        let (gap_wide, btn_w, sheet_w, row_w) = gap_at(400.0);
+        eprintln!(
+            "wrap placeholder: narrow gap={gap_narrow:.1} row_h={row_n:.1} (btn_bottom={btn_n:.1} sheet={sheet_n:.1}) wide gap={gap_wide:.1} row_h={row_w:.1} (btn_bottom={btn_w:.1} sheet={sheet_w:.1})"
+        );
+        assert!(
+            (gap_narrow - gap_wide).abs() < 1.0,
+            "0×0 ViewportModalContent must not wrap in a parent HStack; narrow={gap_narrow:.1} wide={gap_wide:.1} row_h {row_n:.1}/{row_w:.1} (btn {btn_n:.1}/{btn_w:.1} sheet {sheet_n:.1}/{sheet_w:.1})"
+        );
+        assert!(
+            (row_n - 32.0).abs() < 1.0 && (row_w - 32.0).abs() < 1.0,
+            "wrapping HStack must stay one line; row_h {row_n:.1}/{row_w:.1}"
+        );
+
+        // Island reconcile replaces the placeholder (`*old_subtree = new_fragment`).
+        // Closed assemble_modal and the open layer host must stay out of flow too.
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (owner, open) = create_root(|| {
+            let open = use_signal("vm-wrap-live-open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                *live_e.borrow_mut() = card("vm-wrap-live", open);
+            });
+            open
+        });
+        drain_deferred_view_remounts();
+
+        let layout_180 = |live: &RefCell<Element>, layout: &mut LayoutTree| {
+            drain_deferred_view_remounts();
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            layout.build_and_layout(&mut tree, 180.0, 400.0, [0.0, 0.0])
+        };
+
+        let mut layout = LayoutTree::new();
+        let closed = layout_180(&live, &mut layout);
+        let closed_gap = sheet_y(&closed) - btn_bottom(&closed);
+        let closed_row = row_h_of(&live.borrow(), &closed);
+
+        open.set(true);
+        drain_deferred_view_remounts();
+        let opened = layout_180(&live, &mut layout);
+        let opened_gap = sheet_y(&opened) - btn_bottom(&opened);
+        let opened_row = row_h_of(&live.borrow(), &opened);
+        eprintln!(
+            "wrap island: closed gap={closed_gap:.1} row_h={closed_row:.1} open gap={opened_gap:.1} row_h={opened_row:.1}"
+        );
+        assert!(
+            (opened_gap - closed_gap).abs() < 1.0,
+            "opening must not wrap the island host; closed gap={closed_gap:.1} open={opened_gap:.1} row {closed_row:.1}/{opened_row:.1}"
+        );
+        assert!(
+            (closed_row - 32.0).abs() < 1.0 && (opened_row - 32.0).abs() < 1.0,
+            "island host must stay out of the wrapping HStack; row_h {closed_row:.1}/{opened_row:.1}"
+        );
 
         clear_test_reconcile_root();
         drop(live);
