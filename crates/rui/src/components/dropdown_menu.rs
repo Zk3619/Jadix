@@ -523,7 +523,11 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
     let mut trigger = match children {
         None => {
             let mut el: Element = r#box().px("0.75rem").py("0.5rem").into();
-            el = el.child(text("Open"));
+            el = el.child(text(crate::tr_default_zh(
+                "rui.common.open",
+                "Open",
+                "打开",
+            )));
             el = el.focus_id(trigger_id.as_str());
             chain_click(el, toggle)
         }

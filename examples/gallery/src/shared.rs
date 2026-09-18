@@ -19,6 +19,14 @@ pub(crate) const GAL_SHELL_FRAMELESS: &str = "gal_shell_frameless";
 pub(crate) const GAL_SHELL_TRANSPARENT: &str = "gal_shell_transparent";
 #[cfg(test)]
 pub(crate) const GAL_SHELL_BLUR: &str = "gal_shell_blur";
+#[cfg(test)]
+pub(crate) const GAL_SHELL_GLASS_BLUR: &str = "gal_shell_glass_blur";
+#[cfg(test)]
+pub(crate) const GAL_SHELL_GLASS_AERO: &str = "gal_shell_glass_aero";
+#[cfg(test)]
+pub(crate) const GAL_SHELL_GLASS_ACRYLIC: &str = "gal_shell_glass_acrylic";
+#[cfg(test)]
+pub(crate) const GAL_SHELL_GLASS_MICA: &str = "gal_shell_glass_mica";
 pub(crate) const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 pub(crate) const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
 pub(crate) const GAL_GRID_LIST_ID: &str = "gal-grid-sort";

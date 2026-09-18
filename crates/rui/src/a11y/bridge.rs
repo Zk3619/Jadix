@@ -222,7 +222,11 @@ fn collect_visible_text(el: &Element) -> String {
 }
 
 fn collect_visible_text_into(el: &Element, parts: &mut Vec<String>) {
-    crate::core::tree::walk_elements(el, |node| {
+    let mut stack: Vec<&Element> = vec![el];
+    while let Some(node) = stack.pop() {
+        if node.attrs.get("aria-hidden").map(String::as_str) == Some("true") {
+            continue;
+        }
         if let Some(t) = node
             .text
             .as_deref()
@@ -231,7 +235,8 @@ fn collect_visible_text_into(el: &Element, parts: &mut Vec<String>) {
         {
             parts.push(t.to_string());
         }
-    });
+        stack.extend(node.children.iter().rev());
+    }
 }
 
 /// Controls that expose a name from descendant text (ARIA name-from-contents).

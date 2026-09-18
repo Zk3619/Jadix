@@ -869,6 +869,9 @@ fn rasterize_text_rgba(
             // Match glyphon text_render: y = round(line_y) + physical.y - top
             let line_y_px = run.line_y.round() as i32;
             for glyph in run.glyphs.iter() {
+                if crate::renderer::emoji_layout::glyph_is_emoji_layout_slot(&run, glyph) {
+                    continue;
+                }
                 let physical = glyph.physical((0.0, 0.0), 1.0);
                 let Some(image) = swash.get_image_uncached(fs, physical.cache_key) else {
                     continue;
@@ -991,6 +994,9 @@ fn blit_text_shadow_into_bake(
     for run in buffer.layout_runs() {
         let line_y_px = run.line_y.round() as i32;
         for g in run.glyphs.iter() {
+            if crate::renderer::emoji_layout::glyph_is_emoji_layout_slot(&run, g) {
+                continue;
+            }
             let physical = g.physical((0.0, 0.0), 1.0);
             let Some(img) = swash.get_image_uncached(fs, physical.cache_key) else {
                 continue;

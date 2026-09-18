@@ -330,6 +330,7 @@ pub struct ScrollbarBuilder {
     z_index: i32,
     /// When true, track is absolute-positioned and does not consume flex cross size.
     overlay: bool,
+    inline_end: Option<f32>,
 }
 
 /// Along-track minimum thumb size (see [`scrollbar_min_thumb_along_track`]).
@@ -385,6 +386,7 @@ pub fn scrollbar(id: &str) -> ScrollbarBuilder {
         inset: Rect::auto(),
         z_index: 0,
         overlay: false,
+        inline_end: None,
     }
 }
 
@@ -542,6 +544,10 @@ impl ScrollbarBuilder {
     }
     pub fn left(mut self, val: impl IntoDimension) -> Self {
         self.inset.left = Element::into_margin_auto(val);
+        self
+    }
+    pub fn inset_inline_end(mut self, val: impl IntoF32) -> Self {
+        self.inline_end = Some(val.into_f32());
         self
     }
     pub fn inset(mut self, val: impl IntoDimension) -> Self {
@@ -752,12 +758,15 @@ impl From<ScrollbarBuilder> for Element {
             track.set_attr("rui_scrollbar_overlay", "1");
             match builder.orientation {
                 ScrollbarOrientation::Vertical => {
-                    track = track.absolute().right(0.0).top(0.0).bottom(0.0);
+                    track = track.absolute().inset_inline_end(0.0).top(0.0).bottom(0.0);
                 }
                 ScrollbarOrientation::Horizontal => {
                     track = track.absolute().left(0.0).right(0.0).bottom(0.0);
                 }
             }
+        }
+        if let Some(end) = builder.inline_end {
+            track = track.inset_inline_end(end);
         }
         track.set_attr(
             ATTR_SCROLLBAR_TRACK_FADES,

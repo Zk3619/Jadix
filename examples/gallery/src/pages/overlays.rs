@@ -1121,7 +1121,12 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             variant="secondary"
                             size="sm"
                             on_click={move || {
-                                match open_secondary_window("RUI Gallery — Secondary", gallery_secondary_shell_root) {
+                                match open_secondary_window_with(
+                                    WindowOptions::new()
+                                        .title("RUI Gallery — Secondary")
+                                        .window_label("gallery-secondary"),
+                                    gallery_secondary_shell_root,
+                                ) {
                                     Ok(()) => {
                                         toast_push("Secondary window opened", 2000);
                                     }

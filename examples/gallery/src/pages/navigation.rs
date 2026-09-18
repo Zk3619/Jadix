@@ -216,8 +216,10 @@ pub(crate) fn RouterShowcase() -> Element {
                         size="sm"
                         variant="secondary"
                         on_click={move || {
-                            match open_secondary_window(
-                                "RUI Gallery — Shell",
+                            match open_secondary_window_with(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Shell")
+                                    .window_label("gallery-shell"),
                                 gallery_secondary_shell_root,
                             ) {
                                 Ok(()) => {
@@ -332,18 +334,25 @@ pub(crate) fn TrayShowcase() -> Element {
 
 pub(crate) fn gallery_chrome_fill(alpha: f32) -> String {
     let c = parse_color("background");
-    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!(
-        "#{:02x}{:02x}{:02x}{:02x}",
+    gallery_rgba(
         (c[0] * 255.0) as u8,
         (c[1] * 255.0) as u8,
         (c[2] * 255.0) as u8,
-        a
+        alpha,
     )
 }
 
+/// CSS 8-digit hex (`#RRGGBBAA`). Do not use `#AARRGGBB` here — that is `glass_tint` only.
+fn gallery_rgba(r: u8, g: u8, b: u8, alpha: f32) -> String {
+    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+}
+
 pub(crate) fn gallery_custom_title_bar(title: &'static str) -> Element {
-    let fill = gallery_chrome_fill(0.62);
+    gallery_title_bar(title, gallery_chrome_fill(0.62))
+}
+
+fn gallery_title_bar(title: &'static str, fill: String) -> Element {
     let mut drag: Element = ui! {
         <HStack flex_grow="1" h="100%" items="center" cursor="move">
             <Label font_weight="600" text_size="0.875rem">{ title }</Label>
@@ -354,13 +363,18 @@ pub(crate) fn gallery_custom_title_bar(title: &'static str) -> Element {
         <HStack w="100%" h="2.5rem" items="center" px="0.5rem" gap="0.25rem" bg={fill.as_str()}>
             { drag }
             <Button size="icon-xs" variant="ghost" on_click={move || set_window_minimized(true)}>
-                <Icon name="minus" size="0.75rem" />
+                <Icon name="minus" size="0.75rem" color="foreground" />
             </Button>
             <Button size="icon-xs" variant="ghost" on_click={move || toggle_window_maximized()}>
-                <Icon name="square" size="0.75rem" />
+                <Icon name="square" size="0.75rem" color="foreground" />
             </Button>
-            <Button size="icon-xs" variant="ghost" on_click={move || close_window()}>
-                <Icon name="x" size="0.75rem" />
+            <Button
+                size="icon-xs"
+                variant="ghost"
+                class="hover:bg-destructive hover:text-destructive-foreground dark:hover:bg-destructive dark:hover:text-destructive-foreground"
+                on_click={move || close_window()}
+            >
+                <Icon name="x" size="0.75rem" color="foreground" />
             </Button>
         </HStack>
     }
@@ -424,13 +438,32 @@ pub(crate) fn gallery_blur_root() -> Element {
     }
 }
 
+pub(crate) fn gallery_recipe_root(
+    title: &'static str,
+    body: &'static str,
+    fill: String,
+    bar: String,
+) -> Element {
+    ui! {
+        <VStack w="100%" h="100%" bg={fill.as_str()}>
+            { gallery_title_bar(title, bar) }
+            <VStack flex_grow="1" p="1rem" gap="0.5rem">
+                <Label font_weight="700">{ title }</Label>
+                <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                    { body }
+                </Label>
+            </VStack>
+        </VStack>
+    }
+}
+
 #[component]
 pub(crate) fn WindowChromeShowcase() -> Element {
     ui! {
         <MyCard title="无边框 / 透明 / 模糊（外壳）">
             <VStack w="100%" gap="0.5rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "次窗演示 WindowOptions：decorations(false)、transparent、blur。自定义标题栏 mousedown 调 start_window_drag。"
+                    "次窗演示 WindowOptions：decorations(false)、transparent、blur。Blur 高斯+tint；Aero 薄洗色、失焦变灰、暗色换深蓝、反射视差；Acrylic HSV 亮度色；Mica / MicaAlt（去饱和）。需 cargo run -p gallery --features glass。"
                 </Label>
                 <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
                     <Button
@@ -441,6 +474,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                             gallery_open_chrome(
                                 WindowOptions::new()
                                     .title("RUI Gallery — Frameless")
+                                    .window_label("gallery-frameless")
                                     .size(420.0, 280.0)
                                     .frameless(),
                                 gallery_frameless_root,
@@ -458,6 +492,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                             gallery_open_chrome(
                                 WindowOptions::new()
                                     .title("RUI Gallery — Transparent")
+                                    .window_label("gallery-transparent")
                                     .size(440.0, 300.0)
                                     .frameless()
                                     .transparent(true),
@@ -476,6 +511,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                             gallery_open_chrome(
                                 WindowOptions::new()
                                     .title("RUI Gallery — Blur")
+                                    .window_label("gallery-blur")
                                     .size(460.0, 300.0)
                                     .frameless()
                                     .transparent(true)
@@ -486,6 +522,149 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         }}
                     >
                         "Open blur"
+                    </Button>
+                    <Button
+                        id="gal_shell_glass_blur"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Custom Blur")
+                                    .size(460.0, 320.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true)
+                                    .backdrop(WindowBackdrop::Blur)
+                                    .blur_amount(24.0)
+                                    .glass_tint("#28FFFFFF"),
+                                || gallery_recipe_root(
+                                    "Blur recipe",
+                                    "高斯 + 淡 tint 叠层。后面的桌面/窗口应仍能透过。",
+                                    gallery_rgba(255, 255, 255, 0.16),
+                                    gallery_rgba(247, 248, 250, 0.48),
+                                ),
+                                "Custom blur opened",
+                            );
+                        }}
+                    >
+                        "Open Blur recipe"
+                    </Button>
+                    <Button
+                        id="gal_shell_glass_aero"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Aero")
+                                    .size(460.0, 320.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true)
+                                    .backdrop(WindowBackdrop::Aero)
+                                    .blur_amount(16.0)
+                                    .glass_tint("#284FC3F7")
+                                    .glass_tint_dark("#C0101828")
+                                    .aero_afterglow("#40A8E8FF")
+                                    .aero_color_balance(0.16)
+                                    .aero_afterglow_balance(0.28)
+                                    .aero_blur_balance(0.49)
+                                    .aero_reflection(0.32)
+                                    .aero_parallax(0.12),
+                                || gallery_recipe_root(
+                                    "Aero",
+                                    "霜化桌面 + 薄天蓝洗色；失焦变灰、暗色换深蓝；拖动有高光视差。",
+                                    gallery_rgba(79, 195, 247, 0.03),
+                                    gallery_rgba(79, 195, 247, 0.03),
+                                ),
+                                "Aero opened",
+                            );
+                        }}
+                    >
+                        "Open Aero"
+                    </Button>
+                    <Button
+                        id="gal_shell_glass_acrylic"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Acrylic recipe")
+                                    .size(460.0, 320.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true)
+                                    .backdrop(WindowBackdrop::Acrylic)
+                                    .blur_amount(22.0)
+                                    .glass_tint("#50FFFFFF"),
+                                || gallery_recipe_root(
+                                    "Acrylic recipe",
+                                    "未指定 luminosity 时按 HSV-V 推导亮度色，乳白应比纯叠一层更干净。",
+                                    gallery_rgba(244, 246, 248, 0.28),
+                                    gallery_rgba(242, 242, 242, 0.52),
+                                ),
+                                "Acrylic recipe opened",
+                            );
+                        }}
+                    >
+                        "Open Acrylic recipe"
+                    </Button>
+                    <Button
+                        id="gal_shell_glass_mica"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Mica recipe")
+                                    .size(460.0, 320.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true)
+                                    .backdrop(WindowBackdrop::Mica)
+                                    .blur_amount(24.0)
+                                    .luminosity_opacity(0.48)
+                                    .glass_tint("#78E8E4DE"),
+                                || gallery_recipe_root(
+                                    "Mica recipe",
+                                    "壁纸材质、偏暖灰。应半透壁纸；拖到主窗上不应透视主窗（失败则降级 Acrylic）。",
+                                    gallery_rgba(237, 232, 228, 0.30),
+                                    gallery_rgba(232, 228, 222, 0.55),
+                                ),
+                                "Mica recipe opened",
+                            );
+                        }}
+                    >
+                        "Open Mica recipe"
+                    </Button>
+                    <Button
+                        id="gal_shell_glass_mica_alt"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Mica Alt")
+                                    .size(460.0, 320.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true)
+                                    .backdrop(WindowBackdrop::MicaAlt)
+                                    .glass_tint("#70C8C4C0")
+                                    .glass_tint_dark("#80201818"),
+                                || gallery_recipe_root(
+                                    "Mica Alt",
+                                    "去饱和灰调云母。比 Mica 更素，壁纸色彩应被压掉。",
+                                    gallery_rgba(200, 198, 196, 0.32),
+                                    gallery_rgba(188, 186, 184, 0.55),
+                                ),
+                                "Mica Alt opened",
+                            );
+                        }}
+                    >
+                        "Open Mica Alt"
                     </Button>
                 </HStack>
             </VStack>

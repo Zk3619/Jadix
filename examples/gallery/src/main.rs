@@ -7,7 +7,7 @@
 //! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 主题 · 关于。
 //! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
 //!
-//! 应用结构（与前端「入口 + 页面」相同）：[`main`] 只做启动；壳在 [`app`]；分区页面在 [`pages`]。
+//! `main` 只做启动（主题、可选远程图、窗口几何持久化）；壳在 [`app`]；分区页面在 [`pages`]。
 
 mod app;
 mod imports;
@@ -58,6 +58,13 @@ fn main() {
                 Err(format!("gallery demo fetcher has no mapping for {url}"))
             }
         });
+    }
+
+    if let Err(e) = jadix_window_state::Builder::new()
+        .with_filename("gallery.window-state.toml")
+        .install()
+    {
+        eprintln!("gallery: window state: {e}");
     }
 
     #[cfg(feature = "devtools")]

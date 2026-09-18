@@ -1,5 +1,7 @@
 //! WP-3.11 A：`ui!` 与 Builder 各建一叶；viewBox + circle/path；layout_bounds。
 
+#![cfg(feature = "svg")]
+
 use rui::core::tree::LayoutTree;
 use rui::prelude::*;
 use rui::primitives::path::{ATTR_PATH_D, ATTR_PATH_SCENE};

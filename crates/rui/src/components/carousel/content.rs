@@ -518,6 +518,11 @@ fn nav_button(
         .child(icon)
         .into();
     btn = btn.rounded_full().flex_shrink(0.0);
+    btn = btn.aria_label(if which == "prev" {
+        crate::tr_default_zh("rui.carousel.prev", "Previous slide", "上一张")
+    } else {
+        crate::tr_default_zh("rui.carousel.next", "Next slide", "下一张")
+    });
     btn.attrs.insert(
         ATTR_SLOT.to_string(),
         if which == "prev" {

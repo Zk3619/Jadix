@@ -720,7 +720,9 @@ pub(crate) fn sync_radio_checked_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "a11y")]
     use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
+    #[cfg(feature = "a11y")]
     use accesskit::Role;
 
     #[test]
@@ -781,6 +783,7 @@ mod tests {
         assert_eq!(ctrl.focus_id.as_deref(), Some("plan:a"));
     }
 
+    #[cfg(feature = "a11y")]
     #[test]
     fn radio_exposes_role_in_accesskit() {
         let el: Element = radio_group("a11y_rg")

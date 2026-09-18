@@ -511,8 +511,10 @@ pub(crate) fn sync_switch_checked_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "a11y")]
     use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
     use crate::components::label::{label, ATTR_LABEL_FOR};
+    #[cfg(feature = "a11y")]
     use accesskit::Role;
 
     #[test]
@@ -600,6 +602,7 @@ mod tests {
         assert!((thumb.style.translate[0] - THUMB_TRAVEL).abs() < 0.01);
     }
 
+    #[cfg(feature = "a11y")]
     #[test]
     fn switch_caption_exposes_labelled_by_in_accesskit() {
         let el: Element = switch("a11y_sw")

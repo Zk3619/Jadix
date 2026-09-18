@@ -305,6 +305,7 @@ fn prelude_builder_embeds_ui() {
     assert!(!el.children.is_empty());
 }
 
+#[cfg(feature = "svg")]
 #[test]
 fn prelude_svg_tag_and_builder_compile() {
     let _b: Element = svg()

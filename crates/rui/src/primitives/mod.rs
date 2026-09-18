@@ -5,7 +5,7 @@
 //! - **[`overlay`]**：全屏模态遮罩（色 / 透明度 / backdrop 模糊 / 点击关闭）。
 //! - **[`text`] / [`icon`]**：纯文本与图标叶子。
 //! - **[`path`]**：折线/多边形/扇区（WP-3.2 / 3.11 共用核；CPU 覆盖率光栅贴图，tessellate 回退）。
-//! - **[`svg`]**：公开 `<svg>` 叶（场景图；描边/填充；子形状不占 taffy）。
+//! - **[`svg`]**：公开 `<svg>` 叶（feature **`svg`**：场景图 + resvg；子形状不占 taffy）。
 //! - **[`canvas`]**：公开 `<canvas>` 叶（paint / 2D context MVP；同一 path 核）。
 //! - **[`scene3d`]**：公开 `<scene3d>` 叶（WP-3.13 实验 feature；camera/light/material）。
 //! - **[`shader`]**：公开 `<shader>` 叶（experimental；用户 WGSL fragment → 离屏贴图）。
@@ -25,7 +25,9 @@ pub mod path;
 pub mod portal;
 pub mod scene3d;
 pub mod shader;
+#[cfg(feature = "svg")]
 pub mod svg;
+#[cfg(feature = "svg")]
 pub mod svg_smil;
 pub mod text;
 
@@ -52,6 +54,7 @@ pub use shader::{
     shader, ShaderBuilder, ShaderUniform, ATTR_SHADER, ATTR_SHADER_TEX, ATTR_SHADER_TEX1,
     ATTR_SHADER_TEX2,
 };
+#[cfg(feature = "svg")]
 pub use svg::{
     animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse, fe_blend,
     fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
@@ -63,4 +66,37 @@ pub use svg::{
     StopBuilder, SvgBuilder, SvgShapeBuilder, SymbolBuilder, UseBuilder, ATTR_SVG_HAS_SMIL,
     ATTR_SVG_KIND, ATTR_SVG_SCENE, ATTR_SVG_TEXT,
 };
+
+/// resvg bake for public `<svg>` leaves. Always `None` without feature `svg`.
+#[inline]
+pub fn svg_raster_from_element_attrs(
+    attrs: &std::collections::HashMap<String, String>,
+    leaf_w: f32,
+    leaf_h: f32,
+) -> Option<(String, f32, f32)> {
+    #[cfg(feature = "svg")]
+    {
+        svg::svg_raster_from_element_attrs(attrs, leaf_w, leaf_h)
+    }
+    #[cfg(not(feature = "svg"))]
+    {
+        let _ = (attrs, leaf_w, leaf_h);
+        None
+    }
+}
+
+/// Whether any descendant `<svg>` leaf uses SMIL. Always `false` without feature `svg`.
+#[inline]
+pub fn subtree_has_svg_smil(el: &crate::core::tree::Element) -> bool {
+    #[cfg(feature = "svg")]
+    {
+        svg::subtree_has_svg_smil(el)
+    }
+    #[cfg(not(feature = "svg"))]
+    {
+        let _ = el;
+        false
+    }
+}
+
 pub use text::{icon, text, TextBuilder};

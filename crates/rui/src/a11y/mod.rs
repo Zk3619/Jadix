@@ -1,5 +1,8 @@
 //! Accessibility layer: AccessKit tree bridge (Element → `TreeUpdate`) and action dispatch.
 //!
+//! Compiled only with crate feature `a11y` (`accesskit` / `accesskit_winit` optional deps).
+//! Element `accesskit_role` / `accesskit_name` attrs still compile without the feature.
+//!
 //! Runtime wiring (`accesskit_winit::Adapter`) stays in [`crate::app::lifecycle`]; this
 //! module owns the pure tree/action mapping.
 //!

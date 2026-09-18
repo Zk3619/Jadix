@@ -10,13 +10,13 @@ use crate::core::reactivity::{
 };
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::svg::ATTR_SVG_SCENE;
+use crate::primitives::path::ATTR_PATH_SCENE;
 use crate::primitives::{hstack, vstack};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-fn tree_has_svg_scene(el: &Element) -> bool {
-    el.get_attr(ATTR_SVG_SCENE).is_some() || el.children.iter().any(tree_has_svg_scene)
+fn tree_has_path_scene(el: &Element) -> bool {
+    el.get_attr(ATTR_PATH_SCENE).is_some() || el.children.iter().any(tree_has_path_scene)
 }
 
 fn tree_has_placeholder(el: &Element) -> bool {
@@ -46,7 +46,7 @@ fn static_progress_circle_in_hstack_paints() {
         .into();
     let mut tree = LayoutTree::new();
     let result = tree.build_and_layout(&mut root, 600.0, 200.0, [-1.0, -1.0]);
-    assert_eq!(count_attr(&root, ATTR_SVG_SCENE), 3, "three svg leaves");
+    assert_eq!(count_attr(&root, ATTR_PATH_SCENE), 3, "three svg leaves");
     assert!(
         result.textured_draws.len() >= 3,
         "expected >=3 textured draws, got {:?}",
@@ -104,13 +104,13 @@ fn progress_circle_ui_root_effect_mounts_svg() {
 
     let tree = live_check.borrow();
     assert!(
-        tree_has_svg_scene(&tree),
+        tree_has_path_scene(&tree),
         "after deferred anchor flush, mounted tree must contain rui_svg_scene; placeholders={} scenes={}",
         tree_has_placeholder(&tree),
-        count_attr(&tree, ATTR_SVG_SCENE)
+        count_attr(&tree, ATTR_PATH_SCENE)
     );
     assert!(
-        !tree_has_placeholder(&tree) || count_attr(&tree, ATTR_SVG_SCENE) > 0,
+        !tree_has_placeholder(&tree) || count_attr(&tree, ATTR_PATH_SCENE) > 0,
         "bind_prop must not leave empty placeholders without svg scenes"
     );
 
@@ -169,7 +169,7 @@ fn progress_circle_switch_reactive_remounts_svg() {
     });
 
     assert!(
-        tree_has_svg_scene(&live_check.borrow()),
+        tree_has_path_scene(&live_check.borrow()),
         "first overlays mount must produce svg scene"
     );
 
@@ -177,9 +177,9 @@ fn progress_circle_switch_reactive_remounts_svg() {
     section.set("overlays".to_string());
 
     assert!(
-        tree_has_svg_scene(&live_check.borrow()),
+        tree_has_path_scene(&live_check.borrow()),
         "remount overlays after section switch must restore svg scene, scenes={}",
-        count_attr(&live_check.borrow(), ATTR_SVG_SCENE)
+        count_attr(&live_check.borrow(), ATTR_PATH_SCENE)
     );
 
     clear_test_reconcile_root();
@@ -223,7 +223,7 @@ fn progress_circle_ui_root_layout_has_textured_draws() {
     let mut tree = LayoutTree::new();
     let result = tree.build_and_layout(&mut root, 400.0, 120.0, [-1.0, -1.0]);
     assert!(
-        tree_has_svg_scene(&root),
+        tree_has_path_scene(&root),
         "layout tree must still contain svg scene attrs"
     );
     assert!(

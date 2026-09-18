@@ -410,8 +410,10 @@ pub fn CollapsibleTrigger(disabled: bool, children: Option<Element>) -> Element 
                 .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER.to_string());
             return trigger;
         }
-        Some(ref c) => caption_text(c).unwrap_or_else(|| "Toggle".into()),
-        None => "Toggle".into(),
+        Some(ref c) => caption_text(c).unwrap_or_else(|| {
+            crate::tr_default_zh("rui.collapsible.toggle", "Toggle", "展开/折叠")
+        }),
+        None => crate::tr_default_zh("rui.collapsible.toggle", "Toggle", "展开/折叠"),
     };
 
     let mut chevron = chevron_icon();

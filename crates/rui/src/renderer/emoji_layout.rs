@@ -79,6 +79,17 @@ pub fn emoji_slot_attrs<'a>(
         .metrics(emoji_slot_metrics(font_size, line_height))
 }
 
+/// True when this layout glyph is the CJK `一` slot. Paint must skip it — the
+/// ideograph stroke is a horizontal line that otherwise shows through Twemoji.
+pub fn glyph_is_emoji_layout_slot(
+    run: &glyphon::LayoutRun<'_>,
+    glyph: &glyphon::LayoutGlyph,
+) -> bool {
+    run.text
+        .get(glyph.start..glyph.end)
+        .is_some_and(|s| s.contains(EMOJI_LAYOUT_SLOT))
+}
+
 /// Replace each emoji grapheme with [`EMOJI_LAYOUT_SLOT`] so layout advance ≈ custom quad.
 pub fn plan_emoji_layout_text(text: &str) -> String {
     let mut layout = String::with_capacity(text.len());
@@ -122,7 +133,39 @@ pub fn set_buffer_with_emoji_slots(
     font_size: f32,
     line_height: f32,
 ) {
-    if !layout.contains(EMOJI_LAYOUT_SLOT) {
+    set_buffer_with_emoji_slots_colored(
+        buffer,
+        layout,
+        attrs,
+        shaping,
+        font_size,
+        line_height,
+        &[],
+    );
+}
+
+fn selection_fg_at(byte: usize, ranges: &[((usize, usize), [u8; 4])]) -> Option<[u8; 4]> {
+    ranges.iter().find_map(|&((a, b), fg)| {
+        let lo = a.min(b);
+        let hi = a.max(b);
+        (byte >= lo && byte < hi).then_some(fg)
+    })
+}
+
+/// Like [`set_buffer_with_emoji_slots`], plus `::selection` color on non-slot runs.
+///
+/// Slot glyphs stay invisible (custom emoji quads paint on top). Ranges are in
+/// **layout** UTF-8 bytes (after emoji → [`EMOJI_LAYOUT_SLOT`]).
+pub fn set_buffer_with_emoji_slots_colored(
+    buffer: &mut glyphon::Buffer,
+    layout: &str,
+    attrs: &glyphon::Attrs,
+    shaping: glyphon::Shaping,
+    font_size: f32,
+    line_height: f32,
+    ranges: &[((usize, usize), [u8; 4])],
+) {
+    if !layout.contains(EMOJI_LAYOUT_SLOT) && ranges.is_empty() {
         buffer.set_text(layout, attrs, shaping, None);
         return;
     }
@@ -130,28 +173,45 @@ pub fn set_buffer_with_emoji_slots(
     let invisible = glyphon::AttrsOwned::new(&emoji_slot_attrs(attrs, font_size, line_height));
     let mut owned: Vec<(String, glyphon::AttrsOwned)> = Vec::new();
     let mut buf = String::new();
-    let mut slot_run = false;
-    let flush =
-        |owned: &mut Vec<(String, glyphon::AttrsOwned)>, buf: &mut String, slot_run: bool| {
-            if buf.is_empty() {
-                return;
-            }
-            let a = if slot_run {
-                invisible.clone()
-            } else {
-                visible.clone()
-            };
-            owned.push((std::mem::take(buf), a));
+    let mut run_slot = false;
+    let mut run_fg: Option<[u8; 4]> = None;
+    let flush = |owned: &mut Vec<(String, glyphon::AttrsOwned)>,
+                 buf: &mut String,
+                 run_slot: bool,
+                 run_fg: Option<[u8; 4]>| {
+        if buf.is_empty() {
+            return;
+        }
+        let a = if run_slot {
+            invisible.clone()
+        } else if let Some(fg) = run_fg {
+            glyphon::AttrsOwned::new(
+                &attrs
+                    .clone()
+                    .color(glyphon::Color::rgba(fg[0], fg[1], fg[2], fg[3])),
+            )
+        } else {
+            visible.clone()
         };
+        owned.push((std::mem::take(buf), a));
+    };
+    let mut byte = 0usize;
     for c in layout.chars() {
         let is_slot = c == EMOJI_LAYOUT_SLOT;
-        if !buf.is_empty() && is_slot != slot_run {
-            flush(&mut owned, &mut buf, slot_run);
+        let fg = if is_slot {
+            None
+        } else {
+            selection_fg_at(byte, ranges)
+        };
+        if !buf.is_empty() && (is_slot != run_slot || fg != run_fg) {
+            flush(&mut owned, &mut buf, run_slot, run_fg);
         }
-        slot_run = is_slot;
+        run_slot = is_slot;
+        run_fg = fg;
         buf.push(c);
+        byte += c.len_utf8();
     }
-    flush(&mut owned, &mut buf, slot_run);
+    flush(&mut owned, &mut buf, run_slot, run_fg);
     if owned.is_empty() {
         buffer.set_text(layout, attrs, shaping, None);
         return;
@@ -160,7 +220,42 @@ pub fn set_buffer_with_emoji_slots(
         .iter()
         .map(|(t, a)| (t.as_str(), a.as_attrs()))
         .collect();
-    buffer.set_rich_text(rich, attrs, shaping, None);
+    // Default must be the invisible slot attrs. cosmic-text `set_rich_text`
+    // drops spans that equal defaults — if the default were the opaque body
+    // color, a dropped slot span would paint `一` as a visible horizontal stroke
+    // (reaction chips are emoji-only, so the whole line is one slot run).
+    let slot_defaults = invisible.as_attrs();
+    buffer.set_rich_text(rich, &slot_defaults, shaping, None);
+}
+
+/// Original UTF-8 byte → layout byte after each emoji grapheme becomes [`EMOJI_LAYOUT_SLOT`].
+pub fn map_original_byte_to_emoji_layout(original: &str, orig_byte: usize) -> usize {
+    let target = orig_byte.min(original.len());
+    if !emoji_detect::text_contains_emoji(original) {
+        return target;
+    }
+    let mut oi = 0usize;
+    let mut li = 0usize;
+    for g in original.graphemes(true) {
+        if oi >= target {
+            return li;
+        }
+        let next_oi = oi + g.len();
+        let layout_len = if emoji_detect::grapheme_is_emoji(g) {
+            EMOJI_LAYOUT_SLOT.len_utf8()
+        } else {
+            g.len()
+        };
+        if target < next_oi {
+            if emoji_detect::grapheme_is_emoji(g) {
+                return if target > oi { li + layout_len } else { li };
+            }
+            return li + (target - oi);
+        }
+        oi = next_oi;
+        li += layout_len;
+    }
+    li
 }
 
 /// `shape_text` 内 UTF-8 字节下标 →（buffer 行号, 该行内字节下标）。
@@ -464,5 +559,69 @@ mod tests {
         let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, ink, ink)
             .expect("alpha=0 slot must still produce a layout glyph for Twemoji alignment");
         assert!(left.is_finite() && left >= 0.0, "left={left}");
+    }
+
+    #[test]
+    fn slot_glyphs_are_fully_transparent() {
+        use crate::renderer::font_loader;
+        use crate::renderer::text_hit::best_font_family;
+
+        let layout = plan_emoji_layout_text("👍");
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, &layout);
+        let ui = best_font_family(&fs);
+        let size = 12.0_f32;
+        let lh = size;
+        let visible = glyphon::Attrs::new()
+            .family(ui)
+            .color(glyphon::Color::rgba(17, 17, 17, 255));
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(Some(64.0), Some(lh * 2.0));
+        set_buffer_with_emoji_slots(
+            &mut buffer,
+            &layout,
+            &visible,
+            glyphon::Shaping::Advanced,
+            size,
+            lh,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let mut found = 0usize;
+        for run in buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                if !glyph_is_emoji_layout_slot(&run, g) {
+                    continue;
+                }
+                let alpha = g.color_opt.map(|c| c.a()).unwrap_or(255);
+                assert_eq!(
+                    alpha, 0,
+                    "CJK slot `一` must stay alpha=0 (got color_opt={:?}); \
+                     otherwise the ideograph paints as a horizontal line through Twemoji",
+                    g.color_opt
+                );
+                found += 1;
+            }
+        }
+        assert!(
+            found >= 1,
+            "emoji-only chip must emit an invisible slot glyph"
+        );
+    }
+
+    #[test]
+    fn map_original_byte_compresses_emoji_grapheme() {
+        let s = "ab😀c";
+        assert_eq!(map_original_byte_to_emoji_layout(s, 0), 0);
+        assert_eq!(map_original_byte_to_emoji_layout(s, 2), 2);
+        let after = s.find('😀').unwrap() + '😀'.len_utf8();
+        assert_eq!(
+            map_original_byte_to_emoji_layout(s, after),
+            2 + EMOJI_LAYOUT_SLOT.len_utf8()
+        );
+        assert_eq!(
+            map_original_byte_to_emoji_layout(s, s.len()),
+            plan_emoji_layout_text(s).len()
+        );
     }
 }

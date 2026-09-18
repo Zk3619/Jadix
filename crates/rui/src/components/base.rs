@@ -1005,6 +1005,14 @@ impl BaseComponentBuilder {
         self.el = self.el.left(val);
         self
     }
+    pub fn inset_inline_start(mut self, val: impl IntoCssDim) -> Self {
+        self.el = self.el.inset_inline_start(val);
+        self
+    }
+    pub fn inset_inline_end(mut self, val: impl IntoCssDim) -> Self {
+        self.el = self.el.inset_inline_end(val);
+        self
+    }
     pub fn inset(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.inset(val);
         self

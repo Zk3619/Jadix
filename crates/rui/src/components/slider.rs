@@ -328,13 +328,24 @@ pub fn Slider(
 
     let mut el: Element = builder.into();
     if !disabled {
-        let mut handler = on_click;
+        let notify = Rc::new(RefCell::new(on_click));
         let mut old_on_click = el.on_click.clone();
+        let click_n = notify.clone();
         el = el.on_click(move || {
             if let Some(ref mut rc) = old_on_click {
                 rc.borrow_mut()();
             }
-            (handler.0)(());
+            (click_n.borrow_mut().0)(());
+        });
+        // Slider drag uses `on_pointer_down` (= `on_mousedown`) and never emits
+        // `click`. Chain the RSX `on_click` here so scrubbers can enter pause.
+        let old_down = el.on_mousedown.clone();
+        let down_n = notify;
+        el = el.on_mousedown(move |e: &PointerEvent| {
+            if let Some(ref rc) = old_down {
+                rc.borrow_mut()(e);
+            }
+            (down_n.borrow_mut().0)(());
         });
     }
     el

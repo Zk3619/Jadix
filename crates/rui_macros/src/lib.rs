@@ -6954,6 +6954,7 @@ fn expand_node(
                     "Grid",
                     "Icon",
                     "AnimatedIcon",
+                    "MorphIcon",
                     "Box",
                     "Text",
                     "Interactive",
@@ -8520,6 +8521,8 @@ fn expand_node(
                         quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
                     }
                     "Text" => quote! { rui::primitives::text("") },
+                    // Public SVG tags exist only with rui `svg`. Do not emit
+                    // `#[cfg(feature = "svg")]` — that would check the consuming crate.
                     "svg" | "Svg" => quote! { rui::primitives::svg() },
                     "circle" | "Circle" => quote! { rui::primitives::svg::circle() },
                     "ellipse" | "Ellipse" => quote! { rui::primitives::svg::ellipse() },
@@ -8705,6 +8708,337 @@ fn expand_node(
                         }
                         #pe_chain
                         rui::core::tree::Element::from(__b)
+                    }
+                };
+            }
+
+            // Expands to `rui::utils::morph_icon` (compiled only with rui `svg`).
+            // Do not emit `#[cfg(feature = "svg")]` here — that would check the
+            // consuming crate's features, not rui's.
+            if name_str == "MorphIcon" {
+                let mut icon_ts = quote! { "" };
+                let mut icon_bind: Option<&syn::Expr> = None;
+                let mut from_chain = quote! {};
+                let mut from_bind: Option<&syn::Expr> = None;
+                let mut to_chain = quote! {};
+                let mut to_bind: Option<&syn::Expr> = None;
+                let mut progress_chain = quote! {};
+                let mut progress_bind: Option<&syn::Expr> = None;
+                let mut size_ts = quote! { 24.0_f32 };
+                let mut spring_chain = quote! {};
+                let mut spring_bind: Option<&syn::Expr> = None;
+                let mut stroke_chain = quote! {};
+                let mut stroke_bind: Option<&syn::Expr> = None;
+                let mut abs_chain = quote! {};
+                let mut abs_bind: Option<&syn::Expr> = None;
+                let mut interp_chain = quote! {};
+                let mut interp_bind: Option<&syn::Expr> = None;
+                let mut reduced_chain = quote! {};
+                let mut reduced_bind: Option<&syn::Expr> = None;
+                let mut view_box_chain = quote! {};
+                let mut view_box_bind: Option<&syn::Expr> = None;
+                let mut label_chain = quote! {};
+                let mut label_bind: Option<&syn::Expr> = None;
+                let mut id_chain = quote! {};
+                for (attr, value) in &el.attributes {
+                    match attr.to_string().as_str() {
+                        "icon" => {
+                            if expr_reads_get(value) {
+                                icon_bind = Some(value);
+                                icon_ts = quote! {
+                                    rui::core::reactivity::untrack(|| (#value).to_string())
+                                };
+                            } else if let syn::Expr::Lit(expr_lit) = value
+                                && let syn::Lit::Str(lit_str) = &expr_lit.lit
+                            {
+                                let n = lit_str.value();
+                                icon_ts = quote! { #n };
+                            } else {
+                                icon_ts = quote! { (#value).to_string() };
+                            }
+                        }
+                        "from" => {
+                            if expr_reads_get(value) {
+                                from_bind = Some(value);
+                                from_chain = quote! {
+                                    __b = __b.from_icon(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                from_chain = quote! { __b = __b.from_icon((#value).to_string()); };
+                            }
+                        }
+                        "to" => {
+                            if expr_reads_get(value) {
+                                to_bind = Some(value);
+                                to_chain = quote! {
+                                    __b = __b.to_icon(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                to_chain = quote! { __b = __b.to_icon((#value).to_string()); };
+                            }
+                        }
+                        "progress" => {
+                            if expr_reads_get(value) {
+                                progress_bind = Some(value);
+                            } else {
+                                progress_chain = quote! {
+                                    __b = __b.progress(rui::core::tree::IntoF32::into_f32(#value));
+                                };
+                            }
+                        }
+                        "size" => {
+                            size_ts = quote! { rui::core::tree::IntoF32::into_f32(#value) };
+                        }
+                        "spring" => {
+                            if expr_reads_get(value) {
+                                spring_bind = Some(value);
+                                spring_chain = quote! {
+                                    __b = __b.spring(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                spring_chain = quote! { __b = __b.spring((#value).to_string()); };
+                            }
+                        }
+                        "stroke_width" | "strokeWidth" | "stroke-width" => {
+                            if expr_reads_get(value) {
+                                stroke_bind = Some(value);
+                            }
+                            stroke_chain = quote! {
+                                __b = __b.stroke_width(rui::core::tree::IntoF32::into_f32(#value));
+                            };
+                        }
+                        "absolute_stroke_width"
+                        | "absoluteStrokeWidth"
+                        | "absolute-stroke-width" => {
+                            if expr_reads_get(value) {
+                                abs_bind = Some(value);
+                            }
+                            abs_chain = quote! {
+                                __b = __b.absolute_stroke_width(#value);
+                            };
+                        }
+                        "view_box" | "viewBox" | "view-box" => {
+                            if expr_reads_get(value) {
+                                view_box_bind = Some(value);
+                                view_box_chain = quote! {
+                                    __b = __b.view_box(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                view_box_chain =
+                                    quote! { __b = __b.view_box((#value).to_string()); };
+                            }
+                        }
+                        "label" => {
+                            if expr_reads_get(value) {
+                                label_bind = Some(value);
+                                label_chain = quote! {
+                                    __b = __b.label(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                label_chain = quote! { __b = __b.label((#value).to_string()); };
+                            }
+                        }
+                        "interp" => {
+                            if expr_reads_get(value) {
+                                interp_bind = Some(value);
+                                interp_chain = quote! {
+                                    __b = __b.interp(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                interp_chain = quote! { __b = __b.interp((#value).to_string()); };
+                            }
+                        }
+                        "reduced_motion" | "reducedMotion" | "reduced-motion" => {
+                            if expr_reads_get(value) {
+                                reduced_bind = Some(value);
+                                reduced_chain = quote! {
+                                    __b = __b.reduced_motion(
+                                        rui::core::reactivity::untrack(|| (#value).to_string())
+                                    );
+                                };
+                            } else {
+                                reduced_chain =
+                                    quote! { __b = __b.reduced_motion((#value).to_string()); };
+                            }
+                        }
+                        "id" => {
+                            id_chain = quote! { __b = __b.id((#value).to_string()); };
+                        }
+                        _ => {}
+                    }
+                }
+                let site_idx = *node_counter;
+                *node_counter += 1;
+                if id_chain.is_empty() {
+                    id_chain = quote! {
+                        __b = __b.id(format!("{}:{}:MorphIcon#{}", file!(), line!(), #site_idx));
+                    };
+                }
+                let mut binds = Vec::new();
+                if let Some(expr) = from_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_from#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, name| rui::utils::apply_bound_morph_from(el, name),
+                        );
+                    });
+                }
+                if let Some(expr) = to_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_to#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, name| rui::utils::apply_bound_morph_to(el, name),
+                        );
+                    });
+                }
+                if let Some(expr) = icon_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_icon#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, name| rui::utils::apply_bound_morph_icon(el, name),
+                        );
+                    });
+                }
+                if let Some(expr) = spring_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_spring#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, name| rui::utils::apply_bound_morph_spring(el, name),
+                        );
+                    });
+                }
+                if let Some(expr) = stroke_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_stroke#{}", file!(), line!(), #idx),
+                            move || rui::core::tree::IntoF32::into_f32(#expr),
+                            |el, w| rui::utils::apply_bound_morph_stroke(el, w),
+                        );
+                    });
+                }
+                if let Some(expr) = progress_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_progress#{}", file!(), line!(), #idx),
+                            move || rui::core::tree::IntoF32::into_f32(#expr),
+                            |el, p| rui::utils::apply_bound_morph_progress(el, p),
+                        );
+                    });
+                }
+                if let Some(expr) = interp_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_interp#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, kind| rui::utils::apply_bound_morph_interp(el, kind),
+                        );
+                    });
+                }
+                if let Some(expr) = reduced_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_reduced#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, mode| rui::utils::apply_bound_morph_reduced(el, mode),
+                        );
+                    });
+                }
+                if let Some(expr) = abs_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_abs_stroke#{}", file!(), line!(), #idx),
+                            move || #expr,
+                            |el, on| rui::utils::apply_bound_morph_abs_stroke(el, on),
+                        );
+                    });
+                }
+                if let Some(expr) = view_box_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_view_box#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, vb| rui::utils::apply_bound_morph_view_box(el, vb),
+                        );
+                    });
+                }
+                if let Some(expr) = label_bind {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    binds.push(quote! {
+                        __el = rui::app::reactive::bind_attr(
+                            __el,
+                            format!("{}:{}:bind_morph_label#{}", file!(), line!(), #idx),
+                            move || (#expr).to_string(),
+                            |el, name| rui::utils::apply_bound_morph_label(el, name),
+                        );
+                    });
+                }
+                element = quote! {
+                    {
+                        let mut __el = {
+                            let mut __b = rui::utils::morph_icon(#icon_ts)
+                                .size_px(#size_ts);
+                            #from_chain
+                            #to_chain
+                            #progress_chain
+                            #spring_chain
+                            #stroke_chain
+                            #abs_chain
+                            #interp_chain
+                            #reduced_chain
+                            #view_box_chain
+                            #label_chain
+                            #id_chain
+                            rui::core::tree::Element::from(__b)
+                        };
+                        #(#binds)*
+                        __el
                     }
                 };
             }
@@ -9502,8 +9836,8 @@ fn expand_node(
                         }
                     }
                     "size" => {
-                        if name_str == "AnimatedIcon" {
-                            // Consumed by AnimatedIcon pre-pass (builder size_px).
+                        if name_str == "AnimatedIcon" || name_str == "MorphIcon" {
+                            // Consumed by AnimatedIcon / MorphIcon pre-pass (builder size_px).
                         } else if name_str == "Icon" {
                             element = quote! {
                                 rui::utils::with_icon_size(
@@ -9520,6 +9854,27 @@ fn expand_node(
                     "controlled" if name_str == "AnimatedIcon" => {}
                     "pointer_events" | "pointerEvents" | "pointer-events"
                         if name_str == "AnimatedIcon" => {}
+                    "icon"
+                    | "from"
+                    | "to"
+                    | "progress"
+                    | "spring"
+                    | "stroke_width"
+                    | "strokeWidth"
+                    | "stroke-width"
+                    | "id"
+                    | "interp"
+                    | "reduced_motion"
+                    | "reducedMotion"
+                    | "reduced-motion"
+                    | "absolute_stroke_width"
+                    | "absoluteStrokeWidth"
+                    | "absolute-stroke-width"
+                    | "view_box"
+                    | "viewBox"
+                    | "view-box"
+                    | "label"
+                        if name_str == "MorphIcon" => {}
                     "text_size" | "font_size" => {
                         element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
                     }

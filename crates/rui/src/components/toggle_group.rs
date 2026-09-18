@@ -449,6 +449,14 @@ fn nodes_from_label_or_children(
         out.push(build_text_node(label, cfg.clone()));
     }
     for child in children {
+        if keep_toggle_item_child(&child) {
+            let mut child = child;
+            if child.text_style.color != Some(fg) {
+                child.text_style.color = Some(fg);
+            }
+            out.push(child);
+            continue;
+        }
         if child.children.is_empty() {
             if let Some(t) = child.text.clone().filter(|s| !s.is_empty()) {
                 out.push(build_text_node(t, cfg.clone()));
@@ -458,6 +466,35 @@ fn nodes_from_label_or_children(
         out.push(child);
     }
     out
+}
+
+/// Lucide `<Icon>` / MorphIcon / image icons: do not re-wrap `.text` in a
+/// default UI font — PUA glyphs would render as tofu / Latin lookalikes.
+fn keep_toggle_item_child(child: &Element) -> bool {
+    !child.children.is_empty()
+        || child.text_style.font_family.is_some()
+        || child.image_texture.is_some()
+        || child.attrs.contains_key(crate::utils::ATTR_ICON_NAME)
+        || child.attrs.contains_key("rui_morph_icon")
+}
+
+fn is_toggle_icon_node(el: &Element) -> bool {
+    if el.text_style.font_family.is_some()
+        || el.image_texture.is_some()
+        || el.attrs.contains_key(crate::utils::ATTR_ICON_NAME)
+        || el.attrs.contains_key("rui_morph_icon")
+    {
+        return true;
+    }
+    if el.text.as_ref().is_some_and(|t| !t.is_empty()) {
+        return false;
+    }
+    !el.children.is_empty() && el.children.iter().all(is_toggle_icon_node)
+}
+
+/// Icon-only chips match Button `size="icon*"`: equal frame, no extra pad.
+fn is_icon_only_item(label: &str, children: &[Element]) -> bool {
+    label.is_empty() && !children.is_empty() && children.iter().all(is_toggle_icon_node)
 }
 
 fn build_toggle_group_item(
@@ -475,20 +512,21 @@ fn build_toggle_group_item(
     let border_w = if outline && !segmented { 1.0 } else { 0.0 };
     let (px, py, text_px) = toggle_size_pad(ctx.size);
     let min_px = ctx.size.min_px();
+    let icon_only = is_icon_only_item(label, &children);
 
     let nodes = nodes_from_label_or_children(label, children, fg, text_px);
     let mut chip = hstack()
-        .px(px)
-        .py(py)
-        .min_w(min_px)
-        .min_h(min_px)
-        .h(min_px)
         .items_center()
         .justify_center()
         .gap("0.25rem")
         .flex_shrink(0.0)
         .bg(bg)
         .border(border, border_w);
+    if icon_only {
+        chip = chip.w(min_px).h(min_px).min_w(min_px).min_h(min_px);
+    } else {
+        chip = chip.px(px).py(py).min_w(min_px).min_h(min_px).h(min_px);
+    }
     if !segmented {
         chip = chip.rounded("0.375rem");
     }
@@ -1470,5 +1508,66 @@ mod tests {
             },
         );
         assert_eq!(el.children[on_i].style.bg_color, parse_color("accent"));
+    }
+
+    #[test]
+    fn lucide_icon_child_keeps_font_family() {
+        let mut icon = Element::new().text("\u{ea0e}").font_family("lucide");
+        icon.set_attr(crate::utils::ATTR_ICON_NAME, "heart");
+        let nodes = nodes_from_label_or_children("", vec![icon], [1, 2, 3, 255], 14.0);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].text_style.font_family.as_deref(),
+            Some("lucide"),
+            "PUA glyph must keep the lucide face"
+        );
+        assert_eq!(
+            nodes[0]
+                .attrs
+                .get(crate::utils::ATTR_ICON_NAME)
+                .map(String::as_str),
+            Some("heart")
+        );
+        assert_eq!(nodes[0].text_style.color, Some([1, 2, 3, 255]));
+
+        let plain = Element::new().text("Hello");
+        let nodes = nodes_from_label_or_children("", vec![plain], [0, 0, 0, 255], 14.0);
+        assert_eq!(nodes[0].text.as_deref(), Some("Hello"));
+        assert!(
+            nodes[0].text_style.font_family.is_none(),
+            "plain caption still uses the chip typeface"
+        );
+    }
+
+    #[test]
+    fn icon_only_item_is_square_like_icon_button() {
+        use taffy::style::Dimension;
+
+        let el: Element = toggle_group("tg-icon-sq")
+            .size("sm")
+            .variant("outline")
+            .child(|| {
+                let mut icon = Element::new().text("\u{ea0e}").font_family("lucide");
+                icon.set_attr(crate::utils::ATTR_ICON_NAME, "heart");
+                toggle_group_item("heart").child(icon).into()
+            })
+            .into();
+        let chip = &el.children[0];
+        let side = ToggleGroupSize::Sm.min_px();
+        assert_eq!(chip.style.size.width, Dimension::length(side));
+        assert_eq!(chip.style.size.height, Dimension::length(side));
+        assert_eq!(chip.style.padding.left, chip.style.padding.right);
+        assert_eq!(chip.style.padding.top, chip.style.padding.bottom);
+        assert_eq!(chip.style.padding.left, chip.style.padding.top);
+
+        let text: Element = toggle_group("tg-text-rect")
+            .size("sm")
+            .item("a", "snappy")
+            .into();
+        assert!(
+            text.children[0].style.size.width == Dimension::auto(),
+            "caption chips stay content-width, not a forced square"
+        );
+        assert_eq!(text.children[0].style.size.height, Dimension::length(side));
     }
 }

@@ -870,7 +870,7 @@ pub fn ComboboxEmpty(children: Option<Element>) -> Element {
             .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| extract_text_leaf(c)),
-        None => "No results.".into(),
+        None => crate::tr_default_zh("rui.combobox.empty", "No results.", "无匹配结果。"),
     };
     if !ctx.open.peek() || !ctx.visible.peek().is_empty() {
         return Element::new().w(0.0).h(0.0);
@@ -1042,7 +1042,7 @@ pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
         value: None,
         default_value: String::new(),
         entries: Vec::new(),
-        placeholder: "Search…".into(),
+        placeholder: crate::tr_default_zh("rui.combobox.search", "Search…", "搜索…"),
         placement: PopupPlacement::BottomStart,
         clearable: false,
         class: String::new(),
@@ -1272,7 +1272,11 @@ fn build_builder_entries(entries: &[ComboboxEntry]) -> Element {
     }
     // Empty state for builder path when filter yields nothing.
     col = col.child(ComboboxEmpty(ComboboxEmptyProps {
-        children: Some(Element::new().text("No results.")),
+        children: Some(Element::new().text(crate::tr_default_zh(
+            "rui.combobox.empty",
+            "No results.",
+            "无匹配结果。",
+        ))),
         base: None,
     }));
     col
@@ -1302,7 +1306,7 @@ pub fn Combobox(
             None,
             value,
             if placeholder.is_empty() {
-                "Search…".into()
+                crate::tr_default_zh("rui.combobox.search", "Search…", "搜索…")
             } else {
                 placeholder
             },
@@ -1317,7 +1321,7 @@ pub fn Combobox(
         .default_value(default_value)
         .options(options)
         .placeholder(if placeholder.is_empty() {
-            "Search…".into()
+            crate::tr_default_zh("rui.combobox.search", "Search…", "搜索…")
         } else {
             placeholder
         })

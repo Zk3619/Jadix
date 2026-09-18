@@ -21,7 +21,7 @@
 //!     ├── MessageScrollerViewport  // overflow-y-auto · size-full
 //!     │   └── MessageScrollerContent
 //!     │       └── MessageScrollerItem+
-//!     └── MessageScrollerButton    // absolute jump · start | end
+//!     └── MessageScrollerButton    // absolute dock · centered jump · start | end
 //! ```
 //!
 //! ## Usage (dual style · ADR-9)
@@ -662,42 +662,49 @@ fn apply_button_active(
         -1.0
     };
     let active_attr = if active { "true" } else { "false" };
+    let pct = el.style.translate_pct;
+    let pe_now = el.attrs.get(ATTR_POINTER_EVENTS).map(String::as_str);
+    let pe_matches = if active {
+        pe_now.is_none() || pe_now == Some("auto")
+    } else {
+        pe_now == Some("none")
+    };
+    let will_change = (el.style.opacity - opacity).abs() > 0.01
+        || (el.style.scale[0] - scale).abs() > 0.01
+        || (el.style.scale[1] - scale).abs() > 0.01
+        || pct[0].abs() > 0.01
+        || (pct[1] - ty).abs() > 0.01
+        || el.attrs.get(ATTR_ACTIVE).map(String::as_str) != Some(active_attr)
+        || !pe_matches
+        || el.focusable != active;
 
-    let mut changed = false;
     if (el.style.opacity - opacity).abs() > 0.01 {
         el.style.opacity = opacity;
-        changed = true;
     }
     if (el.style.scale[0] - scale).abs() > 0.01 || (el.style.scale[1] - scale).abs() > 0.01 {
         el.style.scale = [scale, scale];
-        changed = true;
     }
-    let pct = el.style.translate_pct;
-    if (pct[0] + 0.5).abs() > 0.01 || (pct[1] - ty).abs() > 0.01 {
-        el.style.translate_pct = [-0.5, ty];
-        changed = true;
+    // Dock owns X centering. Hide still slides on Y; dest-reset unions last-present.
+    if pct[0].abs() > 0.01 || (pct[1] - ty).abs() > 0.01 {
+        el.style.translate_pct = [0.0, ty];
     }
     if el.attrs.get(ATTR_ACTIVE).map(String::as_str) != Some(active_attr) {
         el.attrs
             .insert(ATTR_ACTIVE.to_string(), active_attr.to_string());
-        changed = true;
     }
-    let pe = if active { "auto" } else { "none" };
-    if el.attrs.get(ATTR_POINTER_EVENTS).map(String::as_str) != Some(pe) {
+    if !pe_matches {
         if active {
             el.attrs.remove(ATTR_POINTER_EVENTS);
         } else {
             el.attrs
                 .insert(ATTR_POINTER_EVENTS.to_string(), "none".to_string());
         }
-        changed = true;
     }
     if el.focusable != active {
         el.focusable = active;
-        changed = true;
     }
 
-    if changed {
+    if will_change {
         LayoutStatus::StyleChanged
     } else {
         LayoutStatus::Clean
@@ -744,7 +751,11 @@ fn collect_delayed(children: Vec<DelayedEl>) -> Vec<Element> {
 }
 
 fn default_jump_label(direction: MessageScrollerDirection) -> Element {
-    let caption = if direction.is_end() { "Latest" } else { "Top" };
+    let caption = if direction.is_end() {
+        crate::tr_default_zh("rui.message_scroller.latest", "Latest", "最新")
+    } else {
+        crate::tr_default_zh("rui.message_scroller.top", "Top", "顶部")
+    };
     hstack()
         .items("center")
         .gap("0.375rem")
@@ -1029,7 +1040,11 @@ fn jump_button_size(raw: &str) -> ButtonSize {
     }
 }
 
-/// Absolute jump control. Default icon is Lucide `arrow-down` (rotated for `start`).
+/// Absolute jump control, docked to the start/end edge and centered in a
+/// full-width bar. X centering lives on the dock so hide can still slide on Y
+/// without sharing `translate_pct` with `left:50%` (that clipped through
+/// `overflow:hidden` in a nested gallery ScrollArea / Card).
+/// Default icon is Lucide `arrow-down` (rotated for `start`).
 ///
 /// RSX `<MessageScrollerButton direction="end">`.
 #[component(crate_path = "crate")]
@@ -1065,16 +1080,8 @@ pub fn MessageScrollerButton(
         })
         .into();
     el = el
-        .absolute()
-        .left("50%")
-        .translate_pct(-0.5, 0.0)
-        .z_index(20)
+        .flex_shrink(0.0)
         .box_shadow("0 4px 14px rgba(15, 23, 42, 0.18)");
-    if direction.is_end() {
-        el = el.bottom(BUTTON_INSET);
-    } else {
-        el = el.top(BUTTON_INSET);
-    }
     el.set_attr(ATTR_SLOT, SLOT_BUTTON);
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
@@ -1083,7 +1090,29 @@ pub fn MessageScrollerButton(
     el = apply_base(el, base_builder);
     let sync_ctx = ctx.clone();
     el = el.reactive_sync(move |node, _layout_tree| apply_button_active(node, &sync_ctx, jump_dir));
-    el
+
+    // Full-width dock: `left:50%` + `translateX(-50%)` on the button itself shares
+    // `translate_pct` with the hide slide and clips through overflow:hidden when
+    // the 50% inset does not apply (nested gallery ScrollArea / Card).
+    let mut dock: Element = hstack()
+        .justify_center()
+        .items_center()
+        .child(el)
+        .into();
+    dock = dock
+        .absolute()
+        .left(0.0)
+        .w("100%")
+        .h("max-content")
+        .align_self_kw("start")
+        .z_index(20)
+        .pointer_events_box_none();
+    if direction.is_end() {
+        dock = dock.bottom(BUTTON_INSET);
+    } else {
+        dock = dock.top(BUTTON_INSET);
+    }
+    dock
 }
 
 // ---------------------------------------------------------------------------

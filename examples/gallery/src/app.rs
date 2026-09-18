@@ -211,6 +211,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <DrawingSvgShowcase />
                     <LucideAnimatedShowcase />
+                    <MorphIconShowcase />
                     <DrawingCanvasShowcase />
                     <ImageStreamShowcase />
                     <DrawingScene3dShowcase />

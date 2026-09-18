@@ -150,8 +150,8 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                         <Label text_size="0.75rem" color="muted-foreground">
                                             { format!(
                                                 "({:.0}, {:.0})",
-                                                pos.get()[0],
-                                                pos.get()[1]
+                                                pos.peek()[0],
+                                                pos.peek()[1]
                                             ) }
                                         </Label>
                                         <Button size="sm" variant="outline" on_click={move || open.set(false)}>
@@ -297,7 +297,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"Point · 点定位 + 标题栏拖拽"</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "在舞台内按下以打开/重定位；拖标题栏改 pos Signal（无第二套 left/top sync）。"
+                    "拖标题栏改 pos；collect 原点跟手，不订 pos 以免整岛重挂。"
                 </Label>
                 { point_stage }
                 <AnchoredOverlay id="gal-ao-point-rsx" openSignal={point_open}>

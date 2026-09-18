@@ -894,7 +894,7 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         value: None,
         default_value: String::new(),
         entries: Vec::new(),
-        placeholder: "Select…".into(),
+        placeholder: crate::tr_default_zh("rui.select.placeholder", "Select…", "请选择…"),
         trigger_width: "auto".into(),
         menu_width: None,
         menu_height: None,

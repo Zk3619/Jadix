@@ -66,10 +66,13 @@ use crate::core::reactivity::{
 use crate::core::tree::{Element, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::impl_slot_chrome_methods;
+use crate::primitives::path::{
+    decode_path_d, encode_path_d, ensure_raster_texture, register_path_scene, PathStyle,
+    ATTR_PATH_D, ATTR_PATH_FIT_LEAF, ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
+};
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::primitives::svg::{circle, path, svg};
 use crate::primitives::text::text;
-use crate::style::parse_text_color;
+use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_packed;
@@ -722,7 +725,7 @@ fn progress_circle_overlay(children: Element) -> Element {
         .into()
 }
 
-/// 构建圆形进度 SVG 叶（无 reactive 壳）。
+/// 构建圆形进度叶（path 核；不依赖 `svg` feature / resvg）。
 pub fn progress_circle_svg(
     value: f32,
     size: ProgressCircleSize,
@@ -735,42 +738,42 @@ pub fn progress_circle_svg(
     let nr = (outer_r - sw / 2.0).max(0.0);
     let d = outer_r * 2.0;
 
-    let track: Element = circle()
-        .cx(outer_r)
-        .cy(outer_r)
-        .r(nr)
-        .fill("none")
-        .stroke("border")
-        .stroke_width(sw)
-        .stroke_linecap("round")
-        .into();
-
-    let mut svg_children = vec![track];
-    if let Some(path_d) = progress_circle_arc_d(outer_r, outer_r, nr, t) {
-        let mut indicator: Element = path()
-            .d(path_d)
-            .fill("none")
-            .stroke("primary")
-            .stroke_width(sw)
-            .stroke_linecap("round")
-            .into();
-        if show_animation {
-            indicator = indicator
-                .transition("all")
-                .transition_duration("300ms")
-                .transition_timing_function("ease-in-out");
-        }
-        svg_children.push(indicator);
+    let mut layers = Vec::new();
+    if let Some(track_d) = progress_circle_arc_d(outer_r, outer_r, nr, 1.0) {
+        layers.push((
+            decode_path_d(&track_d),
+            PathStyle::stroke(parse_color("border"), sw),
+        ));
+    }
+    if let Some(arc_d) = progress_circle_arc_d(outer_r, outer_r, nr, t) {
+        layers.push((
+            decode_path_d(&arc_d),
+            PathStyle::stroke(parse_color("primary"), sw),
+        ));
     }
 
-    let mut svg_el: Element = svg()
-        .w(d)
-        .h(d)
-        .view_box(format!("0 0 {d} {d}"))
-        .children(svg_children)
-        .into();
-    svg_el.set_attr("rui_progress", format!("{:.0}%", t * 100.0));
-    svg_el
+    let id = register_path_scene(layers.clone(), Vec::new(), 0.0, d.max(1.0), d.max(1.0));
+    let mut el = Element::new().w(d).h(d);
+    el.set_attr(ATTR_PATH_SCENE, format!("{id:016x}"));
+    el.set_attr(ATTR_PATH_FIT_LEAF, "1");
+    el.set_attr(ATTR_PATH_VIEWBOX, format!("0 0 {d} {d}"));
+    if let Some((cmds, _)) = layers.first() {
+        if !cmds.is_empty() {
+            el.set_attr(ATTR_PATH_D, encode_path_d(cmds));
+        }
+    }
+    let dim = d.round().max(16.0) as u32;
+    if let Some(tex) = ensure_raster_texture(&layers, &[], 0.0, dim, dim, 2) {
+        el = el.image_texture(tex);
+    }
+    if show_animation {
+        el = el
+            .transition("all")
+            .transition_duration("300ms")
+            .transition_timing_function("ease-in-out");
+    }
+    el.set_attr("rui_progress", format!("{:.0}%", t * 100.0));
+    el
 }
 
 fn apply_progress_circle_svg(
@@ -1249,63 +1252,37 @@ mod tests {
             Some("60%")
         );
         assert!(
-            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE)
-                .is_some()
-                || el
-                    .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
-                    .is_some(),
+            el.get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+                .is_some(),
             "untracked circle must compile to a raster scene"
         );
     }
 
-    #[cfg(feature = "svg")]
     #[test]
-    fn circle_svg_registers_scene() {
-        use crate::primitives::svg::ATTR_SVG_SCENE;
+    fn circle_registers_path_scene() {
         let el = progress_circle_svg(0.45, ProgressCircleSize::Md, None, None, true);
         assert!(
-            el.get_attr(ATTR_SVG_SCENE).is_some(),
-            "progress circle must compile to resvg scene"
+            el.get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+                .is_some(),
+            "progress circle must compile to a path scene"
         );
     }
 
-    fn rgba_opaque_count(px: &[u8]) -> usize {
-        px.chunks(4)
-            .filter(|p| p.get(3).copied().unwrap_or(0) > 16)
-            .count()
-    }
-
-    /// Gallery paints `<svg>` via resvg. Theme tokens in `stroke=` are not CSS colors.
-    /// Emit must rewrite them to rgb(); otherwise the ring occupies layout but is invisible.
-    #[cfg(feature = "svg")]
     #[test]
-    fn circle_emitted_svg_has_opaque_pixels() {
-        let el = progress_circle_svg(0.45, ProgressCircleSize::Md, None, None, false);
-        let raw_token_doc = concat!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">"#,
-            r#"<circle cx="32" cy="32" r="29" fill="none" stroke="border" stroke-width="6"/>"#,
-            r#"</svg>"#,
-        );
-        let raw_n = rgba_opaque_count(
-            &crate::media::svg_raster::rasterize_svg_str(raw_token_doc, 64, 64).unwrap(),
-        );
-        assert_eq!(
-            raw_n, 0,
-            "control: resvg must ignore CSS theme token names (got opaque={raw_n})"
-        );
+    fn circle_layout_paints() {
+        use crate::layout::layout_tree::LayoutTree;
 
-        let doc = crate::primitives::svg::emit_svg_document_from_element_attrs(&el.attrs)
-            .expect("progress circle must emit svg markup");
+        let leaf = progress_circle_svg(0.45, ProgressCircleSize::Md, None, None, true);
+        let mut root = Element::new().w(200.0).h(200.0).child(leaf);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
         assert!(
-            doc.contains("rgb(") || doc.contains("rgba("),
-            "emitted SVG must resolve theme tokens to CSS rgb; doc={doc}"
-        );
-        let px = crate::media::svg_raster::rasterize_svg_str(&doc, 64, 64)
-            .expect("emitted progress circle must rasterize");
-        assert!(
-            rgba_opaque_count(&px) > 80,
-            "emitted progress-circle SVG must have visible coverage; opaque={} doc={doc}",
-            rgba_opaque_count(&px)
+            result
+                .textured_draws
+                .iter()
+                .any(|d| d.rect[2] > 30.0 && d.rect[3] > 30.0),
+            "progress circle must raster with non-zero bounds; draws={:?}",
+            result.textured_draws
         );
     }
 
@@ -1350,12 +1327,9 @@ mod tests {
             create_root(|| progress_circle().id("pc").default_value(0.5).into());
         assert_eq!(el.template_id.as_deref(), Some("pc__view"));
         assert!(
-            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE)
-                .is_some()
-                || el
-                    .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
-                    .is_some(),
-            "bind_prop initial apply must register svg/path scene"
+            el.get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+                .is_some(),
+            "bind_prop initial apply must register path scene"
         );
     }
 
@@ -1376,44 +1350,6 @@ mod tests {
                 })
         }
         assert_eq!(progress_pct(&el), Some("100%"));
-    }
-
-    #[cfg(feature = "svg")]
-    #[test]
-    fn circle_svg_layout_paints() {
-        use crate::layout::layout_tree::LayoutTree;
-
-        let svg_el = progress_circle_svg(0.45, ProgressCircleSize::Md, None, None, true);
-        let mut root = Element::new().w(200.0).h(200.0).child(svg_el);
-        let mut tree = LayoutTree::new();
-        let result = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
-        assert!(
-            result
-                .textured_draws
-                .iter()
-                .any(|d| d.rect[2] > 30.0 && d.rect[3] > 30.0),
-            "progress circle must raster with non-zero bounds; draws={:?}",
-            result.textured_draws
-        );
-        crate::style::set_gradient_raster_dpi(1.0);
-        let leaf = &root.children[0];
-        let (tex, dw, dh) = crate::primitives::svg::svg_raster_from_element_attrs(
-            &leaf.attrs,
-            leaf.layout_bounds[2],
-            leaf.layout_bounds[3],
-        )
-        .expect("svg raster key");
-        let doc =
-            crate::primitives::svg::emit_svg_document_from_element_attrs(&leaf.attrs).unwrap();
-        let lo = crate::media::svg_raster::ensure_svg_document_texture(&doc, 64, 64).unwrap();
-        assert_ne!(
-            tex, lo,
-            "paint raster must not use 1× viewBox texture (blurry on HiDPI)"
-        );
-        assert!(
-            (dw - 64.0).abs() < 1.0 && (dh - 64.0).abs() < 1.0,
-            "draw size stays logical, got {dw}×{dh}"
-        );
     }
 
     #[test]

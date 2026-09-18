@@ -188,7 +188,8 @@ pub fn Breadcrumb(
         .label
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or("breadcrumb");
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| crate::tr_default_zh("rui.breadcrumb.label", "breadcrumb", "面包屑"));
     el = base.el.aria_label(aria);
     if !id.trim().is_empty() {
         el.template_id = Some(id);

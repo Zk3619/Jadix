@@ -229,10 +229,14 @@ pub fn PopoverTrigger(id: String, children: Option<Element>) -> Element {
 
     let mut trigger = match children {
         None => {
-            let mut el: Element = interactive(label(trigger_id.as_str()).text("Open").into())
-                .focus_id(trigger_id.as_str())
-                .focusable(true)
-                .into();
+            let mut el: Element = interactive(
+                label(trigger_id.as_str())
+                    .text(crate::tr_default_zh("rui.popover.open", "Open", "打开"))
+                    .into(),
+            )
+            .focus_id(trigger_id.as_str())
+            .focusable(true)
+            .into();
             el = chain_click(el, toggle);
             el
         }

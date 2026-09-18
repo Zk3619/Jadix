@@ -218,10 +218,14 @@ pub fn TooltipTrigger(
     match children {
         None => {
             let h = ctx.trigger_hovered;
-            let mut el: Element = interactive(label(trigger_id.as_str()).text("Hover").into())
-                .focus_id(trigger_id.as_str())
-                .focusable(true)
-                .into();
+            let mut el: Element = interactive(
+                label(trigger_id.as_str())
+                    .text(crate::tr_default_zh("rui.tooltip.hover", "Hover", "悬停"))
+                    .into(),
+            )
+            .focus_id(trigger_id.as_str())
+            .focusable(true)
+            .into();
             el = chain_hover(
                 el,
                 move || set_hovered(h, true),
