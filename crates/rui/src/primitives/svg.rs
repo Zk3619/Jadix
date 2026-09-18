@@ -2078,16 +2078,6 @@ pub fn svg_raster_from_element_attrs(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn emit_svg_document_from_element_attrs(
-    attrs: &std::collections::HashMap<String, String>,
-) -> Option<String> {
-    let scene_hex = attrs.get(ATTR_SVG_SCENE)?;
-    let id = u64::from_str_radix(scene_hex.trim(), 16).ok()?;
-    let scene = SVG_SCENE_STORE.with(|s| s.borrow().get(&id).cloned())?;
-    Some(emit_svg_document_at(&scene.nodes, scene.vb, None))
-}
-
 fn attach_svg_scene(
     mut el: Element,
     nodes: &[SvgNode],

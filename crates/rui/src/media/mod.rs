@@ -1,4 +1,5 @@
-//! 位图 / SVG 解码：供 [`crate::components::Image`]、`queue_image_*` 与 CSS `cursor: url()` 共用。
+//! 位图解码：供 [`crate::components::Image`]、`queue_image_*` 与 CSS `cursor: url()` 共用。
+//! SVG 字节解码见 feature `svg`（`media::svg_raster`）。
 //!
 //! 光栅格式由 [`image`](https://github.com/image-rs/image) 解码（默认 PNG / JPEG / WebP / GIF / ICO；
 //! 更多格式见 `image-*` features）。`.cur` 热点与 SVG 光栅化走专用路径。
@@ -11,6 +12,7 @@ pub mod gif;
 pub mod image;
 pub(crate) mod remote;
 pub mod stream;
+#[cfg(feature = "svg")]
 pub mod svg_raster;
 pub mod yuv;
 

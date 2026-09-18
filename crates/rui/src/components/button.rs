@@ -261,8 +261,8 @@ pub(crate) fn button_variant_color_classes(variant: &str) -> &'static str {
              disabled:opacity-50"
         }
         "ghost" => {
-            "hover:bg-accent hover:text-foreground dark:hover:bg-accent/50 \
-             disabled:opacity-50"
+            "text-foreground hover:bg-accent hover:text-foreground \
+             dark:hover:bg-accent/50 disabled:opacity-50"
         }
         "link" => {
             "text-primary underline-offset-[4px] hover:underline hover:text-primary \
@@ -855,6 +855,10 @@ impl ButtonBuilder {
     }
 }
 
+fn tree_holds_morph_icon(el: &Element) -> bool {
+    el.attrs.contains_key("rui_morph_icon") || el.children.iter().any(tree_holds_morph_icon)
+}
+
 impl From<ButtonBuilder> for Element {
     fn from(builder: ButtonBuilder) -> Element {
         let chrome = builder.chrome.clone();
@@ -937,6 +941,21 @@ impl From<ButtonBuilder> for Element {
         });
 
         for mut child in builder.content {
+            // MorphIcon seeds a Lucide glyph so layout takes the texture path. Do not
+            // hoist that glyph into a caption leaf — it strips `rui_morph_icon` and
+            // the morph bind can no longer find the instance.
+            if tree_holds_morph_icon(&child) {
+                if child
+                    .attrs
+                    .get(crate::core::tree::ATTR_POINTER_EVENTS)
+                    .is_none()
+                    && child.attrs.contains_key("rui_morph_icon")
+                {
+                    child = child.pointer_events("none");
+                }
+                el = el.child(child);
+                continue;
+            }
             // Always build caption through `build_text_node` so measure/paint match static
             // `"…"` children. Re-attach bind_text identity (template_id + unmount) so Solid-style
             // updates keep targeting this leaf — preserving the raw bind shell used to leave a
@@ -1845,6 +1864,140 @@ mod chrome_tests {
         assert_eq!(
             hover, rest,
             "observed ShadCN ghost Button: hover changes bg only, caption stays foreground"
+        );
+    }
+
+    #[test]
+    fn ghost_classes_declare_rest_foreground() {
+        let classes = super::button_variant_color_classes("ghost");
+        assert!(
+            classes.split_whitespace().any(|t| t == "text-foreground"),
+            "ghost rest must set text-foreground so Lucide chrome (min/max/close) \
+             is not washed to primary-foreground / white on frameless secondaries: {classes}"
+        );
+    }
+
+    #[test]
+    fn ghost_icon_child_keeps_foreground_after_class_resolve() {
+        use super::button;
+        use crate::core::reactivity::create_root;
+        use crate::style::{resolve_class_variants, VariantContext};
+        use crate::utils::text_node::build_lucide_icon_text_node;
+        let fg = parse_text_color("foreground");
+        let lucide_fg = |el: &Element| {
+            el.children
+                .iter()
+                .find(|c| c.text_style.font_family.as_deref() == Some("lucide"))
+                .map(|c| c.text_style.color_resolved())
+                .expect("lucide child")
+        };
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-ghost-icon")
+                .variant("ghost")
+                .size("icon-xs")
+                .child(build_lucide_icon_text_node("minus"))
+                .into()
+        });
+        assert_eq!(lucide_fg(&el), fg);
+        assert_ne!(lucide_fg(&el), [255, 255, 255, 255]);
+        let attrs = el.attrs.clone();
+        let _ = resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                attrs: Some(&attrs),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            lucide_fg(&el),
+            fg,
+            "class restore must not paint ghost icons white"
+        );
+        assert_eq!(el.text_style.color, Some(fg));
+    }
+
+    #[test]
+    fn ghost_lucide_title_chrome_emits_textured_draws() {
+        use super::button;
+        use crate::core::reactivity::create_root;
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::utils::text_node::build_lucide_icon_text_node;
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-ghost-caption-x")
+                .variant("ghost")
+                .size("icon-xs")
+                .child(build_lucide_icon_text_node("x"))
+                .into()
+        });
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut el, 48.0, 32.0, [0.0, 0.0]);
+        assert!(
+            result
+                .textured_draws
+                .iter()
+                .any(|d| d.texture_key.starts_with("rui_lucide")),
+            "frameless secondary chrome icons are Lucide textures; \
+             secondary windows must upload/draw textured_draws. keys={:?}",
+            result
+                .textured_draws
+                .iter()
+                .map(|d| d.texture_key.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ghost_icon_hover_applies_accent_background() {
+        use super::button;
+        use crate::core::reactivity::create_root;
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::style::sync_class_variants_subtree;
+        use crate::utils::text_node::build_lucide_icon_text_node;
+        set_theme_mode(ThemeMode::Light);
+        let (_h, mut el) = create_root(|| -> Element {
+            button("t-ghost-caption-hover")
+                .variant("ghost")
+                .size("icon-xs")
+                .child(build_lucide_icon_text_node("x"))
+                .into()
+        });
+        el.layout_bounds = [0.0, 0.0, 28.0, 28.0];
+        assert!(
+            el.style.bg_color[3] < 0.01,
+            "ghost rest background is transparent"
+        );
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut el,
+            [14.0, 14.0],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            hex(el.style.bg_color),
+            hex(parse_color("accent")),
+            "frameless caption ghost buttons resolve hover:bg-accent; \
+             secondary windows must sync_class_variants with the pointer"
+        );
+        sync_class_variants_subtree(
+            &mut el,
+            [-1.0, -1.0],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "pointer leave must drop :hover so transition-colors can fade ghost rest"
         );
     }
 

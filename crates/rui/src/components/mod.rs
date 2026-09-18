@@ -366,10 +366,10 @@ pub use image::{image, ui_image, Image, ImageBuilder, ImageProps, Img, ImgProps}
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,
-    filter_url_insert, input, input_caret_signal_key, input_ime_anchor_signal_key,
-    input_overwrite_signal_key, input_password_reveal_signal_key, input_selection_signal_key,
-    input_type_signal_key, input_value_signal_key, Input, InputBuilder, InputProps, InputType,
-    IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
+    filter_url_insert, input, input_caret_signal_key, input_extra_carets_signal_key,
+    input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
+    input_selection_signal_key, input_type_signal_key, input_value_signal_key, Input, InputBuilder,
+    InputProps, InputType, IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
 };
 pub use input_adornment::{
     input_adornment, input_adornment_addon, input_adornment_text, InputAdornment,

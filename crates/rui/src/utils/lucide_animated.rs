@@ -378,7 +378,8 @@ fn sample_tracks(
             if let Some(kf) = track.keyframes.get(state) {
                 let series = keyframe_string_series(kf);
                 if !series.is_empty() {
-                    // Snap: before midpoint keep first, after keep last (full morph needs SVG path interp).
+                    // Snap: before midpoint keep first, after keep last — fallback if
+                    // polar interp cannot lower the pair (fill-drawn / mismatched d).
                     let delay = track
                         .transition
                         .as_ref()
@@ -391,8 +392,34 @@ fn sample_tracks(
                     } else {
                         (local / dur).clamp(0.0, 1.0)
                     };
-                    let idx = if t < 0.5 { 0 } else { series.len() - 1 };
-                    out.d = Some(series[idx].clone());
+                    let ease = track.transition.as_ref().and_then(|t| t.ease.as_deref());
+                    let te = ease_fn(ease, t);
+                    if series.len() == 1 {
+                        out.d = Some(series[0].clone());
+                    } else {
+                        let n = series.len() - 1;
+                        let x = te * n as f32;
+                        let i = (x.floor() as usize).min(n - 1);
+                        let f = (x - i as f32) as f64;
+                        let snap = || {
+                            let idx = if te < 0.5 { 0 } else { series.len() - 1 };
+                            Some(series[idx].clone())
+                        };
+                        #[cfg(feature = "svg")]
+                        {
+                            out.d = crate::utils::icon_morph::morph_src_at(
+                                &series[i],
+                                &series[i + 1],
+                                f,
+                            )
+                            .or_else(snap);
+                        }
+                        #[cfg(not(feature = "svg"))]
+                        {
+                            let _ = (i, f);
+                            out.d = snap();
+                        }
+                    }
                 }
             }
             continue;

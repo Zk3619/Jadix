@@ -1,6 +1,6 @@
 //! resvg / usvg 光栅化 — 与浏览器 SVG 渲染同栈。
 //!
-//! 供 Image 解码、Twemoji、Lucide Icon、公开 `<svg>` 叶共用；无 `svg` feature 时回退为 `None`。
+//! 本模块仅在 feature `svg` 下编译：供 Image 解码、Twemoji、Lucide Icon、公开 `<svg>` 叶共用。
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -23,12 +23,10 @@ thread_local! {
     static RASTER_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-#[cfg(feature = "svg")]
 thread_local! {
     static SVG_OPT: RefCell<Option<resvg::usvg::Options<'static>>> = RefCell::new(None);
 }
 
-#[cfg(feature = "svg")]
 fn parse_usvg_tree(bytes: &[u8]) -> Option<resvg::usvg::Tree> {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     SVG_OPT.with(|slot| {
@@ -44,7 +42,6 @@ fn parse_usvg_tree(bytes: &[u8]) -> Option<resvg::usvg::Tree> {
 }
 
 /// Parse SVG bytes and rasterize to RGBA8 at exact `out_w`×`out_h`.
-#[cfg(feature = "svg")]
 pub fn rasterize_svg_to_rgba(bytes: &[u8], out_w: u32, out_h: u32) -> Option<Vec<u8>> {
     use resvg::tiny_skia;
 
@@ -58,12 +55,33 @@ pub fn rasterize_svg_to_rgba(bytes: &[u8], out_w: u32, out_h: u32) -> Option<Vec
     let mut pixmap = tiny_skia::Pixmap::new(out_w, out_h)?;
     let transform = tiny_skia::Transform::from_scale(out_w as f32 / nw, out_h as f32 / nh);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    Some(pixmap.data().to_vec())
+    // tiny-skia pixmap is premultiplied. Textured draws (`flags=0`) treat RGBA as
+    // straight and premultiply in the shader when the swapchain is compositor-alpha.
+    // Leaving premul here made Lucide strokes look like the wrong (washed) foreground
+    // on frameless glass / transparent secondary windows.
+    let mut rgba = pixmap.data().to_vec();
+    unpremultiply_rgba8(&mut rgba);
+    Some(rgba)
 }
 
-#[cfg(not(feature = "svg"))]
-pub fn rasterize_svg_to_rgba(_bytes: &[u8], _out_w: u32, _out_h: u32) -> Option<Vec<u8>> {
-    None
+/// Convert premul RGBA8 → straight alpha so `textured_rect` can premul once.
+fn unpremultiply_rgba8(pixels: &mut [u8]) {
+    for px in pixels.chunks_exact_mut(4) {
+        let a = px[3];
+        if a == 0 {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+            continue;
+        }
+        if a == 255 {
+            continue;
+        }
+        let inv = 255.0 / a as f32;
+        px[0] = (px[0] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+        px[1] = (px[1] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+        px[2] = (px[2] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+    }
 }
 
 /// Rasterize UTF-8 SVG markup to RGBA8 at exact output size.
@@ -73,45 +91,29 @@ pub fn rasterize_svg_str(svg: &str, out_w: u32, out_h: u32) -> Option<Vec<u8>> {
 
 /// Rasterize at the SVG's intrinsic size (no scaling cap).
 pub fn rasterize_svg_natural(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    #[cfg(feature = "svg")]
-    {
-        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-        let tree = parse_usvg_tree(bytes)?;
-        let size = tree.size();
-        let out_w = size.width().round().max(1.0) as u32;
-        let out_h = size.height().round().max(1.0) as u32;
-        let rgba = rasterize_svg_to_rgba(bytes, out_w, out_h)?;
-        Some((out_w, out_h, rgba))
-    }
-    #[cfg(not(feature = "svg"))]
-    {
-        let _ = bytes;
-        None
-    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let tree = parse_usvg_tree(bytes)?;
+    let size = tree.size();
+    let out_w = size.width().round().max(1.0) as u32;
+    let out_h = size.height().round().max(1.0) as u32;
+    let rgba = rasterize_svg_to_rgba(bytes, out_w, out_h)?;
+    Some((out_w, out_h, rgba))
 }
 
 /// Fit longest edge to `max_edge`, preserving aspect ratio.
 pub fn rasterize_svg_fit(bytes: &[u8], max_edge: u32) -> Option<(u32, u32, Vec<u8>)> {
-    #[cfg(feature = "svg")]
-    {
-        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-        let tree = parse_usvg_tree(bytes)?;
-        let size = tree.size();
-        let nw = size.width().max(1.0);
-        let nh = size.height().max(1.0);
-        let longest = nw.max(nh);
-        let max = max_edge.max(1) as f32;
-        let scale = if longest > max { max / longest } else { 1.0 };
-        let out_w = (nw * scale).round().clamp(1.0, max) as u32;
-        let out_h = (nh * scale).round().clamp(1.0, max) as u32;
-        let rgba = rasterize_svg_to_rgba(bytes, out_w, out_h)?;
-        Some((out_w, out_h, rgba))
-    }
-    #[cfg(not(feature = "svg"))]
-    {
-        let _ = (bytes, max_edge);
-        None
-    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let tree = parse_usvg_tree(bytes)?;
+    let size = tree.size();
+    let nw = size.width().max(1.0);
+    let nh = size.height().max(1.0);
+    let longest = nw.max(nh);
+    let max = max_edge.max(1) as f32;
+    let scale = if longest > max { max / longest } else { 1.0 };
+    let out_w = (nw * scale).round().clamp(1.0, max) as u32;
+    let out_h = (nh * scale).round().clamp(1.0, max) as u32;
+    let rgba = rasterize_svg_to_rgba(bytes, out_w, out_h)?;
+    Some((out_w, out_h, rgba))
 }
 
 fn hash_svg_doc(svg: &str, width: u32, height: u32) -> String {
@@ -191,7 +193,7 @@ pub fn lucide_svg_document(inner: &str, color: [u8; 4]) -> String {
         )
     };
     format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{inner}</svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" color="{stroke}" stroke="{stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{inner}</svg>"#
     )
 }
 
@@ -230,5 +232,57 @@ pub fn lucide_icon_cache_put(key: String, w: u32, h: u32, rgba: Vec<u8>) {
                 rgba,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpremultiply_restores_straight_rgb_on_partial_alpha() {
+        let mut px = [25u8, 25, 25, 128];
+        unpremultiply_rgba8(&mut px);
+        assert!(
+            (px[0] as i16 - 50).abs() <= 1 && (px[1] as i16 - 50).abs() <= 1,
+            "premul 25 @ a=128 must unpremul to ~50, got {:?}",
+            px
+        );
+        assert_eq!(px[3], 128);
+    }
+
+    #[test]
+    fn lucide_minus_partial_coverage_keeps_foreground_rgb() {
+        let Some(inner) = crate::utils::lucide::lucide_svg_inner("x") else {
+            return;
+        };
+        let fg = [25u8, 25, 25, 255];
+        let (_, _, rgba) = rasterize_lucide_icon_rgba(inner, fg, 96).expect("raster");
+        let mut aa = 0usize;
+        let mut opaque = 0usize;
+        for p in rgba.chunks_exact(4) {
+            let a = p[3];
+            if a >= 250 {
+                opaque += 1;
+                assert!(
+                    (p[0] as i16 - fg[0] as i16).abs() <= 4
+                        && (p[1] as i16 - fg[1] as i16).abs() <= 4,
+                    "opaque stroke must be foreground, got rgba={p:?}"
+                );
+                continue;
+            }
+            if !(40..220).contains(&a) {
+                continue;
+            }
+            aa += 1;
+            assert!(
+                (p[0] as i16 - fg[0] as i16).abs() <= 12
+                    && (p[1] as i16 - fg[1] as i16).abs() <= 12
+                    && (p[2] as i16 - fg[2] as i16).abs() <= 12,
+                "AA pixel must keep straight foreground RGB, got rgba={p:?} fg={fg:?}"
+            );
+        }
+        assert!(opaque > 20, "expected opaque stroke ink, got {opaque}");
+        assert!(aa > 8, "expected antialiased stroke samples, got {aa}");
     }
 }

@@ -15,6 +15,8 @@ pub mod floating_motion;
 pub mod focus_trap;
 pub mod font;
 pub mod hover_intent;
+#[cfg(feature = "svg")]
+pub mod icon_morph;
 pub mod icon_provider;
 pub mod icon_texture;
 pub mod input_hit;
@@ -28,6 +30,8 @@ pub mod lucide_animated;
 pub mod modal_motion;
 pub mod modal_shell;
 pub mod modal_surface;
+#[cfg(feature = "svg")]
+pub mod morph_icon;
 pub mod motion;
 pub mod overflow_fit;
 pub mod panel_presence;
@@ -40,6 +44,7 @@ pub mod table_sort;
 pub mod text_buffer;
 pub mod text_edit_history;
 pub mod text_field;
+pub mod text_multi_cursor;
 pub mod text_node;
 pub mod text_sel_move;
 pub mod text_texture;
@@ -75,6 +80,11 @@ pub use focus_trap::{
     activate_focus_trap, deactivate_focus_trap, focus_trap_ring_ids, sync_focus_trap,
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
+#[cfg(feature = "svg")]
+pub use icon_morph::{
+    alloc_outputs, canonical_d, cubics_to_path_d, fit_icon, interp_linear, svg_to_icon, IconInput,
+    IconNode, MorphError, MorphPlan,
+};
 pub use icon_provider::{
     apply_bound_icon_name, apply_bound_icon_src, build_icon_from_src, build_icon_named,
     clear_icon_provider, clear_registered_icons, glyph_for_name, icon_named, icon_src,
@@ -96,6 +106,17 @@ pub use lucide_animated::{
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,
     sync_animated_icon_hover, tick_animated_icons_subtree, AnimatedIcon, AnimatedIconBuilder,
     ATTR_ANIMATED_ICON, ATTR_ANIMATED_ICON_STATE,
+};
+#[cfg(feature = "svg")]
+pub use morph_icon::{
+    apply_bound_morph_abs_stroke, apply_bound_morph_from, apply_bound_morph_icon,
+    apply_bound_morph_interp, apply_bound_morph_label, apply_bound_morph_progress,
+    apply_bound_morph_reduced, apply_bound_morph_spring, apply_bound_morph_stroke,
+    apply_bound_morph_to, apply_bound_morph_view_box, ensure_morph_icon_texture, morph_destroy,
+    morph_handle, morph_icon, morph_progress, morph_progress_by_id, morph_seek,
+    morph_seek_progress, morph_set, morph_to, morph_to_with, subtree_needs_morph_icon_frame,
+    tick_morph_icons_subtree, IntoMorphSrc, MorphHandle, MorphIcon, MorphIconBuilder,
+    ATTR_MORPH_ICON, ATTR_MORPH_INTERP, ATTR_MORPH_REDUCED,
 };
 pub use motion::{
     clear_motion, ensure_motion_transitions, motion_is_animating, motion_sync_status,

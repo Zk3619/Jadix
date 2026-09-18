@@ -137,6 +137,370 @@ pub(crate) fn LucideAnimatedShowcase() -> Element {
     }
 }
 
+const MORPH_PLAYGROUND_ICONS: &[&str] = &[
+    "x",
+    "plus",
+    "arrow-right",
+    "arrow-down",
+    "check",
+    "chevron-down",
+    "heart",
+    "star",
+];
+
+/// morphicons.com playground caption: `from → to` + Procrustes θ / residual.
+fn morph_plan_caption(from: &str, to: &str) -> (String, String, String) {
+    use rui::utils::icon_morph::{build_plan, icon_input_from_src, resample_icon, SAMPLE_N};
+    let pair = format!("{from} → {to}");
+    let empty = (pair.clone(), String::new(), String::new());
+    let Some(a) = icon_input_from_src(from) else {
+        return empty;
+    };
+    let Some(b) = icon_input_from_src(to) else {
+        return empty;
+    };
+    let Ok(sa) = resample_icon(&a, SAMPLE_N) else {
+        return empty;
+    };
+    let Ok(sb) = resample_icon(&b, SAMPLE_N) else {
+        return empty;
+    };
+    let Ok(plan) = build_plan(&sa, &sb) else {
+        return empty;
+    };
+    if plan.items.is_empty() {
+        return empty;
+    }
+    let degs: Vec<String> = plan
+        .items
+        .iter()
+        .take(4)
+        .map(|it| format!("{:.0}°", it.theta.abs() * 180.0 / std::f64::consts::PI))
+        .collect();
+    let n = plan.items.len() as f64;
+    let res = plan.items.iter().map(|it| it.res).sum::<f64>() / n.max(1.0);
+    let max_res = plan.items.iter().map(|it| it.res).fold(0.0_f64, f64::max);
+    let max_th = plan
+        .items
+        .iter()
+        .map(|it| it.theta.abs())
+        .fold(0.0_f64, f64::max);
+    let kind = if max_res < 0.05 && max_th > 0.2 {
+        "pure rotation, emergent"
+    } else if max_res < 0.05 {
+        "near identity"
+    } else {
+        "polar morph"
+    };
+    (
+        pair,
+        format!("θ [{}] res {:.3}", degs.join(" "), res),
+        kind.to_string(),
+    )
+}
+
+#[component]
+fn MorphPairButton(id: String, a: String, b: String, spring: String) -> Element {
+    let key = format!("gal_morph_pair_{id}");
+    let on = use_signal(&key, || false);
+    let a_s = a.clone();
+    let b_s = b.clone();
+    ui! {
+        <VStack items="center" gap="0.25rem" min_w="4.75rem">
+            <Button variant="outline" size="icon" on_click={move || on.set(!on.peek())}>
+                <MorphIcon
+                    id={format!("gal-morph-pair-{id}")}
+                    icon={if on.get() { b.clone() } else { a.clone() }}
+                    size={24.0}
+                    spring={spring.clone()}
+                />
+            </Button>
+            <Label text_size="0.6rem" color="muted-foreground" class="whitespace-nowrap">
+                { format!("{a_s}↔{b_s}") }
+            </Label>
+        </VStack>
+    }
+}
+
+/// Exclusive icon picker. ToggleGroup paint-syncs pressed chrome (bg/fg) so
+/// selection does not lag behind a hand-written Button `variant={…}` bind.
+#[component]
+fn MorphIconPickers() -> Element {
+    let from = use_signal("gal_morph_pg_from", || "x".to_string());
+    let to = use_signal("gal_morph_pg_to", || "plus".to_string());
+    let t = use_signal("gal_morph_pg_t", || 1.0_f32);
+    let scrubbing = use_signal("gal_morph_pg_scrubbing", || false);
+    let seen = use_signal("gal_morph_pg_to_seen", || to.peek());
+    let _ = create_effect(move || {
+        let next = to.get();
+        let prev = seen.peek();
+        if prev == next {
+            return;
+        }
+        from.set(prev);
+        seen.set(next);
+        t.set(1.0);
+        scrubbing.set(false);
+    });
+    ui! {
+        <ToggleGroup
+            id="gal-morph-pg-icons"
+            type="single"
+            value={to}
+            default_value="plus"
+            variant="outline"
+            size="sm"
+            required={true}
+        >
+            { MORPH_PLAYGROUND_ICONS
+                .iter()
+                .map(|name| {
+                    let name = *name;
+                    ui! {
+                        <ToggleGroupItem value={name}>
+                            <Icon name={name} size="20px" pointer_events="none" />
+                        </ToggleGroupItem>
+                    }
+                })
+                .collect::<Vec<_>>() }
+        </ToggleGroup>
+    }
+}
+
+/// Own effect tree: play↔pause morph must not share the playground card effect.
+#[component]
+fn MorphPlayPauseButton() -> Element {
+    let on = use_signal("gal_morph_pg_playpause", || false);
+    let spring = use_signal("gal_morph_pg_spring", || "snappy".to_string());
+    let stroke = use_signal("gal_morph_pg_stroke", || "2".to_string());
+    ui! {
+        <Button
+            id="gal-morph-pg-playpause-btn"
+            variant="outline"
+            size="icon"
+            on_click={move || on.set(!on.peek())}
+        >
+            <MorphIcon
+                id="gal-morph-pg-playpause"
+                icon={if on.get() { "play" } else { "pause" }}
+                size={18.0}
+                spring={spring.get()}
+                stroke_width={stroke.get().parse::<f32>().unwrap_or(2.0)}
+            />
+        </Button>
+    }
+}
+
+#[component]
+pub(crate) fn MorphIconShowcase() -> Element {
+    let from = use_signal("gal_morph_pg_from", || "x".to_string());
+    let to = use_signal("gal_morph_pg_to", || "plus".to_string());
+    let t = use_signal("gal_morph_pg_t", || 1.0_f32);
+    let spring = use_signal("gal_morph_pg_spring", || "snappy".to_string());
+    let stroke = use_signal("gal_morph_pg_stroke", || "2".to_string());
+    let interp = use_signal("gal_morph_pg_interp", || "polar".to_string());
+    let scrubbing = use_signal("gal_morph_pg_scrubbing", || false);
+
+    let menu = use_signal("gal_morph_menu", || false);
+    let play = use_signal("gal_morph_play", || false);
+    let sun = use_signal("gal_morph_sun", || false);
+    let copied = use_signal("gal_morph_copy", || false);
+    let eye = use_signal("gal_morph_eye", || false);
+
+    let builder_el: Element = morph_icon("menu")
+        .from_icon("menu")
+        .to_icon("x")
+        .progress(0.45)
+        .size_px(32.0)
+        .into();
+    let svg_el: Element = {
+        let from = rui::utils::svg_to_icon(
+            r#"<svg viewBox="0 0 24 24"><path d="M5 12h14" fill="none" stroke="black" stroke-width="2"/></svg>"#,
+        );
+        let to = rui::utils::svg_to_icon(
+            r#"<svg viewBox="0 0 24 24"><path d="M12 5v14" fill="none" stroke="black" stroke-width="2"/></svg>"#,
+        );
+        match (from, to) {
+            (Ok(a), Ok(b)) => morph_icon(a.clone())
+                .from_icon(a)
+                .to_icon(b)
+                .progress(0.5)
+                .interp("linear")
+                .size_px(32.0)
+                .into(),
+            _ => morph_icon("minus")
+                .from_icon("minus")
+                .to_icon("plus")
+                .progress(0.5)
+                .interp("linear")
+                .size_px(32.0)
+                .into(),
+        }
+    };
+
+    ui! {
+        <MyCard title="MorphIcon · 描边图标互变">
+            <VStack w="100%" gap="1rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "任意两枚 Lucide 描边图标 morph。点选图标弹簧互变；拖滑杆进入受控 seek。polar/linear 对照插值。中间按钮演示 play↔pause。需 feature svg + bundled-lucide。"
+                </Label>
+
+                <VStack
+                    w="100%"
+                    items="center"
+                    gap="0.65rem"
+                    p="1.25rem"
+                    bg="secondary"
+                    rounded="0.75rem"
+                    borderStyle="solid"
+                    borderColor="border"
+                    borderWidth="0.0625"
+                >
+                    <MorphIcon
+                        id="gal-morph-pg-preview"
+                        icon={to.get()}
+                        from={if scrubbing.get() { from.get() } else { String::new() }}
+                        to={if scrubbing.get() { to.get() } else { String::new() }}
+                        progress={if scrubbing.get() { t.get() } else { -1.0 }}
+                        size={72.0}
+                        spring={spring.get()}
+                        stroke_width={stroke.get().parse::<f32>().unwrap_or(2.0)}
+                        interp={interp.get()}
+                    />
+                    <VStack items="center" gap="0.15rem">
+                        <Label text_size="0.75rem" font_weight="600">{ morph_plan_caption(&from.get(), &to.get()).0 }</Label>
+                        <Label text_size="0.65rem" color="muted-foreground" class="whitespace-nowrap">{ morph_plan_caption(&from.get(), &to.get()).1 }</Label>
+                        <Label text_size="0.65rem" color="muted-foreground">{ morph_plan_caption(&from.get(), &to.get()).2 }</Label>
+                    </VStack>
+                    <HStack w="18rem" max_w="100%" items="center" gap="0.75rem">
+                        <Slider
+                            id="gal-morph-playground-t"
+                            value={t}
+                            min={0.0}
+                            max={1.0}
+                            step={0.01}
+                            on_click={move || scrubbing.set(true)}
+                        />
+                        <Label
+                            text_size="0.7rem"
+                            color="muted-foreground"
+                            class="whitespace-nowrap"
+                            min_w="3.2rem"
+                        >{ format!("t={:.2}", t.get()) }</Label>
+                    </HStack>
+                    <HStack gap="0.4rem" wrap="wrap" justify="center" items="center">
+                        <MorphIconPickers />
+                    </HStack>
+                    <MorphPlayPauseButton />
+                    <HStack gap="1rem" wrap="wrap" justify="center" items="start">
+                        <VStack gap="0.35rem" items="center">
+                            <Label text_size="0.65rem" color="muted-foreground">"spring"</Label>
+                            <ToggleGroup
+                                id="gal-morph-pg-spring"
+                                value={spring}
+                                default_value="snappy"
+                                variant="outline"
+                                size="sm"
+                            >
+                                <ToggleGroupItem value="snappy">"snappy"</ToggleGroupItem>
+                                <ToggleGroupItem value="smooth">"smooth"</ToggleGroupItem>
+                                <ToggleGroupItem value="bouncy">"bouncy"</ToggleGroupItem>
+                            </ToggleGroup>
+                        </VStack>
+                        <VStack gap="0.35rem" items="center">
+                            <Label text_size="0.65rem" color="muted-foreground">"stroke"</Label>
+                            <ToggleGroup
+                                id="gal-morph-pg-stroke"
+                                value={stroke}
+                                default_value="2"
+                                variant="outline"
+                                size="sm"
+                            >
+                                <ToggleGroupItem value="1">"1"</ToggleGroupItem>
+                                <ToggleGroupItem value="1.5">"1.5"</ToggleGroupItem>
+                                <ToggleGroupItem value="2">"2"</ToggleGroupItem>
+                                <ToggleGroupItem value="2.5">"2.5"</ToggleGroupItem>
+                            </ToggleGroup>
+                        </VStack>
+                        <VStack gap="0.35rem" items="center">
+                            <Label text_size="0.65rem" color="muted-foreground">"interp"</Label>
+                            <ToggleGroup
+                                id="gal-morph-pg-interp"
+                                value={interp}
+                                default_value="polar"
+                                variant="outline"
+                                size="sm"
+                            >
+                                <ToggleGroupItem value="polar">"polar"</ToggleGroupItem>
+                                <ToggleGroupItem value="linear">"linear"</ToggleGroupItem>
+                            </ToggleGroup>
+                        </VStack>
+                    </HStack>
+                </VStack>
+
+                <Separator />
+
+                <Label font_weight="600" text_size="0.875rem">"常见对 · 点击切换"</Label>
+                <HStack w="100%" gap="0.65rem" wrap="wrap" items="start">
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        on_click={move || menu.set(!menu.peek())}
+                    >
+                        <MorphIcon icon={if menu.get() { "x" } else { "menu" }} size={24.0} />
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        on_click={move || play.set(!play.peek())}
+                    >
+                        <MorphIcon icon={if play.get() { "pause" } else { "play" }} size={24.0} />
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        on_click={move || sun.set(!sun.peek())}
+                    >
+                        <MorphIcon icon={if sun.get() { "moon" } else { "sun" }} size={24.0} spring="smooth" />
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        on_click={move || copied.set(!copied.peek())}
+                    >
+                        <MorphIcon icon={if copied.get() { "check" } else { "copy" }} size={24.0} />
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        on_click={move || eye.set(!eye.peek())}
+                    >
+                        <MorphIcon icon={if eye.get() { "eye-off" } else { "eye" }} size={24.0} />
+                    </Button>
+                    <MorphPairButton id="chevron" a="chevron-down" b="chevron-up" spring="snappy" />
+                    <MorphPairButton id="plus-minus" a="plus" b="minus" spring="snappy" />
+                    <MorphPairButton id="volume" a="volume-2" b="volume-x" spring="smooth" />
+                    <MorphPairButton id="lock" a="lock" b="unlock" spring="bouncy" />
+                    <MorphPairButton id="smile" a="smile" b="frown" spring="smooth" />
+                    <MorphPairButton id="panel" a="panel-left" b="panel-left-close" spring="snappy" />
+                    <VStack items="center" gap="0.25rem" min_w="4.75rem">
+                        { builder_el }
+                        <Label text_size="0.6rem" color="muted-foreground" class="whitespace-nowrap">
+                            { "builder @ 0.45" }
+                        </Label>
+                    </VStack>
+                    <VStack items="center" gap="0.25rem" min_w="4.75rem">
+                        { svg_el }
+                        <Label text_size="0.6rem" color="muted-foreground" class="whitespace-nowrap">
+                            { "svg_to_icon linear" }
+                        </Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 /// Chaikin corner-cutting: two passes of subdivision produce a smooth C1 curve
 /// that never overshoots the control polygon.  Anchors the first and last
 /// points so the stroke starts and ends exactly at the pointer position.

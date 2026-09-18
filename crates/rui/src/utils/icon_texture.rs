@@ -322,10 +322,13 @@ fn rasterize_glyph_rgba(
                 continue;
             }
             let i = ((dy as u32 * side + dx as u32) * 4) as usize;
+            // Straight alpha: RGB is the glyph color, A is coverage. The textured
+            // shader premultiplies when the swapchain is compositor-alpha. Storing
+            // premul here washed Lucide chrome on frameless glass windows.
             let cover = a as u32;
-            rgba[i] = ((color[0] as u32 * cover) / 255) as u8;
-            rgba[i + 1] = ((color[1] as u32 * cover) / 255) as u8;
-            rgba[i + 2] = ((color[2] as u32 * cover) / 255) as u8;
+            rgba[i] = color[0];
+            rgba[i + 1] = color[1];
+            rgba[i + 2] = color[2];
             rgba[i + 3] = ((color[3] as u32 * cover) / 255) as u8;
         }
     }
@@ -369,7 +372,7 @@ pub fn ensure_lucide_icon_texture(
             color.hash(&mut hasher);
             #[cfg(feature = "svg")]
             {
-                "resvg_v1".hash(&mut hasher);
+                "resvg_v2".hash(&mut hasher);
             }
             let key = format!("rui_lucide_svg:{:016x}", hasher.finish());
             let mut guard = GLYPH_CPU.lock().ok()?;
@@ -390,7 +393,7 @@ pub fn ensure_lucide_icon_texture(
     size_key.hash(&mut hasher);
     dpr_key.hash(&mut hasher);
     color.hash(&mut hasher);
-    let key = format!("rui_lucide_font_v3:{:016x}", hasher.finish());
+    let key = format!("rui_lucide_font_v4:{:016x}", hasher.finish());
     let mut guard = GLYPH_CPU.lock().ok()?;
     let map = guard.get_or_insert_with(HashMap::new);
     if let Some(entry) = map.get(&key) {

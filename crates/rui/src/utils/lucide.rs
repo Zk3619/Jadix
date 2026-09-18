@@ -44,6 +44,17 @@ pub fn lucide_glyph(name: &str) -> Option<String> {
 }
 
 /// Inner SVG markup for a Lucide icon (no root `<svg>`), from [`lucide_paths.json`].
+/// Lucide renamed several outline icons; MorphIcon looks up SVG inners, not PUA glyphs.
+fn lucide_path_alias(name: &str) -> Option<&'static str> {
+    match name {
+        "unlock" => Some("lock-open"),
+        _ => None,
+    }
+}
+
 pub fn lucide_svg_inner(name: &str) -> Option<&'static str> {
-    lucide_paths_map().get(name).map(|s| s.as_str())
+    lucide_paths_map()
+        .get(name)
+        .or_else(|| lucide_path_alias(name).and_then(|alias| lucide_paths_map().get(alias)))
+        .map(|s| s.as_str())
 }
