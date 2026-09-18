@@ -532,6 +532,42 @@ mod tests {
     }
 
     #[test]
+    fn reaction_hover_scale_unscaled_leading_none_bounds_shave_twemoji() {
+        // Screenshot: collapsed-bar 😮, hover:scale-125, axis-aligned chords.
+        // leading-none strut is 1em; Twemoji ink is 1.10em. paint_scale multiplies
+        // both — an unscaled 12px TextBounds / vis AABB shaves the circle.
+        let font = 12.0_f32;
+        let line_h = font;
+        let paint_scale = 1.25_f32;
+        let ink = font * crate::renderer::emoji_layout::EMOJI_INK_EM;
+        let (pw, ph) = crate::renderer::emoji_layout::emoji_visible_paint_size(16.0, line_h, font);
+        let strut_clip_h = line_h;
+        let phys_ink = ink * paint_scale;
+        let strut_phys_h = strut_clip_h * paint_scale;
+        let paint_phys_h = ph * paint_scale;
+        assert!(
+            phys_ink - strut_phys_h > 1.0,
+            "documents the screenshot: 1em strut*scale={strut_phys_h:.2} cannot cover \
+             1.10em ink*scale={phys_ink:.2}"
+        );
+        assert!(
+            paint_phys_h + 0.01 >= phys_ink,
+            "paint box must cover ink under hover:scale; paint_h={paint_phys_h} ink={phys_ink} pw={pw}"
+        );
+        let bounds = crate::renderer::prepare_text::text_bounds_from_clip(
+            Some([0.0, 0.0, 16.0, strut_clip_h]),
+            64,
+            64,
+        );
+        let bounds_h = (bounds.bottom - bounds.top) as f32;
+        assert!(
+            phys_ink - bounds_h > 1.0,
+            "glyphon TextBounds of the unscaled strut shave hover:scale Twemoji \
+             (screenshot); bounds_h={bounds_h} phys_ink={phys_ink}"
+        );
+    }
+
+    #[test]
     fn custom_emoji_quad_vs_line_box_clip_signal() {
         // Optical centering: 1.1em ink stays inside leading-normal line box.
         let mut fs = font_loader::create_font_system();

@@ -121,8 +121,37 @@ pub fn is_text_xform_texture_key(key: &str) -> bool {
 }
 
 #[cfg(test)]
-fn cache_peek(key: &str) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn cache_peek(key: &str) -> Option<(u32, u32, Vec<u8>)> {
     with_cache(|c| c.map.get(key).map(|e| (e.width, e.height, e.rgba.clone()))).flatten()
+}
+
+/// Axis-aligned opaque ink bbox in texture pixels (`[x, y, w, h]`).
+#[cfg(test)]
+pub(crate) fn opaque_ink_rect(rgba: &[u8], w: u32, h: u32) -> Option<[u32; 4]> {
+    let mut min_x = w;
+    let mut min_y = h;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut any = false;
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if rgba.get(i + 3).copied().unwrap_or(0) < 24 {
+                continue;
+            }
+            any = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    any.then_some([
+        min_x,
+        min_y,
+        max_x.saturating_sub(min_x) + 1,
+        max_y.saturating_sub(min_y) + 1,
+    ])
 }
 
 #[cfg(test)]
@@ -1662,6 +1691,72 @@ mod tests {
         assert!(
             chromatic > 5,
             "expected Twemoji color variance (not wireframe), chromatic={chromatic}/opaque={opaque}"
+        );
+    }
+
+    #[test]
+    fn reaction_chip_hover_scale_twemoji_bake_is_not_clipped_in_rt() {
+        // Reaction leaf: text-xs + leading-none in a 1rem chip. Mid hover:scale-125
+        // must not clip Twemoji against the leading-none strut (square crop).
+        let _g = cache_test_serial();
+        cache_clear();
+        fn bake_at(scale: f32) -> Option<(u32, u32, Vec<u8>, [u32; 4])> {
+            let font = 12.0 * scale;
+            let layout_w = 16.0 * scale;
+            let layout_h = 12.0 * scale;
+            let line_h = 12.0 * scale;
+            let (bw, bh, pad) = text_xform_bake_box_ex(layout_w, layout_h, font, 0.0, line_h);
+            let (key, _) = ensure_text_xform_texture(
+                "😮",
+                font,
+                400,
+                [0, 0, 0, 255],
+                layout_w,
+                layout_h,
+                bw,
+                bh,
+                pad,
+                glyphon::cosmic_text::Align::Center,
+                crate::renderer::BAKE_OVERSAMPLE,
+                false,
+                0.0,
+            )?;
+            let (w, h, rgba) = cache_peek(&key)?;
+            let ink = opaque_ink_rect(&rgba, w, h)?;
+            Some((w, h, rgba, ink))
+        }
+        let Some((rw, rh, _, rest_ink)) = bake_at(1.0) else {
+            return;
+        };
+        let Some((hw, hh, _, hover_ink)) = bake_at(1.17) else {
+            return;
+        };
+        let rest_touch = rest_ink[0] == 0
+            || rest_ink[1] == 0
+            || rest_ink[0] + rest_ink[2] >= rw
+            || rest_ink[1] + rest_ink[3] >= rh;
+        let hover_touch = hover_ink[0] == 0
+            || hover_ink[1] == 0
+            || hover_ink[0] + hover_ink[2] >= hw
+            || hover_ink[1] + hover_ink[3] >= hh;
+        assert!(
+            !rest_touch,
+            "rest reaction Bake already clips Twemoji (square crop, then hover:scale enlarges the cut); rest_rt={rw}x{rh} rest_ink={rest_ink:?}"
+        );
+        assert!(
+            !hover_touch,
+            "scaled reaction Bake must keep Twemoji inside the RT; rest_rt={rw}x{rh} rest_ink={rest_ink:?} hover_rt={hw}x{hh} hover_ink={hover_ink:?}"
+        );
+        let ink_ratio_h = hover_ink[3] as f32 / rest_ink[3] as f32;
+        assert!(
+            ink_ratio_h > 1.17 * 0.88,
+            "hover Twemoji ink must grow with scale (crop to rest strut keeps ink flat); rest_ink={rest_ink:?} hover_ink={hover_ink:?} ratio_h={ink_ratio_h}"
+        );
+        let rest_frac_w = rest_ink[2] as f32 / rw as f32;
+        let hover_frac_w = hover_ink[2] as f32 / hw as f32;
+        assert!(
+            (hover_frac_w - rest_frac_w).abs() < 0.08,
+            "ink/RT fraction must stay similar under near-identity scale (crop shrinks pad); rest={rest_frac_w} hover={hover_frac_w} rest_ink={rest_ink:?} hover_ink={hover_ink:?}"
         );
     }
 

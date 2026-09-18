@@ -933,7 +933,11 @@ fn uses_textured_shadow_bitmap(user_text_shadow: bool, blur_px: f32) -> bool {
     user_text_shadow && blur_px > TEXTURED_SHADOW_MIN_BLUR
 }
 
-fn text_bounds_from_clip(clip: Option<[f32; 4]>, width: u32, height: u32) -> glyphon::TextBounds {
+pub(crate) fn text_bounds_from_clip(
+    clip: Option<[f32; 4]>,
+    width: u32,
+    height: u32,
+) -> glyphon::TextBounds {
     if let Some(b) = clip.and_then(integerize_clip_rect) {
         glyphon::TextBounds {
             left: b[0] as i32,

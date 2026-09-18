@@ -341,6 +341,9 @@ mod tests {
         assert!((bake_source_scale(0.90) - 1.0).abs() < 1e-6);
         assert!((bake_source_scale(1.0) - 1.0).abs() < 1e-6);
         assert!((bake_source_scale(1.10) - 1.0).abs() < 1e-6);
+        // hover:scale-125 settles at 1.25, outside this band — sticky collect
+        // rasters at 1.0 instead (see layout_tree Bake raster_scale).
+        assert!((bake_source_scale(1.25) - 1.25).abs() < 1e-6);
         assert!((bake_source_scale(1.5) - 1.5).abs() < 1e-6);
         assert!((bake_source_scale(0.5) - 0.5).abs() < 1e-6);
     }

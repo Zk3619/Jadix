@@ -50,6 +50,48 @@ pub fn emoji_metrics(font_size: f32) -> (f32, f32, f32) {
     )
 }
 
+/// Paint-box size for an overflow-visible emoji leaf: at least the 1.10em ink
+/// square, even when Taffy/leading-none sized the strut to 1em.
+///
+/// CSS `overflow: visible` lets ink paint past the line box. Collect dest, Coverage
+/// clip, and visual AABB must use this box — otherwise `hover:scale-125` enlarges
+/// a 1em AABB crop of the circular Twemoji (screenshot chords).
+#[inline]
+pub fn emoji_visible_paint_size(layout_w: f32, layout_h: f32, font_size: f32) -> (f32, f32) {
+    let ink = emoji_metrics(font_size).0;
+    (layout_w.max(ink).max(1.0), layout_h.max(ink).max(1.0))
+}
+
+/// Grow `layout_bounds` on overflow-visible axes so visual AABB / scissor cover ink.
+#[inline]
+pub fn layout_bounds_with_visible_emoji_ink(
+    bounds: [f32; 4],
+    text: Option<&str>,
+    font_size: f32,
+    overflow_x_visible: bool,
+    overflow_y_visible: bool,
+) -> [f32; 4] {
+    let Some(text) = text else {
+        return bounds;
+    };
+    if !emoji_detect::text_contains_emoji(text) {
+        return bounds;
+    }
+    let ink = emoji_metrics(font_size).0;
+    let mut b = bounds;
+    if overflow_x_visible && b[2] + 1e-3 < ink {
+        let extra = ink - b[2];
+        b[0] -= extra * 0.5;
+        b[2] = ink;
+    }
+    if overflow_y_visible && b[3] + 1e-3 < ink {
+        let extra = ink - b[3];
+        b[1] -= extra * 0.5;
+        b[3] = ink;
+    }
+    b
+}
+
 /// Raster / `CustomGlyph` edge length — must match glyphon's request (= round(ink × scale)).
 #[inline]
 pub fn emoji_ink_pixel_size(font_size: f32) -> u16 {
@@ -424,6 +466,33 @@ mod tests {
             (left + 1.25).abs() < 0.01,
             "first-on-line centering overflow must not be packed to 0, got {left}"
         );
+    }
+
+    #[test]
+    fn visible_paint_size_covers_ink_that_leading_none_strut_cannot() {
+        let font = 12.0_f32;
+        let strut_h = font;
+        let scale = 1.25_f32;
+        let ink = font * EMOJI_INK_EM;
+        let (pw, ph) = emoji_visible_paint_size(16.0, strut_h, font);
+        assert!((ph - ink).abs() < 1e-6, "paint h={ph} ink={ink}");
+        assert!((pw - 16.0).abs() < 1e-6);
+        assert!(
+            strut_h * scale + 1.0 < ink * scale,
+            "strut*hover:scale-125 is the screenshot crop ({:.2} < {:.2})",
+            strut_h * scale,
+            ink * scale
+        );
+        assert!(ph * scale + 0.01 >= ink * scale);
+        let bounds = layout_bounds_with_visible_emoji_ink(
+            [10.0, 20.0, 16.0, 12.0],
+            Some("😮"),
+            font,
+            true,
+            true,
+        );
+        assert!((bounds[3] - ink).abs() < 1e-6);
+        assert!((bounds[1] - (20.0 - (ink - 12.0) * 0.5)).abs() < 1e-6);
     }
 
     #[test]
