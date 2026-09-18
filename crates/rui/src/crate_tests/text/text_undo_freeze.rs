@@ -76,7 +76,7 @@ mod on {
         TextEditSnapshot {
             value: value.into(),
             caret,
-            selection: None,
+            ..Default::default()
         }
     }
 

@@ -17,7 +17,8 @@ use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
 use crate::tokens;
 use crate::utils::text_field::{
-    attach_text_edit_field_lifecycle, bind_controlled_value, focus_id_for_text_edit,
+    attach_text_edit_field_lifecycle, bind_controlled_value, extra_carets_signal,
+    focus_id_for_text_edit,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 pub(crate) struct TextEditBuildParams {
@@ -149,11 +150,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         None
     };
 
+    let extras = extra_carets_signal(&field_id).peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,
         preedit_sel,
         ime_anchor,
+        extras: &extras,
+        committed_caret: caret_sig.peek(),
         placeholder: &placeholder,
         show_placeholder,
         mask,
@@ -166,6 +170,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let real_display = strings.real_display;
     let caret_in_real = strings.caret_in_real;
     let preedit_underline = strings.preedit_underline;
+    let extra_carets_draw = strings.extra_carets;
+    let extra_selections_draw = strings.extra_selections;
+    let extra_preedit_underlines = strings.extra_preedit_underlines;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -358,6 +365,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             selection_bg,
             overwrite_highlight,
             preedit_underline,
+            extra_carets: extra_carets_draw,
+            extra_selections: extra_selections_draw,
+            extra_preedit_underlines,
             drop_caret: false,
             caret_color: Some(caret_color),
             selection_foreground: Some(selection_foreground),
@@ -548,6 +558,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                     None::<(usize, usize)>
                 })
                 .set(None);
+                crate::utils::text_field::clear_extra_carets(&id_clear);
                 use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>).set(None);
                 #[cfg(feature = "text-undo")]
                 crate::utils::text_edit_history::note_field_after_edit(&id_clear);

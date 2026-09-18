@@ -26,6 +26,7 @@
 //! ## 可选尾饰
 //! - `clearable`：有内容时显示叉号，点击清空（缺省 `false`）。
 //! - Editing shortcut keys (Ctrl/Cmd): Select all A, copy C, paste V, cut X, undo Z, redo Y or Shift+Z; Shift + arrow keys to expand the selection. Tab into the field selects all.
+//! - **Alt+click** adds extra carets (click an extra caret again to drop it). Alt+drag across lines places one caret per hard line at the press column. Typing / Backspace / Delete / arrows apply to every caret. Esc or a click without Alt returns to a single caret.
 //! - `password_toggle`: `type=password` only; toggle mask/plaintext (default `false`).
 //! - `number_steppers`：仅 `type=number`；右侧上下增减触发器（solid-ui `NumberField` 风格）；`step` 默认 `1`；可长按连发（缺省 `false`）。
 //!
@@ -79,10 +80,10 @@ use rui_macros::component;
 use winit::event::MouseButton;
 
 pub use crate::utils::text_field::{
-    bind_controlled_value, input_caret_signal_key, input_focus_id as focus_id_for_input,
-    input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
-    input_preedit_sel_signal_key, input_preedit_signal_key, input_selection_signal_key,
-    input_type_signal_key, input_value_signal_key, INPUT_FOCUS_PREFIX,
+    bind_controlled_value, input_caret_signal_key, input_extra_carets_signal_key,
+    input_focus_id as focus_id_for_input, input_ime_anchor_signal_key, input_overwrite_signal_key,
+    input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_selection_signal_key, input_type_signal_key, input_value_signal_key, INPUT_FOCUS_PREFIX,
 };
 
 pub(crate) use crate::utils::text_field::{
@@ -402,6 +403,7 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     .set(None);
     use_signal(&input_ime_anchor_signal_key(field_id), || None::<usize>).set(None);
     use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(text.len()));
+    crate::utils::text_field::clear_extra_carets(field_id);
     #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::note_field_after_edit(field_id);
 }
@@ -512,13 +514,11 @@ pub fn caret_index_from_display_hit(rest: &str, display_ix: usize) -> usize {
     if committed.is_empty() && preedit.is_empty() {
         return 0;
     }
-    let ime_anchor = use_signal(&input_ime_anchor_signal_key(rest), || None::<usize>).peek();
+    let anchors = crate::utils::text_field::field_compose_anchors(rest, &committed);
     let real_display = if preedit.is_empty() {
-        committed
+        committed.clone()
     } else {
-        let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-        a = committed.floor_char_boundary(a);
-        format!("{}{}{}", &committed[..a], preedit, &committed[a..])
+        crate::utils::text_multi_cursor::splice_preedit(&committed, &anchors, &preedit)
     };
     let ty = InputType::parse(
         &use_signal(&input_type_signal_key(rest), || {
@@ -532,7 +532,11 @@ pub fn caret_index_from_display_hit(rest: &str, display_ix: usize) -> usize {
     } else {
         display_ix
     };
-    real_display.floor_char_boundary(ix.min(real_display.len()))
+    if preedit.is_empty() {
+        real_display.floor_char_boundary(ix.min(real_display.len()))
+    } else {
+        crate::utils::text_multi_cursor::unsplice_display_hit(&committed, &anchors, &preedit, ix)
+    }
 }
 
 pub(crate) fn map_byte_range_to_masked(

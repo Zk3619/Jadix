@@ -129,10 +129,11 @@ pub struct TextChange {
 }
 
 #[cfg(feature = "text-undo")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditPoint {
     pub caret: usize,
     pub selection: Option<(usize, usize)>,
+    pub extra_carets: Vec<(usize, usize)>,
 }
 
 #[cfg(feature = "text-undo")]
@@ -365,7 +366,7 @@ mod stack {
 
     use crate::core::reactivity::{remove_named_signal, use_signal};
     use crate::utils::text_field::{
-        commit_value_sig, input_caret_signal_key, input_selection_signal_key,
+        commit_value_sig, extra_carets_signal, input_caret_signal_key, input_selection_signal_key,
         input_value_signal_key,
     };
 
@@ -380,6 +381,18 @@ mod stack {
         pub value: String,
         pub caret: usize,
         pub selection: Option<(usize, usize)>,
+        pub extra_carets: Vec<(usize, usize)>,
+    }
+
+    impl Default for TextEditSnapshot {
+        fn default() -> Self {
+            Self {
+                value: String::new(),
+                caret: 0,
+                selection: None,
+                extra_carets: Vec::new(),
+            }
+        }
     }
 
     impl TextEditSnapshot {
@@ -391,6 +404,10 @@ mod stack {
                 let hi = a.max(b).min(len);
                 self.selection = if lo < hi { Some((lo, hi)) } else { None };
             }
+            for (c, a) in &mut self.extra_carets {
+                *c = (*c).min(len);
+                *a = (*a).min(len);
+            }
             self
         }
 
@@ -398,6 +415,7 @@ mod stack {
             EditPoint {
                 caret: self.caret,
                 selection: self.selection,
+                extra_carets: self.extra_carets.clone(),
             }
         }
     }
@@ -486,7 +504,7 @@ mod stack {
                 let Some(cur) = self.current.as_ref() else {
                     return false;
                 };
-                if cur.caret != before.caret {
+                if cur.caret != before.caret || cur.extra_carets != before.extra_carets {
                     return false;
                 }
             }
@@ -530,10 +548,12 @@ mod stack {
             None::<(usize, usize)>
         })
         .peek();
+        let extra_carets = extra_carets_signal(field_id).peek();
         TextEditSnapshot {
             value,
             caret,
             selection,
+            extra_carets,
         }
         .clamp()
     }
@@ -547,6 +567,7 @@ mod stack {
             None::<(usize, usize)>
         })
         .set(snap.selection);
+        extra_carets_signal(field_id).set(snap.extra_carets);
     }
 
     struct FlagGuard {
@@ -700,6 +721,7 @@ mod stack {
         }
         doc.caret = group.state_before.caret;
         doc.selection = group.state_before.selection;
+        doc.extra_carets = group.state_before.extra_carets.clone();
         doc.clamp()
     }
 
@@ -719,6 +741,7 @@ mod stack {
         }
         doc.caret = group.state_after.caret;
         doc.selection = group.state_after.selection;
+        doc.extra_carets = group.state_after.extra_carets.clone();
         doc.clamp()
     }
 
@@ -759,11 +782,7 @@ mod stack {
         }
         let group = st.past.pop_back()?;
         st.current_bytes = st.current_bytes.saturating_sub(group.payload_bytes());
-        let cur = st.current.clone().unwrap_or_else(|| TextEditSnapshot {
-            value: String::new(),
-            caret: 0,
-            selection: None,
-        });
+        let cur = st.current.clone().unwrap_or_default();
         let next = snapshot_after_undo(&cur, &group);
         st.future.push_back(group);
         st.current = Some(next.clone());
@@ -785,11 +804,7 @@ mod stack {
             return None;
         }
         let group = st.future.pop_back()?;
-        let cur = st.current.clone().unwrap_or_else(|| TextEditSnapshot {
-            value: String::new(),
-            caret: 0,
-            selection: None,
-        });
+        let cur = st.current.clone().unwrap_or_default();
         let next = snapshot_after_redo(&cur, &group);
         st.push_past(group);
         st.current = Some(next.clone());
@@ -1021,7 +1036,16 @@ mod tests {
         TextEditSnapshot {
             value: value.into(),
             caret,
-            selection: None,
+            ..Default::default()
+        }
+    }
+
+    fn snap_ex(value: &str, caret: usize, extra_carets: Vec<(usize, usize)>) -> TextEditSnapshot {
+        TextEditSnapshot {
+            value: value.into(),
+            caret,
+            extra_carets,
+            ..Default::default()
         }
     }
 
@@ -1145,6 +1169,56 @@ mod tests {
     }
 
     #[test]
+    fn undo_restores_extra_carets() {
+        reset("h_ex");
+        let id = "h_ex";
+        will_user_edit(id, snap_ex("ab", 0, vec![(1, 1)]), EditKind::Insert);
+        note_after_edit(id, snap_ex("XaXb", 1, vec![(3, 3)]));
+        let undone = undo(id).expect("undo");
+        assert_eq!(undone.value, "ab");
+        assert_eq!(undone.caret, 0);
+        assert_eq!(undone.extra_carets, vec![(1, 1)]);
+        let redone = redo(id).expect("redo");
+        assert_eq!(redone.value, "XaXb");
+        assert_eq!(redone.caret, 1);
+        assert_eq!(redone.extra_carets, vec![(3, 3)]);
+        reset(id);
+    }
+
+    #[test]
+    fn extra_carets_coalesce_across_typing() {
+        reset("h_exc");
+        let id = "h_exc";
+        // Extra caret sits before a contiguous tail insert so the payloads merge,
+        // while extra_carets stay in the snapshot (and must not break coalesce).
+        will_user_edit(id, snap_ex("ab", 2, vec![(0, 0)]), EditKind::Insert);
+        note_after_edit(id, snap_ex("abx", 3, vec![(0, 0)]));
+        will_user_edit(id, snap_ex("abx", 3, vec![(0, 0)]), EditKind::Insert);
+        note_after_edit(id, snap_ex("abxy", 4, vec![(0, 0)]));
+        assert_eq!(past_len(id), 1);
+        let undone = undo(id).expect("undo");
+        assert_eq!(undone.value, "ab");
+        assert_eq!(undone.caret, 2);
+        assert_eq!(undone.extra_carets, vec![(0, 0)]);
+        reset(id);
+    }
+
+    #[test]
+    fn extra_caret_change_starts_new_insert_group() {
+        reset("h_exj");
+        let id = "h_exj";
+        will_user_edit(id, snap_ex("ab", 0, vec![]), EditKind::Insert);
+        note_after_edit(id, snap_ex("Xab", 1, vec![]));
+        will_user_edit(id, snap_ex("Xab", 1, vec![(2, 2)]), EditKind::Insert);
+        note_after_edit(id, snap_ex("XaXb", 2, vec![(3, 3)]));
+        assert_eq!(past_len(id), 2);
+        let undone = undo(id).expect("undo");
+        assert_eq!(undone.value, "Xab");
+        assert_eq!(undone.extra_carets, vec![(2, 2)]);
+        reset(id);
+    }
+
+    #[test]
     fn password_config_records_nothing() {
         reset("h_pw");
         install_field_config("h_pw", TextUndoConfig::password_default());
@@ -1260,6 +1334,53 @@ mod tests {
             assert_eq!(
                 use_signal(&input_value_signal_key(id), String::new).peek(),
                 "abc"
+            );
+            reset(id);
+        });
+    }
+
+    #[test]
+    fn undo_field_restores_extra_carets() {
+        reset("h_exf");
+        let (_owner, ()) = create_root(|| {
+            let id = "h_exf";
+            use_signal(&input_value_signal_key(id), String::new).set("ab".into());
+            use_signal(
+                &crate::utils::text_field::input_caret_signal_key(id),
+                || None::<usize>,
+            )
+            .set(Some(0));
+            crate::utils::text_field::extra_carets_signal(id).set(vec![(1, 1)]);
+            will_user_edit_field(id, EditKind::Insert);
+            use_signal(&input_value_signal_key(id), String::new).set("XaXb".into());
+            use_signal(
+                &crate::utils::text_field::input_caret_signal_key(id),
+                || None::<usize>,
+            )
+            .set(Some(1));
+            crate::utils::text_field::extra_carets_signal(id).set(vec![(3, 3)]);
+            note_field_after_edit(id);
+            assert!(undo_field(id));
+            assert_eq!(
+                use_signal(&input_value_signal_key(id), String::new).peek(),
+                "ab"
+            );
+            assert_eq!(
+                use_signal(
+                    &crate::utils::text_field::input_caret_signal_key(id),
+                    || None::<usize>,
+                )
+                .peek(),
+                Some(0)
+            );
+            assert_eq!(
+                crate::utils::text_field::extra_carets_signal(id).peek(),
+                vec![(1, 1)]
+            );
+            assert!(redo_field(id));
+            assert_eq!(
+                crate::utils::text_field::extra_carets_signal(id).peek(),
+                vec![(3, 3)]
             );
             reset(id);
         });
@@ -1388,7 +1509,7 @@ mod tests {
         );
         assert_eq!(undo(id), None);
         assert_eq!(past_len(id), 2, "wall does not pop earlier groups");
-        TEST_RETAIN_SIDE_MAX.with(|c| c.set(RETAIN_SIDE_MAX));
+        TEST_RETAIN_SIDE_MAX.with(|c| c.set(undo_caps::RETAIN_SIDE_MAX));
         TEST_LARGE_REPLACE_HARD.with(|c| c.set(undo_caps::LARGE_REPLACE_HARD));
         reset(id);
     }

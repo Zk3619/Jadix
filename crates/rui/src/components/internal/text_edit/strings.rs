@@ -8,6 +8,10 @@ pub(crate) struct TextEditStringsInput<'a> {
     pub preedit: &'a str,
     pub preedit_sel: Option<(usize, usize)>,
     pub ime_anchor: Option<usize>,
+    /// Extra Alt+click carets as `(caret, anchor)` in committed bytes.
+    pub extras: &'a [(usize, usize)],
+    /// Primary caret in committed bytes (also a compose insertion point).
+    pub committed_caret: Option<usize>,
     pub placeholder: &'a str,
     pub show_placeholder: bool,
     pub mask: bool,
@@ -28,25 +32,55 @@ pub(crate) struct TextEditStrings {
     pub caret_byte: usize,
     /// Display-text byte range of the live IME preedit (for the spaced underline).
     pub preedit_underline: Option<(usize, usize)>,
+    pub extra_carets: Vec<usize>,
+    pub extra_selections: Vec<(usize, usize)>,
+    pub extra_preedit_underlines: Vec<(usize, usize)>,
 }
 
 pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> TextEditStrings {
+    use crate::utils::text_multi_cursor::{
+        preedit_display_caret, preedit_display_ranges, splice_preedit,
+    };
+
+    let compose_anchors = {
+        let mut a = Vec::with_capacity(1 + input.extras.len());
+        if !input.preedit.is_empty() && !input.show_placeholder {
+            let primary = input
+                .ime_anchor
+                .unwrap_or(input.committed.len())
+                .min(input.committed.len());
+            a.push(input.committed.floor_char_boundary(primary));
+            if let Some(c) = input.committed_caret {
+                a.push(
+                    input
+                        .committed
+                        .floor_char_boundary(c.min(input.committed.len())),
+                );
+            }
+            for &(c, anc) in input.extras {
+                a.push(
+                    input
+                        .committed
+                        .floor_char_boundary(c.min(input.committed.len())),
+                );
+                a.push(
+                    input
+                        .committed
+                        .floor_char_boundary(anc.min(input.committed.len())),
+                );
+            }
+            a.sort_unstable();
+            a.dedup();
+        }
+        a
+    };
+
     let real_display = if input.show_placeholder {
         input.placeholder.to_string()
     } else if input.preedit.is_empty() {
         input.committed.to_string()
     } else {
-        let mut a = input
-            .ime_anchor
-            .unwrap_or(input.committed.len())
-            .min(input.committed.len());
-        a = input.committed.floor_char_boundary(a);
-        format!(
-            "{}{}{}",
-            &input.committed[..a],
-            input.preedit,
-            &input.committed[a..]
-        )
+        splice_preedit(input.committed, &compose_anchors, input.preedit)
     };
 
     let layout_measure_text = text_edit_layout_measure_text(
@@ -56,21 +90,33 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         input.preedit,
     );
 
+    let ime_anchor_byte = if input.preedit.is_empty() {
+        0
+    } else {
+        input.committed.floor_char_boundary(
+            input
+                .ime_anchor
+                .unwrap_or(input.committed.len())
+                .min(input.committed.len()),
+        )
+    };
+
     let caret_in_real = if input.is_focused {
         if input.show_placeholder {
             0
         } else if !input.preedit.is_empty() {
-            let mut a = input
-                .ime_anchor
-                .unwrap_or(input.committed.len())
-                .min(input.committed.len());
-            a = input.committed.floor_char_boundary(a);
             let end = input
                 .preedit_sel
                 .map(|(_, e)| e)
                 .unwrap_or_else(|| input.preedit.len())
                 .min(input.preedit.len());
-            a + input.preedit.floor_char_boundary(end)
+            preedit_display_caret(
+                input.committed,
+                &compose_anchors,
+                input.preedit,
+                ime_anchor_byte,
+                input.preedit.floor_char_boundary(end),
+            )
         } else {
             let len = real_display.len();
             let ix = input.caret_override.unwrap_or(len);
@@ -91,19 +137,70 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         caret_in_real
     };
 
+    let mut extra_carets = Vec::new();
+    let mut extra_selections = Vec::new();
+    let mut extra_preedit_underlines = Vec::new();
     let preedit_underline = if input.show_placeholder || input.preedit.is_empty() {
+        for &(c, a) in input.extras {
+            let caret_i = if input.mask {
+                map_byte_index_to_masked(&real_display, c, &display_text)
+            } else {
+                real_display.floor_char_boundary(c.min(real_display.len()))
+            };
+            extra_carets.push(caret_i);
+            let lo = a.min(c);
+            let hi = a.max(c);
+            if lo < hi {
+                extra_selections.push(if input.mask {
+                    map_byte_range_to_masked(&real_display, lo, hi, &display_text)
+                } else {
+                    (
+                        real_display.floor_char_boundary(lo.min(real_display.len())),
+                        real_display.floor_char_boundary(hi.min(real_display.len())),
+                    )
+                });
+            }
+        }
         None
     } else {
-        let mut a = input
-            .ime_anchor
-            .unwrap_or(input.committed.len())
-            .min(input.committed.len());
-        a = input.committed.floor_char_boundary(a);
-        let end = a + input.preedit.len();
-        Some(if input.mask {
-            map_byte_range_to_masked(&real_display, a, end, &display_text)
-        } else {
-            (a, end)
+        let ranges = preedit_display_ranges(input.committed, &compose_anchors, input.preedit);
+        let ime_range = ranges.iter().copied().find(|&(s, _)| {
+            preedit_display_caret(
+                input.committed,
+                &compose_anchors,
+                input.preedit,
+                ime_anchor_byte,
+                0,
+            ) == s
+        });
+        let preedit_caret = input
+            .preedit_sel
+            .map(|(_, e)| e)
+            .unwrap_or_else(|| input.preedit.len())
+            .min(input.preedit.len());
+        let preedit_caret = input.preedit.floor_char_boundary(preedit_caret);
+        for &(start, end) in &ranges {
+            let mapped = if input.mask {
+                map_byte_range_to_masked(&real_display, start, end, &display_text)
+            } else {
+                (start, end)
+            };
+            if Some((start, end)) == ime_range {
+                continue;
+            }
+            extra_preedit_underlines.push(mapped);
+            extra_carets.push(if input.mask {
+                map_byte_index_to_masked(&real_display, start + preedit_caret, &display_text)
+            } else {
+                start + preedit_caret
+            });
+        }
+        ime_range.map(|(s, e)| {
+            if input.mask {
+                map_byte_range_to_masked(&real_display, s, e, &display_text)
+            } else {
+                (s, e)
+            }
         })
     };
 
@@ -114,6 +211,9 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         caret_in_real,
         caret_byte,
         preedit_underline,
+        extra_carets,
+        extra_selections,
+        extra_preedit_underlines,
     }
 }
 
@@ -155,6 +255,8 @@ mod tests {
             preedit: "hao",
             preedit_sel: Some((0, 2)),
             ime_anchor: Some(6),
+            extras: &[],
+            committed_caret: Some(6),
             placeholder: "",
             show_placeholder: false,
             mask: false,
@@ -165,5 +267,30 @@ mod tests {
         assert_eq!(s.layout_measure_text, "你好");
         assert_eq!(s.caret_in_real, 6 + "ha".len());
         assert_eq!(s.preedit_underline, Some((6, 6 + "hao".len())));
+        assert!(s.extra_carets.is_empty());
+        assert!(s.extra_preedit_underlines.is_empty());
+    }
+
+    #[test]
+    fn display_splices_preedit_at_extra_carets() {
+        let extras = [(1, 1)];
+        let s = compose_text_edit_strings(TextEditStringsInput {
+            committed: "ab",
+            preedit: "X",
+            preedit_sel: Some((0, 1)),
+            ime_anchor: Some(0),
+            extras: &extras,
+            committed_caret: Some(0),
+            placeholder: "",
+            show_placeholder: false,
+            mask: false,
+            is_focused: true,
+            caret_override: None,
+        });
+        assert_eq!(s.real_display, "XaXb");
+        assert_eq!(s.caret_in_real, 1);
+        assert_eq!(s.preedit_underline, Some((0, 1)));
+        assert_eq!(s.extra_carets, vec![3]);
+        assert_eq!(s.extra_preedit_underlines, vec![(2, 3)]);
     }
 }

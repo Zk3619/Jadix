@@ -338,26 +338,47 @@ pub(crate) fn finish_composition_preserve_text(focus_id: &str) {
     let insert = preedit_without_syllable_separators(&pre);
     if !insert.is_empty() {
         let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
-        let v = val_sig.peek();
-        let mut anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>)
-            .peek()
-            .unwrap_or_else(|| {
-                crate::core::reactivity::use_signal(&ck, || None::<usize>)
-                    .peek()
-                    .unwrap_or(v.len())
-            });
-        anchor = anchor.min(v.len());
-        anchor = v.floor_char_boundary(anchor);
-        let (new, new_caret) = apply_ime_commit(&v, anchor, &insert);
-        #[cfg(feature = "text-undo")]
-        crate::utils::text_edit_history::will_user_edit_field(
-            rest,
-            crate::utils::text_edit_history::EditKind::Replace,
-        );
-        crate::utils::text_field::commit_value_sig(rest, val_sig, new);
-        crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
-        #[cfg(feature = "text-undo")]
-        crate::utils::text_edit_history::note_field_after_edit(rest);
+        let mut v = val_sig.peek();
+        let cs = crate::utils::text_field::load_text_cursors(rest, &v);
+        if cs.len() > 1 {
+            let old_cs = cs.clone();
+            let old_latest = crate::utils::text_field::latest_caret_signal(rest).peek();
+            let cs = crate::utils::text_multi_cursor::insert_at_cursors(&mut v, cs, &insert);
+            #[cfg(feature = "text-undo")]
+            crate::utils::text_edit_history::will_user_edit_field(
+                rest,
+                crate::utils::text_edit_history::EditKind::Replace,
+            );
+            crate::utils::text_field::commit_value_sig(rest, val_sig, v);
+            crate::utils::text_field::store_text_cursors(rest, &cs);
+            if let Some(l) = old_latest {
+                crate::utils::text_field::latest_caret_signal(rest).set(Some(
+                    crate::utils::text_multi_cursor::follow_latest(&old_cs, &cs, l),
+                ));
+            }
+            #[cfg(feature = "text-undo")]
+            crate::utils::text_edit_history::note_field_after_edit(rest);
+        } else {
+            let mut anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>)
+                .peek()
+                .unwrap_or_else(|| {
+                    crate::core::reactivity::use_signal(&ck, || None::<usize>)
+                        .peek()
+                        .unwrap_or(v.len())
+                });
+            anchor = anchor.min(v.len());
+            anchor = v.floor_char_boundary(anchor);
+            let (new, new_caret) = apply_ime_commit(&v, anchor, &insert);
+            #[cfg(feature = "text-undo")]
+            crate::utils::text_edit_history::will_user_edit_field(
+                rest,
+                crate::utils::text_edit_history::EditKind::Replace,
+            );
+            crate::utils::text_field::commit_value_sig(rest, val_sig, new);
+            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
+            #[cfg(feature = "text-undo")]
+            crate::utils::text_edit_history::note_field_after_edit(rest);
+        }
         record_ime_commit(rest, &insert);
     }
     clear_text_edit_compose_state(focus_id);
@@ -697,6 +718,34 @@ mod tests {
     }
 
     #[test]
+    fn finish_composition_inserts_at_extra_carets() {
+        let (_owner, ()) = crate::core::reactivity::create_root(|| {
+            let rest = "ime_finish_multi";
+            let fid = format!("input:{rest}");
+            let vk = crate::utils::text_field::input_value_signal_key(rest);
+            let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+            crate::core::reactivity::use_signal(&vk, String::new).set("ab".into());
+            crate::core::reactivity::use_signal(
+                &crate::utils::text_field::input_caret_signal_key(rest),
+                || None::<usize>,
+            )
+            .set(Some(0));
+            crate::utils::text_field::extra_carets_signal(rest).set(vec![(1, 1)]);
+            crate::core::reactivity::use_signal(&pk, String::new).set("X".into());
+            finish_composition_preserve_text(&fid);
+            assert_eq!(
+                crate::core::reactivity::use_signal(&vk, String::new).peek(),
+                "XaXb"
+            );
+            assert_eq!(
+                crate::utils::text_field::extra_carets_signal(rest).peek(),
+                vec![(3, 3)]
+            );
+            clear_ime_end_drain();
+        });
+    }
+
+    #[test]
     fn field_to_field_focus_must_clear_end_drain() {
         // Mirrors `sync_ime_focus_owner`: after finish_* starts drain, landing on another
         // Input/Textarea (DevTools CSSOM ↔ app form) must clear it — IME stays allowed so
@@ -760,6 +809,9 @@ mod tests {
             selection_bg: [0; 4],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -827,6 +879,9 @@ mod tests {
                 selection_bg: [0; 4],
                 overwrite_highlight: None,
                 preedit_underline: None,
+                extra_carets: Vec::new(),
+                extra_selections: Vec::new(),
+                extra_preedit_underlines: Vec::new(),
                 drop_caret: false,
                 caret_color: None,
                 selection_foreground: None,

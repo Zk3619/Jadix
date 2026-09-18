@@ -385,12 +385,18 @@ pub struct InputCaretDraw {
     pub caret_byte_index: usize,
     /// Selection `[start, end)` in UTF-8 bytes; `None`/empty skips highlight.
     pub selection: Option<(usize, usize)>,
+    /// Extra Alt+click carets (display UTF-8 bytes).
+    pub extra_carets: Vec<usize>,
+    /// Extra Alt+click selections `[start, end)` in display UTF-8 bytes.
+    pub extra_selections: Vec<(usize, usize)>,
     /// Selection background color.
     pub selection_bg: [u8; 4],
     /// Overwrite-mode highlight `[start, end)`.
     pub overwrite_highlight: Option<(usize, usize)>,
     /// IME preedit `[start, end)` in display UTF-8 bytes; spaced underline under composing glyphs.
     pub preedit_underline: Option<(usize, usize)>,
+    /// Extra carets' IME preedit underlines in display UTF-8 bytes.
+    pub extra_preedit_underlines: Vec<(usize, usize)>,
     /// Draw the I-beam even when a selection highlight is present (selection-move drop caret).
     pub drop_caret: bool,
     /// I-beam fill. `None` uses the node's text color. Input/Textarea default this
@@ -409,9 +415,12 @@ impl Default for InputCaretDraw {
         Self {
             caret_byte_index: 0,
             selection: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
             selection_bg: [0; 4],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -439,16 +448,29 @@ impl InputCaretDraw {
     /// Byte range + color for recoloring selected glyphs. `None` when there is
     /// no highlight. Missing [`Self::selection_foreground`] uses the token default.
     pub fn selection_recolor(&self) -> Option<((usize, usize), [u8; 4])> {
-        let (a, b) = self.selection?;
-        let lo = a.min(b);
-        let hi = a.max(b);
-        if lo >= hi {
-            return None;
-        }
+        self.selection_recolor_ranges().into_iter().next()
+    }
+
+    /// All selection ranges (primary + extra) for glyph recolor.
+    pub fn selection_recolor_ranges(&self) -> Vec<((usize, usize), [u8; 4])> {
         let fg = self
             .selection_foreground
             .unwrap_or_else(Self::default_selection_foreground);
-        Some(((lo, hi), fg))
+        let mut out = Vec::new();
+        let mut push = |a: usize, b: usize| {
+            let lo = a.min(b);
+            let hi = a.max(b);
+            if lo < hi {
+                out.push(((lo, hi), fg));
+            }
+        };
+        if let Some((a, b)) = self.selection {
+            push(a, b);
+        }
+        for &(a, b) in &self.extra_selections {
+            push(a, b);
+        }
+        out
     }
 }
 

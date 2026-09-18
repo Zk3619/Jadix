@@ -369,3 +369,34 @@ fn textarea_caret_and_selection_color_overrides() {
     assert_eq!(draw.selection_bg, sel);
     assert_eq!(draw.selection_foreground, Some(fg));
 }
+
+#[test]
+fn extra_carets_install_on_focused_input_paint() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "diag-extra-carets";
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
+    use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+    use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>).set(None);
+    use_signal(
+        &crate::components::input::input_caret_signal_key(id),
+        || None::<usize>,
+    )
+    .set(Some(1));
+    use_signal(
+        &crate::components::input::input_extra_carets_signal_key(id),
+        Vec::<(usize, usize)>::new,
+    )
+    .set(vec![(3usize, 3usize), (5, 5)]);
+
+    let mut el: Element = input(id).into();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_paint_like_app(&mut el, &mut tree, &mut impact);
+    let leaf = find_caret_leaf(&el).expect("focused field must install input_caret");
+    let draw = leaf.text_style.input_caret.as_ref().expect("caret");
+    assert_eq!(draw.caret_byte_index, 1);
+    assert_eq!(draw.extra_carets, vec![3, 5]);
+}

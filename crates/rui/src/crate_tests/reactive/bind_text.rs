@@ -478,3 +478,44 @@ fn leaf_bind_structure_changed_coerces_to_layout() {
         LayoutStatus::StyleChanged
     );
 }
+
+#[test]
+fn bind_prop_list_items_with_same_site_key_get_own_effects() {
+    reset_registered_anchors();
+    let applied = Rc::new(RefCell::new(Vec::<String>::new()));
+    let root = create_effect({
+        let applied = Rc::clone(&applied);
+        move || {
+            let a = Rc::clone(&applied);
+            let _ = bind_prop(
+                Element::new().template_id("list-a"),
+                "bind:list:shared-site",
+                || 0_i32,
+                move |el, _| {
+                    a.borrow_mut()
+                        .push(el.template_id.clone().unwrap_or_default());
+                    LayoutStatus::Clean
+                },
+            );
+            let b = Rc::clone(&applied);
+            let _ = bind_prop(
+                Element::new().template_id("list-b"),
+                "bind:list:shared-site",
+                || 0_i32,
+                move |el, _| {
+                    b.borrow_mut()
+                        .push(el.template_id.clone().unwrap_or_default());
+                    LayoutStatus::Clean
+                },
+            );
+        }
+    });
+    let got = applied.borrow().clone();
+    assert_eq!(
+        got,
+        vec!["list-a".to_string(), "list-b".to_string()],
+        "same ui! bind_key must not skip later list items"
+    );
+    dispose_effect(root);
+    reset_registered_anchors();
+}

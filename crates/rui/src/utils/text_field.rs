@@ -559,6 +559,12 @@ pub fn input_caret_signal_key(id: &str) -> String {
 pub fn input_selection_signal_key(id: &str) -> String {
     format!("__rui_input_selection_{id}")
 }
+pub fn input_extra_carets_signal_key(id: &str) -> String {
+    format!("__rui_input_extra_carets_{id}")
+}
+pub fn input_latest_caret_signal_key(id: &str) -> String {
+    format!("__rui_input_latest_caret_{id}")
+}
 pub fn input_overwrite_signal_key(id: &str) -> String {
     format!("__rui_input_overwrite_{id}")
 }
@@ -578,6 +584,92 @@ pub fn input_scroll_x_signal_key(id: &str) -> String {
 /// Preferred caret X (px from visual-line start) for ↑↓ navigation.
 pub fn input_caret_preferred_x_signal_key(id: &str) -> String {
     format!("__rui_input_caret_pref_x_{id}")
+}
+
+pub(crate) fn extra_carets_signal(
+    field_id: &str,
+) -> crate::core::reactivity::Signal<Vec<crate::utils::text_multi_cursor::ExtraCaret>> {
+    use_signal(
+        &input_extra_carets_signal_key(field_id),
+        Vec::<crate::utils::text_multi_cursor::ExtraCaret>::new,
+    )
+}
+
+pub(crate) fn latest_caret_signal(
+    field_id: &str,
+) -> crate::core::reactivity::Signal<Option<usize>> {
+    use_signal(&input_latest_caret_signal_key(field_id), || None::<usize>)
+}
+
+pub(crate) fn field_compose_anchors(field_id: &str, committed: &str) -> Vec<usize> {
+    crate::utils::text_multi_cursor::caret_insert_points(&load_text_cursors(field_id, committed))
+}
+
+pub(crate) fn load_text_cursors(
+    field_id: &str,
+    text: &str,
+) -> Vec<crate::utils::text_multi_cursor::TextCursor> {
+    let caret = use_signal(&input_caret_signal_key(field_id), || None::<usize>).peek();
+    let sel = use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .peek();
+    let extras = extra_carets_signal(field_id).peek();
+    crate::utils::text_multi_cursor::assemble_cursors(text, caret, sel, &extras)
+}
+
+pub(crate) fn store_text_cursors(
+    field_id: &str,
+    cursors: &[crate::utils::text_multi_cursor::TextCursor],
+) {
+    let (caret, sel, extras) = crate::utils::text_multi_cursor::split_primary(cursors);
+    use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(caret));
+    use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set(sel);
+    extra_carets_signal(field_id).set(extras);
+}
+
+/// Alt / Shift+Alt pointer down. `Some((drag_anchor, extras_before_gesture))`
+/// means a multi-caret drag should start. Shift+Alt uses the **first caret** as
+/// origin and writes the full column set immediately (click is enough; drag
+/// then moves the end column).
+pub(crate) fn begin_alt_pointer(
+    field_id: &str,
+    text: &str,
+    at: usize,
+    column_select: bool,
+) -> Option<(usize, Vec<(usize, usize)>)> {
+    if column_select {
+        let cs = load_text_cursors(field_id, text);
+        let origin = cs.first().map(|c| c.caret).unwrap_or(at);
+        let next = crate::utils::text_multi_cursor::gesture_carets(text, origin, at, true);
+        store_text_cursors(field_id, &next);
+        let latest = crate::utils::text_multi_cursor::caret_on_pointer_line(text, &next, at)
+            .unwrap_or(origin);
+        latest_caret_signal(field_id).set(Some(latest));
+        return Some((origin, Vec::new()));
+    }
+    let base = extra_carets_signal(field_id).peek();
+    let cursors = load_text_cursors(field_id, text);
+    let (next, added) = crate::utils::text_multi_cursor::add_or_toggle(text, cursors, at);
+    store_text_cursors(field_id, &next);
+    if added {
+        latest_caret_signal(field_id).set(Some(at));
+        Some((at, base))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn clear_extra_carets(field_id: &str) {
+    extra_carets_signal(field_id).set(Vec::new());
+    latest_caret_signal(field_id).set(None);
+}
+
+pub(crate) fn has_extra_carets(field_id: &str) -> bool {
+    !extra_carets_signal(field_id).peek().is_empty()
 }
 
 pub(crate) fn input_text_template_id(id: &str) -> String {
@@ -717,6 +809,8 @@ pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
         input_preedit_sel_signal_key(field_id),
         input_caret_signal_key(field_id),
         input_selection_signal_key(field_id),
+        input_extra_carets_signal_key(field_id),
+        input_latest_caret_signal_key(field_id),
         input_overwrite_signal_key(field_id),
         input_ime_anchor_signal_key(field_id),
         input_type_signal_key(field_id),
@@ -843,6 +937,7 @@ pub fn select_all_in_text_edit(focus_id: &str) -> bool {
     let s = use_signal(&input_value_signal_key(rest), String::new).peek();
     let sk = input_selection_signal_key(rest);
     let ck = input_caret_signal_key(rest);
+    clear_extra_carets(rest);
     if let Some(range) = crate::utils::keyboard::select_all_range(&s) {
         use_signal(&sk, || None::<(usize, usize)>).set(Some(range));
         use_signal(&ck, || None::<usize>).set(Some(0));

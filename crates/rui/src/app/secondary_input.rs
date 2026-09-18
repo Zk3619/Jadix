@@ -23,6 +23,7 @@ impl super::App {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
         self.cursor_pos = position;
+        self.cursor_inside_window = true;
 
         let scale = {
             let secs = self.secondaries.borrow();
@@ -56,6 +57,9 @@ impl super::App {
                     y,
                     &rest,
                     anchor,
+                    self.input_drag_multi,
+                    &self.input_drag_multi_base,
+                    self.input_drag_multi && self.modifiers.shift_key(),
                 );
                 if keep {
                     sec.window.request_redraw();
@@ -162,6 +166,7 @@ impl super::App {
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.cursor_inside_window = false;
         if let Some(old_path) = self.last_mouse_path.take() {
             let [x, y] = self.last_client_pos.unwrap_or([0.0, 0.0]);
             let _ = self.dispatch_mouse_path(
@@ -415,18 +420,42 @@ impl super::App {
                             let hi = a.max(b);
                             (lo < hi).then_some((lo, hi))
                         });
-                        let can_move = line_sel.is_none()
-                            && pre_empty
-                            && !password
-                            && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
-                        if can_move {
-                            let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                        let alt_multi = self.modifiers.alt_key() && pre_empty;
+                        self.input_drag_multi = false;
+                        self.input_drag_multi_base.clear();
+                        if alt_multi {
                             let vk = crate::components::input::input_value_signal_key(&rest);
                             let committed = use_signal(&vk, String::new).peek();
-                            let chunk = committed.get(lo..hi).unwrap_or("").to_string();
-                            let (size, weight, color, lh) = {
-                                let secs = self.secondaries.borrow();
-                                secs.get(&id)
+                            let shift_box = self.modifiers.shift_key();
+                            if let Some((anchor, base)) =
+                                crate::utils::text_field::begin_alt_pointer(
+                                    &rest, &committed, caret_ix, shift_box,
+                                )
+                            {
+                                crate::renderer::restart_caret_blink();
+                                self.input_drag_multi_base = base;
+                                self.input_drag_multi = true;
+                                self.input_drag_anchor = anchor;
+                                self.input_drag_rest = Some(rest);
+                                crate::utils::text_field::set_text_drag_select_active(true);
+                            } else {
+                                crate::renderer::restart_caret_blink();
+                            }
+                        } else {
+                            crate::utils::text_field::clear_extra_carets(&rest);
+                            let can_move = line_sel.is_none()
+                                && pre_empty
+                                && !password
+                                && sel_range
+                                    .is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
+                            if can_move {
+                                let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                                let vk = crate::components::input::input_value_signal_key(&rest);
+                                let committed = use_signal(&vk, String::new).peek();
+                                let chunk = committed.get(lo..hi).unwrap_or("").to_string();
+                                let (size, weight, color, lh) = {
+                                    let secs = self.secondaries.borrow();
+                                    secs.get(&id)
                                     .and_then(|sec| {
                                         super::tree_hit::find_input_text_leaf_for_rest(
                                             &sec.root_element,
@@ -449,33 +478,34 @@ impl super::App {
                                         )
                                     })
                                     .unwrap_or((14.0, 400, [15, 23, 42, 255], 21.0))
-                            };
-                            crate::utils::text_sel_move::begin_potential(
-                                rest.clone(),
-                                (lo, hi),
-                                chunk,
-                                caret_ix,
-                                (x, y),
-                                size,
-                                weight,
-                                color,
-                                lh,
-                            );
-                            self.input_drag_anchor = caret_ix;
-                        } else if let Some((lo, hi)) = line_sel {
-                            use_signal(&ck, || None::<usize>).set(Some(hi));
-                            use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
-                            self.input_drag_anchor = lo;
-                            crate::renderer::restart_caret_blink();
-                        } else {
-                            use_signal(&ck, || None::<usize>).set(Some(caret_ix));
-                            use_signal(&sk, || None::<(usize, usize)>)
-                                .set(Some((caret_ix, caret_ix)));
-                            self.input_drag_anchor = caret_ix;
-                            crate::renderer::restart_caret_blink();
+                                };
+                                crate::utils::text_sel_move::begin_potential(
+                                    rest.clone(),
+                                    (lo, hi),
+                                    chunk,
+                                    caret_ix,
+                                    (x, y),
+                                    size,
+                                    weight,
+                                    color,
+                                    lh,
+                                );
+                                self.input_drag_anchor = caret_ix;
+                            } else if let Some((lo, hi)) = line_sel {
+                                use_signal(&ck, || None::<usize>).set(Some(hi));
+                                use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+                                self.input_drag_anchor = lo;
+                                crate::renderer::restart_caret_blink();
+                            } else {
+                                use_signal(&ck, || None::<usize>).set(Some(caret_ix));
+                                use_signal(&sk, || None::<(usize, usize)>)
+                                    .set(Some((caret_ix, caret_ix)));
+                                self.input_drag_anchor = caret_ix;
+                                crate::renderer::restart_caret_blink();
+                            }
+                            self.input_drag_rest = Some(rest);
+                            crate::utils::text_field::set_text_drag_select_active(true);
                         }
-                        self.input_drag_rest = Some(rest);
-                        crate::utils::text_field::set_text_drag_select_active(true);
                         self.label_drag_key = None;
                         self.left_button_down = true;
                     } else if let Some((key, caret_ix)) = label_drag {
@@ -484,6 +514,8 @@ impl super::App {
                         self.label_drag_key = Some(key);
                         self.label_drag_anchor = caret_ix;
                         self.input_drag_rest = None;
+                        self.input_drag_multi = false;
+                        self.input_drag_multi_base.clear();
                         crate::utils::text_field::set_text_drag_select_active(false);
                         crate::utils::text_sel_move::cancel();
                         self.left_button_down = true;
@@ -612,12 +644,16 @@ impl super::App {
                     }
                     let _ = click_path;
                     let should_outside = !on_exclusive && !on_trigger;
-                    if should_outside && !self.outside_dismiss_on_down {
+                    let ended_panel_drag =
+                        crate::utils::anchored_overlay::take_ended_floating_panel_drag();
+                    if should_outside && !self.outside_dismiss_on_down && !ended_panel_drag {
                         let _ = super::portal_overlay::try_dismiss_outside_press();
                     }
                     self.outside_dismiss_on_down = false;
                     crate::utils::popup::arm_underlay_close();
                     if let Some(rest) = self.input_drag_rest.take() {
+                        self.input_drag_multi = false;
+                        self.input_drag_multi_base.clear();
                         super::window_events::apply_input_drag_release(&rest);
                     }
                     if let Some(key) = self.label_drag_key.take() {

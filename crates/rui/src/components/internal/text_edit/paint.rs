@@ -19,8 +19,9 @@ use crate::style::{
 };
 use crate::tokens;
 use crate::utils::text_field::{
-    ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit,
-    input_scroll_x_signal_key, pull_controlled_into_store, textarea_wrap_width_signal_key,
+    ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, extra_carets_signal,
+    focus_id_for_text_edit, input_scroll_x_signal_key, pull_controlled_into_store,
+    textarea_wrap_width_signal_key,
 };
 
 #[cfg(test)]
@@ -150,11 +151,14 @@ fn sync_one_text_edit_paint(
         None
     };
 
+    let extras = extra_carets_signal(&desc.base_id).peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,
         preedit_sel,
         ime_anchor,
+        extras: &extras,
+        committed_caret: caret_sig.peek(),
         placeholder: &placeholder,
         show_placeholder,
         mask,
@@ -167,6 +171,9 @@ fn sync_one_text_edit_paint(
     let real_display = strings.real_display;
     let caret_in_real = strings.caret_in_real;
     let preedit_underline = strings.preedit_underline;
+    let extra_carets_draw = strings.extra_carets;
+    let extra_selections_draw = strings.extra_selections;
+    let extra_preedit_underlines = strings.extra_preedit_underlines;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -433,9 +440,21 @@ fn sync_one_text_edit_paint(
             {
                 crate::renderer::restart_caret_blink();
             }
+            let extras_draw = if drop_caret {
+                (Vec::new(), Vec::new(), Vec::new())
+            } else {
+                (
+                    extra_carets_draw.clone(),
+                    extra_selections_draw.clone(),
+                    extra_preedit_underlines.clone(),
+                )
+            };
             Some(InputCaretDraw {
                 caret_byte_index: caret_byte,
                 selection: sel_draw,
+                extra_carets: extras_draw.0,
+                extra_selections: extras_draw.1,
+                extra_preedit_underlines: extras_draw.2,
                 selection_bg,
                 overwrite_highlight,
                 preedit_underline,

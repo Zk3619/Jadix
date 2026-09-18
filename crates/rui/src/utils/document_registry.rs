@@ -208,7 +208,7 @@ mod tests {
         crate::utils::text_edit_history::TextEditSnapshot {
             value: value.into(),
             caret,
-            selection: None,
+            ..Default::default()
         }
     }
 

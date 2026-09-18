@@ -234,6 +234,9 @@ fn generate_shadow_bitmap(
     for run in buffer.layout_runs() {
         let line_y_px = run.line_y.round() as i32;
         for g in run.glyphs.iter() {
+            if emoji_layout::glyph_is_emoji_layout_slot(&run, g) {
+                continue;
+            }
             let physical = g.physical((0.0, 0.0), 1.0);
             let img = match swash_cache.get_image_uncached(font_system, physical.cache_key) {
                 Some(img) => img,
@@ -575,6 +578,7 @@ fn correct_bidi_ink_spill(
             emoji_custom_glyph_enabled(),
             size * ui_scale,
             line_height,
+            &[],
         );
         for (line, align) in buffer.lines.iter_mut().zip(aligns) {
             line.set_align(align);
@@ -1161,23 +1165,55 @@ fn set_selection_colored_buffer_text(
     attrs: &glyphon::Attrs,
     shaping: glyphon::Shaping,
 ) {
+    set_selection_colored_buffer_ranges(buffer, text, &[((lo, hi), fg)], attrs, shaping);
+}
+
+fn set_selection_colored_buffer_ranges(
+    buffer: &mut glyphon::Buffer,
+    text: &str,
+    ranges: &[((usize, usize), [u8; 4])],
+    attrs: &glyphon::Attrs,
+    shaping: glyphon::Shaping,
+) {
     let len = text.len();
-    let lo = text.floor_char_boundary(lo.min(len));
-    let hi = text.floor_char_boundary(hi.min(len));
-    if lo >= hi {
+    let mut segs: Vec<(usize, usize, [u8; 4])> = ranges
+        .iter()
+        .filter_map(|&((a, b), fg)| {
+            let lo = text.floor_char_boundary(a.min(b).min(len));
+            let hi = text.floor_char_boundary(a.max(b).min(len));
+            (lo < hi).then_some((lo, hi, fg))
+        })
+        .collect();
+    segs.sort_unstable_by_key(|&(lo, _, _)| lo);
+    let mut merged: Vec<(usize, usize, [u8; 4])> = Vec::with_capacity(segs.len());
+    for (lo, hi, fg) in segs {
+        match merged.last_mut() {
+            Some((_, end, last_fg)) if lo <= *end && *last_fg == fg => {
+                *end = (*end).max(hi);
+            }
+            _ => merged.push((lo, hi, fg)),
+        }
+    }
+    if merged.is_empty() {
         buffer.set_text(text, attrs, shaping, None);
         return;
     }
-    let fg = attrs
-        .clone()
-        .color(glyphon::Color::rgba(fg[0], fg[1], fg[2], fg[3]));
-    let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::with_capacity(3);
-    if lo > 0 {
-        spans.push((&text[..lo], attrs.clone()));
+    let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::with_capacity(merged.len() * 2 + 1);
+    let mut at = 0usize;
+    for (lo, hi, fg) in merged {
+        if at < lo {
+            spans.push((&text[at..lo], attrs.clone()));
+        }
+        spans.push((
+            &text[lo..hi],
+            attrs
+                .clone()
+                .color(glyphon::Color::rgba(fg[0], fg[1], fg[2], fg[3])),
+        ));
+        at = hi;
     }
-    spans.push((&text[lo..hi], fg));
-    if hi < len {
-        spans.push((&text[hi..], attrs.clone()));
+    if at < len {
+        spans.push((&text[at..], attrs.clone()));
     }
     buffer.set_rich_text(spans, attrs, shaping, None);
 }
@@ -1246,37 +1282,61 @@ fn set_shaped_buffer_text(
     hide_emoji_font_glyphs: bool,
     font_size: f32,
     line_height: f32,
+    selection: &[((usize, usize), [u8; 4])],
 ) {
-    if !hide_emoji_font_glyphs {
-        buffer.set_text(text, &attrs, shaping, None);
-        return;
-    }
-    // UAX#14 fit.shape_text may already contain EMOJI_LAYOUT_SLOT (`一`). That string has
-    // no emoji codepoints, so text_contains_emoji is false — still must paint slots
-    // invisible or the ideograph stroke shows as a line through Twemoji quads.
+    // UAX#14 fit.shape_text / emoji-only chips may already contain EMOJI_LAYOUT_SLOT
+    // (`一`). That string has no emoji codepoints, so `hide_emoji_font_glyphs` is often
+    // false — still must paint slots invisible or the ideograph stroke shows as a
+    // horizontal line through Twemoji quads (gallery bubble reactions).
     if text.contains(EMOJI_LAYOUT_SLOT) {
-        emoji_layout::set_buffer_with_emoji_slots(
+        emoji_layout::set_buffer_with_emoji_slots_colored(
             buffer,
             text,
             &attrs,
             shaping,
             font_size,
             line_height,
+            selection,
         );
         return;
     }
+    if !hide_emoji_font_glyphs {
+        if selection.is_empty() {
+            buffer.set_text(text, &attrs, shaping, None);
+        } else {
+            set_selection_colored_buffer_ranges(buffer, text, selection, &attrs, shaping);
+        }
+        return;
+    }
     if !emoji_detect::text_contains_emoji(text) {
-        buffer.set_text(text, &attrs, shaping, None);
+        if selection.is_empty() {
+            buffer.set_text(text, &attrs, shaping, None);
+        } else {
+            set_selection_colored_buffer_ranges(buffer, text, selection, &attrs, shaping);
+        }
         return;
     }
     let (layout, _segments) = plan_emoji_layout(text);
-    emoji_layout::set_buffer_with_emoji_slots(
+    let mapped: Vec<((usize, usize), [u8; 4])> = selection
+        .iter()
+        .map(|&((lo, hi), fg)| {
+            (
+                (
+                    emoji_layout::map_original_byte_to_emoji_layout(text, lo),
+                    emoji_layout::map_original_byte_to_emoji_layout(text, hi),
+                ),
+                fg,
+            )
+        })
+        .collect();
+    emoji_layout::set_buffer_with_emoji_slots_colored(
         buffer,
         &layout,
         &attrs,
         shaping,
         font_size,
         line_height,
+        &mapped,
     );
 }
 
@@ -2310,13 +2370,14 @@ pub fn prepare_text_frame_at(
             resolved_face.synthetic_bold,
         );
         // Glyph recolor is baked into Attrs; Exact reuse must miss when the range/color moves.
-        if let Some(((lo, hi), fg)) = st.input_caret.as_ref().and_then(|c| c.selection_recolor()) {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            shape_hash.hash(&mut h);
-            lo.hash(&mut h);
-            hi.hash(&mut h);
-            fg.hash(&mut h);
-            shape_hash = h.finish();
+        if let Some(caret) = st.input_caret.as_ref() {
+            let ranges = caret.selection_recolor_ranges();
+            if !ranges.is_empty() {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                shape_hash.hash(&mut h);
+                ranges.hash(&mut h);
+                shape_hash = h.finish();
+            }
         }
         // Derive Exact key from identity — do not re-hash the full string (scroll frames
         // visit every visible label; browsers keep glyphs and only translate).
@@ -2827,36 +2888,26 @@ pub fn prepare_text_frame_at(
                     let rich: Vec<(&str, glyphon::Attrs)> =
                         owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
                     buffer.set_rich_text(rich, &attrs, shaping, None);
-                } else if let Some(((lo, hi), fg)) =
-                    st.input_caret.as_ref().and_then(|c| c.selection_recolor())
-                {
-                    let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
-                    if emoji_custom_glyph_enabled() && has_emoji {
-                        set_shaped_buffer_text(
-                            &mut buffer,
-                            unsafe { &mut *text_renderer.font_system },
-                            paint_text,
-                            attrs,
-                            shaping,
-                            true,
-                            scaled_size,
-                            line_height,
-                        );
-                    } else {
-                        let (slo, shi) =
-                            map_original_range_to_paint(info.text.as_str(), paint_text, lo, hi);
-                        set_selection_colored_buffer_text(
-                            &mut buffer,
-                            paint_text,
-                            slo,
-                            shi,
-                            fg,
-                            &attrs,
-                            shaping,
-                        );
-                    }
                 } else {
                     let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
+                    let mapped: Vec<((usize, usize), [u8; 4])> = st
+                        .input_caret
+                        .as_ref()
+                        .map(|c| {
+                            c.selection_recolor_ranges()
+                                .into_iter()
+                                .map(|((lo, hi), fg)| {
+                                    let (slo, shi) = map_original_range_to_paint(
+                                        info.text.as_str(),
+                                        paint_text,
+                                        lo,
+                                        hi,
+                                    );
+                                    ((slo, shi), fg)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     set_shaped_buffer_text(
                         &mut buffer,
                         unsafe { &mut *text_renderer.font_system },
@@ -2866,6 +2917,7 @@ pub fn prepare_text_frame_at(
                         emoji_custom_glyph_enabled() && has_emoji,
                         scaled_size,
                         line_height,
+                        &mapped,
                     );
                 }
                 for line in buffer.lines.iter_mut() {
@@ -4153,6 +4205,150 @@ mod shape_cache_key_tests {
         }
         assert!(found_sel, "expected a glyph in the selected byte range");
         assert!(found_other, "expected a glyph outside the selected range");
+    }
+
+    #[test]
+    fn selection_rich_text_recolors_disjoint_ranges() {
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        buffer.set_size(Some(400.0), Some(80.0));
+        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
+        let text = "abcd\nefgh";
+        super::set_selection_colored_buffer_ranges(
+            &mut buffer,
+            text,
+            &[((0, 2), [9, 8, 7, 255]), ((5, 7), [9, 8, 7, 255])],
+            &attrs,
+            glyphon::Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let mut found_sel = 0usize;
+        let mut found_other = 0usize;
+        for run in buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                let rgba = g.color_opt.map(glyph_rgba);
+                let selected = g.start < 2 || (g.start >= 5 && g.start < 7);
+                if selected {
+                    assert_eq!(rgba, Some([9, 8, 7, 255]), "selected glyph {:?}", g.start);
+                    found_sel += 1;
+                } else {
+                    assert_eq!(rgba, Some([1, 2, 3, 255]), "unselected glyph {:?}", g.start);
+                    found_other += 1;
+                }
+            }
+        }
+        assert!(
+            found_sel >= 2,
+            "expected glyphs in both extra selection ranges"
+        );
+        assert!(
+            found_other >= 1,
+            "expected a glyph outside the selected ranges"
+        );
+    }
+
+    #[test]
+    fn slotted_layout_stays_invisible_even_when_hide_flag_is_false() {
+        use crate::renderer::emoji_layout::{
+            glyph_is_emoji_layout_slot, plan_emoji_layout_text, EMOJI_LAYOUT_SLOT,
+        };
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, &EMOJI_LAYOUT_SLOT.to_string());
+        install_shared_font_system(&mut fs);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(12.0, 12.0));
+        buffer.set_size(Some(64.0), Some(24.0));
+        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(17, 17, 17, 255));
+        let layout = plan_emoji_layout_text("👍");
+        assert!(
+            layout.contains(EMOJI_LAYOUT_SLOT),
+            "chip layout is the CJK slot, not the original emoji"
+        );
+        super::set_shaped_buffer_text(
+            &mut buffer,
+            &mut fs,
+            &layout,
+            attrs,
+            glyphon::Shaping::Advanced,
+            false,
+            12.0,
+            12.0,
+            &[],
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let mut found = 0usize;
+        for run in buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                if !glyph_is_emoji_layout_slot(&run, g) {
+                    continue;
+                }
+                let alpha = g.color_opt.map(|c| c.a()).unwrap_or(255);
+                assert_eq!(
+                    alpha, 0,
+                    "already-slotted paint_text must hide `一` even when hide_emoji=false \
+                     (got color_opt={:?})",
+                    g.color_opt
+                );
+                found += 1;
+            }
+        }
+        assert!(found >= 1, "expected an invisible slot glyph");
+    }
+
+    #[test]
+    fn selection_recolor_applies_to_text_around_emoji() {
+        use crate::renderer::emoji_layout::plan_emoji_layout_text;
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        buffer.set_size(Some(400.0), Some(40.0));
+        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
+        let text = "ab😀cd";
+        let fg = [9_u8, 8, 7, 255];
+        super::set_shaped_buffer_text(
+            &mut buffer,
+            &mut fs,
+            text,
+            attrs,
+            glyphon::Shaping::Advanced,
+            true,
+            14.0,
+            21.0,
+            &[((0, text.len()), fg)],
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let layout = plan_emoji_layout_text(text);
+        let mut found_plain = false;
+        for run in buffer.layout_runs() {
+            for g in run.glyphs.iter() {
+                let slice = layout.get(g.start..g.end.min(layout.len())).unwrap_or("");
+                if slice.chars().all(|c| c.is_ascii_alphabetic()) && !slice.is_empty() {
+                    let rgba = g.color_opt.map(glyph_rgba);
+                    assert_eq!(
+                        rgba,
+                        Some(fg),
+                        "plain glyph {slice:?} should use selection fg"
+                    );
+                    found_plain = true;
+                }
+            }
+        }
+        assert!(
+            found_plain,
+            "expected recolored Latin glyphs around the emoji"
+        );
     }
 
     #[test]
