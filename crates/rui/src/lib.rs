@@ -11,9 +11,13 @@ pub mod style;
 /// 兼容旧路径 `crate::render::*`。
 pub use renderer as render;
 
+#[cfg(feature = "a11y")]
 pub mod a11y;
 pub mod app;
 pub mod components;
+#[cfg(feature = "i18n")]
+/// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
+pub mod i18n;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
 pub mod logging;
 /// OS hooks: desktop defaults + OS overrides (Windows DWM / PE stack, Unix metrics).
@@ -48,6 +52,256 @@ pub mod reactivity {
 
 pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
 pub use rui_macros::*;
+
+/// `true` when `src/i18n` (catalogs / locale overlay) is compiled in.
+pub const fn i18n_enabled() -> bool {
+    cfg!(feature = "i18n")
+}
+
+/// `{name}` substitution for [`tr_with_default`] when feature `i18n` is off.
+pub(crate) fn i18n_interpolate(template: &str, args: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start + 1..];
+        if let Some(end) = rest.find('}') {
+            let name = &rest[..end];
+            if let Some((_, v)) = args.iter().find(|(n, _)| *n == name) {
+                out.push_str(v);
+            } else {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+            rest = &rest[end + 1..];
+        } else {
+            out.push('{');
+            out.push_str(rest);
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// App chrome: look up `key`, or use the English source string.
+///
+/// With `--features i18n` this registers **en-US** then translates. Without the
+/// feature it returns `en_us`. RUI widgets that ship Chinese use [`tr_default_zh`].
+/// Optional third locale at the call site: [`tr_default!`].
+pub fn tr_default(key: &str, en_us: &str) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::tr_default(key, en_us)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        let _ = key;
+        String::from(en_us)
+    }
+}
+
+/// RUI component chrome: register **en-US** and **zh-CN**, then look up.
+pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::tr_default_zh(key, en_us, zh_cn)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        let _ = (key, zh_cn);
+        String::from(en_us)
+    }
+}
+
+/// [`tr_default`] with named `{placeholder}` args.
+pub fn tr_with_default(key: &str, en_us: &str, args: &[(&str, &str)]) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::tr_with_default(key, en_us, args)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        let _ = key;
+        i18n_interpolate(en_us, args)
+    }
+}
+
+/// [`tr_default_zh`] with named `{placeholder}` args.
+pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &str)]) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::tr_with_default_zh(key, en_us, zh_cn, args)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        let _ = (key, zh_cn);
+        i18n_interpolate(en_us, args)
+    }
+}
+
+/// First weekday: 0 = Sunday. With `i18n`, follows CLDR / ICU for the active locale.
+pub fn first_weekday() -> u32 {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::first_weekday()
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        0
+    }
+}
+
+/// `true` when the active locale is RTL (Arabic, Hebrew, …).
+pub fn chrome_rtl() -> bool {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::chrome_rtl()
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        false
+    }
+}
+
+/// Chevron name for previous/next chrome (flips in RTL).
+pub(crate) fn chrome_nav_chevron(previous: bool) -> &'static str {
+    match (chrome_rtl(), previous) {
+        (false, true) | (true, false) => "chevron-left",
+        (false, false) | (true, true) => "chevron-right",
+    }
+}
+
+#[cfg(not(feature = "i18n"))]
+const ENGLISH_MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+#[cfg(not(feature = "i18n"))]
+fn english_month(month: u32) -> &'static str {
+    ENGLISH_MONTHS[month.saturating_sub(1).min(11) as usize]
+}
+
+/// Long date in the active locale (`August 14, 2026` / `2026年8月14日`).
+pub fn format_date_long(year: i32, month: u32, day: u32) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::format_date(year, month, day, crate::i18n::DateStyle::Long)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        format!("{} {day}, {year}", english_month(month))
+    }
+}
+
+/// Year-month caption in the active locale (`August 2026` / `2026年8月`).
+pub fn format_year_month(year: i32, month: u32) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::format_year_month(year, month)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        format!("{} {year}", english_month(month))
+    }
+}
+
+/// Date + time in the active locale (no timezone conversion).
+pub fn format_datetime(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> String {
+    #[cfg(feature = "i18n")]
+    {
+        crate::i18n::format_datetime(year, month, day, hour, minute, second)
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        format!(
+            "{}, {hour:02}:{minute:02}:{second:02}",
+            format_date_long(year, month, day)
+        )
+    }
+}
+
+/// `tr_default!("key", "English")` or `tr_default!("key", "English", "中文")`.
+#[macro_export]
+macro_rules! tr_default {
+    ($key:expr, $en:expr $(,)?) => {
+        $crate::tr_default($key, $en)
+    };
+    ($key:expr, $en:expr, $zh:expr $(,)?) => {
+        $crate::tr_default_zh($key, $en, $zh)
+    };
+}
+
+/// `tr_with_default!("key", "Hello {name}", args)` or with a zh-CN template before `args`.
+#[macro_export]
+macro_rules! tr_with_default {
+    ($key:expr, $en:expr, $args:expr $(,)?) => {
+        $crate::tr_with_default($key, $en, $args)
+    };
+    ($key:expr, $en:expr, $zh:expr, $args:expr $(,)?) => {
+        $crate::tr_with_default_zh($key, $en, $zh, $args)
+    };
+}
+
+/// Translate a catalog key (`t!("save")` / `t!("hello", name = user)`).
+///
+/// Requires `--features i18n` for overlay lookup. Without the feature, returns
+/// the key (or interpolates `{name}` in the key string).
+#[macro_export]
+macro_rules! t {
+    ($key:expr) => {{
+        #[cfg(feature = "i18n")]
+        {
+            $crate::i18n::tr($key)
+        }
+        #[cfg(not(feature = "i18n"))]
+        {
+            ::std::string::String::from($key)
+        }
+    }};
+    ($key:expr, $($name:ident = $val:expr),+ $(,)?) => {{
+        let __rui_i18n_vals = [$($crate::__t_arg($val)),+];
+        let __rui_i18n_names = [$(stringify!($name)),+];
+        let __rui_i18n_pairs: ::std::vec::Vec<(&str, &str)> = __rui_i18n_names
+            .iter()
+            .zip(__rui_i18n_vals.iter())
+            .map(|(n, v)| (*n, v.as_str()))
+            .collect();
+        #[cfg(feature = "i18n")]
+        {
+            $crate::i18n::tr_with($key, &__rui_i18n_pairs)
+        }
+        #[cfg(not(feature = "i18n"))]
+        {
+            let _ = __rui_i18n_pairs;
+            ::std::string::String::from($key)
+        }
+    }};
+}
+
+#[doc(hidden)]
+pub fn __t_arg(v: impl ToString) -> String {
+    v.to_string()
+}
 
 /// Default stable anchor id for [`app::reactive::reactive_anchor`] / [`app::reactive::reactive_placeholder`]
 /// (file + line + column). Prefer explicit ids when you need hot-reload or multi-instance keys.
@@ -285,3 +539,39 @@ pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
     visible_item_range, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
+
+#[cfg(test)]
+mod tr_default_shim_tests {
+    #[test]
+    fn yields_source_string() {
+        assert_eq!(
+            crate::tr_default("rui.pagination.previous", "Previous"),
+            "Previous"
+        );
+    }
+
+    #[test]
+    fn interpolates_placeholders() {
+        assert_eq!(
+            crate::tr_with_default(
+                "rui.date_picker.week_of",
+                "Week of {date}",
+                &[("date", "August 14, 2026")]
+            ),
+            "Week of August 14, 2026"
+        );
+    }
+
+    #[test]
+    fn english_source_is_used_by_default() {
+        assert_eq!(crate::tr_default("rui.pagination.next", "Next"), "Next");
+        assert_eq!(
+            crate::tr_default_zh("rui.pagination.next", "Next", "下一页"),
+            "Next"
+        );
+        assert_eq!(
+            crate::tr_default!("rui.pagination.previous", "Previous", "上一页"),
+            "Previous"
+        );
+    }
+}

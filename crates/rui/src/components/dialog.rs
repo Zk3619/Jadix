@@ -384,9 +384,13 @@ pub fn DialogTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     match children {
-        None => interactive(label(trigger_id.as_str()).text("Open").into())
-            .on_click(move || open.set(true))
-            .into(),
+        None => interactive(
+            label(trigger_id.as_str())
+                .text(crate::tr_default_zh("rui.dialog.open", "Open", "打开"))
+                .into(),
+        )
+        .on_click(move || open.set(true))
+        .into(),
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
             interactive(label(trigger_id.as_str()).text(t).into())
@@ -481,14 +485,15 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
                     let o = open;
                     let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
                     let icon = build_named_icon_text_node("x", glyph).text_size(16.0);
-                    Some(
-                        button(format!("{id}:chrome_close"))
-                            .variant("ghost")
-                            .size("icon-sm")
-                            .on_click(move || o.set(false))
-                            .child(icon)
-                            .into(),
-                    )
+                    let mut close: Element = button(format!("{id}:chrome_close"))
+                        .variant("ghost")
+                        .size("icon-sm")
+                        .on_click(move || o.set(false))
+                        .child(icon)
+                        .into();
+                    close =
+                        close.aria_label(crate::tr_default_zh("rui.dialog.close", "Close", "关闭"));
+                    Some(close)
                 } else {
                     None
                 };

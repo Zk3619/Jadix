@@ -153,13 +153,19 @@ impl DatePickerKind {
         }
     }
 
-    fn placeholder(self) -> &'static str {
+    fn placeholder(self) -> String {
         match self {
-            Self::Date => "Pick a date",
-            Self::DateTimeLocal => "Pick date & time",
-            Self::Time => "Pick a time",
-            Self::Month => "Pick a month",
-            Self::Week => "Pick a week",
+            Self::Date => crate::tr_default_zh("rui.date_picker.date", "Pick a date", "选择日期"),
+            Self::DateTimeLocal => crate::tr_default_zh(
+                "rui.date_picker.datetime",
+                "Pick date & time",
+                "选择日期和时间",
+            ),
+            Self::Time => crate::tr_default_zh("rui.date_picker.time", "Pick a time", "选择时间"),
+            Self::Month => {
+                crate::tr_default_zh("rui.date_picker.month", "Pick a month", "选择月份")
+            }
+            Self::Week => crate::tr_default_zh("rui.date_picker.week", "Pick a week", "选择周"),
         }
     }
 }
@@ -172,22 +178,24 @@ fn format_trigger_value(kind: DatePickerKind, raw: &str) -> String {
         DatePickerKind::Date => parse_ymd(raw)
             .map(|(y, m, d)| format_long_date(y, m, d))
             .unwrap_or_else(|| raw.to_string()),
-        DatePickerKind::DateTimeLocal => {
-            let date = parse_ymd(raw)
-                .map(|(y, m, d)| format_long_date(y, m, d))
-                .unwrap_or_else(|| raw.split('T').next().unwrap_or(raw).to_string());
-            let hms = parse_hms(raw).map(|(h, mi, s)| format!("{h:02}:{mi:02}:{s:02}"));
-            match hms {
-                Some(t) => format!("{date}, {t}"),
-                None => date,
-            }
-        }
+        DatePickerKind::DateTimeLocal => match (parse_ymd(raw), parse_hms(raw)) {
+            (Some((y, m, d)), Some((h, mi, s))) => crate::format_datetime(y, m, d, h, mi, s),
+            (Some((y, m, d)), None) => format_long_date(y, m, d),
+            _ => raw.to_string(),
+        },
         DatePickerKind::Month => parse_ymd(&format!("{raw}-01"))
             .or_else(|| parse_ymd(raw))
             .map(|(y, m, _)| format_month_year(y, m))
             .unwrap_or_else(|| raw.to_string()),
         DatePickerKind::Week => parse_ymd(raw)
-            .map(|(y, m, d)| format!("Week of {}", format_long_date(y, m, d)))
+            .map(|(y, m, d)| {
+                crate::tr_with_default_zh(
+                    "rui.date_picker.week_of",
+                    "Week of {date}",
+                    "{date} 所在周",
+                    &[("date", &format_long_date(y, m, d))],
+                )
+            })
             .unwrap_or_else(|| raw.to_string()),
         DatePickerKind::Time => parse_hms(raw)
             .map(|(h, mi, s)| format!("{h:02}:{mi:02}:{s:02}"))
@@ -409,7 +417,7 @@ fn month_nav_buttons(id: &str, year: Signal<i32>, month: Signal<u32>) -> (Elemen
             m_sig.set(mm);
             y_sig.set(yy);
         })
-        .child(chevron_nav_icon("chevron-left"))
+        .child(chevron_nav_icon(crate::chrome_nav_chevron(true)))
         .into();
     let y_sig = year;
     let m_sig = month;
@@ -428,7 +436,7 @@ fn month_nav_buttons(id: &str, year: Signal<i32>, month: Signal<u32>) -> (Elemen
             m_sig.set(mm);
             y_sig.set(yy);
         })
-        .child(chevron_nav_icon("chevron-right"))
+        .child(chevron_nav_icon(crate::chrome_nav_chevron(false)))
         .into();
     (prev, next)
 }

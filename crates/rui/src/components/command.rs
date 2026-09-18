@@ -302,7 +302,7 @@ fn command_paint(
         Vec::<CommandVisibleItem>::new,
     );
     let empty_msg = use_signal(format!("{id}__cmd_empty").as_str(), || {
-        "No results found.".to_string()
+        crate::tr_default_zh("rui.command.empty", "No results found.", "未找到结果。")
     });
     let query_sig = use_signal(input_value_signal_key(&filter_id).as_str(), String::new);
     let open_now = open.peek();
@@ -414,7 +414,11 @@ fn sync_command_palette_focus(el: &Element) {
 fn command_placeholder(placeholder: impl Into<String>) -> String {
     let placeholder = placeholder.into();
     if placeholder.is_empty() {
-        "Type a command or search...".into()
+        crate::tr_default_zh(
+            "rui.command.placeholder",
+            "Type a command or search...",
+            "输入命令或搜索…",
+        )
     } else {
         placeholder
     }
@@ -671,7 +675,11 @@ pub fn command(id: impl Into<String>) -> CommandBuilder {
         id: id.into(),
         open: None,
         entries: Vec::new(),
-        placeholder: "Type a command or search...".into(),
+        placeholder: crate::tr_default_zh(
+            "rui.command.placeholder",
+            "Type a command or search...",
+            "输入命令或搜索…",
+        ),
         surface: CommandSurface::Overlay,
     }
 }
@@ -728,7 +736,11 @@ impl CommandBuilder {
 fn builder_palette_body(placeholder: String, entries: Vec<CommandEntry>) -> Element {
     let mut list_kids: Vec<Element> = Vec::new();
     list_kids.push(CommandEmpty(CommandEmptyProps {
-        children: Some(Element::new().text("No results found.")),
+        children: Some(Element::new().text(crate::tr_default_zh(
+            "rui.command.empty",
+            "No results found.",
+            "未找到结果。",
+        ))),
         base: None,
     }));
     for e in entries {
@@ -1087,7 +1099,7 @@ pub fn CommandEmpty(children: Option<Element>) -> Element {
             .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| extract_text_leaf(c)),
-        None => "No results found.".into(),
+        None => crate::tr_default_zh("rui.command.empty", "No results found.", "未找到结果。"),
     };
     if ctx.empty_msg.peek() != msg {
         ctx.empty_msg.set(msg);

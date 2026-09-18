@@ -789,9 +789,17 @@ pub fn AlertDialogTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     let mut el = match children {
-        None => interactive(label(trigger_id.as_str()).text("Open").into())
-            .on_click(move || open.set(true))
-            .into(),
+        None => interactive(
+            label(trigger_id.as_str())
+                .text(crate::tr_default_zh(
+                    "rui.alert_dialog.open",
+                    "Open",
+                    "打开",
+                ))
+                .into(),
+        )
+        .on_click(move || open.set(true))
+        .into(),
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
             interactive(label(trigger_id.as_str()).text(t).into())
@@ -935,7 +943,11 @@ pub fn AlertDialogAction(children: Option<Element>) -> Element {
 
     let mut el = match children {
         None => button(btn_id.as_str())
-            .text("Continue")
+            .text(crate::tr_default_zh(
+                "rui.alert_dialog.continue",
+                "Continue",
+                "继续",
+            ))
             .on_click(move || open.set(false))
             .into(),
         Some(c) if is_text_leaf(&c) => {
@@ -988,7 +1000,11 @@ pub fn AlertDialogCancel(id: String, children: Option<Element>) -> Element {
     let mut el = match children {
         None => button(btn_id.as_str())
             .variant("outline")
-            .text("Cancel")
+            .text(crate::tr_default_zh(
+                "rui.alert_dialog.cancel",
+                "Cancel",
+                "取消",
+            ))
             .on_click(move || open.set(false))
             .into(),
         Some(c) if is_text_leaf(&c) => {

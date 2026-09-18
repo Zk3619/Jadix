@@ -537,8 +537,8 @@ fn sidebar_state_attr(open: Signal<bool>) -> String {
 
 fn sidebar_content_side_border(el: Element, side: SidebarSide) -> Element {
     match side {
-        SidebarSide::Left => el.border_right(parse_color("sidebar-border"), 1.0),
-        SidebarSide::Right => el.border_left(parse_color("sidebar-border"), 1.0),
+        SidebarSide::Left => el.border_inline_end(parse_color("sidebar-border"), 1.0),
+        SidebarSide::Right => el.border_inline_start(parse_color("sidebar-border"), 1.0),
     }
 }
 
@@ -1494,7 +1494,7 @@ pub fn SidebarContent(children: Option<Element>) -> Element {
         .absolute()
         .top(2.0)
         .bottom(2.0)
-        .right(2.0)
+        .inset_inline_end(2.0)
         // `overlay(true)` defaults z-index to 10. Nested page stacking would
         // desync glyphs vs rects (same as MessageScroller overlay bars).
         .z_index(0)
@@ -1721,7 +1721,7 @@ pub fn SidebarRail(mut on_click: Option<Handler<()>>) -> Element {
         .h("100%")
         .absolute(true)
         .top(0.0)
-        .right(-16.0)
+        .inset_inline_end(-16.0)
         .cursor("col-resize")
         .into();
     hit = interactive(hit)
@@ -1730,8 +1730,14 @@ pub fn SidebarRail(mut on_click: Option<Handler<()>>) -> Element {
         .into();
     hit.set_attr(ATTR_SLOT, SLOT_RAIL);
     hit.set_attr(ATTR_SIDEBAR, "rail");
-    hit.set_attr("aria-label", "Toggle Sidebar");
-    hit.set_attr("title", "Toggle Sidebar");
+    hit.set_attr(
+        "aria-label",
+        crate::tr_default_zh("rui.sidebar.toggle", "Toggle Sidebar", "切换侧边栏"),
+    );
+    hit.set_attr(
+        "title",
+        crate::tr_default_zh("rui.sidebar.toggle", "Toggle Sidebar", "切换侧边栏"),
+    );
     hit
 }
 

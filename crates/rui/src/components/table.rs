@@ -1352,11 +1352,15 @@ impl From<TableBuilder> for Element {
             if let Some(p) = page_state {
                 let pages = TablePaginationState::page_count(p, total_after_filter);
                 let page_sig = page_sig.expect("page_state implies signal");
-                let info = format!(
-                    "Page {} / {} · {} rows",
-                    p.page_index + 1,
-                    pages,
-                    total_after_filter
+                let info = crate::tr_with_default_zh(
+                    "rui.table.page_info",
+                    "Page {page} / {pages} · {rows} rows",
+                    "第 {page} / {pages} 页 · 共 {rows} 条",
+                    &[
+                        ("page", &(p.page_index + 1).to_string()),
+                        ("pages", &pages.to_string()),
+                        ("rows", &total_after_filter.to_string()),
+                    ],
                 );
                 let prev_id = format!("{id}:page-prev");
                 let next_id = format!("{id}:page-next");
@@ -1369,7 +1373,14 @@ impl From<TableBuilder> for Element {
                         cur.page_index = cur.page_index.saturating_sub(1);
                         page_sig.set(cur);
                     })
-                    .child(text("Previous").size(TEXT_SM));
+                    .child(
+                        text(crate::tr_default_zh(
+                            "rui.table.previous",
+                            "Previous",
+                            "上一页",
+                        ))
+                        .size(TEXT_SM),
+                    );
                 let next = button(next_id)
                     .variant("outline")
                     .size("sm")
@@ -1381,7 +1392,10 @@ impl From<TableBuilder> for Element {
                             page_sig.set(cur);
                         }
                     })
-                    .child(text("Next").size(TEXT_SM));
+                    .child(
+                        text(crate::tr_default_zh("rui.table.next", "Next", "下一页"))
+                            .size(TEXT_SM),
+                    );
                 let footer_row: Element = hstack()
                     .w("100%")
                     .items_center()

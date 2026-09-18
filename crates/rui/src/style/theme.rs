@@ -322,6 +322,7 @@ pub fn set_focus_ring_width(width: f32) {
 
 pub fn set_theme(theme: Theme) {
     CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
+    crate::platform::glass_sync_rui_theme();
 }
 
 /// Switch light/dark tokens while preserving the current [`FocusRingStyle`] /

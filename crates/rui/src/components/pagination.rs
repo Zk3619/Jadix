@@ -669,7 +669,7 @@ pub fn PaginationPrevious(
     children: Option<Element>,
 ) -> Element {
     let label = if text.trim().is_empty() {
-        "Previous".to_string()
+        crate::tr_default_zh("rui.pagination.previous", "Previous", "上一页")
     } else {
         text
     };
@@ -684,7 +684,7 @@ pub fn PaginationPrevious(
         .variant("ghost")
         .size(size)
         .disabled(disabled)
-        .child(lucide_icon("chevron-left", 14.0));
+        .child(lucide_icon(crate::chrome_nav_chevron(true), 14.0));
     if let Some(c) = children {
         for k in take_packed(c) {
             btn = btn.child(k);
@@ -706,7 +706,14 @@ pub fn PaginationPrevious(
         });
     }
     el.set_attr(ATTR_SLOT, SLOT_PREV);
-    el.set_attr("aria-label", "Go to previous page");
+    el.set_attr(
+        "aria-label",
+        crate::tr_default_zh(
+            "rui.pagination.go_previous",
+            "Go to previous page",
+            "转到上一页",
+        ),
+    );
     el
 }
 
@@ -724,7 +731,7 @@ pub fn PaginationNext(
     children: Option<Element>,
 ) -> Element {
     let label = if text.trim().is_empty() {
-        "Next".to_string()
+        crate::tr_default_zh("rui.pagination.next", "Next", "下一页")
     } else {
         text
     };
@@ -746,7 +753,7 @@ pub fn PaginationNext(
     } else if show_text {
         btn = btn.text(label);
     }
-    btn = btn.child(lucide_icon("chevron-right", 14.0));
+    btn = btn.child(lucide_icon(crate::chrome_nav_chevron(false), 14.0));
     let mut el: Element = btn.into();
     if !disabled {
         let mut old = el.on_click.clone();
@@ -758,7 +765,10 @@ pub fn PaginationNext(
         });
     }
     el.set_attr(ATTR_SLOT, SLOT_NEXT);
-    el.set_attr("aria-label", "Go to next page");
+    el.set_attr(
+        "aria-label",
+        crate::tr_default_zh("rui.pagination.go_next", "Go to next page", "转到下一页"),
+    );
     el
 }
 
@@ -906,7 +916,10 @@ fn paint_jumper(
 
     let mut shell: Element = row.into();
     shell.set_attr(ATTR_SLOT, SLOT_JUMPER);
-    shell.set_attr("aria-label", "Pagination jumper");
+    shell.set_attr(
+        "aria-label",
+        crate::tr_default_zh("rui.pagination.jumper", "Pagination jumper", "页码跳转"),
+    );
 
     // Item 勿裁切输入焦点环；高度随内容 + 焦点阴影。
     let mut item = PaginationItem(PaginationItemProps {
@@ -987,9 +1000,9 @@ pub fn pagination(id: impl Into<String>) -> PaginationBuilder {
         max_items: None,
         auto_fit: true,
         jumper: false,
-        jumper_button_text: "Go".into(),
-        previous_text: "Previous".into(),
-        next_text: "Next".into(),
+        jumper_button_text: crate::tr_default_zh("rui.pagination.go", "Go", "前往"),
+        previous_text: crate::tr_default_zh("rui.pagination.previous", "Previous", "上一页"),
+        next_text: crate::tr_default_zh("rui.pagination.next", "Next", "下一页"),
         on_page_change: None,
         parts: PaginationPartChrome::default(),
         custom_body: None,

@@ -53,25 +53,6 @@ const YEAR_SELECT_HI: i32 = 2100;
 const CAPTION_MONTH_GROW: f32 = 1.0;
 const CAPTION_YEAR_GROW: f32 = 1.0;
 
-const MONTH_NAMES: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-const MONTH_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const DOW: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
 #[cfg(test)]
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_DAY: &str = "calendar-day";
@@ -207,25 +188,73 @@ fn clamp_day(y: i32, m: u32, d: u32) -> u32 {
     d.min(days_in_month(y, m)).max(1)
 }
 
-fn caption_title(y: i32, m: u32) -> String {
-    let name = MONTH_NAMES
-        .get((m.saturating_sub(1) as usize).min(11))
-        .copied()
-        .unwrap_or("?");
-    format!("{name} {y}")
+const MONTH_LONG: [(&str, &str, &str); 12] = [
+    ("rui.calendar.month.january", "January", "一月"),
+    ("rui.calendar.month.february", "February", "二月"),
+    ("rui.calendar.month.march", "March", "三月"),
+    ("rui.calendar.month.april", "April", "四月"),
+    ("rui.calendar.month.may", "May", "五月"),
+    ("rui.calendar.month.june", "June", "六月"),
+    ("rui.calendar.month.july", "July", "七月"),
+    ("rui.calendar.month.august", "August", "八月"),
+    ("rui.calendar.month.september", "September", "九月"),
+    ("rui.calendar.month.october", "October", "十月"),
+    ("rui.calendar.month.november", "November", "十一月"),
+    ("rui.calendar.month.december", "December", "十二月"),
+];
+
+const MONTH_SHORT: [(&str, &str, &str); 12] = [
+    ("rui.calendar.month_short.jan", "Jan", "1月"),
+    ("rui.calendar.month_short.feb", "Feb", "2月"),
+    ("rui.calendar.month_short.mar", "Mar", "3月"),
+    ("rui.calendar.month_short.apr", "Apr", "4月"),
+    ("rui.calendar.month_short.may", "May", "5月"),
+    ("rui.calendar.month_short.jun", "Jun", "6月"),
+    ("rui.calendar.month_short.jul", "Jul", "7月"),
+    ("rui.calendar.month_short.aug", "Aug", "8月"),
+    ("rui.calendar.month_short.sep", "Sep", "9月"),
+    ("rui.calendar.month_short.oct", "Oct", "10月"),
+    ("rui.calendar.month_short.nov", "Nov", "11月"),
+    ("rui.calendar.month_short.dec", "Dec", "12月"),
+];
+
+const WEEKDAY_SHORT: [(&str, &str, &str); 7] = [
+    ("rui.calendar.weekday_short.sun", "Su", "日"),
+    ("rui.calendar.weekday_short.mon", "Mo", "一"),
+    ("rui.calendar.weekday_short.tue", "Tu", "二"),
+    ("rui.calendar.weekday_short.wed", "We", "三"),
+    ("rui.calendar.weekday_short.thu", "Th", "四"),
+    ("rui.calendar.weekday_short.fri", "Fr", "五"),
+    ("rui.calendar.weekday_short.sat", "Sa", "六"),
+];
+
+fn month_long(m: u32) -> String {
+    let i = m.saturating_sub(1).min(11) as usize;
+    crate::tr_default_zh(MONTH_LONG[i].0, MONTH_LONG[i].1, MONTH_LONG[i].2)
 }
 
-/// ShadCN `dateStyle: "long"`：`August 14, 2026`。
+fn month_short(m: u32) -> String {
+    let i = m.saturating_sub(1).min(11) as usize;
+    crate::tr_default_zh(MONTH_SHORT[i].0, MONTH_SHORT[i].1, MONTH_SHORT[i].2)
+}
+
+fn weekday_short(i: u32) -> String {
+    let i = (i as usize) % 7;
+    crate::tr_default_zh(WEEKDAY_SHORT[i].0, WEEKDAY_SHORT[i].1, WEEKDAY_SHORT[i].2)
+}
+
+/// ShadCN `dateStyle: "long"`：`August 14, 2026` / `2026年8月14日`.
 pub fn format_long_date(y: i32, m: u32, d: u32) -> String {
-    let name = MONTH_NAMES
-        .get((m.saturating_sub(1) as usize).min(11))
-        .copied()
-        .unwrap_or("?");
-    format!("{name} {d}, {y}")
+    crate::format_date_long(y, m, d)
 }
 
 pub fn format_month_year(y: i32, m: u32) -> String {
-    caption_title(y, m)
+    crate::format_year_month(y, m)
+}
+
+/// Leading blank cells before day 1 when the week starts at `week_start` (0 = Sunday).
+pub fn week_grid_leading(first_of_month_weekday: u32, week_start: u32) -> i32 {
+    (first_of_month_weekday as i32 - week_start as i32).rem_euclid(7)
 }
 
 /// ShadCN Aria `<Calendar>`。
@@ -384,18 +413,23 @@ fn caption_select_flex_item(el: Element, grow: f32) -> Element {
 pub(crate) fn calendar_month_select(id: impl Into<String>, value: Signal<String>) -> Element {
     let mut b = select(id)
         .value_signal(value)
-        .placeholder("Month")
+        .placeholder(crate::tr_default_zh(
+            "rui.calendar.month.placeholder",
+            "Month",
+            "月份",
+        ))
         .trigger_width("100%")
         .max_height("16rem")
         .scroll_selected("center");
-    for (i, name) in MONTH_NAMES.iter().enumerate() {
-        b = b.item(SelectItemData::new((i + 1).to_string(), *name));
+    for i in 0..12u32 {
+        let name = month_long(i + 1);
+        b = b.item(SelectItemData::new((i + 1).to_string(), name));
     }
     caption_select_flex_item(b.into(), CAPTION_MONTH_GROW)
 }
 
 /// Aria `CalendarYearPicker`：复用产品面 [`select`]。
-/// 与月份共用 flex 槽；grow 2:1（月份 : 年份），`flex-basis: 0` 让比例不受内容宽度干扰。
+/// 与月份共用 flex 槽；grow 相等、`flex-basis: 0`，比例不受文案宽度干扰（i18n 月份名可长可短）。
 pub(crate) fn calendar_year_select(
     id: impl Into<String>,
     value: Signal<String>,
@@ -405,7 +439,11 @@ pub(crate) fn calendar_year_select(
     let hi = around.max(YEAR_SELECT_HI);
     let mut b = select(id)
         .value_signal(value)
-        .placeholder("Year")
+        .placeholder(crate::tr_default_zh(
+            "rui.calendar.year_placeholder",
+            "Year",
+            "年份",
+        ))
         .trigger_width("100%")
         .max_height("16rem")
         .scroll_selected("center");
@@ -534,15 +572,19 @@ fn build_calendar_view(
                         dd = n.2;
                     }
                     Key::Named(NamedKey::Home) => {
+                        let start = crate::first_weekday() as i32;
                         let wd = weekday(yy, mm, dd) as i32;
-                        let n = add_days(yy, mm, dd, -wd);
+                        let from_start = (wd - start).rem_euclid(7);
+                        let n = add_days(yy, mm, dd, -from_start);
                         yy = n.0;
                         mm = n.1;
                         dd = n.2;
                     }
                     Key::Named(NamedKey::End) => {
+                        let start = crate::first_weekday() as i32;
                         let wd = weekday(yy, mm, dd) as i32;
-                        let n = add_days(yy, mm, dd, 6 - wd);
+                        let from_start = (wd - start).rem_euclid(7);
+                        let n = add_days(yy, mm, dd, 6 - from_start);
                         yy = n.0;
                         mm = n.1;
                         dd = n.2;
@@ -603,7 +645,7 @@ fn build_calendar_view(
                         ysel.set(yy.to_string());
                     }
                 })
-                .child(lucide_chevron("chevron-left"))
+                .child(lucide_chevron(crate::chrome_nav_chevron(true)))
                 .into(),
         )
         .flex_shrink(0.0);
@@ -629,7 +671,7 @@ fn build_calendar_view(
                         ysel.set(yy.to_string());
                     }
                 })
-                .child(lucide_chevron("chevron-right"))
+                .child(lucide_chevron(crate::chrome_nav_chevron(false)))
                 .into(),
         )
         .flex_shrink(0.0);
@@ -652,15 +694,11 @@ fn build_calendar_view(
             .gap("0.375rem")
             .items_center()
             .overflow("hidden")
-            .child(caption_label(
-                MONTH_SHORT
-                    .get((m.saturating_sub(1) as usize).min(11))
-                    .unwrap_or(&"?"),
-            ))
+            .child(caption_label(&month_short(m)))
             .child(caption_label(&format!("{y}")))
             .into()
     } else {
-        caption_label(&caption_title(y, m))
+        caption_label(&format_month_year(y, m))
     };
 
     let mut caption_slot = hstack()
@@ -741,13 +779,16 @@ fn build_calendar_day_grid(
         })
     };
 
+    let week_start = crate::first_weekday();
     let mut head: Element = hstack().w("100%").into();
-    for name in DOW {
-        let lab = slots.paint(SLOT_WEEKDAY, weekday_label(name));
+    for i in 0..7u32 {
+        let name = weekday_short((week_start + i) % 7);
+        let lab = slots.paint(SLOT_WEEKDAY, weekday_label(&name));
         head = head.child(calendar_grid_cell(lab));
     }
 
-    let first = weekday(y, m, 1) as i32;
+    let first = weekday(y, m, 1);
+    let leading = week_grid_leading(first, week_start);
     let dim = days_in_month(y, m) as i32;
     let (py, pm) = add_months(y, m, -1);
     let pdim = days_in_month(py, pm) as i32;
@@ -761,7 +802,7 @@ fn build_calendar_day_grid(
     for week in 0..6 {
         let mut row: Element = hstack().w("100%").into();
         for col in 0..7 {
-            let offset = week * 7 + col - first;
+            let offset = week * 7 + col - leading;
             let (cy, cm, d, outside) = if offset < 0 {
                 (py, pm, (pdim + offset + 1) as u32, true)
             } else if offset >= dim {
@@ -872,6 +913,14 @@ mod tests {
     fn weekday_known_dates() {
         assert_eq!(weekday(2026, 8, 14), 5, "Fri");
         assert_eq!(weekday(1970, 1, 1), 4, "Thu");
+    }
+
+    #[test]
+    fn monday_week_leading_cells() {
+        // 2026-09-01 is Tuesday (2). Monday start → one leading cell (Mon empty, Tue = 1).
+        assert_eq!(week_grid_leading(2, 1), 1);
+        // Sunday start → two leading cells.
+        assert_eq!(week_grid_leading(2, 0), 2);
     }
 
     #[test]
@@ -1207,8 +1256,8 @@ mod tests {
             prev.layout_bounds
         );
         assert!(
-            (month.layout_bounds[2] - year.layout_bounds[2] * 2.0).abs() < 2.0,
-            "month:year laid-out width must be 2:1, month={:?} year={:?}",
+            (month.layout_bounds[2] - year.layout_bounds[2]).abs() < 2.0,
+            "month/year laid-out width must match (equal flex grow), month={:?} year={:?}",
             month.layout_bounds,
             year.layout_bounds
         );

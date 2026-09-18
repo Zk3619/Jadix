@@ -1898,7 +1898,10 @@ fn current_required(ctx: &QuestionnaireCtx) -> bool {
 #[allow(non_snake_case)]
 pub fn QuestionnairePrevious(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnairePrevious");
-    let label = action_label(children, "Previous");
+    let label = action_label(
+        children,
+        &crate::tr_default_zh("rui.questionnaire.previous", "Previous", "上一步"),
+    );
     let id = format!("{}__previous", ctx.id);
     let click = ctx.clone();
     let btn: Element = button(&id)
@@ -1921,7 +1924,10 @@ pub fn QuestionnairePrevious(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn QuestionnaireSkip(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireSkip");
-    let label = action_label(children, "Skip");
+    let label = action_label(
+        children,
+        &crate::tr_default_zh("rui.questionnaire.skip", "Skip", "跳过"),
+    );
     let id = format!("{}__skip", ctx.id);
     let click = ctx.clone();
     let btn: Element = button(&id)
@@ -1943,7 +1949,10 @@ pub fn QuestionnaireSkip(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn QuestionnaireNext(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireNext");
-    let label = action_label(children, "Next");
+    let label = action_label(
+        children,
+        &crate::tr_default_zh("rui.questionnaire.next", "Next", "下一步"),
+    );
     let id = format!("{}__next", ctx.id);
     let click = ctx.clone();
     let mut btn: Element = button(&id)
@@ -1969,7 +1978,10 @@ pub fn QuestionnaireNext(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn QuestionnaireSubmit(children: Option<Element>) -> Element {
     let ctx = require_questionnaire("QuestionnaireSubmit");
-    let label = action_label(children, "Submit");
+    let label = action_label(
+        children,
+        &crate::tr_default_zh("rui.questionnaire.submit", "Submit", "提交"),
+    );
     let id = format!("{}__submit", ctx.id);
     let click = ctx.clone();
     let mut btn: Element = button(&id)

@@ -89,7 +89,7 @@
 pub use crate::main;
 pub use crate::{
     bind_attr, bind_style, bind_text, classes, component, for_keyed, merge_props, reactive,
-    reactive_anchor_id, split_props, ui,
+    reactive_anchor_id, split_props, t, ui,
 };
 
 // ---------------------------------------------------------------------------
@@ -109,26 +109,49 @@ pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
 pub use crate::core::tree::{collect_ui, Element, LayoutStatus, PointerEvents};
+#[cfg(feature = "i18n")]
+pub use crate::i18n::{
+    add_bundle, add_json, add_toml, clear_bundles, fallback, format_compact, format_currency,
+    format_date, format_list, format_number, format_percent, format_relative, format_time,
+    language_display_name, load, load_dir, load_icu_blob, load_str, locale, register,
+    register_locales, set_fallback, set_locale, set_timezone, system_locale, timezone, tr,
+    tr_count, tr_count_default, tr_count_default_zh, tr_with, use_system_locale, writing_direction,
+    Catalog, DateStyle, ListStyle, Locale, MessageBundle, RelativeUnit, WritingDirection,
+};
+pub use crate::{
+    chrome_rtl, first_weekday, format_date_long, format_datetime, format_year_month, i18n_enabled,
+    tr_default, tr_default_zh, tr_with_default, tr_with_default_zh,
+};
 
 // ---------------------------------------------------------------------------
 // 布局 / 叶子原语（Builder 面常用）
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "svg")]
 pub use crate::primitives::{
-    animate, animate_motion, animate_transform, boxed, canvas, circle, clip_path, defs, desc,
-    effect_wrap, ellipse, fe_blend, fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur,
-    fe_merge, fe_merge_node, fe_offset, filter, g, gstack, hstack, icon, image, interactive, line,
-    linear_gradient, marker, mask, mpath, pattern, r#box, rect, scene3d, set_el, shader, stop, svg,
-    svg_el, svg_path, svg_text, svg_use, symbol, text, text_path, title, tspan, vstack, BoxBuilder,
-    Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder, EffectWrapBuilder, InteractiveBuilder,
-    PathBuilder, Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
-    ShaderBuilder, SvgBuilder, TextBuilder,
+    animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse, fe_blend,
+    fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
+    fe_offset, filter, g, image, line, linear_gradient, marker, mask, mpath, pattern, rect, set_el,
+    stop, svg, svg_el, svg_path, svg_text, svg_use, symbol, text_path, title, tspan, CircleBuilder,
+    PathBuilder, SvgBuilder,
+};
+pub use crate::primitives::{
+    boxed, canvas, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, shader, text,
+    vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, EffectWrapBuilder, InteractiveBuilder,
+    Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
+    ShaderBuilder, TextBuilder,
 };
 
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
     root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
+};
+#[cfg(feature = "svg")]
+pub use crate::utils::{
+    alloc_outputs, canonical_d, cubics_to_path_d, fit_icon, interp_linear, morph_destroy,
+    morph_handle, morph_icon, morph_seek, morph_set, morph_to, morph_to_with, svg_to_icon,
+    IconInput, MorphHandle, MorphIcon, MorphIconBuilder, MorphPlan,
 };
 pub use crate::utils::{
     animated_icon, animated_icon_names, animated_icon_recipe, clear_icon_provider,

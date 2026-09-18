@@ -431,9 +431,13 @@ pub fn SheetTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     match children {
-        None => interactive(label(trigger_id.as_str()).text("Open").into())
-            .on_click(move || open.set(true))
-            .into(),
+        None => interactive(
+            label(trigger_id.as_str())
+                .text(crate::tr_default_zh("rui.sheet.open", "Open", "打开"))
+                .into(),
+        )
+        .on_click(move || open.set(true))
+        .into(),
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
             interactive(label(trigger_id.as_str()).text(t).into())
