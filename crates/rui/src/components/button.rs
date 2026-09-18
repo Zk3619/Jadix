@@ -1117,7 +1117,7 @@ impl From<ButtonBuilder> for Element {
 /// Class variants own bg/fg/link underline. Still join ButtonGroup radii and explicit caption fg.
 fn paint_button_join_and_link_underline(
     el: &mut Element,
-    _layout_tree: &mut LayoutTree,
+    layout_tree: &mut LayoutTree,
     desc: &ButtonHoverPaint,
     is_hovered: bool,
     impact: &mut LayoutStatus,
@@ -1151,6 +1151,9 @@ fn paint_button_join_and_link_underline(
         if style_hit {
             *impact = impact.merge(LayoutStatus::StyleChanged);
             push_button_paint_damage(el);
+            // Caption fg is not on the Button root `text_style`, so class-variant
+            // `before_text` would miss it. Bust idle skip or Breadcrumb stays muted.
+            layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
         }
     }
     let before_radii = el.style.radii;

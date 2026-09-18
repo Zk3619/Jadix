@@ -1094,11 +1094,7 @@ pub fn MessageScrollerButton(
     // Full-width dock: `left:50%` + `translateX(-50%)` on the button itself shares
     // `translate_pct` with the hide slide and clips through overflow:hidden when
     // the 50% inset does not apply (nested gallery ScrollArea / Card).
-    let mut dock: Element = hstack()
-        .justify_center()
-        .items_center()
-        .child(el)
-        .into();
+    let mut dock: Element = hstack().justify_center().items_center().child(el).into();
     dock = dock
         .absolute()
         .left(0.0)

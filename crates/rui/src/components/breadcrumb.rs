@@ -789,6 +789,66 @@ mod tests {
     }
 
     #[test]
+    fn breadcrumb_link_hover_applies_foreground_and_underline() {
+        use crate::components::button::sync_button_hover_paint_subtree;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutStatus;
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::style::sync_class_variants_subtree;
+
+        let muted = parse_text_color("muted-foreground");
+        let fg = theme_fg("foreground");
+        let (_h, mut el) = create_root(|| {
+            build_breadcrumb_link("bc-hover-home", "Home", None, Handler::default())
+        });
+        el.layout_bounds = [0.0, 0.0, 80.0, 24.0];
+        for c in &mut el.children {
+            if c.text.is_some() {
+                c.layout_bounds = [0.0, 0.0, 80.0, 24.0];
+            }
+        }
+        let rest = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Home"))
+            .expect("caption");
+        assert_eq!(rest.text_style.color_resolved(), muted);
+        assert_ne!(rest.text_style.underline, Some(true));
+
+        if let Some(hover) = el.on_hover.clone() {
+            hover.borrow_mut()(true);
+        }
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_button_hover_paint_subtree(&mut el, &mut tree, &mut impact, 800.0, 600.0, [0.0, 0.0]);
+        sync_class_variants_subtree(
+            &mut el,
+            [40.0, 12.0],
+            "",
+            false,
+            800.0,
+            600.0,
+            &mut tree,
+            &mut impact,
+        );
+        let hover = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Home"))
+            .expect("caption");
+        assert_eq!(
+            hover.text_style.color_resolved(),
+            fg,
+            "non-current BreadcrumbLink hover must lift muted to foreground"
+        );
+        assert_eq!(
+            hover.text_style.underline,
+            Some(true),
+            "non-current BreadcrumbLink hover:underline must reach the caption"
+        );
+    }
+
+    #[test]
     fn breadcrumb_link_inline_button() {
         let el = build_breadcrumb_link("", "Home", None, Handler::default());
         assert_eq!(

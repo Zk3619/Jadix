@@ -103,7 +103,7 @@ use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
     mark_floating_with_gap, PopupPlacement, ATTR_FLOATING_EXPAND_CLIP_X,
     ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
+    ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
@@ -578,7 +578,12 @@ fn build_avatar_texture_layer(src: &str, slot: Option<&str>) -> Element {
             ensure_avatar_src_loaded(&key, src, mask)
         });
         track_src_load_signal(&key, load);
-        el.set_attr(ATTR_LOAD_STATE, load_state_label(load.peek()));
+        let state = load.peek();
+        el.set_attr(ATTR_LOAD_STATE, load_state_label(state));
+        // Seed texture/opacity here. Expand-panel rebuilds reuse the collapsed
+        // face's `bind_prop` key; that path skips `apply` and would otherwise
+        // paint an empty image layer over muted fallback (A/B turn gray).
+        let _ = apply_avatar_image_load(&mut el, &key, state);
         el = bind_avatar_image_load(el, key, load);
     }
     el
@@ -683,6 +688,8 @@ struct AvatarFaceSpec {
     shape: AvatarShape,
     src: Option<String>,
     fallback: Option<String>,
+    /// Author utility class on the face root (`bg-red-500`, …). Rebuild must keep it.
+    class: Option<String>,
 }
 
 fn src_from_avatar_texture_key(key: &str) -> Option<String> {
@@ -741,11 +748,35 @@ fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
         shape,
         src,
         fallback,
+        class: utility_class_of(el),
+    })
+}
+
+fn utility_class_of(el: &Element) -> Option<String> {
+    if let Some(s) = el
+        .attrs
+        .get("rui_utility_class")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(s.to_string());
+    }
+    el.class_set.as_ref().and_then(|cs| {
+        let joined = cs.base.join(" ");
+        (!joined.trim().is_empty()).then_some(joined)
     })
 }
 
 fn rebuild_face(spec: &AvatarFaceSpec) -> Element {
     let mut b = avatar().size(spec.size.as_str()).shape(spec.shape.as_str());
+    if let Some(class) = spec
+        .class
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        b = b.class(class);
+    }
     if let Some(src) = spec.src.as_deref().filter(|s| !s.is_empty()) {
         b = b.image(src);
     }
@@ -760,6 +791,12 @@ fn expand_chrome_inset() -> f32 {
     IntoF32::into_f32(EXPAND_CHROME_PAD) + EXPAND_CHROME_BORDER
 }
 
+fn expand_content_width(face_size: f32, n: usize) -> f32 {
+    let n = n.max(1) as f32;
+    let gap = IntoF32::into_f32(tokens::SPACE_1);
+    n * face_size + (n - 1.0) * gap + 2.0 * expand_chrome_inset()
+}
+
 fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> Element {
     let mut panel: Element = hstack()
         .w("auto")
@@ -769,7 +806,7 @@ fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> 
         .overflow("hidden")
         .items_center()
         .justify("start")
-        .wrap("wrap")
+        .wrap("nowrap")
         .gap(tokens::SPACE_1)
         .p(EXPAND_CHROME_PAD)
         .rounded("0.75rem")
@@ -1127,6 +1164,11 @@ fn build_avatar_group_expand_panel(
 ) -> Element {
     let chips = expand_group_faces(faces);
     let mut panel = default_expand_container(chips, expand_class);
+    // Pin to the gap row. `width: auto` in a full-size portal + wrap stretches the
+    // chrome past the last face; `rui_floating_w=auto` is also parsed as trigger px.
+    let content_w = expand_content_width(trigger_h, faces.len());
+    panel = panel.w(content_w);
+    panel.set_attr(ATTR_FLOATING_W, format!("{content_w}px"));
     panel.set_attr("data-avatar-group-overlay", "1");
     mark_floating_with_gap(
         &mut panel,
@@ -1525,7 +1567,7 @@ fn build_avatar_group(
                 .first()
                 .map(|f| IntoF32::into_f32(f.size.box_dim()))
                 .unwrap_or(32.0);
-            let mut panel = build_avatar_group_expand_panel(
+            let panel = build_avatar_group_expand_panel(
                 &portal_id,
                 &fid,
                 placement,
@@ -1535,7 +1577,6 @@ fn build_avatar_group(
                 visible_n,
                 has_count,
             );
-            panel = panel.w("auto");
             let hover_id = portal_id.clone();
             interactive(panel)
                 .focus_id(format!("{hover_id}__panel"))
@@ -2003,7 +2044,7 @@ pub fn AvatarBadge(
 /// - `expand_class`: utility class for the expand container (default = popover / border / shadow tokens).
 /// - `max_visible`: 折叠前最多展示的头像数；未设置时保留手动 `AvatarGroupCount` 布局，但仍会在宽度不足时自动折叠。
 /// - Hover/click `AvatarGroupCount` opens a portal covering the group: all faces lay out as
-///   independent chips (equal gap, wrap) inside popover chrome (width auto, equal padding).
+///   independent chips (equal gap, nowrap) inside popover chrome (content width, equal padding).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AvatarGroup(
@@ -2202,7 +2243,7 @@ mod tests {
         use crate::utils::popup::{
             ATTR_FLOATING, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
             ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_GAP, ATTR_FLOATING_MATCH_TRIGGER,
-            ATTR_FLOATING_STRATEGY,
+            ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
         };
 
         let (_owner, group) = create_root(|| {
@@ -2289,6 +2330,16 @@ mod tests {
             Some("0"),
             "expand width is auto, not stretched to the trigger"
         );
+        let expected_w = super::expand_content_width(32.0, 3);
+        let floating_w = panel
+            .attrs
+            .get(ATTR_FLOATING_W)
+            .and_then(|s| s.trim().trim_end_matches("px").trim().parse::<f32>().ok());
+        assert_eq!(
+            floating_w,
+            Some(expected_w),
+            "expand panel must pin rui_floating_w to the gap-row content width"
+        );
         assert_eq!(
             panel
                 .attrs
@@ -2352,6 +2403,108 @@ mod tests {
         assert_eq!(
             panel.style.justify_content,
             Some(taffy::style::JustifyContent::FLEX_START)
+        );
+        assert_eq!(
+            panel.style.flex_wrap,
+            taffy::style::FlexWrap::NoWrap,
+            "cover panel is a single gap row; wrap would stretch to the portal parent"
+        );
+    }
+
+    #[test]
+    fn avatar_group_expand_panel_hugs_face_row_in_wide_parent() {
+        use crate::core::reactivity::create_root;
+        use crate::layout::layout_tree::LayoutTree;
+
+        let (_owner, faces) = create_root(|| {
+            ["A", "B", "C", "D", "E", "F"]
+                .into_iter()
+                .map(|label| extract_face_spec(&avatar_with_fallback(label)).expect("face"))
+                .collect::<Vec<_>>()
+        });
+        let panel = build_avatar_group_expand_panel(
+            "grp-hug",
+            "fid",
+            PopupPlacement::BottomStart,
+            &faces,
+            None,
+            32.0,
+            3,
+            true,
+        );
+        let mut host = Element::new().relative().w(400.0).h(200.0).child(panel);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut host, 400.0, 200.0, [-1.0, -1.0]);
+        let w = host.children[0].layout_bounds[2];
+        let face = IntoF32::into_f32(AvatarSize::Default.box_dim());
+        let gap = IntoF32::into_f32(tokens::SPACE_1);
+        let content = 6.0 * face + 5.0 * gap + 2.0 * super::expand_chrome_inset();
+        assert!(
+            (w - content).abs() < 12.0,
+            "expand panel must hug the 6-face row ({content:.1}px), not stretch to parent 400, got {w:.1}"
+        );
+    }
+
+    #[test]
+    fn avatar_group_expand_keeps_image_src_and_fallback_class() {
+        use crate::core::reactivity::create_root;
+
+        const SRC: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+        let (_owner, (image_spec, class_spec, img_el, class_el)) = create_root(|| {
+            let with_img: Element = avatar().image(SRC).fallback("A").into();
+            let with_class: Element = avatar().class("bg-red-500").fallback("B").into();
+            let image_spec = extract_face_spec(&with_img).expect("image face");
+            let class_spec = extract_face_spec(&with_class).expect("class face");
+            // Same owner as the collapsed faces: expand rebuild must still seed
+            // image_texture even when bind_prop skips a duplicate key.
+            let img_el = rebuild_face(&image_spec);
+            let class_el = rebuild_face(&class_spec);
+            (image_spec, class_spec, img_el, class_el)
+        });
+        assert_eq!(
+            image_spec.src.as_deref(),
+            Some(SRC),
+            "expand snapshot must keep AvatarImage src so A/B do not fall back to muted"
+        );
+        assert!(
+            class_spec
+                .class
+                .as_deref()
+                .is_some_and(|c| c.split_whitespace().any(|t| t == "bg-red-500")),
+            "expand snapshot must keep author class colors, got {:?}",
+            class_spec.class
+        );
+
+        let mut rebuilt_src = None;
+        let mut rebuilt_tex = false;
+        crate::core::tree::walk_elements(&img_el, |n| {
+            if rebuilt_src.is_none() {
+                if let Some(s) = n.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
+                    rebuilt_src = Some(s.clone());
+                }
+            }
+            if n.image_texture.as_ref().is_some_and(|k| !k.is_empty()) {
+                rebuilt_tex = true;
+            }
+        });
+        assert_eq!(
+            rebuilt_src.as_deref(),
+            Some(SRC),
+            "rebuild_face must emit AvatarImage with the original src"
+        );
+        assert!(
+            rebuilt_tex,
+            "expand rebuild must seed image_texture so colored faces do not paint as muted fallback"
+        );
+        let class_attr = class_el
+            .attrs
+            .get("rui_utility_class")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        assert!(
+            class_attr.split_whitespace().any(|t| t == "bg-red-500"),
+            "rebuild_face must keep bg-red-500, got {class_attr:?}"
         );
     }
 
