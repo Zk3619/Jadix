@@ -30,7 +30,9 @@ fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType
         WindowBackdrop::Auto => BackdropType::Auto,
         WindowBackdrop::None => BackdropType::None,
         WindowBackdrop::Mica => BackdropType::MainWindow,
-        WindowBackdrop::Acrylic => BackdropType::TransientWindow,
+        WindowBackdrop::Acrylic | WindowBackdrop::Blur | WindowBackdrop::Aero => {
+            BackdropType::TransientWindow
+        }
         WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,
     }
 }
@@ -50,13 +52,17 @@ pub(crate) fn apply_created_window(
     let Some(hwnd) = hwnd(window) else {
         return;
     };
-    if options.windows_extends_dwm_frame() {
+    if composition_swapchain || super::glass::has_host(hwnd) {
+        return;
+    }
+    if options.blur {
         set_use_host_backdrop_brush(hwnd, false);
         window.set_system_backdrop(backdrop_type(options.backdrop));
         extend_dwm_frame(hwnd, true);
         if !composition_swapchain {
             enable_dwm_punch_through(hwnd);
         }
+        super::glass::apply_accent(hwnd, options);
     } else if options.windows_punch_through_desktop() && !composition_swapchain {
         set_use_host_backdrop_brush(hwnd, true);
         window.set_system_backdrop(winit::platform::windows::BackdropType::Auto);
@@ -115,7 +121,10 @@ fn enable_dwm_punch_through(hwnd: windows_sys::Win32::Foundation::HWND) {
     }
 }
 
-fn set_use_host_backdrop_brush(hwnd: windows_sys::Win32::Foundation::HWND, enable: bool) {
+pub(crate) fn set_use_host_backdrop_brush(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    enable: bool,
+) {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_HOSTBACKDROPBRUSH};
 
     let value: i32 = if enable { 1 } else { 0 };

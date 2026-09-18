@@ -2,6 +2,7 @@
 
 mod console;
 mod font_paths;
+pub(crate) mod glass;
 mod ime;
 mod process;
 mod scroll;
