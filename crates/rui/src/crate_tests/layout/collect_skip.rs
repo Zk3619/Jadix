@@ -6,6 +6,7 @@ use crate::components::input::{focus_id_for_input, input, input_value_signal_key
 use crate::components::input_adornment::input_adornment;
 use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
 use crate::layout::collect_cache::collect_skip_allowed_for_frame;
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, PORTAL_LAYER_ID};
@@ -73,6 +74,29 @@ fn paint_only_skips_clean_sibling_subtree() {
         "replayed subtrees must stay in the fingerprint map"
     );
     assert_eq!(third.instances.len(), first.instances.len());
+}
+
+#[test]
+fn paint_only_skips_clean_leaf_rect() {
+    reset_collect_skip_counters();
+    let mut root = Element::new().w(80.0).h(40.0).child(
+        Element::new()
+            .w(80.0)
+            .h(40.0)
+            .flex_shrink(0.0)
+            .bg([1.0, 0.0, 0.0, 1.0]),
+    );
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 80.0, 40.0, [-1.0, -1.0]);
+    assert!(!first.instances.is_empty());
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0, -1.0], false, false);
+    let second = tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0, -1.0], false, false);
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "leaf rect must fingerprint-replay instead of collect_paint_node"
+    );
+    assert_eq!(second.instances.len(), first.instances.len());
 }
 
 #[test]
@@ -268,8 +292,8 @@ fn collect_skip_is_paint_only() {
         Clean, false, false, false, false
     ));
     assert!(
-        !collect_skip_allowed_for_frame(LayoutChanged, false, false, false, false),
-        "maximize / settle must recollect; cached ops are absolute"
+        collect_skip_allowed_for_frame(LayoutChanged, false, false, false, false),
+        "LayoutChanged after maximize/fit must still skip idle siblings; GeomKey busts moved boxes"
     );
     assert!(!collect_skip_allowed_for_frame(
         StructureChanged,
@@ -279,8 +303,8 @@ fn collect_skip_is_paint_only() {
         false
     ));
     assert!(
-        !collect_skip_allowed_for_frame(StyleChanged, true, false, false, false),
-        "smooth scroll must not fingerprint-replay"
+        collect_skip_allowed_for_frame(StyleChanged, true, false, false, false),
+        "smooth scroll must skip clean siblings; GeomKey.scroll busts the moving viewport"
     );
     assert!(!collect_skip_allowed_for_frame(
         StyleChanged,
@@ -344,6 +368,100 @@ fn skip_disallowed_frame_drops_stale_absolute_dls() {
         0,
         "skip-off must drop prev so the next paint-only frame cannot replay pre-layout DLs"
     );
+}
+
+fn sidebar_and_scroll_page() -> Element {
+    let sidebar = Element::new()
+        .flex_col()
+        .w(80.0)
+        .h(120.0)
+        .flex_shrink(0.0)
+        .bg([0.15, 0.15, 0.18, 1.0])
+        .child(Element::new().text("SidebarChrome"));
+    let rows = Element::new().flex_col().w(80.0).children((0..8).map(|i| {
+        Element::new()
+            .w(80.0)
+            .h(40.0)
+            .flex_shrink(0.0)
+            .child(Element::new().text(format!("Row{i}")))
+    }));
+    let mut viewport = Element::new()
+        .w(80.0)
+        .h(120.0)
+        .overflow_y("scroll")
+        .overflow_x("hidden")
+        .child(rows);
+    viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}skip-scroll"));
+    Element::new()
+        .flex_row()
+        .w(160.0)
+        .h(120.0)
+        .child(sidebar)
+        .child(viewport)
+}
+
+#[test]
+fn smooth_scroll_must_skip_clean_sidebar_and_keep_fingerprint() {
+    reset_collect_skip_counters();
+    let mut root = sidebar_and_scroll_page();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 160.0, 120.0, [-1.0, -1.0]);
+    let row2 = first
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "Row2")
+        .expect("row2 at rest");
+    let y2 = row2.y;
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 120.0, [-1.0, -1.0], true, false);
+
+    root.children[1].scroll_offset[1] = 48.0;
+    use_signal(&scroll_offset_y_signal_key("skip-scroll"), || 0.0_f32).set(48.0);
+    let scrolled = tree.build_and_layout_fast(&mut root, 160.0, 120.0, [-1.0, -1.0], true, false);
+    let (skipped, _patched) = tree.last_collect_skip_counts();
+    assert!(
+        skipped >= 1,
+        "smooth-scroll collect must replay the idle sidebar, not recollect the whole page (skipped={skipped})"
+    );
+    let row2_scrolled = scrolled
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "Row2")
+        .expect("row2 after scroll");
+    assert!(
+        row2_scrolled.y < y2 - 20.0,
+        "viewport children must recollect at the new scroll_acc, rest_y={y2} scrolled_y={}",
+        row2_scrolled.y
+    );
+    assert!(
+        (row2_scrolled.y - (y2 - 48.0)).abs() < 1.0,
+        "fully-visible row must translate by -scroll_acc, rest_y={y2} scrolled_y={}",
+        row2_scrolled.y
+    );
+    assert!(
+        scrolled.text_nodes.iter().any(|n| n.text == "Row3"),
+        "row that entered the clip must recollect, not replay an empty culled DL"
+    );
+    assert!(
+        skipped >= 2,
+        "smooth-scroll must translate fully-visible rows in addition to the idle sidebar (skipped={skipped})"
+    );
+    assert!(
+        scrolled
+            .text_nodes
+            .iter()
+            .any(|n| n.text == "SidebarChrome"),
+        "skip replays sidebar glyphs; FullClear must still receive them"
+    );
+
+    // Second collect (bubble +N placement / portal follow) must not wipe skip.
+    let again = tree.build_and_layout_fast(&mut root, 160.0, 120.0, [-1.0, -1.0], true, false);
+    assert!(
+        tree.last_collect_skip_counts().0 >= 1,
+        "a follow-up collect while skip stays allowed must still replay the sidebar"
+    );
+    assert!(again.text_nodes.iter().any(|n| n.text == "SidebarChrome"));
 }
 
 const SPIN_BG: [f32; 4] = [0.91, 0.12, 0.88, 1.0];
@@ -1193,10 +1311,18 @@ fn collect_skip_must_not_replay_animate_spin() {
     tree.set_collect_skip_allowed(true);
     let _ = tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0, -1.0], false, false);
     let _ = tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0, -1.0], false, false);
-    assert_eq!(
-        tree.last_collect_skip_counts().0,
-        0,
-        "animate-spin subtrees must recollect; skip is why maximize froze until scroll"
+    assert!(
+        root.children[0].children[0].collect_skip_live,
+        "animate-spin must mark the spinner live"
+    );
+    assert!(
+        root.children[0].children[0].children[0].collect_skip_live,
+        "spin dummy child must recollect with the spinner, not fingerprint-replay"
+    );
+    let skipped = tree.last_collect_skip_counts().0;
+    assert!(
+        skipped <= 1,
+        "only the idle sibling may skip; spinner subtree must recollect (skipped={skipped})"
     );
 }
 
@@ -1737,5 +1863,104 @@ fn paint_only_skip_must_not_drop_z_index_page_stack_bands() {
     assert!(
         root.children[1].collect_skip_live,
         "direct z-index children must stamp collect_skip_live (toast pile without stacking attr)"
+    );
+}
+
+/// Breadcrumb / Link `hover:underline` + caption fg are paint-only (`StyleChanged`).
+/// ViewportsOnly `reuse_idle` must not skip-replay the rest glyphs.
+#[test]
+fn scroll_only_must_recollect_link_hover_underline_and_fg() {
+    use crate::components::button::{button, sync_button_hover_paint_subtree};
+    use crate::core::reactivity::create_root;
+    use crate::core::tree::LayoutStatus;
+    use crate::style::parse_text_color;
+
+    reset_collect_skip_counters();
+    let muted = parse_text_color("muted-foreground");
+    let fg = parse_text_color("foreground");
+    let (_h, link) = create_root(|| -> Element {
+        button("skip-link-ul")
+            .variant("link")
+            .size("inline")
+            .text_color(muted)
+            .class("underline-offset-[2px]")
+            .text("Home")
+            .into()
+    });
+    let idle = Element::new()
+        .w(80.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 0.0, 0.0, 1.0])
+        .child(Element::new().text("idle"));
+    let mut root = Element::new()
+        .flex_row()
+        .w(240.0)
+        .h(40.0)
+        .child(idle)
+        .child(link);
+
+    let mut tree = LayoutTree::new();
+    let rest = tree.build_and_layout(&mut root, 240.0, 40.0, [-1.0, -1.0]);
+    let rest_home = rest
+        .text_nodes
+        .iter()
+        .find(|t| t.text.contains("Home"))
+        .expect("Home at rest");
+    assert_eq!(rest_home.style.color_resolved(), muted);
+    assert!(
+        !rest_home.style.underline_resolved(),
+        "rest Link must not paint underline"
+    );
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 240.0, 40.0, [-1.0, -1.0], true, false);
+
+    let (mouse, on_hover) = {
+        let link = &root.children[1];
+        let b = link.layout_bounds;
+        (
+            [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5],
+            link.on_hover.clone(),
+        )
+    };
+    if let Some(hover) = on_hover {
+        hover.borrow_mut()(true);
+    }
+    let mut impact = LayoutStatus::Clean;
+    sync_button_hover_paint_subtree(
+        &mut root.children[1],
+        &mut tree,
+        &mut impact,
+        240.0,
+        40.0,
+        [0.0, 0.0],
+    );
+    sync_class_variants_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        240.0,
+        40.0,
+        &mut tree,
+        &mut impact,
+    );
+
+    let hovered = tree.build_and_layout_fast(&mut root, 240.0, 40.0, mouse, true, false);
+    let home = hovered
+        .text_nodes
+        .iter()
+        .find(|t| t.text.contains("Home"))
+        .expect("Home after hover");
+    assert_eq!(
+        home.style.color_resolved(),
+        fg,
+        "scroll_only collect skip must not keep rest muted fg; got {:?}",
+        home.style.color
+    );
+    assert!(
+        home.style.underline_resolved(),
+        "scroll_only collect skip must not drop hover:underline"
     );
 }

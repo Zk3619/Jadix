@@ -542,14 +542,8 @@ fn message_scroller_jump_slot_survives_fingerprint_skip() {
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
             tree.set_collect_skip_allowed(true);
             let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], false, false);
-            let skipped = tree.build_and_layout_fast(
-                &mut root,
-                320.0,
-                384.0,
-                [-1.0, -1.0],
-                false,
-                false,
-            );
+            let skipped =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], false, false);
             let btn = find_slot(&root, "message-scroller-button").expect("jump button");
             let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
             assert!(
@@ -650,7 +644,9 @@ fn message_scroller_jump_button_hides_latest_glyphs_at_live_edge() {
                 btn.style.translate_pct
             );
             assert!(
-                dirties.iter().any(|d| d.kind == crate::app::damage::PaintDirtyKind::Node),
+                dirties
+                    .iter()
+                    .any(|d| d.kind == crate::app::damage::PaintDirtyKind::Node),
                 "StyleChanged hide must dest-reset the pill as a Node, got {dirties:?}"
             );
             assert!(
@@ -660,12 +656,175 @@ fn message_scroller_jump_button_hides_latest_glyphs_at_live_edge() {
                 "in-page jump chrome is not a portal OverlayRestore, got {dirties:?}"
             );
             assert!(
-                hidden
-                    .text_nodes
-                    .iter()
-                    .all(|t| t.text != "Latest"),
+                hidden.text_nodes.iter().all(|t| t.text != "Latest"),
                 "at live edge Latest glyphs must leave collect (glyphon retain leftover)"
             );
+        });
+    });
+}
+
+fn find_parent_of_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+    if el
+        .children
+        .iter()
+        .any(|c| c.attrs.get("data-slot").map(String::as_str) == Some(slot))
+    {
+        return Some(el);
+    }
+    el.children
+        .iter()
+        .find_map(|c| find_parent_of_slot(c, slot))
+}
+
+/// Hover dest-reset of Latest used to punch wrapping message glyphs: the full-width
+/// dock last-present, or AABB-intersect recapture of a whole paragraph, dest-reset
+/// a hole in the thread that PartialLoad never rebuilt.
+#[test]
+fn message_scroller_latest_hover_must_not_dirty_message_list() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    320.0,
+                    384.0,
+                    [0.0, 0.0],
+                );
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
+            let result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let dock = find_parent_of_slot(&root, "message-scroller-button").expect("jump dock");
+            let scroller = find_slot(&root, "message-scroller").expect("scroller");
+            assert!(
+                btn.style.opacity > 0.5,
+                "not-at-end must show Latest, opacity={}",
+                btn.style.opacity
+            );
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            let btn_vis = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            let dock_vis = crate::core::tree::visual_paint_aabb(dock, dock.paint_scroll_acc);
+            assert!(
+                dock_vis[2] > btn_vis[2] + 40.0,
+                "precondition: dock is the full-width bar, dock={dock_vis:?} pill={btn_vis:?}"
+            );
+
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let dirties = crate::app::damage::take_frame_paint_nodes();
+            assert_eq!(
+                dirties.len(),
+                1,
+                "hover must dest-reset only the pill, got {dirties:?}"
+            );
+            let dirty = dirties[0];
+            assert_eq!(dirty.key, btn_key);
+            assert_eq!(dirty.kind, crate::app::damage::PaintDirtyKind::Node);
+            assert!(
+                dirty.bounds[2] < scroller.layout_bounds[2] * 0.7,
+                "hover dirty must stay on the pill, not the 100% dock\n dirty={:?} dock={dock_vis:?} scroller={:?}",
+                dirty.bounds,
+                scroller.layout_bounds
+            );
+
+            let overlapping: Vec<(usize, &crate::layout::layout_tree::TextLayoutInfo)> = result
+                .text_nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.text.contains("Turn "))
+                .filter(|(_, t)| crate::app::draw_cull::text_hits_damage(t, dirty.bounds))
+                .collect();
+            assert!(
+                !overlapping.is_empty(),
+                "precondition: wrapping messages must sit under the Latest hole, dirty={:?}",
+                dirty.bounds
+            );
+            let late = crate::app::draw_cull::node_present_capture_text_indices(
+                &[dirty],
+                &result.text_nodes,
+                &result.node_paints,
+            );
+            let leaked: Vec<&str> = overlapping
+                .iter()
+                .filter(|(i, _)| late.contains(i))
+                .map(|(_, t)| t.text.as_str())
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "post-overlay capture must not stamp wrapping messages on Latest, leaked={leaked:?}"
+            );
+            let underlay = crate::app::draw_cull::node_present_layered_underlay_capture_text(
+                &[dirty],
+                &result.text_nodes,
+                &result.node_paints,
+            );
+            let hole = crate::app::draw_cull::padded_xywh(
+                btn.layout_bounds,
+                crate::app::draw_cull::NODE_PRESENT_GLYPH_CLIP_PAD,
+            );
+            let behind_pill: Vec<_> = overlapping
+                .iter()
+                .filter(|(_, t)| crate::app::draw_cull::text_hits_damage(t, btn.layout_bounds))
+                .collect();
+            if !behind_pill.is_empty() {
+                assert!(
+                    !underlay.is_empty(),
+                    "dest-reset of the opaque pill must restore wrapping glyphs behind it"
+                );
+            }
+            for n in &underlay {
+                let clip = n
+                    .clip_bounds
+                    .expect("underlay recapture must clip wrapping messages to the pill");
+                assert!(
+                    clip[2] <= hole[2] + 1.0 && clip[3] <= hole[3] + 1.0,
+                    "wrapping message restore must stay in the opaque pill, not the shadow pad\n clip={clip:?} hole={hole:?} run=({},{},{},{})",
+                    n.x,
+                    n.y,
+                    n.width,
+                    n.height
+                );
+                assert!(
+                    clip[1] + clip[3] <= hole[1] + hole[3] + 1.0,
+                    "underlay recapture must not include wrapping lines below Latest\n clip={clip:?} pill={hole:?}"
+                );
+            }
+            if let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
+                dirty.key,
+                dirty.bounds,
+                &result.node_paints,
+                &result.instances,
+                &[],
+                1.0,
+                Some(dirty.bounds),
+            ) {
+                let pill_bottom = btn.layout_bounds[1] + btn.layout_bounds[3];
+                assert!(
+                    reset.rect[1] + reset.rect[3] <= pill_bottom + 3.0,
+                    "Latest dest-reset must not punch wrapping text below the pill\n wipe={:?} pill={:?}",
+                    reset.rect,
+                    btn.layout_bounds
+                );
+            }
         });
     });
 }

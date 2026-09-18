@@ -700,9 +700,8 @@ fn portal_hoist_does_not_remasure_unchanged_page_text() {
     );
 }
 
-/// Hoist of a new portal **does** full-rebuild Taffy (layer rewrite). Page labels
-/// must still get boxes — the live bug was overlay_split marking too early so
-/// bubble captions vanished while chrome remained.
+/// Hoist of a new portal must attach overlay Taffy nodes without recycling the
+/// page tree. Full `build_and_layout` after +N is the gallery scroll hitch.
 #[test]
 fn portal_hoist_rebuilds_but_keeps_page_text_boxes() {
     let mut labels = Vec::new();
@@ -726,6 +725,7 @@ fn portal_hoist_rebuilds_but_keeps_page_text_boxes() {
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
     let rebuilds_after_cold = tree.full_rebuilds;
+    tree.text_measure_calls.set(0);
 
     let mut dlg = Element::new()
         .w(240.0)
@@ -741,11 +741,15 @@ fn portal_hoist_rebuilds_but_keeps_page_text_boxes() {
         .expect("island");
     island.children.push(dlg);
 
-    let out =
-        tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    let out = tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], true, true, None);
+    assert_eq!(
+        tree.full_rebuilds, rebuilds_after_cold,
+        "portal membership must not rebuild the gallery Taffy tree"
+    );
     assert!(
-        tree.full_rebuilds > rebuilds_after_cold,
-        "portal membership must rebuild Taffy so overlay_split stays a suffix"
+        tree.text_measure_calls.get() < 8,
+        "opening +N during scroll must not remasure page labels, got {}",
+        tree.text_measure_calls.get()
     );
     assert_eq!(
         count_in_layer(&root),
@@ -820,5 +824,180 @@ fn anchored_overlay_hoist_emits_overlay_instances() {
         panel.layout_bounds[2] > 0.0 && panel.layout_bounds[3] > 0.0,
         "anchored panel box {:?}",
         panel.layout_bounds
+    );
+}
+
+/// Gallery startup: cold `build_and_layout` then a same-frame `fast_ex` after a
+/// parent wrapper is replaced while the child keeps `layout_node`.
+///
+/// `attach_unbuilt` used `new_with_children`, which does **not** splice the child
+/// out of the dropped parent's Taffy list. `sync_taffy_children_from_elements`
+/// then `remove_taffy_subtree`'d that orphan and recursively deleted the live
+/// child — `compute_layout` panics `invalid SlotMap key used`.
+#[test]
+fn replaced_parent_keeping_child_layout_node_must_not_panic() {
+    let keep = Element::new()
+        .w(40.0)
+        .h(40.0)
+        .bg([1.0, 0.0, 0.0, 1.0])
+        .template_id("keep");
+    let page = Element::new()
+        .w(200.0)
+        .h(200.0)
+        .template_id("page")
+        .child(keep);
+    let mut root = Element::new().w(800.0).h(600.0).child(page);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    let keep_id = find_by_tid(&root, "keep")
+        .and_then(|e| e.layout_node)
+        .expect("keep must have a Taffy id after cold build");
+
+    let mut old_page = root.children.remove(0);
+    let keep = old_page.children.remove(0);
+    assert_eq!(keep.layout_node, Some(keep_id));
+    let wrapper = Element::new()
+        .w(200.0)
+        .h(200.0)
+        .template_id("page")
+        .child(keep);
+    assert!(
+        wrapper.layout_node.is_none(),
+        "replacement wrapper is unbuilt"
+    );
+    root.children.insert(0, wrapper);
+
+    let out =
+        tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    let keep = find_by_tid(&root, "keep").expect("keep");
+    assert!(
+        keep.layout_node.is_some(),
+        "child SlotMap id must survive the wrapper replace"
+    );
+    assert!(
+        keep.layout_bounds[2] > 0.0 && keep.layout_bounds[3] > 0.0,
+        "keep box {:?}",
+        keep.layout_bounds
+    );
+    assert!(
+        !out.instances.is_empty(),
+        "replaced wrapper must still collect"
+    );
+}
+
+/// Cold tree already has a live hoisted overlay; a second `rui_portal` joins on
+/// the fast path (gallery toasts + first +N). Must not recycle page nodes or
+/// panic on the layer's existing SlotMap children.
+#[test]
+fn second_portal_joins_existing_layer_without_slotmap_panic() {
+    let page = Element::new()
+        .w(800.0)
+        .h(400.0)
+        .flex_col()
+        .child(Element::new().text("page label").text_size(14.0).w(400.0));
+    let mut toast = Element::new()
+        .w(160.0)
+        .h(40.0)
+        .template_id("toast-card")
+        .child(Element::new().text("saved").text_size(14.0));
+    toast.set_attr("rui_portal", "1");
+    toast.set_attr(ATTR_PORTAL_KEY, "toast-card");
+    let island = Element::new()
+        .w(0.0)
+        .h(0.0)
+        .template_id("island")
+        .child(toast);
+    let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    assert_eq!(count_in_layer(&root), 1);
+    let rebuilds_after_cold = tree.full_rebuilds;
+
+    let mut plus_n = Element::new()
+        .w(72.0)
+        .h(28.0)
+        .template_id("plus-n")
+        .child(Element::new().text("+3").text_size(12.0));
+    plus_n.set_attr("rui_portal", "1");
+    plus_n.set_attr(ATTR_PORTAL_KEY, "plus-n");
+    let island = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some("island"))
+        .expect("island");
+    island.children.push(plus_n);
+
+    let out = tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], true, true, None);
+    assert_eq!(
+        tree.full_rebuilds, rebuilds_after_cold,
+        "joining a second overlay must not rebuild the page Taffy tree"
+    );
+    assert_eq!(count_in_layer(&root), 2, "toast + +N on the layer");
+    for tid in ["toast-card", "plus-n"] {
+        let el = find_by_tid(&root, tid).expect(tid);
+        assert!(
+            el.layout_bounds[2] > 0.0 && el.layout_bounds[3] > 0.0,
+            "{tid} box {:?}",
+            el.layout_bounds
+        );
+    }
+    assert!(
+        !out.text_nodes.is_empty(),
+        "page + both overlays must collect glyphs"
+    );
+}
+
+/// Gallery cold start: `new_bootstrap` already `build_and_layout`s a shell, so
+/// `root_node` is `Some`. `rebuild_ui` then swaps in the real app tree with
+/// `layout_node = None`. Fast path must rebuild — not `sync` the unbound tree
+/// (that drops every bootstrap SlotMap id, then `compute_layout` panics
+/// `invalid SlotMap key used`).
+#[test]
+fn fast_path_after_unbound_tree_replace_must_not_panic() {
+    let mut bootstrap = Element::new()
+        .w(100.0)
+        .h(100.0)
+        .child(Element::new().w(10.0).h(10.0).bg([0.0, 0.0, 0.0, 1.0]));
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut bootstrap, 100.0, 100.0, [0.0, 0.0]);
+    assert!(tree.root_node.is_some(), "bootstrap occupies root_node");
+
+    let page = Element::new()
+        .w(800.0)
+        .h(400.0)
+        .flex_col()
+        .child(Element::new().text("gallery page").text_size(14.0).w(400.0));
+    let mut toast = Element::new()
+        .w(160.0)
+        .h(40.0)
+        .template_id("toast-viewport")
+        .child(Element::new().text("hi").text_size(14.0));
+    toast.set_attr("rui_portal", "1");
+    toast.set_attr(ATTR_PORTAL_KEY, "toast-viewport");
+    let mut gallery = Element::new().w(800.0).h(600.0).child(page).child(toast);
+    assert!(
+        gallery.layout_node.is_none(),
+        "rebuild_ui initial mount is an unbound tree"
+    );
+
+    let out =
+        tree.build_and_layout_fast_ex(&mut gallery, 800.0, 600.0, [0.0, 0.0], false, false, None);
+    assert!(
+        gallery.layout_node.is_some(),
+        "unbound replace must rebuild"
+    );
+    assert_eq!(gallery.layout_node, tree.root_node);
+    assert_eq!(count_in_layer(&gallery), 1);
+    let toast = find_by_tid(&gallery, "toast-viewport").expect("toast");
+    assert!(
+        toast.layout_bounds[2] > 0.0 && toast.layout_bounds[3] > 0.0,
+        "toast box {:?}",
+        toast.layout_bounds
+    );
+    assert!(
+        !out.text_nodes.is_empty(),
+        "rebuilt gallery must collect page glyphs"
     );
 }

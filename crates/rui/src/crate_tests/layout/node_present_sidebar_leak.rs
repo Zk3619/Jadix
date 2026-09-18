@@ -1209,7 +1209,8 @@ fn inset_outset_shadow_must_not_stack_on_live_child_ticks() {
         &mut impact,
     );
     let dirties = take_frame_paint_nodes();
-    let collected = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+    let collected =
+        tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
     let inset_paint = collected
         .node_paints
         .iter()
@@ -1513,13 +1514,8 @@ fn idle_css_tick_must_not_treat_inset_halo_as_translation() {
             .iter()
             .find_map(outset_shadow_blob)
             .expect("inset outset shadow");
-        let stacked = inset_halo_stack_reasons(
-            &dirties,
-            &collected,
-            &prev_visual,
-            inset_key,
-            shadow,
-        );
+        let stacked =
+            inset_halo_stack_reasons(&dirties, &collected, &prev_visual, inset_key, shadow);
         assert!(
             stacked.is_empty(),
             "tick {tick}: idle PartialLoad would src-over the inset halo:\n{}",

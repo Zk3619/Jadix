@@ -4,6 +4,7 @@
 //! the thumb and jumped the 8px hit slab. ViewportsOnly overlay collect must fade
 //! alpha without rewriting `layout_bounds`.
 
+use crate::app::damage::take_frame_paint_nodes;
 use crate::app::pointer_events::{
     click_dispatch_path, click_gesture_path, hit_path, resolve_click_from_path,
 };
@@ -158,6 +159,115 @@ fn overlay_auto_fade_paints_cubic_without_rewriting_hit_slab() {
                 (thumb_shown[2] - thumb_hidden[2]).abs() < 0.51
                     && (thumb_shown[3] - thumb_hidden[3]).abs() < 0.51,
                 "fade must not crush thumb size {thumb_shown:?} → {thumb_hidden:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
+    const REST: &str = "diag-auto-fade-present";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+
+            let _ = take_frame_paint_nodes();
+            settle_cubic(REST, "y", 1.0);
+            layout.set_collect_skip_allowed(true);
+            let shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb shown");
+            let shown_a = thumb_fill_alpha(&shown, thumb);
+            assert!(
+                shown_a > 0.99,
+                "settled show must paint opaque thumb (not mid-fade gray), got {shown_a}"
+            );
+            let show_dirty = take_frame_paint_nodes();
+            assert!(
+                !show_dirty.is_empty(),
+                "first opaque collect must dest-reset so PartialLoad presents the black thumb"
+            );
+
+            let _idle =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let idle_dirty = take_frame_paint_nodes();
+            assert!(
+                idle_dirty.is_empty(),
+                "settled opaque must not dest-reset the rail every idle frame, got {}",
+                idle_dirty.len()
+            );
+
+            let tw = use_ui_transition_cubic(&format!("scrollbar_spring_{REST}:y"), 0.0);
+            tw.set(0.0);
+            let _ = tick_animations(0.016);
+            let mid =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let mid_a = thumb_fill_alpha(&mid, thumb);
+            assert!(
+                mid_a > 0.05 && mid_a < 0.99,
+                "in-flight hide must paint live cubic, got {mid_a}"
+            );
+            let fade_dirty = take_frame_paint_nodes();
+            assert!(
+                !fade_dirty.is_empty(),
+                "in-flight fade must dest-reset or PartialLoad keeps the previous alpha"
+            );
+
+            settle_cubic(REST, "y", 0.0);
+            let hidden =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let hidden_a = thumb_fill_alpha(&hidden, thumb);
+            assert!(
+                hidden_a < 0.05,
+                "settled hide must omit the thumb, got {hidden_a}"
+            );
+            let hide_dirty = take_frame_paint_nodes();
+            assert!(
+                !hide_dirty.is_empty(),
+                "settle-to-zero must dest-reset or retain keeps the last gray pixels"
+            );
+
+            let _idle_hidden =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let rest_dirty = take_frame_paint_nodes();
+            assert!(
+                rest_dirty.is_empty(),
+                "settled hidden must not dest-reset the 8px rail every idle tick, got {}",
+                rest_dirty.len()
             );
         });
     });

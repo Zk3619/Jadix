@@ -225,3 +225,86 @@ fn scroller_structure_changed_does_not_set_page_layout_flag() {
         "Send must stay PartialLoad so Footer is not on the present path"
     );
 }
+
+/// Scroll-follow of a hoisted +N / DatePicker panel must compute Taffy from the
+/// portal layer, not restyle the app root and remasure every page text leaf.
+#[test]
+fn floating_scroll_follow_must_compute_portal_not_page() {
+    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+    use crate::utils::popup::ATTR_FLOATING;
+
+    fn find_tid_mut<'a>(el: &'a mut Element, tid: &str) -> Option<&'a mut Element> {
+        if el.template_id.as_deref() == Some(tid) {
+            return Some(el);
+        }
+        el.children.iter_mut().find_map(|c| find_tid_mut(c, tid))
+    }
+
+    let mut page = Element::new().flex_col().w(240.0).h(400.0);
+    for i in 0..32 {
+        page = page.child(
+            Element::new()
+                .text(format!("gallery-row-{i}"))
+                .text_size(14.0)
+                .w(240.0)
+                .h(16.0),
+        );
+    }
+
+    let mut panel = Element::new()
+        .absolute()
+        .w(80.0)
+        .h(32.0)
+        .left(8.0)
+        .top(40.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .template_id("rx-panel")
+        .child(Element::new().text("+N").text_size(12.0));
+    panel.set_attr(ATTR_FLOATING, "rx-follow");
+    panel.set_attr("rui_portal", "1");
+    panel.set_attr(ATTR_PORTAL_KEY, "rx-follow");
+
+    let mut root = Element::new().w(400.0).h(400.0).child(page).child(panel);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+    let app_root = tree.root_node.expect("app root");
+    let portal_node = LayoutTree::portal_layer_layout_node(&root).expect("portal layer taffy node");
+    let before_y = find_tid_mut(&mut root, "rx-panel")
+        .map(|p| p.layout_bounds[1])
+        .expect("hoisted panel");
+    assert!((before_y - 40.0).abs() < 1.0, "seed top, got {before_y}");
+
+    {
+        let panel = find_tid_mut(&mut root, "rx-panel").expect("panel");
+        panel.style.inset.top = taffy::style::LengthPercentageAuto::length(120.0);
+    }
+    {
+        let panel = find_tid_mut(&mut root, "rx-panel").expect("panel");
+        tree.mark_element_layout_dirty(panel);
+    }
+    let _ =
+        tree.relayout_overlay_follow_and_collect(&mut root, 400.0, 400.0, [0.0, 0.0], true, true);
+    assert_eq!(
+        tree.last_compute_root,
+        Some(portal_node),
+        "placement follow must compute from the portal layer, not the app root {app_root:?}"
+    );
+    assert_ne!(
+        tree.last_compute_root,
+        Some(app_root),
+        "computing the app root remasures the gallery every scroll frame while +N is open"
+    );
+    let measures = tree.text_measure_calls.get();
+    assert!(
+        measures < 8,
+        "overlay follow must not remasure page labels, got {measures} text measures"
+    );
+    let after_y = find_tid_mut(&mut root, "rx-panel")
+        .map(|p| p.layout_bounds[1])
+        .expect("panel after follow");
+    assert!(
+        (after_y - 120.0).abs() < 1.0,
+        "panel Y must follow the new inset, got {after_y}"
+    );
+}
