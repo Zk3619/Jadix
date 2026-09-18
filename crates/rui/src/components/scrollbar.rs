@@ -16,6 +16,9 @@
 //! - 主题色：`scrollbar-track` / `scrollbar-thumb` / `scrollbar-track-border` / `scrollbar-thumb-border`。
 //! - `auto` 显隐：仅拇指（及有色的边框）参与淡入；透明轨道不参与。
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
@@ -231,6 +234,48 @@ pub(crate) fn auto_scrollbar_live_paint_alpha(el: &Element) -> Option<f32> {
             .peek()
             .clamp(0.0, 1.0),
     )
+}
+
+thread_local! {
+    /// Last node-present alpha per overlay auto-bar. Idle PartialLoad only redraws dirties;
+    /// without this, a fade that omits alpha-0 quads leaves the last gray pixels on retain.
+    static LAST_AUTO_BAR_PRESENT_ALPHA: RefCell<HashMap<String, f32>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Dest-reset / node-present while the cubic is moving, including the settle-to-zero frame.
+/// Settled hidden and settled opaque do not punch the rail every idle tick.
+pub(crate) fn auto_scrollbar_needs_node_present(el: &Element) -> bool {
+    let Some(alpha) = auto_scrollbar_live_paint_alpha(el) else {
+        return false;
+    };
+    let Some(fid) = el.focus_id.as_deref() else {
+        return false;
+    };
+    let (rest, axis) = if let Some(prefix) = fid.strip_prefix(SCROLLBAR_THUMB_FOCUS_PREFIX) {
+        prefix.rsplit_once(':').unwrap_or((prefix, "y"))
+    } else if let Some(prefix) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
+        prefix.rsplit_once(':').unwrap_or((prefix, "y"))
+    } else {
+        return false;
+    };
+    let fading =
+        crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
+            .is_active();
+    LAST_AUTO_BAR_PRESENT_ALPHA.with(|slot| {
+        let mut last = slot.borrow_mut();
+        let prev = last.get(fid).copied();
+        let changed = match prev {
+            None => true,
+            Some(p) => (p - alpha).abs() > 1e-4,
+        };
+        if fading || changed {
+            last.insert(fid.to_string(), alpha);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// Restore build-time `auto` zeroing so collect can paint live cubic without a Full

@@ -474,7 +474,7 @@ impl SecondaryWindowState {
                 ),
         );
 
-        let mut render_result = if use_full {
+        let render_result = if use_full {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
                 logical_w,
@@ -491,27 +491,6 @@ impl SecondaryWindowState {
                 true,
             )
         };
-
-        // Same anchored placement pass as primary [`AppState::render`]: dropdown / popover
-        // panels need trigger bounds from the first layout before left/top are written.
-        let placement_moved = crate::utils::popup::sync_floating_placement(
-            &mut self.root_element,
-            logical_w,
-            logical_h,
-        );
-        if placement_moved {
-            crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
-                self.layout_tree.mark_element_layout_dirty(el);
-            });
-            render_result = self.layout_tree.build_and_layout_fast(
-                &mut self.root_element,
-                logical_w,
-                logical_h,
-                [0.0, 0.0],
-                false,
-                true,
-            );
-        }
 
         self.has_input_caret = render_result
             .text_nodes

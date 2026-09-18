@@ -12,7 +12,7 @@
 //! - Scroll invalidates the **viewport layer** (scissor Clear), not paint nodes.
 //!   A valid retain may **strip-blit** the overlap and Clear only the newly
 //!   exposed band(s) plus pin holes (sticky / overlay / named paint / nested
-//!   inner viewports). Nested containment blits the outer and pins the inner.
+//!   inner viewports / overlay scrollbar rails). Nested containment blits the outer and pins the inner.
 //!   Overlapping siblings blit both and pin the intersection occupancy (copy
 //!   smear). `force_full_redraw`, invalid retain, `|delta| ≥ viewport`, and
 //!   `RUI_SCROLL_STRIP_BLIT=0` stay abort / layer-Clear gates. Spawn without
@@ -108,7 +108,9 @@ pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
     let pad = element_paint_outset_pad(el, rot_pad);
     let kind = paint_kind_for_element(el);
     let key = if kind == PaintDirtyKind::Overlay {
-        crate::layout::layout_tree::overlay_portal_stamp_key(el)
+        el.paint_overlay_stamp
+            .filter(|k| *k != 0)
+            .unwrap_or_else(|| crate::layout::layout_tree::overlay_portal_stamp_key(el))
     } else {
         paint_element_key(el)
     };
@@ -167,7 +169,12 @@ fn clamp_overlay_clip_box(el: &Element, mut b: [f32; 4]) -> [f32; 4] {
 }
 
 /// Hoisted modal/popover chrome must not dest-reset as a page `Node`.
+/// Descendants (reaction chips, menu items) inherit overlay membership from
+/// last collect (`paint_overlay_stamp`) — they are not themselves `__floating_panel`.
 pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
+    if el.paint_overlay_stamp.is_some_and(|k| k != 0) {
+        return PaintDirtyKind::Overlay;
+    }
     if el.attrs.get("rui_hoisted_portal").map(String::as_str) == Some("1") {
         return PaintDirtyKind::Overlay;
     }
@@ -1807,6 +1814,46 @@ pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     out
 }
 
+/// Overlay (inside) scrollbar tracks that share pixels with a blit viewport.
+///
+/// The rail is a sibling of the viewport, not sticky / portal overlay. Strip blit
+/// copies the overlap including the previous thumb; without a pin the painted
+/// thumb stays frozen while content scrolls.
+pub fn overlay_scrollbar_scroll_blit_pins(
+    root: &Element,
+    viewport_ids: &[String],
+    blit_viewports: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if viewport_ids.is_empty() || blit_viewports.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        let Some(fid) = el.focus_id.as_deref() else {
+            return;
+        };
+        let Some(rest_axis) =
+            fid.strip_prefix(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+        else {
+            return;
+        };
+        let (rest, _) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
+        if !viewport_ids.iter().any(|id| id == rest) {
+            return;
+        }
+        let overlay = el.attrs.get("rui_scrollbar_overlay").map(String::as_str) == Some("1")
+            || el.style.position == taffy::style::Position::Absolute;
+        if !overlay {
+            return;
+        }
+        let b = el.layout_bounds;
+        if overlay_needs_scroll_blit_pin(b, blit_viewports) {
+            out.push(b);
+        }
+    });
+    out
+}
+
 fn push_scroll_blit_pin(pins: &mut Vec<[f32; 4]>, r: [f32; 4]) {
     if r[2] <= 0.0 || r[3] <= 0.0 {
         return;
@@ -2051,6 +2098,75 @@ mod tests {
             paint_kind_for_element(&floating),
             PaintDirtyKind::Overlay,
             "Select/Popover fade chrome must not dest-reset as a page Node"
+        );
+    }
+
+    #[test]
+    fn hoisted_overlay_descendant_hover_scale_dirties_portal_stamp() {
+        // +N expand chips live under `__floating_panel` but have no chrome template_id.
+        // Classifying them as page `Node` lets `page_scissor_excluding_overlay` drop
+        // every hover:scale frame (fully inside occupancy, not a punch). The overlay
+        // pass only encodes Overlay-kind keys, so GPU retains rest until occupancy
+        // jumps — rest↔1.25 snap instead of the 150ms tween.
+        let _ = take_frame_paint_nodes();
+        let mut chip = Element::new().w(16.0).h(16.0);
+        crate::style::apply_class_list(
+            &mut chip,
+            "cursor-pointer transition-transform duration-150 ease-out hover:scale-125",
+        );
+        let mut panel = Element::new().w(80.0).h(32.0).child(chip);
+        panel.template_id = Some("rx__floating_panel".into());
+        panel.set_attr("rui_portal", "1");
+        panel.set_attr(crate::layout::layout_tree::ATTR_PORTAL_KEY, "rx-expand");
+
+        let mut root = Element::new().w(400.0).h(400.0).child(panel);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+
+        fn find_hover_scale_chip(el: &Element) -> Option<&Element> {
+            if el
+                .class_set
+                .as_ref()
+                .is_some_and(crate::style::ClassSet::has_pointer_hover_linear_xform)
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_hover_scale_chip)
+        }
+        fn find_hoisted(el: &Element) -> Option<&Element> {
+            if el.attrs.get("rui_hoisted_portal").map(String::as_str) == Some("1") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_hoisted)
+        }
+        let chip = find_hover_scale_chip(&root).expect("hover:scale chip");
+        let panel = find_hoisted(&root).expect("hoisted panel");
+        let stamp = crate::layout::layout_tree::overlay_portal_stamp_key(panel);
+
+        assert_eq!(
+            paint_kind_for_element(chip),
+            PaintDirtyKind::Overlay,
+            "overlay descendants must Overlay-dirty; page Node is scissored out of occupancy"
+        );
+        let chip_box = crate::core::tree::visual_paint_aabb(chip, chip.paint_scroll_acc);
+        let occ = crate::core::tree::visual_paint_aabb(panel, panel.paint_scroll_acc);
+        assert!(
+            page_scissor_excluding_overlay(chip_box, Some(occ)).is_none(),
+            "chip box is inside overlay occupancy — a page Node dirty would never present"
+        );
+
+        let _ = take_frame_paint_nodes();
+        push_frame_paint_element(chip, chip.paint_scroll_acc);
+        let dirties = take_frame_paint_nodes();
+        assert_eq!(dirties.len(), 1, "expected one dirty, got {dirties:?}");
+        assert_eq!(dirties[0].kind, PaintDirtyKind::Overlay);
+        assert_eq!(
+            dirties[0].key, stamp,
+            "descendant Overlay dirty must use the host portal stamp so the band encodes"
+        );
+        assert!(
+            overlay_band_should_encode(stamp, &[dirties[0].key], false, &[stamp], &[stamp]),
+            "chip hover:scale must encode the host overlay band"
         );
     }
 
@@ -2397,13 +2513,7 @@ mod tests {
             "synthetic whole-suffix band still draws the nested menu"
         );
         assert!(
-            overlay_band_should_encode(
-                0,
-                &[PARENT_KEY],
-                false,
-                &[PARENT_KEY],
-                &[0, NESTED_KEY],
-            ),
+            overlay_band_should_encode(0, &[PARENT_KEY], false, &[PARENT_KEY], &[0, NESTED_KEY],),
             "DatePicker dirty whose portal-layer band is unkeyed must still encode when a nested Select already has a keyed band"
         );
         assert!(
@@ -3948,5 +4058,30 @@ mod tests {
         root.children.push(sticky);
         root.children.push(other);
         assert_eq!(sticky_layout_bounds(&root), vec![[0.0, 0.0, 200.0, 32.0]]);
+    }
+
+    #[test]
+    fn overlay_scrollbar_on_blit_viewport_is_a_pin() {
+        let mut root = Element::new();
+        let mut track = Element::new();
+        track.focus_id = Some(format!(
+            "{}sa-main:y",
+            crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
+        ));
+        track.set_attr("rui_scrollbar_overlay", "1");
+        track.layout_bounds = [392.0, 8.0, 8.0, 280.0];
+        root.children.push(track);
+        let vp = [0.0, 0.0, 400.0, 300.0];
+        let pins = overlay_scrollbar_scroll_blit_pins(&root, &[String::from("sa-main")], &[vp]);
+        assert_eq!(
+            pins,
+            vec![[392.0, 8.0, 8.0, 280.0]],
+            "inside overlay rail sharing the blit viewport must pin"
+        );
+        let disjoint = overlay_scrollbar_scroll_blit_pins(&root, &[String::from("other")], &[vp]);
+        assert!(
+            disjoint.is_empty(),
+            "rails of other viewports must not pin, got {disjoint:?}"
+        );
     }
 }

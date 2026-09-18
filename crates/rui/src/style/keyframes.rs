@@ -318,13 +318,13 @@ fn ensure_builtins() {
         register_keyframes(
             "bounce",
             vec![
-                KeyframeStop::at(0.0).translate([0.0, 0.0]),
-                KeyframeStop::at(0.4).translate([0.0, 0.0]),
-                KeyframeStop::at(0.5).translate([0.0, -25.0]),
-                KeyframeStop::at(0.6).translate([0.0, 0.0]),
-                KeyframeStop::at(0.75).translate([0.0, -12.0]),
-                KeyframeStop::at(0.9).translate([0.0, 0.0]),
-                KeyframeStop::at(1.0).translate([0.0, 0.0]),
+                KeyframeStop::at(0.0).translate_pct([0.0, 0.0]),
+                KeyframeStop::at(0.4).translate_pct([0.0, 0.0]),
+                KeyframeStop::at(0.5).translate_pct([0.0, -0.25]),
+                KeyframeStop::at(0.6).translate_pct([0.0, 0.0]),
+                KeyframeStop::at(0.75).translate_pct([0.0, -0.12]),
+                KeyframeStop::at(0.9).translate_pct([0.0, 0.0]),
+                KeyframeStop::at(1.0).translate_pct([0.0, 0.0]),
             ],
         );
         register_keyframes(
@@ -641,6 +641,23 @@ mod tests {
         let stops = lookup_keyframes("pulse").expect("pulse");
         let mid = sample_keyframes(&stops, 0.5);
         assert!((mid.opacity.unwrap() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn bounce_peak_is_percent_not_pixels() {
+        // Tailwind `animate-bounce` is translateY(-25%) of the box. A 2rem gallery
+        // demo with -25px jumped over the caption (dest-reset then punched it).
+        let stops = lookup_keyframes("bounce").expect("bounce");
+        let peak = sample_keyframes(&stops, 0.5);
+        assert_eq!(peak.translate, None, "bounce must not use px translate");
+        let pct = match peak.props.get(&PropertyId::TranslatePct) {
+            Some(AnimatableValue::Vec2(xy)) => *xy,
+            other => panic!("bounce peak must be translate_pct, got {other:?}"),
+        };
+        assert!(
+            (pct[1] + 0.25).abs() < 0.001,
+            "bounce peak must be -25% of self, got {pct:?}"
+        );
     }
 
     fn base() -> KeyframeBase {

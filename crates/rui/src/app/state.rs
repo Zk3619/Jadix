@@ -104,6 +104,10 @@ pub(super) struct AppState {
     /// would otherwise clobber atlas/viewport when `text_cache_valid` skips the main prepare
     /// (gallery 3b: flipped/clipped glyphs + spin stutter).
     capture_text_renderer: RuiTextRenderer,
+    /// Layered jump-chrome dest-reset restores wrapping underlay glyphs *under* the
+    /// overlay slot. Sharing [`Self::capture_text_renderer`] would flush them after
+    /// Latest and stamp the thread on top of the pill.
+    capture_underlay_text_renderer: RuiTextRenderer,
     /// Separate glyphon pipeline for portal overlay glyphs so page + overlay text can be
     /// prepared together and drawn in one Clear pass (page → overlay rects → overlay text)
     /// without a GLES-fragile `LoadOp::Load` second pass that erased sidebar chrome.
@@ -157,6 +161,9 @@ pub(super) struct AppState {
     render_prof_layout_setup_ms: f32,
     render_prof_layout_taffy_ms: f32,
     render_prof_layout_collect_ms: f32,
+    render_prof_layout_stamp_ms: f32,
+    render_prof_skip_n: f32,
+    render_prof_patch_n: f32,
     render_prof_draw_ms: f32,
     render_prof_acquire_ms: f32,
     render_prof_submit_ms: f32,
@@ -485,6 +492,48 @@ fn draw_instance_range(
     }
     super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, count);
     pass.draw_indexed(0..pipeline.num_indices, 0, start..start + count);
+}
+
+/// Node-present ranged SDF: copy the instance range and its clip_polys so
+/// `instance_index` 0 matches `clip_polys[0]` (GLES firstInstance is relative).
+fn draw_sdf_range_with_clip<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a RuiPipeline,
+    device: &wgpu::Device,
+    dummy: &'a wgpu::BindGroup,
+    instances: &[InstanceInput],
+    clip_polys: &[crate::style::GpuClipPoly],
+    start: u32,
+    count: u32,
+    cull: Option<super::draw_cull::CullRects>,
+) {
+    if count == 0 {
+        return;
+    }
+    let lo = start as usize;
+    let hi = (lo + count as usize).min(instances.len());
+    if lo >= hi {
+        return;
+    }
+    let inst_slice = &instances[lo..hi];
+    let mut polys: Vec<crate::style::GpuClipPoly> = if lo < clip_polys.len() {
+        clip_polys[lo..hi.min(clip_polys.len())].to_vec()
+    } else {
+        Vec::new()
+    };
+    while polys.len() < inst_slice.len() {
+        polys.push(crate::style::GpuClipPoly::NONE);
+    }
+    let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Node present SDF range"),
+        contents: bytemuck::cast_slice(inst_slice),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let (_clip_buf, _clip_bg) = pipeline.bind_sdf_with_clip_polys(pass, device, dummy, &polys);
+    pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+    pass.set_vertex_buffer(1, inst_buf.slice(..));
+    pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    draw_instance_range(pass, pipeline, inst_slice, 0, inst_slice.len() as u32, cull);
 }
 
 fn draw_cpu_sdf_instances<'a>(
@@ -1582,6 +1631,8 @@ impl AppState {
         let font_ptr: *mut glyphon::FontSystem = text_renderer.font_system_mut();
         let capture_text_renderer =
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
+        let capture_underlay_text_renderer =
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
         let overlay_text_renderer =
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
         log::debug!("new_bootstrap: after text_renderer");
@@ -1615,6 +1666,7 @@ impl AppState {
             layout_tree,
             text_renderer,
             capture_text_renderer,
+            capture_underlay_text_renderer,
             overlay_text_renderer,
             overlay_band_text_renderers: Vec::new(),
             page_stack_band_text_renderers: Vec::new(),
@@ -1647,6 +1699,9 @@ impl AppState {
             render_prof_layout_setup_ms: 0.0,
             render_prof_layout_taffy_ms: 0.0,
             render_prof_layout_collect_ms: 0.0,
+            render_prof_layout_stamp_ms: 0.0,
+            render_prof_skip_n: 0.0,
+            render_prof_patch_n: 0.0,
             render_prof_draw_ms: 0.0,
             render_prof_acquire_ms: 0.0,
             render_prof_submit_ms: 0.0,
@@ -1946,6 +2001,11 @@ impl AppState {
                 sticky.extend(super::damage::sticky_layout_bounds(vp));
             }
         }
+        sticky.extend(super::damage::overlay_scrollbar_scroll_blit_pins(
+            &self.root_element,
+            &ids,
+            &viewports,
+        ));
         let named = super::draw_cull::named_scroll_blit_pins(
             &self.damage_nodes,
             &self.last_present_node_bounds,
@@ -2371,6 +2431,7 @@ impl AppState {
         paint_ops: &[crate::layout::layout_tree::PaintOp],
         node_paints: &[crate::layout::layout_tree::NodePaint],
         scaled_instances: &[InstanceInput],
+        clip_polys: &[crate::style::GpuClipPoly],
         scaled_tex: &'pass [crate::renderer::ScaledTexturedDraw],
         scaled_input_chrome: &[InstanceInput],
         overlay_inst_start: usize,
@@ -2381,12 +2442,14 @@ impl AppState {
         ui_scale: f32,
         overlay_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
         capture_text_ready: bool,
+        capture_underlay_ready: bool,
         underline_instances: &[InstanceInput],
         prev_underline_instances: &[InstanceInput],
     ) {
         use super::damage::PaintDirtyKind;
         let dummy = self.pipeline.dummy_backdrop();
         let mut pending_page_glyphs = capture_text_ready;
+        let mut pending_underlay_glyphs = capture_underlay_ready;
         let mut overlay_dirties: Vec<(u64, [f32; 4])> = Vec::new();
         let mut page_punch_overlap: Option<[f32; 4]> = None;
         for dirty in &self.damage_nodes {
@@ -2555,6 +2618,7 @@ impl AppState {
                             render_pass,
                             node_paints,
                             scaled_instances,
+                            clip_polys,
                             scaled_tex,
                             scaled_input_chrome,
                             dummy,
@@ -2621,18 +2685,13 @@ impl AppState {
                                 },
                             );
                             if replay {
-                                self.pipeline.bind_sdf(render_pass, false, dummy);
-                                render_pass
-                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                                render_pass.set_index_buffer(
-                                    self.pipeline.index_buffer.slice(..),
-                                    wgpu::IndexFormat::Uint16,
-                                );
-                                draw_instance_range(
+                                draw_sdf_range_with_clip(
                                     render_pass,
                                     &self.pipeline,
+                                    &self.device,
+                                    dummy,
                                     scaled_instances,
+                                    clip_polys,
                                     reset.replay.0 as u32,
                                     (reset.replay.1 - reset.replay.0) as u32,
                                     Some(super::draw_cull::CullRects::one(reset.rect)),
@@ -2655,37 +2714,76 @@ impl AppState {
                         ) {
                             // Stacking overlay dest-reset punched in-flow fills
                             // (rounded bubble under a jump pill). Rebuild them
-                            // in the hole before drawing the overlay slot.
-                            self.draw_matching_node_paints(
-                                render_pass,
-                                node_paints,
-                                scaled_instances,
-                                scaled_tex,
-                                scaled_input_chrome,
-                                dummy,
-                                |p| {
-                                    !p.overlay
-                                        && !super::damage::paint_dirty_matches_present_slot(
-                                            dirty.key,
-                                            dirty.bounds,
-                                            p.key,
-                                            p.bounds,
-                                            has_keyed,
-                                        )
-                                        && super::damage::restore_page_behind_overlay(
-                                            p.bounds,
-                                            scissor_logical,
-                                        )
-                                },
-                                cull_phys,
-                                Some(overlay_inst_start),
-                                Some(overlay_tex_start),
-                            );
+                            // in the CLEAR hole only — the 8px node scissor
+                            // hangs below Latest onto wrapping thread / composer.
+                            if let Some(reset) = node_dest_reset.as_ref() {
+                                let scale = ui_scale.max(1e-6);
+                                let reset_logical = [
+                                    reset.rect[0] / scale,
+                                    reset.rect[1] / scale,
+                                    reset.rect[2] / scale,
+                                    reset.rect[3] / scale,
+                                ];
+                                if let Some((wx, wy, ww, wh)) =
+                                    super::damage::damage_to_scissor_physical(
+                                        reset_logical,
+                                        0.0,
+                                        ui_scale,
+                                        self.config.width,
+                                        self.config.height,
+                                    )
+                                {
+                                    render_pass.set_scissor_rect(wx, wy, ww, wh);
+                                }
+                                let restore_cull =
+                                    Some(super::draw_cull::CullRects::one(reset.rect));
+                                self.draw_matching_node_paints(
+                                    render_pass,
+                                    node_paints,
+                                    scaled_instances,
+                                    clip_polys,
+                                    scaled_tex,
+                                    scaled_input_chrome,
+                                    dummy,
+                                    |p| {
+                                        !p.overlay
+                                            && !super::damage::paint_dirty_matches_present_slot(
+                                                dirty.key,
+                                                dirty.bounds,
+                                                p.key,
+                                                p.bounds,
+                                                has_keyed,
+                                            )
+                                            && super::damage::restore_page_behind_overlay(
+                                                p.bounds,
+                                                reset_logical,
+                                            )
+                                    },
+                                    restore_cull,
+                                    Some(overlay_inst_start),
+                                    Some(overlay_tex_start),
+                                );
+                                if pending_underlay_glyphs {
+                                    self.capture_underlay_text_renderer.render(render_pass);
+                                    super::frame_stats::note_scene_batch(
+                                        super::frame_stats::SceneKind::Text,
+                                        1,
+                                    );
+                                    pending_underlay_glyphs = false;
+                                }
+                                render_pass.set_scissor_rect(x, y, w, h);
+                            } else {
+                                // No CLEAR: wrapping underlay is still in retain.
+                                // Replaying ancestor fills or recapture glyphs
+                                // in the padded scissor stamps/punches the thread.
+                                pending_underlay_glyphs = false;
+                            }
                         }
                         self.draw_matching_node_paints(
                             render_pass,
                             node_paints,
                             scaled_instances,
+                            clip_polys,
                             scaled_tex,
                             scaled_input_chrome,
                             dummy,
@@ -2750,6 +2848,11 @@ impl AppState {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
             pending_page_glyphs = false;
         }
+        if any_overlay && pending_underlay_glyphs {
+            self.capture_underlay_text_renderer.render(render_pass);
+            super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
+            pending_underlay_glyphs = false;
+        }
         for (key, dirty_bounds) in merged {
             let occupancy = super::damage::overlay_encode_occupancy(
                 key,
@@ -2801,6 +2904,10 @@ impl AppState {
         }
         if pending_page_glyphs {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
+        }
+        if pending_underlay_glyphs {
+            self.capture_underlay_text_renderer.render(render_pass);
+            super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
         }
     }
 
@@ -3012,6 +3119,7 @@ impl AppState {
         render_pass: &mut wgpu::RenderPass<'pass>,
         node_paints: &[crate::layout::layout_tree::NodePaint],
         scaled_instances: &[InstanceInput],
+        clip_polys: &[crate::style::GpuClipPoly],
         scaled_tex: &'pass [crate::renderer::ScaledTexturedDraw],
         scaled_input_chrome: &[InstanceInput],
         dummy: &'pass wgpu::BindGroup,
@@ -3030,22 +3138,18 @@ impl AppState {
                 // ended on glyphon (TriangleStrip, strip_index_format None).
                 // Indexed SDF draws with the leftover Uint16 index buffer panic:
                 // "strip index format None must match index buffer format Uint16".
-                // Clip-poly SSBO is indexed by `instance_index`. A ranged draw on
-                // GLES can feed a relative index and clip the fill to another
-                // widget's inset round-clip (Default looks 1px smaller on hover).
+                // Clip-poly SSBO is indexed by `instance_index`. Copy the range so
+                // GLES relative firstInstance still maps to this slot's polys, not
+                // `clip_polys[0]` (Default looked 1px smaller on hover).
                 // OverlayRestore caps at the page prefix so a containing page
                 // slot cannot submit overlay instances (that would restack the halo).
-                self.pipeline.bind_sdf(render_pass, false, dummy);
-                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                render_pass.set_index_buffer(
-                    self.pipeline.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                draw_instance_range(
+                draw_sdf_range_with_clip(
                     render_pass,
                     &self.pipeline,
+                    &self.device,
+                    dummy,
                     scaled_instances,
+                    clip_polys,
                     inst_lo as u32,
                     (inst_hi - inst_lo) as u32,
                     cull,
@@ -4386,11 +4490,18 @@ impl AppState {
         // zeros its `location`, which collapses absolute positions for that whole branch
         // (gallery `<Show>` / `bind_text` LayoutChanged: card title overlapping buttons).
         // Root compute still reuses clean sibling caches via mark_dirty.
-        // Cold start / portal hoist still need a full Taffy rebuild (NodeId recycle;
-        // hoist rewrites layer.children — skipping rebuild desyncs overlay_split and
-        // drops page glyphs: gallery bubbles keep chrome, lose text).
+        // Cold start still needs a full Taffy rebuild. Portal membership (+N hoist)
+        // attaches unbuilt overlay nodes and syncs the portal layer's children —
+        // recycling the whole gallery dropped frames and is not required.
         // Local `<Show>` structure changes attach unbuilt nodes on the fast path.
-        let use_full_taffy_rebuild = self.layout_tree.root_node.is_none() || portal_moves > 0;
+        // Portal membership (+N hoist) used to force `build_and_layout` of the
+        // gallery every scroll frame the overlay opened — that is the hitch.
+        let portal_only_structure =
+            (self.portal_membership_dirty || portal_moves > 0) && !page_geom;
+        // Cold `rebuild_ui` swaps an unbound tree onto a LayoutTree that already
+        // laid out the bootstrap shell. Portal membership still uses the fast path.
+        let use_full_taffy_rebuild =
+            self.layout_tree.root_node.is_none() || self.root_element.layout_node.is_none();
         let layout_subtree_root: Option<taffy::prelude::NodeId> = None;
         if !use_full_taffy_rebuild
             && (matches!(
@@ -4455,14 +4566,16 @@ impl AppState {
                             | crate::core::tree::LayoutStatus::StyleChanged
                     ))
                 || (scroll_paint_only
-                    && !matches!(
-                        layout_for_build,
-                        crate::core::tree::LayoutStatus::StructureChanged
-                    )
-                    && !matches!(
-                        pre_chrome_layout_status,
-                        crate::core::tree::LayoutStatus::StructureChanged
-                    )));
+                    && (portal_only_structure
+                        || !matches!(
+                            layout_for_build,
+                            crate::core::tree::LayoutStatus::StructureChanged
+                        ))
+                    && (portal_only_structure
+                        || !matches!(
+                            pre_chrome_layout_status,
+                            crate::core::tree::LayoutStatus::StructureChanged
+                        ))));
         // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
         // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect with signal geometry,
         // Avoid just hovering the full color Taffy every frame.
@@ -4475,8 +4588,17 @@ impl AppState {
                 && scroll_only)
             || active_drag_rest.is_some();
         crate::style::set_gradient_raster_dpi(self.ui_scale());
+        let skip_layout_status = if portal_only_structure
+            && matches!(
+                layout_for_build,
+                crate::core::tree::LayoutStatus::StructureChanged
+            ) {
+            crate::core::tree::LayoutStatus::StyleChanged
+        } else {
+            layout_for_build
+        };
         let allow_collect_skip = crate::layout::collect_cache::collect_skip_allowed_for_frame(
-            layout_for_build,
+            skip_layout_status,
             scroll_paint_only,
             use_full_taffy_rebuild,
             viewport_resizing,
@@ -4492,6 +4614,7 @@ impl AppState {
             layout_prof_sum.setup_ms += p.setup_ms;
             layout_prof_sum.taffy_compute_ms += p.taffy_compute_ms;
             layout_prof_sum.collect_ms += p.collect_ms;
+            layout_prof_sum.collect_stamp_ms += p.collect_stamp_ms;
         };
         let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
@@ -4543,28 +4666,8 @@ impl AppState {
                 acc_layout_prof(&render_result.prof);
             }
         }
-        // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
-        // Only dirty floating layer nodes + fast compute, prohibiting full reconstruction of Taffy every frame (the whole page scrolls and freezes after opening DatePicker).
-        let placement_moved = crate::utils::popup::sync_floating_placement(
-            &mut self.root_element,
-            logical_w,
-            logical_h,
-        );
-        if placement_moved {
-            crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
-                self.layout_tree.mark_element_layout_dirty(el);
-            });
-            render_result = self.layout_tree.build_and_layout_fast_ex(
-                &mut self.root_element,
-                logical_w,
-                logical_h,
-                mouse_pos,
-                false,
-                scrollbar_overlay_collect,
-                None,
-            );
-            acc_layout_prof(&render_result.prof);
-        }
+        // Placement is applied inside layout (after Taffy, before collect) so a
+        // scroll frame with +N open does not collect the gallery a second time.
         // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
         let floating_needs_frame =
             crate::utils::floating_motion::flush_floating_motion_subtree(&mut self.root_element);
@@ -4578,14 +4681,13 @@ impl AppState {
                 &self.root_element,
                 &mut self.layout_tree,
             );
-            render_result = self.layout_tree.build_and_layout_fast_ex(
+            render_result = self.layout_tree.relayout_overlay_follow_and_collect(
                 &mut self.root_element,
                 logical_w,
                 logical_h,
                 mouse_pos,
-                false,
+                scroll_only,
                 scrollbar_overlay_collect,
-                None,
             );
             acc_layout_prof(&render_result.prof);
         }
@@ -4650,6 +4752,10 @@ impl AppState {
             self.render_prof_layout_setup_ms += layout_prof_sum.setup_ms;
             self.render_prof_layout_taffy_ms += layout_prof_sum.taffy_compute_ms;
             self.render_prof_layout_collect_ms += layout_prof_sum.collect_ms;
+            self.render_prof_layout_stamp_ms += layout_prof_sum.collect_stamp_ms;
+            let (skip, patch) = self.layout_tree.last_collect_skip_counts();
+            self.render_prof_skip_n += skip as f32;
+            self.render_prof_patch_n += patch as f32;
         }
 
         // Export collected metrics and hover state for window_events.rs to avoid redundant traversals.
@@ -4959,18 +5065,18 @@ impl AppState {
         // Expand's unconstrained measure frame still emits opacity-0 instances at
         // content height. That AABB is not occupancy (`hoisted_portal_paint_box`)
         // and must not become a scroll blit pin / dest-reset strip down the page.
-        let overlay_visual = if crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element)
-        {
-            None
-        } else {
-            Self::overlay_visual_bounds_logical(
-                &scaled_instances[overlay_inst_start..],
-                &scaled_tex[overlay_tex_slice_start..],
-                &self.text_nodes[overlay_text_start..],
-                &scaled_input_chrome[overlay_chrome_start..],
-                ui_scale,
-            )
-        };
+        let overlay_visual =
+            if crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element) {
+                None
+            } else {
+                Self::overlay_visual_bounds_logical(
+                    &scaled_instances[overlay_inst_start..],
+                    &scaled_tex[overlay_tex_slice_start..],
+                    &self.text_nodes[overlay_text_start..],
+                    &scaled_input_chrome[overlay_chrome_start..],
+                    ui_scale,
+                )
+            };
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
@@ -5412,6 +5518,7 @@ impl AppState {
                 prev_slot_for(d.key),
             )
         };
+        let mut capture_underlay_ready = false;
         let capture_text_ready = if gpu_present.use_node_present
             && self.damage_nodes.iter().any(|d| match d.kind {
                 super::damage::PaintDirtyKind::OverlayRestore => true,
@@ -5429,6 +5536,27 @@ impl AppState {
                     super::damage::PaintDirtyKind::Overlay => false,
                 })
                 .collect();
+            let underlay_text = super::draw_cull::node_present_layered_underlay_capture_text(
+                &glyph_dirties,
+                page_text,
+                &render_result.node_paints,
+            );
+            if !underlay_text.is_empty() {
+                let shadow_keys: std::collections::HashSet<u64> =
+                    self.shadow_tex_cache.keys().copied().collect();
+                prepare_text_frame(
+                    &mut self.capture_underlay_text_renderer,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &underlay_text,
+                    ui_scale,
+                    text_fast,
+                    &shadow_keys,
+                    &self.shadow_rect_cache,
+                );
+                capture_underlay_ready = true;
+            }
             let hole_text = super::draw_cull::node_present_clipped_capture_text(
                 &glyph_dirties,
                 page_text,
@@ -6165,6 +6293,7 @@ impl AppState {
                     &render_result.paint_ops,
                     &render_result.node_paints,
                     &scaled_instances,
+                    &render_result.clip_polys,
                     &scaled_tex,
                     &scaled_input_chrome,
                     overlay_inst_start,
@@ -6175,6 +6304,7 @@ impl AppState {
                     ui_scale,
                     &overlay_band_ranges,
                     capture_text_ready,
+                    capture_underlay_ready,
                     &presented_underlines,
                     &prev_presented_underlines,
                 );
@@ -6574,7 +6704,7 @@ impl AppState {
             if elapsed >= std::time::Duration::from_secs(1) && render_profile_log_enabled() {
                 let f = self.render_prof_frames.max(1) as f32;
                 log::warn!(
-                    "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [layout_tree: rebuild={:.2} setup={:.2} taffy={:.2} collect={:.2}] [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",
+                    "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [layout_tree: rebuild={:.2} setup={:.2} taffy={:.2} collect={:.2} stamp={:.2} skip={:.0} patch={:.0}] [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",
                     elapsed.as_millis() as f32,
                     f / elapsed.as_secs_f32().max(0.001),
                     self.render_prof_pre_ms / f,
@@ -6584,6 +6714,9 @@ impl AppState {
                     self.render_prof_layout_setup_ms / f,
                     self.render_prof_layout_taffy_ms / f,
                     self.render_prof_layout_collect_ms / f,
+                    self.render_prof_layout_stamp_ms / f,
+                    self.render_prof_skip_n / f,
+                    self.render_prof_patch_n / f,
                     self.render_prof_upload_ms / f,
                     self.render_prof_acquire_ms / f,
                     self.render_prof_text_ms / f,
@@ -6599,6 +6732,9 @@ impl AppState {
                 self.render_prof_layout_setup_ms = 0.0;
                 self.render_prof_layout_taffy_ms = 0.0;
                 self.render_prof_layout_collect_ms = 0.0;
+                self.render_prof_layout_stamp_ms = 0.0;
+                self.render_prof_skip_n = 0.0;
+                self.render_prof_patch_n = 0.0;
                 self.render_prof_draw_ms = 0.0;
                 self.render_prof_acquire_ms = 0.0;
                 self.render_prof_submit_ms = 0.0;

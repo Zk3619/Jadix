@@ -667,6 +667,36 @@ impl RuiPipeline {
         pass.set_bind_group(1, backdrop, &[]);
     }
 
+    /// Bind SDF with a clip-poly SSBO that starts at index 0.
+    ///
+    /// Pair with an instance vertex buffer that also starts at 0. GLES `instance_index`
+    /// is relative to `firstInstance`; a ranged draw against the full SSBO would clip
+    /// to `clip_polys[0]` (another widget) instead of this range. The returned buffer
+    /// and bind group must stay alive until the draw is encoded.
+    pub fn bind_sdf_with_clip_polys<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        device: &wgpu::Device,
+        backdrop: &'a wgpu::BindGroup,
+        polys: &[crate::style::GpuClipPoly],
+    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+        let data: Vec<crate::style::GpuClipPoly> = if polys.is_empty() {
+            vec![crate::style::GpuClipPoly::NONE]
+        } else {
+            polys.to_vec()
+        };
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Clip poly range"),
+            contents: bytemuck::cast_slice(&data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let bg = Self::make_bind_group(device, &self.bind_group_layout, &self.globals_buffer, &buf);
+        pass.set_pipeline(&self.render_pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.set_bind_group(1, backdrop, &[]);
+        (buf, bg)
+    }
+
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
         let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
