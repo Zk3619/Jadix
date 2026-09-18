@@ -2,19 +2,30 @@
 members = ["crates/*", "examples/*"]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Zk3619/rui"
+
+# Single source of truth for versions. Member crates use `{ workspace = true }`
+# plus crate-local features / optional. Policy: development-docs/ops/crate_deps.md
 [workspace.dependencies]
+# --- path crates (version required so they are not `*` wildcards for cargo-deny / publish) ---
+rui = { path = "crates/rui", version = "0.1.0", default-features = false }
+# Alias so `jadix_window_state` can feature-gate the engine under the W4 name.
+jadix = { package = "rui", path = "crates/rui", version = "0.1.0", default-features = false }
+rui_macros = { path = "crates/rui_macros", version = "0.1.0" }
+rui_style_tokens = { path = "crates/rui_style_tokens", version = "0.1.0" }
+jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
+jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
+
+# --- window / GPU ---
 winit = "0.30"
 accesskit = "0.24.1"
 accesskit_winit = { version = "0.33.2", default-features = false, features = [
     "rwh_06",
 ] }
-taffy = "0.13"
-env_logger = "0.11"
-log = "0.4"
-tracing = "0.1"
-bytemuck = { version = "1.25", features = ["derive"] }
-# Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
-glyphon = { version = "0.12", default-features = false }
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
 # Vulkan+GLES on Windows). Keep GL/Metal on by default; Vulkan/DX12 stay opt-in
 # so Windows release does not pull multiple native backends at once.
@@ -26,21 +37,74 @@ wgpu = { version = "30", default-features = false, features = [
     "gles",
     "metal",
 ] }
+
+# --- layout / text ---
+taffy = "0.13"
+bytemuck = { version = "1.25", features = ["derive"] }
+# Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
+glyphon = { version = "0.12", default-features = false }
+# Stack pin (not a direct dep). glyphon re-exports `glyphon::cosmic_text`.
 cosmic-text = "0.19"
 swash = "0.2.6"
 ttf-parser = "0.25"
 unicode-segmentation = "1.11.0"
 unicode-linebreak = "0.1.5"
-# Text-only clipboard: the default `image` feature drags in image 0.25 with
-# bmp/png/jpeg decoders that nothing here calls.
-clipboard-rs = { version = "0.3", default-features = false }
-rfd = "0.15"
-syn = { version = "2.0", features = ["full", "extra-traits", "visit"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+
+# --- logging / serde ---
+env_logger = "0.11"
+log = "0.4"
+tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
+
+# --- macros ---
+syn = { version = "2.0", features = ["full", "extra-traits", "visit"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# --- desktop helpers ---
+# Clipboard lives in `jadix_clipboard` (fork of clipboard-rs; Windows → `windows` 0.62).
+clipboard-win = { version = "5.4", features = ["monitor"] }
+x11rb = { version = "0.13", features = ["xfixes"] }
+# objc2 0.6 matches rfd / wgpu-hal (winit still pins 0.5 — do not add a third).
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-ui-kit = "0.3"
+rfd = "0.17.2"
+# default-features off: skip Linux libxdo / libappindicator. gtk still required on Linux if this feature is on.
+# 0.25 + muda 0.20 accept windows-sys 0.61 (range >=0.60, <=0.61).
+tray-icon = { version = "0.25", default-features = false }
+# 8.2 pins windows-sys ^0.60.1 (cannot pick 0.61). 9.0.0-rc.5 is the first line that pins 0.61.
+notify = "9.0.0-rc.5"
+# Scoped grow around `app_builder` / `ui!` (Windows PE ~1 MiB). Not a PE `/STACK` bump.
+stacker = "0.1"
+
+# --- media ---
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "ico",
+] }
+resvg = "0.48.1"
+# Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
+ropey = "1.6"
+
+# --- i18n (feature `i18n`) ---
+icu = { version = "2.3.1", default-features = false }
+icu_provider_blob = { version = "2.3", default-features = false }
+writeable = "0.6"
+
+# --- platform ---
+libc = "0.2"
+windows-sys = "0.61"
+windows = "0.62"
+windows-core = "0.62"
+windows-numerics = "0.3"
+windows-collections = "0.3"
 
 [profile.release]
 codegen-units = 1

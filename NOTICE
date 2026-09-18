@@ -24,8 +24,8 @@ The RUI source code is licensed under the Apache License, Version 2.0 (see LICEN
 
 This file lists bundled assets and other third-party material shipped inside
 the `rui` crate (optional features may omit some entries). Rust crate
-dependencies retain their own licenses; run `cargo deny check licenses` or
-`cargo license -p rui` for the full dependency graph.
+dependencies retain their own licenses; run `cargo deny check licenses bans sources`
+or `cargo license -p rui` for the full dependency graph.
 
 Bundled fonts (optional `bundled-*` / `fonts-*` features)
 ---------------------------------------------------------
@@ -68,6 +68,16 @@ Animated icon recipes in `crates/rui/assets/lucide_animated.json`
   Copyright: pqoqubbw and contributors
   https://github.com/pqoqubbw/icons
 
+Optional ICU4X locale data (`i18n` feature)
+------------------------------------------
+
+When the `i18n` feature is enabled, RUI links ICU4X (`icu` / `icu_provider_blob`)
+with Unicode CLDR compiled data (and optional runtime blobs).
+
+  License: Unicode License v3
+  Copyright: Unicode, Inc. and others
+  https://github.com/unicode-org/icu4x
+
 Design alignment (not shipped as third-party source)
 ----------------------------------------------------
 
@@ -75,7 +85,17 @@ Component naming and token semantics align with shadcn/ui and Tailwind CSS
 v4 conventions. RUI reimplements these APIs in Rust; upstream React/TS source
 is not vendored into this repository.
 
+Window glass recipes (Blur / Aero / Acrylic / Mica graphs, tint opacity
+modifier, Aero inactive remaps) follow publicly documented WinUI Acrylic
+behavior and the effect-graph structure described by DWMBlurGlass
+(LGPL-3.0, https://github.com/Maplespe/DWMBlurGlass). RUI does not vendor
+that project's source, assets, or DWM injection.
+
 Local reference snapshots under `Reference/` (when present on a developer
 machine) are for comparison only and are not included in published crates.
+
+`crates/jadix_clipboard` is a maintained fork of clipboard-rs 0.3.x
+(MIT, Copyright 2024 桃树夭 / ChurchTao). The crate itself is Apache-2.0;
+the MIT notice is in `crates/jadix_clipboard/NOTICE`.
 
 The crate-local copy for crates.io is [`crates/rui/NOTICE`](crates/rui/NOTICE).

@@ -1,8 +1,8 @@
 [package]
 name = "gpu_probe"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 publish = false
 
 # Diagnostic-only: measures the memory floor of winit + wgpu with no rui code,
@@ -22,7 +22,7 @@ winit = { workspace = true }
 wgpu = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { workspace = true, features = [
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }

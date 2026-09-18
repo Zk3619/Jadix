@@ -1,0 +1,85 @@
+[package]
+name = "jadix_clipboard"
+version.workspace = true
+edition.workspace = true
+description = "Cross-platform clipboard for Jadix/RUI (text, html, rtf, files, optional image). Fork of clipboard-rs aligned to workspace Windows/objc pins."
+license.workspace = true
+repository.workspace = true
+readme = false
+keywords = ["clipboard"]
+categories = ["os"]
+
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/NOTICE",
+    "/src/**/*",
+]
+
+[lints.rust]
+# `wayland.rs` is ported; the Cargo feature is reserved until `wl-clipboard-rs`
+# can be added without a third `hashbrown`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("wayland"))'] }
+
+[features]
+default = []
+image = ["dep:image"]
+# Wayland backend lives in `src/platform/wayland.rs`. Not a Cargo feature yet:
+# `wl-clipboard-rs` 0.9 pulls hashbrown 0.15 / petgraph into the lockfile.
+# Linux uses X11 (`x11rb`), same as clipboard-rs without its `wayland` feature.
+
+[dependencies]
+image = { workspace = true, optional = true, default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+] }
+clipboard-win = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies.image]
+workspace = true
+optional = true
+default-features = false
+features = ["bmp", "png", "jpeg"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSString",
+    "NSEnumerator",
+    "NSURL",
+] }
+objc2-app-kit = { workspace = true, features = [
+    "NSPasteboard",
+    "NSPasteboardItem",
+    "NSImage",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies.image]
+workspace = true
+optional = true
+default-features = false
+features = ["tiff", "png", "jpeg"]
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSObject",
+    "NSString",
+    "NSEnumerator",
+] }
+objc2-ui-kit = { workspace = true, features = ["UIPasteboard", "UIImage"] }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "ios", target_os = "emscripten"))))'.dependencies]
+x11rb = { workspace = true }

@@ -29,16 +29,34 @@ use super::window_chrome::{WindowBackdrop, WindowOptions};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppConfig {
     pub title: Option<String>,
+    pub window_label: Option<String>,
     pub inner_width: Option<f64>,
     pub inner_height: Option<f64>,
     pub decorations: Option<bool>,
     pub transparent: Option<bool>,
     pub blur: Option<bool>,
     pub backdrop: Option<WindowBackdrop>,
+    pub blur_amount: Option<f32>,
+    pub glass_tint: Option<[u8; 4]>,
+    pub glass_tint_dark: Option<[u8; 4]>,
+    pub luminosity_opacity: Option<f32>,
+    pub aero_color_balance: Option<f32>,
+    pub aero_afterglow_balance: Option<f32>,
+    pub aero_blur_balance: Option<f32>,
+    pub aero_afterglow: Option<[u8; 4]>,
+    pub aero_reflection: Option<f32>,
+    pub aero_parallax: Option<f32>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub font_weight: Option<u16>,
     pub synthetic_bold: Option<bool>,
+    /// BCP 47 locale (`zh-CN`). With feature `i18n`, becomes the active locale
+    /// for this window (`signal_key_scope`); primary window also sets the process default.
+    pub locale: Option<String>,
+    /// Path to `i18n.toml` (optional `dir = "locales"`). Loaded with feature `i18n`.
+    pub i18n: Option<String>,
+    /// IANA timezone (`Asia/Shanghai`). Separate from the message catalog.
+    pub timezone: Option<String>,
     #[cfg(feature = "devtools")]
     pub devtools: Option<bool>,
 }
@@ -49,6 +67,7 @@ impl AppConfig {
         if let Some(title) = self.title {
             o.title = title;
         }
+        o.window_label = self.window_label;
         if self.inner_width.is_some() {
             o.inner_width = self.inner_width;
         }
@@ -66,6 +85,36 @@ impl AppConfig {
         }
         if let Some(bd) = self.backdrop {
             o.backdrop = bd;
+        }
+        if let Some(v) = self.blur_amount {
+            o.blur_amount = Some(v);
+        }
+        if let Some(v) = self.glass_tint {
+            o.glass_tint = Some(v);
+        }
+        if let Some(v) = self.glass_tint_dark {
+            o.glass_tint_dark = Some(v);
+        }
+        if let Some(v) = self.luminosity_opacity {
+            o.luminosity_opacity = Some(v);
+        }
+        if let Some(v) = self.aero_color_balance {
+            o.aero_color_balance = Some(v);
+        }
+        if let Some(v) = self.aero_afterglow_balance {
+            o.aero_afterglow_balance = Some(v);
+        }
+        if let Some(v) = self.aero_blur_balance {
+            o.aero_blur_balance = Some(v);
+        }
+        if let Some(v) = self.aero_afterglow {
+            o.aero_afterglow = Some(v);
+        }
+        if let Some(v) = self.aero_reflection {
+            o.aero_reflection = Some(v);
+        }
+        if let Some(v) = self.aero_parallax {
+            o.aero_parallax = Some(v);
         }
         o.default_font_family = self.font_family;
         o.default_font_size = self.font_size;
@@ -112,6 +161,22 @@ impl AppConfig {
             set_text_defaults(d);
         }
 
+        if let Some(ref path) = self.i18n {
+            apply_i18n_file(path);
+        }
+        if let Some(ref loc) = self.locale {
+            #[cfg(feature = "i18n")]
+            crate::i18n::set_locale(loc.as_str());
+            #[cfg(not(feature = "i18n"))]
+            let _ = loc;
+        }
+        if let Some(ref tz) = self.timezone {
+            #[cfg(feature = "i18n")]
+            crate::i18n::set_timezone(tz.as_str());
+            #[cfg(not(feature = "i18n"))]
+            let _ = tz;
+        }
+
         if let Some(ref title) = self.title {
             super::window_chrome::set_window_title(title);
         }
@@ -121,6 +186,27 @@ impl AppConfig {
             }
             _ => {}
         }
+    }
+}
+
+fn apply_i18n_file(path: &str) {
+    #[cfg(feature = "i18n")]
+    {
+        use std::sync::Mutex;
+        static LAST: Mutex<Option<String>> = Mutex::new(None);
+        let mut g = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if g.as_deref() == Some(path) {
+            return;
+        }
+        *g = Some(path.to_string());
+        drop(g);
+        if let Err(e) = crate::i18n::load(path) {
+            log::warn!("i18n: failed to load {path}: {e}");
+        }
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        let _ = path;
     }
 }
 
@@ -150,6 +236,12 @@ impl AppBuilder {
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.config.title = Some(title.into());
+        self
+    }
+
+    pub fn window_label(mut self, label: impl Into<String>) -> Self {
+        let s = label.into();
+        self.config.window_label = if s.trim().is_empty() { None } else { Some(s) };
         self
     }
 
@@ -193,6 +285,56 @@ impl AppBuilder {
         self
     }
 
+    pub fn blur_amount(mut self, amount: f32) -> Self {
+        self.config.blur_amount = Some(amount);
+        self
+    }
+
+    pub fn glass_tint(mut self, tint: impl Into<super::window_chrome::GlassTintArg>) -> Self {
+        self.config.glass_tint = tint.into().0;
+        self
+    }
+
+    pub fn glass_tint_dark(mut self, tint: impl Into<super::window_chrome::GlassTintArg>) -> Self {
+        self.config.glass_tint_dark = tint.into().0;
+        self
+    }
+
+    pub fn luminosity_opacity(mut self, opacity: f32) -> Self {
+        self.config.luminosity_opacity = Some(opacity);
+        self
+    }
+
+    pub fn aero_color_balance(mut self, v: f32) -> Self {
+        self.config.aero_color_balance = Some(v);
+        self
+    }
+
+    pub fn aero_afterglow_balance(mut self, v: f32) -> Self {
+        self.config.aero_afterglow_balance = Some(v);
+        self
+    }
+
+    pub fn aero_blur_balance(mut self, v: f32) -> Self {
+        self.config.aero_blur_balance = Some(v);
+        self
+    }
+
+    pub fn aero_afterglow(mut self, tint: impl Into<super::window_chrome::GlassTintArg>) -> Self {
+        self.config.aero_afterglow = tint.into().0;
+        self
+    }
+
+    pub fn aero_reflection(mut self, intensity: f32) -> Self {
+        self.config.aero_reflection = Some(intensity);
+        self
+    }
+
+    pub fn aero_parallax(mut self, amount: f32) -> Self {
+        self.config.aero_parallax = Some(amount);
+        self
+    }
+
     /// CSS `font-family` list (document default).
     pub fn font(mut self, family: impl Into<String>) -> Self {
         self.config.font_family = Some(family.into());
@@ -212,6 +354,29 @@ impl AppBuilder {
 
     pub fn synthetic_bold(mut self, enabled: bool) -> Self {
         self.config.synthetic_bold = Some(enabled);
+        self
+    }
+
+    /// BCP 47 locale (`zh-CN` / `ar`).
+    pub fn locale(mut self, locale: impl Into<String>) -> Self {
+        self.config.locale = Some(locale.into());
+        self
+    }
+
+    /// Alias of [`Self::locale`] (`lang="zh-CN"`).
+    pub fn lang(self, locale: impl Into<String>) -> Self {
+        self.locale(locale)
+    }
+
+    /// Load `i18n.toml` (and `dir = "locales"` if set). Requires feature `i18n`.
+    pub fn i18n(mut self, path: impl Into<String>) -> Self {
+        self.config.i18n = Some(path.into());
+        self
+    }
+
+    /// IANA timezone (`Asia/Shanghai`). Requires feature `i18n`; not a catalog key.
+    pub fn timezone(mut self, tz: impl Into<String>) -> Self {
+        self.config.timezone = Some(tz.into());
         self
     }
 
@@ -282,6 +447,18 @@ pub(crate) fn materialize_app_shell(config: AppConfig, children: Vec<Element>) -
         .children(children)
         .into();
     el.set_attr("data-slot", "app");
+    #[cfg(feature = "i18n")]
+    {
+        el.set_attr("lang", crate::i18n::locale().tag());
+        el.set_attr("dir", crate::i18n::writing_direction().as_str());
+        if crate::i18n::writing_direction().is_rtl() {
+            el = el.text_direction(crate::style::TextDirection::Rtl);
+        }
+    }
+    #[cfg(not(feature = "i18n"))]
+    {
+        el.set_attr("lang", config.locale.as_deref().unwrap_or("en"));
+    }
     el
 }
 
@@ -306,6 +483,7 @@ mod tests {
     fn app_builder_maps_title_size_font_and_frameless() {
         let o = app()
             .title("Hello")
+            .window_label("main")
             .size(640.0, 480.0)
             .font("Inter, sans-serif")
             .font_size(20)
@@ -314,6 +492,7 @@ mod tests {
             .transparent(true)
             .into_window_options();
         assert_eq!(o.title, "Hello");
+        assert_eq!(o.window_label.as_deref(), Some("main"));
         assert_eq!(o.inner_width, Some(640.0));
         assert_eq!(o.inner_height, Some(480.0));
         assert!(!o.decorations);
@@ -321,6 +500,31 @@ mod tests {
         assert_eq!(o.default_font_family.as_deref(), Some("Inter, sans-serif"));
         assert_eq!(o.default_font_size, Some(20.0));
         assert_eq!(o.default_font_weight, Some(500));
+    }
+
+    #[test]
+    fn app_builder_maps_glass_recipe_knobs() {
+        let o = app()
+            .blur(true)
+            .backdrop("aero")
+            .blur_amount(18.0)
+            .glass_tint("#80FF0000")
+            .glass_tint_dark("#80202020")
+            .luminosity_opacity(0.4)
+            .aero_color_balance(0.1)
+            .aero_afterglow("#40FFE8A0")
+            .aero_reflection(0.2)
+            .into_window_options();
+        assert!(o.blur);
+        assert_eq!(o.backdrop, WindowBackdrop::Aero);
+        assert_eq!(o.blur_amount, Some(18.0));
+        assert_eq!(o.glass_tint, Some([0x80, 0xff, 0x00, 0x00]));
+        assert_eq!(o.glass_tint_dark, Some([0x80, 0x20, 0x20, 0x20]));
+        assert_eq!(o.luminosity_opacity, Some(0.4));
+        assert_eq!(o.aero_color_balance, Some(0.1));
+        assert_eq!(o.aero_afterglow, Some([0x40, 0xff, 0xe8, 0xa0]));
+        assert_eq!(o.aero_reflection, Some(0.2));
+        assert!(o.wants_custom_dcomp());
     }
 
     #[test]
@@ -332,6 +536,13 @@ mod tests {
         assert_eq!(o.decorations, d.decorations);
         assert!(o.default_font_size.is_none());
         assert!(o.default_font_family.is_none());
+    }
+
+    #[test]
+    fn app_builder_locale_is_recorded() {
+        let cfg = app().locale("zh-CN").i18n("i18n.toml").config().clone();
+        assert_eq!(cfg.locale.as_deref(), Some("zh-CN"));
+        assert_eq!(cfg.i18n.as_deref(), Some("i18n.toml"));
     }
 
     #[test]

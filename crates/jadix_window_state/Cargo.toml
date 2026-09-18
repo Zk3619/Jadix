@@ -1,0 +1,33 @@
+[package]
+name = "jadix_window_state"
+version.workspace = true
+edition.workspace = true
+description = "Cross-platform window state persistence (TOML) for jadix / winit apps"
+license.workspace = true
+repository = "https://github.com/Zk3619/Jdix"
+readme = "README.md"
+keywords = ["gui", "window", "winit", "jadix"]
+categories = ["gui"]
+
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/README.md",
+  "/src/**/*",
+]
+
+[features]
+# Persistence + `WindowView` are always available. `winit` applies to live windows.
+# `jadix` registers a lifecycle hook so restore/save run inside the engine event loop.
+default = ["winit"]
+winit = ["dep:winit"]
+jadix = ["winit", "dep:jadix"]
+
+[dependencies]
+log = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+winit = { workspace = true, optional = true }
+# Core engine crate is still on disk as `crates/rui`; workspace alias `jadix`
+# so this crate's feature / rustc path use the W4 umbrella name.
+jadix = { workspace = true, optional = true }

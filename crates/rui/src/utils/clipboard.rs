@@ -41,7 +41,7 @@ pub fn get_text() -> Option<String> {
     crate::platform::clipboard_get_text()
 }
 
-/// MIME 类型常量（文本族）。原生 `clipboard-rs` 默认路径以纯文本为主；
+/// MIME 类型常量（文本族）。`jadix_clipboard` 默认路径以纯文本为主；
 /// 自定义 MIME 在无平台扩展时退化为 UTF-8 文本写入。
 pub mod mime {
     pub const TEXT_PLAIN: &str = "text/plain";

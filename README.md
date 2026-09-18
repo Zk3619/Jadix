@@ -42,6 +42,10 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
 - **组件与样式能力 | Components and styling**  
   内置 `Button`、`Input`、`Label`、`ScrollArea`、`Scrollbar` 等组件，支持类 utility 的样式属性写法。
 
+- **国际化 | i18n**
+  `src/i18n` 整模块收进 `--features i18n`（与 `a11y` 相同）。应用文案用两参数 `tr_default("save", "Save")`；RUI 组件用 `tr_default_zh(..., "Previous", "上一页")` 带 en-US/zh-CN。其它语言只开 feature、改 `i18n.toml` / `locales/<tag>.toml` 覆盖即可。关 feature 时返回英文源字符串。无障碍桥接需 `--features a11y`。
+  The `i18n` module is feature-gated. Apps call two-arg `tr_default`. RUI chrome ships en-US/zh-CN via `tr_default_zh`. More locales are TOML overlays. AccessKit is `--features a11y`.
+
 - **开发期热重载 | Dev-time hot reload**  
   `rui_hot_reload_cli` 监听 `crates/` 与 `examples/` 变更，通过本地 TCP 通知运行时刷新模板与资源。
 
@@ -56,6 +60,8 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
 - `accesskit` / `accesskit_winit` - accessibility bridge
 - `syn` / `quote` / `proc-macro2` - macro infrastructure
 
+Versions are pinned once in the root `[workspace.dependencies]` table. Member crates use `{ workspace = true }`. Adding or bumping a crate follows `development-docs/ops/crate_deps.md`; licenses and duplicate versions are gated by [`deny.toml`](deny.toml) (`cargo deny check licenses bans sources`).
+
 ---
 
 ## 工作区结构 | Workspace Structure
@@ -66,9 +72,12 @@ rui/
 │  ├─ rui/                  # 核心运行时与组件系统 | Core runtime and components
 │  ├─ rui_macros/           # #[component] / ui! 宏 | Proc-macro crate
 │  ├─ rui_style_tokens/     # utility 真源 | Shared style tokens
-│  └─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
+│  ├─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
+│  └─ jadix_window_state/   # 可选：窗口几何 TOML 持久化 | Optional window-state crate
 └─ examples/
-   └─ gallery/              # 组件与能力展示 | Component gallery
+   ├─ gallery/              # 组件与能力展示 | Component gallery
+   ├─ calculator/           # 体积 / 内存基线 | Size/memory baseline
+   └─ gpu_probe/            # winit+wgpu 驱动探针 | Driver-floor probe
 ```
 
 ---
@@ -235,4 +244,4 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 Apache License 2.0 — see [LICENSE](LICENSE). Bundled fonts and icon assets are listed in [NOTICE](NOTICE).
 
-Dependency licenses are audited with [`deny.toml`](deny.toml) (`cargo deny check licenses`).
+Dependency licenses, bans, and crate sources are audited with [`deny.toml`](deny.toml) (`cargo deny check licenses bans sources`). Version policy lives in `development-docs/ops/crate_deps.md`.

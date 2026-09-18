@@ -60,6 +60,87 @@ pub(crate) fn apply_created_window(
     }
 }
 
+pub(crate) fn try_init_custom_glass(window: &Window, options: &WindowOptions) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        os::windows::glass::try_init_custom(window, options)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, options);
+        false
+    }
+}
+
+#[cfg(all(windows, feature = "backend-dx12"))]
+pub(crate) fn custom_glass_surface_handle(window: &Window) -> Option<*mut std::ffi::c_void> {
+    os::windows::glass::composition_surface_handle(window)
+}
+
+pub(crate) fn glass_detach(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        os::windows::glass::detach_window(window);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
+pub(crate) fn glass_on_focus(window: &Window, focused: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        os::windows::glass::on_focus(window, focused);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, focused);
+    }
+}
+
+pub(crate) fn glass_on_shown(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        os::windows::glass::on_shown(window);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
+pub(crate) fn glass_on_moved(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        os::windows::glass::on_moved(window);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
+pub(crate) fn glass_sync_rui_theme() {
+    #[cfg(all(target_os = "windows", feature = "backend-dx12"))]
+    {
+        os::windows::glass::sync_rui_theme();
+        crate::app::runtime::request_redraw_all();
+    }
+}
+
+pub(crate) fn glass_on_os_theme(os_dark: bool) {
+    #[cfg(all(target_os = "windows", feature = "backend-dx12"))]
+    {
+        os::windows::glass::set_os_dark_all(os_dark);
+        crate::app::runtime::request_redraw_all();
+    }
+    #[cfg(not(all(target_os = "windows", feature = "backend-dx12")))]
+    {
+        let _ = os_dark;
+    }
+}
+
 pub(crate) fn process_private_mb() -> f64 {
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {

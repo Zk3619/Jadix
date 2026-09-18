@@ -1,4 +1,4 @@
-//! macOS edit-shortcut modifier is Cmd (Super). Text I/O shares desktop `clipboard-rs`.
+//! macOS edit-shortcut modifier is Cmd (Super). Text I/O shares desktop `jadix_clipboard`.
 
 use winit::keyboard::ModifiersState;
 

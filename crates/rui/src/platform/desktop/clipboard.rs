@@ -1,9 +1,8 @@
-//! Desktop-default clipboard: `clipboard-rs` text I/O + Ctrl as the edit modifier.
+//! Desktop-default clipboard: `jadix_clipboard` text I/O + Ctrl as the edit modifier.
 //!
-//! macOS overrides the modifier (Cmd / Super). Do not swap crates here
-//! (`docs/engine/platform.md` §9.4).
+//! macOS overrides the modifier (Cmd / Super).
 
-use clipboard_rs::{Clipboard, ClipboardContext};
+use jadix_clipboard::{Clipboard, ClipboardContext};
 use winit::keyboard::ModifiersState;
 
 pub(crate) fn clipboard_set_text(text: &str) {

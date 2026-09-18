@@ -1,18 +1,19 @@
 [package]
 name = "gallery"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
-rui = { path = "../../crates/rui", default-features = false, features = [
+rui = { workspace = true, features = [
     "bundled-lucide",
     "lucide-animated",
     "svg",
     "text-undo",
 ] }
+jadix_window_state = { workspace = true, features = ["jadix"] }
 log = { workspace = true }
 
 [features]
@@ -36,5 +37,12 @@ image-stream = ["rui/image-stream"]
 # Optional wgpu compute (blur / histogram / particles / backdrop-filter).
 #   cargo run -p gallery --features compute
 compute = ["rui/compute"]
+# Windows custom DComp glass recipes (Blur / Aero / tunable Acrylic). Enables DX12.
+#   cargo run -p gallery --features glass
+glass = ["rui/backend-dx12"]
+# Locale overlays. cargo run -p gallery --features i18n
+i18n = ["rui/i18n"]
+# AccessKit bridge. cargo run -p gallery --features a11y
+a11y = ["rui/a11y"]
 # Deprecated alias (raster formats are always available via rui's image core).
 images = ["rui/images"]

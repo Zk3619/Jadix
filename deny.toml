@@ -1,6 +1,17 @@
-# License policy for RUI workspace crates.
-# Run: cargo deny check licenses
-# See docs/ops/PUBLISH.md §2.1
+# License and dependency policy for the RUI workspace.
+# Run: cargo deny check licenses bans sources
+# Inventory and upgrade rules: development-docs/ops/crate_deps.md
+# Publish checklist: development-docs/ops/PUBLISH.md
+
+[graph]
+# Feature unification is workspace-wide. Check the three CI targets so
+# Windows/macOS-only duplicates (windows-sys, objc2) are visible on Linux CI.
+all-features = false
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
 
 [licenses]
 version = 2
@@ -18,6 +29,8 @@ allow = [
   "OpenSSL",
   "BSL-1.0",
 ]
+# MPL-2.0 / OpenSSL stay on the allow-list for future optional deps; they are
+# unused in the current graph (cargo-deny warns license-not-encountered).
 confidence-threshold = 0.8
 # v2: only `allow` is used; GPL/LGPL/AGPL are rejected because they are not listed.
 
@@ -26,8 +39,46 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "deny"
+# Path members inherit `{ workspace = true }` with an explicit version in
+# `[workspace.dependencies]`. Keep this on so unpublished examples stay legal
+# if a path pin ever drops its version.
+allow-wildcard-paths = true
+
+# Duplicate versions we do not control (winit / cosmic-text / resvg / rfd).
+# Only crates that actually appear twice in the three-target graph; new names still warn.
+skip = [
+  { crate = "windows-sys", reason = "winit 0.30 pins 0.52; rustix 0.38 linux leftover 0.59; rfd/rui IME/stacker/notify 9/tray-icon 0.25 pin 0.61" },
+  { crate = "objc2", reason = "winit/accesskit pin 0.5; rfd/wgpu-hal/jadix_clipboard pin 0.6" },
+  { crate = "objc2-app-kit", reason = "follows objc2 0.5 vs 0.6" },
+  { crate = "objc2-foundation", reason = "follows objc2 0.5 vs 0.6" },
+  { crate = "block2", reason = "follows objc2 0.5 vs 0.6" },
+  { crate = "bitflags", reason = "core-graphics / kqueue-sys / redox_syscall still on 1.x" },
+  { crate = "fontdb", reason = "cosmic-text 0.19 pins 0.23; usvg 0.48 pins 0.24" },
+  { crate = "harfrust", reason = "cosmic-text 0.19 pins 0.5; usvg 0.48 pins 0.12" },
+  { crate = "roxmltree", reason = "fontconfig-parser pins 0.20; usvg 0.48 pins 0.21" },
+  { crate = "tiny-skia", reason = "winit linux sctk-adwaita pins 0.11; resvg 0.48 pins 0.12" },
+  { crate = "tiny-skia-path", reason = "follows tiny-skia 0.11 vs 0.12" },
+  { crate = "font-types", reason = "cosmic-text harfrust 0.5 vs usvg/swash fontations 0.12/0.44" },
+  { crate = "skrifa", reason = "cosmic-text harfrust 0.5 → 0.40; usvg 0.48 + swash share 0.44" },
+  { crate = "read-fonts", reason = "follows skrifa 0.40 vs 0.44" },
+  { crate = "hashbrown", reason = "accesskit 0.16 vs wgpu/naga 0.17" },
+  { crate = "thiserror", reason = "winit android/linux path on 1.x; wgpu/tray-icon on 2.x" },
+  { crate = "thiserror-impl", reason = "follows thiserror 1 vs 2" },
+  { crate = "syn", reason = "proc-macro-error (gtk path) on 1.x; thiserror 2 / ICU4X on 3.x; we pin 2.x" },
+  { crate = "rustix", reason = "winit 0.38 vs notify/stacker 1.x" },
+  { crate = "linux-raw-sys", reason = "follows rustix 0.38 vs 1.x" },
+  { crate = "rustc-hash", reason = "naga 1.x vs cosmic-text 2.x" },
+  { crate = "smol_str", reason = "winit 0.2 vs cosmic-text 0.3" },
+]
+
+[bans.workspace-dependencies]
+# `cosmic-text` is a stack pin (glyphon re-exports it); not a direct dep.
+unused = "allow"
+duplicates = "deny"
+include-path-dependencies = true
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -35,8 +35,8 @@ jobs:
         run: cargo clippy -p rui --all-targets --no-deps --features text-undo -- -D warnings
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
-      - name: License audit (deny.toml)
-        run: cargo deny check licenses
+      - name: License + dependency policy (deny.toml)
+        run: cargo deny check licenses bans sources
 
   test:
     name: test (${{ matrix.os }})

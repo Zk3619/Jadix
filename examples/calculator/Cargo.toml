@@ -1,10 +1,10 @@
 [package]
 name = "calculator"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
-rui = { path = "../../crates/rui", default-features = false }
+rui = { workspace = true }
 winit = { workspace = true }
