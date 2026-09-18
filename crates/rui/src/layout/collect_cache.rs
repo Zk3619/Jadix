@@ -1,12 +1,62 @@
 //! Cross-frame fingerprint display list: skip collect of clean subtrees.
 //!
 //! Analog of GPUI `Entity::cached` without Entity: paint-hash the retained tree, replay
-//! last frame's ops when a sibling subtree is unchanged. FullClear GPU present still
-//! receives a complete list (replay, not omit) — see [`crate::app::damage`].
+//! last frame's ops when a sibling subtree is unchanged. Fully-visible scrolled subtrees
+//! translate those ops by `GeomKey.scroll` instead of recollecting. FullClear GPU present
+//! still receives a complete list (replay, not omit) — see [`crate::app::damage`].
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+
+#[cfg(test)]
+std::thread_local! {
+    static STAMP_HASHED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Fast non-crypto hasher for paint fingerprints (SipHash was a collect-floor on gallery).
+struct PaintHasher {
+    state: u64,
+}
+
+impl PaintHasher {
+    fn new() -> Self {
+        Self {
+            state: 0x243f_6a88_85a3_08d3,
+        }
+    }
+}
+
+impl Hasher for PaintHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut i = 0;
+        while i + 8 <= bytes.len() {
+            let chunk = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+            self.write_u64(chunk);
+            i += 8;
+        }
+        while i < bytes.len() {
+            self.state = self
+                .state
+                .rotate_left(5)
+                .wrapping_mul(0x517c_c1b7_2722_0a95)
+                ^ (bytes[i] as u64);
+            i += 1;
+        }
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.state = self
+            .state
+            .rotate_left(5)
+            .wrapping_mul(0x517c_c1b7_2722_0a95)
+            ^ i;
+    }
+
+    fn finish(&self) -> u64 {
+        self.state
+    }
+}
 
 use taffy::prelude::NodeId;
 
@@ -133,12 +183,18 @@ pub(crate) struct CachedSubtree {
 
 #[derive(Default)]
 pub(crate) struct CollectSkipState {
-    /// When false (scroll / cold FullClear), never replay and do not clone the DL.
+    /// When false (layout / resize / settle / full rebuild), never replay and do not clone the DL.
+    /// Smooth scroll keeps this true: fully-clipped-inside subtrees translate by `GeomKey.scroll`;
+    /// clean siblings (sidebar, idle cards) fingerprint-replay.
     pub allowed: bool,
     prev: HashMap<NodeId, CachedSubtree>,
     next: HashMap<NodeId, CachedSubtree>,
     pub skipped: u32,
     pub patched: u32,
+    /// First frame of a CSS transform tween under an idle wrapper. `reuse_idle`
+    /// would keep the rest paint-hash and skip-replay the rest Bake (collapsed
+    /// reaction hover:scale looks like it lost enlarge). One-shot per collect.
+    pub hash_bust: bool,
 }
 
 impl CollectSkipState {
@@ -160,6 +216,7 @@ impl CollectSkipState {
         self.next.clear();
         self.skipped = 0;
         self.patched = 0;
+        self.hash_bust = false;
     }
 
     pub fn end_frame(&mut self) {
@@ -170,8 +227,10 @@ impl CollectSkipState {
                 self.prev.insert(k, v);
             }
         } else {
-            // Layout / scroll / resize: absolute DLs are stale. Keeping `prev` across
+            // Layout / resize / settle: absolute DLs are stale. Keeping `prev` across
             // a skip-off frame is what let maximize replay the pre-grow list.
+            // Smooth scroll must not take this branch — wiping the cache every wheel
+            // tick recollects the whole gallery (sidebar + idle cards + +N portals).
             self.next.clear();
             self.prev.clear();
         }
@@ -193,14 +252,42 @@ impl CollectSkipState {
             return None;
         }
         let cached = self.prev.get(&node)?;
-        if cached.paint_hash != el.collect_paint_hash || !geom_eq(&cached.geom, &geom) {
+        if cached.paint_hash != el.collect_paint_hash {
             if cached.paint_hash != 0 {
                 self.patched = self.patched.saturating_add(1);
             }
             return None;
         }
-        splice_cached(
-            cached, instances, textured, text, chrome, clip_polys, paint_ops,
+        if geom_eq(&cached.geom, &geom) {
+            splice_cached(
+                cached, instances, textured, text, chrome, clip_polys, paint_ops,
+            );
+            self.skipped = self.skipped.saturating_add(1);
+            return Some(cached.extent);
+        }
+        let Some(delta) = scroll_translate_delta(&cached.geom, &geom) else {
+            if cached.paint_hash != 0 {
+                self.patched = self.patched.saturating_add(1);
+            }
+            return None;
+        };
+        if el.collect_skip_scroll_pin {
+            self.patched = self.patched.saturating_add(1);
+            return None;
+        }
+        // Overflow/clip containers cull descendants; their cached DL is incomplete.
+        if node_clips_descendants(el) {
+            self.patched = self.patched.saturating_add(1);
+            return None;
+        }
+        // Incomplete DLs: clip-cull dropped descendants while this box straddled / sat
+        // outside the viewport. Translating that slice would omit rows that just entered.
+        if !subtree_fully_inside_clip(&cached.geom, el) || !subtree_fully_inside_clip(&geom, el) {
+            self.patched = self.patched.saturating_add(1);
+            return None;
+        }
+        splice_cached_translated(
+            cached, delta, geom, instances, textured, text, chrome, clip_polys, paint_ops,
         );
         self.skipped = self.skipped.saturating_add(1);
         Some(cached.extent)
@@ -243,14 +330,66 @@ impl CollectSkipState {
 }
 
 fn geom_eq(a: &GeomKey, b: &GeomKey) -> bool {
+    geom_eq_except_scroll(a, b) && a.scroll == b.scroll
+}
+
+fn geom_eq_except_scroll(a: &GeomKey, b: &GeomKey) -> bool {
     a.abs == b.abs
         && a.size == b.size
-        && a.scroll == b.scroll
         && a.has_clip == b.has_clip
         && a.clip == b.clip
         && a.opacity == b.opacity
         && a.scale == b.scale
         && a.linear == b.linear
+}
+
+/// `render = abs - scroll`. Content moves by `old_scroll - new_scroll`.
+fn scroll_translate_delta(old: &GeomKey, new: &GeomKey) -> Option<[f32; 2]> {
+    if !geom_eq_except_scroll(old, new) {
+        return None;
+    }
+    if old.scroll == new.scroll {
+        return None;
+    }
+    Some([
+        f32::from_bits(old.scroll[0]) - f32::from_bits(new.scroll[0]),
+        f32::from_bits(old.scroll[1]) - f32::from_bits(new.scroll[1]),
+    ])
+}
+
+fn geom_paint_rect(g: &GeomKey) -> [f32; 4] {
+    [
+        f32::from_bits(g.abs[0]) - f32::from_bits(g.scroll[0]),
+        f32::from_bits(g.abs[1]) - f32::from_bits(g.scroll[1]),
+        f32::from_bits(g.size[0]),
+        f32::from_bits(g.size[1]),
+    ]
+}
+
+fn geom_clip_rect(g: &GeomKey) -> Option<[f32; 4]> {
+    if !g.has_clip {
+        return None;
+    }
+    Some([
+        f32::from_bits(g.clip[0]),
+        f32::from_bits(g.clip[1]),
+        f32::from_bits(g.clip[2]),
+        f32::from_bits(g.clip[3]),
+    ])
+}
+
+fn subtree_fully_inside_clip(g: &GeomKey, _el: &Element) -> bool {
+    let Some(clip) = geom_clip_rect(g) else {
+        return true;
+    };
+    // Layout box, no shadow pad: a flush-bottom row must still translate-replay.
+    // Partial overlap is incomplete (clip-cull dropped descendants).
+    const EPS: f32 = 0.5;
+    let r = geom_paint_rect(g);
+    r[0] + EPS >= clip[0]
+        && r[1] + EPS >= clip[1]
+        && r[0] + r[2] <= clip[0] + clip[2] + EPS
+        && r[1] + r[3] <= clip[1] + clip[3] + EPS
 }
 
 /// Fingerprint of a subtree's **paint** geometry.
@@ -306,9 +445,6 @@ fn node_opens_stacking_band(el: &Element) -> bool {
 }
 
 pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
-    if el.children.is_empty() {
-        return false;
-    }
     if el.collect_skip_live {
         return false;
     }
@@ -318,7 +454,25 @@ pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
     if node_opens_stacking_band(el) {
         return false;
     }
+    // Overlay thumbs are relative leaves. Skip-replay uses Taffy leftover
+    // (min cap at the unscrolled top) and ignores `thumb_geometry_override`
+    // / live cubic — frozen / invisible rail while the list scrolls.
+    if node_is_scrollbar_chrome(el) {
+        return false;
+    }
     true
+}
+
+fn node_is_scrollbar_chrome(el: &Element) -> bool {
+    el.focus_id.as_deref().is_some_and(|fid| {
+        fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+            || fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+    })
+}
+
+fn node_clips_descendants(el: &Element) -> bool {
+    !matches!(el.style.overflow.x, taffy::style::Overflow::Visible)
+        || !matches!(el.style.overflow.y, taffy::style::Overflow::Visible)
 }
 
 fn node_collect_is_live(el: &Element) -> bool {
@@ -371,23 +525,65 @@ fn node_collect_is_live(el: &Element) -> bool {
 }
 
 /// Bottom-up paint hash so a dirty leaf invalidates ancestors but not siblings.
-pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element) {
-    fn rec(el: &mut Element) -> u64 {
-        let mut h = DefaultHasher::new();
+///
+/// `reuse_idle`: skip rehashing idle **subtrees** on scroll-only / ViewportsOnly
+/// frames. `hash_paint_self` on every wrapper was the collect floor (~9ms). Live
+/// and scroll-viewport paths still rehash so spin / `scroll_offset` stay fresh.
+pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
+    fn rec(el: &mut Element, reuse_idle: bool, ancestor_live: bool) -> u64 {
+        let self_live = ancestor_live || node_collect_is_live(el);
+        if reuse_idle
+            && !self_live
+            && !el.collect_skip_live
+            && !el.collect_skip_has_scroll
+            && !node_is_scrollbar_chrome(el)
+            && el.collect_paint_hash != 0
+        {
+            return el.collect_paint_hash;
+        }
+        #[cfg(test)]
+        STAMP_HASHED.with(|c| c.set(c.get().saturating_add(1)));
+        let mut h = PaintHasher::new();
         hash_paint_self(el, &mut h);
-        // Side-channel nodes stamp `live` so ancestors walk into them. Skipping the
-        // root while a portal layer sits underneath parks `overlay_split` at `len`.
+        // Side-channel bubbles UP so ancestors walk into portals / stacking parents.
+        // It must not flow DOWN (`self_live`): a z-index badge used to mark the whole
+        // gallery column live and force an 8ms stamp every ViewportsOnly frame.
         let mut live = node_collect_is_live(el) || node_has_collect_side_channel(el);
+        let mut scroll_pin = el.style.position_sticky
+            || el.style.position_fixed
+            || el.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(String::as_str) == Some("1");
+        let mut has_scroll = node_seeds_scroll_skip(el);
         for child in &mut el.children {
-            rec(child).hash(&mut h);
+            rec(child, reuse_idle, self_live).hash(&mut h);
             live |= child.collect_skip_live;
+            scroll_pin |= child.collect_skip_scroll_pin;
+            has_scroll |= child.collect_skip_has_scroll;
         }
         let hash = h.finish();
         el.collect_paint_hash = hash;
-        el.collect_skip_live = live;
+        el.collect_skip_live = live || ancestor_live;
+        el.collect_skip_scroll_pin = scroll_pin;
+        el.collect_skip_has_scroll = has_scroll;
         hash
     }
-    rec(root);
+    rec(root, reuse_idle, false);
+}
+
+fn node_seeds_scroll_skip(el: &Element) -> bool {
+    if el.contains_scroll_viewport {
+        return true;
+    }
+    if el.scroll_offset[0] != 0.0 || el.scroll_offset[1] != 0.0 {
+        return true;
+    }
+    if matches!(el.style.overflow.x, taffy::style::Overflow::Scroll)
+        || matches!(el.style.overflow.y, taffy::style::Overflow::Scroll)
+    {
+        return true;
+    }
+    el.focus_id.as_deref().is_some_and(|id| {
+        id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+    })
 }
 
 fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
@@ -621,19 +817,25 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
 /// Fingerprint skip is a **paint-only** cache of absolute display-list ops.
 ///
 /// `Clean` / `StyleChanged`: geometry matches the previous frame; replay is valid
-/// for subtrees that are not live. `LayoutChanged` / `StructureChanged` (maximize,
-/// text-fit settle, wrap) move flex boxes — replaying pre-reflow ops ghosts glyphs
-/// and freezes time-sampled paint. Smooth scroll and live resize are the same class.
+/// for subtrees that are not live. `StructureChanged` and live resize/settle still
+/// gate skip off (new Taffy ids / mid-drag viewport). `LayoutChanged` (maximize
+/// fit, wrap) **is** allowed: [`GeomKey`] includes origin+size, so moved flex
+/// boxes miss replay instead of ghosting at the pre-grow Y. Gating skip off for
+/// LayoutChanged forced a full collect every glyphon-fit frame after maximize.
+///
+/// Smooth scroll (`scroll_paint_only`) is **not** a gate: fully-visible scrolled
+/// nodes translate last-frame ops by `GeomKey.scroll`; clean siblings keep replaying.
 pub(crate) fn collect_skip_allowed_for_frame(
     layout: LayoutStatus,
-    scroll_paint_only: bool,
+    _scroll_paint_only: bool,
     full_rebuild: bool,
     viewport_resizing: bool,
     text_settling: bool,
 ) -> bool {
-    matches!(layout, LayoutStatus::Clean | LayoutStatus::StyleChanged)
-        && !scroll_paint_only
-        && !full_rebuild
+    matches!(
+        layout,
+        LayoutStatus::Clean | LayoutStatus::StyleChanged | LayoutStatus::LayoutChanged
+    ) && !full_rebuild
         && !viewport_resizing
         && !text_settling
 }
@@ -1065,6 +1267,159 @@ fn splice_cached(
     }
 }
 
+fn splice_cached_translated(
+    cached: &CachedSubtree,
+    delta: [f32; 2],
+    new_geom: GeomKey,
+    instances: &mut Vec<InstanceInput>,
+    textured: &mut Vec<TexturedDraw>,
+    text: &mut Vec<TextLayoutInfo>,
+    chrome: &mut Vec<InstanceInput>,
+    clip_polys: &mut Vec<GpuClipPoly>,
+    paint_ops: &mut Vec<PaintOp>,
+) {
+    let inst0 = instances.len();
+    let tex0 = textured.len();
+    let text0 = text.len();
+    let chrome0 = chrome.len();
+    let poly0 = clip_polys.len();
+    splice_cached(
+        cached, instances, textured, text, chrome, clip_polys, paint_ops,
+    );
+    let old = &cached.geom;
+    for inst in &mut instances[inst0..] {
+        nudge_instance(inst, delta, old, &new_geom);
+    }
+    for draw in &mut textured[tex0..] {
+        nudge_textured(draw, delta, old, &new_geom);
+    }
+    for node in &mut text[text0..] {
+        nudge_text(node, delta, old, &new_geom);
+    }
+    for inst in &mut chrome[chrome0..] {
+        nudge_instance(inst, delta, old, &new_geom);
+    }
+    for poly in &mut clip_polys[poly0..] {
+        nudge_clip_poly(poly, delta, old, &new_geom);
+    }
+}
+
+fn clip_is_parent(pos: [f32; 2], size: [f32; 2], geom: &GeomKey) -> bool {
+    geom.has_clip
+        && size[0] >= 0.0
+        && pos[0].to_bits() == geom.clip[0]
+        && pos[1].to_bits() == geom.clip[1]
+        && size[0].to_bits() == geom.clip[2]
+        && size[1].to_bits() == geom.clip[3]
+}
+
+fn assign_parent_clip(pos: &mut [f32; 2], size: &mut [f32; 2], geom: &GeomKey) {
+    if geom.has_clip {
+        *pos = [f32::from_bits(geom.clip[0]), f32::from_bits(geom.clip[1])];
+        *size = [f32::from_bits(geom.clip[2]), f32::from_bits(geom.clip[3])];
+    } else {
+        *pos = [0.0, 0.0];
+        *size = InstanceInput::NO_CLIP_SIZE;
+    }
+}
+
+fn nudge_instance(inst: &mut InstanceInput, delta: [f32; 2], old: &GeomKey, new: &GeomKey) {
+    inst.rect_pos[0] += delta[0];
+    inst.rect_pos[1] += delta[1];
+    if inst.clip_size[0] < 0.0 {
+        return;
+    }
+    if clip_is_parent(inst.clip_pos, inst.clip_size, old) {
+        assign_parent_clip(&mut inst.clip_pos, &mut inst.clip_size, new);
+    } else {
+        inst.clip_pos[0] += delta[0];
+        inst.clip_pos[1] += delta[1];
+    }
+}
+
+fn nudge_textured(draw: &mut TexturedDraw, delta: [f32; 2], old: &GeomKey, new: &GeomKey) {
+    draw.rect[0] += delta[0];
+    draw.rect[1] += delta[1];
+    if draw.clip_size[0] < 0.0 {
+        return;
+    }
+    if clip_is_parent(draw.clip_pos, draw.clip_size, old) {
+        assign_parent_clip(&mut draw.clip_pos, &mut draw.clip_size, new);
+    } else {
+        draw.clip_pos[0] += delta[0];
+        draw.clip_pos[1] += delta[1];
+    }
+}
+
+fn nudge_text(node: &mut TextLayoutInfo, delta: [f32; 2], old: &GeomKey, new: &GeomKey) {
+    node.x += delta[0];
+    node.y += delta[1];
+    node.paint_origin[0] += delta[0];
+    node.paint_origin[1] += delta[1];
+    if let Some(clip) = node.clip_bounds.as_mut() {
+        if clip_is_parent([clip[0], clip[1]], [clip[2], clip[3]], old) {
+            if new.has_clip {
+                *clip = [
+                    f32::from_bits(new.clip[0]),
+                    f32::from_bits(new.clip[1]),
+                    f32::from_bits(new.clip[2]),
+                    f32::from_bits(new.clip[3]),
+                ];
+            }
+        } else {
+            clip[0] += delta[0];
+            clip[1] += delta[1];
+        }
+    }
+}
+
+fn round_rect_is_parent(xywh: [f32; 4], geom: &GeomKey) -> bool {
+    geom.has_clip
+        && xywh[2] > 0.5
+        && xywh[0].to_bits() == geom.clip[0]
+        && xywh[1].to_bits() == geom.clip[1]
+        && xywh[2].to_bits() == geom.clip[2]
+        && xywh[3].to_bits() == geom.clip[3]
+}
+
+fn assign_round_rect_parent(xywh: &mut [f32; 4], geom: &GeomKey) {
+    if geom.has_clip {
+        *xywh = [
+            f32::from_bits(geom.clip[0]),
+            f32::from_bits(geom.clip[1]),
+            f32::from_bits(geom.clip[2]),
+            f32::from_bits(geom.clip[3]),
+        ];
+    } else {
+        *xywh = [0.0, 0.0, 0.0, 0.0];
+    }
+}
+
+fn nudge_pts(pts: &mut [[f32; 2]], count: u32, delta: [f32; 2]) {
+    let n = (count as usize).min(pts.len());
+    for p in pts.iter_mut().take(n) {
+        p[0] += delta[0];
+        p[1] += delta[1];
+    }
+}
+
+fn nudge_clip_poly(poly: &mut GpuClipPoly, delta: [f32; 2], old: &GeomKey, new: &GeomKey) {
+    if round_rect_is_parent(poly.round_rect, old) {
+        assign_round_rect_parent(&mut poly.round_rect, new);
+    } else if poly.round_rect[2] > 0.5 {
+        poly.round_rect[0] += delta[0];
+        poly.round_rect[1] += delta[1];
+    }
+    if round_rect_is_parent(poly.round_rect2, old) {
+        assign_round_rect_parent(&mut poly.round_rect2, new);
+    } else if poly.round_rect2[2] > 0.5 {
+        poly.round_rect2[0] += delta[0];
+        poly.round_rect2[1] += delta[1];
+    }
+    nudge_pts(poly.pts.as_mut_slice(), poly.count, delta);
+    nudge_pts(poly.pts2.as_mut_slice(), poly.count2, delta);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1123,8 +1478,75 @@ mod tests {
     }
 
     #[test]
-    fn empty_children_is_not_skippable() {
-        assert!(!subtree_is_skippable(&Element::new()));
+    fn empty_leaf_is_skippable() {
+        assert!(
+            subtree_is_skippable(&Element::new()),
+            "leaf replay avoids collect_paint_node on every glyph/rect"
+        );
+    }
+
+    #[test]
+    fn overlay_scrollbar_thumb_is_not_skippable() {
+        let mut thumb = Element::new().w(8.0).h(24.0);
+        thumb.focus_id = Some(format!(
+            "{}sa:y",
+            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX
+        ));
+        assert!(
+            !subtree_is_skippable(&thumb),
+            "relative overlay thumb skip replays Taffy leftover and freezes the rail"
+        );
+        let mut track = Element::new().w(8.0).h(120.0);
+        track.focus_id = Some(format!(
+            "{}sa:y",
+            crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
+        ));
+        assert!(!subtree_is_skippable(&track));
+    }
+
+    #[test]
+    fn overflow_hidden_is_skippable_for_exact_replay() {
+        let mut el = el_with_child();
+        el.style.overflow.x = taffy::style::Overflow::Hidden;
+        assert!(
+            subtree_is_skippable(&el),
+            "overflow-hidden may exact-replay; translate is refused separately"
+        );
+    }
+
+    #[test]
+    fn z_index_child_does_not_force_stamp_of_idle_siblings() {
+        let mut viewport = Element::new();
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.focus_id = Some(format!(
+            "{}stamp-z",
+            crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX
+        ));
+        let mut zed = Element::new().text("overlay");
+        zed.style.z_index = 10;
+        let mut idle = Element::new();
+        for i in 0..40 {
+            idle.children.push(Element::new().text(format!("row{i}")));
+        }
+        viewport.children.push(zed);
+        viewport.children.push(idle);
+
+        STAMP_HASHED.with(|c| c.set(0));
+        stamp_subtree_paint_hashes(&mut viewport, false);
+        let full = STAMP_HASHED.with(|c| c.get());
+        assert!(full >= 40, "cold stamp must hash idle rows, hashed={full}");
+
+        STAMP_HASHED.with(|c| c.set(0));
+        stamp_subtree_paint_hashes(&mut viewport, true);
+        let reuse = STAMP_HASHED.with(|c| c.get());
+        assert!(
+            reuse <= 4,
+            "z-index sibling must not poison idle row stamp (reuse hashed={reuse}, cold={full})"
+        );
+        assert!(
+            !viewport.children[1].collect_skip_live,
+            "idle column must not inherit live from a stacking sibling"
+        );
     }
 
     #[test]
@@ -1161,6 +1583,46 @@ mod tests {
             "opacity change must bust skip geom, not replay the previous fade"
         );
         assert!(geom_eq(&a, &c));
+    }
+
+    #[test]
+    fn scroll_translate_delta_is_old_minus_new() {
+        let clip = Some([0.0, 0.0, 80.0, 120.0]);
+        let rest = geom_key(
+            [0.0, 80.0],
+            [80.0, 40.0],
+            [0.0, 0.0],
+            clip,
+            1.0,
+            [1.0, 1.0],
+            crate::style::MAT2D_IDENTITY,
+        );
+        let scrolled = geom_key(
+            [0.0, 80.0],
+            [80.0, 40.0],
+            [0.0, 48.0],
+            clip,
+            1.0,
+            [1.0, 1.0],
+            crate::style::MAT2D_IDENTITY,
+        );
+        assert_eq!(scroll_translate_delta(&rest, &scrolled), Some([0.0, -48.0]));
+        let el = el_with_child();
+        assert!(subtree_fully_inside_clip(&rest, &el));
+        assert!(subtree_fully_inside_clip(&scrolled, &el));
+        let entering = geom_key(
+            [0.0, 120.0],
+            [80.0, 40.0],
+            [0.0, 0.0],
+            clip,
+            1.0,
+            [1.0, 1.0],
+            crate::style::MAT2D_IDENTITY,
+        );
+        assert!(
+            !subtree_fully_inside_clip(&entering, &el),
+            "clip-culled rows must not translate-replay an empty DL"
+        );
     }
 
     #[test]

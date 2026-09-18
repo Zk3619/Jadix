@@ -958,6 +958,13 @@ pub fn tick_active_css_transitions_subtree(
                     // this icon and the retain angle jumps on the next Clear.
                     crate::app::damage::push_frame_paint_element(el, scroll_acc);
                 }
+                if css_trans
+                    || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
+                    || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
+                    || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
+                {
+                    layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+                }
                 // Padding/margin/size tweens must request flex recompute. StyleChanged alone
                 // is treated as scroll-only paint and leaves geometry stuck at the hover size.
                 let need_taffy = matches!(
@@ -1626,6 +1633,14 @@ fn sync_class_variants_subtree_inner(
                     };
                     let before = el.style.clone();
                     let before_text = el.text_style.clone();
+                    // Empty snapshot or_inserts `from=current`. Capture rest *before*
+                    // `:hover` / `:focus` overlay so `transition-transform` can tween.
+                    if !el.transition_snapshot.has_any_tweens() && !el.style.transition.is_empty() {
+                        super::animation::snap_element_transitions_to_current(
+                            &el.inner.style,
+                            &mut el.inner.transition_snapshot,
+                        );
+                    }
                     let local = resolve_class_variants(el, &ctx);
                     let spun = tick_animate_spin(el);
                     let defer_shell_css = crate::utils::modal_motion::modal_shell_defer_css_tick(
@@ -1687,6 +1702,18 @@ fn sync_class_variants_subtree_inner(
                         mark_hover_paint_dirty();
                         if spun || css_anim || css_trans {
                             crate::app::damage::push_frame_paint_element(el, scroll_acc);
+                        }
+                        if css_trans
+                            || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
+                            || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
+                            || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
+                            || el.text_style != before_text
+                        {
+                            // ViewportsOnly `reuse_idle` skips idle wrappers. First
+                            // hover:scale / hover:underline / hover:text frame is not
+                            // `collect_skip_live` yet — without this bust, skip-replays
+                            // the rest Bake (lost enlarge, Link/Breadcrumb hover chrome).
+                            layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
                         }
                         // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
                         // transition frame dirties flex geometry and can make sidebar hit-test flicker.

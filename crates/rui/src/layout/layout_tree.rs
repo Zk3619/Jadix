@@ -239,6 +239,23 @@ pub fn overlay_portal_stamp_key(el: &Element) -> u64 {
     h.finish()
 }
 
+/// Last-collect overlay membership for paint dirty classification.
+/// Direct hoisted hosts use their own stamp; descendants inherit the host key.
+fn stamp_element_overlay_paint(
+    el: &mut Element,
+    overlay_marked: bool,
+    inherited_stamp: Option<u64>,
+) {
+    el.paint_overlay_stamp = if !overlay_marked {
+        None
+    } else if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1") {
+        let k = overlay_portal_stamp_key(el);
+        (k != 0).then_some(k)
+    } else {
+        inherited_stamp.filter(|k| *k != 0)
+    };
+}
+
 /// True while an expand panel is on its unconstrained measure frame.
 pub(crate) fn hoisted_expand_measuring(root: &Element) -> bool {
     let mut yes = false;
@@ -320,8 +337,9 @@ fn subtree_has_drag_overlay(el: &Element) -> bool {
 ///   opened inside a Dialog stage on the portal layer) are lifted in a second pass so they
 ///   become viewport-fixed siblings — otherwise `absolute` + viewport `left`/`top` double-
 ///   offsets the menu relative to the local containing block.
-/// - Returns a non-zero “structure dirty” count when the portal tree changed (caller must
-///   full-rebuild Taffy).
+/// - Returns a non-zero “structure dirty” count when the portal tree changed.
+///   Callers should attach unbuilt Taffy nodes and sync the portal layer's
+///   children — not recycle the whole gallery tree.
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     // Drag ghost follow is Point paint chrome: pin Taffy at grab origin before
     // layout so collect can patch `abs` the same frame. Live left/top churn
@@ -2005,8 +2023,10 @@ pub struct LayoutProfileMs {
     pub setup_ms: f32,
     /// `compute_layout_with_measure`; `0` when skipped by `scroll_only`.
     pub taffy_compute_ms: f32,
-    /// `collect_instances_mut` (expand whole-tree instances + `TextLayoutInfo`).
+    /// `stamp_subtree_paint_hashes` + `collect_instances_mut`.
     pub collect_ms: f32,
+    /// Paint-hash walk inside [`Self::collect_ms`].
+    pub collect_stamp_ms: f32,
 }
 
 /// Split points for Solid/CSS stacking: page paint, then portal overlay paint.
@@ -2123,17 +2143,25 @@ pub struct NodePaint {
     /// shrink the wipe away from overlapping underlay, and restore that underlay
     /// in the hole (in-flow Node dest-reset stays membership-only).
     pub layered: bool,
+    /// Untransformed Taffy box in paint space (no CSS scale / translate).
+    /// Sibling occupancy for dest-reset uses this so ping/bounce growth cannot
+    /// treat a caption above as an already-overlapping earlier sibling.
+    pub rest: Option<[f32; 4]>,
 }
 
 /// Dest-reset / scissor clip for this overflow box.
-/// GPU `clip_*` stay the layout border; this is the world AABB of painted pixels.
+///
+/// scale¹ bakes CSS `scale` into `vis` and leaves the affine identity. The rest-sized
+/// layout border then AABB-crops hover:scale Twemoji (screenshot chords) while the
+/// unscaled capsule stays intact. Rotated overflow still uses the transformed AABB.
 fn overflow_dest_aabb(
     layout_border: [f32; 4],
     vis: [f32; 4],
     transform: &crate::style::Mat2d,
 ) -> [f32; 4] {
+    let _ = layout_border;
     if crate::style::mat2d_is_identity(transform) {
-        layout_border
+        vis
     } else {
         crate::style::aabb_of_centered_transform(vis, transform)
     }
@@ -2195,6 +2223,16 @@ fn record_node_paint(
             paint_ops: (start.paint_ops, end.paint_ops),
             overflow_clip,
             layered,
+            rest: {
+                let b = el.layout_bounds;
+                let r = [
+                    b[0] - paint_scroll[0],
+                    b[1] - paint_scroll[1],
+                    b[2].max(0.0),
+                    b[3].max(0.0),
+                ];
+                (r[2] > 0.5 && r[3] > 0.5).then_some(r)
+            },
         });
     });
 }
@@ -2516,9 +2554,18 @@ impl LayoutTree {
     }
 
     /// Paint-only (`Clean` / `StyleChanged`) frames may replay fingerprint DL for clean siblings.
-    /// Layout/structure, live resize, text settle, and smooth scroll must pass `false`.
+    /// Layout/structure, live resize, and text settle must pass `false`. Smooth scroll stays
+    /// `true`: fully-visible scrolled subtrees translate last-frame ops; idle siblings replay.
     pub fn set_collect_skip_allowed(&mut self, allowed: bool) {
         self.collect_skip.allowed = allowed;
+    }
+
+    /// First frame of a CSS transform tween under an idle wrapper: ViewportsOnly
+    /// `reuse_idle` would keep the rest paint-hash and skip-replay the rest Bake.
+    pub(crate) fn note_collect_skip_hash_bust_if_idle(&mut self, already_live: bool) {
+        if !already_live {
+            self.collect_skip.hash_bust = true;
+        }
     }
 
     /// Drop fingerprint DLs (maximize/restore, full Taffy rebuild).
@@ -2981,6 +3028,9 @@ struct CollectFrame {
     cache_geom: crate::layout::collect_cache::GeomKey,
     /// This node (or an ancestor) opened a later page-stack band.
     layered: bool,
+    /// Host portal stamp while walking the overlay suffix. Direct portal-layer
+    /// children get their own key; nested descendants inherit it.
+    overlay_stamp: Option<u64>,
 }
 
 fn collect_commit_extent(
@@ -3265,22 +3315,6 @@ impl LayoutTree {
         }
     }
 
-    fn remove_taffy_subtree(&mut self, id: NodeId) {
-        if !self.total_nodes.contains(&id) {
-            return;
-        }
-        if let Ok(kids) = self.taffy.children(id) {
-            for k in kids {
-                self.remove_taffy_subtree(k);
-            }
-        }
-        self.collect_skip.evict(id);
-        let _ = self.taffy.remove(id);
-        self.total_nodes.remove(&id);
-        self.text_measurements.remove(&id);
-        self.visited_nodes.remove(&id);
-    }
-
     /// Keep Taffy child order in lockstep with `element.children`.
     ///
     /// Keyed list reorder reuses the same nodes (`LayoutChanged`, not
@@ -3288,7 +3322,7 @@ impl LayoutTree {
     /// Taffy tree, so without this walk `compute_layout` packs the previous order.
     ///
     /// Cross-parent moves (kanban / sortable) keep the child's `layout_node`. A
-    /// parent-local `remove_taffy_subtree` would free that SlotMap key before the
+    /// parent-local subtree drop would free that SlotMap key before the
     /// destination `set_children` — Taffy panics: `invalid SlotMap key used`.
     /// Reparent every live id first, then drop nodes the element tree no longer
     /// references.
@@ -3337,7 +3371,18 @@ impl LayoutTree {
             .filter(|id| !live.contains(id))
             .collect();
         for id in orphans {
-            self.remove_taffy_subtree(id);
+            if !self.total_nodes.contains(&id) {
+                continue;
+            }
+            // Do not recurse. `new_with_children` / hoist can leave a live id in
+            // an orphan's child list; subtree-delete would free that SlotMap key
+            // while another parent still walks it (`invalid SlotMap key used`).
+            // Taffy `remove` unparents remaining children without deleting them.
+            self.collect_skip.evict(id);
+            let _ = self.taffy.remove(id);
+            self.total_nodes.remove(&id);
+            self.text_measurements.remove(&id);
+            self.visited_nodes.remove(&id);
         }
     }
 
@@ -3515,6 +3560,8 @@ impl LayoutTree {
         let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
         let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
 
+        self.apply_floating_placement_before_collect(root, width, height);
+
         self.finish_collect(
             root,
             root_node,
@@ -3560,6 +3607,186 @@ impl LayoutTree {
         )
     }
 
+    /// Taffy node of the root [`PORTAL_LAYER_ID`] layer, if present.
+    pub fn portal_layer_layout_node(root: &Element) -> Option<NodeId> {
+        root.children.iter().find_map(|c| {
+            if c.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+                c.layout_node
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Hoist + attach newly inserted Taffy nodes + sync child order.
+    ///
+    /// A fresh `rui_portal` used to return `>0` and force [`Self::build_and_layout`]
+    /// of the whole gallery (bubble +N during scroll). Layer membership is a
+    /// child-list change on the portal layer — [`Self::sync_taffy_children_from_elements`]
+    /// reparents those ids without recycling page `NodeId`s.
+    fn reconcile_portals_incremental(&mut self, root: &mut Element) -> usize {
+        let portal_dirty = hoist_portal_subtrees(root);
+        self.dirty_point_overlay_commit(root);
+        let attached = Self::subtree_has_unbuilt_taffy_nodes(root);
+        if attached {
+            self.attach_unbuilt_taffy_nodes(root);
+        }
+        if portal_dirty > 0 || attached {
+            self.sync_taffy_children_from_elements(root);
+        }
+        portal_dirty
+    }
+
+    fn portal_layer_available_space(
+        &self,
+        overlay_root: NodeId,
+        root_node: NodeId,
+        width: f32,
+        height: f32,
+    ) -> (NodeId, Size<AvailableSpace>) {
+        if overlay_root != root_node {
+            if let Ok(layout) = self.taffy.layout(overlay_root) {
+                return (
+                    overlay_root,
+                    Size {
+                        width: AvailableSpace::Definite(layout.size.width),
+                        height: AvailableSpace::Definite(layout.size.height),
+                    },
+                );
+            }
+        }
+        (
+            root_node,
+            Size {
+                width: AvailableSpace::Definite(width),
+                height: AvailableSpace::Definite(height),
+            },
+        )
+    }
+
+    /// Compute the portal layer (or app root if the layer has no node) without
+    /// clearing the page measure cache.
+    fn compute_portal_layer(&mut self, root: &mut Element, width: f32, height: f32) {
+        let Some(root_node) = self.root_node else {
+            return;
+        };
+        let overlay_root = Self::portal_layer_layout_node(root).unwrap_or(root_node);
+        let (compute_node, available_space) =
+            self.portal_layer_available_space(overlay_root, root_node, width, height);
+        #[cfg(test)]
+        {
+            self.last_compute_root = Some(compute_node);
+        }
+        if let Err(err) = self.compute_layout_cached_measure(compute_node, available_space) {
+            log::error!("taffy compute_layout_with_measure failed: {err:?}");
+        }
+        let _ = self.relayout_deferred_units_if_needed(root, compute_node, available_space);
+    }
+
+    /// `sync_floating_placement` writes left/top from trigger visual bounds.
+    /// Must run after Taffy (layout_bounds exist) and **before** collect so a
+    /// scroll frame with +N open does not collect the gallery twice.
+    fn apply_floating_placement_before_collect(
+        &mut self,
+        root: &mut Element,
+        width: f32,
+        height: f32,
+    ) {
+        if !crate::utils::popup::sync_floating_placement(root, width, height) {
+            return;
+        }
+        crate::utils::popup::visit_floating_panels(root, |el| {
+            self.mark_element_layout_dirty(el);
+        });
+        self.compute_portal_layer(root, width, height);
+    }
+
+    /// After `sync_floating_placement` writes left/top: recompute only the portal
+    /// layer and recollect. Must not restyle the app root or clear the page
+    /// measure cache — that remasures every gallery text leaf each scroll frame
+    /// while a +N / DatePicker panel follows its trigger.
+    pub fn relayout_overlay_follow_and_collect(
+        &mut self,
+        root: &mut Element,
+        width: f32,
+        height: f32,
+        mouse_pos: [f32; 2],
+        collect_scroll_only: bool,
+        scrollbar_overlay_collect: bool,
+    ) -> RenderResult {
+        if !self.element_tree_is_bound(root) {
+            return self.build_and_layout(root, width, height, mouse_pos);
+        }
+        let _ = self.reconcile_portals_incremental(root);
+
+        let root_node = self
+            .root_node
+            .expect("overlay follow requires existing root_node");
+        let overlay_root = Self::portal_layer_layout_node(root).unwrap_or(root_node);
+
+        let t_setup_begin = Instant::now();
+        let next_viewport = [width.max(0.0), height.max(0.0)];
+        let viewport_changed = self.viewport != next_viewport;
+        if viewport_changed {
+            self.collect_skip.invalidate();
+            self.viewport = next_viewport;
+            root.style.size.width = Dimension::length(width);
+            root.style.size.height = Dimension::length(height);
+            cascade_inheritable_text_style(root, None);
+            self.update_taffy_node_style(root);
+        }
+        let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
+
+        let (compute_node, available_space) =
+            self.portal_layer_available_space(overlay_root, root_node, width, height);
+
+        let t_compute_begin = Instant::now();
+        // Keep the page measure memo. Overlay follow only dirtied portal panels.
+        #[cfg(test)]
+        {
+            self.last_compute_root = Some(compute_node);
+        }
+        if let Err(err) = self.compute_layout_cached_measure(compute_node, available_space) {
+            log::error!("taffy compute_layout_with_measure failed: {err:?}");
+        }
+        let relayout_ms =
+            self.relayout_deferred_units_if_needed(root, compute_node, available_space);
+        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
+
+        let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
+        let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
+            if collect_scroll_only || scrollbar_overlay_collect {
+                Some(&mut scroll_signal_cache)
+            } else {
+                None
+            };
+
+        self.finish_collect(
+            root,
+            root_node,
+            mouse_pos,
+            collect_scroll_only,
+            scrollbar_overlay_collect,
+            &mut scroll_cache_slot,
+            0.0,
+            setup_ms,
+            taffy_compute_ms,
+        )
+    }
+
+    /// True when `root` is the same Taffy tree `self.root_node` currently owns.
+    ///
+    /// `new_bootstrap` layouts a private shell, then `rebuild_ui` swaps in the
+    /// real app tree (`layout_node = None`). Incremental sync would treat every
+    /// bootstrap id as an orphan, free them, then `compute_layout` panics
+    /// `invalid SlotMap key used`.
+    fn element_tree_is_bound(&self, root: &Element) -> bool {
+        let Some(rid) = self.root_node else {
+            return false;
+        };
+        matches!(root.layout_node, Some(eid) if eid == rid && self.total_nodes.contains(&rid))
+    }
+
     /// Like [`Self::build_and_layout_fast`], with an optional subtree compute root.
     pub fn build_and_layout_fast_ex(
         &mut self,
@@ -3571,19 +3798,13 @@ impl LayoutTree {
         scrollbar_overlay_collect: bool,
         subtree_root: Option<NodeId>,
     ) -> RenderResult {
-        // Solid invariant: portals must be on their mount before any layout/collect.
-        // Layer rewrite without a Taffy rebuild desyncs `element.children` vs `taffy.children`
-        // and can mark overlay_split too early (page text prepared as culled overlay → empty bubbles).
-        let portal_dirty = hoist_portal_subtrees(root);
-        if portal_dirty > 0 || self.root_node.is_none() {
+        if !self.element_tree_is_bound(root) {
             return self.build_and_layout(root, width, height, mouse_pos);
         }
-        self.dirty_point_overlay_commit(root);
-        // `write_placed_ghost` / `<Show>` insert Elements with `layout_node = None`.
-        // Attach only those subtrees — do not walk the whole gallery through `build_and_layout`.
-        if Self::subtree_has_unbuilt_taffy_nodes(root) {
-            self.attach_unbuilt_taffy_nodes(root);
-        }
+        // Fresh `rui_portal` (bubble +N) rewrites layer children. Sync those ids
+        // onto the existing Taffy tree — a full `build_and_layout` remasures the
+        // gallery on every scroll-frame open.
+        let portal_dirty = self.reconcile_portals_incremental(root);
 
         let root_node = self
             .root_node
@@ -3618,14 +3839,20 @@ impl LayoutTree {
         // element child order changes. The fast path only `compute_layout`s the
         // existing Taffy tree — keyed reorder is LayoutChanged, not
         // StructureChanged, so without this sync flex items keep their old slots.
-        if !scroll_only {
+        if !scroll_only || portal_dirty > 0 {
             self.sync_taffy_children_from_elements(root);
         }
 
         // Live maximize/minimize is often `Clean` + `scroll_only` (ViewportsOnly prepass).
         // Skipping compute here leaves Taffy at the pre-resize locations: a flex Footer
         // stays at the old Y while the swapchain already matches the new window.
-        let taffy_compute_ms = if !scroll_only || viewport_changed {
+        // Portal-only membership ( +N open while scrolling ) computes the overlay
+        // layer without clearing the page measure cache.
+        let taffy_compute_ms = if portal_dirty > 0 && scroll_only && !viewport_changed {
+            let t_compute_begin = Instant::now();
+            self.compute_portal_layer(root, width, height);
+            t_compute_begin.elapsed().as_secs_f32() * 1000.0
+        } else if !scroll_only || viewport_changed {
             let (compute_node, available_space) = if let Some(sub) = subtree_root {
                 if let Ok(layout) = self.taffy.layout(sub) {
                     (
@@ -3671,6 +3898,8 @@ impl LayoutTree {
         } else {
             0.0
         };
+
+        self.apply_floating_placement_before_collect(root, width, height);
 
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
         let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
@@ -3733,7 +3962,10 @@ impl LayoutTree {
         }
         let mut skip = std::mem::take(&mut self.collect_skip);
         skip.begin_frame();
-        crate::layout::collect_cache::stamp_subtree_paint_hashes(root);
+        let t_stamp = Instant::now();
+        let reuse_idle = scroll_only && !std::mem::take(&mut skip.hash_bust);
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(root, reuse_idle);
+        let collect_stamp_ms = t_stamp.elapsed().as_secs_f32() * 1000.0;
         self.collect_instances_mut(
             root,
             root_node,
@@ -3874,6 +4106,7 @@ impl LayoutTree {
                 setup_ms,
                 taffy_compute_ms,
                 collect_ms,
+                collect_stamp_ms,
             },
         };
         self.collect_scratch = scratch;
@@ -4062,18 +4295,14 @@ impl LayoutTree {
                             self.total_nodes.insert(id);
                             id
                         } else {
-                            let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
-                            self.total_nodes.insert(id);
-                            id
+                            self.new_taffy_parent(style, &child_nodes)
                         }
                     } else if is_text_leaf {
                         let id = self.taffy.new_leaf_with_context(style, ()).unwrap();
                         self.total_nodes.insert(id);
                         id
                     } else {
-                        let id = self.taffy.new_with_children(style, &child_nodes).unwrap();
-                        self.total_nodes.insert(id);
-                        id
+                        self.new_taffy_parent(style, &child_nodes)
                     };
 
                     element.layout_node = Some(node_id);
@@ -4097,6 +4326,18 @@ impl LayoutTree {
         }
 
         root_id.expect("build_taffy_node_mut produced a root")
+    }
+
+    /// `TaffyTree::new_with_children` overwrites `parents[child]` without splicing
+    /// the child out of the previous parent. Incremental attach (new wrapper, live
+    /// child) then leaves the old parent walking a key that orphan-drop frees.
+    fn new_taffy_parent(&mut self, style: taffy::style::Style, child_nodes: &[NodeId]) -> NodeId {
+        let id = self.taffy.new_leaf(style).unwrap();
+        self.total_nodes.insert(id);
+        if !child_nodes.is_empty() {
+            self.taffy.set_children(id, child_nodes).unwrap();
+        }
+        id
     }
 
     /// Refresh abs + paint-visual for a collect-skipped subtree from live Taffy geometry.
@@ -4352,10 +4593,19 @@ impl LayoutTree {
                 )
             })
             .unwrap_or((frame.abs_offset, [0.0, 0.0]));
+        // Own `scroll_offset` is not in `scroll_acc` (that's ancestors). Folding it in
+        // busts exact-replay when a viewport scrolls its contents without moving its box.
+        let scroll = unsafe {
+            let el = &*frame.element;
+            [
+                frame.scroll_acc[0] + el.scroll_offset[0],
+                frame.scroll_acc[1] + el.scroll_offset[1],
+            ]
+        };
         crate::layout::collect_cache::geom_key(
             origin,
             size,
-            frame.scroll_acc,
+            scroll,
             frame.parent_clip,
             frame.ancestor_opacity,
             frame.ancestor_scale,
@@ -4415,6 +4665,7 @@ impl LayoutTree {
             cache_start: crate::layout::collect_cache::DlCursor::default(),
             cache_geom: crate::layout::collect_cache::GeomKey::default(),
             layered: child_opens_page_stack_band(element),
+            overlay_stamp: None,
         }];
         let mut root_extent = [0.0_f32, 0.0];
 
@@ -4424,6 +4675,7 @@ impl LayoutTree {
             if frame.walk.is_none() {
                 #[cfg(test)]
                 stack_probe::mark_collect();
+                stamp_element_overlay_paint(element, overlay_split.marked, frame.overlay_stamp);
                 frame.cache_geom = self.collect_skip_geom(&frame);
                 let replay_start = crate::layout::collect_cache::DlCursor::capture(
                     instances,
@@ -4609,7 +4861,7 @@ impl LayoutTree {
                 self.collect_take_child(
                     element,
                     walk,
-                    _scroll_only,
+                    _scroll_only || skip.allowed,
                     frame.scrollbar_overlay_collect,
                     instances,
                     textured_draws,
@@ -4642,6 +4894,12 @@ impl LayoutTree {
                     cache_geom: crate::layout::collect_cache::GeomKey::default(),
                     layered: frame.layered
                         || child_opens_page_stack_band(&element.children[job.index]),
+                    overlay_stamp: if walk.painted.is_body_portal_layer {
+                        let k = overlay_portal_stamp_key(&element.children[job.index]);
+                        (k != 0).then_some(k)
+                    } else {
+                        frame.overlay_stamp
+                    },
                 };
                 stack.push(frame);
                 stack.push(child_frame);
@@ -4874,6 +5132,9 @@ impl LayoutTree {
             scroll_acc
         };
         element.paint_scroll_acc = scroll_for_render;
+        if crate::components::scrollbar::auto_scrollbar_needs_node_present(element) {
+            crate::app::damage::push_frame_paint_element(element, scroll_for_render);
+        }
         let paint_nudge = crate::components::button_group::button_group_paint_nudge(element);
         let offset_motion = crate::style::offset_path::sample(&element.style, [lay_w, lay_h]);
         // 布局原点（文字 / 子节点 / overflow clip）。连体叠边只扩 chrome，不平移整框。
@@ -4941,15 +5202,29 @@ impl LayoutTree {
         // so placement matches `visual_paint_aabb` (hover / leave). Center origin is
         // the old `(size-scaled)*0.5` inset. Passing `style.scale` again in the SDF
         // affine painted ~scale² while hit-testing stayed at scale¹.
-        let origin_layout = crate::style::origin_px(&element.style.transform_origin, lay_w, lay_h);
+        //
+        // Overflow-visible emoji: Taffy `leading-none` strut is 1em; Twemoji ink is
+        // 1.10em. Scale that strut and hover:scale-125 dest is a 15px-tall AABB of a
+        // 16.5px face (screenshot chords). Match `paint_vis` / dest draw box.
+        let paint_box = crate::renderer::emoji_layout::layout_bounds_with_visible_emoji_ink(
+            [render_x, render_y, lay_w, lay_h],
+            element.text.as_deref(),
+            element.text_style.size_resolved(),
+            element.style.overflow.x == taffy::style::Overflow::Visible,
+            element.style.overflow.y == taffy::style::Overflow::Visible,
+        );
+        let origin_layout =
+            crate::style::origin_px(&element.style.transform_origin, paint_box[2], paint_box[3]);
         let (vis_w, vis_h, vis_x, vis_y) =
             if (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON {
                 let vis = crate::style::scale_box_about_origin(
-                    [render_x, render_y, lay_w, lay_h],
+                    paint_box,
                     origin_layout,
                     [paint_sx, paint_sy],
                 );
                 (vis[2], vis[3], vis[0], vis[1])
+            } else if (paint_box[2] - lay_w).abs() > 1e-3 || (paint_box[3] - lay_h).abs() > 1e-3 {
+                (paint_box[2], paint_box[3], paint_box[0], paint_box[1])
             } else {
                 (chrome_w, chrome_h, chrome_x, chrome_y)
             };
@@ -4961,8 +5236,8 @@ impl LayoutTree {
         //（会绕角转、壳与文分离）。2×2 用 linear；tx/ty = (I-R)*(origin-center)，壳 / 贴图 /
         // 子树 `child_pass_offset_for` 共用同一 origin。默认 center → tx/ty = 0。
         let origin_in_vis = [
-            origin_layout[0] - (vis_x - render_x),
-            origin_layout[1] - (vis_y - render_y),
+            origin_layout[0] - (vis_x - paint_box[0]),
+            origin_layout[1] - (vis_y - paint_box[1]),
         ];
         let local_unwrapped = crate::style::rotate_and_list_mat2d(
             element.style.rotate_deg + offset_motion.rotate_deg,
@@ -4987,20 +5262,24 @@ impl LayoutTree {
         let self_tex0 = textured_draws.len();
 
         // Clipping & Visibility
-        // Overflow clips the **layout** border box. GPU tests axis-aligned
-        // descendants in local `clip_pos` space; rotated descendants use world
-        // `clip_poly` (CSS: ancestor clip is in the ancestor's space).
-        // Using `render_rect` (CSS scale/rotate visual) made gallery `hover:scale-*` /
-        // `hover:rotate-*` tiles grow/shrink the scroll clip every tween frame, which
-        // jittered hit-test and flashed sidebar hover while those tiles were on screen.
+        // Overflow clips the padding box. Unscaled scrollports keep the Taffy border
+        // so hover:scale tiles do not grow the *viewport* clip every tween frame.
+        // scale¹ dest already includes CSS scale (affine identity): clipping children
+        // to the rest-sized border AABB-crops hover:scale Twemoji (screenshot chords).
         let layout_border = [render_x, render_y, lay_w, lay_h];
         let overflow_border = overflow_clip_layout_border(element, layout_border);
         let mut clip = parent_clip;
         let mut dest_clip = parent_dest_clip;
         let (clip_x, clip_y) = crate::core::tree::overflow_clip_axes(element);
         let overflow_clips = clip_x || clip_y;
+        let scaled_paint_box = (paint_sx - 1.0).abs() > 1e-4 || (paint_sy - 1.0).abs() > 1e-4;
         if overflow_clips {
-            clip = intersect_overflow_axes(clip, overflow_border, clip_x, clip_y);
+            let descendant_overflow = if scaled_paint_box {
+                render_rect
+            } else {
+                overflow_border
+            };
+            clip = intersect_overflow_axes(clip, descendant_overflow, clip_x, clip_y);
             dest_clip = intersect_overflow_axes(
                 dest_clip,
                 overflow_dest_aabb(overflow_border, render_rect, &transform),
@@ -5070,11 +5349,16 @@ impl LayoutTree {
         // including `rui_escape_overflow_clip` shells (DragOverlay restrict box)
         // and zero-radius boxes. `escape` only drops *ancestor* overflow.
         let overflow_clip_poly = if overflow_clips && clip_x && clip_y {
-            crate::style::GpuClipPoly::from_overflow_box(
-                overflow_border,
-                element.style.radii,
-                &transform,
-            )
+            // scale¹ keeps the affine identity; a rest-sized poly then GPU-clips
+            // hover:scale Twemoji to the Taffy strut (screenshot AABB chords).
+            // Unscaled scrollports keep the layout border so tiles do not grow the
+            // viewport clip every tween frame.
+            let poly_box = if scaled_paint_box {
+                render_rect
+            } else {
+                overflow_border
+            };
+            crate::style::GpuClipPoly::from_overflow_box(poly_box, element.style.radii, &transform)
         } else {
             crate::style::GpuClipPoly::NONE
         };
@@ -5929,9 +6213,15 @@ impl LayoutTree {
                 if !lucide_static_textured {
                     // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
                     // Coverage (glyphon) for idle axis-aligned UI text only.
+                    // scale¹ keeps world_linear identity, so Coverage is the default.
+                    // Twemoji under CSS scale must Bake: glyphon TextBounds of the
+                    // unscaled strut AABB-crops the face (screenshot chords).
+                    let emoji_scaled =
+                        scaled_paint && crate::renderer::emoji_detect::text_contains_emoji(text);
                     let sticky_xform = ancestor_sticky_xform
                         || crate::renderer::element_wants_sticky_xform(element)
-                        || wm_rot.abs() > 1e-6;
+                        || wm_rot.abs() > 1e-6
+                        || emoji_scaled;
                     let glyph_raster = crate::renderer::resolve_glyph_raster(
                         sticky_xform,
                         &text_paint_linear,
@@ -5972,21 +6262,42 @@ impl LayoutTree {
                         };
                         let as_sdf = matches!(glyph_raster, crate::renderer::GlyphRasterMode::Msdf)
                             && !crate::renderer::emoji_detect::text_contains_emoji(text);
+                        // Sticky hover:scale / rotate: raster at rest and let the draw quad
+                        // carry CSS scale. Re-shaping Twemoji into a leading-none strut every
+                        // tween frame crops the face (square cut mid hover:scale-125).
+                        // Non-sticky zoom uses the identity band (Dialog zoom-in-95).
+                        let raster_scale = if sticky_xform {
+                            1.0
+                        } else {
+                            crate::renderer::bake_source_scale(text_scale)
+                        };
+                        let dest_sx = text_scale / raster_scale.max(1e-6);
                         let dpr = if as_sdf {
                             (3.5 * text_scale).clamp(3.5, 8.0)
                         } else if crate::renderer::emoji_detect::text_contains_emoji(text)
-                            && text_scale > 1.25
+                            && raster_scale > 1.25
                         {
-                            // Sticky hover:scale on emoji — raise Bake oversample instead of MSDF.
-                            (crate::renderer::BAKE_OVERSAMPLE * text_scale).clamp(3.0, 6.0)
+                            (crate::renderer::BAKE_OVERSAMPLE * raster_scale).clamp(3.0, 6.0)
                         } else {
                             crate::renderer::BAKE_OVERSAMPLE
                         };
-                        let src_w = (text_w * text_scale).max(1.0);
-                        let src_h = (text_h * text_scale).max(1.0);
-                        let draw_w = text_w * text_scale;
-                        let draw_h = text_h * text_scale;
-                        let bake_font_size = text_style.size_resolved() * text_scale;
+                        let mut src_w = (text_w * raster_scale).max(1.0);
+                        let mut src_h = (text_h * raster_scale).max(1.0);
+                        let (draw_w, draw_h) =
+                            if crate::renderer::emoji_detect::text_contains_emoji(text) {
+                                let (pw, ph) =
+                                    crate::renderer::emoji_layout::emoji_visible_paint_size(
+                                        text_w,
+                                        text_h,
+                                        text_style.size_resolved(),
+                                    );
+                                src_w = (pw * raster_scale).max(1.0);
+                                src_h = (ph * raster_scale).max(1.0);
+                                (pw * text_scale, ph * text_scale)
+                            } else {
+                                (text_w * text_scale, text_h * text_scale)
+                            };
+                        let bake_font_size = text_style.size_resolved() * raster_scale;
                         // Expand to line-height + ink pad (+ text-shadow extent); draw the padded
                         // quad so glyphs/shadow aren't clipped. Intersect only with ancestor scroll
                         // clip — not the text leaf's overflow:hidden (that would crop the pad).
@@ -6000,10 +6311,10 @@ impl LayoutTree {
                                 Some((
                                     sc,
                                     [
-                                        text_style.shadow_offset[0] * text_scale,
-                                        text_style.shadow_offset[1] * text_scale,
+                                        text_style.shadow_offset[0] * raster_scale,
+                                        text_style.shadow_offset[1] * raster_scale,
                                     ],
-                                    text_style.shadow_blur * text_scale,
+                                    text_style.shadow_blur * raster_scale,
                                 ))
                             }
                             _ => None,
@@ -6012,7 +6323,7 @@ impl LayoutTree {
                             user_shadow,
                             text_style.weight_resolved(),
                             text_style.color_resolved(),
-                            text_scale,
+                            raster_scale,
                             is_icon,
                             text_style.font_family.as_deref(),
                         );
@@ -6025,7 +6336,7 @@ impl LayoutTree {
                         let is_input_text = text_style.input_caret.is_some();
                         let line_h = crate::renderer::prepare_text::coverage_line_height(
                             &text_style,
-                            text_scale,
+                            raster_scale,
                             is_input_text,
                         );
                         let (bake_w, bake_h, pad) =
@@ -6087,7 +6398,12 @@ impl LayoutTree {
                         };
                         if let Some((tex_key, _)) = bake_result {
                             let full = crate::utils::text_texture::bake_draw_rect_for_layout(
-                                text_x, text_y0, draw_w, draw_h, bake_w, bake_h,
+                                text_x,
+                                text_y0,
+                                draw_w,
+                                draw_h,
+                                bake_w * dest_sx,
+                                bake_h * dest_sx,
                             );
                             let xform = crate::style::mat2d_set_translation(
                                 &text_paint_linear,
@@ -6100,7 +6416,22 @@ impl LayoutTree {
                             // pre-rotation box. AABB-intersecting it with overflow squeezes
                             // vertical text into the clip edge. Keep the full quad and GPU-clip
                             // after the vertex transform.
-                            let cpu_clip = if rotated { None } else { parent_clip };
+                            // Overflow-visible emoji: never UV-crop the scaled dest against a
+                            // rest-sized ancestor AABB (`clipped`) — that is the screenshot
+                            // square cut. Still GPU-clip to ancestor `overflow:hidden`
+                            // (`dest_clip`): the chip is overflow-visible, so dest_clip is the
+                            // padded pill / accordion max-height, not the rest strut.
+                            // Skipping that clip leaves wrap-row Twemoji hanging below a
+                            // shrinking +N capsule. Hover:scale-125 fits in the 6px pad.
+                            let emoji_overflow_visible =
+                                crate::renderer::emoji_detect::text_contains_emoji(text)
+                                    && element.style.overflow.x == taffy::style::Overflow::Visible
+                                    && element.style.overflow.y == taffy::style::Overflow::Visible;
+                            let cpu_clip = if rotated || emoji_overflow_visible {
+                                None
+                            } else {
+                                parent_clip
+                            };
                             let skip = rotated
                                 && parent_clip.is_some_and(|c| {
                                     crate::renderer::aabbs_disjoint(
@@ -6113,8 +6444,8 @@ impl LayoutTree {
                                     TexturedDraw::clipped(full, cpu_clip, tex_key, opacity)
                                 {
                                     draw = draw.with_transform(xform);
-                                    if rotated {
-                                        draw = draw.with_overflow_clip(parent_clip);
+                                    if rotated || emoji_overflow_visible {
+                                        draw = draw.with_overflow_clip(dest_clip.or(parent_clip));
                                     }
                                     if as_sdf {
                                         let c = text_style.color_resolved();
@@ -6211,14 +6542,24 @@ impl LayoutTree {
                             // selection painted past the input border.
                             clip_bounds: if text_style.overflow.allows_caret_scroll() {
                                 hidden_input_text_clip(parent_clip, render_rect)
-                            } else if element_text_clips_to_box(element) {
-                                Some(intersect_rect(
-                                    clip.or(parent_clip),
-                                    text_leaf_clip_rect(render_rect, &text_style),
-                                ))
+                            } else if element_text_clips_to_box(element)
+                                && !crate::renderer::emoji_detect::text_contains_emoji(text)
+                            {
+                                let leaf_clip = if scaled_paint {
+                                    [
+                                        text_x,
+                                        text_y0,
+                                        (text_w * text_scale).max(1.0),
+                                        (text_h * text_scale).max(1.0),
+                                    ]
+                                } else {
+                                    text_leaf_clip_rect(render_rect, &text_style)
+                                };
+                                Some(intersect_rect(clip.or(parent_clip), leaf_clip))
                             } else {
-                                // Ancestor overflow only for wrapping text: leaf scissor hides spilled
-                                // bidi/emoji glyphs when measure under-counts soft-wrap lines.
+                                // Ancestor overflow only. Emoji / wrapping ink may overflow the
+                                // line box (`leading-none`); clipping to the strut is the
+                                // hover:scale Twemoji square crop.
                                 clip
                             },
                             style: text_style.clone(),
@@ -6235,11 +6576,20 @@ impl LayoutTree {
                         });
                         let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                             hidden_input_text_clip(parent_clip, render_rect)
-                        } else if element_text_clips_to_box(element) {
-                            Some(intersect_rect(
-                                clip.or(parent_clip),
-                                text_leaf_clip_rect(render_rect, &text_style),
-                            ))
+                        } else if element_text_clips_to_box(element)
+                            && !crate::renderer::emoji_detect::text_contains_emoji(text)
+                        {
+                            let leaf_clip = if scaled_paint {
+                                [
+                                    text_x,
+                                    text_y0,
+                                    (text_w * text_scale).max(1.0),
+                                    (text_h * text_scale).max(1.0),
+                                ]
+                            } else {
+                                text_leaf_clip_rect(render_rect, &text_style)
+                            };
+                            Some(intersect_rect(clip.or(parent_clip), leaf_clip))
                         } else {
                             clip
                         };

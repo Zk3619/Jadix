@@ -961,11 +961,20 @@ pub struct ElementInner {
     pub(crate) collect_paint_hash: u64,
     /// Some descendant (or self) must recollect every frame (spin / shimmer / CSS).
     pub(crate) collect_skip_live: bool,
+    /// Sticky / fixed descendant: scroll-translate replay would move viewport-pinned paint.
+    pub(crate) collect_skip_scroll_pin: bool,
+    /// This node or a descendant is a scroll viewport / has a nonzero offset.
+    /// Stamp reuse must still walk this path so `scroll_offset` fingerprints stay live.
+    pub(crate) collect_skip_has_scroll: bool,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
     /// Ancestor scroll passed to collect when this node last painted.
     /// `bind_text` StyleChanged must dest-reset in this space, not document `[0,0]`.
     pub(crate) paint_scroll_acc: [f32; 2],
+    /// Host portal stamp when last collect painted this node in the overlay suffix.
+    /// Hover:scale chips under `__floating_panel` have no chrome template_id; without
+    /// this, `paint_kind_for_element` records a page `Node` that occupancy scissors out.
+    pub(crate) paint_overlay_stamp: Option<u64>,
     /// Parent CSS `scale` product stamped at last collect (CarouselStack / nested scale).
     /// [`visual_paint_aabb`] bakes this into the vis box the same way collect does.
     pub(crate) paint_ancestor_scale: [f32; 2],
@@ -1084,8 +1093,11 @@ fn blank_inner() -> ElementInner {
         collect_extent_valid: false,
         collect_paint_hash: 0,
         collect_skip_live: false,
+        collect_skip_scroll_pin: false,
+        collect_skip_has_scroll: false,
         sticky_visual_offset: [0.0, 0.0],
         paint_scroll_acc: [0.0, 0.0],
+        paint_overlay_stamp: None,
         paint_ancestor_scale: [1.0, 1.0],
         paint_ancestor_linear: crate::style::MAT2D_IDENTITY,
         #[cfg(feature = "devtools")]
@@ -4079,7 +4091,13 @@ fn paint_vis(
     ancestor_linear: crate::style::Mat2d,
     ancestor_scale: [f32; 2],
 ) -> PaintVis {
-    let b = el.layout_bounds;
+    let b = crate::renderer::emoji_layout::layout_bounds_with_visible_emoji_ink(
+        el.layout_bounds,
+        el.text.as_deref(),
+        el.text_style.size_resolved(),
+        el.style.overflow.x == taffy::style::Overflow::Visible,
+        el.style.overflow.y == taffy::style::Overflow::Visible,
+    );
     let offset = crate::style::offset_path::sample(&el.style, [b[2], b[3]]);
     let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0] + offset.translate[0];
     let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1] + offset.translate[1];
@@ -4293,7 +4311,17 @@ pub(crate) fn pointer_in_paint_border_box(
         return false;
     }
     let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
-    let b = el.layout_bounds;
+    // `pointer_to_layout_local` is origin'd on the paint-vis box (overflow-visible
+    // emoji ink is inflated past the leading-none strut). Testing against the
+    // uninflated Taffy size drops :hover on the face — chip hover:scale never
+    // enters and the glyph stays at rest.
+    let b = crate::renderer::emoji_layout::layout_bounds_with_visible_emoji_ink(
+        el.layout_bounds,
+        el.text.as_deref(),
+        el.text_style.size_resolved(),
+        el.style.overflow.x == taffy::style::Overflow::Visible,
+        el.style.overflow.y == taffy::style::Overflow::Visible,
+    );
     local[0] >= -0.5 && local[1] >= -0.5 && local[0] <= b[2] + 0.5 && local[1] <= b[3] + 0.5
 }
 

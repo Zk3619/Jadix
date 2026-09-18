@@ -101,6 +101,10 @@ impl CubicTween {
         let s = self.0.borrow();
         s.signal.try_peek().unwrap_or(s.value)
     }
+
+    pub fn is_active(&self) -> bool {
+        self.0.borrow().active
+    }
 }
 
 pub fn use_ui_transition_cubic(id_str: &str, initial: f32) -> CubicTween {
