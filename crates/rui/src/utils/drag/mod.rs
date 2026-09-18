@@ -63,8 +63,8 @@ pub use session::{
     last_draggable_bounds, last_hit_rect, last_hits, last_hits_in_scope, last_overlay_pos,
     last_pointer, nudge_insert, overlay_hides_source, overlay_is_registered,
     overlay_source_opacity, pump_autoscroll, pump_inertia, refresh_hit_cache, remove_modifier,
-    resolve_insert_index, start_geometry, tick, BeginDrag, DragEvent, DragHandler, DragHit,
-    DragItemRef, DragPhase, DragPredicate, OVERLAY_SOURCE_OPACITY,
+    resolve_insert_index, start_geometry, tick, tick_follow, BeginDrag, DragEvent, DragHandler,
+    DragHit, DragItemRef, DragPhase, DragPredicate, OVERLAY_SOURCE_OPACITY,
 };
 pub use sortable::{
     apply_clone_event, apply_event, apply_multi_event, apply_swap_event, apply_transfer,
@@ -91,6 +91,8 @@ pub const ATTR_DRAG_HANDLE: &str = "rui_drag_handle";
 pub const ATTR_DRAG_OVERLAY: &str = "rui_drag_overlay";
 /// Clip shell around a [`ATTR_DRAG_OVERLAY`] ghost (`RestrictOverflow::Hidden`).
 pub const ATTR_DRAG_OVERLAY_CLIP: &str = "rui_drag_overlay_clip";
+/// Absolute chip inside a clip shell. Collect patches viewport `abs`; the shell stays on the restrict box.
+pub const ATTR_DRAG_OVERLAY_INNER: &str = "rui_drag_overlay_inner";
 pub const ATTR_DRAG_IGNORE: &str = "rui_drag_ignore";
 /// Collision target (solid-dnd `isActiveDroppable`). Paint-only; not CSS `:hover`.
 pub const ATTR_DRAG_OVER: &str = "rui_drag_over";

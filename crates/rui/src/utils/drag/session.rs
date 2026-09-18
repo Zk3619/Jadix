@@ -266,6 +266,14 @@ thread_local! {
     static LAST_COAST_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
     /// Viewport-space restrict box while `RestrictOverflow::Hidden` (overlay clip).
     static RESTRICT_CLIP: RefCell<Option<[f32; 4]>> = const { RefCell::new(None) };
+    /// Page ScrollArea / header clip at the restrict target. Applied as an extra
+    /// scissor on the portal clip shell — the shell itself stays the parent box
+    /// so rotation cannot leak into the padding beside the dashed arena.
+    static RESTRICT_ANCESTOR_CLIP: RefCell<Option<[f32; 4]>> = const { RefCell::new(None) };
+    /// Ancestor overflow clip (page ScrollArea / header) at each named restrict
+    /// target. Hidden clip shells live on the portal layer and must scissor to
+    /// this intersection or they paint over chrome that already clipped the parent.
+    static ANCESTOR_OVERFLOW_CLIP: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn set_scope_inertia(scope_id: &str, opts: InertiaOpts) {
@@ -380,7 +388,7 @@ pub(crate) fn overlay_center_origin_now(scope: &str) -> Option<[f32; 2]> {
     SCOPES.with(|m| {
         if let Some(rt) = m.borrow().get(scope) {
             if rt.overlay_pos.peek() != origin {
-                rt.overlay_pos.set(origin);
+                rt.overlay_pos.set_silent(origin);
             }
         }
     });
@@ -419,6 +427,56 @@ fn remember_named_bounds(id: &str, bounds: [f32; 4]) {
     NAMED_BOUNDS.with(|m| {
         m.borrow_mut().insert(id.to_string(), bounds);
     });
+}
+
+fn remember_ancestor_overflow_clip(id: &str, clip: Option<[f32; 4]>) {
+    if id.is_empty() {
+        return;
+    }
+    ANCESTOR_OVERFLOW_CLIP.with(|m| match clip.filter(|c| c[2] > 0.0 && c[3] > 0.0) {
+        Some(c) => {
+            m.borrow_mut().insert(id.to_string(), c);
+        }
+        None => {
+            m.borrow_mut().remove(id);
+        }
+    });
+}
+
+fn last_ancestor_overflow_clip(id: &str) -> Option<[f32; 4]> {
+    ANCESTOR_OVERFLOW_CLIP.with(|m| m.borrow().get(id).copied())
+}
+
+fn intersect_xywh(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+fn child_overflow_clip(
+    el: &Element,
+    slot: [f32; 4],
+    ancestor: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    if !crate::core::tree::element_clips_overflow(el) {
+        return ancestor;
+    }
+    Some(match ancestor {
+        Some(c) => intersect_xywh(c, slot),
+        None => slot,
+    })
+}
+
+fn restrict_ancestor_clip_for(sess: &DragSession) -> Option<[f32; 4]> {
+    match &sess.restrict {
+        Restrict::Element(id) => last_ancestor_overflow_clip(id),
+        Restrict::Parent => {
+            last_ancestor_overflow_clip(&item_bounds_key(&sess.scope_id, &sess.draggable_id))
+        }
+        _ => None,
+    }
 }
 
 fn last_named_bounds(id: &str) -> Option<[f32; 4]> {
@@ -740,8 +798,22 @@ pub(super) fn peek_restrict_clip() -> Option<[f32; 4]> {
     RESTRICT_CLIP.with(|c| *c.borrow())
 }
 
+/// Page overflow that still clips a Hidden portal shell (header / ScrollArea).
+pub(crate) fn peek_restrict_ancestor_clip() -> Option<[f32; 4]> {
+    RESTRICT_ANCESTOR_CLIP.with(|c| *c.borrow())
+}
+
 fn set_restrict_clip(box_: Option<[f32; 4]>) {
     RESTRICT_CLIP.with(|c| *c.borrow_mut() = box_);
+}
+
+pub(crate) fn set_restrict_ancestor_clip(box_: Option<[f32; 4]>) {
+    RESTRICT_ANCESTOR_CLIP.with(|c| *c.borrow_mut() = box_);
+}
+
+fn clear_restrict_clip_state() {
+    set_restrict_clip(None);
+    set_restrict_ancestor_clip(None);
 }
 
 fn restrict_clip_bounds(resolved: &Restrict, viewport: [f32; 2]) -> Option<[f32; 4]> {
@@ -1116,9 +1188,20 @@ fn ghost_origin(
     let origin = ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx));
     let overflow = scope_restrict_overflow(&sess.scope_id);
     if overflow.is_hidden() && !(sess.restrict_end_only && !at_end) {
-        set_restrict_clip(restrict_clip_bounds(&ctx.restrict, viewport));
+        // Failed Element/Parent lookup must keep the last clip box. Clearing it
+        // remounts the overlay without a shell, and `write_ghost_origin` then
+        // walks the clip shell with the chip — the ghost escapes the parent.
+        if let Some(box_) = restrict_clip_bounds(&ctx.restrict, viewport) {
+            // Shell geometry is the parent restrict box. Page overflow is a
+            // second scissor — shrinking the shell to the viewport let rotation
+            // paint in the padding beside the dashed arena after scroll.
+            set_restrict_clip(Some(box_));
+            if let Some(anc) = restrict_ancestor_clip_for(sess) {
+                set_restrict_ancestor_clip(Some(anc));
+            }
+        }
     } else {
-        set_restrict_clip(None);
+        clear_restrict_clip_state();
     }
     origin
 }
@@ -1444,6 +1527,58 @@ fn clamp_tail_append_hover(
     hover.min(max)
 }
 
+/// CursorMoved paint-follow: `overlay_pos` + Overlay dirty from [`LAST_HITS`].
+/// No tree walk, no collision / sortable `hover_list` — those run on vsync [`tick`].
+pub fn tick_follow(x: f32, y: f32, viewport: [f32; 2]) -> bool {
+    if !is_active() && !is_coasting() {
+        return false;
+    }
+    crate::utils::pointer_drag::tick(x, y);
+    let Some(sess) = SESSION.with(|s| s.borrow().clone()) else {
+        return false;
+    };
+    SESSION.with(|s| {
+        if let Some(d) = s.borrow_mut().as_mut() {
+            d.last_pointer = [x, y];
+            d.last_viewport = viewport;
+        }
+    });
+    if sess.phase == DragPhase::Active {
+        VELOCITY.with(|v| v.borrow_mut().sample([x, y], Instant::now()));
+    }
+    let hits = LAST_HITS.with(|h| h.borrow().clone());
+    let origin = ghost_origin(&sess, [x, y], viewport, &hits, false);
+    write_ghost_follow(&sess.scope_id, origin);
+    true
+}
+
+fn write_ghost_follow(scope_id: &str, origin: [f32; 2]) {
+    SCOPES.with(|m| {
+        if let Some(rt) = m.borrow().get(scope_id) {
+            if rt.overlay_pos.peek() != origin {
+                rt.overlay_pos.set_silent(origin);
+            }
+        }
+    });
+    super::overlay::note_ghost_follow_tick(origin);
+}
+
+/// After layout (and the frame's scroll-offset chase), refresh `overlay_pos` +
+/// Hidden clip from live visual hits so the clip shell tracks a scrolled parent.
+/// Collision / `hover_list` stay on vsync [`tick`] — this must not remount.
+pub(crate) fn resync_overlay_follow_after_layout(root: &Element) {
+    if !is_active() {
+        return;
+    }
+    let Some(sess) = SESSION.with(|s| s.borrow().clone()) else {
+        return;
+    };
+    let hits = collect_hits(root);
+    LAST_HITS.with(|h| *h.borrow_mut() = hits.clone());
+    let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, &hits, false);
+    write_ghost_follow(&sess.scope_id, origin);
+}
+
 /// Advance the session. `hits` must be collected from the current layout tree.
 /// Returns `true` when the UI should redraw.
 pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
@@ -1533,6 +1668,10 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     let origin = ghost_origin(&sess, [x, y], viewport, hits, false);
     let dragged = moving_item_rect(&sess, hits, origin);
 
+    // Paint-follow first (same as Point overlay tick): `overlay_pos` + Overlay
+    // dirty before collision / sortable, so CursorMoved vsync already dest-resets.
+    write_ghost_follow(&sess.scope_id, origin);
+
     let (collision, empty_insert, can_drop, collision_fn) = SCOPES.with(|m| {
         m.borrow()
             .get(&sess.scope_id)
@@ -1618,16 +1757,11 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
     // not run under `SCOPES.borrow()` (same as [`activate_scope`]). One
     // `batch` so hover list / index / highlight do not remount twice.
     let ui = SCOPES.with(|m| {
-        m.borrow().get(&sess.scope_id).map(|rt| {
-            (
-                rt.overlay_pos,
-                rt.active_droppable,
-                rt.hover_list,
-                rt.hover_index,
-            )
-        })
+        m.borrow()
+            .get(&sess.scope_id)
+            .map(|rt| (rt.active_droppable, rt.hover_list, rt.hover_index))
     });
-    if let Some((overlay_pos, active_droppable, hover_list_sig, hover_index_sig)) = ui {
+    if let Some((active_droppable, hover_list_sig, hover_index_sig)) = ui {
         let prev_list = hover_list_sig.peek();
         let mut hover_list = resolve_sortable_hover_list(hits, &sess, [x, y], prev_list.as_deref());
         // `can_drop` (Sortable `onMove`) must also veto sortable hover — otherwise
@@ -1651,15 +1785,11 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
                 }
             })
             .or(sess.from_index);
-        let pos_changed = overlay_pos.peek() != origin;
         let drop_changed = active_droppable.peek() != next_id;
         let list_changed = hover_list_sig.peek() != hover_list;
         let index_changed = hover_index_sig.peek() != hover_index;
-        if pos_changed || drop_changed || list_changed || index_changed {
+        if drop_changed || list_changed || index_changed {
             batch(|| {
-                if pos_changed {
-                    overlay_pos.set(origin);
-                }
                 if drop_changed {
                     active_droppable.set(next_id.clone());
                 }
@@ -1992,7 +2122,7 @@ fn activate_scope(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) {
             from_list.set(sess.from_list.clone());
             from_index.set(sess.from_index);
             drag_extent.set(extent);
-            overlay_pos.set(origin);
+            overlay_pos.set_silent(origin);
             if registered {
                 overlay_open.set(true);
             }
@@ -2026,7 +2156,8 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
     // One transition: overlay / active / hover are one session, not six effects.
     DRAG_PACK_PITCH.set(0.0);
     DRAG_PACK_GAP.set(0.0);
-    set_restrict_clip(None);
+    clear_restrict_clip_state();
+    super::overlay::clear_ghost_follow();
     batch(|| {
         rt.overlay_open.set(false);
         rt.active_draggable.set(None);
@@ -2114,7 +2245,7 @@ fn commit_end(hits: &[DragHit]) -> bool {
             SCOPES.with(|m| {
                 if let Some(rt) = m.borrow().get(&sess.scope_id) {
                     if rt.overlay_pos.peek() != origin {
-                        rt.overlay_pos.set(origin);
+                        rt.overlay_pos.set_silent(origin);
                     }
                 }
             });
@@ -2217,7 +2348,7 @@ pub fn cancel() -> bool {
     let Some(sess) = SESSION.with(|s| s.borrow_mut().take()) else {
         return false;
     };
-    set_restrict_clip(None);
+    clear_restrict_clip_state();
     crate::utils::pointer_drag::clear();
     crate::app::release_pointer_capture();
     VELOCITY.with(|v| v.borrow_mut().reset());
@@ -2339,6 +2470,11 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
         });
         false
     };
+    // XY has no locked-axis drift. Skip a second full-tree `collect_hits` on
+    // every mousemove when autoscroll did not actually pan (Gallery drag 不跟手).
+    if !moved && !matches!(axis, Axis::X | Axis::Y) {
+        return false;
+    }
     let hits = collect_hits(root);
     let drift = SESSION.with(|s| {
         s.borrow()
@@ -2361,8 +2497,9 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
 pub fn collect_hits(root: &Element) -> Vec<DragHit> {
     NAMED_BOUNDS.with(|m| m.borrow_mut().clear());
     PARENT_BOUNDS.with(|m| m.borrow_mut().clear());
+    ANCESTOR_OVERFLOW_CLIP.with(|m| m.borrow_mut().clear());
     let mut out = Vec::new();
-    collect_hits_inner(root, [0.0, 0.0], None, &mut out);
+    collect_hits_inner(root, [0.0, 0.0], None, None, &mut out);
     cap_stretched_indexed_rects(&mut out);
     super::registry::sync_registered_from_collect(&out);
     out
@@ -2472,6 +2609,7 @@ fn collect_hits_inner(
     el: &Element,
     scroll_acc: [f32; 2],
     ancestor: Option<RestrictAncestor>,
+    overflow_clip: Option<[f32; 4]>,
     out: &mut Vec<DragHit>,
 ) {
     if el.attrs.contains_key(ATTR_DRAG_OVERLAY) || el.attrs.contains_key(ATTR_DRAG_HOLE_PREVIEW) {
@@ -2479,13 +2617,13 @@ fn collect_hits_inner(
     }
     // Pointer-space layout slot (scroll applied). Sortable preview translate
     // is ignored so insert-index stays on the original rows.
-    let scroll_acc = if el.template_id.as_deref()
+    let (scroll_acc, overflow_clip) = if el.template_id.as_deref()
         == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
         || el.style.position_fixed
     {
-        [0.0_f32, 0.0_f32]
+        ([0.0_f32, 0.0_f32], None)
     } else {
-        scroll_acc
+        (scroll_acc, overflow_clip)
     };
     let slot = crate::app::tree_hit::collision_hit_box(el, scroll_acc);
     let item_shell = el.attrs.contains_key(ATTR_DRAG_ITEM_SHELL);
@@ -2508,17 +2646,21 @@ fn collect_hits_inner(
         .filter(|s| !s.is_empty());
     if let Some(n) = named {
         remember_named_bounds(n, slot);
+        remember_ancestor_overflow_clip(n, overflow_clip);
     }
     if let Some(n) = attr_id {
         remember_named_bounds(n, slot);
+        remember_ancestor_overflow_clip(n, overflow_clip);
     }
     if drag_id.is_some() || drop_id.is_some() {
         let id = drag_id.clone().or(drop_id.clone()).unwrap_or_default();
         let scope_id = el.attrs.get(ATTR_DRAG_SCOPE).cloned().unwrap_or_default();
         remember_draggable_bounds(&scope_id, &id, slot);
+        remember_ancestor_overflow_clip(&id, overflow_clip);
         if drag_id.is_some() {
             if let Some(parent) = author_parent_slot(ancestor) {
                 remember_parent_bounds(&scope_id, &id, parent);
+                remember_ancestor_overflow_clip(&item_bounds_key(&scope_id, &id), overflow_clip);
             }
         }
         let disabled = el
@@ -2547,8 +2689,9 @@ fn collect_hits_inner(
         });
     }
     let next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
+    let next_clip = child_overflow_clip(el, slot, overflow_clip);
     for c in &el.children {
-        collect_hits_inner(c, next_acc, Some(child_anc), out);
+        collect_hits_inner(c, next_acc, Some(child_anc), next_clip, out);
     }
 }
 
@@ -4846,6 +4989,224 @@ mod tests {
             );
             let _ = end(&hits);
             assert!(peek_restrict_clip().is_none());
+        });
+    }
+
+    #[test]
+    fn restrict_overflow_hidden_clip_follows_scrolled_arena() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::Element("arena".into()),
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    restrict_overflow: RestrictOverflow::Hidden,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            let mut card = hit("card", [80.0, 40.0, 40.0, 24.0], false);
+            card.scope_id = "s".into();
+            card.is_draggable = true;
+            let mut arena = hit("arena", [10.0, 20.0, 200.0, 120.0], true);
+            arena.scope_id = "s".into();
+            let hits = vec![card.clone(), arena];
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(110.0, 62.0, &hits, [800.0, 600.0]));
+            let clip0 = peek_restrict_clip().expect("hidden overflow stores the restrict box");
+            assert!(
+                (clip0[1] - 20.0).abs() < 0.5,
+                "initial clip y must be the arena, got {clip0:?}"
+            );
+
+            let mut arena_scrolled = hit("arena", [10.0, -60.0, 200.0, 120.0], true);
+            arena_scrolled.scope_id = "s".into();
+            let mut card_scrolled = card.clone();
+            card_scrolled.rect = Rect::from_bounds([80.0, -40.0, 40.0, 24.0]);
+            let scrolled = vec![card_scrolled, arena_scrolled];
+            assert!(tick(110.0, 62.0, &scrolled, [800.0, 600.0]));
+            let clip1 = peek_restrict_clip().expect("clip must survive page scroll");
+            assert!(
+                (clip1[0] - 10.0).abs() < 0.5
+                    && (clip1[1] + 60.0).abs() < 0.5
+                    && (clip1[2] - 200.0).abs() < 0.5
+                    && (clip1[3] - 120.0).abs() < 0.5,
+                "clip shell must track the scrolled arena, got {clip1:?}"
+            );
+            let pos = overlay_pos.peek();
+            assert!(
+                pos[1] + 0.5 >= clip1[1] && pos[1] <= clip1[1] + clip1[3] + 0.5,
+                "ghost origin must stay inside the scrolled restrict box, pos={pos:?} clip={clip1:?}"
+            );
+
+            assert!(tick(110.0, 62.0, &[], [800.0, 600.0]));
+            let clip_kept = peek_restrict_clip().expect("failed lookup must keep last clip");
+            assert_eq!(clip_kept, clip1, "stale hits must not drop Hidden clip");
+
+            assert!(tick(110.0, 62.0, &hits, [800.0, 600.0]));
+            let clip2 = peek_restrict_clip().expect("clip restores after scroll-back");
+            assert!(
+                (clip2[1] - 20.0).abs() < 0.5,
+                "scroll-back must restore the arena clip, got {clip2:?}"
+            );
+            let _ = end(&hits);
+        });
+    }
+
+    #[test]
+    fn restrict_overflow_hidden_clip_intersects_ancestor_scroll() {
+        use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([40.0_f32, 24.0]);
+            register_scope(
+                "s".into(),
+                ScopeRuntime {
+                    collision: CollisionAlg::PointerWithin,
+                    axis: Axis::Xy,
+                    start_axis: Axis::Xy,
+                    threshold: 0.0,
+                    restrict: Restrict::Element("arena".into()),
+                    restrict_end_only: false,
+                    restrict_anchor: RestrictAnchor::FULL,
+                    snap: None,
+                    restrict_overflow: RestrictOverflow::Hidden,
+                    overlay_registered: true,
+                    source_opacity: 0.0,
+                    autoscroll: AutoScroll {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                    empty_insert: 0.0,
+                    delay_ms: 0.0,
+                    activation: Activation::And,
+                    collision_fn: None,
+                    overlay_align: OverlayAlign::Grab,
+                    can_drop: None,
+                    on_start: None,
+                    on_move: None,
+                    on_over: None,
+                    on_end: None,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                    stack_seq: 0,
+                    modifiers: Vec::new(),
+                    sensors: Vec::new(),
+                },
+            );
+            let mut card = Element::new();
+            card.layout_bounds = [80.0, 100.0, 40.0, 24.0];
+            card.set_attr(ATTR_DRAG_DRAGGABLE, "card");
+            card.set_attr(ATTR_DRAG_SCOPE, "s");
+            let mut arena = Element::new();
+            arena.layout_bounds = [10.0, 20.0, 200.0, 240.0];
+            arena.set_attr(ATTR_DRAG_DROPPABLE, "arena");
+            arena.set_attr(ATTR_DRAG_SCOPE, "s");
+            arena = arena.child(card);
+            let mut vp = Element::new().overflow("hidden");
+            vp.layout_bounds = [0.0, 80.0, 400.0, 200.0];
+            vp.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}page"));
+            vp = vp.child(arena);
+            let hits = collect_hits(&vp);
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 110.0],
+                grab_offset: [20.0, 10.0],
+                start_bounds: [80.0, 100.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(110.0, 120.0, &hits, [800.0, 600.0]));
+            let clip = peek_restrict_clip().expect("hidden clip");
+            assert!(
+                (clip[0] - 10.0).abs() < 0.5 && (clip[1] - 20.0).abs() < 0.5,
+                "clip shell must stay on the arena, not the scroll viewport; got {clip:?}"
+            );
+            let ancestor = peek_restrict_ancestor_clip().expect("page overflow");
+            assert!(
+                (ancestor[1] - 80.0).abs() < 0.5,
+                "ancestor clip must be the scroll viewport, got {ancestor:?}"
+            );
+            let visible = intersect_xywh(clip, ancestor);
+            assert!(
+                (visible[1] - 80.0).abs() < 0.5 && visible[0] >= 10.0 - 0.5,
+                "visible scissor must start at the viewport and keep the arena left, got {visible:?}"
+            );
+            assert!(
+                visible[0] + 0.5 >= 10.0,
+                "rotation must not paint in the padding left of the arena; visible={visible:?}"
+            );
+            let _ = end(&hits);
         });
     }
 
@@ -8066,5 +8427,78 @@ mod tests {
             Some(2),
             "horizontal list must split on X (Y would yield 0)"
         );
+    }
+
+    #[test]
+    fn tick_follow_moves_ghost_without_crossing_hover_list() {
+        let (_o, _) = create_root(|| {
+            let overlay_open = Signal::new(false);
+            let overlay_pos = Signal::new([0.0_f32, 0.0]);
+            let active_draggable = Signal::new(None::<String>);
+            let active_droppable = Signal::new(None::<String>);
+            let from_list = Signal::new(None::<String>);
+            let from_index = Signal::new(None::<usize>);
+            let hover_list = Signal::new(None::<String>);
+            let hover_index = Signal::new(None::<usize>);
+            let drag_extent = Signal::new([80.0_f32, 32.0]);
+            register_scope(
+                "s".into(),
+                scope_rt(
+                    CollisionAlg::PointerWithin,
+                    Axis::Y,
+                    0.0,
+                    0.0,
+                    Activation::And,
+                    None,
+                    None,
+                    OverlayAlign::Grab,
+                    overlay_open,
+                    overlay_pos,
+                    active_draggable,
+                    active_droppable,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                    drag_extent,
+                ),
+            );
+            begin(BeginDrag {
+                scope_id: "s".into(),
+                draggable_id: "v0".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [40.0, 16.0],
+                start_bounds: [0.0, 0.0, 80.0, 32.0],
+                from_list: Some("vert".into()),
+                from_index: Some(0),
+                item_type: "card".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let hits = vec![
+                axis_hit("v0", "vert", [0.0, 0.0, 80.0, 32.0], Some(0), Axis::Y),
+                axis_hit("v1", "vert", [0.0, 40.0, 80.0, 32.0], Some(1), Axis::Y),
+                axis_hit("vert", "vert", [0.0, 0.0, 80.0, 120.0], None, Axis::Y),
+                axis_hit("h0", "horiz", [0.0, 200.0, 40.0, 32.0], Some(0), Axis::X),
+                axis_hit("horiz", "horiz", [0.0, 200.0, 120.0, 32.0], None, Axis::X),
+            ];
+            assert!(tick(40.0, 56.0, &hits, [400.0, 300.0]));
+            let grab_pos = overlay_pos.peek();
+            assert_eq!(hover_list.peek().as_deref(), Some("vert"));
+            assert!(tick_follow(90.0, 216.0, [400.0, 300.0]));
+            let live = overlay_pos.peek();
+            assert_ne!(
+                live, grab_pos,
+                "ghost origin must follow without collect_hits"
+            );
+            assert_eq!(
+                hover_list.peek().as_deref(),
+                Some("vert"),
+                "跨区 hover_list must wait for vsync tick"
+            );
+            assert!(tick(90.0, 216.0, &hits, [400.0, 300.0]));
+            assert_eq!(hover_list.peek().as_deref(), Some("horiz"));
+            let _ = end(&hits);
+        });
     }
 }

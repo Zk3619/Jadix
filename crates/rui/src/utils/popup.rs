@@ -951,6 +951,15 @@ fn apply_floating_menus(
         return;
     };
 
+    // Title-bar drag writes left/top as paint chrome. Re-running cursor placement
+    // would remount-fight and flip/clamp the grab point away from the pointer.
+    if crate::utils::anchored_overlay::floating_panel_drag_id().as_deref() == Some(id.as_str()) {
+        for c in &mut el.children {
+            apply_floating_menus(c, triggers, viewport, changed);
+        }
+        return;
+    }
+
     // Unanchored overlays set ATTR_FLOATING (+ optional TRIGGER) so outside-press
     // treats the panel / toggle as inside — without PLACEMENT or POINT, do not
     // rewrite left/top (author `fixed` / inset is the geometry).

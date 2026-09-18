@@ -7,7 +7,12 @@
 //! and clamps Y to the viewport floor; seeding `apply_stored_floating_place`
 //! with `match_trigger=0` + `strategy=fixed` writes overflow-hidden at (0,0)
 //! until measure and the ghost vanishes.
+//!
+//! Pointer follow shares Point overlay paint-follow: Taffy stays at the grab
+//! origin, collect patches `abs`, CursorMoved queues Overlay dirty. Clip shells
+//! still write inner relative inset (restrict box is not the chip).
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, OverlayMode};
@@ -16,6 +21,7 @@ use crate::core::reactivity::{isolate_reads, with_child_owner, Signal};
 use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutStatus, UnitSlot};
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
 use crate::layout::{dim_kind, dim_length_px, DimKind};
+use crate::utils::anchored_overlay::pin_overlay_follow_insets;
 use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{
@@ -30,7 +36,8 @@ use super::session::{
 use super::{
     ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE, ATTR_DRAG_GROUP,
     ATTR_DRAG_HANDLE, ATTR_DRAG_IGNORE, ATTR_DRAG_INDEX, ATTR_DRAG_ITEM_SHELL, ATTR_DRAG_LIST,
-    ATTR_DRAG_OVER, ATTR_DRAG_OVERLAY, ATTR_DRAG_OVERLAY_CLIP, ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
+    ATTR_DRAG_OVER, ATTR_DRAG_OVERLAY, ATTR_DRAG_OVERLAY_CLIP, ATTR_DRAG_OVERLAY_INNER,
+    ATTR_DRAG_SCOPE, ATTR_DRAG_TYPE,
 };
 
 /// Pin the ghost at viewport `origin` (item top-left, already grab-offset).
@@ -64,6 +71,8 @@ fn place_drag_ghost(
             .absolute()
             .left(origin[0] - bbox[0])
             .top(origin[1] - bbox[1]);
+        let scope = ghost_id.strip_suffix("__ghost").unwrap_or(ghost_id);
+        panel.set_attr(ATTR_DRAG_OVERLAY_INNER, scope);
         let mut shell = Element::new()
             .pointer_events_none()
             .fixed()
@@ -116,14 +125,130 @@ fn write_ghost_origin(el: &mut Element, origin: [f32; 2]) -> bool {
     dx || dy
 }
 
-fn write_clip_shell(el: &mut Element, bbox: [f32; 4], origin: [f32; 2]) -> bool {
-    let mut changed = write_ghost_origin(el, [bbox[0], bbox[1]]);
-    changed = write_len(el, UnitSlot::Width, bbox[2]) || changed;
-    changed = write_len(el, UnitSlot::Height, bbox[3]) || changed;
+fn write_clip_shell(el: &mut Element, bbox: [f32; 4], origin: [f32; 2]) -> (bool, bool) {
+    let mut origin_moved = write_ghost_origin(el, [bbox[0], bbox[1]]);
+    let size_moved =
+        write_len(el, UnitSlot::Width, bbox[2]) || write_len(el, UnitSlot::Height, bbox[3]);
     if let Some(inner) = el.children.first_mut() {
-        changed = write_ghost_origin(inner, [origin[0] - bbox[0], origin[1] - bbox[1]]) || changed;
+        origin_moved =
+            write_ghost_origin(inner, [origin[0] - bbox[0], origin[1] - bbox[1]]) || origin_moved;
     }
-    changed
+    (origin_moved || size_moved, size_moved)
+}
+
+/// Dest-reset old + new ghost boxes. Origin follow is paint-only (`StyleChanged`);
+/// without Overlay dirty, PartialLoad keeps the previous chip.
+fn note_ghost_follow_damage(el: &Element, origin: [f32; 2]) {
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    let w = el.layout_bounds[2];
+    let h = el.layout_bounds[3];
+    remember_ghost_follow_chrome(el, origin, [w, h]);
+    if w > 0.5 && h > 0.5 {
+        crate::app::damage::push_frame_overlay_damage(
+            crate::layout::layout_tree::overlay_portal_stamp_key(el),
+            [origin[0], origin[1], w, h],
+        );
+    }
+}
+
+/// Dest-reset the restrict clip box (old + live) and the chip. Page scroll
+/// moves the shell; chip-only dirty leaves ink at the pre-scroll parent.
+fn note_clip_shell_damage(el: &Element, old: [f32; 4], bbox: [f32; 4], origin: [f32; 2]) {
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    let stamp = crate::layout::layout_tree::overlay_portal_stamp_key(el);
+    if old[2] > 0.5 && old[3] > 0.5 {
+        crate::app::damage::push_frame_overlay_damage(stamp, old);
+    }
+    if bbox[2] > 0.5 && bbox[3] > 0.5 {
+        crate::app::damage::push_frame_overlay_damage(stamp, bbox);
+    }
+    let inner = el
+        .children
+        .first()
+        .map(|c| [c.layout_bounds[2], c.layout_bounds[3]]);
+    let size = match inner {
+        Some([w, h]) if w > 0.5 && h > 0.5 => [w, h],
+        _ => [bbox[2], bbox[3]],
+    };
+    remember_ghost_follow_chrome(el, origin, size);
+    if size[0] > 0.5 && size[1] > 0.5 {
+        crate::app::damage::push_frame_overlay_damage(
+            stamp,
+            [origin[0], origin[1], size[0], size[1]],
+        );
+    }
+}
+
+struct GhostFollow {
+    stamp_key: Cell<u64>,
+    panel_size: Cell<[f32; 2]>,
+    last_visual: Cell<Option<[f32; 2]>>,
+    base: Cell<Option<[f32; 2]>>,
+}
+
+thread_local! {
+    static GHOST_FOLLOW: GhostFollow = const {
+        GhostFollow {
+            stamp_key: Cell::new(0),
+            panel_size: Cell::new([0.0, 0.0]),
+            last_visual: Cell::new(None),
+            base: Cell::new(None),
+        }
+    };
+}
+
+fn remember_ghost_follow_chrome(el: &Element, visual: [f32; 2], size: [f32; 2]) {
+    GHOST_FOLLOW.with(|g| {
+        g.stamp_key
+            .set(crate::layout::layout_tree::overlay_portal_stamp_key(el));
+        if size[0] > 0.5 && size[1] > 0.5 {
+            g.panel_size.set(size);
+        }
+        g.last_visual.set(Some(visual));
+    });
+}
+
+fn ghost_follow_base() -> Option<[f32; 2]> {
+    GHOST_FOLLOW.with(|g| g.base.get())
+}
+
+fn capture_ghost_follow_base(base: [f32; 2]) {
+    GHOST_FOLLOW.with(|g| {
+        if g.base.get().is_none() {
+            g.base.set(Some(base));
+        }
+    });
+}
+
+/// Pin Taffy at the first origin; later ticks only patch collect `abs`.
+fn pin_ghost_follow(el: &mut Element, visual: [f32; 2]) {
+    let base = ghost_follow_base().unwrap_or(visual);
+    capture_ghost_follow_base(base);
+    pin_overlay_follow_insets(el, base);
+}
+
+pub(crate) fn clear_ghost_follow() {
+    GHOST_FOLLOW.with(|g| {
+        g.stamp_key.set(0);
+        g.panel_size.set([0.0, 0.0]);
+        g.last_visual.set(None);
+        g.base.set(None);
+    });
+}
+
+/// CursorMoved: Overlay dirty at the live origin before RedrawRequested take.
+pub(crate) fn note_ghost_follow_tick(visual: [f32; 2]) {
+    GHOST_FOLLOW.with(|g| {
+        crate::app::damage::queue_overlay_follow_tick_damage(
+            g.stamp_key.get(),
+            g.panel_size.get(),
+            g.last_visual.get(),
+            visual,
+        );
+        if g.stamp_key.get() != 0 && g.panel_size.get()[0] > 0.5 && g.panel_size.get()[1] > 0.5 {
+            g.last_visual.set(Some(visual));
+        }
+    });
 }
 
 fn paint_target(el: &mut Element) -> &mut Element {
@@ -135,13 +260,24 @@ fn paint_target(el: &mut Element) -> &mut Element {
 }
 
 /// After Taffy measured an auto-sized Center ghost, pin paint origin to the
-/// live pointer in the same collect (inset + `overlay_pos`). Clip shells keep
-/// the restrict box; their size is not the chip.
+/// live pointer in the same collect. Taffy stays at the grab origin (Point
+/// follow); collect patches `abs`. Clip shells patch to the live restrict box
+/// so page / autoscroll moves overflow clip with the parent.
 pub(crate) fn adjust_overlay_collect_origin(
     el: &mut Element,
     measured: [f32; 2],
 ) -> Option<[f32; 2]> {
-    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none() || el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+    if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+        return peek_restrict_clip()
+            .filter(|b| b[2] > 0.5 && b[3] > 0.5)
+            .map(|b| [b[0], b[1]]);
+    }
+    if let Some(scope) = el.attrs.get(ATTR_DRAG_OVERLAY_INNER).cloned() {
+        let origin = overlay_origin_after_ghost_measure(&scope, measured)?;
+        remember_ghost_follow_chrome(el, origin, measured);
+        return Some(origin);
+    }
+    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none() {
         return None;
     }
     let scope = el
@@ -150,7 +286,8 @@ pub(crate) fn adjust_overlay_collect_origin(
         .strip_suffix("__ghost")?
         .to_string();
     let origin = overlay_origin_after_ghost_measure(&scope, measured)?;
-    write_ghost_origin(el, origin);
+    pin_ghost_follow(el, origin);
+    remember_ghost_follow_chrome(el, origin, measured);
     Some(origin)
 }
 
@@ -286,8 +423,11 @@ fn sync_drag_overlay_ghost(
         let is_open = open.peek();
         let source_id = active.peek();
         let clip = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5);
-        let want_clip = is_open && clip.is_some();
         let have_clip = el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some();
+        // Once Hidden opened a clip shell, keep it even if a tick fails to
+        // resolve the restrict box (page scroll / stale hits). Dropping the
+        // shell remounts an unclipped ghost that breaks out of the parent.
+        let want_clip = is_open && (clip.is_some() || have_clip);
         let body_key = if !is_open {
             String::new()
         } else if let Some(id) = &source_id {
@@ -322,17 +462,32 @@ fn sync_drag_overlay_ghost(
             return changed;
         }
         let origin = pos.peek();
-        let moved = if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
-            if let Some(bbox) = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5) {
+        let clip_bbox = peek_restrict_clip();
+        let old_shell = el.layout_bounds;
+        let (moved, size_moved) = if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+            if let Some(bbox) = clip_bbox {
                 write_clip_shell(el, bbox, origin)
             } else {
-                write_ghost_origin(el, origin)
+                // Keep the last restrict box. Moving the shell to the chip
+                // origin lets overflow-hidden travel with the ghost.
+                (false, false)
             }
         } else {
-            write_ghost_origin(el, origin)
+            pin_ghost_follow(el, origin);
+            (true, false)
         };
-        if moved {
+        if size_moved {
+            // Clip-shell size is Taffy geometry. Pointer follow is not.
             changed = changed.merge(LayoutStatus::LayoutChanged);
+        } else if moved {
+            // Inset is paint chrome (`adjust_overlay_collect_origin` patches abs).
+            // LayoutChanged disabled page collect-skip and the Gallery ghost lagged.
+            changed = changed.merge(LayoutStatus::StyleChanged);
+            if let Some(bbox) = clip_bbox {
+                note_clip_shell_damage(el, old_shell, bbox, origin);
+            } else {
+                note_ghost_follow_damage(el, origin);
+            }
         }
         if is_open {
             if let Some(dec) = &decorate {
@@ -375,13 +530,14 @@ pub(crate) fn sync_overlay_ghost_insets(el: &mut Element) {
             });
             if let Some(p) = origin {
                 if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
-                    if let Some(bbox) = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5) {
+                    if let Some(bbox) = peek_restrict_clip() {
+                        let old = el.layout_bounds;
                         write_clip_shell(el, bbox, p);
-                    } else {
-                        write_ghost_origin(el, p);
+                        note_clip_shell_damage(el, old, bbox, p);
                     }
                 } else if el.style.position_fixed {
-                    write_ghost_origin(el, p);
+                    pin_ghost_follow(el, p);
+                    note_ghost_follow_damage(el, p);
                 }
             }
         }
@@ -1853,6 +2009,101 @@ mod tests {
     }
 
     #[test]
+    fn ghost_follow_pins_taffy_collect_patches_abs() {
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
+        let (_o, _) = crate::core::reactivity::create_root(|| {
+            let _el: Element = drag_scope("gf-abs")
+                .threshold(0.0)
+                .child(|| Element::from(drag_overlay()));
+            begin(BeginDrag {
+                scope_id: "gf-abs".into(),
+                draggable_id: "chip".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [30.0, 8.0, 80.0, 32.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(50.0, 20.0, &[], [800.0, 600.0]));
+            let grab = crate::utils::drag::last_overlay_pos("gf-abs").expect("grab origin");
+            let mut ghost = place_drag_ghost(
+                Element::new().w(80.0).h(32.0).text("g"),
+                "gf-abs__ghost",
+                grab,
+                None,
+            );
+            ghost.layout_bounds = [grab[0], grab[1], 80.0, 32.0];
+            sync_overlay_ghost_insets(&mut ghost);
+            assert!(tick(90.0, 70.0, &[], [800.0, 600.0]));
+            let visual = crate::utils::drag::last_overlay_pos("gf-abs").expect("live origin");
+            assert_ne!(visual, grab, "pointer moved");
+            let patched = adjust_overlay_collect_origin(&mut ghost, [80.0, 32.0]);
+            assert_eq!(
+                patched,
+                Some(visual),
+                "collect must patch abs so occupancy / children follow"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(ghost.style.inset.left),
+                Some(grab[0]),
+                "Taffy inset stays at grab origin during drag"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(ghost.style.inset.top),
+                Some(grab[1])
+            );
+            assert_eq!(ghost.style.translate, [0.0, 0.0]);
+            let _ = end(&[]);
+        });
+    }
+
+    #[test]
+    fn ghost_follow_tick_queues_overlay_damage_before_render() {
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
+        let (_o, _) = crate::core::reactivity::create_root(|| {
+            let _el: Element = drag_scope("gf-tick")
+                .threshold(0.0)
+                .child(|| Element::from(drag_overlay()));
+            begin(BeginDrag {
+                scope_id: "gf-tick".into(),
+                draggable_id: "chip".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [30.0, 8.0, 80.0, 32.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(50.0, 20.0, &[], [800.0, 600.0]));
+            let grab = crate::utils::drag::last_overlay_pos("gf-tick").expect("grab origin");
+            let mut ghost =
+                place_drag_ghost(Element::new().w(80.0).h(32.0), "gf-tick__ghost", grab, None);
+            ghost.layout_bounds = [grab[0], grab[1], 80.0, 32.0];
+            sync_overlay_ghost_insets(&mut ghost);
+            let _ = crate::app::damage::take_frame_paint_nodes();
+            assert!(tick(90.0, 70.0, &[], [800.0, 600.0]));
+            let visual = crate::utils::drag::last_overlay_pos("gf-tick").expect("live origin");
+            let dirties = crate::app::damage::take_frame_paint_nodes();
+            assert!(
+                dirties.iter().any(|d| {
+                    d.kind == crate::app::damage::PaintDirtyKind::Overlay
+                        && d.bounds[0] <= visual[0] + 0.5
+                        && d.bounds[1] <= visual[1] + 0.5
+                        && d.bounds[0] + d.bounds[2] >= visual[0] + 80.0 - 0.5
+                        && d.bounds[1] + d.bounds[3] >= visual[1] + 32.0 - 0.5
+                }),
+                "CursorMoved must dest-reset the live origin (same-key union ok); got {dirties:?}"
+            );
+            let _ = end(&[]);
+        });
+    }
+
+    #[test]
     fn ghost_clip_shell_wraps_and_offsets_inner() {
         let el = place_drag_ghost(
             Element::new().w(40.0).h(24.0).text("card"),
@@ -1882,6 +2133,10 @@ mod tests {
         assert_eq!(el.style.overflow.y, taffy::style::Overflow::Hidden);
         let inner = el.children.first().expect("clip shell wraps the ghost");
         assert!(inner.attrs.get(ATTR_DRAG_OVERLAY).is_none());
+        assert_eq!(
+            inner.attrs.get(ATTR_DRAG_OVERLAY_INNER).map(String::as_str),
+            Some("g1")
+        );
         assert!(!inner.style.position_fixed);
         assert_eq!(
             crate::layout::lpa_length_px(inner.style.inset.left),
@@ -1891,6 +2146,224 @@ mod tests {
             crate::layout::lpa_length_px(inner.style.inset.top),
             Some(20.0)
         );
+    }
+
+    #[test]
+    fn ghost_clip_inner_collect_patches_abs() {
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
+        let (_o, _) = crate::core::reactivity::create_root(|| {
+            let _el: Element = drag_scope("gf-clip")
+                .threshold(0.0)
+                .child(|| Element::from(drag_overlay()));
+            begin(BeginDrag {
+                scope_id: "gf-clip".into(),
+                draggable_id: "chip".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [30.0, 8.0, 80.0, 32.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(50.0, 20.0, &[], [800.0, 600.0]));
+            let grab = crate::utils::drag::last_overlay_pos("gf-clip").expect("grab origin");
+            let bbox = [10.0_f32, 20.0, 400.0, 240.0];
+            let mut shell = place_drag_ghost(
+                Element::new().w(80.0).h(32.0).text("g"),
+                "gf-clip__ghost",
+                grab,
+                Some(bbox),
+            );
+            assert!(adjust_overlay_collect_origin(&mut shell, [400.0, 240.0]).is_none());
+            assert!(tick(90.0, 70.0, &[], [800.0, 600.0]));
+            let visual = crate::utils::drag::last_overlay_pos("gf-clip").expect("live origin");
+            assert_ne!(visual, grab, "pointer moved");
+            let inner = shell.children.first_mut().expect("clip inner");
+            let patched = adjust_overlay_collect_origin(inner, [80.0, 32.0]);
+            assert_eq!(
+                patched,
+                Some(visual),
+                "clip inner collect must patch viewport abs so the chip follows"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.left),
+                Some(bbox[0]),
+                "clip shell stays on the restrict box"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.top),
+                Some(bbox[1])
+            );
+            let _ = end(&[]);
+        });
+    }
+
+    #[test]
+    fn ghost_clip_shell_collect_tracks_scrolled_restrict_box() {
+        use crate::utils::drag::geometry::Rect;
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag, DragHit};
+        let (_o, _) = crate::core::reactivity::create_root(|| {
+            let _el: Element = drag_scope("gf-clip-scroll")
+                .threshold(0.0)
+                .restrict("arena")
+                .restrict_overflow("hidden")
+                .child(|| Element::from(drag_overlay()));
+            fn hit(id: &str, bounds: [f32; 4], drop: bool) -> DragHit {
+                DragHit {
+                    id: id.into(),
+                    scope_id: "gf-clip-scroll".into(),
+                    is_draggable: !drop,
+                    is_droppable: drop,
+                    rect: Rect::from_bounds(bounds),
+                    item_type: "chip".into(),
+                    accept: String::new(),
+                    list_id: None,
+                    index: None,
+                    group: String::new(),
+                    disabled: false,
+                    list_axis: None,
+                    skip_shift: false,
+                    skip_follow: false,
+                    pull_clone: false,
+                }
+            }
+            let card = hit("chip", [80.0, 40.0, 40.0, 24.0], false);
+            let arena = hit("arena", [10.0, 20.0, 400.0, 240.0], true);
+            begin(BeginDrag {
+                scope_id: "gf-clip-scroll".into(),
+                draggable_id: "chip".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(
+                110.0,
+                62.0,
+                &[card.clone(), arena.clone()],
+                [800.0, 600.0]
+            ));
+            let grab = crate::utils::drag::last_overlay_pos("gf-clip-scroll").expect("grab");
+            let bbox0 = peek_restrict_clip().expect("hidden clip");
+            let mut shell = place_drag_ghost(
+                Element::new().w(80.0).h(32.0).text("g"),
+                "gf-clip-scroll__ghost",
+                grab,
+                Some(bbox0),
+            );
+            shell.layout_bounds = bbox0;
+            assert_eq!(
+                adjust_overlay_collect_origin(&mut shell, [bbox0[2], bbox0[3]]),
+                Some([bbox0[0], bbox0[1]]),
+                "clip shell collect must patch to the live restrict origin"
+            );
+
+            let arena_scrolled = hit("arena", [10.0, -60.0, 400.0, 240.0], true);
+            let mut card_scrolled = card.clone();
+            card_scrolled.rect = Rect::from_bounds([80.0, -40.0, 40.0, 24.0]);
+            assert!(tick(
+                110.0,
+                62.0,
+                &[card_scrolled, arena_scrolled],
+                [800.0, 600.0]
+            ));
+            let bbox1 = peek_restrict_clip().expect("scrolled clip");
+            assert!(
+                (bbox1[1] + 60.0).abs() < 0.5,
+                "clip TLS must follow the scrolled arena, got {bbox1:?}"
+            );
+            let visual = crate::utils::drag::last_overlay_pos("gf-clip-scroll").expect("live");
+            sync_overlay_ghost_insets(&mut shell);
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.left),
+                Some(bbox1[0]),
+                "clip shell must stay on the restrict box, not the chip"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.top),
+                Some(bbox1[1]),
+                "clip shell y must track the scrolled parent, not the ghost origin {visual:?}"
+            );
+            assert_eq!(
+                adjust_overlay_collect_origin(&mut shell, [bbox1[2], bbox1[3]]),
+                Some([bbox1[0], bbox1[1]])
+            );
+            let inner = shell.children.first_mut().expect("clip inner");
+            assert_eq!(
+                adjust_overlay_collect_origin(inner, [80.0, 32.0]),
+                Some(visual),
+                "inner still patches viewport abs so the chip follows"
+            );
+
+            assert!(tick(110.0, 62.0, &[card, arena], [800.0, 600.0]));
+            let bbox2 = peek_restrict_clip().expect("restored clip");
+            sync_overlay_ghost_insets(&mut shell);
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.top),
+                Some(bbox2[1]),
+                "scroll-back must restore the clip shell, not leave a leftover origin"
+            );
+            assert_ne!(
+                crate::layout::lpa_length_px(shell.style.inset.top),
+                Some(visual[1]),
+                "shell must not have been written to the chip origin"
+            );
+            let _ = end(&[]);
+        });
+    }
+
+    #[test]
+    fn ghost_clip_shell_keeps_restrict_box_when_clip_lookup_misses() {
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
+        let (_o, _) = crate::core::reactivity::create_root(|| {
+            let _el: Element = drag_scope("gf-clip-keep")
+                .threshold(0.0)
+                .restrict("arena")
+                .restrict_overflow("hidden")
+                .child(|| Element::from(drag_overlay()));
+            begin(BeginDrag {
+                scope_id: "gf-clip-keep".into(),
+                draggable_id: "chip".into(),
+                pointer: [40.0, 16.0],
+                grab_offset: [10.0, 8.0],
+                start_bounds: [30.0, 8.0, 80.0, 32.0],
+                from_list: None,
+                from_index: None,
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let bbox = [10.0_f32, 20.0, 400.0, 240.0];
+            let mut shell = place_drag_ghost(
+                Element::new().w(80.0).h(32.0).text("g"),
+                "gf-clip-keep__ghost",
+                [80.0, 40.0],
+                Some(bbox),
+            );
+            assert!(tick(90.0, 70.0, &[], [800.0, 600.0]));
+            let visual = crate::utils::drag::last_overlay_pos("gf-clip-keep").expect("live");
+            sync_overlay_ghost_insets(&mut shell);
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.left),
+                Some(bbox[0]),
+                "missing clip TLS must not move the shell to the chip"
+            );
+            assert_eq!(
+                crate::layout::lpa_length_px(shell.style.inset.top),
+                Some(bbox[1])
+            );
+            assert_ne!(
+                crate::layout::lpa_length_px(shell.style.inset.left),
+                Some(visual[0])
+            );
+            let _ = end(&[]);
+        });
     }
 
     #[test]
@@ -1966,6 +2439,76 @@ mod tests {
                 "rotated bake must discard ink outside the restrict box, p={leaked:?}"
             );
         }
+    }
+
+    #[test]
+    fn rotated_hidden_ghost_does_not_paint_above_ancestor_clip() {
+        let mut inner = Element::new()
+            .w(80.0)
+            .h(80.0)
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .text("溢出隐藏");
+        inner.style.rotate_deg = -135.0;
+        // Shell already matches the visible parent strip (header already clipped).
+        let panel = place_drag_ghost(inner, "g1", [20.0, 90.0], Some([10.0, 80.0, 200.0, 180.0]));
+        let mut root = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .child(mount_anchored_overlay(panel, 903));
+        assert!(crate::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = crate::layout::LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        let fill_i = result
+            .instances
+            .iter()
+            .position(|i| i.color[0] > 0.9 && i.rect_size[0] > 60.0)
+            .expect("rotated ghost fill");
+        let poly = result.clip_polys[fill_i];
+        assert!(poly.is_active(), "hidden shell must stamp a world clip");
+        let header = [40.0_f32, 40.0];
+        assert!(
+            !poly.contains_point(header),
+            "portal ghost must not paint in the page header above the clipped parent, p={header:?}"
+        );
+    }
+
+    #[test]
+    fn hidden_ghost_ancestor_scissor_keeps_parent_left_edge() {
+        let mut inner = Element::new()
+            .w(80.0)
+            .h(80.0)
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .text("溢出隐藏");
+        inner.style.rotate_deg = -135.0;
+        let panel = place_drag_ghost(inner, "g1", [20.0, 90.0], Some([10.0, 20.0, 200.0, 240.0]));
+        crate::utils::drag::session::set_restrict_ancestor_clip(Some([0.0, 80.0, 400.0, 200.0]));
+        let mut root = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .child(mount_anchored_overlay(panel, 904));
+        assert!(crate::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = crate::layout::LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        crate::utils::drag::session::set_restrict_ancestor_clip(None);
+        let fill_i = result
+            .instances
+            .iter()
+            .position(|i| i.color[0] > 0.9 && i.rect_size[0] > 60.0)
+            .expect("rotated ghost fill");
+        let poly = result.clip_polys[fill_i];
+        assert!(poly.is_active(), "hidden shell must stamp a world clip");
+        assert!(
+            !poly.contains_point([40.0, 40.0]),
+            "must not paint in the header above the scroll viewport"
+        );
+        assert!(
+            !poly.contains_point([5.0, 120.0]),
+            "must not paint in the padding left of the dashed parent"
+        );
+        assert!(
+            poly.contains_point([100.0, 120.0]),
+            "must still paint inside the visible arena"
+        );
     }
 
     fn find_ghost(el: &Element) -> Option<&Element> {
