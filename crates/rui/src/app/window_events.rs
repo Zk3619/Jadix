@@ -19,6 +19,9 @@ pub(super) fn tick_input_drag_select_at(
     y: f32,
     rest: &str,
     anchor: usize,
+    multi: bool,
+    multi_base: &[(usize, usize)],
+    column_select: bool,
 ) -> bool {
     let dt = crate::utils::text_field::take_text_drag_scroll_dt(dt);
     let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, y, dt);
@@ -44,6 +47,28 @@ pub(super) fn tick_input_drag_select_at(
     let Some(caret_ix) = hit_input_caret_at(root, font_system, scale, x, y, rest) else {
         return scrolled;
     };
+    if multi {
+        let vk = crate::components::input::input_value_signal_key(rest);
+        let text = crate::core::reactivity::use_signal(&vk, String::new).peek();
+        let gesture =
+            crate::utils::text_multi_cursor::gesture_carets(&text, anchor, caret_ix, column_select);
+        if column_select {
+            crate::utils::text_field::store_text_cursors(rest, &gesture);
+            let latest =
+                crate::utils::text_multi_cursor::caret_on_pointer_line(&text, &gesture, caret_ix)
+                    .or_else(|| gesture.first().map(|c| c.caret))
+                    .unwrap_or(anchor);
+            crate::utils::text_field::latest_caret_signal(rest).set(Some(latest));
+            return true;
+        }
+        let extras: Vec<(usize, usize)> = multi_base
+            .iter()
+            .copied()
+            .chain(gesture.into_iter().map(|c| (c.caret, c.anchor)))
+            .collect();
+        crate::utils::text_field::extra_carets_signal(rest).set(extras);
+        return true;
+    }
     let lo = anchor.min(caret_ix);
     let hi = anchor.max(caret_ix);
     let sk = crate::components::input::input_selection_signal_key(rest);
@@ -166,6 +191,8 @@ impl super::App {
         self.content_scroll_drag = None;
         self.textarea_resize_drag = None;
         self.input_drag_rest = None;
+        self.input_drag_multi = false;
+        self.input_drag_multi_base.clear();
         crate::utils::text_field::set_text_drag_select_active(false);
         crate::utils::text_sel_move::cancel();
         self.label_drag_key = None;
@@ -367,6 +394,9 @@ impl super::App {
                         y,
                         rest,
                         anchor,
+                        self.input_drag_multi,
+                        &self.input_drag_multi_base,
+                        self.input_drag_multi && self.modifiers.shift_key(),
                     )
                 } else {
                     false
@@ -377,7 +407,15 @@ impl super::App {
             if input_drag_keep {
                 sec.window.request_redraw();
             }
-            let render_ok = match sec.render() {
+            let mouse_pos = if self.pointer_window == Some(id) && self.cursor_inside_window {
+                [
+                    self.cursor_pos.x as f32 / scale.max(1.0),
+                    self.cursor_pos.y as f32 / scale.max(1.0),
+                ]
+            } else {
+                [-1.0, -1.0]
+            };
+            let render_ok = match sec.render(mouse_pos) {
                 Ok(()) => true,
                 Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
                     let inner = sec.window.inner_size();
@@ -442,6 +480,7 @@ impl super::App {
         }
 
         if render_ok {
+            #[cfg(feature = "a11y")]
             if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
                 let secondaries = &self.secondaries;
                 adapter.update_if_active(|| {
@@ -733,17 +772,41 @@ impl super::App {
         let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
         let anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>).peek();
         let caret = crate::core::reactivity::use_signal(&ck, || None::<usize>).peek();
-        let display = super::tree_hit::input_display_text(&committed, &pre, anchor);
+        let compose_anchors = crate::utils::text_field::field_compose_anchors(rest, &committed);
+        let display = if pre.is_empty() {
+            committed.clone()
+        } else {
+            crate::utils::text_multi_cursor::splice_preedit(&committed, &compose_anchors, &pre)
+        };
         let mut compose_byte = if !pre.is_empty() {
-            let mut a = anchor.unwrap_or(committed.len()).min(committed.len());
-            a = committed.floor_char_boundary(a);
-            a
+            let a = anchor
+                .unwrap_or_else(|| caret.unwrap_or(committed.len()))
+                .min(committed.len());
+            let a = committed.floor_char_boundary(a);
+            crate::utils::text_multi_cursor::preedit_display_caret(
+                &committed,
+                &compose_anchors,
+                &pre,
+                a,
+                0,
+            )
         } else {
             caret.unwrap_or(display.len()).min(display.len())
         };
         compose_byte = display.floor_char_boundary(compose_byte.min(display.len()));
         let caret_byte = if !pre.is_empty() {
-            (compose_byte + pre.len()).min(display.len())
+            crate::utils::text_multi_cursor::preedit_display_caret(
+                &committed,
+                &compose_anchors,
+                &pre,
+                committed.floor_char_boundary(
+                    anchor
+                        .unwrap_or_else(|| caret.unwrap_or(committed.len()))
+                        .min(committed.len()),
+                ),
+                pre.len(),
+            )
+            .min(display.len())
         } else {
             compose_byte
         };
@@ -1142,7 +1205,8 @@ impl super::App {
             hit,
             self.textarea_resize_drag.is_some(),
             (self.drag_reorder.is_some() && self.left_button_down)
-                || crate::utils::drag::is_dragging(),
+                || crate::utils::drag::is_dragging()
+                || crate::utils::anchored_overlay::is_floating_panel_dragging(),
         );
     }
 
@@ -1277,32 +1341,38 @@ impl super::App {
 
         // Hover-driven overlay scrollbar visibility: pick the topmost scroll area (or scrollbar target)
         // under the cursor and keep its hover signal set while we remain inside.
+        let overlay_dragging = crate::utils::drag::is_dragging()
+            || crate::utils::anchored_overlay::is_floating_panel_dragging();
         let mut hover_rest: Option<String> = None;
         let mut hover_axis: Option<(String, super::scroll_support::ScrollAxis)> = None;
-        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
-        {
-            if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
-                // Hovering scrollbar track/thumb should only affect that axis.
-                // Do not set area-hover here, otherwise both axes are treated as hovered.
-                hover_axis = Some((rest, axis));
+        if !overlay_dragging {
+            if let Some(fid) =
+                super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+            {
+                if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid)
+                {
+                    // Hovering scrollbar track/thumb should only affect that axis.
+                    // Do not set area-hover here, otherwise both axes are treated as hovered.
+                    hover_axis = Some((rest, axis));
+                }
             }
-        }
-        if hover_rest.is_none() {
-            let mut targets = Vec::new();
-            super::scroll_support::collect_scroll_chain_at(
-                &state.root_element,
-                x,
-                y,
-                [0.0, 0.0],
-                &mut targets,
-            );
-            // `collect_scroll_chain_at` only keeps the topmost branch; first is deepest.
-            if let Some((rest, _, _, _)) = targets.first() {
-                let key = crate::core::scroll_viewport::scroll_hover_mode_signal_key(rest);
-                let mode =
-                    crate::core::reactivity::use_signal(&key, || "scrollbar".to_string()).get();
-                if mode.eq_ignore_ascii_case("area") {
-                    hover_rest = Some(rest.clone());
+            if hover_rest.is_none() {
+                let mut targets = Vec::new();
+                super::scroll_support::collect_scroll_chain_at(
+                    &state.root_element,
+                    x,
+                    y,
+                    [0.0, 0.0],
+                    &mut targets,
+                );
+                // `collect_scroll_chain_at` only keeps the topmost branch; first is deepest.
+                if let Some((rest, _, _, _)) = targets.first() {
+                    let key = crate::core::scroll_viewport::scroll_hover_mode_signal_key(rest);
+                    let mode =
+                        crate::core::reactivity::use_signal(&key, || "scrollbar".to_string()).get();
+                    if mode.eq_ignore_ascii_case("area") {
+                        hover_rest = Some(rest.clone());
+                    }
                 }
             }
         }
@@ -1345,6 +1415,9 @@ impl super::App {
                         y,
                         rest,
                         anchor,
+                        self.input_drag_multi,
+                        &self.input_drag_multi_base,
+                        self.input_drag_multi && self.modifiers.shift_key(),
                     );
                     if input_drag_keep_redraw {
                         text_drag_scrollbar_bump =
@@ -1397,7 +1470,7 @@ impl super::App {
         });
         let input_drag_needs_redraw = self.input_drag_rest.is_some() && self.left_button_down;
 
-        if self.left_button_down && self.scrollbar_drag.is_none() {
+        if !overlay_dragging && self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
                 // When the pointer is not over any drag handle in this list, fall back to the
                 // source-row index so hover does not stick on the last valid row.
@@ -1422,10 +1495,20 @@ impl super::App {
             }
         }
 
-        let cursor_pick = super::tree_hit::pick_cursor(&state.root_element, x, y, [0.0, 0.0]);
+        let cursor_pick = if overlay_dragging {
+            None
+        } else {
+            super::tree_hit::pick_cursor(&state.root_element, x, y, [0.0, 0.0])
+        };
         let mut to_run = Vec::new();
-        super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
-        let mouse_path = super::pointer_events::hit_path(&state.root_element, x, y);
+        if !overlay_dragging {
+            super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
+        }
+        let mouse_path = if overlay_dragging {
+            Vec::new()
+        } else {
+            super::pointer_events::hit_path(&state.root_element, x, y)
+        };
 
         // Always apply: occluders (modal underlay) return None and must reset to Default,
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
@@ -1438,31 +1521,41 @@ impl super::App {
             cursor_pick.clone(),
             self.textarea_resize_drag.is_some(),
             (self.drag_reorder.is_some() && self.left_button_down)
-                || crate::utils::drag::is_dragging(),
+                || crate::utils::drag::is_dragging()
+                || crate::utils::anchored_overlay::is_floating_panel_dragging(),
         );
 
-        let drawer_dragging =
-            crate::components::drawer::tick_drawer_drag(&mut state.root_element, x, y);
+        let drawer_dragging = if overlay_dragging {
+            false
+        } else {
+            crate::components::drawer::tick_drawer_drag(&mut state.root_element, x, y)
+        };
         if drawer_dragging {
             state.mark_full_redraw();
         }
-        let (drag_hits, drag_viewport) = if crate::utils::drag::is_dragging() {
-            let hits = crate::utils::drag::collect_hits(&state.root_element);
+        // Active drag: follow from LAST_HITS (no tree walk). Pending still collects
+        // so threshold-cross can freeze items. Collision / 跨区 hover runs on vsync.
+        let drag_viewport = if crate::utils::drag::is_dragging() {
             let size = state.window.inner_size();
             let scale = state.window.scale_factor() as f32;
-            (
-                hits,
-                [
-                    size.width as f32 / scale.max(1.0),
-                    size.height as f32 / scale.max(1.0),
-                ],
-            )
+            [
+                size.width as f32 / scale.max(1.0),
+                size.height as f32 / scale.max(1.0),
+            ]
         } else {
-            (Vec::new(), [0.0_f32, 0.0])
+            [0.0_f32, 0.0]
+        };
+        let drag_hits = if crate::utils::drag::is_dragging() && !crate::utils::drag::is_active() {
+            crate::utils::drag::collect_hits(&state.root_element)
+        } else {
+            Vec::new()
         };
 
-        let color_dragging =
-            crate::components::color_picker::tick_color_drag_from_tree(&state.root_element, x, y);
+        let color_dragging = if overlay_dragging {
+            false
+        } else {
+            crate::components::color_picker::tick_color_drag_from_tree(&state.root_element, x, y)
+        };
 
         drop(state_borrow);
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
@@ -1505,7 +1598,11 @@ impl super::App {
         let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
         let floating_panel_dragging =
             crate::utils::anchored_overlay::tick_floating_panel_drag(x, y);
-        let drag_dragging = crate::utils::drag::tick(x, y, &drag_hits, drag_viewport);
+        let drag_dragging = if crate::utils::drag::is_active() {
+            crate::utils::drag::tick_follow(x, y, drag_viewport)
+        } else {
+            crate::utils::drag::tick(x, y, &drag_hits, drag_viewport)
+        };
         let pointer_action_dragging = crate::utils::pointer_action::on_move(x, y);
         let drag_scrolled = (*self.state.borrow()).as_ref().is_some_and(|st| {
             if crate::utils::drag::is_active() {
@@ -1677,9 +1774,13 @@ impl super::App {
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
         // waits for scrollbar auto-hide redraws and leave sticks until another chrome hover.
-        if let Some(st) = (*self.state.borrow()).as_ref() {
-            if crate::style::class_variant_hover_needs_frame(&st.root_element, [x, y]) {
-                window.request_redraw();
+        if !crate::utils::drag::is_dragging()
+            && !crate::utils::anchored_overlay::is_floating_panel_dragging()
+        {
+            if let Some(st) = (*self.state.borrow()).as_ref() {
+                if crate::style::class_variant_hover_needs_frame(&st.root_element, [x, y]) {
+                    window.request_redraw();
+                }
             }
         }
 
@@ -2094,6 +2195,8 @@ impl super::App {
                         });
                         self.content_scroll_drag = None;
                         self.input_drag_rest = None;
+                        self.input_drag_multi = false;
+                        self.input_drag_multi_base.clear();
                         crate::utils::text_field::set_text_drag_select_active(false);
                         crate::utils::text_sel_move::cancel();
                         self.label_drag_key = None;
@@ -2279,66 +2382,90 @@ impl super::App {
                     let hi = a.max(b);
                     (lo < hi).then_some((lo, hi))
                 });
-                let can_move = line_sel.is_none()
-                    && pre_empty
-                    && !password
-                    && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
-                if can_move {
-                    let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                let alt_multi = self.modifiers.alt_key() && pre_empty;
+                self.input_drag_multi = false;
+                self.input_drag_multi_base.clear();
+                if alt_multi {
                     let vk = crate::components::input::input_value_signal_key(&rest);
                     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
-                    let chunk = committed.get(lo..hi).unwrap_or("").to_string();
-                    let (size, weight, color, lh) = (*self.state.borrow())
-                        .as_ref()
-                        .and_then(|st| {
-                            super::tree_hit::find_input_text_leaf_for_rest(
-                                &st.root_element,
-                                None,
-                                &rest,
-                            )
-                        })
-                        .map(|(_, _, style, _)| {
-                            let lh = style.line_height_px.unwrap_or_else(|| {
-                                style.size_resolved()
+                    let shift_box = self.modifiers.shift_key();
+                    if let Some((anchor, base)) = crate::utils::text_field::begin_alt_pointer(
+                        &rest, &committed, caret_ix, shift_box,
+                    ) {
+                        crate::renderer::restart_caret_blink();
+                        self.input_drag_multi_base = base;
+                        self.input_drag_multi = true;
+                        self.input_drag_anchor = anchor;
+                        self.input_drag_rest = Some(rest.clone());
+                        crate::utils::text_field::set_text_drag_select_active(true);
+                    } else {
+                        crate::renderer::restart_caret_blink();
+                    }
+                } else {
+                    crate::utils::text_field::clear_extra_carets(&rest);
+                    let can_move = line_sel.is_none()
+                        && pre_empty
+                        && !password
+                        && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
+                    if can_move {
+                        let (lo, hi) = sel_range.expect("can_move implies non-empty range");
+                        let vk = crate::components::input::input_value_signal_key(&rest);
+                        let committed =
+                            crate::core::reactivity::use_signal(&vk, String::new).peek();
+                        let chunk = committed.get(lo..hi).unwrap_or("").to_string();
+                        let (size, weight, color, lh) = (*self.state.borrow())
+                            .as_ref()
+                            .and_then(|st| {
+                                super::tree_hit::find_input_text_leaf_for_rest(
+                                    &st.root_element,
+                                    None,
+                                    &rest,
+                                )
+                            })
+                            .map(|(_, _, style, _)| {
+                                let lh = style.line_height_px.unwrap_or_else(|| {
+                                    style.size_resolved()
                                     * style.line_height_scale.unwrap_or(
                                         crate::utils::text_field::text_edit_default_leading_scale(),
                                     )
-                            });
-                            (
-                                style.size_resolved(),
-                                style.weight_resolved(),
-                                style.color_resolved(),
-                                lh,
-                            )
-                        })
-                        .unwrap_or((14.0, 400, [15, 23, 42, 255], 21.0));
-                    crate::utils::text_sel_move::begin_potential(
-                        rest.clone(),
-                        (lo, hi),
-                        chunk,
-                        caret_ix,
-                        (x, y),
-                        size,
-                        weight,
-                        color,
-                        lh,
-                    );
-                    self.input_drag_anchor = caret_ix;
-                } else if let Some((lo, hi)) = line_sel {
-                    crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
-                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                        .set(Some((lo, hi)));
-                    self.input_drag_anchor = lo;
-                    crate::renderer::restart_caret_blink();
-                } else {
-                    crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret_ix));
-                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                        .set(Some((caret_ix, caret_ix)));
-                    self.input_drag_anchor = caret_ix;
-                    crate::renderer::restart_caret_blink();
+                                });
+                                (
+                                    style.size_resolved(),
+                                    style.weight_resolved(),
+                                    style.color_resolved(),
+                                    lh,
+                                )
+                            })
+                            .unwrap_or((14.0, 400, [15, 23, 42, 255], 21.0));
+                        crate::utils::text_sel_move::begin_potential(
+                            rest.clone(),
+                            (lo, hi),
+                            chunk,
+                            caret_ix,
+                            (x, y),
+                            size,
+                            weight,
+                            color,
+                            lh,
+                        );
+                        self.input_drag_anchor = caret_ix;
+                    } else if let Some((lo, hi)) = line_sel {
+                        crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
+                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                            .set(Some((lo, hi)));
+                        self.input_drag_anchor = lo;
+                        crate::renderer::restart_caret_blink();
+                    } else {
+                        crate::core::reactivity::use_signal(&ck, || None::<usize>)
+                            .set(Some(caret_ix));
+                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                            .set(Some((caret_ix, caret_ix)));
+                        self.input_drag_anchor = caret_ix;
+                        crate::renderer::restart_caret_blink();
+                    }
+                    self.input_drag_rest = Some(rest.clone());
+                    crate::utils::text_field::set_text_drag_select_active(true);
                 }
-                self.input_drag_rest = Some(rest.clone());
-                crate::utils::text_field::set_text_drag_select_active(true);
                 if is_textarea_drag {
                     let scroll_rest = crate::utils::text_field::textarea_scroll_rest(&rest);
                     let now = std::time::Instant::now();
@@ -2379,6 +2506,8 @@ impl super::App {
                 self.label_drag_key = Some(key);
                 self.label_drag_anchor = caret_ix;
                 self.input_drag_rest = None;
+                self.input_drag_multi = false;
+                self.input_drag_multi_base.clear();
                 crate::utils::text_field::set_text_drag_select_active(false);
                 crate::utils::text_sel_move::cancel();
                 self.content_scroll_drag = None;
@@ -2508,6 +2637,8 @@ impl super::App {
                 }
             }
             if let Some(rest) = self.input_drag_rest.take() {
+                self.input_drag_multi = false;
+                self.input_drag_multi_base.clear();
                 apply_input_drag_release(&rest);
                 // Always repaint after an input drag so collapsed ranges clear and
                 // non-empty selections get a final highlight frame.
@@ -2987,6 +3118,32 @@ impl super::App {
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
+        // Collision / sortable 跨区 at vsync so CursorMoved only follows the pointer.
+        // Do not hold AppState across `tick` (hover_list.set remounts islands).
+        if crate::utils::drag::is_active() {
+            let sampled = {
+                let guard = self.state.borrow();
+                match guard.as_ref() {
+                    Some(st) if st.window.id() == id => {
+                        let hits = crate::utils::drag::collect_hits(&st.root_element);
+                        let size = st.window.inner_size();
+                        let scale = st.window.scale_factor() as f32;
+                        Some((
+                            hits,
+                            [
+                                size.width as f32 / scale.max(1.0),
+                                size.height as f32 / scale.max(1.0),
+                            ],
+                            self.last_client_pos.unwrap_or([0.0, 0.0]),
+                        ))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some((hits, viewport, pos)) = sampled {
+                let _ = crate::utils::drag::tick(pos[0], pos[1], &hits, viewport);
+            }
+        }
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -3068,7 +3225,12 @@ impl super::App {
                 }
             }
         }
-        if crate::style::take_style_hot_rebuild() {
+        let style_rebuild = crate::style::take_style_hot_rebuild();
+        #[cfg(feature = "i18n")]
+        let locale_rebuild = crate::i18n::take_locale_rebuild();
+        #[cfg(not(feature = "i18n"))]
+        let locale_rebuild = false;
+        if style_rebuild || locale_rebuild {
             let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
             state.rebuild_ui(new_root);
             state.window.request_redraw();
@@ -3111,6 +3273,9 @@ impl super::App {
                     y,
                     rest,
                     anchor,
+                    self.input_drag_multi,
+                    &self.input_drag_multi_base,
+                    self.input_drag_multi && self.modifiers.shift_key(),
                 )
             } else {
                 false
@@ -3121,10 +3286,24 @@ impl super::App {
 
         let window = state.window.clone();
         crate::utils::lucide_animated::sync_animated_icon_hover(&mut state.root_element);
-        let anim_icons = crate::utils::lucide_animated::tick_animated_icons_subtree(
-            &mut state.root_element,
-            anim_dt,
-        );
+        let anim_icons = {
+            let animated = crate::utils::lucide_animated::tick_animated_icons_subtree(
+                &mut state.root_element,
+                anim_dt,
+            );
+            #[cfg(feature = "svg")]
+            {
+                animated
+                    || crate::utils::morph_icon::tick_morph_icons_subtree(
+                        &mut state.root_element,
+                        anim_dt,
+                    )
+            }
+            #[cfg(not(feature = "svg"))]
+            {
+                animated
+            }
+        };
         let gif_tick = crate::app::pending_images::tick_gif_textures(anim_dt);
         let overlay_scroll_rests =
             super::scroll_support::collect_hoisted_scroll_rests(&state.root_element);
@@ -3545,6 +3724,7 @@ impl super::App {
             scroll_paint_only,
         ) {
             Ok(_) => {
+                #[cfg(feature = "a11y")]
                 if let Some(adapter) = &mut self.accesskit_adapter {
                     // Build the a11y tree only when a screen reader is actually subscribed.
                     // Eager `tree_update_from_elements` on every scroll frame is a full-tree walk.
@@ -3681,7 +3861,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         hover_cursor_pick.clone(),
                         self.textarea_resize_drag.is_some(),
                         (self.drag_reorder.is_some() && self.left_button_down)
-                            || crate::utils::drag::is_dragging(),
+                            || crate::utils::drag::is_dragging()
+                            || crate::utils::anchored_overlay::is_floating_panel_dragging(),
                     );
                 }
 
@@ -3748,12 +3929,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         win_h,
                     )
                 });
-                let svg_smil_active =
-                    crate::primitives::svg::subtree_has_svg_smil(&state.root_element);
-                let anim_icon_active =
-                    crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
+                let svg_smil_active = crate::primitives::subtree_has_svg_smil(&state.root_element);
+                let anim_icon_active = {
+                    let animated = crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
                         &state.root_element,
                     );
+                    #[cfg(feature = "svg")]
+                    {
+                        animated
+                            || crate::utils::morph_icon::subtree_needs_morph_icon_frame(
+                                &state.root_element,
+                            )
+                    }
+                    #[cfg(not(feature = "svg"))]
+                    {
+                        animated
+                    }
+                };
                 let gpu_presented = state.gpu_presented_this_frame;
                 let painted_caret_matches_focus =
                     super::ime_support::painted_caret_matches_focus(&state.text_nodes, &fid);
@@ -4215,7 +4407,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         hover_cursor_pick,
                         self.textarea_resize_drag.is_some(),
                         (self.drag_reorder.is_some() && self.left_button_down)
-                            || crate::utils::drag::is_dragging(),
+                            || crate::utils::drag::is_dragging()
+                            || crate::utils::anchored_overlay::is_floating_panel_dragging(),
                     );
                 }
 
@@ -4588,7 +4781,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     // unmounts the Menu so a second hit looks like an outside press on the parent
                     // DatePicker / ColorPicker popover.
                     let should_outside_dismiss = !on_exclusive && !on_trigger;
-                    if should_outside_dismiss && !self.outside_dismiss_on_down {
+                    let ended_panel_drag =
+                        crate::utils::anchored_overlay::take_ended_floating_panel_drag();
+                    if should_outside_dismiss && !self.outside_dismiss_on_down && !ended_panel_drag
+                    {
                         if super::portal_overlay::try_dismiss_outside_press() {
                             super::runtime::request_redraw();
                         }

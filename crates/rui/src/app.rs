@@ -6,7 +6,7 @@ use winit::window::WindowId;
 use secondary_window::SecondaryUiBuilder;
 
 /// Wakes the event loop for hot reload (debug) and background tasks, and delivers
-/// [`accesskit_winit`] messages.
+/// AccessKit messages when feature `a11y` is enabled.
 pub(super) enum RuiUserEvent {
     #[cfg(all(debug_assertions, feature = "hot-reload"))]
     HotReloadWake,
@@ -18,9 +18,8 @@ pub(super) enum RuiUserEvent {
         builder: SecondaryUiBuilder,
     },
     /// Drop a secondary window (custom chrome Close).
-    CloseWindow {
-        id: WindowId,
-    },
+    CloseWindow { id: WindowId },
+    #[cfg(feature = "a11y")]
     AccessKit(accesskit_winit::Event),
     /// Request a clean event-loop exit (tray Quit / [`ui_bridge::request_exit`]).
     Exit,
@@ -38,12 +37,14 @@ impl std::fmt::Debug for RuiUserEvent {
                 .field("builder", &"SecondaryUiBuilder(..)")
                 .finish(),
             Self::CloseWindow { id } => f.debug_struct("CloseWindow").field("id", id).finish(),
+            #[cfg(feature = "a11y")]
             Self::AccessKit(ev) => f.debug_tuple("AccessKit").field(ev).finish(),
             Self::Exit => f.write_str("Exit"),
         }
     }
 }
 
+#[cfg(feature = "a11y")]
 impl From<accesskit_winit::Event> for RuiUserEvent {
     fn from(e: accesskit_winit::Event) -> Self {
         RuiUserEvent::AccessKit(e)
@@ -89,6 +90,7 @@ pub(crate) use state::{
 };
 #[cfg(feature = "devtools")]
 pub mod devtools;
+pub(crate) mod glass_params;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tray;
@@ -97,6 +99,7 @@ pub mod ui_bridge;
 pub(crate) mod window_chrome;
 mod window_events;
 pub mod window_keys;
+pub(crate) mod window_lifecycle;
 pub(crate) mod window_scope;
 
 pub use entry::{app, launch, AppBuilder, AppConfig};
@@ -116,7 +119,9 @@ pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
     close_window, set_window_maximized, set_window_minimized, start_window_drag,
     toggle_window_maximized, window_is_maximized, WindowBackdrop, WindowOptions,
+    PRIMARY_WINDOW_LABEL,
 };
+pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
 
 use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;
@@ -215,6 +220,10 @@ struct App {
     input_drag_rest: Option<String>,
     /// Drag-selection anchor (UTF-8 byte index).
     input_drag_anchor: usize,
+    /// Alt+click extra-caret drag (do not move the primary caret).
+    input_drag_multi: bool,
+    /// Extra carets present when the Alt gesture started (excluding this drag).
+    input_drag_multi_base: Vec<(usize, usize)>,
     /// Stable key for static selectable-text drag (`focus_id` / `template_id`).
     label_drag_key: Option<String>,
     /// Static text drag-selection anchor (UTF-8 bytes).
@@ -260,9 +269,13 @@ struct App {
     /// Soft-blur: wait before cancelling IME so clicking the candidate chrome
     /// (which can briefly steal winit focus) does not abort composition.
     ime_os_blur_at: Option<std::time::Instant>,
+    /// AccessKit adapters clone this; unused when feature `a11y` is off.
+    #[cfg_attr(not(feature = "a11y"), allow(dead_code))]
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
+    #[cfg(feature = "a11y")]
     accesskit_adapter: Option<accesskit_winit::Adapter>,
     /// Per-secondary-window AccessKit adapters (created before `set_visible`).
+    #[cfg(feature = "a11y")]
     secondary_accesskit:
         std::collections::HashMap<winit::window::WindowId, accesskit_winit::Adapter>,
     /// Window whose HWND currently owns OS IME drive (`LAST_IME_FOCUS_ID` / Imm).

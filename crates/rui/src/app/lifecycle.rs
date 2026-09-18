@@ -1,14 +1,16 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(feature = "a11y")]
 use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
+#[cfg(feature = "a11y")]
 use accesskit_winit::Adapter;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, TouchPhase, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::ModifiersState,
-    window::WindowId,
+    window::{Window, WindowId},
 };
 
 use crate::core::tree::Element;
@@ -82,8 +84,28 @@ impl super::App {
     /// already torn down and wgpu-hal's GLES/WGL path panics inside `make_current`
     /// (`unwrap` on OS error 2004). With `panic = "abort"` that becomes Windows
     /// `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409).
+    fn persist_window_state(&self) {
+        if let Some(st) = self.state.borrow().as_ref() {
+            super::window_lifecycle::emit_closing(&st.window);
+        }
+        for sec in self.secondaries.borrow().values() {
+            super::window_lifecycle::emit_closing(&sec.window);
+        }
+        super::window_lifecycle::emit_exit();
+    }
+
+    fn lifecycle_window(&self, id: WindowId) -> Option<Arc<Window>> {
+        if let Some(st) = (*self.state.borrow()).as_ref() {
+            if st.window.id() == id {
+                return Some(st.window.clone());
+            }
+        }
+        self.secondaries.borrow().get(&id).map(|s| s.window.clone())
+    }
+
     fn shutdown_renderer(&mut self) {
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
+        self.persist_window_state();
         super::tray::dispose_trays_for_shutdown();
 
         // 1) Pull secondary UI/GPU state out of the map *before* disposing owners, so
@@ -95,8 +117,10 @@ impl super::App {
             let _scope = super::window_scope::enter_secondary_id(id);
             sec.hide_window();
             sec.trim_before_drop();
+            let glass_window = sec.window.clone();
             drop(sec.take_owner());
             drop(sec);
+            crate::platform::glass_detach(&glass_window);
             drop(_scope);
             if let Some(token) = super::window_scope::forget_secondary(id) {
                 super::portal_overlay::drop_overlay_stack(
@@ -104,6 +128,7 @@ impl super::App {
                 );
             }
         }
+        #[cfg(feature = "a11y")]
         self.secondary_accesskit.clear();
         self.ime_owner_window = None;
         // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
@@ -116,17 +141,25 @@ impl super::App {
         // element `UnmountHook`s that may touch `self.state` via the shared Rc still held
         // by effect closures until `clear_effects` runs.
         crate::app::runtime::clear_app_runtime();
-        self.accesskit_adapter = None;
+        #[cfg(feature = "a11y")]
+        {
+            self.accesskit_adapter = None;
+        }
         // Clear shared FontSystem pointer before dropping primary text_renderer.
         crate::text::clear_shared_font_system();
         crate::text::shutdown_layout_text();
         // Drop effect closures before GPU/UI state so they cannot rebuild into a dead cell.
         crate::core::reactivity::clear_effects();
+        let window = state.window.clone();
         drop(state);
+        crate::platform::glass_detach(&window);
         self.pointer_window = None;
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
+        if let Some(window) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
+            super::window_lifecycle::emit_closing(&window);
+        }
         if let Some(mut sec) = self.secondaries.borrow_mut().remove(&id) {
             // Keep SIGNAL_KEY_SCOPE on this window while Owner/unmount runs so
             // portal_sync cannot write the primary overlay stack.
@@ -139,8 +172,10 @@ impl super::App {
             }
             sec.hide_window();
             sec.trim_before_drop();
+            let glass_window = sec.window.clone();
             drop(sec.take_owner());
             drop(sec);
+            crate::platform::glass_detach(&glass_window);
             drop(_scope);
         }
         if let Some(token) = super::window_scope::forget_secondary(id) {
@@ -148,6 +183,7 @@ impl super::App {
                 token,
             ));
         }
+        #[cfg(feature = "a11y")]
         self.secondary_accesskit.remove(&id);
         if self.ime_owner_window == Some(id) {
             self.ime_owner_window = None;
@@ -277,8 +313,10 @@ impl super::App {
     }
 }
 
+#[cfg(feature = "a11y")]
 struct AccessKitBootstrap;
 
+#[cfg(feature = "a11y")]
 impl accesskit::ActivationHandler for AccessKitBootstrap {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         const RID: NodeId = NodeId(1);
@@ -289,6 +327,16 @@ impl accesskit::ActivationHandler for AccessKitBootstrap {
             focus: RID,
         })
     }
+}
+
+/// AccessKit panics if the HWND was already shown (WGL/DComp init can do that).
+#[cfg(feature = "a11y")]
+fn create_accesskit_adapter(
+    event_loop: &ActiveEventLoop,
+    window: &Window,
+    proxy: winit::event_loop::EventLoopProxy<super::RuiUserEvent>,
+) -> Adapter {
+    Adapter::with_mixed_handlers(event_loop, window, AccessKitBootstrap, proxy)
 }
 
 impl ApplicationHandler<super::RuiUserEvent> for super::App {
@@ -307,38 +355,64 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
             super::RuiUserEvent::OpenWindow { options, builder } => {
                 let wants_glass = options.compositor_alpha();
-                let mut composition = wants_glass;
+                let mut composition = options.wants_dcomp_swapchain();
                 let Ok(created) = event_loop.create_window(options.window_attributes(composition))
                 else {
                     log::warn!("multi-window: create_window failed");
                     return;
                 };
                 let mut window = Arc::new(created);
+                #[cfg(feature = "a11y")]
+                let mut accesskit = Some(create_accesskit_adapter(
+                    event_loop,
+                    &window,
+                    self.event_loop_proxy.clone(),
+                ));
                 super::window_chrome::apply_created_window(&window, &options, composition);
+                super::window_lifecycle::emit_created(&window, options.persistence_label(false));
                 let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
 
                 let secondary = if wants_glass {
-                    if let Some(gpu) = super::glass_gpu::try_acquire(&window) {
+                    if let Some(gpu) = super::glass_gpu::try_acquire(&window, &options) {
                         super::secondary_window::SecondaryWindowState::from_compositor(
                             window.clone(),
                             gpu,
                             placeholder,
                             options.clone(),
+                            composition,
                         )
                     } else {
-                        log::warn!(
-                            "glass: no PreMultiplied swapchain; falling back to the primary GPU"
-                        );
-                        composition = false;
-                        drop(window);
-                        let Ok(created) =
-                            event_loop.create_window(options.window_attributes(false))
-                        else {
-                            log::warn!("multi-window: create_window failed");
-                            return;
-                        };
-                        window = Arc::new(created);
-                        super::window_chrome::apply_created_window(&window, &options, false);
+                        if composition {
+                            log::warn!(
+                                "dcomp glass: DX12 composition GPU failed; recreating with AccentPolicy fallback"
+                            );
+                            composition = false;
+                            #[cfg(feature = "a11y")]
+                            {
+                                drop(accesskit.take());
+                            }
+                            drop(window);
+                            let Ok(created) =
+                                event_loop.create_window(options.window_attributes(false))
+                            else {
+                                log::warn!("multi-window: create_window failed");
+                                return;
+                            };
+                            window = Arc::new(created);
+                            #[cfg(feature = "a11y")]
+                            {
+                                accesskit = Some(create_accesskit_adapter(
+                                    event_loop,
+                                    &window,
+                                    self.event_loop_proxy.clone(),
+                                ));
+                            }
+                            super::window_chrome::apply_created_window(&window, &options, false);
+                            super::window_lifecycle::emit_created(
+                                &window,
+                                options.persistence_label(false),
+                            );
+                        }
                         let state_borrow = self.state.borrow();
                         let Some(primary) = state_borrow.as_ref() else {
                             log::warn!("multi-window: OpenWindow before primary AppState ready");
@@ -411,15 +485,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     sec.attach_owner(owner);
                 }
 
-                let adapter = Adapter::with_mixed_handlers(
-                    event_loop,
-                    &window,
-                    AccessKitBootstrap,
-                    self.event_loop_proxy.clone(),
-                );
-                self.secondary_accesskit.insert(id, adapter);
+                #[cfg(feature = "a11y")]
+                if let Some(adapter) = accesskit.take() {
+                    self.secondary_accesskit.insert(id, adapter);
+                }
 
                 window.set_visible(true);
+                crate::platform::glass_on_shown(&window);
                 super::window_chrome::apply_created_window(&window, &options, composition);
                 window.request_redraw();
             }
@@ -442,6 +514,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 self.shutdown_renderer();
                 event_loop.exit();
             }
+            #[cfg(feature = "a11y")]
             super::RuiUserEvent::AccessKit(ev) => {
                 use accesskit_winit::WindowEvent as AkWindowEvent;
                 let wid = ev.window_id;
@@ -749,10 +822,24 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         if self.state.borrow().is_none() {
             let attrs = self.window_options.to_window_attributes();
             let window = event_loop.create_window(attrs).unwrap();
+            #[cfg(feature = "a11y")]
+            {
+                log::debug!("lifecycle: before accesskit");
+                self.accesskit_adapter = Some(create_accesskit_adapter(
+                    event_loop,
+                    &window,
+                    self.event_loop_proxy.clone(),
+                ));
+                log::debug!("lifecycle: after accesskit");
+            }
             super::window_chrome::apply_created_window(
                 &window,
                 &self.window_options,
-                self.window_options.compositor_alpha(),
+                self.window_options.wants_dcomp_swapchain(),
+            );
+            super::window_lifecycle::emit_created(
+                &window,
+                self.window_options.persistence_label(true),
             );
             let window = Arc::new(window);
 
@@ -804,22 +891,14 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             });
             log::debug!("lifecycle: after root create_effect");
 
-            log::debug!("lifecycle: before accesskit");
-            let adapter = Adapter::with_mixed_handlers(
-                event_loop,
-                &window,
-                AccessKitBootstrap,
-                self.event_loop_proxy.clone(),
-            );
-            log::debug!("lifecycle: after accesskit");
             window.set_visible(true);
+            crate::platform::glass_on_shown(&window);
             let composition = self
                 .state
                 .borrow()
                 .as_ref()
                 .is_some_and(|s| s.composition_swapchain);
             super::window_chrome::apply_created_window(&window, &self.window_options, composition);
-            self.accesskit_adapter = Some(adapter);
         }
 
         if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -837,17 +916,23 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if let Some(adapter) = &mut self.accesskit_adapter {
-            if let Some(st) = (*self.state.borrow()).as_ref() {
-                if st.window.id() == id {
-                    adapter.process_event(&st.window, &event);
+        #[cfg(feature = "a11y")]
+        {
+            if let Some(adapter) = &mut self.accesskit_adapter {
+                if let Some(st) = (*self.state.borrow()).as_ref() {
+                    if st.window.id() == id {
+                        adapter.process_event(&st.window, &event);
+                    }
+                }
+            }
+            if let Some(win) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
+                if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
+                    adapter.process_event(&win, &event);
                 }
             }
         }
-        if let Some(win) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
-            if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
-                adapter.process_event(&win, &event);
-            }
+        if let Some(win) = self.lifecycle_window(id) {
+            super::window_lifecycle::emit_event(&win, &event);
         }
         match event {
             WindowEvent::CloseRequested => {
@@ -1029,11 +1114,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         self.bind_pointer_window(id);
                         super::window_scope::force_secondary_id(id);
                         if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                            crate::platform::glass_on_focus(&sec.window, true);
                             sec.os_focused = true;
                             sec.ime_os_blur_at = None;
                             sec.window.request_redraw();
                         }
                     } else if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                        crate::platform::glass_on_focus(&sec.window, false);
                         // Same TIP-candidate soft-blur as primary: do not drop IME immediately.
                         sec.os_focused = false;
                         let at = std::time::Instant::now() + std::time::Duration::from_millis(200);
@@ -1042,14 +1129,17 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     }
                 } else if focused {
                     self.bind_pointer_window(id);
-                    // Must not use enter_primary() guard here — its Drop would restore a
-                    // stuck secondary SIGNAL_KEY_SCOPE and freeze primary input routing.
                     super::window_scope::force_primary();
                     self.os_window_focused = true;
                     self.ime_os_blur_at = None;
+                    if let Some(state) = (*self.state.borrow()).as_ref() {
+                        crate::platform::glass_on_focus(&state.window, true);
+                    }
                 } else {
-                    // Defer hard release: TIP candidate UI may briefly steal focus.
                     self.os_window_focused = false;
+                    if let Some(state) = (*self.state.borrow()).as_ref() {
+                        crate::platform::glass_on_focus(&state.window, false);
+                    }
                     self.ime_os_blur_at =
                         Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
                     event_loop
@@ -1116,6 +1206,18 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         state.window.request_redraw();
                     }
                 }
+            }
+            WindowEvent::Moved(_) => {
+                if let Some(sec) = self.secondaries.borrow().get(&id) {
+                    crate::platform::glass_on_moved(&sec.window);
+                } else if let Some(state) = self.state.borrow().as_ref() {
+                    if state.window.id() == id {
+                        crate::platform::glass_on_moved(&state.window);
+                    }
+                }
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                crate::platform::glass_on_os_theme(matches!(theme, winit::window::Theme::Dark));
             }
             WindowEvent::RedrawRequested => {
                 // Layout / collect / GPU stay on the PE stack. User closures
@@ -1188,6 +1290,8 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         drag_reorder: None,
         input_drag_rest: None,
         input_drag_anchor: 0,
+        input_drag_multi: false,
+        input_drag_multi_base: Vec::new(),
         label_drag_key: None,
         label_drag_anchor: 0,
         scroll_accum: std::collections::HashMap::new(),
@@ -1209,7 +1313,9 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         os_window_focused: true,
         ime_os_blur_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
+        #[cfg(feature = "a11y")]
         accesskit_adapter: None,
+        #[cfg(feature = "a11y")]
         secondary_accesskit: std::collections::HashMap::new(),
         ime_owner_window: None,
         custom_cursors: crate::style::CustomCursorCache::new(),

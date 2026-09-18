@@ -914,8 +914,9 @@ pub(crate) fn text_layout_height(el: &Element, text: &str, avail_width: f32) -> 
 
 /// Attach a Solid-style binding to an existing element (style/class/text patches).
 ///
-/// `bind_key` uniquely identifies the effect (idempotent across root rebuilds). The mounted node is
-/// looked up by `el.template_id` (set to `bind_key` when missing).
+/// `bind_key` is the `ui!` site. The registry also includes `el.template_id` so
+/// list items that share a site (same file:line) still get separate effects.
+/// Lookup of the mounted node is by `template_id` (set to `bind_key` when missing).
 pub fn bind_prop<T, C, A>(
     mut el: Element,
     bind_key: impl Into<String>,
@@ -928,7 +929,6 @@ where
     A: Fn(&mut Element, T) -> LayoutStatus + 'static,
 {
     let bind_key = bind_key.into();
-    let registry_key = window_scoped_registry_key(&bind_key);
     if el.template_id.is_none() {
         el.template_id = Some(bind_key.clone());
     }
@@ -936,6 +936,9 @@ where
         .template_id
         .clone()
         .expect("bind_prop: template_id assigned above");
+    // `bind_key` is file:line of one `ui!` site. List items share that site and must
+    // still get separate effects — key by the node's `template_id` as well.
+    let registry_key = window_scoped_registry_key(&format!("{bind_key}\0{node_id}"));
 
     let initial = untrack(&mut compute);
 

@@ -174,12 +174,14 @@ pub fn apply_style_patch(el: &mut Element, patch: &StylePatch) -> LayoutStatus {
 
 /// Keep utility-class base snapshots aligned with live style after Inspector edits.
 fn sync_class_set_base_from_live(el: &mut Element) {
+    let style = el.style.as_ref().clone();
+    let text_style = el.text_style.as_ref().clone();
     if let Some(cs) = el.class_set.as_mut() {
         if cs.base_style.is_some() {
-            cs.base_style = Some(el.style.as_ref().clone());
+            cs.base_style = Some(style);
         }
         if cs.base_text_style.is_some() {
-            cs.base_text_style = Some(el.text_style.as_ref().clone());
+            cs.base_text_style = Some(text_style);
         }
     }
 }
@@ -721,12 +723,12 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             .unwrap_or(LayoutStatus::Clean),
         "color" => {
             let c = parse_cssom_color(value);
-            el.text_style.color = [
+            el.text_style.color = Some([
                 (c[0] * 255.0).round() as u8,
                 (c[1] * 255.0).round() as u8,
                 (c[2] * 255.0).round() as u8,
                 (c[3] * 255.0).round() as u8,
-            ];
+            ]);
             LayoutStatus::StyleChanged
         }
         "font-size" | "font_size" => {

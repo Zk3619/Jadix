@@ -13,7 +13,9 @@ use winit::window::Window;
 use crate::core::reactivity::OwnerHandle;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
 use crate::renderer::{
-    prepare_text_frame, scale_clip_polys_in_place, scale_instances, RuiPipeline, RuiTextRenderer,
+    prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_textured_draws,
+    RuiPipeline, RuiTextRenderer, ScaledTexturedDraw, TexturePool, TexturedInstanceInput,
+    TexturedQuadPipeline,
 };
 
 /// Factory for a secondary window's root [`Element`].
@@ -46,6 +48,12 @@ pub(super) struct SecondaryWindowState {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     pipeline: RuiPipeline,
+    /// Lucide caption icons / Image / SVG collect as `textured_draws`. The primary
+    /// window uploads these; secondaries (especially glass sidecars) must too.
+    textured_pipeline: TexturedQuadPipeline,
+    image_textures: TexturePool,
+    textured_instance_buffer: wgpu::Buffer,
+    textured_instance_capacity: usize,
     instance_buffer: wgpu::Buffer,
     instance_buffer_capacity: usize,
     num_instances: u32,
@@ -111,6 +119,7 @@ impl SecondaryWindowState {
             r.pending_warmup.clear();
         }
         self.overlay_band_text_renderers.clear();
+        self.image_textures.as_map_mut().clear();
     }
 
     pub(super) fn new(
@@ -147,6 +156,8 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(&window, &chrome, false);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
+        let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
+            init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
@@ -190,6 +201,10 @@ impl SecondaryWindowState {
             config,
             size,
             pipeline,
+            textured_pipeline,
+            image_textures: TexturePool::new(),
+            textured_instance_buffer,
+            textured_instance_capacity,
             instance_buffer,
             instance_buffer_capacity: scaled_instances.len().max(1),
             num_instances,
@@ -222,6 +237,7 @@ impl SecondaryWindowState {
         gpu: super::glass_gpu::CompositorGpu,
         mut root_element: Element,
         chrome: super::window_chrome::WindowOptions,
+        composition_swapchain: bool,
     ) -> Self {
         let compositor_alpha = true;
         let super::glass_gpu::CompositorGpu {
@@ -232,9 +248,11 @@ impl SecondaryWindowState {
             surface,
             config,
         } = gpu;
-        super::window_chrome::apply_created_window(&window, &chrome, true);
+        super::window_chrome::apply_created_window(&window, &chrome, composition_swapchain);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
+        let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
+            init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
@@ -278,6 +296,10 @@ impl SecondaryWindowState {
             config,
             size,
             pipeline,
+            textured_pipeline,
+            image_textures: TexturePool::new(),
+            textured_instance_buffer,
+            textured_instance_capacity,
             instance_buffer,
             instance_buffer_capacity: scaled_instances.len().max(1),
             num_instances,
@@ -299,7 +321,7 @@ impl SecondaryWindowState {
             text_nodes: Vec::new(),
             has_input_caret: false,
             compositor_alpha,
-            composition_swapchain: true,
+            composition_swapchain,
             chrome,
             owner: None,
         }
@@ -326,6 +348,11 @@ impl SecondaryWindowState {
         );
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
+        self.textured_pipeline.update_resolution(
+            &self.queue,
+            self.config.width,
+            self.config.height,
+        );
         self.layout_status = LayoutStatus::LayoutChanged;
     }
 
@@ -339,8 +366,12 @@ impl SecondaryWindowState {
     }
 
     /// Layout + clear + draw primitives/text for this secondary window.
+    ///
+    /// `mouse_pos` is logical client coords when the pointer is inside this window,
+    /// otherwise `[-1, -1]` so CSS `:hover` (ghost caption `hover:bg-accent`) leaves.
     pub(super) fn render(
         &mut self,
+        mouse_pos: [f32; 2],
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         let inner = self.window.inner_size();
         if inner.width > 0
@@ -372,6 +403,15 @@ impl SecondaryWindowState {
             && sync_collect.portal_layout_changed
             && !sync_collect.page_layout_changed;
 
+        crate::components::button::sync_button_hover_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+            logical_w,
+            logical_h,
+            [0.0, 0.0],
+        );
+
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
         // Same chrome pass as primary [`AppState::render`]: Input/Textarea ring + caret are
@@ -381,6 +421,21 @@ impl SecondaryWindowState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        {
+            let focused =
+                crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+            let dark = crate::style::is_dark_theme();
+            crate::style::sync_class_variants_subtree(
+                &mut self.root_element,
+                mouse_pos,
+                focused.as_str(),
+                dark,
+                logical_w,
+                logical_h,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+        }
         crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -439,11 +494,12 @@ impl SecondaryWindowState {
 
         // Same anchored placement pass as primary [`AppState::render`]: dropdown / popover
         // panels need trigger bounds from the first layout before left/top are written.
-        if crate::utils::popup::sync_floating_placement(
+        let placement_moved = crate::utils::popup::sync_floating_placement(
             &mut self.root_element,
             logical_w,
             logical_h,
-        ) {
+        );
+        if placement_moved {
             crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
                 self.layout_tree.mark_element_layout_dirty(el);
             });
@@ -474,6 +530,19 @@ impl SecondaryWindowState {
             .overlay_split
             .chrome_start
             .min(scaled_input_chrome.len());
+        let scaled_tex = scale_textured_draws(&render_result.textured_draws, scale);
+        let overlay_tex_start = render_result
+            .overlay_split
+            .textured_start
+            .min(scaled_tex.len());
+        let textured_insts: Vec<_> = scaled_tex.iter().map(|d| d.to_instance()).collect();
+        super::state::upload_textured_instance_buffer(
+            &self.device,
+            &self.queue,
+            &mut self.textured_instance_buffer,
+            &mut self.textured_instance_capacity,
+            &textured_insts,
+        );
         let mut clip_polys = render_result.clip_polys;
         scale_clip_polys_in_place(&mut clip_polys, scale);
         while clip_polys.len() < scaled_instances.len() {
@@ -507,6 +576,12 @@ impl SecondaryWindowState {
 
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
+        self.textured_pipeline.update_resolution(
+            &self.queue,
+            self.config.width,
+            self.config.height,
+        );
+        self.upload_pending_textures(&scaled_tex);
 
         let empty_keys = std::collections::HashSet::new();
         let empty_rects = std::collections::HashMap::new();
@@ -530,7 +605,7 @@ impl SecondaryWindowState {
         // Portal overlay glyphs (Dialog / Select menu) — same band model as AppState.
         let overlay_band_ranges = render_result.overlay_split.band_ranges(
             scaled_instances.len(),
-            0,
+            scaled_tex.len(),
             render_result.text_nodes.len(),
             scaled_input_chrome.len(),
             0,
@@ -627,7 +702,25 @@ impl SecondaryWindowState {
                 );
             }
 
+            // Named Lucide caption icons (min/max/close) collect as textured draws.
+            if overlay_tex_start > 0 {
+                super::state::draw_packed_textured_runs(
+                    &mut render_pass,
+                    &self.textured_pipeline,
+                    &self.textured_instance_buffer,
+                    &self.image_textures,
+                    &scaled_tex,
+                    0,
+                    overlay_tex_start,
+                    None,
+                );
+            }
+
             if !prep.underline_instances.is_empty() {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let underline_buffer =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -636,6 +729,10 @@ impl SecondaryWindowState {
                             usage: wgpu::BufferUsages::VERTEX,
                         });
                 render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
                 render_pass.draw_indexed(
                     0..self.pipeline.num_indices,
                     0,
@@ -714,6 +811,19 @@ impl SecondaryWindowState {
                     );
                 }
 
+                if band.textured.0 < band.textured.1 {
+                    super::state::draw_packed_textured_runs(
+                        &mut render_pass,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        &scaled_tex,
+                        band.textured.0,
+                        band.textured.1,
+                        None,
+                    );
+                }
+
                 if band.chrome.0 < band.chrome.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
@@ -781,6 +891,12 @@ impl SecondaryWindowState {
         if prep.culled_skip_prepare || prep.needs_warmup || overlay_needs_warmup {
             self.window.request_redraw();
         }
+        if scaled_tex
+            .iter()
+            .any(|d| self.image_textures.get(&d.texture_key).is_none())
+        {
+            self.window.request_redraw();
+        }
         if crate::text::take_fit_needs_relayout() {
             self.window.request_redraw();
         }
@@ -799,6 +915,71 @@ impl SecondaryWindowState {
                     &self.config,
                     font_ptr,
                 ));
+        }
+    }
+
+    /// Rehydrate CPU caches into this window's device, then upload `take_pending`.
+    ///
+    /// Glass sidecars cannot share primary `GpuImageTexture`s; Lucide caption icons
+    /// re-queue from the CPU cache every collect so sequential primary/secondary
+    /// presents can both upload.
+    fn upload_pending_textures(&mut self, scaled_tex: &[ScaledTexturedDraw]) {
+        self.image_textures.begin_frame();
+        for draw in scaled_tex {
+            self.image_textures.touch(&draw.texture_key);
+        }
+        let _ = crate::style::flush_gradient_textures(|key| self.image_textures.get(key).is_some());
+        let _ = crate::primitives::path::flush_path_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+        #[cfg(feature = "svg")]
+        {
+            let _ = crate::media::svg_raster::flush_svg_textures(|key| {
+                self.image_textures.get(key).is_some()
+            });
+        }
+        let _ =
+            super::pending_images::flush_src_textures(|key| self.image_textures.get(key).is_some());
+        let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+        let _ = crate::utils::text_texture::flush_text_xform_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+
+        for (id, rgba, w, h) in super::pending_images::take_pending() {
+            let is_text_xform = crate::utils::text_texture::is_text_xform_texture_key(&id);
+            let format = if is_text_xform {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            };
+            if self
+                .image_textures
+                .try_overwrite_rgba8(&id, &self.queue, &rgba, w, h, format)
+            {
+                continue;
+            }
+            let gpu = if is_text_xform {
+                super::image_registry::upload_rgba8_linear(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &rgba,
+                    w,
+                    h,
+                )
+            } else {
+                super::image_registry::upload_rgba8(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &rgba,
+                    w,
+                    h,
+                )
+            };
+            self.image_textures.insert_with_size(id, gpu, w, h);
         }
     }
 
@@ -862,6 +1043,21 @@ impl SecondaryWindowState {
             LayoutStatus::Clean
         }
     }
+}
+
+fn init_secondary_textured(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> (TexturedQuadPipeline, wgpu::Buffer, usize) {
+    let pipeline = TexturedQuadPipeline::new(device, config);
+    let stride = std::mem::size_of::<TexturedInstanceInput>();
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Secondary Textured instance buffer"),
+        size: (stride * 256) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    (pipeline, buffer, 256)
 }
 
 fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&'a mut Element> {

@@ -1047,9 +1047,15 @@ pub fn cssom_text_from_element(el: &Element) -> String {
         .as_ref()
         .and_then(|cs| cs.base_text_style.as_ref())
         .unwrap_or(&el.text_style);
-    push_decl(&mut lines, "color", &format_text_rgba(text.color));
-    push_decl(&mut lines, "font-size", &format!("{:.0}px", text.size));
-    push_decl(&mut lines, "font-weight", &text.weight.to_string());
+    if let Some(c) = text.color {
+        push_decl(&mut lines, "color", &format_text_rgba(c));
+    }
+    if let Some(size) = text.size {
+        push_decl(&mut lines, "font-size", &format!("{:.0}px", size));
+    }
+    if let Some(weight) = text.weight {
+        push_decl(&mut lines, "font-weight", &weight.to_string());
+    }
     if let Some(family) = text.font_family.as_deref() {
         push_decl(&mut lines, "font-family", family);
     }

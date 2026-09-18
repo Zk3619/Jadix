@@ -156,7 +156,7 @@ pub(crate) fn element_self_pointer_hit_with(
         );
     };
     if !has_path {
-        // 纯纹理 Icon / AnimatedIcon：无 path 层时回退变换后的 border box。
+        // 纯纹理 Icon / AnimatedIcon / MorphIcon：无 path 层时回退变换后的 border box。
         return crate::core::tree::pointer_in_paint_border_box(
             el,
             [x, y],
@@ -482,7 +482,7 @@ fn hit_enter_clipped(
     Some((escaped, next_acc))
 }
 
-/// Consistent with the string shown in [`crate::components::input`]: `preedit` is inserted at the `ime_anchor` byte position of `committed`.
+/// Consistent with the string shown in [`crate::components::input`]: `preedit` is inserted at each live caret.
 pub(super) fn input_display_text(
     committed: &str,
     preedit: &str,
@@ -491,9 +491,8 @@ pub(super) fn input_display_text(
     if preedit.is_empty() {
         return committed.to_string();
     }
-    let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-    a = committed.floor_char_boundary(a);
-    format!("{}{}{}", &committed[..a], preedit, &committed[a..])
+    let a = ime_anchor.unwrap_or(committed.len());
+    crate::utils::text_multi_cursor::splice_preedit(committed, &[a], preedit)
 }
 
 /// Pointer hit on a stacking layer.
@@ -2712,6 +2711,12 @@ mod focused_key_dispatch_tests {
 mod ime_scroll_bounds_tests {
     use super::*;
     use taffy::style::Overflow;
+
+    #[test]
+    fn input_display_text_splices_preedit_at_anchor() {
+        assert_eq!(input_display_text("ab", "X", Some(1)), "aXb");
+        assert_eq!(input_display_text("ab", "", Some(1)), "ab");
+    }
 
     #[test]
     fn find_bounds_by_focus_id_accumulates_scroll_for_ime_visual() {

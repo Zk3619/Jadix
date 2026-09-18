@@ -394,15 +394,7 @@ struct HitNode {
 
 fn hit_path_nodes(el: &Element, x: f32, y: f32) -> Vec<HitNode> {
     let mut path = Vec::new();
-    hit_path_rec(
-        el,
-        x,
-        y,
-        [0.0, 0.0],
-        crate::style::MAT2D_IDENTITY,
-        [1.0, 1.0],
-        &mut path,
-    );
+    hit_path_walk(el, x, y, &mut path);
     path
 }
 
@@ -432,104 +424,148 @@ fn pointer_events_blocked(el: &Element) -> bool {
     !pointer_events_targets_children(el)
 }
 
-fn hit_path_rec(
-    el: &Element,
-    x: f32,
-    y: f32,
-    scroll_acc: [f32; 2],
-    ancestor_linear: crate::style::Mat2d,
-    ancestor_scale: [f32; 2],
-    out: &mut Vec<HitNode>,
-) -> bool {
-    if pointer_events_blocked(el) {
-        return false;
+/// Exclusive hit path (root → leaf). Heap walk: a 4k parent-chain overflows the
+/// default 1 MiB thread if this maps tree depth onto the OS stack (`pointer_hit_node_set`
+/// is on the class-variant sync path).
+fn hit_path_walk(root: &Element, x: f32, y: f32, out: &mut Vec<HitNode>) {
+    struct Frame {
+        ptr: *const Element,
+        scroll_acc: [f32; 2],
+        ancestor_linear: crate::style::Mat2d,
+        ancestor_scale: [f32; 2],
+        order: Vec<usize>,
+        next_child: usize,
+        entry_index: usize,
+        child_hit: bool,
+        started: bool,
     }
+    let mut stack = vec![Frame {
+        ptr: root as *const Element,
+        scroll_acc: [0.0, 0.0],
+        ancestor_linear: crate::style::MAT2D_IDENTITY,
+        ancestor_scale: [1.0, 1.0],
+        order: Vec::new(),
+        next_child: 0,
+        entry_index: 0,
+        child_hit: false,
+        started: false,
+    }];
+    while let Some(mut frame) = stack.pop() {
+        // SAFETY: `ptr` is a node in `root`'s tree for the duration of this call.
+        let el = unsafe { &*frame.ptr };
+        if !frame.started {
+            if pointer_events_blocked(el) {
+                continue;
+            }
 
-    // Solid body portal layer: escape ancestor scroll offsets (same as paint collect).
-    let scroll_acc = if el.template_id.as_deref()
-        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
-        || el.style.position_fixed
-    {
-        [0.0_f32, 0.0_f32]
-    } else {
-        scroll_acc
-    };
+            // Solid body portal layer: escape ancestor scroll offsets (same as paint collect).
+            let scroll_acc = if el.template_id.as_deref()
+                == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+                || el.style.position_fixed
+            {
+                [0.0_f32, 0.0_f32]
+            } else {
+                frame.scroll_acc
+            };
 
-    let is_body_portal =
-        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    if !is_body_portal
-        && !crate::core::tree::overflow_clip_contains_pointer(
-            el,
-            [x, y],
-            scroll_acc,
-            ancestor_linear,
-            ancestor_scale,
-        )
-    {
-        return false;
-    }
-    if !crate::core::tree::clip_path_contains_pointer(
-        el,
-        [x, y],
-        scroll_acc,
-        ancestor_linear,
-        ancestor_scale,
-    ) {
-        return false;
-    }
+            let is_body_portal =
+                el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+            if !is_body_portal
+                && !crate::core::tree::overflow_clip_contains_pointer(
+                    el,
+                    [x, y],
+                    scroll_acc,
+                    frame.ancestor_linear,
+                    frame.ancestor_scale,
+                )
+            {
+                continue;
+            }
+            if !crate::core::tree::clip_path_contains_pointer(
+                el,
+                [x, y],
+                scroll_acc,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            ) {
+                continue;
+            }
 
-    let next_acc = if is_body_portal {
-        scroll_acc
-    } else {
-        super::tree_hit::next_hit_scroll_acc(el, scroll_acc)
-    };
+            // Record this node before descending (root → leaf order).
+            let entry_index = out.len();
+            let paint_bounds = crate::core::tree::visual_paint_aabb_with_ancestor(
+                el,
+                scroll_acc,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            );
+            out.push(HitNode {
+                ptr: el as *const Element,
+                bounds: paint_bounds,
+            });
 
-    // Record this node before descending (root → leaf order).
-    let entry_index = out.len();
-    let paint_bounds = crate::core::tree::visual_paint_aabb_with_ancestor(
-        el,
-        scroll_acc,
-        ancestor_linear,
-        ancestor_scale,
-    );
-    out.push(HitNode {
-        ptr: el as *const Element,
-        bounds: paint_bounds,
-    });
-
-    let mut child_hit = false;
-    let order = {
-        let mut order: Vec<usize> = (0..el.children.len()).collect();
-        order.sort_by(|&a, &b| {
-            let za = el.children[a].style.z_index;
-            let zb = el.children[b].style.z_index;
-            za.cmp(&zb).then(a.cmp(&b))
-        });
-        order
-    };
-    let (child_lin, child_sc) =
-        crate::core::tree::child_paint_ancestor(el, ancestor_linear, ancestor_scale);
-    for i in order.into_iter().rev() {
-        if hit_path_rec(&el.children[i], x, y, next_acc, child_lin, child_sc, out) {
-            child_hit = true;
-            break;
+            // Highest z_index / later DOM sibling first (same as `order.rev()`).
+            let mut order: Vec<usize> = (0..el.children.len()).collect();
+            order.sort_by(|&a, &b| {
+                let za = el.children[a].style.z_index;
+                let zb = el.children[b].style.z_index;
+                za.cmp(&zb).then(a.cmp(&b))
+            });
+            order.reverse();
+            frame.scroll_acc = scroll_acc;
+            frame.order = order;
+            frame.next_child = 0;
+            frame.entry_index = entry_index;
+            frame.child_hit = false;
+            frame.started = true;
         }
-    }
 
-    let self_hit = tree_hit::element_self_pointer_hit_with(
-        el,
-        x,
-        y,
-        scroll_acc,
-        ancestor_linear,
-        ancestor_scale,
-    );
-    let hit = child_hit || self_hit;
-    if hit {
-        true
-    } else {
-        out.truncate(entry_index);
-        false
+        if frame.next_child > 0 && out.len() > frame.entry_index + 1 {
+            frame.child_hit = true;
+        }
+
+        if !frame.child_hit && frame.next_child < frame.order.len() {
+            let i = frame.order[frame.next_child];
+            frame.next_child += 1;
+            let is_body_portal =
+                el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+            let next_acc = if is_body_portal {
+                frame.scroll_acc
+            } else {
+                super::tree_hit::next_hit_scroll_acc(el, frame.scroll_acc)
+            };
+            let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
+                el,
+                frame.ancestor_linear,
+                frame.ancestor_scale,
+            );
+            let child_ptr = std::ptr::addr_of!(el.children[i]);
+            stack.push(frame);
+            stack.push(Frame {
+                ptr: child_ptr,
+                scroll_acc: next_acc,
+                ancestor_linear: child_lin,
+                ancestor_scale: child_sc,
+                order: Vec::new(),
+                next_child: 0,
+                entry_index: 0,
+                child_hit: false,
+                started: false,
+            });
+            continue;
+        }
+
+        let self_hit = tree_hit::element_self_pointer_hit_with(
+            el,
+            x,
+            y,
+            frame.scroll_acc,
+            frame.ancestor_linear,
+            frame.ancestor_scale,
+        );
+        if !(frame.child_hit || self_hit) {
+            out.truncate(frame.entry_index);
+        }
     }
 }
 
