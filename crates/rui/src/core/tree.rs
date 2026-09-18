@@ -3915,6 +3915,12 @@ impl Element {
     pub fn left(self, val: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::InsetL, val)
     }
+    pub fn inset_inline_start(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetInlineStart, val)
+    }
+    pub fn inset_inline_end(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetInlineEnd, val)
+    }
     pub fn inset(self, val: impl IntoCssDim) -> Self {
         let d = val.into_css_dim();
         self.set_css(UnitSlot::InsetL, d.clone())
@@ -4305,6 +4311,43 @@ pub(crate) fn pointer_as_layout_box_xy(
     [g.vx + local[0], g.vy + local[1]]
 }
 
+/// Axes that clip pointer / paint overflow to the border box.
+///
+/// Per-axis `hidden`/`clip` stays independent (`overflow-x: hidden; overflow-y: visible`
+/// for `text-overflow` must not scissor glyphs to the line box). A **scrollport**
+/// (`auto`/`scroll`, or a `scroll:` id whose overflow was cleared to `Visible`) clips
+/// both axes — CSS scroll containers clip on both axes, and gallery `scroll:` shells
+/// must not leak hits into the sidebar.
+#[inline]
+pub(crate) fn overflow_clip_axes(el: &Element) -> (bool, bool) {
+    overflow_clip_axes_from(
+        el.style.overflow.x,
+        el.style.overflow.y,
+        el.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        }),
+    )
+}
+
+#[inline]
+pub(crate) fn overflow_clip_axes_from(
+    overflow_x: taffy::style::Overflow,
+    overflow_y: taffy::style::Overflow,
+    is_scroll_viewport: bool,
+) -> (bool, bool) {
+    use taffy::style::Overflow::{Scroll, Visible};
+    let ox = overflow_x != Visible;
+    let oy = overflow_y != Visible;
+    // CSS `overflow: auto` is stored as Taffy `Scroll`.
+    let scrollport =
+        is_scroll_viewport || matches!(overflow_x, Scroll) || matches!(overflow_y, Scroll);
+    if scrollport {
+        (true, true)
+    } else {
+        (ox, oy)
+    }
+}
+
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
 ///
 /// `scroll:` ids still clip when overflow was cleared to `Visible` (ScrollArea outer shells and
@@ -4312,11 +4355,8 @@ pub(crate) fn pointer_as_layout_box_xy(
 /// sibling chrome (gallery sidebar) while the main pane scrolls.
 #[inline]
 pub(crate) fn element_clips_overflow(el: &Element) -> bool {
-    el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible
-        || el.focus_id.as_deref().is_some_and(|f| {
-            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
-        })
+    let (clip_x, clip_y) = overflow_clip_axes(el);
+    clip_x || clip_y
 }
 
 /// Overflow clip is the **local** border box (CSS), then the VS affine is applied.
@@ -4339,11 +4379,7 @@ pub(crate) fn overflow_clip_contains_pointer(
         return false;
     }
     let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
-    let clip_x = el.style.overflow.x != taffy::style::Overflow::Visible;
-    let clip_y = el.style.overflow.y != taffy::style::Overflow::Visible
-        || el.focus_id.as_deref().is_some_and(|f| {
-            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
-        });
+    let (clip_x, clip_y) = overflow_clip_axes(el);
     if clip_x && (local[0] < 0.0 || local[0] > b[2]) {
         return false;
     }
@@ -4544,7 +4580,13 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                     }
                     push_subtree_layout_nodes(element, &mut collect.layout_dirty);
                 }
-                LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+                LayoutStatus::StyleChanged => {
+                    // Same as bind_text paint-only: StyleChanged is a local dest-reset
+                    // + recapture, not a layout rebuild. Leaving this a no-op kept
+                    // previous ink in PartialLoad (in-page stacking chrome hide/hover).
+                    crate::app::damage::push_frame_paint_element(element, scroll_acc);
+                }
+                LayoutStatus::Clean => {}
             }
             *impact = impact.merge(status);
         }

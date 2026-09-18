@@ -236,7 +236,7 @@ pub(super) struct AppState {
 
 /// `queue.write_buffer` is executed before render pass during submit; the same buffer is written to offset 0 multiple times.
 /// Only the last time will be left (as soon as the pie chart enters the viewport, the polyline instance is covered into a pie chart rectangle). It must be packaged once and drawn according to instance range.
-fn upload_textured_instance_buffer(
+pub(super) fn upload_textured_instance_buffer(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     buffer: &mut wgpu::Buffer,
@@ -260,7 +260,7 @@ fn upload_textured_instance_buffer(
     queue.write_buffer(buffer, 0, bytemuck::cast_slice(insts));
 }
 
-fn draw_packed_textured_runs<'pass>(
+pub(super) fn draw_packed_textured_runs<'pass>(
     pass: &mut wgpu::RenderPass<'pass>,
     pipeline: &'pass TexturedQuadPipeline,
     instance_buffer: &'pass wgpu::Buffer,
@@ -1314,6 +1314,7 @@ impl AppState {
     }
 
     /// Snapshot for [`accesskit_winit::Adapter::update_if_active`].
+    #[cfg(feature = "a11y")]
     pub(super) fn accesskit_tree_update(&self) -> accesskit::TreeUpdate {
         let focused = use_signal("__rui_button_focus_id", String::new).peek();
         let fid = if focused.is_empty() {
@@ -1454,8 +1455,25 @@ impl AppState {
         // user-mode drivers commit ~80 MB of private heaps at device creation, while
         // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
         // not need what DX12 buys, so GL leads and the others stay as fallbacks.
-        let (instance, surface, adapter, device, queue) =
-            Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+        let (instance, surface, adapter, device, queue) = if compositor_alpha {
+            if let Some(gpu) = super::glass_gpu::try_acquire(&window, &chrome) {
+                (
+                    gpu.instance,
+                    gpu.surface,
+                    gpu.adapter,
+                    gpu.device,
+                    gpu.queue,
+                )
+            } else {
+                let (i, s, a, d, q) =
+                    Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+                (i, s, a, Arc::new(d), Arc::new(q))
+            }
+        } else {
+            let (i, s, a, d, q) =
+                Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+            (i, s, a, Arc::new(d), Arc::new(q))
+        };
         crate::renderer::wgpu_compat::install_device_error_handlers(&device);
         let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             TextRendererBackend::CpuTextHybrid
@@ -1465,8 +1483,6 @@ impl AppState {
         log::warn!("text renderer backend: {:?}", text_backend);
 
         let mut gpu_caps = crate::renderer::probe_gpu_caps(&adapter);
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
         let compute = crate::renderer::ComputePipelines::new(&device, &mut gpu_caps);
 
         let surface_caps = surface.get_capabilities(&adapter);
@@ -2389,7 +2405,7 @@ impl AppState {
                 overlay_dirties.push((dirty.key, scissor_logical));
                 continue;
             }
-            let scissor_logical = if dirty.kind == PaintDirtyKind::Node {
+            let mut scissor_logical = if dirty.kind == PaintDirtyKind::Node {
                 let clipped = super::damage::page_scissor_excluding_overlay(
                     scissor_logical,
                     self.overlay_occupied,
@@ -2415,6 +2431,47 @@ impl AppState {
                 clipped
             } else {
                 scissor_logical
+            };
+            // Own outset shadow dest-reset sits outside overflow:hidden. GPU scissor
+            // must cover that wipe or PartialLoad src-overs the halo darker every tick.
+            let node_dest_reset = if dirty.kind == PaintDirtyKind::Node
+                && allow_primitives
+                && !super::damage::paint_dirty_nested_in_larger_node(dirty, &self.damage_nodes)
+            {
+                let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
+                let prev_slot = super::draw_cull::last_present_prev_for_dirty(
+                    dirty.kind,
+                    dirty.key,
+                    &self.last_present_node_bounds,
+                );
+                super::draw_cull::node_present_dest_reset_full(
+                    dirty.key,
+                    dirty.bounds,
+                    node_paints,
+                    page,
+                    scaled_tex,
+                    ui_scale,
+                    prev_slot,
+                )
+            } else {
+                None
+            };
+            if let Some(reset) = node_dest_reset.as_ref() {
+                if ui_scale > 0.0 {
+                    let logical = [
+                        reset.rect[0] / ui_scale,
+                        reset.rect[1] / ui_scale,
+                        reset.rect[2] / ui_scale,
+                        reset.rect[3] / ui_scale,
+                    ];
+                    scissor_logical = super::damage::union_rects(scissor_logical, logical);
+                    if let Some(clipped) = super::damage::page_scissor_excluding_overlay(
+                        scissor_logical,
+                        self.overlay_occupied,
+                    ) {
+                        scissor_logical = clipped;
+                    }
+                }
             };
             let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
                 scissor_logical,
@@ -2531,48 +2588,56 @@ impl AppState {
                 }
                 PaintDirtyKind::Node => {
                     if allow_primitives {
-                        let page =
-                            &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
-                        // Load + src-over of the same rounded SDF stacks AA (Default
-                        // looks smaller / jittery). Ghost leave cannot erase an opaque
-                        // hover fill. Wipe this slot's ink with the card behind it —
-                        // never the scissor-padded dirty box (that punches parent
-                        // chrome), never the widget's own fill, never window Clear.
-                        // Nested Input inside a dirty Adornment: the shell already
-                        // dest-reset this box. A second wipe after the shell draw
-                        // leaves a nested fill (Gallery Kbd Search).
-                        if !super::damage::paint_dirty_nested_in_larger_node(
-                            dirty,
-                            &self.damage_nodes,
-                        ) {
-                            let prev_slot = super::draw_cull::last_present_prev_for_dirty(
-                                dirty.kind,
-                                dirty.key,
-                                &self.last_present_node_bounds,
+                        if let Some(reset) = node_dest_reset.as_ref() {
+                            let replay = reset.replay.1 > reset.replay.0;
+                            if replay {
+                                if let Some((wx, wy, ww, wh)) =
+                                    super::damage::damage_to_scissor_physical(
+                                        [
+                                            reset.rect[0] / ui_scale.max(1e-6),
+                                            reset.rect[1] / ui_scale.max(1e-6),
+                                            reset.rect[2] / ui_scale.max(1e-6),
+                                            reset.rect[3] / ui_scale.max(1e-6),
+                                        ],
+                                        0.0,
+                                        ui_scale,
+                                        self.config.width,
+                                        self.config.height,
+                                    )
+                                {
+                                    render_pass.set_scissor_rect(wx, wy, ww, wh);
+                                }
+                            }
+                            draw_scissor_clear(
+                                render_pass,
+                                &self.pipeline,
+                                &self.device,
+                                reset.rect,
+                                wgpu::Color {
+                                    r: reset.clear[0] as f64,
+                                    g: reset.clear[1] as f64,
+                                    b: reset.clear[2] as f64,
+                                    a: 1.0,
+                                },
                             );
-                            if let Some((rect, color)) =
-                                super::draw_cull::node_present_dest_reset_scaled(
-                                    dirty.key,
-                                    dirty.bounds,
-                                    node_paints,
-                                    page,
-                                    scaled_tex,
-                                    ui_scale,
-                                    prev_slot,
-                                )
-                            {
-                                draw_scissor_clear(
+                            if replay {
+                                self.pipeline.bind_sdf(render_pass, false, dummy);
+                                render_pass
+                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                                render_pass.set_index_buffer(
+                                    self.pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                draw_instance_range(
                                     render_pass,
                                     &self.pipeline,
-                                    &self.device,
-                                    rect,
-                                    wgpu::Color {
-                                        r: color[0] as f64,
-                                        g: color[1] as f64,
-                                        b: color[2] as f64,
-                                        a: 1.0,
-                                    },
+                                    scaled_instances,
+                                    reset.replay.0 as u32,
+                                    (reset.replay.1 - reset.replay.0) as u32,
+                                    Some(super::draw_cull::CullRects::one(reset.rect)),
                                 );
+                                render_pass.set_scissor_rect(x, y, w, h);
                             }
                         }
                         let has_keyed = super::damage::paint_dirty_has_keyed_slot(
@@ -2583,6 +2648,40 @@ impl AppState {
                                 .filter(|p| !p.overlay)
                                 .map(|p| (p.key, p.bounds)),
                         );
+                        if super::draw_cull::node_present_restore_underlay(
+                            dirty.key,
+                            dirty.bounds,
+                            node_paints,
+                        ) {
+                            // Stacking overlay dest-reset punched in-flow fills
+                            // (rounded bubble under a jump pill). Rebuild them
+                            // in the hole before drawing the overlay slot.
+                            self.draw_matching_node_paints(
+                                render_pass,
+                                node_paints,
+                                scaled_instances,
+                                scaled_tex,
+                                scaled_input_chrome,
+                                dummy,
+                                |p| {
+                                    !p.overlay
+                                        && !super::damage::paint_dirty_matches_present_slot(
+                                            dirty.key,
+                                            dirty.bounds,
+                                            p.key,
+                                            p.bounds,
+                                            has_keyed,
+                                        )
+                                        && super::damage::restore_page_behind_overlay(
+                                            p.bounds,
+                                            scissor_logical,
+                                        )
+                                },
+                                cull_phys,
+                                Some(overlay_inst_start),
+                                Some(overlay_tex_start),
+                            );
+                        }
                         self.draw_matching_node_paints(
                             render_pass,
                             node_paints,
@@ -4189,22 +4288,27 @@ impl AppState {
         self.scroll_text_clip_second = None;
         self.scroll_strip_blit.clear();
         self.scroll_blit_pins.clear();
-        if scroll_changed && !self.portal_membership_dirty {
+        if scroll_changed {
             // Pixels move inside the scroller: Clear that viewport layer, keep the rest
             // of the retain buffer (sidebar / chrome). Whole-window FullClear is wrong here.
+            // Portal join must not cancel this — overlay membership scissors the panel;
+            // the page viewport still translated. Fingerprint-only spawn of an overlay
+            // ScrollArea is not page scroll (`existing_scroll_offset_changed`).
             let prev_offsets = self.last_scroll_offsets.clone();
-            if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
-                self.mark_full_redraw();
-            } else {
-                self.scroll_layer_clear = true;
-                let (jobs, nested_pins) =
-                    self.try_plan_scroll_strip_blits(&prev_offsets, &cur_offsets);
-                if !jobs.is_empty() {
-                    self.damage_rect = Some(jobs[0].plan.exposed);
-                    self.scroll_text_clip = Some(jobs[0].plan.exposed);
-                    self.scroll_text_clip_second = jobs[0].plan.exposed_second;
-                    self.scroll_strip_blit = jobs;
-                    self.scroll_blit_pins = nested_pins;
+            if super::damage::existing_scroll_offset_changed(&prev_offsets, &cur_offsets) {
+                if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
+                    self.mark_full_redraw();
+                } else {
+                    self.scroll_layer_clear = true;
+                    let (jobs, nested_pins) =
+                        self.try_plan_scroll_strip_blits(&prev_offsets, &cur_offsets);
+                    if !jobs.is_empty() {
+                        self.damage_rect = Some(jobs[0].plan.exposed);
+                        self.scroll_text_clip = Some(jobs[0].plan.exposed);
+                        self.scroll_text_clip_second = jobs[0].plan.exposed_second;
+                        self.scroll_strip_blit = jobs;
+                        self.scroll_blit_pins = nested_pins;
+                    }
                 }
             }
         }
@@ -4441,11 +4545,12 @@ impl AppState {
         }
         // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
         // Only dirty floating layer nodes + fast compute, prohibiting full reconstruction of Taffy every frame (the whole page scrolls and freezes after opening DatePicker).
-        if crate::utils::popup::sync_floating_placement(
+        let placement_moved = crate::utils::popup::sync_floating_placement(
             &mut self.root_element,
             logical_w,
             logical_h,
-        ) {
+        );
+        if placement_moved {
             crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
                 self.layout_tree.mark_element_layout_dirty(el);
             });
@@ -4616,9 +4721,12 @@ impl AppState {
         let _ = crate::primitives::path::flush_path_textures(|key| {
             self.image_textures.get(key).is_some()
         });
-        let _ = crate::media::svg_raster::flush_svg_textures(|key| {
-            self.image_textures.get(key).is_some()
-        });
+        #[cfg(feature = "svg")]
+        {
+            let _ = crate::media::svg_raster::flush_svg_textures(|key| {
+                self.image_textures.get(key).is_some()
+            });
+        }
         let _ =
             super::pending_images::flush_src_textures(|key| self.image_textures.get(key).is_some());
         let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
@@ -4848,13 +4956,21 @@ impl AppState {
         // the gallery, and do not cancel a real scroll-layer Clear — that viewport
         // still has to repaint page glyphs after pixels moved.
         let overlay_tex_slice_start = overlay_tex_start.min(scaled_tex.len());
-        let overlay_visual = Self::overlay_visual_bounds_logical(
-            &scaled_instances[overlay_inst_start..],
-            &scaled_tex[overlay_tex_slice_start..],
-            &self.text_nodes[overlay_text_start..],
-            &scaled_input_chrome[overlay_chrome_start..],
-            ui_scale,
-        );
+        // Expand's unconstrained measure frame still emits opacity-0 instances at
+        // content height. That AABB is not occupancy (`hoisted_portal_paint_box`)
+        // and must not become a scroll blit pin / dest-reset strip down the page.
+        let overlay_visual = if crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element)
+        {
+            None
+        } else {
+            Self::overlay_visual_bounds_logical(
+                &scaled_instances[overlay_inst_start..],
+                &scaled_tex[overlay_tex_slice_start..],
+                &self.text_nodes[overlay_text_start..],
+                &scaled_input_chrome[overlay_chrome_start..],
+                ui_scale,
+            )
+        };
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
@@ -4863,28 +4979,22 @@ impl AppState {
         // Clear here (not inside overlay occupancy) so `note_fit_relayout_followup`
         // can still arm the *next* chrome after text prepare.
         self.page_geom_dirty = false;
-        let present_slots: Vec<(u64, [f32; 4])> = render_result
-            .node_paints
-            .iter()
-            .filter(|p| !p.overlay)
-            .map(|p| (p.key, p.bounds))
-            .collect();
-        // Slot motion without a scroll layer: dest-reset `prev∪now` on every
-        // translated page slot (Tabs height change moving 8b) instead of window
-        // FullClear — FullClear was the one-frame glyph luminance flash. A scroll
-        // layer already translated the viewport; expanding every slot would abort
-        // strip blit. Unnamed leftovers still FullClear (maximize / glyphon_fit
-        // when page_geom did not already Clear).
+        // Same space as `last_present_node_bounds` (visual own-chrome / halo,
+        // recorded before DPI scale + `take`). Layout `p.bounds` vs that visual
+        // prev makes every outset-shadow slot look translated — gallery inset
+        // dest-resets and PartialLoad src-overs the Md halo on idle CSS ticks.
+        // Visual slots skip nested foreign descendant ink so a child's
+        // hover:scale Bake cannot dest-reset an overflow:visible parent pill.
         if !self.scroll_layer_clear {
             super::damage::expand_paint_dirties_for_translated_slots(
                 &mut self.damage_nodes,
-                &present_slots,
+                &next_last_present,
                 &self.last_present_node_bounds,
             );
         }
         if super::damage::node_present_moved_forces_full_clear(
             super::damage::unnamed_translated_page_slots(
-                &present_slots,
+                &next_last_present,
                 &self.last_present_node_bounds,
                 &self.damage_nodes,
             ),
@@ -4995,6 +5105,12 @@ impl AppState {
                     let text_hi = band.text.1.min(overlay_text_start);
                     if text_lo >= text_hi {
                         page_stack_skip_glyphon[band_i] = true;
+                        // Empty later band: drop the last GPU mesh. Skip-render
+                        // keeps those vertices off this pass, but the next
+                        // prepare/render of a stale buffer stamps leftover glyphs.
+                        if band_i > 0 {
+                            self.clear_page_stack_band_glyphon(band_i);
+                        }
                         underlines.push(Vec::new());
                         shadow_bands.push(Vec::new());
                         continue;
@@ -5433,6 +5549,8 @@ impl AppState {
                         1u8.hash(&mut hasher);
                         c.caret_byte_index.hash(&mut hasher);
                         c.selection.hash(&mut hasher);
+                        c.extra_carets.hash(&mut hasher);
+                        c.extra_selections.hash(&mut hasher);
                         c.overwrite_highlight.hash(&mut hasher);
                         c.selection_bg.hash(&mut hasher);
                     }

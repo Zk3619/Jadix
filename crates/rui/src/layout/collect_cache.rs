@@ -280,6 +280,7 @@ fn node_has_collect_side_channel(el: &Element) -> bool {
         || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
         || el.attrs.get("rui_portal").map(String::as_str) == Some("1")
         || el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
+        || crate::utils::anchored_overlay::point_overlay_drag_collect_live(el)
         || node_records_page_stack_bands(el)
 }
 
@@ -294,6 +295,16 @@ fn node_records_page_stack_bands(el: &Element) -> bool {
     el.children.iter().any(|c| c.style.z_index != 0)
 }
 
+/// This node opens a later page-stack band (`layout_tree` `child_opens_page_stack_band`).
+/// Skipping it records one parent NodePaint and drops descendant slots that
+/// dest-reset / scroll-blit pins key by (absolute jump chrome).
+fn node_opens_stacking_band(el: &Element) -> bool {
+    el.style.z_index != 0
+        || el.style.position == taffy::style::Position::Absolute
+        || el.style.position_fixed
+        || el.attrs.get("data-stacking-context").map(String::as_str) == Some("1")
+}
+
 pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
     if el.children.is_empty() {
         return false;
@@ -302,6 +313,9 @@ pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
         return false;
     }
     if node_has_collect_side_channel(el) {
+        return false;
+    }
+    if node_opens_stacking_band(el) {
         return false;
     }
     true
@@ -338,6 +352,10 @@ fn node_collect_is_live(el: &Element) -> bool {
         return true;
     }
     if el.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+        return true;
+    }
+    #[cfg(feature = "svg")]
+    if el.attrs.contains_key(crate::utils::ATTR_MORPH_ICON) {
         return true;
     }
     if crate::style::css_animation_needs_frame(&el.style, &el.animation_snapshot) {
@@ -527,6 +545,8 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     }
     el.text_style.color.hash(h);
     el.text_style.size.map(|s| s.to_bits()).hash(h);
+    #[cfg(feature = "svg")]
+    crate::utils::morph_icon::hash_morph_icon_paint(el, h);
     el.text_style.weight.hash(h);
     el.text_style.font_family.hash(h);
     match el.text_style.align {
@@ -551,8 +571,11 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
             true.hash(h);
             c.caret_byte_index.hash(h);
             c.selection.hash(h);
+            c.extra_carets.hash(h);
+            c.extra_selections.hash(h);
             c.overwrite_highlight.hash(h);
             c.preedit_underline.hash(h);
+            c.extra_preedit_underlines.hash(h);
             c.drop_caret.hash(h);
             c.caret_color.hash(h);
             c.selection_bg.hash(h);
@@ -1084,6 +1107,19 @@ mod tests {
     #[test]
     fn ordinary_subtree_with_children_is_skippable() {
         assert!(subtree_is_skippable(&el_with_child()));
+    }
+
+    #[test]
+    fn stacking_band_node_is_not_skippable() {
+        let mut abs = el_with_child();
+        abs.style.position = taffy::style::Position::Absolute;
+        assert!(
+            !subtree_is_skippable(&abs),
+            "absolute dock skip would drop descendant dest-reset slots"
+        );
+        let mut zed = el_with_child();
+        zed.style.z_index = 20;
+        assert!(!subtree_is_skippable(&zed));
     }
 
     #[test]

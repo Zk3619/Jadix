@@ -76,6 +76,38 @@ fn tall_message_scroller_root() -> Element {
         .child(scroller)
 }
 
+fn gallery_like_message_scroller_with_jump() -> Element {
+    let mut content = message_scroller_content();
+    for (i, text) in GAL_MS_TEXTS.iter().enumerate() {
+        content = content.child(bubble_turn(i, text));
+    }
+    let scroller: Element = message_scroller_provider()
+        .id("ms-gallery-jump")
+        .auto_scroll(true)
+        .default_scroll_position("end")
+        .child(
+            message_scroller()
+                .h("100%")
+                .child(message_scroller_viewport().child(content))
+                .child(message_scroller_button().direction("end")),
+        )
+        .into();
+    let page = Element::new().w(400.0).h(900.0).flex_col().child(
+        Element::new()
+            .w(384.0)
+            .h(384.0)
+            .overflow("hidden")
+            .child(scroller),
+    );
+    Element::from(
+        scroll_area("outer-jump")
+            .w(400.0)
+            .h(800.0)
+            .overflow_y("auto")
+            .child(page),
+    )
+}
+
 fn gallery_like_message_scroller_root() -> Element {
     let mut content = message_scroller_content();
     for (i, text) in GAL_MS_TEXTS.iter().enumerate() {
@@ -391,10 +423,48 @@ fn message_scroller_jump_button_layers_above_message_glyphs() {
             );
             let result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
             let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let scroller = find_slot(&root, "message-scroller").expect("scroller");
+            let b = btn.layout_bounds;
+            let s = scroller.layout_bounds;
+            let visual_x = b[0] + b[2] * btn.style.translate_pct[0];
+            let visual_y = b[1] + b[3] * btn.style.translate_pct[1];
             assert!(
                 btn.style.opacity > 0.5,
                 "not-at-end must show the jump button, opacity={}",
                 btn.style.opacity
+            );
+            assert!(
+                btn.style.translate_pct[0].abs() < 0.02,
+                "centering must live on the dock, not translateX; translate_pct={:?}",
+                btn.style.translate_pct
+            );
+            assert!(
+                b[2] > 24.0 && b[2] < s[2] * 0.7,
+                "jump button must hug the Latest label, not stretch/clip; bounds={b:?} scroller={s:?}"
+            );
+            let btn_cx = visual_x + b[2] * 0.5;
+            let scroller_cx = s[0] + s[2] * 0.5;
+            assert!(
+                visual_x > s[0] + 8.0 && visual_x + b[2] < s[0] + s[2] - 8.0,
+                "jump button must stay fully inside the scroller; \
+                 visual=({visual_x:.1},{visual_y:.1}) size={}x{} scroller={s:?}",
+                b[2],
+                b[3]
+            );
+            assert!(
+                (btn_cx - scroller_cx).abs() < s[2] * 0.2,
+                "jump button must sit near the scroller center, not the left clip; \
+                 btn_cx={btn_cx:.1} scroller_cx={scroller_cx:.1} scroller={s:?}"
+            );
+            let latest = result
+                .text_nodes
+                .iter()
+                .find(|t| t.text == "Latest")
+                .expect("Latest label");
+            assert!(
+                latest.x > s[0] + 16.0,
+                "Latest glyph must not sit on the left clip edge; x={} scroller={s:?}",
+                latest.x
             );
             assert!(
                 btn.focusable,
@@ -421,6 +491,259 @@ fn message_scroller_jump_button_layers_above_message_glyphs() {
             assert!(
                 !earlier_has_latest,
                 "jump label must not share the message band"
+            );
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                result
+                    .node_paints
+                    .iter()
+                    .any(|p| p.key == btn_key && p.layered),
+                "jump button collect slot must be a later page-stack band"
+            );
+        });
+    });
+}
+
+#[test]
+fn message_scroller_jump_slot_survives_fingerprint_skip() {
+    // Absolute dock skip used to record one parent NodePaint. last-present then
+    // dropped the button key; hide+scroll blit pinned only the slid box and
+    // copied Latest into the overlap.
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    320.0,
+                    384.0,
+                    [0.0, 0.0],
+                );
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
+            let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            tree.set_collect_skip_allowed(true);
+            let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], false, false);
+            let skipped = tree.build_and_layout_fast(
+                &mut root,
+                320.0,
+                384.0,
+                [-1.0, -1.0],
+                false,
+                false,
+            );
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                skipped
+                    .node_paints
+                    .iter()
+                    .any(|p| p.key == btn_key && p.layered),
+                "fingerprint skip must keep the jump button dest-reset slot"
+            );
+            let prev = crate::app::draw_cull::last_present_visual_slots(
+                &skipped.node_paints,
+                &skipped.instances,
+                &[],
+                &skipped.text_nodes,
+                &[],
+            );
+            assert!(
+                prev.iter().any(|(k, _)| *k == btn_key),
+                "last-present must keep the button key across skip frames"
+            );
+        });
+    });
+}
+
+#[test]
+fn message_scroller_jump_button_hides_latest_glyphs_at_live_edge() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    320.0,
+                    384.0,
+                    [0.0, 0.0],
+                );
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
+            let shown = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            assert!(
+                shown.text_nodes.iter().any(|t| t.text == "Latest"),
+                "scrolled-away must emit Latest"
+            );
+
+            let max_y = use_signal(
+                &scroll_content_h_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek()
+                - use_signal(
+                    &scroll_viewport_h_signal_key("ms-layout-test:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
+            crate::app::damage::clear_frame_paint_nodes();
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(max_y.max(0.0));
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                320.0,
+                384.0,
+                [0.0, 0.0],
+            );
+            let dirties = crate::app::damage::take_frame_paint_nodes();
+            let hidden = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            assert!(
+                btn.style.opacity < 0.05,
+                "at live edge the jump button must hide, opacity={}",
+                btn.style.opacity
+            );
+            assert!(
+                (btn.style.translate_pct[1] - 1.0).abs() < 0.02,
+                "hide still slides on Y; dest-reset unions last-present, {:?}",
+                btn.style.translate_pct
+            );
+            assert!(
+                dirties.iter().any(|d| d.kind == crate::app::damage::PaintDirtyKind::Node),
+                "StyleChanged hide must dest-reset the pill as a Node, got {dirties:?}"
+            );
+            assert!(
+                dirties
+                    .iter()
+                    .all(|d| d.kind != crate::app::damage::PaintDirtyKind::OverlayRestore),
+                "in-page jump chrome is not a portal OverlayRestore, got {dirties:?}"
+            );
+            assert!(
+                hidden
+                    .text_nodes
+                    .iter()
+                    .all(|t| t.text != "Latest"),
+                "at live edge Latest glyphs must leave collect (glyphon retain leftover)"
+            );
+        });
+    });
+}
+
+#[test]
+fn gallery_nested_jump_button_stays_inside_chat_clip() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = gallery_like_message_scroller_with_jump();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    400.0,
+                    800.0,
+                    [0.0, 0.0],
+                );
+                let _ = tree.build_and_layout(&mut root, 400.0, 800.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-gallery-jump:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            sync_reactive_elements_subtree(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                400.0,
+                800.0,
+                [0.0, 0.0],
+            );
+            let result = tree.build_and_layout(&mut root, 400.0, 800.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let scroller = find_slot(&root, "message-scroller").expect("scroller");
+            let b = btn.layout_bounds;
+            let s = scroller.layout_bounds;
+            let visual_x = b[0] + b[2] * btn.style.translate_pct[0];
+            assert!(
+                btn.style.opacity > 0.5,
+                "scrolled-away-from-end must show Latest, opacity={}",
+                btn.style.opacity
+            );
+            assert!(
+                btn.style.translate_pct[0].abs() < 0.02,
+                "centering must live on the dock, not translateX; translate_pct={:?}",
+                btn.style.translate_pct
+            );
+            let latest = result
+                .text_nodes
+                .iter()
+                .find(|t| t.text == "Latest")
+                .expect("Latest label");
+            let btn_cx = visual_x + b[2] * 0.5;
+            let scroller_cx = s[0] + s[2] * 0.5;
+            assert!(
+                visual_x > s[0] + 4.0 && visual_x + b[2] < s[0] + s[2] - 4.0,
+                "Latest chrome must not clip on the chat's left edge; \
+                 visual_x={visual_x:.1} btn={b:?} scroller={s:?} label=({:.1},{:.1}) clip={:?}",
+                latest.x,
+                latest.y,
+                latest.clip_bounds
+            );
+            assert!(
+                latest.x > s[0] + 12.0,
+                "Latest glyph must sit inside the chat, not the left clip; x={} clip={:?} scroller={s:?}",
+                latest.x,
+                latest.clip_bounds
+            );
+            assert!(
+                (btn_cx - scroller_cx).abs() < s[2] * 0.2,
+                "Latest pill must sit near the chat center; \
+                 btn_cx={btn_cx:.1} scroller_cx={scroller_cx:.1} label_x={:.1} scroller={s:?}",
+                latest.x
             );
         });
     });

@@ -270,7 +270,10 @@ fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
     {
         return None;
     }
-    let mut b = el.layout_bounds;
+    // Visual box (CSS translate / collect abs patch). `layout_bounds` is Taffy
+    // origin — Point title-bar drag used translate follow and occupancy stayed
+    // on the grab box, so PartialLoad scissored content to a slice.
+    let mut b = crate::core::tree::visual_paint_aabb(el, [0.0, 0.0]);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return None;
     }
@@ -320,11 +323,13 @@ fn subtree_has_drag_overlay(el: &Element) -> bool {
 /// - Returns a non-zero “structure dirty” count when the portal tree changed (caller must
 ///   full-rebuild Taffy).
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
-    // Drag ghost `fixed` inset is paint chrome (`overlay_pos` is not an island
-    // dep). Apply before Taffy so a pointer tick does not remount the clone.
+    // Drag ghost follow is Point paint chrome: pin Taffy at grab origin before
+    // layout so collect can patch `abs` the same frame. Live left/top churn
+    // disabled collect-skip and lagged the Gallery ghost.
     if crate::utils::drag::is_active() {
         crate::utils::drag::overlay::sync_overlay_ghost_insets(root);
     }
+    crate::utils::anchored_overlay::sync_point_overlay_drag_insets(root);
     let dirty = ensure_portal_layer(root);
 
     let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2113,6 +2118,11 @@ pub struct NodePaint {
     /// Rotated overflow is the AABB of the transformed local box — dest-reset
     /// and node-present scissor must cover diamond tips, not the unrotated AABB.
     pub overflow_clip: Option<[f32; 4]>,
+    /// Absolute / z-index / stacking-context slot that opened a later page-stack
+    /// band. Dest-reset of this slot composites over in-flow content: do not
+    /// shrink the wipe away from overlapping underlay, and restore that underlay
+    /// in the hole (in-flow Node dest-reset stays membership-only).
+    pub layered: bool,
 }
 
 /// Dest-reset / scissor clip for this overflow box.
@@ -2153,6 +2163,7 @@ fn record_node_paint(
     overlay: bool,
     scroll_acc: [f32; 2],
     overflow_clip: Option<[f32; 4]>,
+    layered: bool,
 ) {
     // Same space as collect instances / chrome dirties: visual, not Taffy document.
     let paint_scroll = if escapes_ancestor_overflow(el) {
@@ -2183,6 +2194,7 @@ fn record_node_paint(
             chrome: (start.chrome, end.chrome),
             paint_ops: (start.paint_ops, end.paint_ops),
             overflow_clip,
+            layered,
         });
     });
 }
@@ -2967,6 +2979,8 @@ struct CollectFrame {
     walk: Option<CollectWalk>,
     cache_start: crate::layout::collect_cache::DlCursor,
     cache_geom: crate::layout::collect_cache::GeomKey,
+    /// This node (or an ancestor) opened a later page-stack band.
+    layered: bool,
 }
 
 fn collect_commit_extent(
@@ -3358,6 +3372,28 @@ impl LayoutTree {
         }
     }
 
+    /// Mouseup Point-drag commit: Taffy still caches the grab-origin location.
+    fn dirty_point_overlay_commit(&mut self, root: &Element) {
+        let Some(id) = crate::utils::anchored_overlay::take_point_overlay_commit_dirty() else {
+            return;
+        };
+        let mut ptrs: Vec<*const Element> = Vec::new();
+        crate::core::tree::walk_elements(root, |el| {
+            if el
+                .attrs
+                .get(crate::utils::popup::ATTR_FLOATING)
+                .map(String::as_str)
+                == Some(id.as_str())
+            {
+                ptrs.push(el as *const Element);
+            }
+        });
+        for p in ptrs {
+            // SAFETY: `root` outlives this loop; walk already finished.
+            self.mark_element_layout_dirty(unsafe { &*p });
+        }
+    }
+
     /// Refresh the leaf text measure entry used by `compute_layout_with_measure`.
     pub fn sync_text_measure(&mut self, element: &Element) {
         let Some(node_id) = element.layout_node else {
@@ -3428,6 +3464,7 @@ impl LayoutTree {
 
         // Invariant: never layout/paint unhoisted `rui_portal` nodes (Solid keep-alive + body mount).
         let _ = hoist_portal_subtrees(root);
+        let _ = crate::utils::anchored_overlay::take_point_overlay_commit_dirty();
         // Full rebuild may recycle Taffy `NodeId`s; fingerprint keys would alias.
         self.collect_skip.invalidate();
         #[cfg(test)]
@@ -3541,6 +3578,7 @@ impl LayoutTree {
         if portal_dirty > 0 || self.root_node.is_none() {
             return self.build_and_layout(root, width, height, mouse_pos);
         }
+        self.dirty_point_overlay_commit(root);
         // `write_placed_ghost` / `<Show>` insert Elements with `layout_node = None`.
         // Attach only those subtrees — do not walk the whole gallery through `build_and_layout`.
         if Self::subtree_has_unbuilt_taffy_nodes(root) {
@@ -3679,6 +3717,13 @@ impl LayoutTree {
         // signal moved but paint stayed on the old offset, and `request_redraw` is a
         // no-op while `AppState` is mutably borrowed for render.
         crate::components::message_scroller::sync_message_scroller_follow_after_layout(root, self);
+        // Wheel / autoscroll chase offset after the vsync drag `tick`. Hidden
+        // clip shells must follow the live parent before this collect, or the
+        // ghost paints in the pre-scroll restrict box (突破父容器).
+        if crate::utils::drag::is_active() {
+            crate::utils::drag::session::resync_overlay_follow_after_layout(root);
+            crate::utils::drag::overlay::sync_overlay_ghost_insets(root);
+        }
 
         let t_collect_begin = Instant::now();
         #[cfg(feature = "devtools")]
@@ -4369,6 +4414,7 @@ impl LayoutTree {
             walk: None,
             cache_start: crate::layout::collect_cache::DlCursor::default(),
             cache_geom: crate::layout::collect_cache::GeomKey::default(),
+            layered: child_opens_page_stack_band(element),
         }];
         let mut root_extent = [0.0_f32, 0.0];
 
@@ -4411,6 +4457,7 @@ impl LayoutTree {
                         overlay_split.marked,
                         frame.scroll_acc,
                         frame.parent_dest_clip,
+                        frame.layered,
                     );
                     if let Ok(cl) = self.taffy.layout(frame.node) {
                         let paint_abs = [
@@ -4501,6 +4548,7 @@ impl LayoutTree {
                             overlay_split.marked,
                             frame.scroll_acc,
                             frame.parent_dest_clip,
+                            frame.layered,
                         );
                         collect_commit_extent(&mut stack, extent, &mut root_extent);
                         continue;
@@ -4543,6 +4591,7 @@ impl LayoutTree {
                                     overlay_split.marked,
                                     frame.scroll_acc,
                                     frame.parent_dest_clip,
+                                    frame.layered,
                                 );
                                 collect_commit_extent(&mut stack, extent, &mut root_extent);
                                 continue;
@@ -4591,6 +4640,8 @@ impl LayoutTree {
                     walk: None,
                     cache_start: crate::layout::collect_cache::DlCursor::default(),
                     cache_geom: crate::layout::collect_cache::GeomKey::default(),
+                    layered: frame.layered
+                        || child_opens_page_stack_band(&element.children[job.index]),
                 };
                 stack.push(frame);
                 stack.push(child_frame);
@@ -4635,6 +4686,7 @@ impl LayoutTree {
                     overlay_split.marked,
                     frame.scroll_acc,
                     frame.parent_dest_clip,
+                    frame.layered,
                 );
                 collect_commit_extent(&mut stack, extent, &mut root_extent);
             }
@@ -4776,6 +4828,14 @@ impl LayoutTree {
         let (abs_x, abs_y) = if crate::utils::drag::is_active() {
             if let Some(origin) =
                 crate::utils::drag::overlay::adjust_overlay_collect_origin(element, [lay_w, lay_h])
+            {
+                (origin[0], origin[1])
+            } else {
+                (abs_x, abs_y)
+            }
+        } else if crate::utils::anchored_overlay::is_floating_panel_dragging() {
+            if let Some(origin) =
+                crate::utils::anchored_overlay::adjust_point_overlay_collect_origin(element)
             {
                 (origin[0], origin[1])
             } else {
@@ -4937,15 +4997,15 @@ impl LayoutTree {
         let overflow_border = overflow_clip_layout_border(element, layout_border);
         let mut clip = parent_clip;
         let mut dest_clip = parent_dest_clip;
-        let clip_x = element.style.overflow.x != taffy::style::Overflow::Visible;
-        let clip_y = element.style.overflow.y != taffy::style::Overflow::Visible;
+        let (clip_x, clip_y) = crate::core::tree::overflow_clip_axes(element);
         let overflow_clips = clip_x || clip_y;
         if overflow_clips {
-            clip = intersect_overflow_axes(clip, overflow_border, element.style.overflow);
+            clip = intersect_overflow_axes(clip, overflow_border, clip_x, clip_y);
             dest_clip = intersect_overflow_axes(
                 dest_clip,
                 overflow_dest_aabb(overflow_border, render_rect, &transform),
-                element.style.overflow,
+                clip_x,
+                clip_y,
             );
         }
         if !element.style.clip_path.is_none() {
@@ -5017,6 +5077,31 @@ impl LayoutTree {
             )
         } else {
             crate::style::GpuClipPoly::NONE
+        };
+        // Hidden DragOverlay: portal + escape drops page overflow. Re-AND the
+        // restrict target's ancestor clip so rotation cannot paint in the header
+        // or the padding beside the dashed parent after the page scrolls.
+        let (clip, dest_clip, overflow_clip_poly) = if element
+            .attrs
+            .get(crate::utils::drag::ATTR_DRAG_OVERLAY_CLIP)
+            .is_some()
+        {
+            if let Some(anc) = crate::utils::drag::session::peek_restrict_ancestor_clip()
+                .filter(|b| b[2] > 0.5 && b[3] > 0.5)
+            {
+                (
+                    Some(intersect_rect(clip, anc)),
+                    Some(intersect_rect(dest_clip, anc)),
+                    crate::style::GpuClipPoly::and_layers(
+                        overflow_clip_poly,
+                        crate::style::GpuClipPoly::from_axis_rect(anc),
+                    ),
+                )
+            } else {
+                (clip, dest_clip, overflow_clip_poly)
+            }
+        } else {
+            (clip, dest_clip, overflow_clip_poly)
         };
         // Descendants: overflow + clip-path. Own chrome: clip-path only —
         // overflow must not scissor outset box-shadow (Dialog/Drawer/Sheet).
@@ -5397,11 +5482,7 @@ impl LayoutTree {
                         path_tex_drawn = true;
                     }
                 } else if let Some((tex_key, dw, dh)) =
-                    crate::primitives::svg::svg_raster_from_element_attrs(
-                        &element.attrs,
-                        vis_w,
-                        vis_h,
-                    )
+                    crate::primitives::svg_raster_from_element_attrs(&element.attrs, vis_w, vis_h)
                 {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
@@ -5424,7 +5505,7 @@ impl LayoutTree {
                     }
                 }
             } else if let Some((tex_key, dw, dh)) =
-                crate::primitives::svg::svg_raster_from_element_attrs(&element.attrs, vis_w, vis_h)
+                crate::primitives::svg_raster_from_element_attrs(&element.attrs, vis_w, vis_h)
             {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], paint_clip, tex_key, opacity)
@@ -5619,7 +5700,16 @@ impl LayoutTree {
         }
 
         let mut pending_caret_scroll: Option<(f32, Option<String>)> = None;
-        if let Some(text) = &element.text {
+        'text_emit: {
+            let Some(text) = &element.text else {
+                break 'text_emit;
+            };
+            // Fully transparent text is not ink. A later page-stack glyphon band
+            // that keeps those runs will skip `render()` on empty/unchanged and
+            // PartialLoad retains the last GPU mesh.
+            if opacity < 0.01 {
+                break 'text_emit;
+            }
             let mut text_style = element.text_style.as_ref().clone();
             if opacity < 1.0 - f32::EPSILON {
                 let mut c = text_style.color_resolved();
@@ -5680,11 +5770,16 @@ impl LayoutTree {
                 text_x0 - text_style.scroll_x.max(0.0) * text_scale
             };
             let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
+            #[cfg(feature = "svg")]
+            let is_morph_icon = element.attrs.contains_key(crate::utils::ATTR_MORPH_ICON);
+            #[cfg(not(feature = "svg"))]
+            let is_morph_icon = false;
             // Glyphon cannot rotate. Lucide + spin/rotate/transform-transition → cached
             // square texture + element transform (same path at 0° and 180°, so accordion
             // chevrons don't pop from Coverage→Linear mid-spin). lucide-animated always
             // uses the same TexturedDraw path (frame bake).
             let icon_needs_xform = is_animated_icon
+                || is_morph_icon
                 || (is_icon
                     && (crate::renderer::element_wants_sticky_xform(element)
                         || element.style.rotate_deg.abs() > 0.5
@@ -5718,6 +5813,29 @@ impl LayoutTree {
                             2.0,
                         )
                     {
+                        textured_draws.push(
+                            crate::renderer::TexturedDraw {
+                                rect: full,
+                                uv_offset: [0.0, 0.0],
+                                uv_scale: [1.0, 1.0],
+                                texture_key: tex_key,
+                                opacity,
+                                tint_rgb: [1.0, 1.0, 1.0],
+                                transform: icon_xf,
+                                clip_pos: [0.0, 0.0],
+                                clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                            }
+                            .with_overflow_clip(clip),
+                        );
+                    }
+                } else if is_morph_icon {
+                    #[cfg(feature = "svg")]
+                    if let Some((tex_key, _)) = crate::utils::morph_icon::ensure_morph_icon_texture(
+                        element,
+                        side,
+                        text_style.color_resolved(),
+                        2.0,
+                    ) {
                         textured_draws.push(
                             crate::renderer::TexturedDraw {
                                 rect: full,
@@ -6324,8 +6442,7 @@ impl LayoutTree {
                 (painted.clip, painted.clip_poly)
             };
         let dest_clip = if painted.filter_capture || painted.scale_layer.is_some() {
-            let clip_x = element.style.overflow.x != taffy::style::Overflow::Visible;
-            let clip_y = element.style.overflow.y != taffy::style::Overflow::Visible;
+            let (clip_x, clip_y) = crate::core::tree::overflow_clip_axes(element);
             if clip_x || clip_y {
                 intersect_overflow_axes(
                     None,
@@ -6334,7 +6451,8 @@ impl LayoutTree {
                         painted.render_rect,
                         &painted.transform,
                     ),
-                    element.style.overflow,
+                    clip_x,
+                    clip_y,
                 )
             } else {
                 None
@@ -7329,8 +7447,8 @@ fn filter_source_overflow_clip(
     lay_w: f32,
     lay_h: f32,
 ) -> (Option<[f32; 4]>, crate::style::GpuClipPoly) {
-    let clip_x = style.overflow.x != taffy::style::Overflow::Visible;
-    let clip_y = style.overflow.y != taffy::style::Overflow::Visible;
+    let (clip_x, clip_y) =
+        crate::core::tree::overflow_clip_axes_from(style.overflow.x, style.overflow.y, false);
     if !clip_x && !clip_y {
         return (None, crate::style::GpuClipPoly::NONE);
     }
@@ -7340,7 +7458,7 @@ fn filter_source_overflow_clip(
     } else {
         crate::style::GpuClipPoly::NONE
     };
-    (intersect_overflow_axes(None, box_r, style.overflow), poly)
+    (intersect_overflow_axes(None, box_r, clip_x, clip_y), poly)
 }
 
 /// Native `<input>`: clip at the padding box. The text leaf is the content box —
@@ -7455,16 +7573,15 @@ fn overflow_clip_layout_border(element: &Element, mut layout_border: [f32; 4]) -
     layout_border
 }
 
-/// Intersect `parent` with `layout` only on axes whose overflow is not `visible`.
+/// Intersect `parent` with `layout` only on axes that clip.
 /// `overflow-x: hidden; overflow-y: visible` (static `text-overflow`) must not
-/// scissor glyph ink to the line box.
+/// scissor glyph ink to the line box. Scrollports clip both axes.
 fn intersect_overflow_axes(
     parent: Option<[f32; 4]>,
     layout: [f32; 4],
-    overflow: taffy::geometry::Point<taffy::style::Overflow>,
+    clip_x: bool,
+    clip_y: bool,
 ) -> Option<[f32; 4]> {
-    let clip_x = overflow.x != taffy::style::Overflow::Visible;
-    let clip_y = overflow.y != taffy::style::Overflow::Visible;
     if !clip_x && !clip_y {
         return parent;
     }
@@ -7685,7 +7802,21 @@ fn push_input_chrome_instances(
         None
     };
 
-    if let Some((s, e)) = range_opt {
+    let mut sel_ranges: Vec<(usize, usize)> = Vec::new();
+    if let Some(r) = range_opt {
+        sel_ranges.push(r);
+    }
+    for &(sa, sb) in &caret.extra_selections {
+        let mut s = sa.min(sb).min(text.len());
+        let mut e = sa.max(sb).min(text.len());
+        s = text.floor_char_boundary(s);
+        e = text.floor_char_boundary(e);
+        if s < e {
+            sel_ranges.push((s, e));
+        }
+    }
+
+    for (s, e) in sel_ranges {
         let bg = caret.selection_bg;
         let color = [
             bg[0] as f32 / 255.0,
@@ -7811,7 +7942,14 @@ fn push_input_chrome_instances(
         }
     }
 
-    if let Some((sa, sb)) = caret.preedit_underline {
+    let mut preedit_uls = Vec::with_capacity(
+        usize::from(caret.preedit_underline.is_some()) + caret.extra_preedit_underlines.len(),
+    );
+    if let Some(r) = caret.preedit_underline {
+        preedit_uls.push(r);
+    }
+    preedit_uls.extend_from_slice(&caret.extra_preedit_underlines);
+    for (sa, sb) in preedit_uls {
         let mut s = sa.min(sb).min(text.len());
         let mut e = sa.max(sb).min(text.len());
         s = text.floor_char_boundary(s);
@@ -7887,78 +8025,83 @@ fn push_input_chrome_instances(
         }
     }
 
-    if range_opt.is_some() && !caret.drop_caret {
-        return;
-    }
-
     if !caret.drop_caret && !crate::renderer::caret_blink_visible() {
         return;
     }
-    let mut ix = caret.caret_byte_index.min(text.len());
-    ix = text.floor_char_boundary(ix);
-    let (line_i, prefix_w, line_w) = if crate::text::needs_logical_prewrap(text) {
-        let source = if soft_wrap {
-            style.wrap_mode.to_line_break_source()
-        } else {
-            crate::text::LineBreakSource::None
-        };
-        let model = crate::text::build_visual_lines(
-            text,
-            style.size_resolved(),
-            style.weight_resolved(),
-            line_height.max(1.0),
-            box_w.max(1.0),
-            source,
-        );
-        let i = crate::text::caret_visual_line_index(&model.ranges, ix);
-        (i, model.caret_x_on_line(ix), model.line_visual_width(i))
-    } else {
-        let (line_i, local) = line_and_local(ix);
-        let (_line_start, line_body) = line_body_at(line_i);
-        (
-            line_i,
-            prefix_width_logical(
-                line_body,
-                local,
-                style.size_resolved(),
-                style.weight_resolved(),
-                line_height,
-            ),
-            prefix_width_logical(
-                line_body,
-                line_body.len(),
-                style.size_resolved(),
-                style.weight_resolved(),
-                line_height,
-            ),
-        )
-    };
-    let align_dx = style.align_inline_offset(line_w, box_w);
-    let caret_w = 2.0_f32;
-    let mut caret_x = x + align_dx + prefix_w;
-    if soft_wrap {
-        // Soft-wrap: do not clamp to `box_w - caret_w` — that parked the hairline on the
-        // last glyph when a visual line filled the leaf (gallery soft-wrap caret bug).
-        caret_x = caret_x.max(x);
-    } else if !pan {
-        caret_x = caret_x.min(x + box_w - caret_w).max(x);
+    let mut caret_ixs: Vec<usize> = Vec::new();
+    // Multi-cursor column select keeps I-beams on the origin column even while
+    // each line has a selection; single-caret drag-select still hides the beam.
+    if range_opt.is_none() || caret.drop_caret || !caret.extra_carets.is_empty() {
+        caret_ixs.push(caret.caret_byte_index);
     }
-    let c = caret.caret_color.unwrap_or_else(|| style.color_resolved());
-    let color = [
-        c[0] as f32 / 255.0,
-        c[1] as f32 / 255.0,
-        c[2] as f32 / 255.0,
-        (c[3] as f32 / 255.0) * opacity,
-    ];
-    push_chrome_rect(
-        caret_out,
-        clip,
-        caret_x,
-        caret_y(line_i.min(line_count.saturating_sub(1))),
-        caret_w,
-        caret_h,
-        color,
-    );
+    caret_ixs.extend(caret.extra_carets.iter().copied());
+    for raw_ix in caret_ixs {
+        let mut ix = raw_ix.min(text.len());
+        ix = text.floor_char_boundary(ix);
+        let (line_i, prefix_w, line_w) = if crate::text::needs_logical_prewrap(text) {
+            let source = if soft_wrap {
+                style.wrap_mode.to_line_break_source()
+            } else {
+                crate::text::LineBreakSource::None
+            };
+            let model = crate::text::build_visual_lines(
+                text,
+                style.size_resolved(),
+                style.weight_resolved(),
+                line_height.max(1.0),
+                box_w.max(1.0),
+                source,
+            );
+            let i = crate::text::caret_visual_line_index(&model.ranges, ix);
+            (i, model.caret_x_on_line(ix), model.line_visual_width(i))
+        } else {
+            let (line_i, local) = line_and_local(ix);
+            let (_line_start, line_body) = line_body_at(line_i);
+            (
+                line_i,
+                prefix_width_logical(
+                    line_body,
+                    local,
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                ),
+                prefix_width_logical(
+                    line_body,
+                    line_body.len(),
+                    style.size_resolved(),
+                    style.weight_resolved(),
+                    line_height,
+                ),
+            )
+        };
+        let align_dx = style.align_inline_offset(line_w, box_w);
+        let caret_w = 2.0_f32;
+        let mut caret_x = x + align_dx + prefix_w;
+        if soft_wrap {
+            // Soft-wrap: do not clamp to `box_w - caret_w` — that parked the hairline on the
+            // last glyph when a visual line filled the leaf (gallery soft-wrap caret bug).
+            caret_x = caret_x.max(x);
+        } else if !pan {
+            caret_x = caret_x.min(x + box_w - caret_w).max(x);
+        }
+        let c = caret.caret_color.unwrap_or_else(|| style.color_resolved());
+        let color = [
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+            (c[3] as f32 / 255.0) * opacity,
+        ];
+        push_chrome_rect(
+            caret_out,
+            clip,
+            caret_x,
+            caret_y(line_i.min(line_count.saturating_sub(1))),
+            caret_w,
+            caret_h,
+            color,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -8047,6 +8190,9 @@ mod prepared_text_attach_tests {
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8103,6 +8249,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 255],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: Some([255, 255, 255, 255]),
@@ -8149,6 +8298,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0; 4],
             overwrite_highlight: None,
             preedit_underline: Some((6, 9)),
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8183,6 +8335,50 @@ mod prepared_text_attach_tests {
         assert!(
             !chrome.is_empty(),
             "caret hairline must still draw while composing"
+        );
+    }
+
+    #[test]
+    fn extra_carets_emit_additional_hairlines() {
+        let text = "hello";
+        let lh = 21.0_f32;
+        let mut style = TextStyle::default();
+        style.size = Some(14.0);
+        style.weight = Some(400);
+        style.line_height_px = Some(lh);
+        style.color = Some([0, 0, 0, 255]);
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: 1,
+            selection: None,
+            extra_carets: vec![3, 5],
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
+            selection_bg: [0; 4],
+            overwrite_highlight: None,
+            preedit_underline: None,
+            drop_caret: true,
+            caret_color: None,
+            selection_foreground: None,
+        });
+        let mut selection = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            10.0,
+            20.0,
+            280.0,
+            lh,
+            None,
+            1.0,
+        );
+        assert_eq!(
+            chrome.len(),
+            3,
+            "primary + two extra carets, got {}",
+            chrome.len()
         );
     }
 
@@ -8222,6 +8418,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8319,6 +8518,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8375,6 +8577,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8438,6 +8643,9 @@ mod prepared_text_attach_tests {
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8473,6 +8681,9 @@ mod prepared_text_attach_tests {
             selection_bg: [80, 120, 200, 90],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8523,6 +8734,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8588,6 +8802,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8798,6 +9015,9 @@ mod prepared_text_attach_tests {
             selection_bg: [0, 0, 0, 0],
             overwrite_highlight: None,
             preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,

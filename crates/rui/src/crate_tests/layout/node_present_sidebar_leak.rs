@@ -5,15 +5,16 @@
 //! an inset shell so Input's dirty AABB never swallows the rail captions.
 
 use crate::app::damage::{
-    force_full_redraw_after_chrome, intersect_rects, paint_dirty_nested_in_larger_node,
-    paint_element_key, push_frame_paint_damage, push_frame_paint_element, take_frame_paint_nodes,
-    PaintDirty, PaintDirtyKind,
+    expand_paint_dirties_for_translated_slots, force_full_redraw_after_chrome, intersect_rects,
+    node_present_slot_moved, paint_dirty_has_keyed_slot, paint_dirty_matches_present_slot,
+    paint_dirty_nested_in_larger_node, paint_element_key, push_frame_paint_damage,
+    push_frame_paint_element, take_frame_paint_nodes, union_rects, PaintDirty, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
-    instance_paint_bounds, node_paint_visual_bounds, node_present_capture_text_indices,
-    node_present_dest_reset, node_present_dest_reset_scaled, node_present_foreign_glyph_indices,
-    node_present_glyphs_for_dirty, node_present_needs_glyphs, node_present_scissor_logical,
-    text_paint_bounds,
+    instance_paint_bounds, last_present_visual_slots, node_paint_visual_bounds,
+    node_present_capture_text_indices, node_present_dest_reset, node_present_dest_reset_scaled,
+    node_present_foreign_glyph_indices, node_present_glyphs_for_dirty, node_present_needs_glyphs,
+    node_present_scissor_logical, text_paint_bounds,
 };
 use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
@@ -32,7 +33,10 @@ use crate::core::tree::{
 use crate::layout::layout_tree::RenderResult;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::renderer::font_loader;
-use crate::style::{apply_class_list, sync_class_variants_subtree, sync_focus_ring_subtree};
+use crate::style::{
+    apply_class_list, sync_class_variants_subtree, sync_focus_ring_subtree,
+    tick_active_css_transitions_subtree,
+};
 use crate::text::install_shared_font_system;
 
 const NAV_LAYOUT: &str = "布局";
@@ -1102,5 +1106,425 @@ fn form_field_focus_ring_must_not_dirty_or_wipe_the_label() {
             label_bottom,
             fmt_rect(label_box)
         );
+    }
+}
+
+fn aabb_covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
+    outer[0] <= inner[0] + 0.5
+        && outer[1] <= inner[1] + 0.5
+        && outer[0] + outer[2] >= inner[0] + inner[2] - 0.5
+        && outer[1] + outer[3] >= inner[1] + inner[3] - 0.5
+}
+
+fn outset_shadow_blob(inst: &crate::renderer::InstanceInput) -> Option<[f32; 4]> {
+    if inst.shadow_inset != 0.0 || inst.shadow_color[3] <= 0.05 || inst.shadow_blur <= 0.0 {
+        return None;
+    }
+    let b = instance_paint_bounds(inst);
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    Some(b)
+}
+
+/// Gallery inset card: overflow:hidden + Md halo. A live descendant (spin) must not
+/// PartialLoad src-over that halo — dest-reset has to wipe whatever the scissor paints.
+#[test]
+fn inset_outset_shadow_must_not_stack_on_live_child_ticks() {
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+    let _ = take_frame_paint_nodes();
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let inset = find_slot(&root, "sidebar-inset").expect("sidebar-inset");
+    let inset_key = paint_element_key(inset);
+    let inset_box = inset.layout_bounds;
+    let inset_paint = first
+        .node_paints
+        .iter()
+        .find(|p| p.key == inset_key)
+        .expect("inset NodePaint");
+    let shadow = first.instances[inset_paint.instance.0..inset_paint.instance.1]
+        .iter()
+        .find_map(outset_shadow_blob)
+        .expect("inset outset shadow instance");
+    assert!(
+        shadow[0] < inset_box[0] - 4.0 && shadow[1] < inset_box[1] - 4.0,
+        "precondition: Md halo extends past the inset box\n shadow={} inset={}",
+        fmt_rect(shadow),
+        fmt_rect(inset_box)
+    );
+
+    let prev = node_paint_visual_bounds(
+        inset_paint,
+        &first.instances,
+        &[],
+        &first.text_nodes,
+        &first.input_chrome_instances,
+    );
+    let (wipe, _) = node_present_dest_reset_scaled(
+        inset_key,
+        inset_box,
+        &first.node_paints,
+        &first.instances,
+        &[],
+        1.0,
+        Some(prev),
+    )
+    .expect("inset dest-reset");
+    let scissor = node_present_scissor_logical(
+        PaintDirtyKind::Node,
+        inset_key,
+        inset_box,
+        &[(inset_key, prev)],
+        &first.node_paints,
+        NODE_SCISSOR_PAD,
+    );
+    let painted = intersect_rects(shadow, scissor).expect("inset halo sits in node scissor");
+    assert!(
+        aabb_covers(wipe, painted),
+        "dirtying the inset must dest-reset the halo the scissor will paint\n wipe={} painted={} scissor={} shadow={} prev={} overflow={:?} bounds={}",
+        fmt_rect(wipe),
+        fmt_rect(painted),
+        fmt_rect(scissor),
+        fmt_rect(shadow),
+        fmt_rect(prev),
+        inset_paint.overflow_clip.map(fmt_rect),
+        fmt_rect(inset_paint.bounds)
+    );
+
+    let mut impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "",
+        false,
+        1280.0,
+        800.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirties = take_frame_paint_nodes();
+    let collected = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+    let inset_paint = collected
+        .node_paints
+        .iter()
+        .find(|p| p.key == inset_key)
+        .expect("inset NodePaint after tick");
+    let shadow = collected.instances[inset_paint.instance.0..inset_paint.instance.1]
+        .iter()
+        .find_map(outset_shadow_blob)
+        .expect("inset outset shadow after tick");
+
+    let mut stacked = Vec::new();
+    for d in dirties.iter().filter(|d| d.kind == PaintDirtyKind::Node) {
+        if paint_dirty_nested_in_larger_node(d, &dirties) {
+            continue;
+        }
+        let has_keyed = paint_dirty_has_keyed_slot(
+            d.key,
+            d.bounds,
+            collected
+                .node_paints
+                .iter()
+                .filter(|p| !p.overlay)
+                .map(|p| (p.key, p.bounds)),
+        );
+        let draws_halo = collected.node_paints.iter().any(|p| {
+            !p.overlay
+                && paint_dirty_matches_present_slot(d.key, d.bounds, p.key, p.bounds, has_keyed)
+                && p.instance.0 <= inset_paint.instance.0
+                && p.instance.1 >= inset_paint.instance.0 + 1
+                && collected.instances[p.instance.0..p.instance.1]
+                    .iter()
+                    .any(|i| outset_shadow_blob(i).is_some())
+        });
+        if !draws_halo {
+            continue;
+        }
+        let prev = collected
+            .node_paints
+            .iter()
+            .find(|p| p.key == d.key)
+            .map(|p| {
+                node_paint_visual_bounds(
+                    p,
+                    &collected.instances,
+                    &[],
+                    &collected.text_nodes,
+                    &collected.input_chrome_instances,
+                )
+            });
+        let slots: Vec<(u64, [f32; 4])> = prev.map(|b| (d.key, b)).into_iter().collect();
+        let scissor = node_present_scissor_logical(
+            d.kind,
+            d.key,
+            d.bounds,
+            &slots,
+            &collected.node_paints,
+            NODE_SCISSOR_PAD,
+        );
+        let Some(painted) = intersect_rects(shadow, scissor) else {
+            continue;
+        };
+        let wipe = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &collected.node_paints,
+            &collected.instances,
+            &[],
+            1.0,
+            prev,
+        )
+        .map(|(r, _)| r);
+        if wipe.is_none_or(|w| !aabb_covers(w, painted)) {
+            stacked.push(format!(
+                "dirty {} {} scissor={} wipe={:?} painted={} shadow={}",
+                d.key,
+                fmt_rect(d.bounds),
+                fmt_rect(scissor),
+                wipe.map(fmt_rect),
+                fmt_rect(painted),
+                fmt_rect(shadow)
+            ));
+        }
+    }
+    assert!(
+        stacked.is_empty(),
+        "live child PartialLoad would src-over the inset halo without dest-reset:\n{}",
+        stacked.join("\n")
+    );
+}
+
+fn layout_present_slots(result: &RenderResult) -> Vec<(u64, [f32; 4])> {
+    result
+        .node_paints
+        .iter()
+        .filter(|p| !p.overlay)
+        .map(|p| (p.key, p.bounds))
+        .collect()
+}
+
+fn visual_present_slots(result: &RenderResult) -> Vec<(u64, [f32; 4])> {
+    last_present_visual_slots(
+        &result.node_paints,
+        &result.instances,
+        &[],
+        &result.text_nodes,
+        &result.input_chrome_instances,
+    )
+}
+
+fn slot_of(slots: &[(u64, [f32; 4])], key: u64) -> Option<[f32; 4]> {
+    slots.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)
+}
+
+/// `encode_node_present` unions dest-reset into the GPU scissor after overflow clip.
+fn encode_node_scissor(
+    dirty: &PaintDirty,
+    prev_slots: &[(u64, [f32; 4])],
+    result: &RenderResult,
+    prev_for_key: Option<[f32; 4]>,
+) -> ([f32; 4], Option<[f32; 4]>) {
+    let mut scissor = node_present_scissor_logical(
+        dirty.kind,
+        dirty.key,
+        dirty.bounds,
+        prev_slots,
+        &result.node_paints,
+        NODE_SCISSOR_PAD,
+    );
+    let wipe = node_present_dest_reset_scaled(
+        dirty.key,
+        dirty.bounds,
+        &result.node_paints,
+        &result.instances,
+        &[],
+        1.0,
+        prev_for_key,
+    )
+    .map(|(r, _)| r);
+    if let Some(rect) = wipe {
+        scissor = union_rects(scissor, rect);
+    }
+    (scissor, wipe)
+}
+
+fn inset_halo_stack_reasons(
+    dirties: &[PaintDirty],
+    result: &RenderResult,
+    prev_slots: &[(u64, [f32; 4])],
+    inset_key: u64,
+    shadow: [f32; 4],
+) -> Vec<String> {
+    let inset_paint = result
+        .node_paints
+        .iter()
+        .find(|p| p.key == inset_key)
+        .expect("inset NodePaint");
+    let mut stacked = Vec::new();
+    for d in dirties.iter().filter(|d| d.kind == PaintDirtyKind::Node) {
+        let skip_wipe = paint_dirty_nested_in_larger_node(d, dirties);
+        let has_keyed = paint_dirty_has_keyed_slot(
+            d.key,
+            d.bounds,
+            result
+                .node_paints
+                .iter()
+                .filter(|p| !p.overlay)
+                .map(|p| (p.key, p.bounds)),
+        );
+        let draws_halo = result.node_paints.iter().any(|p| {
+            !p.overlay
+                && paint_dirty_matches_present_slot(d.key, d.bounds, p.key, p.bounds, has_keyed)
+                && p.instance.0 <= inset_paint.instance.0
+                && p.instance.1 >= inset_paint.instance.0 + 1
+                && result.instances[p.instance.0..p.instance.1]
+                    .iter()
+                    .any(|i| outset_shadow_blob(i).is_some())
+        });
+        if !draws_halo {
+            continue;
+        }
+        let prev = slot_of(prev_slots, d.key);
+        let (scissor, wipe) = if skip_wipe {
+            (
+                node_present_scissor_logical(
+                    d.kind,
+                    d.key,
+                    d.bounds,
+                    prev_slots,
+                    &result.node_paints,
+                    NODE_SCISSOR_PAD,
+                ),
+                None,
+            )
+        } else {
+            encode_node_scissor(d, prev_slots, result, prev)
+        };
+        let Some(painted) = intersect_rects(shadow, scissor) else {
+            continue;
+        };
+        if wipe.is_none_or(|w| !aabb_covers(w, painted)) {
+            stacked.push(format!(
+                "dirty {} {} skip_wipe={skip_wipe} scissor={} wipe={:?} painted={} shadow={}",
+                d.key,
+                fmt_rect(d.bounds),
+                fmt_rect(scissor),
+                wipe.map(fmt_rect),
+                fmt_rect(painted),
+                fmt_rect(shadow)
+            ));
+        }
+    }
+    stacked
+}
+
+/// Gallery idle: CSS ticks a descendant, but `last_present_node_bounds` is visual
+/// (inset Md halo). Expand used to compare layout `p.bounds` to that visual prev,
+/// treat the stable card as translated, and PartialLoad src-over the gutter halo.
+#[test]
+fn idle_css_tick_must_not_treat_inset_halo_as_translation() {
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+    let _ = take_frame_paint_nodes();
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let inset = find_slot(&root, "sidebar-inset").expect("sidebar-inset");
+    let inset_key = paint_element_key(inset);
+    let inset_layout = inset.layout_bounds;
+    let prev_visual = visual_present_slots(&first);
+    let prev_inset = slot_of(&prev_visual, inset_key).expect("inset last-present");
+    assert!(
+        node_present_slot_moved(prev_inset, inset_layout),
+        "precondition: Md halo makes last-present visual ≠ layout box\n visual={} layout={}",
+        fmt_rect(prev_inset),
+        fmt_rect(inset_layout)
+    );
+
+    let mut prev_visual = prev_visual;
+    let mut impact = LayoutStatus::Clean;
+    for tick in 0..5 {
+        tick_active_css_transitions_subtree(
+            &mut root,
+            [-1.0, -1.0],
+            "",
+            false,
+            1280.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        let mut dirties = take_frame_paint_nodes();
+        let collected =
+            tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+        let now_visual = visual_present_slots(&collected);
+        let now_layout = layout_present_slots(&collected);
+        let now_inset_visual = slot_of(&now_visual, inset_key).expect("inset visual");
+        let prev_inset_visual = slot_of(&prev_visual, inset_key).unwrap_or(prev_inset);
+        assert!(
+            !node_present_slot_moved(prev_inset_visual, now_inset_visual),
+            "tick {tick}: inset visual jittered without a layout move\n prev={} now={}",
+            fmt_rect(prev_inset_visual),
+            fmt_rect(now_inset_visual)
+        );
+
+        if tick == 0 {
+            let mut mixed = Vec::new();
+            expand_paint_dirties_for_translated_slots(&mut mixed, &now_layout, &prev_visual);
+            assert!(
+                mixed.iter().any(|d| d.key == inset_key),
+                "canary: layout-now vs visual-prev must still look like a move (last-present space)"
+            );
+        }
+
+        // Same comparison `render_inner` must use: visual now vs visual last-present.
+        expand_paint_dirties_for_translated_slots(&mut dirties, &now_visual, &prev_visual);
+        assert!(
+            dirties
+                .iter()
+                .all(|d| d.kind != PaintDirtyKind::Node || d.key != inset_key),
+            "tick {tick}: idle CSS must not expand-dirty the inset card\n dirties={:?}\n layout={} visual_prev={} visual_now={}",
+            dirties
+                .iter()
+                .map(|d| format!("{} {}", d.key, fmt_rect(d.bounds)))
+                .collect::<Vec<_>>(),
+            fmt_rect(
+                slot_of(&now_layout, inset_key).unwrap_or([0.0; 4])
+            ),
+            fmt_rect(slot_of(&prev_visual, inset_key).unwrap_or([0.0; 4])),
+            fmt_rect(now_inset_visual)
+        );
+
+        let inset_paint = collected
+            .node_paints
+            .iter()
+            .find(|p| p.key == inset_key)
+            .expect("inset NodePaint");
+        let shadow = collected.instances[inset_paint.instance.0..inset_paint.instance.1]
+            .iter()
+            .find_map(outset_shadow_blob)
+            .expect("inset outset shadow");
+        let stacked = inset_halo_stack_reasons(
+            &dirties,
+            &collected,
+            &prev_visual,
+            inset_key,
+            shadow,
+        );
+        assert!(
+            stacked.is_empty(),
+            "tick {tick}: idle PartialLoad would src-over the inset halo:\n{}",
+            stacked.join("\n")
+        );
+        prev_visual = now_visual;
     }
 }

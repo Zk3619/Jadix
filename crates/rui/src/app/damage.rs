@@ -199,6 +199,25 @@ pub fn push_frame_overlay_damage(key: u64, bounds: [f32; 4]) {
     push_paint_dirty(key, bounds, PaintDirtyKind::Overlay);
 }
 
+/// Dest-reset the previous overlay box, then dirty the live follow origin.
+/// CursorMoved must queue this before RedrawRequested `take_frame_paint_nodes`.
+pub fn queue_overlay_follow_tick_damage(
+    key: u64,
+    size: [f32; 2],
+    prev: Option<[f32; 2]>,
+    visual: [f32; 2],
+) {
+    if key == 0 || size[0] < 0.5 || size[1] < 0.5 {
+        return;
+    }
+    if let Some(prev) = prev {
+        if prev != visual {
+            push_frame_overlay_damage(key, [prev[0], prev[1], size[0], size[1]]);
+        }
+    }
+    push_frame_overlay_damage(key, [visual[0], visual[1], size[0], size[1]]);
+}
+
 /// Overlay closed/shrunk: clear this box, restore intersecting page nodes.
 pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
     push_paint_dirty(
@@ -1363,6 +1382,12 @@ pub fn clipped_island_structure_damage(
 /// Name every page slot that translated so node-present can dest-reset `prev∪now`
 /// instead of window-FullClearing sibling captions (Tabs height change → 8b).
 ///
+/// `current_slots` / `previous_slots` must be the same space: visual slots from
+/// [`crate::app::draw_cull::last_present_visual_slots`], not layout `NodePaint.bounds`.
+/// Mixing layout-now with visual-prev treats a stable outset shadow as a translate.
+/// Visual slots skip nested foreign descendant ink so hover:scale Bake on a child
+/// cannot dest-reset an overflow:visible parent.
+///
 /// Skip on a scroll-layer Clear — every slot moves, and expanding here would abort
 /// strip blit / pin holes.
 pub fn expand_paint_dirties_for_translated_slots(
@@ -1437,6 +1462,21 @@ pub fn unnamed_translated_page_slots(
 #[inline]
 pub fn node_present_moved_forces_full_clear(dirties_moved: bool, scroll_layer_clear: bool) -> bool {
     dirties_moved && !scroll_layer_clear
+}
+
+/// True when a viewport that already existed last frame changed its offset.
+///
+/// Portal join (bubble `+N`) hashes a newly spawned overlay ScrollArea into the
+/// scroll fingerprint. That is not page motion — treating it as scroll FullClears
+/// the gallery. Conversely, skipping the scroll layer because the portal joined
+/// leaves every translated page slot to dest-reset `prev∪now` (a tall strip of
+/// content below the chip) and hitch.
+pub fn existing_scroll_offset_changed(
+    prev: &HashMap<String, [u32; 2]>,
+    cur: &HashMap<String, [u32; 2]>,
+) -> bool {
+    cur.iter()
+        .any(|(id, off)| prev.get(id).is_some_and(|p| p != off))
 }
 
 /// `glyphon_fit` after a live-resize / fast-measure frame reflows **page** Y.
@@ -3419,6 +3459,57 @@ mod tests {
     }
 
     #[test]
+    fn portal_join_must_not_suppress_existing_page_scroll() {
+        // Bubble +N hashes a new overlay ScrollArea into the fingerprint. That spawn
+        // is not page motion. A page viewport that actually moved still owns the
+        // layer Clear — otherwise dest-reset of prev∪now punches content below.
+        let mut prev = HashMap::new();
+        prev.insert("main".into(), [0u32, 100u32]);
+        let mut cur_spawn = prev.clone();
+        cur_spawn.insert("overlay".into(), [0, 0]);
+        assert!(
+            !existing_scroll_offset_changed(&prev, &cur_spawn),
+            "overlay ScrollArea spawn is not page scroll"
+        );
+        let mut cur_scrolled = HashMap::new();
+        cur_scrolled.insert("main".into(), [0, 140]);
+        cur_scrolled.insert("overlay".into(), [0, 0]);
+        assert!(
+            existing_scroll_offset_changed(&prev, &cur_scrolled),
+            "+N during scroll must still see the page viewport move"
+        );
+        let prev_slots = [(1u64, [10.0, 200.0, 300.0, 400.0])];
+        let now_slots = [(1u64, [10.0, 120.0, 300.0, 400.0])];
+        let overlay_only = [PaintDirty {
+            key: 99,
+            bounds: [40.0, 80.0, 48.0, 28.0],
+            kind: PaintDirtyKind::Overlay,
+        }];
+        let unnamed = unnamed_translated_page_slots(&now_slots, &prev_slots, &overlay_only);
+        assert!(
+            unnamed,
+            "overlay dirties do not name the translated page card"
+        );
+        let page_scrolled = existing_scroll_offset_changed(&prev, &cur_scrolled);
+        assert!(
+            !node_present_moved_forces_full_clear(unnamed, page_scrolled),
+            "page scroll layer owns the translation; +N must not window-FullClear"
+        );
+        assert!(
+            node_present_moved_forces_full_clear(unnamed, false),
+            "without a scroll layer the unnamed card would FullClear — that is the flicker"
+        );
+        let mut dirties = Vec::new();
+        expand_paint_dirties_for_translated_slots(&mut dirties, &now_slots, &prev_slots);
+        assert_eq!(dirties.len(), 1);
+        assert!(
+            (dirties[0].bounds[3] - 480.0).abs() < 0.5,
+            "dest-reset prev∪now of a scrolled 400px card is a 480px strip over content below\n bounds={:?}",
+            dirties[0].bounds
+        );
+    }
+
+    #[test]
     fn scroll_strip_blit_viewport_axis_aligned_rejects_rotate() {
         let mut el = Element::new();
         el.layout_bounds = [0.0, 0.0, 200.0, 100.0];
@@ -3560,8 +3651,8 @@ mod tests {
                 let dy = next - scroll;
                 if dy.abs() >= 0.5 {
                     let plan = plan_scroll_strip_blit(vp, [0.0, dy]).expect("plan");
-                    let copy = scroll_strip_copy_physical(&plan, scale, 800, 1200)
-                        .expect("physical copy");
+                    let copy =
+                        scroll_strip_copy_physical(&plan, scale, 800, 1200).expect("physical copy");
                     let blit = copy.src_y as i32 - copy.dst_y as i32;
                     let glyph = glyphon_quad_y(layout_y, scroll, scale)
                         - glyphon_quad_y(layout_y, next, scale);
