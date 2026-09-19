@@ -21,7 +21,11 @@
 //!   `force_full_redraw` — that aborts strip blit. Pin holes dest-reset those
 //!   widgets in the copied overlap. Slot motion **without** a scroll layer
 //!   (maximize / `glyphon_fit`) still FullClears.
-//! - Page structure / page layout stay FullClear.
+//! - Page route / maximize / miss → **Window** FullClear (PresentTier::Window).
+//! - Nested island Structure / portal / scroll viewport → **Region** Clear
+//!   (PresentTier::Region) — not window, not single-node dest-reset.
+//! - Box-stable ink (bind_text, caret, spin) → **Node** dest-reset
+//!   (PresentTier::Node).
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -32,11 +36,27 @@ use std::sync::OnceLock;
 
 use crate::core::tree::{Element, LayoutStatus};
 
+/// R5 present tiers (Wave 46+): Window / Region / Node.
+///
+/// Layout/Structure no longer mean "always window FullClear". Nested islands are
+/// Region; only page-route geometry, maximize, or dest-reset miss escalate to Window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentTier {
+    /// Clear the window (or full inset) and redraw.
+    Window,
+    /// Scissor-Clear an island / overlay / viewport clip; redraw inside the hole.
+    Region,
+    /// Dest-reset one node's prev∪now; clean siblings may fingerprint-skip.
+    Node,
+}
+
 /// How a paint-dirty item is submitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintDirtyKind {
     /// This node's own primitives (hover chrome, bind_text, …).
     Node,
+    /// Nested Structure island / list clip / overlap group: region Clear + underlay.
+    Region,
     /// Hoisted overlay primitives only — never page slots.
     Overlay,
     /// Erase leftover overlay pixels, then redraw intersecting **page** nodes.
@@ -92,6 +112,12 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
 /// scissor in document space while ink is in visual space — dest-reset misses,
 /// PartialLoad stacks the previous offset (Marker labels after scroll).
 pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
+    // Shown/entering at opacity≈0 has no dest-ink. Dest-reset of the empty
+    // fill+shadow AABB punches underlay (Latest pill over wrapping thread).
+    // Hide (`data-active` not `true`) still dest-resets the last faded box.
+    if skip_transparent_shown_dest_reset(el) {
+        return;
+    }
     let b = clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc));
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
@@ -234,16 +260,37 @@ pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
     );
 }
 
-/// Restore page in the occupancy hole, then page nodes, then overlay chrome.
+/// Nested Structure island / list clip: region Clear (Wave 46/49), not node dest-reset.
+pub fn push_frame_region_paint(key: u64, bounds: [f32; 4]) {
+    push_paint_dirty(key, bounds, PaintDirtyKind::Region);
+}
+
+/// Restore page in the occupancy hole, then region clears, then page nodes, then overlay.
+///
+/// Within `Node`, larger boxes first. Nested Input inside InputAdornment skips its own
+/// dest-reset when the shell is also dirty; if the Input present ran *before* the shell
+/// wipe, caret / typed glyphs / ⌘K were cleared and never redrawn (click-focus flicker,
+/// keystrokes only flash the placeholder).
 pub fn sort_paint_dirty_nodes(nodes: &mut [PaintDirty]) {
-    nodes.sort_by_key(|d| match d.kind {
-        PaintDirtyKind::OverlayRestore => 0u8,
-        PaintDirtyKind::Node => 1,
-        PaintDirtyKind::Overlay => 2,
+    nodes.sort_by(|a, b| {
+        let rank = |d: &PaintDirty| match d.kind {
+            PaintDirtyKind::OverlayRestore => 0u8,
+            PaintDirtyKind::Region => 1,
+            PaintDirtyKind::Node => 2,
+            PaintDirtyKind::Overlay => 3,
+        };
+        rank(a).cmp(&rank(b)).then_with(|| {
+            if a.kind != PaintDirtyKind::Node || b.kind != PaintDirtyKind::Node {
+                return std::cmp::Ordering::Equal;
+            }
+            let aa = a.bounds[2] * a.bounds[3];
+            let ba = b.bounds[2] * b.bounds[3];
+            ba.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
+        })
     });
 }
 
-/// Take this frame's dirty nodes (order: restore, page, overlay).
+/// Take this frame's dirty nodes (order: restore, region, large→small page nodes, overlay).
 pub fn take_frame_paint_nodes() -> Vec<PaintDirty> {
     FRAME_PAINT_NODES.with(|slot| {
         let mut nodes = slot.borrow_mut().split_off(0);
@@ -806,6 +853,7 @@ pub fn overlay_encode_occupancy(
             Some(d) if overlay_same_footprint(Some(d), Some(layout), overlay_stamp_slack()) => {
                 union_rects(layout, d)
             }
+            Some(d) if overlay_dirty_is_contained_keyframe(d, layout) => d,
             _ => layout,
         };
         if stamps.len() <= 1 {
@@ -901,6 +949,12 @@ pub fn overlay_mounted_replace_holes(
             if let Some(d) = dirty {
                 if trust_dirty(hole, d) || trust_dirty(p, d) || trust_dirty(c, d) {
                     hole = union_rects(hole, d);
+                } else if overlay_dirty_is_contained_keyframe(d, hole) {
+                    // Dialog zoom card lives inside a fullscreen centering stage.
+                    // Dest-reset of the empty host punches the sibling scrim;
+                    // overlay_band_should_encode then skips the underlay because
+                    // the dirty key is the panel stamp.
+                    hole = d;
                 }
             }
             vec![hole]
@@ -998,6 +1052,20 @@ pub fn overlay_restore_is_closed_portal(
 #[inline]
 pub fn overlay_suffix_submitted(physical_scissor: Option<(u32, u32, u32, u32)>) -> bool {
     physical_scissor.is_some()
+}
+
+/// Shown (`data-active=true`) with no current dest-ink.
+fn skip_transparent_shown_dest_reset(el: &Element) -> bool {
+    el.attrs.get("data-active").map(String::as_str) == Some("true") && el.style.opacity < 0.01
+}
+
+/// CSS dirty of a descendant (Dialog `{id}__modal_zoom` card) inside a much larger
+/// portal host (fullscreen centering stage). Not the same footprint — dest-reset of
+/// the host punches the sibling scrim.
+pub(crate) fn overlay_dirty_is_contained_keyframe(dirty: [f32; 4], stamp: [f32; 4]) -> bool {
+    let slack = overlay_stamp_slack();
+    !overlay_box_extends_beyond(dirty, stamp, slack)
+        && overlay_box_extends_beyond(stamp, dirty, slack)
 }
 
 /// True when `outer` sticks out of `inner` by more than `slack` px (`[x,y,w,h]`).
@@ -1144,12 +1212,12 @@ pub fn paint_dirty_skips_node_dest_reset(
     !layered && paint_dirty_nested_in_larger_node(dirty, nodes)
 }
 
-/// Node dirty whose center sits in an OverlayRestore hole.
+/// Node dirty whose center sits in an OverlayRestore / Region hole.
 ///
-/// Cover overlays (AvatarGroup +N / Bubble +N) punch overlapping underlay, then
-/// Restore redraws the page prefix in tree order. A follow-up per-face Node
-/// dest-reset CLEARs that stacking (later face wiped by an earlier sibling) for
-/// one frame.
+/// Cover overlays (AvatarGroup +N / Bubble +N) and Wave 49 Region islands punch
+/// overlapping underlay, then Restore/Region redraws the page prefix in tree
+/// order. A follow-up per-face Node dest-reset CLEARs that stacking (later face
+/// wiped by an earlier sibling) for one frame.
 #[inline]
 pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[PaintDirty]) -> bool {
     if dirty.kind != PaintDirtyKind::Node {
@@ -1162,8 +1230,10 @@ pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[Paint
     let cx = dirty.bounds[0] + dirty.bounds[2] * 0.5;
     let cy = dirty.bounds[1] + dirty.bounds[3] * 0.5;
     nodes.iter().any(|o| {
-        o.kind == PaintDirtyKind::OverlayRestore
-            && o.bounds[2] * o.bounds[3] > area + 1.0
+        matches!(
+            o.kind,
+            PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
+        ) && o.bounds[2] * o.bounds[3] > area + 1.0
             && cx >= o.bounds[0]
             && cy >= o.bounds[1]
             && cx < o.bounds[0] + o.bounds[2]
@@ -1181,6 +1251,47 @@ pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[Paint
 #[inline]
 pub fn restore_page_behind_overlay(slot_bounds: [f32; 4], hole: [f32; 4]) -> bool {
     intersect_rects(slot_bounds, hole).is_some()
+}
+
+/// Roughly-square chip (Avatar / +N). Wide group rows and form fields are not.
+#[inline]
+pub fn is_rest_stack_chip(bounds: [f32; 4]) -> bool {
+    let w = bounds[2];
+    let h = bounds[3];
+    if w < 8.0 || h < 8.0 || w > 96.0 || h > 96.0 {
+        return false;
+    }
+    w.max(h) <= w.min(h) * 1.35 + 0.5
+}
+
+/// OverlayRestore replay rank: containing fills (0) before leaf widgets (1).
+///
+/// `node_paints` is post-order (AvatarGroup faces, then card). Replaying every
+/// intersecting slot in that order paints the card/page fill *after* overlapping
+/// A/B/C/+N and wipes stacking for a frame. `None` = skip (neighbor / non-intersect).
+///
+/// Cover overlay holes are often *larger* than the collapsed row, so the row is
+/// not `area > hole`. Rank 0 is every non-chip restore slot (row / page / card);
+/// rank 1 is only stacked chips so they src-over last.
+#[inline]
+pub fn overlay_restore_replay_rank(slot_bounds: [f32; 4], hole: [f32; 4]) -> Option<u8> {
+    if !restore_page_behind_overlay(slot_bounds, hole) {
+        return None;
+    }
+    let slot_area = (slot_bounds[2] * slot_bounds[3]).max(1.0);
+    let hole_area = (hole[2] * hole[3]).max(1.0);
+    if is_rest_stack_chip(slot_bounds) {
+        return if restore_slot_in_hole(slot_bounds, hole) {
+            Some(1)
+        } else {
+            None
+        };
+    }
+    if slot_area > hole_area + 1.0 || restore_slot_in_hole(slot_bounds, hole) {
+        Some(0)
+    } else {
+        None
+    }
 }
 
 /// Overlay close: redraw this collect slot into the cleared hole.
@@ -1326,12 +1437,11 @@ pub fn frame_clear_policy(
     }
 }
 
-/// After chrome sync: FullClear only when the **page** structure/geometry moved,
-/// or nobody named a dirty node (fallback).
+/// After chrome sync: classify into [`PresentTier`], then Window → FullClear.
 ///
 /// Nested island `StructureChanged` (MessageScroller Send / For inside a clip)
-/// names a local box and must stay PartialLoad — FullClear is what kept the
-/// sidebar Footer on the Send present path.
+/// names a local **Region** and must stay PartialLoad — FullClear is what kept
+/// the sidebar Footer on the Send present path.
 ///
 /// Widget-local `LayoutChanged` (InputAdornment ring, fit-relayout of a fixed
 /// box) must not FullClear — that wipes CSS spin dirties and Load-stamps
@@ -1349,24 +1459,122 @@ pub fn force_full_redraw_after_chrome(
     page_geometry_changed: bool,
     portal_structure_skip: bool,
     has_named_damage: bool,
+    has_region_damage: bool,
 ) -> bool {
+    matches!(
+        classify_present_tier(
+            pre_chrome,
+            sync_impact,
+            page_geometry_changed,
+            portal_structure_skip,
+            has_named_damage,
+            has_region_damage,
+        ),
+        PresentTier::Window
+    )
+}
+
+/// Classify the frame present tier (R5 / Wave 46).
+///
+/// - `page_geometry_changed` → Window (route Match, maximize, fit reflow).
+/// - Portal membership only → Region (overlay layer Clear).
+/// - Structure with named/region damage → Region (island clip).
+/// - Structure with nothing named → Window fallback.
+/// - Layout with named damage → Node (widget-local / absorbed leaf).
+/// - Layout with nothing named → Window fallback.
+/// - Style/Clean with named → Node; else Window fallback.
+pub fn classify_present_tier(
+    pre_chrome: LayoutStatus,
+    sync_impact: LayoutStatus,
+    page_geometry_changed: bool,
+    portal_structure_skip: bool,
+    has_named_damage: bool,
+    has_region_damage: bool,
+) -> PresentTier {
+    if page_geometry_changed {
+        return PresentTier::Window;
+    }
     if portal_structure_skip {
-        return false;
+        return PresentTier::Region;
     }
     let structure = matches!(pre_chrome, LayoutStatus::StructureChanged)
         || matches!(sync_impact, LayoutStatus::StructureChanged);
     if structure {
-        // Nested island StructureChanged (MessageScroller Send / For) names its clip
-        // box and must not FullClear the sidebar Footer. Page geometry (route Show)
-        // still Clears. No named box → fallback Clear.
-        return page_geometry_changed || !has_named_damage;
+        if has_region_damage || has_named_damage {
+            return PresentTier::Region;
+        }
+        return PresentTier::Window;
     }
     let layout = matches!(pre_chrome, LayoutStatus::LayoutChanged)
         || matches!(sync_impact, LayoutStatus::LayoutChanged);
-    if !layout {
+    if layout {
+        if has_region_damage {
+            return PresentTier::Region;
+        }
+        if has_named_damage {
+            return PresentTier::Node;
+        }
+        return PresentTier::Window;
+    }
+    if has_region_damage {
+        return PresentTier::Region;
+    }
+    if has_named_damage {
+        return PresentTier::Node;
+    }
+    PresentTier::Window
+}
+
+/// Route-sized island damage (Gallery `Match` section body) must Window-Clear,
+/// not dest-reset a title slot. True when the region covers most of the viewport.
+pub fn region_is_page_route_tier(region: [f32; 4], viewport: [f32; 4]) -> bool {
+    if region[2] <= 0.0 || region[3] <= 0.0 || viewport[2] <= 0.0 || viewport[3] <= 0.0 {
         return false;
     }
-    page_geometry_changed || !has_named_damage
+    if damage_covers_full(viewport, region) {
+        return true;
+    }
+    let area = region[2] * region[3];
+    let vp_area = viewport[2] * viewport[3];
+    area >= vp_area * 0.45
+}
+
+/// Dest-reset miss (Taffy id / last-present gone) must escalate: Node → Region → Window.
+pub fn promote_present_tier_on_miss(tier: PresentTier, miss: bool) -> PresentTier {
+    if !miss {
+        return tier;
+    }
+    match tier {
+        PresentTier::Node => PresentTier::Region,
+        PresentTier::Region | PresentTier::Window => PresentTier::Window,
+    }
+}
+
+/// True when a dest-reset lookup failed: previous slot existed but the key is
+/// gone from this frame's paints (Taffy id recycle / unmounted). First present
+/// (`!had_previous`) is not a miss — wipe `now` only.
+pub fn dest_reset_slot_miss(found_current: bool, had_previous: bool) -> bool {
+    had_previous && !found_current
+}
+
+/// Wave 51 escalate for a Node dirty: miss → Region; visual AABB growth stays Node.
+///
+/// Spin / hover-scale change size every tick (`node_present_slot_moved` is true).
+/// Those must keep Node dest-reset (`prev∪now`). Promoting them to Region was the
+/// Gallery spin 叠影 regression after R5.
+pub fn escalate_node_dest_reset_kind(
+    kind: PaintDirtyKind,
+    found_current: bool,
+    had_previous: bool,
+) -> PaintDirtyKind {
+    if kind != PaintDirtyKind::Node {
+        return kind;
+    }
+    if dest_reset_slot_miss(found_current, had_previous) {
+        PaintDirtyKind::Region
+    } else {
+        PaintDirtyKind::Node
+    }
 }
 
 /// Dest-reset wipes `now` only. If the last presented box is not that box,
@@ -1435,7 +1643,24 @@ pub fn clipped_island_structure_damage(
     island: [f32; 4],
     clip: Option<[f32; 4]>,
 ) -> Option<[f32; 4]> {
+    region_island_structure_damage(clip, island, None)
+}
+
+/// Wave 49 Region Clear bounds: island overflow clip ∩ (prev ∪ now).
+///
+/// Callers pass the pre-reconcile box as `prev` and the post-reconcile visual as
+/// `now`. Missing `now` falls back to `prev` only (same as
+/// [`clipped_island_structure_damage`]).
+pub fn region_island_structure_damage(
+    clip: Option<[f32; 4]>,
+    prev: [f32; 4],
+    now: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
     let clip = clip?;
+    let island = match now {
+        Some(n) if n[2] > 0.5 && n[3] > 0.5 => union_rects(prev, n),
+        _ => prev,
+    };
     let d = intersect_rects(island, clip).unwrap_or(island);
     if d[2] > 0.5 && d[3] > 0.5 {
         Some(d)
@@ -1904,6 +2129,40 @@ pub fn message_scroller_jump_scroll_blit_pins(
     out
 }
 
+/// Focused Input / Textarea I-beam (`input_caret` leaf) sharing a strip-blit viewport.
+///
+/// Strip blit copies retain pixels that may be mid blink-OFF. A later Clear of the
+/// exposed band (or a blink-OFF named pin) then leaves Gallery Kbd Search looking
+/// unfocused until the next blink ON (图二 → 图三). Pin the live caret leaf every
+/// scroll frame so Clear+redraw pulls chrome from this frame's collect.
+pub fn focused_input_caret_scroll_blit_pins(
+    root: &Element,
+    blit_viewports: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if blit_viewports.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        if el.text_style.input_caret.is_none() {
+            return;
+        }
+        let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+        if !overlay_needs_scroll_blit_pin(b, blit_viewports) {
+            return;
+        }
+        // Pad covers the I-beam hairline and a plain_chrome parent Hard-ring outset.
+        let pad = 8.0;
+        out.push([
+            b[0] - pad,
+            b[1] - pad,
+            (b[2] + pad * 2.0).max(0.0),
+            (b[3] + pad * 2.0).max(0.0),
+        ]);
+    });
+    out
+}
+
 /// Overlay (inside) scrollbar tracks that share pixels with a blit viewport.
 ///
 /// The rail is a sibling of the viewport, not sticky / portal overlay. Strip blit
@@ -2279,6 +2538,28 @@ mod tests {
     }
 
     #[test]
+    fn push_frame_paint_skips_transparent_shown_enter_without_product_slot() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new();
+        el.layout_bounds = [120.0, 340.0, 80.0, 32.0];
+        el.style.opacity = 0.0;
+        el.set_attr("data-active", "true");
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        assert!(
+            take_frame_paint_nodes().is_empty(),
+            "shown opacity≈0 enter must not dest-reset empty fill+shadow"
+        );
+
+        el.set_attr("data-active", "false");
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        assert_eq!(
+            take_frame_paint_nodes().len(),
+            1,
+            "hide settle still dest-resets the last faded box"
+        );
+    }
+
+    #[test]
     fn overlay_expand_clip_dirty_must_not_use_unconstrained_height() {
         let _ = take_frame_paint_nodes();
         let mut el = Element::new();
@@ -2472,6 +2753,34 @@ mod tests {
     const NESTED_KEY: u64 = 2;
     const PANEL_KEY: u64 = 3;
     const COLOR_KEY: u64 = 4;
+
+    #[test]
+    fn dialog_exit_panel_stamp_must_not_punch_scrim_without_redraw() {
+        // AlertDialog: overlay and the centering stage are sibling portals. The
+        // stage layout box is fullscreen (`inset 0` / 100%), but CSS ticks the
+        // inner `{id}__modal_zoom` card which inherits the stage stamp.
+        // Dest-reset of that empty host wiped the scrim; overlay_band_should_encode
+        // then skipped the underlay because the dirty key is the panel stamp —
+        // "遮罩瞬间关闭、稍等后弹窗也瞬间关闭".
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let stamps = [(OVERLAY, vp), (STAGE, vp)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(card));
+        let flags =
+            overlay_band_encode_flags(&[OVERLAY, STAGE], &[STAGE], false, &[OVERLAY, STAGE]);
+        let punches = holes.iter().any(|h| damage_covers_full(vp, *h));
+        assert!(
+            !punches || flags[0],
+            "panel-stamp dest-reset must not wipe the fullscreen scrim without encoding the overlay band; holes={holes:?} flags={flags:?}"
+        );
+        let occ = overlay_encode_occupancy(STAGE, Some(card), &stamps, Some(vp));
+        assert!(
+            occ.is_some_and(|b| !damage_covers_full(vp, b)),
+            "zoom occupancy must be the card, not the empty fullscreen stage; occ={occ:?}"
+        );
+    }
 
     #[test]
     fn overlay_encode_scissor_must_keep_nested_menu_flipped_above_parent() {
@@ -3008,6 +3317,24 @@ mod tests {
     }
 
     #[test]
+    fn node_dirties_sort_larger_before_nested() {
+        let shell = PaintDirty {
+            key: 1,
+            bounds: [10.0, 10.0, 320.0, 40.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let input = PaintDirty {
+            key: 2,
+            bounds: [12.0, 12.0, 260.0, 36.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let mut nodes = vec![input, shell];
+        sort_paint_dirty_nodes(&mut nodes);
+        assert_eq!(nodes[0].key, 1, "shell wipe must precede nested Input redraw");
+        assert_eq!(nodes[1].key, 2);
+    }
+
+    #[test]
     fn nested_input_dirty_skips_dest_reset_inside_adornment() {
         let shell = PaintDirty {
             key: 1,
@@ -3047,6 +3374,45 @@ mod tests {
         assert!(
             paint_dirty_skips_node_dest_reset(&latest, &[viewport, latest], false),
             "in-flow children still skip under a larger ancestor"
+        );
+    }
+
+    #[test]
+    fn overlay_restore_must_replay_page_fill_before_overlapping_avatar_faces() {
+        // Cover-overlay close: hole is the expanded panel (larger than A/C/+N).
+        // Card/page fill must paint before stacked faces, or dest-reset white /
+        // a later fill wipes the overlap for a frame.
+        let hole = [8.0, 40.0, 96.0, 48.0];
+        let face_a = [8.0, 40.0, 32.0, 32.0];
+        let face_c = [24.0, 40.0, 32.0, 32.0];
+        let count = [40.0, 40.0, 32.0, 32.0];
+        let page = [0.0, 0.0, 320.0, 384.0];
+        assert_eq!(overlay_restore_replay_rank(page, hole), Some(0));
+        let row = [8.0, 40.0, 80.0, 32.0];
+        assert_eq!(
+            overlay_restore_replay_rank(row, hole),
+            Some(0),
+            "collapsed group row is not a chip and must fill before A/B/C"
+        );
+        assert_eq!(overlay_restore_replay_rank(face_a, hole), Some(1));
+        assert_eq!(overlay_restore_replay_rank(face_c, hole), Some(1));
+        assert_eq!(overlay_restore_replay_rank(count, hole), Some(1));
+        let beside = [200.0, 40.0, 32.0, 32.0];
+        assert_eq!(overlay_restore_replay_rank(beside, hole), None);
+    }
+
+    #[test]
+    fn overlay_dirty_is_contained_keyframe_uses_inner_card_not_empty_stage() {
+        let stage = [0.0, 0.0, 800.0, 600.0];
+        let card = [200.0, 120.0, 400.0, 280.0];
+        assert!(
+            overlay_dirty_is_contained_keyframe(card, stage),
+            "zoom card inside fullscreen stage must dest-reset the card, not the host"
+        );
+        assert!(!overlay_dirty_is_contained_keyframe(stage, card));
+        assert!(
+            !overlay_dirty_is_contained_keyframe(card, card),
+            "same footprint is not a contained keyframe"
         );
     }
 
@@ -3099,6 +3465,44 @@ mod tests {
         assert!(
             !paint_dirty_covered_by_overlay_restore(&page, &nodes),
             "larger page dest-reset is not swallowed by a small Restore hole"
+        );
+
+        // Wave 49/51: Region island (group AABB) also swallows per-face Node wipes.
+        let region = PaintDirty {
+            key: 8,
+            bounds: [8.0, 40.0, 96.0, 48.0],
+            kind: PaintDirtyKind::Region,
+        };
+        let region_nodes = [region, face_a, face_c];
+        assert!(
+            paint_dirty_covered_by_overlay_restore(&face_a, &region_nodes),
+            "Region group AABB must skip earlier face dest-reset"
+        );
+        assert!(
+            paint_dirty_covered_by_overlay_restore(&face_c, &region_nodes),
+            "Region group AABB must skip later face dest-reset"
+        );
+    }
+
+    #[test]
+    fn region_island_unions_prev_and_now_inside_clip() {
+        let clip = Some([0.0, 0.0, 400.0, 300.0]);
+        let prev = [10.0, 100.0, 200.0, 40.0];
+        let now = [10.0, 140.0, 200.0, 80.0];
+        let d = region_island_structure_damage(clip, prev, Some(now)).expect("region");
+        assert!(
+            (d[1] - 100.0).abs() < 0.5 && (d[3] - 120.0).abs() < 0.5,
+            "Region must cover prev∪now Y span, got {d:?}"
+        );
+        let page = region_island_structure_damage(
+            Some([0.0, 0.0, 800.0, 600.0]),
+            [0.0, 48.0, 752.0, 520.0],
+            Some([0.0, 48.0, 752.0, 520.0]),
+        )
+        .expect("page-sized");
+        assert!(
+            region_is_page_route_tier(page, [0.0, 0.0, 800.0, 600.0]),
+            "Match section_body sized region is Window tier"
         );
     }
 
@@ -3386,16 +3790,25 @@ mod tests {
         // Typing / caret / spin: pre_chrome may still be LayoutChanged from
         // fit-relayout of a fixed Input box. Named dirties must PartialLoad.
         assert!(
-            !force_full_redraw_after_chrome(LayoutChanged, StyleChanged, false, false, true),
+            !force_full_redraw_after_chrome(LayoutChanged, StyleChanged, false, false, true, false),
             "pre_chrome LayoutChanged must not undo Input+spin PartialLoad"
         );
+        assert_eq!(
+            classify_present_tier(LayoutChanged, StyleChanged, false, false, true, false),
+            PresentTier::Node,
+            "Input+spin is PresentTier::Node"
+        );
         assert!(
-            !force_full_redraw_after_chrome(Clean, LayoutChanged, false, false, true),
+            !force_full_redraw_after_chrome(Clean, LayoutChanged, false, false, true, false),
             "chrome LayoutChanged with named dirties stays PartialLoad"
         );
         assert!(
-            force_full_redraw_after_chrome(LayoutChanged, StyleChanged, true, false, true),
+            force_full_redraw_after_chrome(LayoutChanged, StyleChanged, true, false, true, false),
             "page geometry (window resize / text-fit settle) FullClears even with named spin"
+        );
+        assert_eq!(
+            classify_present_tier(LayoutChanged, StyleChanged, true, false, true, false),
+            PresentTier::Window,
         );
         assert!(
             fit_relayout_is_page_geometry(true, false, false),
@@ -3411,7 +3824,8 @@ mod tests {
                 StyleChanged,
                 fit_relayout_is_page_geometry(true, false, false),
                 false,
-                true
+                true,
+                false,
             ),
             "named spin must not keep PartialLoad after maximize fit reflow — dest-reset of the new box leaves the old Y"
         );
@@ -3486,24 +3900,89 @@ mod tests {
             "scroll layer without a moved named slot does not FullClear"
         );
         assert!(
-            force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, false),
+            force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, false, false),
             "nobody named a dirty box → FullClear fallback"
         );
         assert!(
-            !force_full_redraw_after_chrome(StructureChanged, Clean, false, false, true),
+            !force_full_redraw_after_chrome(StructureChanged, Clean, false, false, true, false),
             "island StructureChanged with named damage stays PartialLoad (Send must not wipe Footer)"
         );
+        assert_eq!(
+            classify_present_tier(StructureChanged, Clean, false, false, true, true),
+            PresentTier::Region,
+            "Send nested island is PresentTier::Region"
+        );
+        assert_eq!(
+            classify_present_tier(StructureChanged, Clean, true, false, true, true),
+            PresentTier::Window,
+            "App:section_body page Match is PresentTier::Window"
+        );
         assert!(
-            force_full_redraw_after_chrome(StructureChanged, Clean, true, false, true),
+            force_full_redraw_after_chrome(StructureChanged, Clean, true, false, true, false),
             "page geometry StructureChanged FullClears"
         );
         assert!(
-            force_full_redraw_after_chrome(StructureChanged, Clean, false, false, false),
+            force_full_redraw_after_chrome(StructureChanged, Clean, false, false, false, false),
             "StructureChanged with no named box → FullClear fallback"
         );
         assert!(
-            !force_full_redraw_after_chrome(StructureChanged, Clean, false, true, true),
+            !force_full_redraw_after_chrome(StructureChanged, Clean, false, true, true, false),
             "portal-only structure skip"
+        );
+        assert_eq!(
+            classify_present_tier(StructureChanged, Clean, false, true, true, false),
+            PresentTier::Region,
+            "portal-only is Region, not Window"
+        );
+        assert_eq!(
+            classify_present_tier(LayoutChanged, Clean, false, false, true, true),
+            PresentTier::Region,
+            "Layout + region dirty is Region, not Node"
+        );
+        assert!(
+            !force_full_redraw_after_chrome(LayoutChanged, Clean, false, false, true, true),
+            "has_region_damage must reach the helper (not hardcoded false)"
+        );
+        assert!(
+            region_is_page_route_tier([0.0, 0.0, 900.0, 700.0], [0.0, 0.0, 1280.0, 800.0]),
+            "large inset Match body is page-route Window"
+        );
+        assert!(
+            !region_is_page_route_tier([10.0, 100.0, 320.0, 200.0], [0.0, 0.0, 1280.0, 800.0]),
+            "MessageScroller Send clip stays Region"
+        );
+        assert_eq!(
+            promote_present_tier_on_miss(PresentTier::Node, true),
+            PresentTier::Region
+        );
+        assert_eq!(
+            promote_present_tier_on_miss(PresentTier::Region, true),
+            PresentTier::Window
+        );
+        assert_eq!(
+            promote_present_tier_on_miss(PresentTier::Node, false),
+            PresentTier::Node
+        );
+        assert!(dest_reset_slot_miss(false, true));
+        assert!(!dest_reset_slot_miss(true, false));
+        assert!(!dest_reset_slot_miss(true, true));
+        assert!(!dest_reset_slot_miss(false, false));
+        // Circumcircle growth looks like slot_moved, but must stay Node dest-reset.
+        let rest = [10.0, 10.0, 16.0, 16.0];
+        let spun = [4.0, 4.0, 28.0, 28.0];
+        assert!(
+            node_present_slot_moved(rest, spun),
+            "precondition: spin grows visual AABB"
+        );
+        assert_eq!(
+            escalate_node_dest_reset_kind(PaintDirtyKind::Node, true, true),
+            PaintDirtyKind::Node,
+            "spin / hover-scale AABB growth must not escalate to Region (叠影)"
+        );
+        assert_eq!(
+            escalate_node_dest_reset_kind(PaintDirtyKind::Node, false, true),
+            PaintDirtyKind::Region,
+            "Taffy / last-present miss still escalates"
         );
     }
 
@@ -4307,6 +4786,30 @@ mod tests {
         assert!(
             message_scroller_jump_scroll_blit_pins(&idle, &[vp]).is_empty(),
             "hidden Latest must not pin"
+        );
+    }
+
+    #[test]
+    fn focused_input_caret_on_blit_viewport_is_a_pin() {
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [40.0, 60.0, 120.0, 24.0];
+        leaf.text_style.input_caret = Some(crate::style::InputCaretDraw::default());
+        let mut root = Element::new();
+        root.children.push(leaf);
+        let vp = [0.0, 0.0, 400.0, 320.0];
+        let pins = focused_input_caret_scroll_blit_pins(&root, &[vp]);
+        assert_eq!(pins.len(), 1, "focused caret leaf must pin, got {pins:?}");
+        assert!(
+            pins[0][0] < 40.0 && pins[0][1] < 60.0,
+            "pin must pad the caret leaf AABB; got {:?}",
+            pins[0]
+        );
+
+        let mut idle = Element::new();
+        idle.layout_bounds = [40.0, 60.0, 120.0, 24.0];
+        assert!(
+            focused_input_caret_scroll_blit_pins(&idle, &[vp]).is_empty(),
+            "leaf without input_caret must not pin"
         );
     }
 }

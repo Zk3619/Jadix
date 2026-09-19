@@ -2010,6 +2010,10 @@ impl AppState {
             &self.root_element,
             &viewports,
         ));
+        sticky.extend(super::damage::focused_input_caret_scroll_blit_pins(
+            &self.root_element,
+            &viewports,
+        ));
         let named = super::draw_cull::named_scroll_blit_pins(
             &self.damage_nodes,
             &self.last_present_node_bounds,
@@ -2069,6 +2073,8 @@ impl AppState {
         self.scroll_strip_blit.clear();
         self.scroll_blit_pins.clear();
         super::damage::clear_frame_paint_nodes();
+        // Wave 52: Window tier must not fingerprint-replay the previous page DL.
+        self.layout_tree.invalidate_collect_skip();
     }
 
     fn note_fit_relayout_followup(&mut self, page_geometry: bool, scroll_paint_only: bool) {
@@ -2429,6 +2435,36 @@ impl AppState {
         }
     }
 
+    /// Wave 51: Node dest-reset only for box-stable ink. Taffy / last-present miss
+    /// promotes to Region Clear — never silent-skip a gone key.
+    ///
+    /// Do **not** promote on [`node_present_slot_moved`]: spin / hover-scale grow the
+    /// visual AABB every tick; Node dest-reset already unions `prev∪now`. Escalating
+    /// those to Region skips dest-reset and leaves duplicate spin / stacked labels.
+    fn escalate_node_dest_reset_misses(
+        &mut self,
+        node_paints: &[crate::layout::layout_tree::NodePaint],
+    ) {
+        use super::damage::PaintDirtyKind;
+        for dirty in &mut self.damage_nodes {
+            if dirty.kind != PaintDirtyKind::Node {
+                continue;
+            }
+            let found_current = node_paints
+                .iter()
+                .any(|p| !p.overlay && p.key == dirty.key);
+            let had_previous = self
+                .last_present_node_bounds
+                .iter()
+                .any(|(k, _)| *k == dirty.key);
+            dirty.kind = super::damage::escalate_node_dest_reset_kind(
+                dirty.kind,
+                found_current,
+                had_previous,
+            );
+        }
+    }
+
     fn encode_node_present<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
@@ -2516,15 +2552,18 @@ impl AppState {
             let layered =
                 super::draw_cull::layered_overlay_slot_bounds(dirty.key, dirty.bounds, node_paints)
                     .is_some();
+            let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
             let node_dest_reset = if dirty.kind == PaintDirtyKind::Node
                 && allow_primitives
-                && !(super::damage::paint_dirty_skips_node_dest_reset(
+                && !(super::draw_cull::paint_dirty_skips_node_dest_reset_covered(
                     dirty,
                     &self.damage_nodes,
                     layered,
+                    node_paints,
+                    page,
+                    ui_scale,
                 ) && !super::draw_cull::slot_visual_exceeds_rest(dirty.key, node_paints))
             {
-                let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
                 let prev_slot = super::draw_cull::last_present_prev_for_dirty(
                     dirty.kind,
                     dirty.key,
@@ -2536,6 +2575,7 @@ impl AppState {
                     node_paints,
                     page,
                     scaled_tex,
+                    scaled_input_chrome,
                     ui_scale,
                     prev_slot,
                 )
@@ -2573,12 +2613,20 @@ impl AppState {
                 super::draw_cull::damage_cull_rect_physical(scissor_logical, 0.0, ui_scale);
             let cull_phys = Some(super::draw_cull::CullRects::one(cull_rect));
             match dirty.kind {
-                PaintDirtyKind::OverlayRestore => {
+                PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => {
                     let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
-                    let fill = super::draw_cull::opaque_fill_color_at(
+                    let fill = super::draw_cull::opaque_fill_color_at_skipping(
                         page,
                         cull_rect[0] + cull_rect[2] * 0.5,
                         cull_rect[1] + cull_rect[3] * 0.5,
+                        |i| {
+                            node_paints.iter().any(|p| {
+                                !p.overlay
+                                    && super::damage::is_rest_stack_chip(p.bounds)
+                                    && i >= p.instance.0
+                                    && i < p.instance.1
+                            })
+                        },
                     );
                     let restore_color = fill
                         .map(|c| wgpu::Color {
@@ -2637,25 +2685,30 @@ impl AppState {
                                 );
                             }
                         }
-                        self.draw_matching_node_paints(
-                            render_pass,
-                            node_paints,
-                            scaled_instances,
-                            clip_polys,
-                            scaled_tex,
-                            scaled_input_chrome,
-                            dummy,
-                            |p| {
-                                !p.overlay
-                                    && super::damage::restore_page_behind_overlay(
-                                        p.bounds,
-                                        dirty.bounds,
-                                    )
-                            },
-                            cull_phys,
-                            Some(overlay_inst_start),
-                            Some(overlay_tex_start),
-                        );
+                        // Cover overlays (AvatarGroup +N): post-order node_paints
+                        // are faces then card. Card fill after overlapping faces
+                        // wipes stacking for a frame. Fills first, then leaves.
+                        for rank in 0u8..=1 {
+                            self.draw_matching_node_paints(
+                                render_pass,
+                                node_paints,
+                                scaled_instances,
+                                clip_polys,
+                                scaled_tex,
+                                scaled_input_chrome,
+                                dummy,
+                                |p| {
+                                    !p.overlay
+                                        && super::damage::overlay_restore_replay_rank(
+                                            p.bounds,
+                                            dirty.bounds,
+                                        ) == Some(rank)
+                                },
+                                cull_phys,
+                                Some(overlay_inst_start),
+                                Some(overlay_tex_start),
+                            );
+                        }
                     }
                     if allow_primitives {
                         self.draw_node_present_underlines(
@@ -2676,25 +2729,27 @@ impl AppState {
                 PaintDirtyKind::Node => {
                     if allow_primitives {
                         if let Some(reset) = node_dest_reset.as_ref() {
-                            let replay = reset.replay.1 > reset.replay.0;
-                            if replay {
-                                if let Some((wx, wy, ww, wh)) =
-                                    super::damage::damage_to_scissor_physical(
-                                        [
-                                            reset.rect[0] / ui_scale.max(1e-6),
-                                            reset.rect[1] / ui_scale.max(1e-6),
-                                            reset.rect[2] / ui_scale.max(1e-6),
-                                            reset.rect[3] / ui_scale.max(1e-6),
-                                        ],
-                                        0.0,
-                                        ui_scale,
-                                        self.config.width,
-                                        self.config.height,
-                                    )
-                                {
-                                    render_pass.set_scissor_rect(wx, wy, ww, wh);
-                                }
+                            // Always scissor to the wipe (fill ∪ halo) before CLEAR.
+                            // `replay` used to be the only path that widened scissor;
+                            // a sharp card behind Latest left GPU scissor on the
+                            // pill and stacked the outset in retain.
+                            if let Some((wx, wy, ww, wh)) =
+                                super::damage::damage_to_scissor_physical(
+                                    [
+                                        reset.rect[0] / ui_scale.max(1e-6),
+                                        reset.rect[1] / ui_scale.max(1e-6),
+                                        reset.rect[2] / ui_scale.max(1e-6),
+                                        reset.rect[3] / ui_scale.max(1e-6),
+                                    ],
+                                    0.0,
+                                    ui_scale,
+                                    self.config.width,
+                                    self.config.height,
+                                )
+                            {
+                                render_pass.set_scissor_rect(wx, wy, ww, wh);
                             }
+                            let replay = reset.replay.1 > reset.replay.0;
                             // Layered jump chrome (Latest) is a rounded pill. A
                             // scissor-sized radii=0 CLEAR lets SDF +2px AA leak a
                             // translucent white frame — hover flashes sharp corners.
@@ -3060,7 +3115,7 @@ impl AppState {
         for dirty in &self.damage_nodes {
             let pad = match dirty.kind {
                 PaintDirtyKind::Overlay => continue,
-                PaintDirtyKind::OverlayRestore => 2.0,
+                PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => 2.0,
                 // Owner clip already limits glyphs. Do not use the 8px node scissor —
                 // that strip overlaps `gap-2` siblings and the sidebar rail.
                 PaintDirtyKind::Node => {
@@ -3429,6 +3484,21 @@ impl AppState {
             }
         }
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        if !matches!(status, LayoutStatus::Clean) {
+            // Bind StyleChanged already zeros this spine. Island replace does not —
+            // ViewportsOnly `reuse_idle` would skip-replay the previous title/desc
+            // (and an idle sidebar) on top of the new Match body.
+            if let Some(path) = crate::core::tree::find_path_in_tree(&self.root_element, |n| {
+                n.template_id
+                    .as_deref()
+                    .is_some_and(|tid| normalize_anchor_template_id(tid) == want)
+            }) {
+                crate::layout::collect_cache::invalidate_collect_paint_hash_path(
+                    &mut self.root_element,
+                    &path,
+                );
+            }
+        }
         if portal_island || portal_moves > 0 {
             // Bubble +N expand / popover hoist: Taffy still rebuilds the portal layer,
             // but GPU FullClear of the gallery is the fullscreen flash.
@@ -3437,14 +3507,28 @@ impl AppState {
             status,
             LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
         ) {
-            // Nested island (Tabs panel / MessageScroller Send): dest-reset the island
-            // intersected with the overflow clip — not the clip itself. Gallery Forms
-            // Tabs share the page ScrollArea with 8b ToggleGroup; dirtying that clip
-            // wiped sibling glyphs for one PartialLoad frame. Footer stays outside
-            // the MessageScroller clip. Unclipped page Show still FullClears.
-            if let Some(d) = super::damage::clipped_island_structure_damage(island_box, clip_bounds)
+            // Nested island (Tabs panel / MessageScroller Send): Region Clear
+            // clip ∩ (prev ∪ now) — not a Node dest-reset, not the clip itself.
+            // Gallery Forms Tabs share the page ScrollArea with 8b ToggleGroup;
+            // dirtying that clip wiped sibling glyphs. Route-sized Match bodies
+            // (App:section_body) cover most of the viewport → Window FullClear.
+            let now_box = crate::core::tree::find_in_tree(&self.root_element, |n| {
+                n.template_id
+                    .as_deref()
+                    .is_some_and(|tid| normalize_anchor_template_id(tid) == want)
+            })
+            .map(|el| crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc));
+            if let Some(d) =
+                super::damage::region_island_structure_damage(clip_bounds, island_box, now_box)
             {
-                super::damage::push_frame_paint_key(island_key, d);
+                let (lw, lh) = self.logical_size();
+                let viewport = [0.0, 0.0, lw, lh];
+                if super::damage::region_is_page_route_tier(d, viewport) {
+                    self.page_geom_dirty = true;
+                    self.mark_full_redraw();
+                } else {
+                    super::damage::push_frame_region_paint(island_key, d);
+                }
             } else if clip_bounds.is_none() {
                 self.page_geom_dirty = true;
                 self.mark_full_redraw();
@@ -3612,45 +3696,53 @@ impl AppState {
         let could_absorb =
             super::reactive::bind_layout_absorbed_by_specified_ancestor(&self.root_element, &path);
 
-        let mut cursor = &mut self.root_element;
-        for &index in &path {
-            cursor = &mut cursor.children[index];
-        }
-        let status = patch(cursor);
-        // LayoutChanged: patched node only. StructureChanged: whole subtree —
-        // bind apply may flip child `display` / flex (Marker separator hairlines)
-        // and the fast path no longer rebuilds Taffy on StructureChanged.
-        //
-        // Play/Pause inside a `min_w` Button still reports leaf LayoutChanged
-        // (intrinsic glyph width). Promoting that to the frame status forces
-        // root `compute_layout` and hitch sibling CSS animations for one frame.
-        let absorbed =
-            matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) && could_absorb;
-        let frame_status = if absorbed {
-            crate::core::tree::LayoutStatus::StyleChanged
-        } else {
-            status
-        };
-        crate::core::tree::collect_bind_layout_dirty(
-            cursor,
-            if absorbed {
-                crate::core::tree::LayoutStatus::Clean
+        let (status, frame_status) = {
+            let mut cursor = &mut self.root_element;
+            for &index in &path {
+                cursor = &mut cursor.children[index];
+            }
+            let status = patch(cursor);
+            // LayoutChanged: patched node only. StructureChanged: whole subtree —
+            // bind apply may flip child `display` / flex (Marker separator hairlines)
+            // and the fast path no longer rebuilds Taffy on StructureChanged.
+            //
+            // Play/Pause inside a `min_w` Button still reports leaf LayoutChanged
+            // (intrinsic glyph width). Promoting that to the frame status forces
+            // root `compute_layout` and hitch sibling CSS animations for one frame.
+            let absorbed =
+                matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) && could_absorb;
+            let frame_status = if absorbed {
+                crate::core::tree::LayoutStatus::StyleChanged
             } else {
                 status
-            },
-            &mut self.pending_layout_dirty,
-        );
-        self.template_paths.insert(template_id.to_string(), path);
+            };
+            crate::core::tree::collect_bind_layout_dirty(
+                cursor,
+                if absorbed {
+                    crate::core::tree::LayoutStatus::Clean
+                } else {
+                    status
+                },
+                &mut self.pending_layout_dirty,
+            );
+            if matches!(frame_status, crate::core::tree::LayoutStatus::StyleChanged) {
+                // Paint-only (e.g. bind_text `"10"`→`"11"`): this node's collect slot.
+                // Key by Taffy id so node-present dest-reset / glyph capture match
+                // even when the label has no SDF fill (gallery MouseEvent log).
+                super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
+            }
+            (status, frame_status)
+        };
         self.layout_status = Self::merge_layout_status(self.layout_status, frame_status);
-        if matches!(
-            frame_status,
-            crate::core::tree::LayoutStatus::StyleChanged
-        ) {
-            // Paint-only (e.g. bind_text `"10"`→`"11"`): this node's collect slot.
-            // Key by Taffy id so node-present dest-reset / glyph capture match
-            // even when the label has no SDF fill (gallery MouseEvent log).
-            super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
+        if matches!(frame_status, crate::core::tree::LayoutStatus::StyleChanged) {
+            // ViewportsOnly `reuse_idle` would skip-replay idle ancestors (gallery
+            // Item variant bind while the clicked button is still hovered).
+            crate::layout::collect_cache::invalidate_collect_paint_hash_path(
+                &mut self.root_element,
+                &path,
+            );
         }
+        self.template_paths.insert(template_id.to_string(), path);
         status
     }
 
@@ -4177,10 +4269,58 @@ impl AppState {
             matches!(sync_impact, crate::core::tree::LayoutStatus::LayoutChanged)
                 && sync_collect.portal_layout_changed
                 && !sync_collect.page_layout_changed;
-        // Button hover chrome: always sync — scroll frames update layout before this pass,
-        // and pointer hover may have left on the prior post-layout reconcile while
-        // `scroll_paint_only` was true (signal already false; skipping sync stuck hover
-        // until scroll settled).
+        // Class-variant `:hover` uses last-frame layout_bounds. After a **page**
+        // StructureChanged (or while the Inspector dock is about to insert/remove),
+        // those bounds still cover the pre-rebuild geometry — dozens of nodes falsely
+        // report hovered and flash together.
+        // Overlay-only StructureChanged (bubble +N / popover hoist) must NOT do this:
+        // a sentinel mouse forces every card to leave, unions paint damage to the
+        // viewport, and FullClears even after skip_full_clear_for_portal_structure.
+        // Hoist runs after this pass — mark membership now so +N Show-mount is not
+        // treated as a page rebuild.
+        if matches!(
+            pre_chrome_layout_status,
+            crate::core::tree::LayoutStatus::StructureChanged
+        ) && (self.portal_membership_dirty || element_contains_rui_portal(&self.root_element))
+        {
+            self.portal_membership_dirty = true;
+        }
+        let variant_mouse = {
+            let structure_dirty = super::damage::page_structure_rebuild(
+                matches!(
+                    pre_chrome_layout_status,
+                    crate::core::tree::LayoutStatus::StructureChanged
+                ),
+                self.portal_membership_dirty,
+                self.page_geom_dirty,
+            );
+            // Only suppress class-hover while the dock is open *and* waiting for sync.
+            // `is_enabled()` alone (feature on, panel closed) must not pin the mouse to a
+            // sentinel — that interacted badly with layout-page CSS transitions.
+            #[cfg(feature = "devtools")]
+            let panel_pending = crate::app::devtools::DevToolsState::is_enabled()
+                && crate::app::devtools::DevToolsState::is_open()
+                && crate::app::devtools::DevToolsState::generation()
+                    != crate::app::devtools::DevToolsState::last_sync_gen();
+            #[cfg(not(feature = "devtools"))]
+            let panel_pending = false;
+            if structure_dirty || panel_pending {
+                [-1.0e9_f32, -1.0e9_f32]
+            } else {
+                mouse_pos
+            }
+        };
+        // `on_hover` / `{id}_hover` must leave (and enter) with CSS `:hover` on this
+        // chrome frame — same `variant_mouse`, before Button / class paint. Post-render
+        // reconcile is then an idempotent Rc-refresh after layout.
+        crate::app::tree_hit::apply_pointer_hover_reconcile(
+            &self.root_element,
+            variant_mouse[0],
+            variant_mouse[1],
+            scroll_paint_only || variant_mouse[0] < 0.0,
+        );
+        // Button hover chrome: always sync — `{id}_hover` was just reconciled, including
+        // during `scroll_paint_only` (content sliding under a still pointer).
         crate::components::button::sync_button_hover_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -4258,48 +4398,6 @@ impl AppState {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
             let dark = crate::style::is_dark_theme();
-            // Class-variant `:hover` uses last-frame layout_bounds. After a **page**
-            // StructureChanged (or while the Inspector dock is about to insert/remove),
-            // those bounds still cover the pre-rebuild geometry — dozens of nodes falsely
-            // report hovered and flash together.
-            // Overlay-only StructureChanged (bubble +N / popover hoist) must NOT do this:
-            // a sentinel mouse forces every card to leave, unions paint damage to the
-            // viewport, and FullClears even after skip_full_clear_for_portal_structure.
-            // Hoist runs after this pass — mark membership now so +N Show-mount is not
-            // treated as a page rebuild.
-            if matches!(
-                pre_chrome_layout_status,
-                crate::core::tree::LayoutStatus::StructureChanged
-            ) && (self.portal_membership_dirty
-                || element_contains_rui_portal(&self.root_element))
-            {
-                self.portal_membership_dirty = true;
-            }
-            let variant_mouse = {
-                let structure_dirty = super::damage::page_structure_rebuild(
-                    matches!(
-                        pre_chrome_layout_status,
-                        crate::core::tree::LayoutStatus::StructureChanged
-                    ),
-                    self.portal_membership_dirty,
-                    self.page_geom_dirty,
-                );
-                // Only suppress class-hover while the dock is open *and* waiting for sync.
-                // `is_enabled()` alone (feature on, panel closed) must not pin the mouse to a
-                // sentinel — that interacted badly with layout-page CSS transitions.
-                #[cfg(feature = "devtools")]
-                let panel_pending = crate::app::devtools::DevToolsState::is_enabled()
-                    && crate::app::devtools::DevToolsState::is_open()
-                    && crate::app::devtools::DevToolsState::generation()
-                        != crate::app::devtools::DevToolsState::last_sync_gen();
-                #[cfg(not(feature = "devtools"))]
-                let panel_pending = false;
-                if structure_dirty || panel_pending {
-                    [-1.0e9_f32, -1.0e9_f32]
-                } else {
-                    mouse_pos
-                }
-            };
             if scroll_paint_only {
                 crate::style::tick_active_css_transitions_subtree(
                     &mut self.root_element,
@@ -4376,14 +4474,23 @@ impl AppState {
                 self.portal_membership_dirty,
                 page_geom,
             );
+        let has_region = self
+            .damage_nodes
+            .iter()
+            .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Region));
+        let has_named = !self.damage_nodes.is_empty();
         // One gate for sync_impact **and** pre_chrome. A later pre_chrome
         // `mark_full_redraw` used to undo named-node PartialLoad (Input + spin).
-        if super::damage::force_full_redraw_after_chrome(
-            pre_chrome_layout_status,
-            sync_impact,
-            page_geom,
-            portal_skip,
-            !self.damage_nodes.is_empty(),
+        if matches!(
+            super::damage::classify_present_tier(
+                pre_chrome_layout_status,
+                sync_impact,
+                page_geom,
+                portal_skip,
+                has_named,
+                has_region,
+            ),
+            super::damage::PresentTier::Window
         ) {
             self.mark_full_redraw();
         }
@@ -4397,17 +4504,13 @@ impl AppState {
 
         crate::components::drawer::sync_drawer_background_scale(&mut self.root_element);
 
-        // Modal overlay/panel live on the hoisted portal tree. Flush seeds enter/exit
-        // keyframes; CSS then ticks **once** on those nodes. Pre-hoist class-variant
-        // tick skips them via `modal_shell_defer_css_tick` so we do not double-step
-        // (or step a stale un-hoisted copy).
+        // Seed overlay/zoom closed pose *before* layout so `__modal_zoom` capture
+        // sees opacity 0 / scale 0.90. CSS time starts *after* layout — first-open
+        // AlertDialog hitch (variant chrome + zoom capture) must not eat the 200ms
+        // fade, and the animation must play in full once that hitch is over.
         let modal_needs_frame =
             crate::utils::modal_motion::flush_modal_shell_motion_subtree(&mut self.root_element);
-        let modal_css_ticking =
-            crate::utils::modal_motion::tick_hoisted_modal_css(&mut self.root_element);
-        // Floating Expand 依赖 layout_bounds 测高；Fade 也可在 layout 后 seed。
-        // Do not flush immediately after hoist (the floating layer height is still 0 at this time, and reactive reconstruction will flush out mid).
-        if modal_needs_frame || modal_css_ticking {
+        if modal_needs_frame {
             self.window.request_redraw();
         }
 
@@ -4735,6 +4838,10 @@ impl AppState {
         // Placement is applied inside layout (after Taffy, before collect) so a
         // scroll frame with +N open does not collect the gallery a second time.
         // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
+        // DialogFade CSS: same — tick only after overlay/zoom have bounds so the
+        // 200ms enter/exit starts after first-open layout hitch, not during it.
+        let modal_css_ticking =
+            crate::utils::modal_motion::tick_hoisted_modal_css(&mut self.root_element);
         let floating_needs_frame =
             crate::utils::floating_motion::flush_floating_motion_subtree(&mut self.root_element);
         let floating_css_ticking =
@@ -4757,14 +4864,19 @@ impl AppState {
             );
             acc_layout_prof(&render_result.prof);
         }
-        if floating_needs_frame || floating_css_ticking {
+        if modal_css_ticking || floating_needs_frame || floating_css_ticking {
             self.window.request_redraw();
         }
         if crate::components::color_picker::is_color_dragging() {
-            let _ = crate::components::color_picker::tick_color_drag_from_tree(
+            let live = crate::components::color_picker::snapshot_color_drag_bounds(
                 &self.root_element,
                 mouse_pos[0],
                 mouse_pos[1],
+            );
+            crate::components::color_picker::queue_color_drag_apply(
+                mouse_pos[0],
+                mouse_pos[1],
+                live,
             );
         }
         drop(acc_layout_prof);
@@ -5590,7 +5702,8 @@ impl AppState {
         let mut capture_underlay_ready = false;
         let capture_text_ready = if gpu_present.use_node_present
             && self.damage_nodes.iter().any(|d| match d.kind {
-                super::damage::PaintDirtyKind::OverlayRestore => true,
+                super::damage::PaintDirtyKind::OverlayRestore
+                | super::damage::PaintDirtyKind::Region => true,
                 super::damage::PaintDirtyKind::Node => {
                     !super::damage::paint_dirty_covered_by_overlay_restore(d, &self.damage_nodes)
                         && node_needs_glyphs(d)
@@ -5604,7 +5717,8 @@ impl AppState {
                 .iter()
                 .copied()
                 .filter(|d| match d.kind {
-                    super::damage::PaintDirtyKind::OverlayRestore => true,
+                    super::damage::PaintDirtyKind::OverlayRestore
+                    | super::damage::PaintDirtyKind::Region => true,
                     super::damage::PaintDirtyKind::Node => {
                         !super::damage::paint_dirty_covered_by_overlay_restore(
                             d,
@@ -6303,6 +6417,11 @@ impl AppState {
         } else {
             color_load
         };
+
+        // Mutate damage_nodes before the render pass borrows `self.pipeline`.
+        if gpu_present.use_node_present {
+            self.escalate_node_dest_reset_misses(&render_result.node_paints);
+        }
 
         {
             debug_assert!(

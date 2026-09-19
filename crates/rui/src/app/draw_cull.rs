@@ -193,7 +193,7 @@ pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
 
 /// Opaque fill AABB (CSS transform applied). Outset box-shadow src-overs;
 /// putting that halo in a layered dest-reset punches wrapping thread / the
-/// overlay rail (Latest `0 4px 14px` while scale/ancestor transform is live).
+/// overlay rail (Latest outset shadow while scale/ancestor transform is live).
 fn instance_fill_bounds(i: &InstanceInput) -> [f32; 4] {
     let bounds = [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]];
     if transform_is_identity(&i.transform) {
@@ -508,11 +508,14 @@ pub(crate) fn instance_fill_opaque(i: &InstanceInput) -> bool {
     i.color[3] > 0.95
 }
 
-/// Outset box-shadow pixels the SDF actually paints (Hard ring is spread-only,
+/// Outset box-shadow geometry the SDF actually paints (Hard ring is spread-only,
 /// `blur = 0`). Inset shadows stay inside the fill and do not grow dest-reset.
+///
+/// Do **not** gate on `shadow_color[3]`: Latest fade multiplies that alpha by
+/// opacity, so mid-fade (`0.18 * 0.2`) drops below 0.05 and dest-reset used
+/// fill-only — PartialLoad stacked every frame's halo (enter ring / hide ghost).
 fn instance_has_outset_shadow(i: &InstanceInput) -> bool {
     i.shadow_inset == 0.0
-        && i.shadow_color[3] > 0.05
         && (i.shadow_blur > 0.0
             || i.shadow_spread.abs() > 0.0
             || i.shadow_offset[0] != 0.0
@@ -735,9 +738,9 @@ pub(crate) fn clamp_last_present_prev(prev: [f32; 4], dirty_bounds: [f32; 4]) ->
     )
 }
 
-/// Like [`clamp_last_present_prev`], but drop a much larger prev instead of
-/// growing the wipe by [`LAST_PRESENT_PREV_MAX_OUTSET`]. Layered jump dest-reset
-/// must not inherit a full-width dock neighborhood.
+/// Like [`clamp_last_present_prev`], but clip prev to this neighborhood instead of
+/// keeping a same-key dock verbatim. Latest last-present is often the full-width
+/// 100% bar (area ≤ 4× the pill); unioning it dest-resets the overlay rail.
 pub(crate) fn clamp_last_present_prev_tight(
     prev: [f32; 4],
     dirty_bounds: [f32; 4],
@@ -747,11 +750,13 @@ pub(crate) fn clamp_last_present_prev_tight(
     }
     let prev_area = prev[2] * prev[3];
     let dirty_area = dirty_bounds[2] * dirty_bounds[3];
-    if prev_area <= dirty_area * 4.0 + 1.0 {
-        Some(prev)
-    } else {
-        None
+    if prev_area > dirty_area * 4.0 + 1.0 {
+        return None;
     }
+    intersect_rects(
+        prev,
+        padded_xywh(dirty_bounds, LAST_PRESENT_PREV_MAX_OUTSET),
+    )
 }
 
 /// Tightest ancestor overflow clip on slots matching this dirty (logical px).
@@ -780,6 +785,22 @@ pub(crate) fn node_present_overflow_clip(
     acc
 }
 
+/// True when node-present dest-reset is the page island (Match body ∩ scroller),
+/// not a widget hover. Occupancy clip against the *new* page then punches leftover
+/// bands of the previous page (Gallery 浮层 → 数据 ViewportModal ghost).
+fn dest_reset_fills_overflow_clip(dirty_bounds: [f32; 4], overflow: Option<[f32; 4]>) -> bool {
+    let Some(c) = overflow else {
+        return false;
+    };
+    if c[2] < 64.0 || c[3] < 64.0 {
+        return false;
+    }
+    let Some(hit) = intersect_rects(dirty_bounds, c) else {
+        return false;
+    };
+    hit[2] * hit[3] >= c[2] * c[3] * 0.45
+}
+
 /// Owner clip on capture glyphs. 1px covers coverage AA; the 8px node scissor
 /// pad must not be used here — it overlaps `gap-2` siblings and stamps captions.
 pub(crate) const NODE_PRESENT_GLYPH_CLIP_PAD: f32 = 1.0;
@@ -803,6 +824,7 @@ pub(crate) fn node_present_reset_rect(
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
     textured: &[ScaledTexturedDraw],
+    chrome: &[InstanceInput],
     pad: f32,
     ui_scale: f32,
     prev_bounds: Option<[f32; 4]>,
@@ -813,6 +835,7 @@ pub(crate) fn node_present_reset_rect(
     let mut ink: Option<[f32; 4]> = None;
     let mut slot_visual: Option<[f32; 4]> = None;
     let mut matched = false;
+    let mut sdf_ink = false;
     for p in node_paints {
         if !slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
             continue;
@@ -828,11 +851,10 @@ pub(crate) fn node_present_reset_rect(
         let lo = p.instance.0.min(instances.len());
         let hi = p.instance.1.min(instances.len());
         for inst in &instances[lo..hi] {
-            // Layered jump chrome hangs over wrapping thread. Outset shadow
-            // src-overs; putting it in the wipe punches the line below Latest.
-            // Non-identity transform (hide scale 0.95, ancestor card matrix)
-            // used to fall through to `instance_paint_bounds` and re-expand.
-            let mut b = if layered {
+            // Layered ping/bounce stay on the fill so occupancy can clip a
+            // rest-disjoint caption. Latest outset shadow must wipe the SDF halo
+            // or PartialLoad stacks every fade frame (enter ring / hide ghost).
+            let mut b = if layered && !instance_has_outset_shadow(inst) {
                 instance_fill_bounds(inst)
             } else {
                 instance_paint_bounds(inst)
@@ -859,6 +881,7 @@ pub(crate) fn node_present_reset_rect(
                 }
             }
             if instance_has_dest_ink(inst) || !transform_is_identity(&inst.transform) {
+                sdf_ink = true;
                 ink = Some(match ink {
                     Some(prev) => union_xywh(prev, b),
                     None => b,
@@ -877,19 +900,92 @@ pub(crate) fn node_present_reset_rect(
                 None => b,
             });
         }
+        let clo = p.chrome.0.min(chrome.len());
+        let chi = p.chrome.1.min(chrome.len());
+        for inst in &chrome[clo..chi] {
+            let mut b = instance_paint_bounds(inst);
+            if b[2] <= 0.0 || b[3] <= 0.0 {
+                continue;
+            }
+            if let Some(c) = p.overflow_clip {
+                if c[2] > 0.0 && c[3] > 0.0 {
+                    match intersect_rects(b, scale_xywh(c, s)) {
+                        Some(hit) => b = hit,
+                        None => continue,
+                    }
+                }
+            }
+            ink = Some(match ink {
+                Some(prev) => union_xywh(prev, b),
+                None => b,
+            });
+        }
     }
     if !matched {
-        return None;
+        // Match island swap often recycles the Taffy id. `last-present` for that
+        // key may now be a parent/inset slot (must not union). The dirty box is
+        // still the snapshotted old island — wipe it or PartialLoad src-overs
+        // leftover title/desc glyphs onto the new page (Gallery 基础).
+        let r = scale_xywh(dirty_bounds, s);
+        return if r[2] > 0.5 && r[3] > 0.5 {
+            Some(r)
+        } else {
+            None
+        };
     }
     let overflow = node_present_overflow_clip(dirty_key, dirty_bounds, node_paints);
-    let mut acc = ink.or(slot_visual);
+    // Text/caret slots: dest-ink is the I-beam (chrome) / glyphs, not the
+    // flex-grown layout box. Falling back to `slot_visual` dest-reset the whole
+    // Input content slot on every blink.
+    //
+    // Text-only bind_text / shimmer still need a wipe when last-present is
+    // missing (zero same-box leaf, first present). Prefer `prev` when usable —
+    // caret blink dirties the full text-leaf AABB; using that as wipe punches
+    // the Input ring / focus halo every OFF frame.
+    let mut acc = ink.or(if sdf_ink { slot_visual } else { None });
+    if acc.is_none() && node_dirty_has_text(dirty_key, dirty_bounds, node_paints) {
+        let dirty_phys = scale_xywh(dirty_bounds, s);
+        let prev_usable = prev_bounds.is_some_and(|p| p[2] > 0.5 && p[3] > 0.5);
+        if !prev_usable && dirty_phys[2] > 0.5 && dirty_phys[3] > 0.5 {
+            acc = Some(dirty_phys);
+        }
+    }
+    if layered {
+        // `PaintDirty.bounds` already includes CSS shadow pad (style, not
+        // opacity-multiplied instance alpha). Hide settle has no dest-ink;
+        // fade frames still need this union or occupancy clips the halo off.
+        // Clamp to the slot neighborhood so a full-width dock dirty cannot
+        // wipe the overlay rail.
+        let dirty_phys = scale_xywh(dirty_bounds, s);
+        let limited = match slot_visual {
+            Some(sb) => {
+                layered_slot_with_halo_pad(sb, dirty_phys, LAST_PRESENT_PREV_MAX_OUTSET * s)
+            }
+            None => dirty_phys,
+        };
+        acc = Some(match acc {
+            Some(prev) => union_xywh(prev, limited),
+            None => limited,
+        });
+    }
     let clamp_box = if layered {
-        layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints)
+        let slot = layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints)
             .map(|b| scale_xywh(b, s))
-            .or(slot_visual)
-            .unwrap_or(scale_xywh(dirty_bounds, s))
+            .or(slot_visual);
+        match slot {
+            Some(sb) => layered_slot_with_halo_pad(
+                sb,
+                scale_xywh(dirty_bounds, s),
+                LAST_PRESENT_PREV_MAX_OUTSET * s,
+            ),
+            None => scale_xywh(dirty_bounds, s),
+        }
     } else {
-        scale_xywh(dirty_bounds, s)
+        // Caret blink dirties the I-beam (2px). Clamping last-present to that
+        // tiny dirty made `prev_area > 4×dirty` fire, then `I-beam+48px` ate the
+        // rounded stroke and the sibling clear X when the caret sat at the
+        // content-box end. Clamp to the collect slot, not the I-beam.
+        slot_visual.unwrap_or_else(|| scale_xywh(dirty_bounds, s))
     };
     // `clamp_last_present_prev` is in logical px; `clamp_box` may already be scaled.
     let clamp_logical = if s > 0.0 {
@@ -909,23 +1005,9 @@ pub(crate) fn node_present_reset_rect(
             clamp_last_present_prev(p, clamp_logical)
         }
     }) {
-        let mut pb = scale_xywh(prev, s);
-        if layered {
-            // last-present visual includes the SDF halo. Unioning it re-punches
-            // wrapping thread below Latest; keep the previous *fill* only.
-            let halo = matching_slots_own_halo(dirty_key, dirty_bounds, node_paints, instances, s);
-            if halo > 0.0 {
-                let inset = [
-                    pb[0] + halo,
-                    pb[1] + halo,
-                    (pb[2] - 2.0 * halo).max(0.0),
-                    (pb[3] - 2.0 * halo).max(0.0),
-                ];
-                if inset[2] > 0.5 && inset[3] > 0.5 {
-                    pb = inset;
-                }
-            }
-        }
+        // Keep the previous SDF halo. Insetting by own-halo left the last fade
+        // frame in PartialLoad (stacked enter ring / hide ghost pill).
+        let pb = scale_xywh(prev, s);
         acc = Some(match acc {
             Some(now) => union_xywh(now, pb),
             None => pb,
@@ -940,7 +1022,7 @@ pub(crate) fn node_present_reset_rect(
     // 1px parent border). When `prev_bounds` is missing (key recycle / first
     // present), keep RESET_PAD so the **theme** focus-ring halo (Hard spread /
     // Soft blur) is still covered by current blur-1 ink.
-    let wipe_pad = if ink.is_some() && prev_bounds.is_none() {
+    let wipe_pad = if sdf_ink && ink.is_some() && prev_bounds.is_none() {
         let (blur, spread) = crate::style::focus_ring_params(crate::style::focus_ring_style());
         pad.max(0.0)
             .max(sdf_painted_halo_pad(blur, spread, [0.0, 0.0]) * s)
@@ -956,7 +1038,17 @@ pub(crate) fn node_present_reset_rect(
             }
             None => Some(r),
         })
-        .map(|r| clip_node_present_rect(r, dirty_key, dirty_bounds, node_paints, s, layered))
+        .map(|r| {
+            // Gallery overlays → 数据: reused ScrollArea dest-reset occupancy-clipped
+            // against the new table and left ViewportModal in the emptied bands.
+            // When this dirty already fills the overflow clip, siblings outside
+            // that clip (sidebar / 8b) stay safe without occupancy shrink.
+            if dest_reset_fills_overflow_clip(dirty_bounds, overflow) {
+                r
+            } else {
+                clip_node_present_rect(r, dirty_key, dirty_bounds, node_paints, s, layered)
+            }
+        })
         .filter(|r| r[2] > 0.5 && r[3] > 0.5)
 }
 
@@ -1016,8 +1108,13 @@ fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         if !aabb_contains(parent_box, child_box) {
             return true;
         }
-        let same_box = (parent.bounds[2] - child.bounds[2]).abs() <= 2.5
-            && (parent.bounds[3] - child.bounds[3]).abs() <= 2.5;
+        // Occupancy (rest), not visual bounds. `animate-spin` grows only the
+        // leaf `NodePaint.bounds` to the circumcircle; the MarkerIcon wrap
+        // stays the unrotated size-4 box. Comparing visual sizes then misses
+        // same-box wrappers, wrap last-present unions the bake, and idle
+        // PartialLoad dest-resets the wrap — src-overing the spinner twice.
+        let same_box = (parent_box[2] - child_box[2]).abs() <= 2.5
+            && (parent_box[3] - child_box[3]).abs() <= 2.5;
         let much_larger = parent.bounds[2] > child.bounds[2] * 1.5 + 8.0
             || parent.bounds[3] > child.bounds[3] * 1.5 + 8.0;
         if much_larger {
@@ -1025,10 +1122,19 @@ fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         }
         // Identity + vertex AA: instance ink is wrap+2. Unioning it into the
         // wrap last-present looks like a translation every idle spin tick.
+        //
+        // Text-only same-box (MarkerContent + text leaf): neither rest grows.
+        // Treating both as "wrap" skipped glyph ink on *both* → last-present
+        // `[x,y,0,0]` and dest-reset ∪ prev collapsed. Lower key keeps ink
+        // (leaf allocated first); higher key wrap skips.
         if same_box {
-            return !parent
-                .rest
-                .is_some_and(|r| parent.bounds[2] > r[2] + 2.5 || parent.bounds[3] > r[3] + 2.5);
+            let parent_grown = parent.rest.is_some_and(|r| {
+                parent.bounds[2] > r[2] + 2.5 || parent.bounds[3] > r[3] + 2.5
+            });
+            if parent_grown {
+                return false;
+            }
+            return parent.key > child.key;
         }
         return false;
     }
@@ -1049,6 +1155,12 @@ fn nested_foreign_owns(
     paints
         .iter()
         .any(|q| is_nested_foreign_slot(parent, q) && range_contains_index(range(q), i))
+}
+
+fn slot_has_sdf_dest_ink(p: &NodePaint, instances: &[InstanceInput]) -> bool {
+    let lo = p.instance.0.min(instances.len());
+    let hi = p.instance.1.min(instances.len());
+    instances[lo..hi].iter().any(instance_has_dest_ink)
 }
 
 /// Collect-slot visual box plus this frame's transformed instance / texture / glyph ink.
@@ -1077,7 +1189,10 @@ pub(crate) fn node_paint_visual_bounds_in(
     chrome: &[InstanceInput],
     paints: &[NodePaint],
 ) -> [f32; 4] {
-    let mut acc = if p.bounds[2] > 0.0 && p.bounds[3] > 0.0 {
+    // Text/caret leaves have no SDF. Starting from the flex `w(100%)` layout box
+    // made last-present (and dest-reset ∪ prev) the whole Input content slot —
+    // blink then punched the rounded stroke and the sibling clear X.
+    let mut acc = if slot_has_sdf_dest_ink(p, instances) && p.bounds[2] > 0.0 && p.bounds[3] > 0.0 {
         Some(p.bounds)
     } else {
         None
@@ -1088,9 +1203,9 @@ pub(crate) fn node_paint_visual_bounds_in(
         if nested_foreign_owns(p, paints, lo + off, |q| q.instance) {
             continue;
         }
-        // Layered last-present must not union the SDF halo. That AABB is 4× the
-        // pill and dest-reset of it punches wrapping thread / the overlay rail.
-        let b = if p.layered {
+        // Layered last-present must cover the SDF halo so hide-settle dest-reset
+        // can erase it. Occupancy still keeps the overlay rail out of the wipe.
+        let b = if p.layered && !instance_has_outset_shadow(inst) {
             instance_fill_bounds(inst)
         } else {
             instance_paint_bounds(inst)
@@ -1166,7 +1281,18 @@ pub(crate) fn node_paint_visual_bounds_in(
             None => b,
         });
     }
-    let mut acc = acc.unwrap_or(p.bounds);
+    // Text/caret leaves have no SDF. Falling back to the flex `w(100%)` box made
+    // last-present (and dest-reset ∪ prev) the whole Input content slot.
+    let mut acc = match acc {
+        Some(v) => v,
+        None if slot_has_sdf_dest_ink(p, instances) && p.bounds[2] > 0.0 && p.bounds[3] > 0.0 => {
+            p.bounds
+        }
+        None => [p.bounds[0], p.bounds[1], 0.0, 0.0],
+    };
+    if acc[2] <= 0.0 || acc[3] <= 0.0 {
+        return acc;
+    }
     if let Some(c) = p.overflow_clip {
         if c[2] > 0.0 && c[3] > 0.0 {
             let clip = overflow_allowing_own_halo(c, slot_own_outset_halo_pad(p, instances, 1.0));
@@ -1181,7 +1307,18 @@ pub(crate) fn node_paint_visual_bounds_in(
 /// Glyph AABB that dest-reset / last-present may follow: shadow outset yes,
 /// layout overflow into a neighbor slot no.
 fn text_ink_in_slot(n: &TextLayoutInfo, slot: [f32; 4]) -> Option<[f32; 4]> {
-    let b = text_paint_bounds(n);
+    let mut b = text_paint_bounds(n);
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return None;
+    }
+    // Input text leaf is `w(100%)` of the remaining flex slot. Glyphon's box is
+    // that layout width; dest-reset of the empty stretch punched the rounded
+    // stroke and the sibling clear X. Last-present follows painted advance.
+    if n.style.overflow.allows_caret_scroll() {
+        if let Some(ink_w) = text_run_ink_width(n) {
+            b[2] = b[2].min(ink_w);
+        }
+    }
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return None;
     }
@@ -1193,6 +1330,25 @@ fn text_ink_in_slot(n: &TextLayoutInfo, slot: [f32; 4]) -> Option<[f32; 4]> {
         + n.style.shadow_offset[1].abs()
         + 2.0;
     intersect_rects(b, padded_xywh(slot, extra))
+}
+
+/// Painted advance of a nowrap edit run (not the flex layout box).
+fn text_run_ink_width(n: &TextLayoutInfo) -> Option<f32> {
+    if n.style.font_family.as_deref() == Some("lucide") {
+        return None;
+    }
+    if let Some(p) = n.prepared.as_ref() {
+        return Some(crate::text::intrinsic_width(p).max(0.0));
+    }
+    if n.text.is_empty() {
+        return None;
+    }
+    Some(crate::text::measure_prefix_advance(
+        &n.text,
+        n.style.size_resolved(),
+        n.style.weight_resolved(),
+        n.height.max(1.0),
+    ))
 }
 
 /// Page-node visual slots for `last_present_node_bounds` (logical px).
@@ -1225,7 +1381,9 @@ pub(crate) fn last_present_prev_for_dirty(
 ) -> Option<[f32; 4]> {
     match kind {
         PaintDirtyKind::Node => slots.iter().find(|(k, _)| *k == key).map(|(_, b)| *b),
-        PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore => None,
+        PaintDirtyKind::Overlay
+        | PaintDirtyKind::OverlayRestore
+        | PaintDirtyKind::Region => None,
     }
 }
 
@@ -1277,12 +1435,14 @@ fn node_present_scissor_logical_ex(
     occupancy_clip: bool,
 ) -> [f32; 4] {
     let layered = matching_slot_is_layered(dirty_key, dirty_bounds, node_paints);
-    // Shadow-padded `PaintDirty.bounds` (Latest box-shadow + 8px Node pad) is
-    // the hover chrome hole, not the wipe. Layered jump dest-reset must clamp
-    // last-present to the opaque slot or a 48px neighborhood punches wrapping
-    // text below the pill and the overlay rail.
+    // Latest `PaintDirty.bounds` already includes the CSS shadow pad. Clamping
+    // GPU scissor to the opaque slot left the halo outside CLEAR — PartialLoad
+    // stacked every fade frame. Ping/bounce dirty is the visual itself.
     let clamp_box = if layered {
-        layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints).unwrap_or(dirty_bounds)
+        match layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints) {
+            Some(slot) => layered_slot_with_halo(slot, dirty_bounds),
+            None => dirty_bounds,
+        }
     } else {
         dirty_bounds
     };
@@ -1299,7 +1459,9 @@ fn node_present_scissor_logical_ex(
     };
     let overflow = match kind {
         PaintDirtyKind::Node => node_present_overflow_clip(dirty_key, dirty_bounds, node_paints),
-        PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore => None,
+        PaintDirtyKind::Overlay
+        | PaintDirtyKind::OverlayRestore
+        | PaintDirtyKind::Region => None,
     };
     if let Some(c) = overflow {
         scissor = intersect_rects(scissor, c).unwrap_or(scissor);
@@ -1309,7 +1471,7 @@ fn node_present_scissor_logical_ex(
     if let Some(c) = overflow {
         scissor = intersect_rects(scissor, c).unwrap_or(scissor);
     }
-    if occupancy_clip {
+    if occupancy_clip && !dest_reset_fills_overflow_clip(dirty_bounds, overflow) {
         clip_node_present_rect(scissor, dirty_key, dirty_bounds, node_paints, 1.0, layered)
     } else {
         scissor
@@ -1319,7 +1481,7 @@ fn node_present_scissor_logical_ex(
 pub(crate) fn node_present_scissor_pad(kind: PaintDirtyKind) -> f32 {
     match kind {
         PaintDirtyKind::Overlay => 16.0,
-        PaintDirtyKind::OverlayRestore => 0.0,
+        PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => 0.0,
         PaintDirtyKind::Node => 8.0,
     }
 }
@@ -1330,6 +1492,19 @@ fn matching_slot_is_layered(
     node_paints: &[NodePaint],
 ) -> bool {
     layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints).is_some()
+}
+
+/// Layered jump dirty may be the full-width dock. Keep the halo pad around the
+/// opaque slot (Latest outset is well under 48px) so dest-reset / blit
+/// pins cannot swallow the overlay rail.
+fn layered_slot_with_halo(slot: [f32; 4], dirty_bounds: [f32; 4]) -> [f32; 4] {
+    layered_slot_with_halo_pad(slot, dirty_bounds, LAST_PRESENT_PREV_MAX_OUTSET)
+}
+
+fn layered_slot_with_halo_pad(slot: [f32; 4], dirty_bounds: [f32; 4], pad: f32) -> [f32; 4] {
+    let neighborhood = padded_xywh(slot, pad.max(0.0));
+    let halo = intersect_rects(dirty_bounds, neighborhood).unwrap_or(slot);
+    union_xywh(slot, halo)
 }
 
 /// Collect-box of the layered overlay slot (opaque pill, not shadow-padded dirty).
@@ -1465,9 +1640,12 @@ fn clip_rect_against_layered_siblings(
         if intersect_rects(rect, occ).is_none() {
             continue;
         }
-        // Thin overlay rail vs full-width jump dock: the dock has no ink on
-        // the padding strip. Keep the rail wipe so fade can erase the thumb.
-        if rect[2] < 24.0 && occ[2] > rect[2] * 1.5 + 8.0 {
+        // Overlay chrome (Latest pill / overlay rail) sits on in-flow wrapping
+        // that inherits `layered` from MessageScroller's stacking-context.
+        // Shrinking the wipe against those wide siblings left the SDF halo in
+        // PartialLoad (stacked enter ring / hide ghost) or punched a pill hole
+        // with no recapture. Keep clipping a *peer* overlay (rail vs pill).
+        if occ[2] > rect[2] * 1.5 + 8.0 {
             continue;
         }
         rect = shrink_aabb_to_exclude(rect, occ);
@@ -1555,18 +1733,31 @@ fn clip_rect_against_foreign_siblings(
         if point_in_rect(rest_host, rect_center(occ)) {
             continue;
         }
-        if i < host_idx && intersect_rects(rest_host, occ).is_some() {
-            // Host already overlaps this earlier sibling (overlay-layout reaction
-            // nip). Occupancy must src-over it (hover:scale top). Dest-reset must
-            // wipe the same overlap on leave or the enlarged strip stays as a ghost.
-            // Focus-ring pad still clips labels the field does not overlap.
-            continue;
+        if host_layered && !p.layered {
+            if !slot_visual_exceeds_rest(dirty_key, node_paints) {
+                // Latest-style overlay: wrapping thread is underlay. Occupancy
+                // shrink of those siblings left the SDF halo in PartialLoad
+                // (stacked enter ring / hide ghost). Ping scale-2 still clips
+                // rest-disjoint captions below.
+                continue;
+            }
+            // Halo below the rest box sits on wrapping thread. Captions *above*
+            // a layered ping still clip.
+            let host_bottom = rest_host[1] + rest_host[3];
+            if occ[1] + 0.5 >= host_bottom {
+                continue;
+            }
         }
-        if host_layered && i >= host_idx {
-            // Jump pill hangs over wrapping thread *below*. Shrinking against those
-            // later in-flow slots left a 24px strip and dest-reset returned None.
-            // Earlier rest-disjoint captions (gallery `ping` title) still clip.
-            continue;
+        if i < host_idx && intersect_rects(rest_host, occ).is_some() {
+            // hover:scale leave must wipe the enlarged overlap with an earlier
+            // sibling (reaction chip over content). Rest-overlapping rounded
+            // chips (AvatarGroup A/B/C) must not: AABB dest-reset of the later
+            // circle punches the earlier disk's crescent.
+            if !super::damage::is_rest_stack_chip(rest_host)
+                || !super::damage::is_rest_stack_chip(occ)
+            {
+                continue;
+            }
         }
         if intersect_rects(rect, occ).is_none() {
             continue;
@@ -1700,6 +1891,7 @@ pub(crate) fn node_present_dest_reset_scaled(
         node_paints,
         instances,
         textured,
+        &[],
         ui_scale,
         prev_bounds,
     )
@@ -1721,6 +1913,7 @@ pub(crate) fn node_present_dest_reset_full(
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
     textured: &[ScaledTexturedDraw],
+    chrome: &[InstanceInput],
     ui_scale: f32,
     prev_bounds: Option<[f32; 4]>,
 ) -> Option<NodePresentDestReset> {
@@ -1730,6 +1923,7 @@ pub(crate) fn node_present_dest_reset_full(
         node_paints,
         instances,
         textured,
+        chrome,
         NODE_PRESENT_RESET_PAD_PHYSICAL,
         ui_scale,
         prev_bounds,
@@ -1739,7 +1933,13 @@ pub(crate) fn node_present_dest_reset_full(
     let cx = rect[0] + rect[2] * 0.5;
     let cy = rect[1] + rect[3] * 0.5;
     let behind_idx = instances.iter().enumerate().rev().find_map(|(i, inst)| {
-        if skip_dirty(i) || !instance_fill_opaque(inst) {
+        if skip_dirty(i) {
+            return None;
+        }
+        // Transparent Input fill still has a 1px rounded stroke. Skipping it
+        // CLEARed the I-beam hole with page color and never replayed the SDF —
+        // a sharp remnant on the inner-right radius.
+        if !instance_fill_opaque(inst) && !instance_has_dest_ink(inst) {
             return None;
         }
         let [px, py] = inst.rect_pos;
@@ -1803,9 +2003,14 @@ pub(crate) fn node_present_dest_reset_full(
         .map(|o| slot_own_chrome_replay(o, instances, ui_scale))
         .filter(|r| r.0 <= idx && idx < r.1)
         .unwrap_or((idx, idx + 1));
+    // Rounded underlay with nothing further behind (gallery Item on a rounded
+    // card, no page fill at the sample): falling through to None skipped the
+    // wipe and PartialLoad kept the previous 1px outline. CLEAR the hole with
+    // the underlay's own color; replay still redraws the SDF in the scissor.
     let clear = opaque_fill_color_at_skipping(instances, cx, cy, |i| {
         skip_dirty(i) || (i >= replay.0 && i < replay.1)
-    })?;
+    })
+    .unwrap_or(behind.color);
     Some(NodePresentDestReset {
         rect,
         clear,
@@ -1903,7 +2108,7 @@ pub(crate) fn node_present_glyphs_for_dirty(
 ) -> BTreeSet<usize> {
     let mut idx = BTreeSet::new();
     match dirty.kind {
-        PaintDirtyKind::OverlayRestore => {
+        PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => {
             for (i, n) in page_text.iter().enumerate() {
                 if text_hits_damage(n, dirty.bounds) {
                     idx.insert(i);
@@ -1979,7 +2184,7 @@ pub(crate) fn node_present_foreign_glyph_indices(
 ) -> Vec<usize> {
     if !matches!(
         dirty.kind,
-        PaintDirtyKind::Node | PaintDirtyKind::OverlayRestore
+        PaintDirtyKind::Node | PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
     ) {
         return Vec::new();
     }
@@ -2025,7 +2230,7 @@ fn glyph_belongs_to_dirty(
     node_paints: &[NodePaint],
 ) -> bool {
     match dirty.kind {
-        PaintDirtyKind::OverlayRestore => text_hits_damage(n, dirty.bounds),
+        PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => text_hits_damage(n, dirty.bounds),
         PaintDirtyKind::Overlay => false,
         PaintDirtyKind::Node => {
             // Collect-slot membership only — including layered jump chrome.
@@ -2035,6 +2240,24 @@ fn glyph_belongs_to_dirty(
             glyph_in_dirty_slot(i, dirty, page_text, node_paints)
         }
     }
+}
+
+fn layered_underlay_hole(dirty: &PaintDirty, node_paints: &[NodePaint]) -> Option<[f32; 4]> {
+    // Hide settle may skip opacity-0 ink; dest-reset still CLEARs the last
+    // visual. Recapture wrapping in that hole or the thread stays punched.
+    let hole = match layered_overlay_slot_bounds(dirty.key, dirty.bounds, node_paints) {
+        Some(slot) => union_xywh(slot, dirty.bounds),
+        None => {
+            if !node_paints.iter().any(|p| p.key == dirty.key && p.layered) {
+                return None;
+            }
+            dirty.bounds
+        }
+    };
+    if hole[2] <= 0.5 || hole[3] <= 0.5 {
+        return None;
+    }
+    Some(padded_xywh(hole, NODE_PRESENT_GLYPH_CLIP_PAD))
 }
 
 fn glyph_is_layered_underlay(
@@ -2047,12 +2270,12 @@ fn glyph_is_layered_underlay(
     if dirty.kind != PaintDirtyKind::Node {
         return false;
     }
-    let Some(slot) = layered_overlay_slot_bounds(dirty.key, dirty.bounds, node_paints) else {
+    let Some(hole) = layered_underlay_hole(dirty, node_paints) else {
         return false;
     };
-    // Shadow-padded `dirty.bounds` hangs below the pill onto the next wrapping
-    // line. Recapture only glyphs that sit behind the opaque slot.
-    text_hits_damage(n, slot) && !glyph_in_dirty_slot(i, dirty, page_text, node_paints)
+    // Dest-reset CLEARs fill ∪ outset halo. Wrapping runs in the halo must
+    // recapture here or the thread stays punched / the SDF stacks in retain.
+    text_hits_damage(n, hole) && !glyph_in_dirty_slot(i, dirty, page_text, node_paints)
 }
 
 /// Wrapping underlay glyphs dest-reset punched, restored *under* the overlay slot.
@@ -2067,10 +2290,9 @@ pub(crate) fn node_present_layered_underlay_capture_text(
         if dirty.kind != PaintDirtyKind::Node {
             continue;
         }
-        let Some(slot) = layered_overlay_slot_bounds(dirty.key, dirty.bounds, node_paints) else {
+        let Some(hole) = layered_underlay_hole(dirty, node_paints) else {
             continue;
         };
-        let hole = padded_xywh(slot, NODE_PRESENT_GLYPH_CLIP_PAD);
         for (i, n) in page_text.iter().enumerate() {
             if seen.contains(&i) {
                 continue;
@@ -2085,6 +2307,64 @@ pub(crate) fn node_present_layered_underlay_capture_text(
         }
     }
     out
+}
+
+/// Skip inner dest-reset only when a larger dirty ancestor will redraw the hole.
+///
+/// Opaque own fill is the common case (cards / fields). InputAdornment shells are
+/// transparent-fill with border + Hard ring — still own chrome that dest-resets and
+/// redraws. Geometry-only nesting without that chrome is not enough: gallery Item
+/// outline→default is larger than its title but had no own fill, so skipping the
+/// title wipe left `"outline"` glyphs under `"default"`.
+///
+/// Own chrome only — Item's collect range includes descendant quads (gear icon).
+pub fn paint_dirty_skips_node_dest_reset_covered(
+    dirty: &PaintDirty,
+    nodes: &[PaintDirty],
+    layered: bool,
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    ui_scale: f32,
+) -> bool {
+    if layered || dirty.kind != PaintDirtyKind::Node {
+        return false;
+    }
+    let area = dirty.bounds[2] * dirty.bounds[3];
+    let cx = dirty.bounds[0] + dirty.bounds[2] * 0.5;
+    let cy = dirty.bounds[1] + dirty.bounds[3] * 0.5;
+    nodes.iter().any(|o| {
+        o.kind == PaintDirtyKind::Node
+            && o.key != dirty.key
+            && o.bounds[2] * o.bounds[3] > area + 1.0
+            && cx >= o.bounds[0]
+            && cy >= o.bounds[1]
+            && cx < o.bounds[0] + o.bounds[2]
+            && cy < o.bounds[1] + o.bounds[3]
+            && node_dirty_repaints_nested_hole(o.key, o.bounds, node_paints, instances, ui_scale)
+    })
+}
+
+/// Larger dirty redraws the hole: opaque fill, or own border / Hard-ring chrome
+/// (InputAdornment shell is `background` fill + ring; plain transparent parents still fail).
+fn node_dirty_repaints_nested_hole(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    ui_scale: f32,
+) -> bool {
+    let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    node_paints.iter().any(|p| {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
+            return false;
+        }
+        let (lo, hi) = slot_own_chrome_replay(p, instances, ui_scale);
+        instances[lo..hi].iter().any(|inst| {
+            instance_fill_opaque(inst)
+                || (inst.border_width > 0.5 && inst.border_color[3] > 0.05)
+                || (inst.shadow_spread.abs() > 1.0 && inst.shadow_color[3] > 0.05)
+        })
+    })
 }
 
 /// Matching collect slot owns glyphon (paint-only `bind_text` labels have no SDF fill).
@@ -2940,6 +3220,173 @@ mod tests {
             node_present_dest_reset(bounds_keyed.key, bounds_keyed.bounds, &[label], &instances)
                 .expect("same-box text-only dirty must dest-reset");
         assert!((rect2[2] - rect[2]).abs() < 1.0);
+    }
+
+    #[test]
+    fn caret_blink_text_leaf_must_not_wipe_flex_content_box() {
+        // `push_focused_text_edit_caret_damage` dirties the text leaf's layout
+        // AABB (often flex-grown). Text-only dirty fallback used to wipe that
+        // whole box every OFF frame and punch the Input ring / focus halo.
+        let mut card = blank_instance(0.0, 0.0, 400.0, 80.0);
+        card.color = [0.96, 0.96, 0.97, 1.0];
+        let leaf = [12.0, 20.0, 300.0, 24.0];
+        let ibeam = [40.0, 22.0, 2.0, 18.0];
+        let p = slot(5, leaf, (0, 1));
+        let instances = [card];
+        let (wipe, _) = node_present_dest_reset_scaled(
+            5,
+            leaf,
+            &[p],
+            &instances,
+            &[],
+            1.0,
+            Some(ibeam),
+        )
+        .expect("caret OFF must still wipe via last-present I-beam");
+        assert!(
+            wipe[2] < leaf[2] * 0.5 && wipe[3] <= leaf[3] + 2.0,
+            "wipe must follow I-beam∪prev, not the flex leaf\n wipe={wipe:?} leaf={leaf:?} ibeam={ibeam:?}"
+        );
+        assert!(
+            wipe[0] <= ibeam[0] && wipe[0] + wipe[2] >= ibeam[0] + ibeam[2],
+            "wipe must cover the previous I-beam\n wipe={wipe:?}"
+        );
+    }
+
+    #[test]
+    fn transparent_item_must_not_skip_title_dest_reset() {
+        // Gallery Item outline→default: both the row and the bind_text title are
+        // dirty. Geometry nesting used to skip the title wipe; the Item has no
+        // fill, so "outline" glyphs stayed in retain under "default".
+        let mut card = blank_instance(0.0, 0.0, 400.0, 80.0);
+        card.color = [0.96, 0.96, 0.97, 1.0];
+        card.radii = [8.0; 4];
+        let item_box = [8.0, 8.0, 384.0, 56.0];
+        let title_box = [48.0, 16.0, 200.0, 20.0];
+        let item_p = slot(2, item_box, (0, 0));
+        let title_p = slot(3, title_box, (0, 1));
+        let item_dirty = PaintDirty {
+            key: 2,
+            bounds: item_box,
+            kind: PaintDirtyKind::Node,
+        };
+        let title_dirty = PaintDirty {
+            key: 3,
+            bounds: title_box,
+            kind: PaintDirtyKind::Node,
+        };
+        let dirties = [item_dirty, title_dirty];
+        let paints = [item_p, title_p];
+        let instances = [card];
+        assert!(
+            crate::app::damage::paint_dirty_nested_in_larger_node(&title_dirty, &dirties),
+            "precondition: title center sits in the Item dirty"
+        );
+        assert!(
+            crate::app::damage::paint_dirty_skips_node_dest_reset(&title_dirty, &dirties, false),
+            "precondition: geometry-only skip would fire"
+        );
+        assert!(
+            !paint_dirty_skips_node_dest_reset_covered(
+                &title_dirty,
+                &dirties,
+                false,
+                &paints,
+                &instances,
+                1.0,
+            ),
+            "transparent Item must not skip the title dest-reset"
+        );
+        assert!(
+            node_present_dest_reset_full(
+                3,
+                title_box,
+                &paints,
+                &instances,
+                &[],
+                &[],
+                1.0,
+                Some(title_box),
+            )
+            .is_some(),
+            "title dest-reset must wipe leftover outline glyphs using the card behind"
+        );
+    }
+
+    #[test]
+    fn transparent_item_with_icon_must_not_skip_title_dest_reset() {
+        // Gallery Item has ItemMedia (gear). Collect range includes that opaque
+        // descendant; skip must look at Item's own chrome only.
+        let mut card = blank_instance(0.0, 0.0, 400.0, 80.0);
+        card.color = [0.96, 0.96, 0.97, 1.0];
+        let mut item_fill = blank_instance(8.0, 8.0, 384.0, 56.0);
+        item_fill.color = [0.0, 0.0, 0.0, 0.0];
+        let mut icon = blank_instance(16.0, 20.0, 24.0, 24.0);
+        icon.color = [0.4, 0.4, 0.45, 1.0];
+        let item_box = [8.0, 8.0, 384.0, 56.0];
+        let title_box = [48.0, 16.0, 200.0, 20.0];
+        let mut item_p = slot(2, item_box, (0, 0));
+        item_p.instance = (1, 3);
+        let title_p = slot(3, title_box, (0, 1));
+        let item_dirty = PaintDirty {
+            key: 2,
+            bounds: item_box,
+            kind: PaintDirtyKind::Node,
+        };
+        let title_dirty = PaintDirty {
+            key: 3,
+            bounds: title_box,
+            kind: PaintDirtyKind::Node,
+        };
+        let dirties = [item_dirty, title_dirty];
+        assert!(
+            node_dirty_has_opaque_fill(2, item_box, &[item_p, title_p], &[card, item_fill, icon]),
+            "precondition: descendant icon would look like Item fill"
+        );
+        assert!(
+            !paint_dirty_skips_node_dest_reset_covered(
+                &title_dirty,
+                &dirties,
+                false,
+                &[item_p, title_p],
+                &[card, item_fill, icon],
+                1.0,
+            ),
+            "opaque ItemMedia must not make default Item skip the title dest-reset"
+        );
+    }
+
+    #[test]
+    fn opaque_shell_still_skips_nested_input_dest_reset() {
+        // Kbd Input inside InputAdornment: the shell redraws opaque fill, so the
+        // nested field still skips its own wipe (avoids punching gap-2 neighbors).
+        let mut fill = blank_instance(10.0, 10.0, 320.0, 40.0);
+        fill.color = [1.0, 1.0, 1.0, 1.0];
+        let mut shell_p = slot(1, [10.0, 10.0, 320.0, 40.0], (0, 0));
+        shell_p.instance = (0, 1);
+        let input_p = slot(2, [12.0, 12.0, 260.0, 36.0], (0, 0));
+        let shell = PaintDirty {
+            key: 1,
+            bounds: [10.0, 10.0, 320.0, 40.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let input = PaintDirty {
+            key: 2,
+            bounds: [12.0, 12.0, 260.0, 36.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let dirties = [shell, input];
+        assert!(
+            paint_dirty_skips_node_dest_reset_covered(
+                &input,
+                &dirties,
+                false,
+                &[shell_p, input_p],
+                &[fill],
+                1.0,
+            ),
+            "opaque InputAdornment must still nested-skip the field dest-reset"
+        );
     }
 
     #[test]
@@ -4028,7 +4475,7 @@ mod tests {
         };
         let paints = [content_p, chip_p];
         let wipe =
-            super::node_present_reset_rect(2, dirty, &paints, &[], &[], 0.0, 1.0, Some(prev))
+            super::node_present_reset_rect(2, dirty, &paints, &[], &[], &[], 0.0, 1.0, Some(prev))
                 .expect("leave dest-reset");
         assert!(
             wipe[1] <= prev[1] + 0.5,
@@ -4056,6 +4503,72 @@ mod tests {
             layered: false,
             rest,
         }
+    }
+
+    #[test]
+    fn dest_reset_later_avatar_must_not_punch_earlier_disk_crescent() {
+        // 32px circles, -8px overlap. Earlier-sibling occupancy used to skip the
+        // clip (hover:scale leave). AABB dest-reset of B then CLEARed A's crescent.
+        let a = [0.0, 0.0, 32.0, 32.0];
+        let b = [24.0, 0.0, 32.0, 32.0];
+        let c = [48.0, 0.0, 32.0, 32.0];
+        let mut page = blank_instance(0.0, 0.0, 320.0, 80.0);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut fa = blank_instance(a[0], a[1], a[2], a[3]);
+        fa.color = [0.9, 0.2, 0.2, 1.0];
+        fa.radii = [16.0; 4];
+        let mut fb = blank_instance(b[0], b[1], b[2], b[3]);
+        fb.color = [0.2, 0.7, 0.3, 1.0];
+        fb.radii = [16.0; 4];
+        let mut fc = blank_instance(c[0], c[1], c[2], c[3]);
+        fc.color = [0.95, 0.95, 0.95, 1.0];
+        fc.radii = [16.0; 4];
+        let paints = [
+            paint_slot(1, a, Some(a), (1, 2)),
+            paint_slot(2, b, Some(b), (2, 3)),
+            paint_slot(3, c, Some(c), (3, 4)),
+            paint_slot(
+                0,
+                [0.0, 0.0, 320.0, 80.0],
+                Some([0.0, 0.0, 320.0, 80.0]),
+                (0, 1),
+            ),
+        ];
+        let instances = [page, fa, fb, fc];
+        let (wipe_b, _) = node_present_dest_reset_scaled(2, b, &paints, &instances, &[], 1.0, None)
+            .expect("card behind B");
+        let crescent = [22.0, 16.0];
+        let in_a_disk = {
+            let dx = crescent[0] - 16.0;
+            let dy = crescent[1] - 16.0;
+            dx * dx + dy * dy <= 16.0 * 16.0
+        };
+        let in_b_disk = {
+            let dx = crescent[0] - 40.0;
+            let dy = crescent[1] - 16.0;
+            dx * dx + dy * dy <= 16.0 * 16.0
+        };
+        assert!(
+            in_a_disk && !in_b_disk,
+            "precondition: (22,16) is A's crescent vs B"
+        );
+        assert!(
+            crescent[0] < wipe_b[0]
+                || crescent[0] >= wipe_b[0] + wipe_b[2]
+                || crescent[1] < wipe_b[1]
+                || crescent[1] >= wipe_b[1] + wipe_b[3],
+            "B dest-reset must not AABB-clear A's crescent, wipe={wipe_b:?}"
+        );
+        let (wipe_c, _) = node_present_dest_reset_scaled(3, c, &paints, &instances, &[], 1.0, None)
+            .expect("card behind C");
+        let crescent_bc = [46.0, 16.0];
+        assert!(
+            crescent_bc[0] < wipe_c[0]
+                || crescent_bc[0] >= wipe_c[0] + wipe_c[2]
+                || crescent_bc[1] < wipe_c[1]
+                || crescent_bc[1] >= wipe_c[1] + wipe_c[3],
+            "C dest-reset must not AABB-clear B's crescent, wipe={wipe_c:?}"
+        );
     }
 
     #[test]
@@ -4396,7 +4909,7 @@ mod tests {
         let paints = [bar_p, chip_p];
         let instances = [page, fill, outline];
         let bake_bounds = textured_paint_bounds(&bake);
-        let reset = node_present_dest_reset_full(2, chip, &paints, &instances, &[bake], 1.0, None)
+        let reset = node_present_dest_reset_full(2, chip, &paints, &instances, &[bake], &[], 1.0, None)
             .expect("card under capsule");
         assert_eq!(
             reset.clear, card_color,
@@ -4485,7 +4998,7 @@ mod tests {
             rest: None,
         });
         let bake = blank_textured(27.0, 11.0, 26.0, 26.0, MAT2D_IDENTITY);
-        let reset = node_present_dest_reset_full(2, chip, &paints, &instances, &[bake], 1.0, None)
+        let reset = node_present_dest_reset_full(2, chip, &paints, &instances, &[bake], &[], 1.0, None)
             .expect("card under capsule");
         assert_eq!(
             reset.replay,
@@ -4670,6 +5183,131 @@ mod tests {
         assert!(
             !rect_contains_point(scissor, title[0] + 40.0, title[1] + title[3] - 4.0),
             "scissor pad must not leak past overflow clip into the title bottom\n scissor={scissor:?} title={title:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_unmatched_island_key_must_wipe_old_title_box() {
+        // Gallery events → 基础: Match stamps a new Taffy id on the title island.
+        // Dest-reset used to return None when the dirty key is gone from this
+        // frame's node_paints, so PartialLoad kept 「指针事件」 under 「基础」.
+        let old_title = [80.0, 8.0, 96.0, 24.0];
+        let new_title = [80.0, 8.0, 36.0, 24.0];
+        let mut page = blank_instance(0.0, 0.0, 400.0, 200.0);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut now_fill = blank_instance(new_title[0], new_title[1], new_title[2], new_title[3]);
+        now_fill.color = [0.96, 0.96, 0.96, 1.0];
+        let now = NodePaint {
+            key: 99,
+            bounds: new_title,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        let (wipe, _) = node_present_dest_reset_scaled(
+            41,
+            old_title,
+            &[now],
+            &[page, now_fill],
+            &[],
+            1.0,
+            None,
+        )
+        .expect("unmatched island dirty must still dest-reset the snapshotted box");
+        assert!(
+            aabb_covers(wipe, old_title),
+            "must wipe leftover 「指针事件」 glyphs, not only the new 「基础」 box\n wipe={wipe:?} old={old_title:?} now={new_title:?}"
+        );
+        assert!(
+            !aabb_covers(wipe, [0.0, 0.0, 400.0, 200.0]),
+            "must not fall back to a window wipe\n wipe={wipe:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_reused_page_island_must_wipe_previous_page_band() {
+        // Gallery 浮层 → 数据: Match reuses the ScrollArea Taffy id. Occupancy
+        // used to shrink that dest-reset against a tall foreign slot whose
+        // center sits above the island, leaving ViewportModal in retain.
+        let island = [200.0, 80.0, 800.0, 600.0];
+        let leftover = [220.0, 100.0, 400.0, 180.0];
+        let table = [220.0, 300.0, 760.0, 140.0];
+        let tall_foreign = [200.0, -1000.0, 800.0, 1200.0];
+        let mut page = blank_instance(island[0], island[1], island[2], island[3]);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut table_fill = blank_instance(table[0], table[1], table[2], table[3]);
+        table_fill.color = [1.0, 1.0, 1.0, 1.0];
+        let mut foreign_fill = blank_instance(
+            tall_foreign[0],
+            tall_foreign[1],
+            tall_foreign[2],
+            tall_foreign[3],
+        );
+        foreign_fill.color = [0.9, 0.9, 0.9, 1.0];
+        let host = NodePaint {
+            key: 1,
+            bounds: island,
+            overlay: false,
+            instance: (0, 1),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some(island),
+            layered: false,
+            rest: Some(island),
+        };
+        let table_slot = NodePaint {
+            key: 2,
+            bounds: table,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some(island),
+            layered: false,
+            rest: Some(table),
+        };
+        let foreign = NodePaint {
+            key: 3,
+            bounds: tall_foreign,
+            overlay: false,
+            instance: (2, 3),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: Some(tall_foreign),
+        };
+        let (wipe, _) = node_present_dest_reset_scaled(
+            1,
+            island,
+            &[host, table_slot, foreign],
+            &[page, table_fill, foreign_fill],
+            &[],
+            1.0,
+            Some(island),
+        )
+        .expect("reused page island must dest-reset");
+        let lx = leftover[0] + leftover[2] * 0.5;
+        let ly = leftover[1] + leftover[3] * 0.5;
+        assert!(
+            rect_contains_point(wipe, lx, ly),
+            "must wipe leftover ViewportModal band, not occupancy-clip it away\n wipe={wipe:?} leftover={leftover:?}"
+        );
+        assert!(
+            aabb_covers(wipe, table) || rect_contains_point(wipe, table[0] + 8.0, table[1] + 8.0),
+            "island dest-reset should still cover the new table neighborhood\n wipe={wipe:?} table={table:?}"
         );
     }
 
@@ -5242,8 +5880,8 @@ mod tests {
             "layered dest-reset must erase the opaque pill on the bubble\n wipe={wipe:?} btn={btn:?}"
         );
         assert!(
-            wipe[1] + wipe[3] <= btn[1] + btn[3] + 4.0,
-            "outset shadow must not dest-reset wrapping underlay below the pill\n wipe={wipe:?} btn={btn:?} blob={blob:?}"
+            aabb_covers(wipe, blob),
+            "layered dest-reset must wipe the outset halo or PartialLoad stacks it\n wipe={wipe:?} btn={btn:?} blob={blob:?}"
         );
         assert!(
             node_present_restore_underlay(2, btn, &[bubble_p, btn_p]),
@@ -5340,7 +5978,7 @@ mod tests {
         let dirty = padded_xywh(btn, 32.0);
         let paints = [wrap_p, btn_p, bar_p];
         let reset =
-            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], 1.0, Some(halo))
+            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], &[], 1.0, Some(halo))
                 .expect("card behind jump");
         let wrap_line = [16.0, 368.0, 280.0, 16.0];
         assert!(
@@ -5349,19 +5987,30 @@ mod tests {
             reset.rect
         );
         assert!(
-            reset.rect[1] + reset.rect[3] <= btn[1] + btn[3] + 4.0,
-            "transformed shadow halo must not dest-reset wrapping text below Latest\n wipe={:?} halo={halo:?} btn={btn:?}",
-            reset.rect
-        );
-        assert!(
-            intersect_rects(reset.rect, wrap_line).is_none(),
-            "dest-reset must not punch the next wrapping line\n wipe={:?} line={wrap_line:?}",
+            aabb_covers(reset.rect, halo) || reset.rect[1] + reset.rect[3] >= btn[1] + btn[3] + 8.0,
+            "transformed shadow halo must dest-reset or PartialLoad stacks the fade\n wipe={:?} halo={halo:?} btn={btn:?}",
             reset.rect
         );
         assert!(
             intersect_rects(reset.rect, bar).is_none(),
             "dest-reset must not punch the overlay scrollbar\n wipe={:?} bar={bar:?}",
             reset.rect
+        );
+        let mut wrap_run = sample_text("wrapping", wrap_line[0] + 8.0);
+        wrap_run.y = wrap_line[1];
+        wrap_run.width = 80.0;
+        wrap_run.height = wrap_line[3];
+        let halo_dirty = PaintDirty {
+            key: 2,
+            bounds: dirty,
+            kind: PaintDirtyKind::Node,
+        };
+        let underlay =
+            node_present_layered_underlay_capture_text(&[halo_dirty], &[wrap_run], &paints);
+        assert!(
+            !underlay.is_empty(),
+            "halo dest-reset must restore wrapping glyphs under the overlay, got {} runs",
+            underlay.len()
         );
         let last = last_present_visual_slots(&paints, &instances, &[], &[], &[]);
         let btn_last = last
@@ -5370,8 +6019,12 @@ mod tests {
             .map(|(_, b)| *b)
             .expect("button last-present");
         assert!(
-            btn_last[2] <= btn[2] + 8.0 && btn_last[3] <= btn[3] + 8.0,
-            "layered last-present must stay on the fill, not the SDF halo\n last={btn_last:?} halo={halo:?} btn={btn:?}"
+            aabb_covers(btn_last, btn) || intersect_rects(btn_last, btn).is_some(),
+            "layered last-present must keep the pill\n last={btn_last:?} btn={btn:?}"
+        );
+        assert!(
+            aabb_covers(btn_last, halo) || btn_last[1] + btn_last[3] >= btn[1] + btn[3] + 8.0,
+            "layered last-present must cover the SDF halo so hide-settle can erase it\n last={btn_last:?} halo={halo:?} btn={btn:?}"
         );
         let scissor = node_present_scissor_logical(
             PaintDirtyKind::Node,
@@ -5382,12 +6035,114 @@ mod tests {
             8.0,
         );
         assert!(
-            scissor[2] <= btn[2] + 16.0,
-            "scissor must stay on the pill, not the shadow-padded dirty\n scissor={scissor:?} dirty={dirty:?}"
+            scissor[2] < 200.0,
+            "scissor must stay on the pill+halo, not the 100% dock\n scissor={scissor:?} dirty={dirty:?}"
         );
         assert!(
             intersect_rects(scissor, bar).is_none(),
             "scissor must not include the overlay scrollbar\n scissor={scissor:?} bar={bar:?}"
+        );
+    }
+
+    #[test]
+    fn layered_stacking_context_wrapping_must_not_clip_jump_halo() {
+        // MessageScroller `data-stacking-context` marks wrapping bubbles layered.
+        // Occupancy shrink against those siblings left the SDF halo in retain
+        // (stacked enter ring / hide ghost) and punched a pill-sized hole.
+        let mut card = blank_instance(0.0, 0.0, 320.0, 384.0);
+        card.color = [1.0, 1.0, 1.0, 1.0];
+        let wrap = [16.0, 300.0, 280.0, 80.0];
+        let mut wrap_fill = blank_instance(wrap[0], wrap[1], wrap[2], wrap[3]);
+        wrap_fill.color = [0.96, 0.96, 0.97, 1.0];
+        let btn = [120.0, 336.0, 80.0, 32.0];
+        let mut btn_fill = blank_instance(btn[0], btn[1], btn[2], btn[3]);
+        btn_fill.color = [1.0, 1.0, 1.0, 1.0];
+        btn_fill.radii = [16.0; 4];
+        btn_fill.shadow_color = [0.0, 0.0, 0.0, 0.05];
+        btn_fill.shadow_blur = 2.0;
+        btn_fill.shadow_offset = [0.0, 1.0];
+        let bar = [308.0, 8.0, 8.0, 368.0];
+        let mut bar_fill = blank_instance(bar[0], bar[1], bar[2], bar[3]);
+        bar_fill.color = [0.1, 0.1, 0.1, 0.4];
+        let wrap_p = NodePaint {
+            key: 1,
+            bounds: wrap,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(wrap),
+        };
+        let btn_p = NodePaint {
+            key: 2,
+            bounds: btn,
+            overlay: false,
+            instance: (2, 3),
+            textured: (0, 0),
+            text: (1, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(btn),
+        };
+        let bar_p = NodePaint {
+            key: 3,
+            bounds: bar,
+            overlay: false,
+            instance: (3, 4),
+            textured: (0, 0),
+            text: (1, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(bar),
+        };
+        let instances = [card, wrap_fill, btn_fill, bar_fill];
+        let halo = instance_paint_bounds(&instances[2]);
+        let dirty = padded_xywh(btn, 16.0);
+        let paints = [wrap_p, btn_p, bar_p];
+        let reset =
+            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], &[], 1.0, Some(halo))
+                .expect("card behind jump");
+        assert!(
+            aabb_covers(reset.rect, halo) || reset.rect[1] + reset.rect[3] >= btn[1] + btn[3] + 4.0,
+            "stacking-context wrapping must not occupancy-clip the halo\n wipe={:?} halo={halo:?} btn={btn:?}",
+            reset.rect
+        );
+        assert!(
+            intersect_rects(reset.rect, bar).is_none(),
+            "Latest dest-reset must not punch the overlay scrollbar\n wipe={:?} bar={bar:?}",
+            reset.rect
+        );
+        let mut wrap_run = sample_text("wrapping", wrap[0] + 8.0);
+        wrap_run.y = btn[1] + 8.0;
+        wrap_run.width = 80.0;
+        wrap_run.height = 16.0;
+        let dirty_node = PaintDirty {
+            key: 2,
+            bounds: dirty,
+            kind: PaintDirtyKind::Node,
+        };
+        let underlay =
+            node_present_layered_underlay_capture_text(&[dirty_node], &[wrap_run], &paints);
+        assert!(
+            !underlay.is_empty(),
+            "halo dest-reset must recapture wrapping in the stacking-context band"
+        );
+
+        let bar_reset =
+            node_present_dest_reset_full(3, bar, &paints, &instances, &[], &[], 1.0, Some(bar))
+                .expect("overlay rail dest-reset");
+        assert!(
+            intersect_rects(bar_reset.rect, btn).is_none(),
+            "scrollbar fade dest-reset must not punch Latest's pill\n wipe={:?} btn={btn:?}",
+            bar_reset.rect
         );
     }
 
@@ -5437,6 +6192,7 @@ mod tests {
             dock,
             &[btn_p, bar_p],
             &instances,
+            &[],
             &[],
             1.0,
             Some(dock),
@@ -5525,6 +6281,7 @@ mod tests {
             btn,
             &[viewport, btn_p],
             &instances,
+            &[],
             &[],
             1.0,
             Some(btn),

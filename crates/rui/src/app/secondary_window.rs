@@ -403,6 +403,14 @@ impl SecondaryWindowState {
             && sync_collect.portal_layout_changed
             && !sync_collect.page_layout_changed;
 
+        // Same mouse as CSS `:hover` below (`[-1,-1]` when the pointer is off this window).
+        crate::app::tree_hit::apply_pointer_hover_reconcile(
+            &self.root_element,
+            mouse_pos[0],
+            mouse_pos[1],
+            mouse_pos[0] < 0.0 && mouse_pos[1] < 0.0,
+        );
+
         crate::components::button::sync_button_hover_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -1013,14 +1021,18 @@ impl SecondaryWindowState {
         F: FnOnce(&mut Element) -> LayoutStatus,
     {
         let want = template_id.replace('\\', "/").to_ascii_lowercase();
-        if let Some(el) = find_template_mut(&mut self.root_element, &want) {
-            let status = patch(el);
-            self.layout_status = self.layout_status.merge(status);
-            status
-        } else {
+        let Some(status) = find_template_mut(&mut self.root_element, &want).map(patch) else {
             crate::app::reactive::note_bind_miss(template_id);
-            LayoutStatus::Clean
+            return LayoutStatus::Clean;
+        };
+        self.layout_status = self.layout_status.merge(status);
+        if matches!(status, LayoutStatus::StyleChanged) {
+            crate::layout::collect_cache::invalidate_collect_paint_hash_for_template(
+                &mut self.root_element,
+                &want,
+            );
         }
+        status
     }
 }
 
