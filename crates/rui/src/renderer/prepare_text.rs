@@ -3,6 +3,7 @@
 //! 调试：设置环境变量 `RUI_TEXT_DEBUG`（见 [`super::text_prepare_debug`]）。
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -774,35 +775,102 @@ fn nowrap_layout_width_from_text(
     )
 }
 
-/// Cap for band-cull identity pool (excess parked entries are dropped).
-const SHAPED_IDENTITY_POOL_CAP: usize = 128;
+/// Cap for band-cull identity pool (counts buffers, not unique hashes).
+const SHAPED_IDENTITY_POOL_CAP: usize = 256;
+
+type ShapedIdentityPool = std::collections::HashMap<u64, VecDeque<super::text::ShapedTextEntry>>;
 
 #[inline]
-fn park_shaped_entry(
-    pool: &mut std::collections::HashMap<u64, super::text::ShapedTextEntry>,
-    entry: super::text::ShapedTextEntry,
-) {
+fn identity_pool_len(pool: &ShapedIdentityPool) -> usize {
+    pool.values().map(VecDeque::len).sum()
+}
+
+#[inline]
+fn park_shaped_entry(pool: &mut ShapedIdentityPool, entry: super::text::ShapedTextEntry) {
     if entry.shape_hash == 0 {
         return;
     }
-    while pool.len() >= SHAPED_IDENTITY_POOL_CAP && !pool.contains_key(&entry.shape_hash) {
-        if let Some(&k) = pool.keys().next() {
-            pool.remove(&k);
+    while identity_pool_len(pool) >= SHAPED_IDENTITY_POOL_CAP {
+        let victim = pool
+            .keys()
+            .copied()
+            .find(|&k| k != entry.shape_hash)
+            .or_else(|| pool.keys().copied().next());
+        let Some(k) = victim else {
+            break;
+        };
+        let empty = if let Some(q) = pool.get_mut(&k) {
+            q.pop_front();
+            q.is_empty()
         } else {
             break;
+        };
+        if empty {
+            pool.remove(&k);
         }
     }
-    pool.insert(entry.shape_hash, entry);
+    pool.entry(entry.shape_hash).or_default().push_back(entry);
 }
 
-/// Pull a parked buffer for `shape_hash` into `cache[i]` after band-cull index shifts.
+#[inline]
+fn take_pooled_entry(
+    pool: &mut ShapedIdentityPool,
+    shape_hash: u64,
+) -> Option<super::text::ShapedTextEntry> {
+    let q = pool.get_mut(&shape_hash)?;
+    let entry = q.pop_front()?;
+    if q.is_empty() {
+        pool.remove(&shape_hash);
+    }
+    Some(entry)
+}
+
+/// Park every live slot so the next list (prefix-shift, clip-strip subset,
+/// duplicate emoji runs) can FIFO-reclaim by `shape_hash`.
 ///
-/// Only the identity pool: never swap two live slots (that painted button captions
-/// inside Inputs). `shape_hash` already includes requested weight / synthetic-bold
-/// so sidebar 「数据」 cannot reclaim the page-title buffer.
+/// Live buffers always win: inserting them one-by-one into a full pool evicted
+/// the entries we were about to reclaim (`hits ≈ cap − leftover`, perpetual
+/// `shape_miss ≈ nodes − hits` while scrolling the gallery).
+fn park_shaped_cache(cache: &mut Vec<super::text::ShapedTextEntry>, pool: &mut ShapedIdentityPool) {
+    park_shaped_cache_with_cap(cache, pool, SHAPED_IDENTITY_POOL_CAP);
+}
+
+fn park_shaped_cache_with_cap(
+    cache: &mut Vec<super::text::ShapedTextEntry>,
+    pool: &mut ShapedIdentityPool,
+    cap: usize,
+) {
+    let mut live = ShapedIdentityPool::new();
+    for entry in cache.drain(..) {
+        if entry.shape_hash == 0 {
+            continue;
+        }
+        live.entry(entry.shape_hash).or_default().push_back(entry);
+    }
+    let live_count = identity_pool_len(&live);
+    let mut room = cap.saturating_sub(live_count);
+    for (k, mut q) in std::mem::take(pool) {
+        if q.is_empty() || room == 0 {
+            continue;
+        }
+        let dest = live.entry(k).or_default();
+        while room > 0 && !q.is_empty() {
+            dest.push_back(q.pop_front().unwrap());
+            room -= 1;
+        }
+    }
+    live.retain(|_, q| !q.is_empty());
+    *pool = live;
+}
+
+/// Pull a parked buffer for `shape_hash` into `cache[i]`.
+///
+/// Pool only — never swap two live slots (that painted button captions inside
+/// Inputs). `shape_hash` already includes requested weight / synthetic-bold so
+/// sidebar 「数据」 cannot reclaim the page-title buffer.
 fn reclaim_shaped_slot(
     cache: &mut Vec<super::text::ShapedTextEntry>,
-    pool: &mut std::collections::HashMap<u64, super::text::ShapedTextEntry>,
+    pool: &mut ShapedIdentityPool,
     i: usize,
     shape_hash: u64,
 ) {
@@ -812,10 +880,30 @@ fn reclaim_shaped_slot(
     if cache[i].shape_hash == shape_hash {
         return;
     }
-    if let Some(reclaimed) = pool.remove(&shape_hash) {
+    if let Some(reclaimed) = take_pooled_entry(pool, shape_hash) {
         let displaced = std::mem::replace(&mut cache[i], reclaimed);
         park_shaped_entry(pool, displaced);
     }
+}
+
+fn assign_shaped_slot(
+    cache: &mut Vec<super::text::ShapedTextEntry>,
+    pool: &mut ShapedIdentityPool,
+    font_system: &mut glyphon::FontSystem,
+    i: usize,
+    shape_hash: u64,
+) {
+    while cache.len() < i {
+        cache.push(make_dummy_cache_entry(font_system));
+    }
+    if cache.len() == i {
+        cache.push(
+            take_pooled_entry(pool, shape_hash)
+                .unwrap_or_else(|| make_dummy_cache_entry(font_system)),
+        );
+        return;
+    }
+    reclaim_shaped_slot(cache, pool, i, shape_hash);
 }
 
 /// Scroll fast-path: Exact-hit idle Input may skip `shape_until_scroll`.
@@ -2064,13 +2152,14 @@ pub fn prepare_text_frame_at(
     let mut text_areas = Vec::with_capacity(cap);
     let viewport_clip = [0.0, 0.0, width as f32, height as f32];
 
-    if text_renderer.shaped_cache.len() > text_nodes.len() {
-        for entry in text_renderer.shaped_cache.drain(text_nodes.len()..) {
-            park_shaped_entry(&mut text_renderer.shaped_identity_pool, entry);
-        }
-    }
-
+    // Compute growth before parking: first-frame / list-grew still preshape offscreen.
     let initial_preshape = text_renderer.shaped_cache.len() < text_nodes.len();
+    // Clip-strip submit and band-cull change membership/order every scroll frame.
+    // Index-aligned reuse then mass-misses; park everything and FIFO-reclaim by hash.
+    park_shaped_cache(
+        &mut text_renderer.shaped_cache,
+        &mut text_renderer.shaped_identity_pool,
+    );
     let effective_margin = if initial_preshape {
         f32::MAX
     } else {
@@ -2387,20 +2476,10 @@ pub fn prepare_text_frame_at(
         // visit every visible label; browsers keep glyphs and only translate).
         let key_hash = node_shape_key_from_identity(shape_hash, scaled_w, scaled_h, false);
 
-        while text_renderer.shaped_cache.len() <= i {
-            text_renderer
-                .shaped_cache
-                .push(make_dummy_cache_entry(unsafe {
-                    &mut *text_renderer.font_system
-                }));
-        }
-
-        // shaped_cache stays index-aligned. Band-cull reordering reclaims buffers from
-        // `shaped_identity_pool` by shape_hash — never swap two live slots in the vec
-        // (that painted button captions inside Inputs).
-        reclaim_shaped_slot(
+        assign_shaped_slot(
             &mut text_renderer.shaped_cache,
             &mut text_renderer.shaped_identity_pool,
+            unsafe { &mut *text_renderer.font_system },
             i,
             shape_hash,
         );
@@ -3843,7 +3922,7 @@ pub fn prepare_text_frame_at(
     let _total_ms = (_t3 - _t0).as_secs_f64() * 1000.0;
     if _total_ms > 4.0 {
         log::warn!(
-            "prepare_text_frame {:.1}ms | loop={:.1}ms areas={:.1}ms gpu={:.1}ms | nodes={} shape_miss={} emoji_miss={} areas={} warmup={} preshape={}",
+            "prepare_text_frame {:.1}ms | loop={:.1}ms areas={:.1}ms gpu={:.1}ms | nodes={} shape_miss={} emoji_miss={} areas={} warmup={} preshape={} pool={}",
             _total_ms,
             (_t1 - _t0).as_secs_f64() * 1000.0,
             (_t2 - _t1).as_secs_f64() * 1000.0,
@@ -3854,6 +3933,7 @@ pub fn prepare_text_frame_at(
             text_area_count,
             _warmup_count,
             initial_preshape,
+            identity_pool_len(&text_renderer.shaped_identity_pool),
         );
     }
 
@@ -4874,18 +4954,29 @@ mod input_shaping_stability_tests {
 
     fn reclaim_dummy(
         cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
-        pool: &mut std::collections::HashMap<u64, crate::renderer::text::ShapedTextEntry>,
+        pool: &mut super::ShapedIdentityPool,
         i: usize,
         hash: u64,
     ) {
         super::reclaim_shaped_slot(cache, pool, i, hash);
     }
 
+    fn grow_and_reclaim(
+        cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
+        pool: &mut super::ShapedIdentityPool,
+        fs: &mut glyphon::FontSystem,
+        hashes: &[u64],
+    ) {
+        for (i, &hash) in hashes.iter().enumerate() {
+            super::assign_shaped_slot(cache, pool, fs, i, hash);
+        }
+    }
+
     #[test]
     fn shaped_identity_pool_reclaims_across_index_churn() {
         let mut fs = crate::renderer::font_loader::create_font_system();
         let mut cache = vec![dummy_shaped(&mut fs, 0xB0B, 7.0)];
-        let mut pool = std::collections::HashMap::new();
+        let mut pool = super::ShapedIdentityPool::new();
         super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA11CE, 42.0));
         reclaim_dummy(&mut cache, &mut pool, 0, 0xA11CE);
         assert_eq!(cache[0].shape_hash, 0xA11CE);
@@ -4902,7 +4993,7 @@ mod input_shaping_stability_tests {
             dummy_shaped(&mut fs, 0xC, 3.0),
             dummy_shaped(&mut fs, 0, 0.0),
         ];
-        let mut pool = std::collections::HashMap::new();
+        let mut pool = super::ShapedIdentityPool::new();
         super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA, 1.0));
         reclaim_dummy(&mut cache, &mut pool, 0, 0xA);
         assert_eq!(cache[0].shape_hash, 0xA);
@@ -4911,6 +5002,111 @@ mod input_shaping_stability_tests {
         assert_eq!(cache[1].shape_hash, 0xB);
         reclaim_dummy(&mut cache, &mut pool, 2, 0xC);
         assert_eq!(cache[2].shape_hash, 0xC);
+    }
+
+    /// Gallery scroll: first visible run leaves, everyone else shifts, a new run
+    /// enters. Pre-fix (index-aligned, no park-all): every live slot Miss-reshaped.
+    #[test]
+    fn band_cull_prefix_drop_reclaims_after_park_all() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut cache = vec![
+            dummy_shaped(&mut fs, 0xA, 1.0),
+            dummy_shaped(&mut fs, 0xB, 2.0),
+            dummy_shaped(&mut fs, 0xC, 3.0),
+            dummy_shaped(&mut fs, 0xD, 4.0),
+            dummy_shaped(&mut fs, 0xE, 5.0),
+        ];
+        let mut pool = super::ShapedIdentityPool::new();
+        super::park_shaped_cache(&mut cache, &mut pool);
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xB, 0xC, 0xD, 0xE, 0xF]);
+        assert_eq!(cache[0].shape_hash, 0xB);
+        assert_eq!(cache[0].measured_text_w, 2.0);
+        assert_eq!(cache[1].shape_hash, 0xC);
+        assert_eq!(cache[1].measured_text_w, 3.0);
+        assert_eq!(cache[2].shape_hash, 0xD);
+        assert_eq!(cache[2].measured_text_w, 4.0);
+        assert_eq!(cache[3].shape_hash, 0xE);
+        assert_eq!(cache[3].measured_text_w, 5.0);
+        assert_eq!(
+            cache[4].shape_hash, 0,
+            "unmatched F stays a dummy; Miss path will shape it"
+        );
+    }
+
+    /// Scroll Clear submits only the damage-strip subset, then the next frame
+    /// submits the full visible window again. Pool must keep the parked majority.
+    #[test]
+    fn subset_then_full_window_reclaims() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut cache = vec![
+            dummy_shaped(&mut fs, 0xA, 1.0),
+            dummy_shaped(&mut fs, 0xB, 2.0),
+            dummy_shaped(&mut fs, 0xC, 3.0),
+            dummy_shaped(&mut fs, 0xD, 4.0),
+            dummy_shaped(&mut fs, 0xE, 5.0),
+        ];
+        let mut pool = super::ShapedIdentityPool::new();
+        super::park_shaped_cache(&mut cache, &mut pool);
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xC, 0xD]);
+        assert_eq!(cache[0].measured_text_w, 3.0);
+        assert_eq!(cache[1].measured_text_w, 4.0);
+        super::park_shaped_cache(&mut cache, &mut pool);
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xA, 0xB, 0xC, 0xD, 0xE]);
+        assert_eq!(cache[0].measured_text_w, 1.0);
+        assert_eq!(cache[1].measured_text_w, 2.0);
+        assert_eq!(cache[2].measured_text_w, 3.0);
+        assert_eq!(cache[3].measured_text_w, 4.0);
+        assert_eq!(cache[4].measured_text_w, 5.0);
+    }
+
+    /// Clip-strip duplication and repeated reaction emoji share `shape_hash`.
+    /// HashMap last-write-wins dropped the extra copy; FIFO must keep both.
+    #[test]
+    fn duplicate_hash_copies_both_survive_pool() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut cache = vec![
+            dummy_shaped(&mut fs, 0x11, 10.0),
+            dummy_shaped(&mut fs, 0x11, 20.0),
+        ];
+        let mut pool = super::ShapedIdentityPool::new();
+        super::park_shaped_cache(&mut cache, &mut pool);
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0x11, 0x11]);
+        assert_eq!(cache[0].measured_text_w, 10.0);
+        assert_eq!(cache[1].measured_text_w, 20.0);
+    }
+
+    /// Saturated pool + park-all used to evict the live set (gallery: 60 nodes,
+    /// cap 256, leftover 225 ⇒ 29 perpetual misses, hits = cap − leftover).
+    #[test]
+    fn park_all_does_not_evict_live_when_pool_is_full() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut pool = super::ShapedIdentityPool::new();
+        for i in 0..4u64 {
+            super::park_shaped_entry(
+                &mut pool,
+                dummy_shaped(&mut fs, 0x1000 + i, 100.0 + i as f32),
+            );
+        }
+        assert_eq!(super::identity_pool_len(&pool), 4);
+        let mut cache = vec![
+            dummy_shaped(&mut fs, 0xA, 1.0),
+            dummy_shaped(&mut fs, 0xB, 2.0),
+            dummy_shaped(&mut fs, 0xC, 3.0),
+        ];
+        super::park_shaped_cache_with_cap(&mut cache, &mut pool, 4);
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xA, 0xB, 0xC]);
+        assert_eq!(
+            cache[0].measured_text_w, 1.0,
+            "live A must survive a full pool"
+        );
+        assert_eq!(
+            cache[1].measured_text_w, 2.0,
+            "live B must survive a full pool"
+        );
+        assert_eq!(
+            cache[2].measured_text_w, 3.0,
+            "live C must survive a full pool"
+        );
     }
 
     #[test]

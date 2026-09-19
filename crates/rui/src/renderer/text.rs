@@ -300,9 +300,10 @@ pub struct RuiTextRenderer {
     pub text_renderer: TextRenderer,
     pub viewport: Viewport,
     pub(crate) shaped_cache: Vec<ShapedTextEntry>,
-    /// Band-cull safe reuse: entries keyed by `shape_hash`, never swapped inside
-    /// `shaped_cache` (in-vec swap painted wrong glyphs on gallery Inputs).
-    pub(crate) shaped_identity_pool: HashMap<u64, ShapedTextEntry>,
+    /// Band-cull / clip-strip reuse: FIFO queues keyed by `shape_hash`.
+    /// Each prepare parks live `shaped_cache` here, then reclaims by identity
+    /// (in-vec swap painted button captions inside Inputs).
+    pub(crate) shaped_identity_pool: HashMap<u64, VecDeque<ShapedTextEntry>>,
     pub(crate) text_area_capacity_hint: usize,
     pub(crate) emoji_cache: EmojiGlyphCache,
     pub(crate) pending_warmup: Vec<usize>,
