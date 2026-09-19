@@ -2006,6 +2006,10 @@ impl AppState {
             &ids,
             &viewports,
         ));
+        sticky.extend(super::damage::message_scroller_jump_scroll_blit_pins(
+            &self.root_element,
+            &viewports,
+        ));
         let named = super::draw_cull::named_scroll_blit_pins(
             &self.damage_nodes,
             &self.last_present_node_bounds,
@@ -2453,6 +2457,12 @@ impl AppState {
         let mut overlay_dirties: Vec<(u64, [f32; 4])> = Vec::new();
         let mut page_punch_overlap: Option<[f32; 4]> = None;
         for dirty in &self.damage_nodes {
+            if super::damage::paint_dirty_covered_by_overlay_restore(dirty, &self.damage_nodes) {
+                // OverlayRestore already replayed page instances in tree order.
+                // Per-face dest-reset of overlapping AvatarGroup chips would
+                // CLEAR later faces for one frame.
+                continue;
+            }
             let scissor_pad = super::draw_cull::node_present_scissor_pad(dirty.kind);
             // Pad is inside the helper; overflow is re-intersected after pad so the
             // 8px Node scissor cannot leak into a title above ScrollArea.
@@ -2469,6 +2479,12 @@ impl AppState {
                 continue;
             }
             let mut scissor_logical = if dirty.kind == PaintDirtyKind::Node {
+                if super::damage::page_node_present_occluded_by_overlay(
+                    dirty.bounds,
+                    self.overlay_occupied,
+                ) {
+                    continue;
+                }
                 let clipped = super::damage::page_scissor_excluding_overlay(
                     scissor_logical,
                     self.overlay_occupied,
@@ -2497,9 +2513,16 @@ impl AppState {
             };
             // Own outset shadow dest-reset sits outside overflow:hidden. GPU scissor
             // must cover that wipe or PartialLoad src-overs the halo darker every tick.
+            let layered =
+                super::draw_cull::layered_overlay_slot_bounds(dirty.key, dirty.bounds, node_paints)
+                    .is_some();
             let node_dest_reset = if dirty.kind == PaintDirtyKind::Node
                 && allow_primitives
-                && !super::damage::paint_dirty_nested_in_larger_node(dirty, &self.damage_nodes)
+                && !(super::damage::paint_dirty_skips_node_dest_reset(
+                    dirty,
+                    &self.damage_nodes,
+                    layered,
+                ) && !super::draw_cull::slot_visual_exceeds_rest(dirty.key, node_paints))
             {
                 let page = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
                 let prev_slot = super::draw_cull::last_present_prev_for_dirty(
@@ -2672,18 +2695,33 @@ impl AppState {
                                     render_pass.set_scissor_rect(wx, wy, ww, wh);
                                 }
                             }
-                            draw_scissor_clear(
-                                render_pass,
-                                &self.pipeline,
-                                &self.device,
-                                reset.rect,
-                                wgpu::Color {
-                                    r: reset.clear[0] as f64,
-                                    g: reset.clear[1] as f64,
-                                    b: reset.clear[2] as f64,
-                                    a: 1.0,
-                                },
-                            );
+                            // Layered jump chrome (Latest) is a rounded pill. A
+                            // scissor-sized radii=0 CLEAR lets SDF +2px AA leak a
+                            // translucent white frame — hover flashes sharp corners.
+                            // Inflate the fill so AA sits outside the scissor.
+                            let reset_color = wgpu::Color {
+                                r: reset.clear[0] as f64,
+                                g: reset.clear[1] as f64,
+                                b: reset.clear[2] as f64,
+                                a: 1.0,
+                            };
+                            if layered {
+                                draw_scissor_fill(
+                                    render_pass,
+                                    &self.pipeline,
+                                    &self.device,
+                                    reset.rect,
+                                    reset_color,
+                                );
+                            } else {
+                                draw_scissor_clear(
+                                    render_pass,
+                                    &self.pipeline,
+                                    &self.device,
+                                    reset.rect,
+                                    reset_color,
+                                );
+                            }
                             if replay {
                                 draw_sdf_range_with_clip(
                                     render_pass,
@@ -3025,7 +3063,15 @@ impl AppState {
                 PaintDirtyKind::OverlayRestore => 2.0,
                 // Owner clip already limits glyphs. Do not use the 8px node scissor —
                 // that strip overlaps `gap-2` siblings and the sidebar rail.
-                PaintDirtyKind::Node => super::draw_cull::NODE_PRESENT_GLYPH_CLIP_PAD,
+                PaintDirtyKind::Node => {
+                    if super::damage::page_node_present_occluded_by_overlay(
+                        dirty.bounds,
+                        self.overlay_occupied,
+                    ) {
+                        continue;
+                    }
+                    super::draw_cull::NODE_PRESENT_GLYPH_CLIP_PAD
+                }
             };
             let padded = super::draw_cull::padded_xywh(dirty.bounds, pad);
             union = Some(match union {
@@ -3563,6 +3609,8 @@ impl AppState {
         else {
             return crate::core::tree::LayoutStatus::Clean;
         };
+        let could_absorb =
+            super::reactive::bind_layout_absorbed_by_specified_ancestor(&self.root_element, &path);
 
         let mut cursor = &mut self.root_element;
         for &index in &path {
@@ -3572,14 +3620,32 @@ impl AppState {
         // LayoutChanged: patched node only. StructureChanged: whole subtree —
         // bind apply may flip child `display` / flex (Marker separator hairlines)
         // and the fast path no longer rebuilds Taffy on StructureChanged.
+        //
+        // Play/Pause inside a `min_w` Button still reports leaf LayoutChanged
+        // (intrinsic glyph width). Promoting that to the frame status forces
+        // root `compute_layout` and hitch sibling CSS animations for one frame.
+        let absorbed =
+            matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) && could_absorb;
+        let frame_status = if absorbed {
+            crate::core::tree::LayoutStatus::StyleChanged
+        } else {
+            status
+        };
         crate::core::tree::collect_bind_layout_dirty(
             cursor,
-            status,
+            if absorbed {
+                crate::core::tree::LayoutStatus::Clean
+            } else {
+                status
+            },
             &mut self.pending_layout_dirty,
         );
         self.template_paths.insert(template_id.to_string(), path);
-        self.layout_status = Self::merge_layout_status(self.layout_status, status);
-        if matches!(status, crate::core::tree::LayoutStatus::StyleChanged) {
+        self.layout_status = Self::merge_layout_status(self.layout_status, frame_status);
+        if matches!(
+            frame_status,
+            crate::core::tree::LayoutStatus::StyleChanged
+        ) {
             // Paint-only (e.g. bind_text `"10"`→`"11"`): this node's collect slot.
             // Key by Taffy id so node-present dest-reset / glyph capture match
             // even when the label has no SDF fill (gallery MouseEvent log).
@@ -5518,11 +5584,18 @@ impl AppState {
                 prev_slot_for(d.key),
             )
         };
+        let page_node_occluded = |d: &super::damage::PaintDirty| {
+            super::damage::page_node_present_occluded_by_overlay(d.bounds, self.overlay_occupied)
+        };
         let mut capture_underlay_ready = false;
         let capture_text_ready = if gpu_present.use_node_present
             && self.damage_nodes.iter().any(|d| match d.kind {
                 super::damage::PaintDirtyKind::OverlayRestore => true,
-                super::damage::PaintDirtyKind::Node => node_needs_glyphs(d),
+                super::damage::PaintDirtyKind::Node => {
+                    !super::damage::paint_dirty_covered_by_overlay_restore(d, &self.damage_nodes)
+                        && node_needs_glyphs(d)
+                        && !page_node_occluded(d)
+                }
                 super::damage::PaintDirtyKind::Overlay => false,
             }) {
             let page_text = &self.text_nodes[..overlay_text_start];
@@ -5532,7 +5605,13 @@ impl AppState {
                 .copied()
                 .filter(|d| match d.kind {
                     super::damage::PaintDirtyKind::OverlayRestore => true,
-                    super::damage::PaintDirtyKind::Node => node_needs_glyphs(d),
+                    super::damage::PaintDirtyKind::Node => {
+                        !super::damage::paint_dirty_covered_by_overlay_restore(
+                            d,
+                            &self.damage_nodes,
+                        ) && node_needs_glyphs(d)
+                            && !page_node_occluded(d)
+                    }
                     super::damage::PaintDirtyKind::Overlay => false,
                 })
                 .collect();

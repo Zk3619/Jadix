@@ -160,7 +160,10 @@ pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
         // uniform quad pad — union of fill ∪ shifted halo is the same AABB.
         let extra =
             sdf_outset_shadow_pad(i.shadow_blur, i.shadow_spread, [0.0, 0.0], i.border_width);
-        if extra > 2.0 || i.shadow_offset[0] != 0.0 || i.shadow_offset[1] != 0.0 {
+        // Always include vertex AA (+2). Skipping `extra == 2` (fill with no
+        // shadow/border) left pulse SDF fringes in retain: last-present dest-reset
+        // uses wipe_pad 0, so rounded AABB corners accumulated as a frame.
+        if extra > 0.0 || i.shadow_offset[0] != 0.0 || i.shadow_offset[1] != 0.0 {
             let sx = i.rect_pos[0] + i.shadow_offset[0] - extra;
             let sy = i.rect_pos[1] + i.shadow_offset[1] - extra;
             let sw = i.rect_size[0] + extra * 2.0;
@@ -186,6 +189,18 @@ pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
         }
     }
     bounds
+}
+
+/// Opaque fill AABB (CSS transform applied). Outset box-shadow src-overs;
+/// putting that halo in a layered dest-reset punches wrapping thread / the
+/// overlay rail (Latest `0 4px 14px` while scale/ancestor transform is live).
+fn instance_fill_bounds(i: &InstanceInput) -> [f32; 4] {
+    let bounds = [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]];
+    if transform_is_identity(&i.transform) {
+        bounds
+    } else {
+        aabb_of_centered_transform(bounds, &i.transform)
+    }
 }
 
 pub(crate) fn instance_hits_damage(i: &InstanceInput, damage: [f32; 4]) -> bool {
@@ -504,9 +519,11 @@ fn instance_has_outset_shadow(i: &InstanceInput) -> bool {
             || i.shadow_offset[1] != 0.0)
 }
 
-/// Opaque fill, visible border, or outset shadow — pixels dest-reset must erase.
+/// Visible fill, border, or outset shadow — pixels dest-reset must erase.
+/// Opacity animations (`animate-pulse`) paint below the opaque threshold; they
+/// still src-over and must wipe last-present or the rounded AABB ghosts a frame.
 fn instance_has_dest_ink(i: &InstanceInput) -> bool {
-    instance_fill_opaque(i)
+    i.color[3] > 0.05
         || (i.border_width > 0.0 && i.border_color[3] > 0.05)
         || instance_has_outset_shadow(i)
 }
@@ -641,10 +658,7 @@ fn paints_has_keyed_slot(dirty_key: u64, dirty_bounds: [f32; 4], paints: &[NodeP
     super::damage::paint_dirty_has_keyed_slot(
         dirty_key,
         dirty_bounds,
-        paints
-            .iter()
-            .filter(|q| !q.overlay)
-            .map(|q| (q.key, q.bounds)),
+        paints.iter().map(|q| (q.key, q.bounds)),
     )
 }
 
@@ -654,9 +668,6 @@ fn slot_matches_dirty(
     p: &NodePaint,
     has_keyed: bool,
 ) -> bool {
-    if p.overlay {
-        return false;
-    }
     super::damage::paint_dirty_matches_present_slot(
         dirty_key,
         dirty_bounds,
@@ -722,6 +733,25 @@ pub(crate) fn clamp_last_present_prev(prev: [f32; 4], dirty_bounds: [f32; 4]) ->
         prev,
         padded_xywh(dirty_bounds, LAST_PRESENT_PREV_MAX_OUTSET),
     )
+}
+
+/// Like [`clamp_last_present_prev`], but drop a much larger prev instead of
+/// growing the wipe by [`LAST_PRESENT_PREV_MAX_OUTSET`]. Layered jump dest-reset
+/// must not inherit a full-width dock neighborhood.
+pub(crate) fn clamp_last_present_prev_tight(
+    prev: [f32; 4],
+    dirty_bounds: [f32; 4],
+) -> Option<[f32; 4]> {
+    if prev[2] <= 0.0 || prev[3] <= 0.0 || dirty_bounds[2] <= 0.0 || dirty_bounds[3] <= 0.0 {
+        return None;
+    }
+    let prev_area = prev[2] * prev[3];
+    let dirty_area = dirty_bounds[2] * dirty_bounds[3];
+    if prev_area <= dirty_area * 4.0 + 1.0 {
+        Some(prev)
+    } else {
+        None
+    }
 }
 
 /// Tightest ancestor overflow clip on slots matching this dirty (logical px).
@@ -800,13 +830,10 @@ pub(crate) fn node_present_reset_rect(
         for inst in &instances[lo..hi] {
             // Layered jump chrome hangs over wrapping thread. Outset shadow
             // src-overs; putting it in the wipe punches the line below Latest.
-            let mut b = if layered && transform_is_identity(&inst.transform) {
-                [
-                    inst.rect_pos[0],
-                    inst.rect_pos[1],
-                    inst.rect_size[0],
-                    inst.rect_size[1],
-                ]
+            // Non-identity transform (hide scale 0.95, ancestor card matrix)
+            // used to fall through to `instance_paint_bounds` and re-expand.
+            let mut b = if layered {
+                instance_fill_bounds(inst)
             } else {
                 instance_paint_bounds(inst)
             };
@@ -818,9 +845,14 @@ pub(crate) fn node_present_reset_rect(
                 && p.bounds[2] > 0.0
                 && p.bounds[3] > 0.0
             {
-                let extra =
-                    sdf_painted_halo_pad(inst.shadow_blur, inst.shadow_spread, inst.shadow_offset)
-                        * s;
+                // Include vertex AA (+2). Halo-only pad clipped pulse dest-reset
+                // back to the layout box, leaving rounded AABB corners in retain.
+                let extra = sdf_outset_shadow_pad(
+                    inst.shadow_blur,
+                    inst.shadow_spread,
+                    inst.shadow_offset,
+                    inst.border_width,
+                ) * s;
                 match intersect_rects(b, padded_xywh(scale_xywh(p.bounds, s), extra)) {
                     Some(hit) => b = hit,
                     None => continue,
@@ -851,7 +883,32 @@ pub(crate) fn node_present_reset_rect(
     }
     let overflow = node_present_overflow_clip(dirty_key, dirty_bounds, node_paints);
     let mut acc = ink.or(slot_visual);
-    if let Some(prev) = prev_bounds.and_then(|p| clamp_last_present_prev(p, dirty_bounds)) {
+    let clamp_box = if layered {
+        layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints)
+            .map(|b| scale_xywh(b, s))
+            .or(slot_visual)
+            .unwrap_or(scale_xywh(dirty_bounds, s))
+    } else {
+        scale_xywh(dirty_bounds, s)
+    };
+    // `clamp_last_present_prev` is in logical px; `clamp_box` may already be scaled.
+    let clamp_logical = if s > 0.0 {
+        [
+            clamp_box[0] / s,
+            clamp_box[1] / s,
+            clamp_box[2] / s,
+            clamp_box[3] / s,
+        ]
+    } else {
+        clamp_box
+    };
+    if let Some(prev) = prev_bounds.and_then(|p| {
+        if layered {
+            clamp_last_present_prev_tight(p, clamp_logical)
+        } else {
+            clamp_last_present_prev(p, clamp_logical)
+        }
+    }) {
         let mut pb = scale_xywh(prev, s);
         if layered {
             // last-present visual includes the SDF halo. Unioning it re-punches
@@ -899,12 +956,7 @@ pub(crate) fn node_present_reset_rect(
             }
             None => Some(r),
         })
-        .map(|r| {
-            // Layered jump pills rest-overlap underlay and occupancy skips the
-            // clip. Ping/bounce growth used to skip clip because the *visual*
-            // host swallowed the caption — rest occupancy clips those.
-            clip_rect_against_foreign_siblings(r, dirty_key, dirty_bounds, node_paints, s)
-        })
+        .map(|r| clip_node_present_rect(r, dirty_key, dirty_bounds, node_paints, s, layered))
         .filter(|r| r[2] > 0.5 && r[3] > 0.5)
 }
 
@@ -948,12 +1000,37 @@ fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         return false;
     }
     if slot_ranges_covered_by(parent, child) {
-        // Equal collect spans (MarkerIcon wrap has no own ink). The wrap AABB is
-        // the unrotated size-4 box; the child's `bounds` is the circumcircle.
-        // aabb_contains(wrap, child) fails, but last-present of the wrap must
-        // still skip that bake or idle spin dirties the wrap and src-overs twice.
-        return !aabb_contains(parent.bounds, child.bounds)
-            && slots_share_box_center(parent.bounds, child.bounds);
+        // Equal collect spans (MarkerIcon wrap has no own ink). NodeId order is
+        // not wrap-vs-leaf: the Icon is often allocated first (lower key).
+        // Skip the shared bake from the *wrap* last-present; never from a
+        // spinning leaf whose visual already exceeds its Taffy rest box.
+        //
+        // Occupancy (rest) for the center test: Latest hide translates the pill
+        // 8px, so visual centers diverge and the full-width dock used to union
+        // that slide — dest-reset of a 320×39 bar punched the overlay rail.
+        let parent_box = node_paint_occupancy(parent);
+        let child_box = node_paint_occupancy(child);
+        if !slots_share_box_center(parent_box, child_box) {
+            return false;
+        }
+        if !aabb_contains(parent_box, child_box) {
+            return true;
+        }
+        let same_box = (parent.bounds[2] - child.bounds[2]).abs() <= 2.5
+            && (parent.bounds[3] - child.bounds[3]).abs() <= 2.5;
+        let much_larger = parent.bounds[2] > child.bounds[2] * 1.5 + 8.0
+            || parent.bounds[3] > child.bounds[3] * 1.5 + 8.0;
+        if much_larger {
+            return true;
+        }
+        // Identity + vertex AA: instance ink is wrap+2. Unioning it into the
+        // wrap last-present looks like a translation every idle spin tick.
+        if same_box {
+            return !parent
+                .rest
+                .is_some_and(|r| parent.bounds[2] > r[2] + 2.5 || parent.bounds[3] > r[3] + 2.5);
+        }
+        return false;
     }
     // Proper subset = descendant collect, not spatial containment.
     // Overflow:visible + `animate-spin` grows `NodePaint.bounds` to the
@@ -1011,7 +1088,13 @@ pub(crate) fn node_paint_visual_bounds_in(
         if nested_foreign_owns(p, paints, lo + off, |q| q.instance) {
             continue;
         }
-        let b = instance_paint_bounds(inst);
+        // Layered last-present must not union the SDF halo. That AABB is 4× the
+        // pill and dest-reset of it punches wrapping thread / the overlay rail.
+        let b = if p.layered {
+            instance_fill_bounds(inst)
+        } else {
+            instance_paint_bounds(inst)
+        };
         if b[2] <= 0.0 || b[3] <= 0.0 {
             continue;
         }
@@ -1146,6 +1229,18 @@ pub(crate) fn last_present_prev_for_dirty(
     }
 }
 
+/// `animate-spin` / rotate grows `NodePaint.bounds` to the circumcircle while `rest`
+/// stays the Taffy box. Nested dest-reset skip would let a larger hover dirty
+/// (page-wide CursorMoved on a `hover:scale` tile) omit that wipe — retain freezes.
+pub(crate) fn slot_visual_exceeds_rest(key: u64, paints: &[NodePaint]) -> bool {
+    paints.iter().any(|p| {
+        p.key == key
+            && !p.overlay
+            && p.rest
+                .is_some_and(|r| p.bounds[2] > r[2] + 2.5 || p.bounds[3] > r[3] + 2.5)
+    })
+}
+
 /// Final **logical** node-present scissor: clamp last-present, union dirty, intersect
 /// ancestor overflow, pad, then intersect overflow again so the 8px Node pad cannot
 /// leak into a title bar sitting above a ScrollArea.
@@ -1157,11 +1252,50 @@ pub(crate) fn node_present_scissor_logical(
     node_paints: &[NodePaint],
     scissor_pad: f32,
 ) -> [f32; 4] {
-    let prev = last_present_prev_for_dirty(kind, dirty_key, prev_slots)
-        .and_then(|p| clamp_last_present_prev(p, dirty_bounds));
+    node_present_scissor_logical_ex(
+        kind,
+        dirty_key,
+        dirty_bounds,
+        prev_slots,
+        node_paints,
+        scissor_pad,
+        true,
+    )
+}
+
+/// Scroll blit pins must dest-reset copied hover ink. Occupancy clip is a
+/// node-present PartialLoad rule (do not punch a wrapping caption). Applying it
+/// here treats a containing card as a foreign sibling, zeros the hole, and the
+/// overlap blit keeps `:hover` until scroll settles.
+fn node_present_scissor_logical_ex(
+    kind: PaintDirtyKind,
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    prev_slots: &[(u64, [f32; 4])],
+    node_paints: &[NodePaint],
+    scissor_pad: f32,
+    occupancy_clip: bool,
+) -> [f32; 4] {
+    let layered = matching_slot_is_layered(dirty_key, dirty_bounds, node_paints);
+    // Shadow-padded `PaintDirty.bounds` (Latest box-shadow + 8px Node pad) is
+    // the hover chrome hole, not the wipe. Layered jump dest-reset must clamp
+    // last-present to the opaque slot or a 48px neighborhood punches wrapping
+    // text below the pill and the overlay rail.
+    let clamp_box = if layered {
+        layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints).unwrap_or(dirty_bounds)
+    } else {
+        dirty_bounds
+    };
+    let prev = last_present_prev_for_dirty(kind, dirty_key, prev_slots).and_then(|p| {
+        if layered {
+            clamp_last_present_prev_tight(p, clamp_box)
+        } else {
+            clamp_last_present_prev(p, clamp_box)
+        }
+    });
     let mut scissor = match prev {
-        Some(prev) => union_xywh(dirty_bounds, prev),
-        None => dirty_bounds,
+        Some(prev) => union_xywh(clamp_box, prev),
+        None => clamp_box,
     };
     let overflow = match kind {
         PaintDirtyKind::Node => node_present_overflow_clip(dirty_key, dirty_bounds, node_paints),
@@ -1170,14 +1304,15 @@ pub(crate) fn node_present_scissor_logical(
     if let Some(c) = overflow {
         scissor = intersect_rects(scissor, c).unwrap_or(scissor);
     }
-    scissor = padded_xywh(scissor, scissor_pad);
+    let pad = if layered { 1.0 } else { scissor_pad };
+    scissor = padded_xywh(scissor, pad);
     if let Some(c) = overflow {
         scissor = intersect_rects(scissor, c).unwrap_or(scissor);
     }
-    if matching_slot_is_layered(dirty_key, dirty_bounds, node_paints) {
-        scissor
+    if occupancy_clip {
+        clip_node_present_rect(scissor, dirty_key, dirty_bounds, node_paints, 1.0, layered)
     } else {
-        clip_rect_against_foreign_siblings(scissor, dirty_key, dirty_bounds, node_paints, 1.0)
+        scissor
     }
 }
 
@@ -1256,6 +1391,93 @@ fn node_paint_occupancy(p: &NodePaint) -> [f32; 4] {
     }
 }
 
+/// Dest-reset / node-present scissor occupancy clip.
+///
+/// Layered slots (absolute ping, jump pills) still punch rest-overlapping
+/// underlay, but must not paint or wipe a rest-disjoint caption above — GPU
+/// scissor used to stay unclipped, so `animate-ping` src-overed the label.
+///
+/// In-flow `animate-spin` grows to a circumcircle. Skipping occupancy clip let
+/// the 8px node scissor dest-reset the caption every tick (ghost 「play-state」).
+/// Clip rest-disjoint captions again; the gallery stage keeps the diamond ink
+/// off the title so the clip only removes pad leak, not leftover frames.
+fn clip_node_present_rect(
+    rect: [f32; 4],
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    slot_scale: f32,
+    layered: bool,
+) -> [f32; 4] {
+    if layered {
+        let r = clip_rect_against_layered_siblings(
+            rect,
+            dirty_key,
+            dirty_bounds,
+            node_paints,
+            slot_scale,
+        );
+        clip_rect_against_foreign_siblings(r, dirty_key, dirty_bounds, node_paints, slot_scale)
+    } else {
+        clip_rect_against_foreign_siblings(rect, dirty_key, dirty_bounds, node_paints, slot_scale)
+    }
+}
+
+/// Shrink a layered dest-reset so it does not cover **other** page-stack slots
+/// (overlay auto scrollbar vs Latest). In-flow underlay stays in the wipe.
+///
+/// The jump dock is a full-width empty bar that shares Y with the overlay
+/// rail. Occupancy clip against that bar used to cut the fading track's
+/// bottom, leaving a groove+thumb remnant in retain (Latest's dirty band).
+fn clip_rect_against_layered_siblings(
+    mut rect: [f32; 4],
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    slot_scale: f32,
+) -> [f32; 4] {
+    if rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return rect;
+    }
+    let s = slot_scale.max(0.0);
+    let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    for p in node_paints {
+        if !p.layered || p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
+            continue;
+        }
+        if slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
+            continue;
+        }
+        let related = node_paints.iter().any(|m| {
+            slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
+                && (slot_ranges_covered_by(m, p) || slot_ranges_covered_by(p, m))
+        });
+        if related {
+            continue;
+        }
+        let occ = scale_xywh(node_paint_occupancy(p), s);
+        if occ[2] <= 0.5 || occ[3] <= 0.5 {
+            continue;
+        }
+        if aabb_contains(occ, rect) {
+            continue;
+        }
+        if intersect_rects(rect, occ).is_none() {
+            continue;
+        }
+        // Thin overlay rail vs full-width jump dock: the dock has no ink on
+        // the padding strip. Keep the rail wipe so fade can erase the thumb.
+        if rect[2] < 24.0 && occ[2] > rect[2] * 1.5 + 8.0 {
+            continue;
+        }
+        rect = shrink_aabb_to_exclude(rect, occ);
+        if rect[2] <= 0.5 || rect[3] <= 0.5 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+    }
+    rect
+}
+
 /// Shrink `rect` so it does not cover sibling collect slots (form_field label
 /// above Input). Skip ancestors and interiors — those must stay in the wipe.
 ///
@@ -1308,6 +1530,9 @@ fn clip_rect_against_foreign_siblings(
         return rect;
     };
     let rest_host = rest_host.unwrap_or(host);
+    let host_layered = node_paints
+        .iter()
+        .any(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) && p.layered);
     for (i, p) in node_paints.iter().enumerate() {
         if p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
             continue;
@@ -1335,6 +1560,12 @@ fn clip_rect_against_foreign_siblings(
             // nip). Occupancy must src-over it (hover:scale top). Dest-reset must
             // wipe the same overlap on leave or the enlarged strip stays as a ghost.
             // Focus-ring pad still clips labels the field does not overlap.
+            continue;
+        }
+        if host_layered && i >= host_idx {
+            // Jump pill hangs over wrapping thread *below*. Shrinking against those
+            // later in-flow slots left a 24px strip and dest-reset returned None.
+            // Earlier rest-disjoint captions (gallery `ping` title) still clip.
             continue;
         }
         if intersect_rects(rect, occ).is_none() {
@@ -1409,6 +1640,8 @@ fn shrink_aabb_to_exclude(wipe: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
 /// Scroll blit cannot run node-present encode (`scroll_layer_clear`). Pin the same
 /// dest-reset hole: last-present prev ∪ now, clamped, overflow-clipped, padded.
 /// Using only `dirty.bounds` leaves the previous hover box in the copied overlap.
+/// Do **not** occupancy-clip: a containing in-flow card zeros the hole and the
+/// copied overlap keeps `:hover` until blit stops.
 pub(crate) fn named_scroll_blit_pins(
     dirties: &[PaintDirty],
     prev_slots: &[(u64, [f32; 4])],
@@ -1417,13 +1650,14 @@ pub(crate) fn named_scroll_blit_pins(
     dirties
         .iter()
         .map(|d| {
-            node_present_scissor_logical(
+            node_present_scissor_logical_ex(
                 d.kind,
                 d.key,
                 d.bounds,
                 prev_slots,
                 node_paints,
                 node_present_scissor_pad(d.kind),
+                false,
             )
         })
         .filter(|r| r[2] > 0.0 && r[3] > 0.0)
@@ -1517,18 +1751,36 @@ pub(crate) fn node_present_dest_reset_full(
         }
     });
     let Some(idx) = behind_idx else {
-        let clear = node_present_behind_color_for_rect(
+        if let Some(clear) = node_present_behind_color_for_rect(
             dirty_key,
             dirty_bounds,
             node_paints,
             instances,
             rect,
-        )?;
-        return Some(NodePresentDestReset {
-            rect,
-            clear,
-            replay: (0, 0),
-        });
+        ) {
+            return Some(NodePresentDestReset {
+                rect,
+                clear,
+                replay: (0, 0),
+            });
+        }
+        // Overlay auto-bar hangs in the viewport padding. No card fill contains the
+        // thumb center, dest-reset used to return None, and PartialLoad kept the
+        // last gray pixels (recovered only after a foreign FullClear).
+        if matching_slot_is_layered(dirty_key, dirty_bounds, node_paints) {
+            let clear = node_present_behind_color_in_overflow(
+                dirty_key,
+                dirty_bounds,
+                node_paints,
+                instances,
+            )?;
+            return Some(NodePresentDestReset {
+                rect,
+                clear,
+                replay: (0, 0),
+            });
+        }
+        return None;
     };
     let behind = &instances[idx];
     if !instance_aabb_clear_unsafe(behind) {
@@ -1591,6 +1843,38 @@ fn node_present_behind_color_for_rect(
             return None;
         }
         intersect_rects(b, rect).map(|_| inst.color)
+    })
+}
+
+/// Page fill inside this slot's overflow clip, even if it does not contain the
+/// wipe (overlay auto-bar lives in the viewport's right padding).
+fn node_present_behind_color_in_overflow(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+) -> Option<[f32; 4]> {
+    let dirty_inst = dirty_slot_instance_ranges(dirty_key, dirty_bounds, node_paints);
+    let skip = |i: usize| dirty_inst.iter().any(|&(a, b)| i >= a && i < b);
+    let clip = node_present_overflow_clip(dirty_key, dirty_bounds, node_paints);
+    instances.iter().enumerate().rev().find_map(|(i, inst)| {
+        if skip(i) || !instance_fill_opaque(inst) {
+            return None;
+        }
+        let b = [
+            inst.rect_pos[0],
+            inst.rect_pos[1],
+            inst.rect_size[0],
+            inst.rect_size[1],
+        ];
+        if b[2] <= 0.0 || b[3] <= 0.0 {
+            return None;
+        }
+        if let Some(c) = clip {
+            intersect_rects(b, c).map(|_| inst.color)
+        } else {
+            Some(inst.color)
+        }
     })
 }
 
@@ -2043,6 +2327,35 @@ mod tests {
             layered: false,
             rest: None,
         }
+    }
+
+    #[test]
+    fn layered_clip_must_not_cut_overlay_rail_against_full_width_jump_dock() {
+        // Latest dock is a full-width empty bar. Occupancy clip against it used
+        // to chop the fading overlay rail, leaving a groove+thumb remnant.
+        let mut rail = slot(1, [310.0, 2.0, 10.0, 380.0], (0, 0));
+        rail.overlay = true;
+        rail.layered = true;
+        rail.rest = Some(rail.bounds);
+        let mut dock = slot(2, [0.0, 336.0, 320.0, 32.0], (0, 0));
+        dock.layered = true;
+        dock.rest = Some(dock.bounds);
+        let wipe = clip_rect_against_layered_siblings(
+            rail.bounds,
+            rail.key,
+            rail.bounds,
+            &[rail, dock],
+            1.0,
+        );
+        let remnant = [310.0, 336.0, 10.0, 32.0];
+        assert!(
+            intersect_rects(wipe, remnant).is_some(),
+            "rail wipe must still overlap Latest's Y, wipe={wipe:?}"
+        );
+        assert!(
+            wipe[1] + wipe[3] + 1.0 >= remnant[1] + remnant[3],
+            "rail wipe must keep the bottom under Latest, wipe={wipe:?} remnant={remnant:?}"
+        );
     }
 
     #[test]
@@ -2680,6 +2993,40 @@ mod tests {
             typed_clip[0] + 1e-3 >= dirty_input.bounds[0] - NODE_PRESENT_GLYPH_CLIP_PAD,
             "typed clip {typed_clip:?} must stay in the Input dirty {:?}",
             dirty_input.bounds
+        );
+    }
+
+    #[test]
+    fn modal_scrim_occludes_clicked_trigger_glyph_capture() {
+        // AlertDialog: dest-reset skip still left node-present glyphon to flush
+        // "one" onto the retained scrim. Occupancy must drop that dirty first.
+        let trigger = [24.0, 80.0, 96.0, 32.0];
+        let scrim = [0.0, 0.0, 1280.0, 800.0];
+        let dirty = PaintDirty {
+            key: 7,
+            bounds: trigger,
+            kind: PaintDirtyKind::Node,
+        };
+        let mut caption = sample_text("one", 28.0);
+        caption.y = 86.0;
+        caption.paint_origin = [28.0, 86.0];
+        let paints = [slot(7, trigger, (0, 1))];
+        let page = [caption];
+        let captured = node_present_clipped_capture_text(&[dirty], &page, &paints);
+        assert!(
+            captured.iter().any(|n| n.text == "one"),
+            "without occupancy the clicked caption is in the capture buffer"
+        );
+        let dirties: Vec<PaintDirty> = [dirty]
+            .into_iter()
+            .filter(|d| {
+                !crate::app::damage::page_node_present_occluded_by_overlay(d.bounds, Some(scrim))
+            })
+            .collect();
+        let hidden = node_present_clipped_capture_text(&dirties, &page, &paints);
+        assert!(
+            hidden.iter().all(|n| n.text != "one"),
+            "fullscreen scrim occupancy must drop the trigger from glyphon capture"
         );
     }
 
@@ -3712,10 +4059,10 @@ mod tests {
     }
 
     #[test]
-    fn dest_reset_ping_scale_must_not_punch_caption_above() {
-        // Gallery VStack: Label "ping" then a 32px circle whose animate-ping visual
-        // is scale 2. Occupancy used the grown host, so the caption center sat
-        // inside it and dest-reset skipped the clip — retain glyphs were wiped.
+    fn dest_reset_layered_ping_must_not_paint_or_wipe_caption() {
+        // Gallery ping is `position:absolute` (layered). Scale-2 visual overlaps
+        // the caption; dest-reset and scissor must clip that rest-disjoint sibling
+        // so the ring cannot src-over the label.
         let label = [8.0, 0.0, 40.0, 14.0];
         let rest = [16.0, 22.0, 32.0, 32.0];
         let visual = [0.0, 6.0, 64.0, 64.0];
@@ -3737,15 +4084,144 @@ mod tests {
             Some(visual),
         )
         .expect("card behind ping");
-        let lx = label[0] + label[2] * 0.5;
-        let ly = label[1] + label[3] * 0.5;
         assert!(
-            !super::point_in_rect(wipe, [lx, ly]),
-            "ping dest-reset must not punch the caption\n wipe={wipe:?} label={label:?}"
+            super::intersect_rects(wipe, label).is_none(),
+            "layered ping dest-reset must not punch the caption\n wipe={wipe:?} label={label:?}"
         );
         assert!(
             wipe[2] > 20.0 && wipe[3] > 20.0,
             "wipe must still cover the ping body, not collapse\n wipe={wipe:?}"
+        );
+        let sc = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            visual,
+            &[(2, visual)],
+            &paints,
+            node_present_scissor_pad(PaintDirtyKind::Node),
+        );
+        assert!(
+            super::intersect_rects(sc, label).is_none(),
+            "layered ping scissor must not paint the caption\n scissor={sc:?} label={label:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_play_state_spin_must_cover_circumcircle_against_caption_and_button() {
+        // Gallery play-state stages the 2.5rem spinner in 5rem so the 45°
+        // circumcircle (+ 8px scissor pad) stays off the caption/button.
+        let label = [8.0, 0.0, 72.0, 14.0];
+        let rest = [20.0, 40.0, 40.0, 40.0];
+        let button = [16.0, 106.0, 48.0, 28.0];
+        let deg45 = std::f32::consts::FRAC_PI_4;
+        let (s, c) = deg45.sin_cos();
+        let xf = [c, s, -s, c, 0.0, 0.0];
+        let visual = crate::renderer::aabb_of_centered_transform(rest, &xf);
+        let mut page = blank_instance(0.0, 0.0, 200.0, 150.0);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut fill = blank_instance(rest[0], rest[1], rest[2], rest[3]);
+        fill.color = [0.1, 0.1, 0.12, 1.0];
+        fill.radii = [6.0; 4];
+        fill.transform = xf;
+        let mut btn_fill = blank_instance(button[0], button[1], button[2], button[3]);
+        btn_fill.color = [1.0, 1.0, 1.0, 1.0];
+        btn_fill.radii = [6.0; 4];
+        let spin_slot = paint_slot(2, visual, Some(rest), (1, 2));
+        let paints = [
+            paint_slot(1, label, Some(label), (0, 0)),
+            spin_slot,
+            paint_slot(3, button, Some(button), (2, 3)),
+        ];
+        let instances = [page, fill, btn_fill];
+        let (wipe, _) =
+            node_present_dest_reset_scaled(2, visual, &paints, &instances, &[], 1.0, Some(visual))
+                .expect("card behind play-state spin");
+        assert!(
+            aabb_covers(wipe, visual),
+            "pause dest-reset must wipe the 45° circumcircle, not leftover frames\n wipe={wipe:?} visual={visual:?} rest={rest:?} label={label:?} button={button:?}"
+        );
+        assert!(
+            super::intersect_rects(wipe, label).is_none(),
+            "spin dest-reset must not punch the caption\n wipe={wipe:?} label={label:?}"
+        );
+        let sc = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            visual,
+            &[(2, visual)],
+            &paints,
+            node_present_scissor_pad(PaintDirtyKind::Node),
+        );
+        assert!(
+            aabb_covers(sc, visual),
+            "pause scissor must cover the 45° circumcircle\n scissor={sc:?} visual={visual:?}"
+        );
+        assert!(
+            super::intersect_rects(sc, label).is_none(),
+            "spin scissor must not dest-reset the caption\n scissor={sc:?} label={label:?}"
+        );
+        let encode = super::union_xywh(sc, wipe);
+        assert!(
+            super::intersect_rects(encode, label).is_none(),
+            "GPU scissor ∪ wipe must not dest-reset the caption\n encode={encode:?} label={label:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_play_state_spin_must_not_punch_caption_when_circumcircle_nips_it() {
+        // Tight column (no stage): 45° tips nip the title. Occupancy clip must
+        // still keep dest-reset/scissor off the caption (ghost 「play-state」).
+        let label = [8.0, 0.0, 72.0, 14.0];
+        let rest = [16.0, 20.0, 40.0, 40.0];
+        let button = [12.0, 66.0, 48.0, 28.0];
+        let deg45 = std::f32::consts::FRAC_PI_4;
+        let (s, c) = deg45.sin_cos();
+        let xf = [c, s, -s, c, 0.0, 0.0];
+        let visual = crate::renderer::aabb_of_centered_transform(rest, &xf);
+        let mut page = blank_instance(0.0, 0.0, 200.0, 120.0);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut fill = blank_instance(rest[0], rest[1], rest[2], rest[3]);
+        fill.color = [0.1, 0.1, 0.12, 1.0];
+        fill.radii = [6.0; 4];
+        fill.transform = xf;
+        let mut btn_fill = blank_instance(button[0], button[1], button[2], button[3]);
+        btn_fill.color = [1.0, 1.0, 1.0, 1.0];
+        btn_fill.radii = [6.0; 4];
+        let spin_slot = paint_slot(2, visual, Some(rest), (1, 2));
+        let paints = [
+            paint_slot(1, label, Some(label), (0, 0)),
+            spin_slot,
+            paint_slot(3, button, Some(button), (2, 3)),
+        ];
+        let (wipe, _) = node_present_dest_reset_scaled(
+            2,
+            visual,
+            &paints,
+            &[page, fill, btn_fill],
+            &[],
+            1.0,
+            Some(visual),
+        )
+        .expect("card behind play-state spin");
+        assert!(
+            super::intersect_rects(wipe, label).is_none(),
+            "tight-column spin dest-reset must not punch the caption\n wipe={wipe:?} label={label:?} visual={visual:?}"
+        );
+        assert!(
+            aabb_covers(wipe, rest),
+            "wipe must still cover the unrotated box\n wipe={wipe:?} rest={rest:?}"
+        );
+        let sc = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            visual,
+            &[(2, visual)],
+            &paints,
+            node_present_scissor_pad(PaintDirtyKind::Node),
+        );
+        assert!(
+            super::intersect_rects(sc, label).is_none(),
+            "tight-column spin scissor must not dest-reset the caption\n scissor={sc:?} label={label:?}"
         );
     }
 
@@ -3825,6 +4301,48 @@ mod tests {
         assert!(
             aabb_covers(sc, pulse),
             "pulse scissor must not crop to ping's grown visual\n scissor={sc:?} pulse={pulse:?} ping_visual={ping_visual:?}"
+        );
+    }
+
+    #[test]
+    fn dest_reset_pulse_last_present_must_cover_vertex_aa() {
+        // `animation: … alternate pulse` only changes opacity. Last-present dest-reset
+        // used the layout box (no +2 vertex AA), so rounded-md corners left a frame.
+        let pulse = [52.0, 20.0, 48.0, 32.0];
+        let mut page = blank_instance(0.0, 0.0, 200.0, 90.0);
+        page.color = [0.96, 0.96, 0.96, 1.0];
+        let mut pulse_fill = blank_instance(pulse[0], pulse[1], pulse[2], pulse[3]);
+        pulse_fill.color = [0.55, 0.35, 0.85, 0.5];
+        pulse_fill.radii = [6.0; 4];
+        let paints = [paint_slot(2, pulse, Some(pulse), (1, 2))];
+        let ink = instance_paint_bounds(&pulse_fill);
+        let (wipe, _) = node_present_dest_reset_scaled(
+            2,
+            pulse,
+            &paints,
+            &[page, pulse_fill],
+            &[],
+            1.0,
+            Some(pulse),
+        )
+        .expect("card behind pulse");
+        assert!(
+            aabb_covers(wipe, ink),
+            "pulse dest-reset must cover SDF vertex AA, not just the layout box\n wipe={wipe:?} ink={ink:?} pulse={pulse:?}"
+        );
+        assert!(
+            wipe[0] <= pulse[0] - 1.5 && wipe[1] <= pulse[1] - 1.5,
+            "wipe must outset the rounded box by vertex AA\n wipe={wipe:?} pulse={pulse:?}"
+        );
+    }
+
+    #[test]
+    fn instance_paint_bounds_includes_vertex_aa_for_simple_fill() {
+        let i = blank_instance(10.0, 10.0, 40.0, 20.0);
+        let b = instance_paint_bounds(&i);
+        assert!(
+            b[0] <= 8.0 && b[1] <= 8.0 && b[0] + b[2] >= 52.0 && b[1] + b[3] >= 32.0,
+            "simple fill occupancy must include shader vertex AA (+2), got {b:?}"
         );
     }
 
@@ -4532,6 +5050,67 @@ mod tests {
     }
 
     #[test]
+    fn named_scroll_blit_pins_keep_hover_scale_leftover_past_caption() {
+        // `hover:scale` last-present hangs into the caption below. Occupancy clip
+        // (node-present) cuts that leftover so dest-reset cannot punch wrapping
+        // text. Scroll blit copies those pixels in the overlap — the pin must
+        // still dest-reset the scaled hole or hover sticks until blit stops.
+        let rest = [20.0, 40.0, 80.0, 32.0];
+        let scaled = [20.0, 32.0, 80.0, 48.0];
+        let caption = [20.0, 72.0, 80.0, 24.0];
+        let dirty = PaintDirty {
+            key: 2,
+            bounds: rest,
+            kind: PaintDirtyKind::Node,
+        };
+        let chip_p = NodePaint {
+            key: 2,
+            bounds: rest,
+            overlay: false,
+            instance: (0, 1),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 200.0, 200.0]),
+            layered: false,
+            rest: Some(rest),
+        };
+        let cap_p = NodePaint {
+            key: 3,
+            bounds: caption,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 200.0, 200.0]),
+            layered: false,
+            rest: Some(caption),
+        };
+        let occupancy = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            rest,
+            &[(2, scaled)],
+            &[chip_p.clone(), cap_p.clone()],
+            8.0,
+        );
+        assert!(
+            occupancy[1] + occupancy[3] <= caption[1] + 1.0,
+            "node-present occupancy must still spare the caption, got {occupancy:?}"
+        );
+        let pins = named_scroll_blit_pins(&[dirty], &[(2, scaled)], &[chip_p, cap_p]);
+        assert_eq!(pins.len(), 1);
+        let p = pins[0];
+        assert!(
+            p[1] <= scaled[1] + 1.0 && p[1] + p[3] >= scaled[1] + scaled[3] - 1.0,
+            "scroll blit pin must dest-reset scaled leftover, got {p:?} scaled={scaled:?}"
+        );
+    }
+
+    #[test]
     fn named_scroll_blit_pins_overlay_skips_page_prev() {
         let dirty = PaintDirty {
             key: 7,
@@ -4692,6 +5271,210 @@ mod tests {
             1,
             "layered dest-reset must restore underlay glyphs under the overlay slot, got {} runs",
             underlay.len()
+        );
+    }
+
+    #[test]
+    fn layered_jump_transformed_shadow_must_not_expand_dest_reset() {
+        // Gallery Latest: `0 4px 14px` + hide scale 0.95 / ancestor card matrix.
+        // `instance_paint_bounds` of that halo is ~144×96. Dest-reset of it
+        // punched wrapping thread and the overlay rail.
+        let mut card = blank_instance(0.0, 0.0, 320.0, 384.0);
+        card.color = [1.0, 1.0, 1.0, 1.0];
+        let wrap = [16.0, 300.0, 280.0, 80.0];
+        let mut wrap_fill = blank_instance(wrap[0], wrap[1], wrap[2], wrap[3]);
+        wrap_fill.color = [0.96, 0.96, 0.97, 1.0];
+        let btn = [120.0, 336.0, 80.0, 32.0];
+        let mut btn_fill = blank_instance(btn[0], btn[1], btn[2], btn[3]);
+        btn_fill.color = [1.0, 1.0, 1.0, 1.0];
+        btn_fill.radii = [16.0; 4];
+        btn_fill.shadow_color = [0.06, 0.09, 0.16, 0.18];
+        btn_fill.shadow_blur = 14.0;
+        btn_fill.shadow_offset = [0.0, 4.0];
+        // Subpixel ancestor translate — not identity, used to take the shadow path.
+        btn_fill.transform = [1.0, 0.0, 0.0, 1.0, 0.25, 0.0];
+        let bar = [310.0, 0.0, 10.0, 120.0];
+        let mut bar_fill = blank_instance(bar[0], bar[1], bar[2], bar[3]);
+        bar_fill.color = [0.1, 0.1, 0.1, 0.4];
+        let wrap_p = NodePaint {
+            key: 1,
+            bounds: wrap,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: false,
+            rest: Some(wrap),
+        };
+        let btn_p = NodePaint {
+            key: 2,
+            bounds: btn,
+            overlay: false,
+            instance: (2, 3),
+            textured: (0, 0),
+            text: (1, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(btn),
+        };
+        let bar_p = NodePaint {
+            key: 3,
+            bounds: bar,
+            overlay: false,
+            instance: (3, 4),
+            textured: (0, 0),
+            text: (1, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(bar),
+        };
+        let instances = [card, wrap_fill, btn_fill, bar_fill];
+        let halo = instance_paint_bounds(&instances[2]);
+        let dirty = padded_xywh(btn, 32.0);
+        let paints = [wrap_p, btn_p, bar_p];
+        let reset =
+            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], 1.0, Some(halo))
+                .expect("card behind jump");
+        let wrap_line = [16.0, 368.0, 280.0, 16.0];
+        assert!(
+            aabb_covers(reset.rect, btn) || intersect_rects(reset.rect, btn).is_some(),
+            "wipe must still cover the opaque pill\n wipe={:?} btn={btn:?}",
+            reset.rect
+        );
+        assert!(
+            reset.rect[1] + reset.rect[3] <= btn[1] + btn[3] + 4.0,
+            "transformed shadow halo must not dest-reset wrapping text below Latest\n wipe={:?} halo={halo:?} btn={btn:?}",
+            reset.rect
+        );
+        assert!(
+            intersect_rects(reset.rect, wrap_line).is_none(),
+            "dest-reset must not punch the next wrapping line\n wipe={:?} line={wrap_line:?}",
+            reset.rect
+        );
+        assert!(
+            intersect_rects(reset.rect, bar).is_none(),
+            "dest-reset must not punch the overlay scrollbar\n wipe={:?} bar={bar:?}",
+            reset.rect
+        );
+        let last = last_present_visual_slots(&paints, &instances, &[], &[], &[]);
+        let btn_last = last
+            .iter()
+            .find(|(k, _)| *k == 2)
+            .map(|(_, b)| *b)
+            .expect("button last-present");
+        assert!(
+            btn_last[2] <= btn[2] + 8.0 && btn_last[3] <= btn[3] + 8.0,
+            "layered last-present must stay on the fill, not the SDF halo\n last={btn_last:?} halo={halo:?} btn={btn:?}"
+        );
+        let scissor = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            dirty,
+            &[(2, halo)],
+            &paints,
+            8.0,
+        );
+        assert!(
+            scissor[2] <= btn[2] + 16.0,
+            "scissor must stay on the pill, not the shadow-padded dirty\n scissor={scissor:?} dirty={dirty:?}"
+        );
+        assert!(
+            intersect_rects(scissor, bar).is_none(),
+            "scissor must not include the overlay scrollbar\n scissor={scissor:?} bar={bar:?}"
+        );
+    }
+
+    #[test]
+    fn layered_dest_reset_must_not_punch_overlay_scrollbar() {
+        // Full-width dock last-present / scissor used to dest-reset across the
+        // overlay auto rail. Layered clip must keep the wipe on the pill.
+        let mut card = blank_instance(0.0, 0.0, 320.0, 384.0);
+        card.color = [1.0, 1.0, 1.0, 1.0];
+        let btn = [120.0, 340.0, 80.0, 32.0];
+        let mut btn_fill = blank_instance(btn[0], btn[1], btn[2], btn[3]);
+        btn_fill.color = [0.1, 0.1, 0.12, 1.0];
+        btn_fill.radii = [16.0; 4];
+        let bar = [308.0, 8.0, 8.0, 368.0];
+        let mut bar_fill = blank_instance(bar[0], bar[1], bar[2], bar[3]);
+        bar_fill.color = [0.7, 0.7, 0.72, 0.4];
+        let dock = [0.0, 336.0, 320.0, 40.0];
+        let btn_p = NodePaint {
+            key: 2,
+            bounds: btn,
+            overlay: false,
+            instance: (1, 2),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(btn),
+        };
+        let bar_p = NodePaint {
+            key: 3,
+            bounds: bar,
+            overlay: false,
+            instance: (2, 3),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: Some([0.0, 0.0, 320.0, 384.0]),
+            layered: true,
+            rest: Some(bar),
+        };
+        let instances = [card, btn_fill, bar_fill];
+        let wipe = node_present_dest_reset_full(
+            2,
+            dock,
+            &[btn_p, bar_p],
+            &instances,
+            &[],
+            1.0,
+            Some(dock),
+        )
+        .expect("dest-reset of Latest")
+        .rect;
+        assert!(
+            aabb_covers(wipe, btn) || intersect_rects(wipe, btn).is_some(),
+            "wipe must still cover the pill\n wipe={wipe:?} btn={btn:?}"
+        );
+        assert!(
+            intersect_rects(wipe, bar).is_none(),
+            "Latest dest-reset must not punch the overlay scrollbar\n wipe={wipe:?} bar={bar:?}"
+        );
+        let scissor = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            2,
+            dock,
+            &[(2, dock)],
+            &[btn_p, bar_p],
+            8.0,
+        );
+        assert!(
+            intersect_rects(scissor, bar).is_none(),
+            "Latest node-present scissor must not include the overlay scrollbar\n scissor={scissor:?} bar={bar:?}"
+        );
+        let pins = named_scroll_blit_pins(
+            &[PaintDirty {
+                key: 2,
+                bounds: dock,
+                kind: PaintDirtyKind::Node,
+            }],
+            &[(2, dock)],
+            &[btn_p, bar_p],
+        );
+        assert!(
+            pins.iter().all(|p| intersect_rects(*p, bar).is_none()),
+            "scroll-blit pin of Latest must stay off the overlay scrollbar, got {pins:?}"
         );
     }
 

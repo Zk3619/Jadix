@@ -93,6 +93,7 @@ use crate::core::tree::{parse_text_color, Element, LayoutStatus, ATTR_POINTER_EV
 use crate::impl_slot_chrome_methods;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, vstack};
+use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::tokens;
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
@@ -115,6 +116,10 @@ const SLOT_BUTTON: &str = "message-scroller-button";
 const DEFAULT_EDGE_THRESHOLD: f32 = 8.0;
 const DEFAULT_PREVIOUS_PEEK: f32 = 48.0;
 const BUTTON_INSET: &str = "1rem";
+/// Hide slides this far along Y (px). Stays inside `BUTTON_INSET` (1rem) so
+/// `overflow:hidden` on the scroller does not clip the pill off-screen.
+const BUTTON_SLIDE_PX: f32 = 8.0;
+const BUTTON_MOTION_MS: f32 = 200.0;
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -612,6 +617,10 @@ fn apply_scroll_offset_to_element(el: &mut Element, viewport_id: &str) {
 /// cannot see the new item heights; post-collect follow only moved the offset signal
 /// and left this frame stuck on the old edge.
 ///
+/// A second pass then re-syncs [`MessageScrollerButton`]: the dock is a later sibling
+/// of the viewport, so pre-layout `reactive_sync` (LIFO) hid/showed Latest from a
+/// stale max/offset. `request_redraw` is a no-op while render holds `AppState`.
+///
 /// Iterative: this runs from inside `finish_collect` immediately before
 /// `collect_instances_mut`, whose frames are already large. A recursive walk of
 /// Gallery / calculator trees overflowed the Windows default stack.
@@ -622,6 +631,11 @@ pub(crate) fn sync_message_scroller_follow_after_layout(
     // Raw pointers: NLL will not let `&mut Element` children share a stack
     // with their parent. The walk is exclusive — a node is popped before its
     // children are pushed, so no two entries alias.
+    //
+    // Two passes: viewport follow publishes `content_h` / snaps offset *then*
+    // the jump button re-reads those signals. Pre-layout `reactive_sync` walks
+    // the dock before the viewport (LIFO children), so a same-frame live-edge
+    // snap left Latest at opacity 1. `request_redraw` is a no-op during render.
     let mut stack: Vec<*mut Element> = vec![el];
     while let Some(ptr) = stack.pop() {
         // SAFETY: exclusive tree walk — parent is popped before children are pushed.
@@ -633,6 +647,61 @@ pub(crate) fn sync_message_scroller_follow_after_layout(
         }
         for child in &mut node.children {
             stack.push(child);
+        }
+    }
+    stack.push(el);
+    while let Some(ptr) = stack.pop() {
+        // SAFETY: exclusive tree walk — parent is popped before children are pushed.
+        let node = unsafe { &mut *ptr };
+        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_BUTTON) {
+            if let Some(sync) = node.reactive_sync.clone() {
+                if sync.run(node, layout_tree) == LayoutStatus::StyleChanged {
+                    crate::app::damage::push_frame_paint_element(node, node.paint_scroll_acc);
+                }
+            }
+        }
+        for child in &mut node.children {
+            stack.push(child);
+        }
+    }
+}
+
+fn button_hide_translate_y(direction: MessageScrollerDirection) -> f32 {
+    if direction.is_end() {
+        BUTTON_SLIDE_PX
+    } else {
+        -BUTTON_SLIDE_PX
+    }
+}
+
+fn button_motion_entries() -> [TransitionEntry; 2] {
+    let ms = BUTTON_MOTION_MS;
+    [
+        TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: ms,
+            delay_ms: 0.0,
+            timing: TimingFunction::EaseOut,
+        },
+        TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: ms,
+            delay_ms: 0.0,
+            timing: TimingFunction::EaseOut,
+        },
+    ]
+}
+
+fn ensure_jump_motion_transitions(style: &mut crate::style::Style) {
+    for entry in button_motion_entries() {
+        if let Some(existing) = style
+            .transition
+            .iter_mut()
+            .find(|e| e.property == entry.property)
+        {
+            *existing = entry;
+        } else {
+            style.transition.push(entry);
         }
     }
 }
@@ -656,37 +725,67 @@ fn apply_button_active(
     let scale = if active { 1.0 } else { 0.95 };
     let ty = if active {
         0.0
-    } else if direction.is_end() {
-        1.0
     } else {
-        -1.0
+        button_hide_translate_y(direction)
     };
     let active_attr = if active { "true" } else { "false" };
-    let pct = el.style.translate_pct;
     let pe_now = el.attrs.get(ATTR_POINTER_EVENTS).map(String::as_str);
     let pe_matches = if active {
         pe_now.is_none() || pe_now == Some("auto")
     } else {
         pe_now == Some("none")
     };
+    ensure_jump_motion_transitions(&mut el.style);
+    let pose_changed = el.attrs.get(ATTR_ACTIVE).map(String::as_str) != Some(active_attr);
     let will_change = (el.style.opacity - opacity).abs() > 0.01
         || (el.style.scale[0] - scale).abs() > 0.01
         || (el.style.scale[1] - scale).abs() > 0.01
-        || pct[0].abs() > 0.01
-        || (pct[1] - ty).abs() > 0.01
-        || el.attrs.get(ATTR_ACTIVE).map(String::as_str) != Some(active_attr)
+        || el.style.translate[0].abs() > 0.01
+        || (el.style.translate[1] - ty).abs() > 0.01
+        || el.style.translate_pct[0].abs() > 0.01
+        || el.style.translate_pct[1].abs() > 0.01
+        || pose_changed
         || !pe_matches
-        || el.focusable != active;
+        || el.focusable != active
+        || el.transition_snapshot.has_active_tweens();
 
-    if (el.style.opacity - opacity).abs() > 0.01 {
+    // Follow-after-layout re-runs this after the CSS tick. Writing the target
+    // over `mid` every frame painted the end pose — enter/exit never showed.
+    // Snap idle opacity/transform *before* the new target so `tick` retargets
+    // from the current visual (hidden 0 / +8px). Button color tweens are often
+    // already active; `has_active_tweens()` must not skip this snap or
+    // `or_insert` starts opacity from the already-written end pose.
+    let motion_running = el
+        .transition_snapshot
+        .prop_tween_active(TransitionProperty::Opacity)
+        || el
+            .transition_snapshot
+            .prop_tween_active(TransitionProperty::Transform);
+    if pose_changed {
+        if !motion_running {
+            crate::utils::motion::snap_motion_baseline(el);
+        }
         el.style.opacity = opacity;
-    }
-    if (el.style.scale[0] - scale).abs() > 0.01 || (el.style.scale[1] - scale).abs() > 0.01 {
         el.style.scale = [scale, scale];
+        el.style.translate = [0.0, ty];
+        el.style.translate_pct = [0.0, 0.0];
+    } else if !motion_running && (el.style.opacity - opacity).abs() > 0.01 {
+        // Hide wrote 0 then a t=0 tick put `from` (1) back, and no later CSS
+        // frame ran — Latest stayed fully visible at the live edge.
+        crate::utils::motion::snap_motion_baseline(el);
+        el.style.opacity = opacity;
+        el.style.scale = [scale, scale];
+        el.style.translate = [0.0, ty];
+        el.style.translate_pct = [0.0, 0.0];
     }
-    // Dock owns X centering. Hide still slides on Y; dest-reset unions last-present.
-    if pct[0].abs() > 0.01 || (pct[1] - ty).abs() > 0.01 {
-        el.style.translate_pct = [0.0, ty];
+    if el
+        .transition_snapshot
+        .prop_tween_active(TransitionProperty::Opacity)
+        || el
+            .transition_snapshot
+            .prop_tween_active(TransitionProperty::Transform)
+    {
+        crate::style::note_page_css_needs_frame();
     }
     if el.attrs.get(ATTR_ACTIVE).map(String::as_str) != Some(active_attr) {
         el.attrs
@@ -1041,9 +1140,10 @@ fn jump_button_size(raw: &str) -> ButtonSize {
 }
 
 /// Absolute jump control, docked to the start/end edge and centered in a
-/// full-width bar. X centering lives on the dock so hide can still slide on Y
-/// without sharing `translate_pct` with `left:50%` (that clipped through
-/// `overflow:hidden` in a nested gallery ScrollArea / Card).
+/// full-width bar. X centering lives on the dock so the button does not share
+/// `translate_pct` with `left:50%` (that clipped through `overflow:hidden` in a
+/// nested gallery ScrollArea / Card). Hide/show use a short Y-slide (8px,
+/// inside the 1rem inset) plus opacity/scale so dest-reset stays on the pill.
 /// Default icon is Lucide `arrow-down` (rotated for `start`).
 ///
 /// RSX `<MessageScrollerButton direction="end">`.
@@ -1086,14 +1186,17 @@ pub fn MessageScrollerButton(
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
     el = el.opacity(0.0).pointer_events_none();
+    el.style.scale = [0.95, 0.95];
+    el.style.translate = [0.0, button_hide_translate_y(direction)];
+    ensure_jump_motion_transitions(&mut el.style);
     el.focusable = false;
     el = apply_base(el, base_builder);
     let sync_ctx = ctx.clone();
     el = el.reactive_sync(move |node, _layout_tree| apply_button_active(node, &sync_ctx, jump_dir));
 
-    // Full-width dock: `left:50%` + `translateX(-50%)` on the button itself shares
-    // `translate_pct` with the hide slide and clips through overflow:hidden when
-    // the 50% inset does not apply (nested gallery ScrollArea / Card).
+    // Full-width dock: `left:50%` + `translateX(-50%)` on the button itself used
+    // to share `translate_pct` with the hide Y-slide and clip through overflow:hidden
+    // when the 50% inset does not apply (nested gallery ScrollArea / Card).
     let mut dock: Element = hstack().justify_center().items_center().child(el).into();
     dock = dock
         .absolute()

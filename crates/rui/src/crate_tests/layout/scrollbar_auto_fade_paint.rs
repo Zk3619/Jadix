@@ -260,6 +260,53 @@ fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
                 !hide_dirty.is_empty(),
                 "settle-to-zero must dest-reset or retain keeps the last gray pixels"
             );
+            let thumb_key = find_focus_mut(&mut root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .and_then(|el| el.layout_node)
+                .map(u64::from)
+                .expect("thumb taffy");
+            let prev = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let mut covered = false;
+            for d in &hide_dirty {
+                if d.kind != crate::app::damage::PaintDirtyKind::Node {
+                    continue;
+                }
+                let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &hidden.node_paints,
+                    &hidden.instances,
+                    &[],
+                    1.0,
+                    prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
+                );
+                let Some(reset) = reset else {
+                    continue;
+                };
+                let wipe = reset.rect;
+                let overlaps_thumb = crate::app::damage::intersect_rects(wipe, thumb).is_some();
+                if d.key == thumb_key || overlaps_thumb {
+                    let covers = wipe[0] <= thumb[0] + 1.5
+                        && wipe[1] <= thumb[1] + 1.5
+                        && wipe[0] + wipe[2] + 1.5 >= thumb[0] + thumb[2]
+                        && wipe[1] + wipe[3] + 1.5 >= thumb[1] + thumb[3];
+                    assert!(
+                        covers,
+                        "fade dest-reset must cover the last painted thumb, not a leftover cap\n wipe={wipe:?} thumb={thumb:?} dirty={:?}",
+                        d.bounds
+                    );
+                    covered = true;
+                }
+            }
+            assert!(
+                covered,
+                "overlay auto hide must dest-reset the painted thumb (not skip CLEAR), hide_dirty={hide_dirty:?} thumb={thumb:?}"
+            );
 
             let _idle_hidden =
                 layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);

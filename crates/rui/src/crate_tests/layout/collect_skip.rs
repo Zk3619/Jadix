@@ -1964,3 +1964,117 @@ fn scroll_only_must_recollect_link_hover_underline_and_fg() {
         "scroll_only collect skip must not drop hover:underline"
     );
 }
+
+fn instance_has_chip_color(
+    result: &crate::layout::layout_tree::RenderResult,
+    color: [f32; 4],
+) -> bool {
+    result.instances.iter().any(|i| {
+        i.rect_size[0] > 20.0
+            && i.rect_size[1] > 20.0
+            && (0..4).all(|c| (i.color[c] - color[c]).abs() < 0.06)
+    })
+}
+
+/// Chrome hover runs before collect. ViewportsOnly `reuse_idle` must not
+/// skip-replay `hover:bg` after freeze leave (same order as AppState chrome).
+#[test]
+fn scroll_only_skip_replay_must_not_keep_hover_bg_after_pointer_miss() {
+    use crate::core::tree::LayoutStatus;
+    use crate::style::{apply_class_list, parse_color, tick_active_css_transitions_subtree};
+
+    reset_collect_skip_counters();
+    let hover_bg = parse_color("muted");
+    let mut chip = Element::new().w(80.0).h(40.0).flex_shrink(0.0);
+    apply_class_list(&mut chip, "bg-transparent hover:bg-muted");
+    let rest_bg = chip.style.bg_color;
+    let filler = Element::new()
+        .w(80.0)
+        .h(200.0)
+        .flex_shrink(0.0)
+        .bg([0.2, 0.2, 0.22, 1.0]);
+    let mut root = Element::new()
+        .flex_col()
+        .w(80.0)
+        .h(80.0)
+        .overflow_y("scroll")
+        .overflow_x("hidden")
+        .child(chip)
+        .child(filler);
+    root.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}hover-leave-scroll"));
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 80.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 80.0, 80.0, [-1.0, -1.0], true, false);
+
+    let mouse = {
+        let b = root.children[0].layout_bounds;
+        [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+    };
+    let mut impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        80.0,
+        80.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    assert_eq!(
+        root.children[0]
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.last_pointer_hover),
+        Some(true),
+        "stationary pointer over the chip must enter hover"
+    );
+    let hovered = tree.build_and_layout_fast(&mut root, 80.0, 80.0, mouse, true, false);
+    assert!(
+        instance_has_chip_color(&hovered, hover_bg),
+        "hovered chip must collect hover:bg; instances={:?}",
+        hovered
+            .instances
+            .iter()
+            .map(|i| i.color)
+            .collect::<Vec<_>>()
+    );
+
+    // Same order as render chrome: live offset, then freeze leave, then collect.
+    root.scroll_offset[1] = 30.0;
+    use_signal(&scroll_offset_y_signal_key("hover-leave-scroll"), || {
+        0.0_f32
+    })
+    .set_silent(30.0);
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        80.0,
+        80.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    assert_eq!(
+        root.children[0]
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.last_pointer_hover),
+        Some(false),
+        "content sliding out from under a still pointer must leave hover in chrome"
+    );
+    assert_eq!(root.children[0].style.bg_color, rest_bg);
+    let left = tree.build_and_layout_fast(&mut root, 80.0, 80.0, mouse, true, false);
+    assert!(
+        !instance_has_chip_color(&left, hover_bg),
+        "scroll_only skip-replay must not keep hover:bg after pointer miss; instances={:?}",
+        left.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+}
+

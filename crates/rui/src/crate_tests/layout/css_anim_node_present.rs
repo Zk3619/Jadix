@@ -8,20 +8,29 @@
 
 use crate::app::damage::{
     expand_paint_dirties_for_translated_slots, intersect_rects, paint_dirty_has_keyed_slot,
-    paint_dirty_matches_present_slot, paint_dirty_nested_in_larger_node, paint_element_key,
-    take_frame_paint_nodes, PaintDirtyKind,
+    paint_dirty_matches_present_slot, paint_dirty_nested_in_larger_node,
+    paint_dirty_skips_node_dest_reset, paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
-    node_paint_visual_bounds, node_present_clipped_capture_text, node_present_dest_reset_scaled,
-    node_present_scissor_logical,
+    last_present_prev_for_dirty, last_present_visual_slots, node_paint_visual_bounds,
+    node_present_clipped_capture_text, node_present_dest_reset_scaled,
+    node_present_scissor_logical, slot_visual_exceeds_rest,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{visual_paint_aabb, Element, LayoutStatus, LayoutTree};
 use crate::primitives::r#box::hstack;
 use crate::style::{
-    apply_class_list, sync_class_variants_subtree, tick_active_css_transitions_subtree,
+    apply_class_list, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+    sync_class_variants_subtree, tick_active_css_transitions_subtree,
 };
+
+#[cfg(feature = "bundled-lucide")]
+use crate::app::draw_cull::{textured_hits_damage, textured_paint_bounds};
+#[cfg(feature = "bundled-lucide")]
+use crate::renderer::scale_textured_draws;
+#[cfg(feature = "bundled-lucide")]
+use crate::style::class_variant_hover_needs_frame;
 
 fn fmt_rect(r: [f32; 4]) -> String {
     format!("[{:.1},{:.1} {:.1}x{:.1}]", r[0], r[1], r[2], r[3])
@@ -148,6 +157,13 @@ fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
     el.children.iter().find_map(|c| find_slot(c, slot))
 }
 
+fn find_slot_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
+    if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+        return Some(el);
+    }
+    el.children.iter_mut().find_map(|c| find_slot_mut(c, slot))
+}
+
 #[test]
 fn idle_sync_must_tick_offscreen_animate_spin() {
     let _ = crate::primitives::interactive::take_hover_paint_dirty();
@@ -173,17 +189,14 @@ fn idle_sync_must_tick_offscreen_animate_spin() {
         &mut impact,
     );
     assert!(
-        crate::primitives::interactive::take_hover_paint_dirty(),
-        "idle sync must tick animate-spin even when element_is_offscreen is true — that is why spin dies when scrolling stops"
-    );
-    assert!(
         root.animation_snapshot
             .runs
             .first()
             .is_some_and(|r| r.elapsed_ms > 0.0),
-        "spin elapsed must advance on the idle path, got {:?}",
+        "idle sync must tick animate-spin even when element_is_offscreen is true — that is why spin dies when scrolling stops, got {:?}",
         root.animation_snapshot.runs
     );
+    let _ = crate::primitives::interactive::take_hover_paint_dirty();
     assert!(
         crate::style::any_page_css_needs_frame(),
         "chrome must arm the page-CSS wake so about_to_wait does not WaitUntil scrollbar hide"
@@ -690,6 +703,553 @@ fn idle_marker_row_spin_must_not_dirty_content_row() {
         !paint_dirty_nested_in_larger_node(&icon_dirty, &dirty),
         "icon dest-reset must not be nested-skipped under the Marker row"
     );
+}
+
+#[test]
+fn marker_hover_must_not_nested_skip_spin_dest_reset() {
+    // Moving the pointer over MarkerContent (shimmer) used to dest-reset the row
+    // and nested-skip the loader-circle — retain kept one angle (卡顿 / 停止).
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 30.0);
+
+    let mut icon = Element::new().w(16.0).h(16.0).bg([0.1, 0.1, 0.1, 1.0]);
+    apply_class_list(&mut icon, "animate-spin");
+    icon.set_attr("data-slot", "spin-icon");
+
+    let mut wrap = Element::new()
+        .w(16.0)
+        .h(16.0)
+        .pointer_events_none()
+        .child(icon);
+    wrap.set_attr("data-slot", "spin-wrap");
+
+    let mut content = Element::new().w(80.0).h(16.0).bg([0.85, 0.85, 0.85, 1.0]);
+    apply_class_list(&mut content, "shimmer");
+    content.set_attr("data-slot", "shimmer");
+
+    let mut row: Element = hstack()
+        .items("center")
+        .h(16.0)
+        .gap(8.0)
+        .child(wrap)
+        .child(content)
+        .into();
+    row.set_attr("data-slot", "marker-row");
+
+    let mut root = Element::new()
+        .w(200.0)
+        .h(48.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(row);
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 200.0, 48.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+    let prev_slots = crate::app::draw_cull::last_present_visual_slots(
+        &first.node_paints,
+        &first.instances,
+        &[],
+        &first.text_nodes,
+        &first.input_chrome_instances,
+    );
+
+    let content_el = find_slot(&root, "shimmer").expect("content");
+    let mouse = [
+        content_el.layout_bounds[0] + content_el.layout_bounds[2] * 0.5,
+        content_el.layout_bounds[1] + content_el.layout_bounds[3] * 0.5,
+    ];
+
+    crate::style::utility::set_frame_dt(0.125);
+    let mut impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        200.0,
+        48.0,
+        &mut tree,
+        &mut impact,
+    );
+    let mut dirty = take_frame_paint_nodes();
+    let later = tree.build_and_layout_fast(&mut root, 200.0, 48.0, [-1.0, -1.0], false, false);
+    let now_slots = crate::app::draw_cull::last_present_visual_slots(
+        &later.node_paints,
+        &later.instances,
+        &[],
+        &later.text_nodes,
+        &later.input_chrome_instances,
+    );
+    let row_el = find_slot(&root, "marker-row").expect("row");
+    let icon_el = find_slot(&root, "spin-icon").expect("icon");
+    let row_key = paint_element_key(row_el);
+    let icon_key = paint_element_key(icon_el);
+    expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+    let icon_dirty = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == icon_key)
+        .cloned()
+        .expect("hover spin must still dirty the icon");
+    assert!(
+        !dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == row_key),
+        "hovering MarkerContent must not dest-reset the row\n dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("key={} {}", d.key, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !paint_dirty_nested_in_larger_node(&icon_dirty, &dirty),
+        "icon dest-reset must run while the pointer is on the Marker caption"
+    );
+    assert!(
+        icon_el
+            .animation_snapshot
+            .runs
+            .first()
+            .is_some_and(|r| r.elapsed_ms > 0.0),
+        "spin elapsed must keep advancing under hover, got {:?}",
+        icon_el.animation_snapshot.runs
+    );
+}
+
+#[cfg(feature = "bundled-lucide")]
+fn find_spin_el(el: &Element) -> Option<&Element> {
+    if el.attrs.get("rui_animate").map(String::as_str) == Some("spin")
+        || el.style.animations.iter().any(|a| a.name == "spin")
+    {
+        return Some(el);
+    }
+    el.children.iter().find_map(find_spin_el)
+}
+
+#[cfg(feature = "bundled-lucide")]
+fn spin_elapsed_ms(el: &Element) -> f32 {
+    el.animation_snapshot
+        .runs
+        .first()
+        .map(|r| r.elapsed_ms)
+        .unwrap_or(0.0)
+}
+
+#[cfg(feature = "bundled-lucide")]
+fn dump_paints(paints: &[crate::layout::layout_tree::NodePaint], root: &Element) -> String {
+    paints
+        .iter()
+        .map(|p| {
+            let slot = find_slot_by_key(root, p.key)
+                .and_then(|e| e.attrs.get("data-slot"))
+                .map(String::as_str)
+                .unwrap_or("?");
+            format!(
+                "key={} slot={slot} bounds={} inst={:?} tex={:?} text={:?}",
+                p.key,
+                fmt_rect(p.bounds),
+                p.instance,
+                p.textured,
+                p.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn dump_dirties(dirty: &[crate::app::damage::PaintDirty], root: &Element) -> String {
+    dirty
+        .iter()
+        .map(|d| {
+            let slot = find_slot_by_key(root, d.key)
+                .and_then(|e| e.attrs.get("data-slot"))
+                .map(String::as_str)
+                .unwrap_or("?");
+            format!(
+                "key={} slot={slot} nested={} {}",
+                d.key,
+                paint_dirty_nested_in_larger_node(d, dirty),
+                fmt_rect(d.bounds)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn find_slot_by_key(el: &Element, key: u64) -> Option<&Element> {
+    if paint_element_key(el) == key {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_slot_by_key(c, key))
+}
+
+/// Fast pointer motion *anywhere* on the gallery (sidebar, `hover:scale` tiles)
+/// extra-paints. Marker spin must keep sampling the CSS timeline and dest-reset
+/// even when the hovered tile is also a Node dirty — the pointer never has to
+/// enter the Marker.
+#[test]
+fn page_pointer_storm_must_keep_distant_marker_spinning() {
+    let _ = take_frame_paint_nodes();
+    set_css_transition_virtual_timeline(true);
+    set_css_transition_timeline_ms(0.0);
+    struct ResetVirtual;
+    impl Drop for ResetVirtual {
+        fn drop(&mut self) {
+            set_css_transition_virtual_timeline(false);
+        }
+    }
+    let _reset_virtual = ResetVirtual;
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut icon = Element::new().w(16.0).h(16.0).bg([0.1, 0.1, 0.1, 1.0]);
+    apply_class_list(&mut icon, "animate-spin");
+    icon.set_attr("data-slot", "spin-icon");
+    let mut marker_row: Element = hstack().items("center").h(20.0).gap(8.0).child(icon).into();
+    marker_row.set_attr("data-slot", "marker-row");
+
+    let mut tile = Element::new().w(64.0).h(64.0).bg([0.2, 0.4, 0.8, 1.0]);
+    apply_class_list(&mut tile, "hover:scale-125");
+    tile.set_attr("data-slot", "hover-tile");
+
+    let mut root = Element::new()
+        .flex_col()
+        .w(400.0)
+        .h(240.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .gap(80.0)
+        .child(marker_row)
+        .child(tile);
+    let mut tree = LayoutTree::new();
+    let _first = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+    let mut seed_impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "",
+        false,
+        400.0,
+        240.0,
+        &mut tree,
+        &mut seed_impact,
+    );
+    let _ = take_frame_paint_nodes();
+    let seeded = tree.build_and_layout_fast(&mut root, 400.0, 240.0, [-1.0, -1.0], false, false);
+    let mut prev_slots = last_present_visual_slots(
+        &seeded.node_paints,
+        &seeded.instances,
+        &[],
+        &seeded.text_nodes,
+        &seeded.input_chrome_instances,
+    );
+
+    let tile_el = find_slot(&root, "hover-tile").expect("tile");
+    let spin_el = find_slot(&root, "spin-icon").expect("spin");
+    let tile_c = [
+        tile_el.layout_bounds[0] + tile_el.layout_bounds[2] * 0.5,
+        tile_el.layout_bounds[1] + tile_el.layout_bounds[3] * 0.5,
+    ];
+    let far = [380.0, 220.0];
+    assert!(
+        (tile_c[1] - spin_el.layout_bounds[1]).abs() > 40.0,
+        "hover tile must sit away from the spinner so this is a page-wide storm, not Marker hover"
+    );
+
+    let mut last_rotate = spin_el.style.rotate_deg;
+    let mut virtual_ms = 0.0_f64;
+    for (i, mouse) in [tile_c, far, tile_c, far]
+        .iter()
+        .cycle()
+        .take(8)
+        .enumerate()
+    {
+        virtual_ms += 16.0;
+        set_css_transition_timeline_ms(virtual_ms);
+        // Typical CursorMoved extra-paint dt (1–8ms), not dt≈0 — production used
+        // this branch and ignored the CSS timeline, so spin crawled/froze.
+        crate::style::utility::set_frame_dt(0.002);
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            *mouse,
+            "",
+            false,
+            400.0,
+            240.0,
+            &mut tree,
+            &mut impact,
+        );
+        let mut dirty = take_frame_paint_nodes();
+        let later = tree.build_and_layout_fast(&mut root, 400.0, 240.0, *mouse, false, false);
+        let now_slots = last_present_visual_slots(
+            &later.node_paints,
+            &later.instances,
+            &[],
+            &later.text_nodes,
+            &later.input_chrome_instances,
+        );
+        expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+
+        let spin = find_slot(&root, "spin-icon").expect("spin");
+        let spin_key = paint_element_key(spin);
+        let tile_key = paint_element_key(find_slot(&root, "hover-tile").expect("tile"));
+        let rotate = spin.style.rotate_deg;
+        assert!(
+            (rotate - last_rotate).abs() > 4.0,
+            "i={i} extra hover-frame dt=2ms must still sample +16ms of CSS time, rotate {last_rotate:.1}->{rotate:.1}"
+        );
+        last_rotate = rotate;
+
+        let icon_dirty = dirty
+            .iter()
+            .find(|d| d.kind == PaintDirtyKind::Node && d.key == spin_key)
+            .cloned()
+            .expect("spin must stay a Node dirty while the pointer storms the page");
+        let skip = paint_dirty_skips_node_dest_reset(&icon_dirty, &dirty, false)
+            && !slot_visual_exceeds_rest(spin_key, &later.node_paints);
+        assert!(
+            !skip,
+            "i={i} hover-tile dirty must not nested-skip spin dest-reset\n{}",
+            dump_dirties(&dirty, &root)
+        );
+        let prev_icon = last_present_prev_for_dirty(PaintDirtyKind::Node, spin_key, &prev_slots);
+        let reset = node_present_dest_reset_scaled(
+            spin_key,
+            icon_dirty.bounds,
+            &later.node_paints,
+            &later.instances,
+            &[],
+            1.0,
+            prev_icon,
+        );
+        assert!(
+            reset.is_some(),
+            "i={i} icon dest-reset must run during a page-wide pointer storm (hover tile key={tile_key})\n{}",
+            dump_dirties(&dirty, &root)
+        );
+        prev_slots = now_slots;
+    }
+}
+
+/// Gallery 1c-m: real `<Marker>` + lucide loader + shimmer caption.
+/// CursorMoved extra paints used a simplified hstack tree in the previous test;
+/// the cluster / MarkerIcon wrap / content last-present is what nested-skips.
+/// Lucide path/font raster needs `bundled-lucide` (same as gallery).
+#[cfg(feature = "bundled-lucide")]
+#[test]
+fn gallery_marker_pointer_storm_must_keep_spinning() {
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut glyph = crate::utils::build_named_icon_text_node("loader-circle", "\u{ea0e}");
+    apply_class_list(&mut glyph, "animate-spin");
+    let marker_el: Element = crate::components::marker()
+        .role("status")
+        .icon(glyph)
+        .content_with(|c| c.class("shimmer").text("Thinking..."))
+        .into();
+    let mut root = Element::new()
+        .w(320.0)
+        .h(64.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(marker_el);
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = take_frame_paint_nodes();
+    assert!(
+        !first.textured_draws.is_empty(),
+        "loader-circle + animate-spin must collect a lucide texture (got 0 textured draws)"
+    );
+    let mut prev_slots = last_present_visual_slots(
+        &first.node_paints,
+        &first.instances,
+        &scale_textured_draws(&first.textured_draws, 1.0),
+        &first.text_nodes,
+        &first.input_chrome_instances,
+    );
+
+    let content = find_slot(&root, "marker-content").expect("content");
+    let icon_slot = find_slot(&root, "marker-icon").expect("icon slot");
+    let row = find_slot(&root, "marker").expect("row");
+    let probes = [
+        [
+            icon_slot.layout_bounds[0] + icon_slot.layout_bounds[2] * 0.5,
+            icon_slot.layout_bounds[1] + icon_slot.layout_bounds[3] * 0.5,
+        ],
+        [
+            content.layout_bounds[0] + content.layout_bounds[2] * 0.5,
+            content.layout_bounds[1] + content.layout_bounds[3] * 0.5,
+        ],
+        [row.layout_bounds[0] + 4.0, row.layout_bounds[1] - 2.0],
+        [
+            row.layout_bounds[0] + row.layout_bounds[2] * 0.5,
+            row.layout_bounds[1] + row.layout_bounds[3] * 0.5,
+        ],
+    ];
+
+    let mut last_elapsed = spin_elapsed_ms(find_spin_el(&root).expect("spin"));
+    let mut last_rotate = find_spin_el(&root).expect("spin").style.rotate_deg;
+    for (i, mouse) in probes.iter().cycle().take(12).enumerate() {
+        crate::style::utility::set_frame_dt(if i % 3 == 1 { 0.0 } else { 1.0 / 60.0 });
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            *mouse,
+            "",
+            false,
+            320.0,
+            64.0,
+            &mut tree,
+            &mut impact,
+        );
+        let mut dirty = take_frame_paint_nodes();
+        let later = tree.build_and_layout_fast(&mut root, 320.0, 64.0, *mouse, false, false);
+        let now_slots = last_present_visual_slots(
+            &later.node_paints,
+            &later.instances,
+            &scale_textured_draws(&later.textured_draws, 1.0),
+            &later.text_nodes,
+            &later.input_chrome_instances,
+        );
+        expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+        assert!(
+            !crate::primitives::interactive::take_hover_paint_dirty(),
+            "spin/shimmer ticks must not mark hover-dirty — CursorMoved would storm dt≈0 paints"
+        );
+        assert!(
+            !class_variant_hover_needs_frame(&root, *mouse),
+            "Marker has no hover: utilities; pointer motion must not wake extra class-hover frames"
+        );
+
+        let spin = find_spin_el(&root).expect("spin");
+        assert_eq!(
+            spin.pointer_events_mode(),
+            crate::core::tree::PointerEvents::None,
+            "spin AABB must stay pointer-events:none so rotating hit tests cannot flicker hover"
+        );
+        let elapsed = spin_elapsed_ms(spin);
+        let rotate = spin.style.rotate_deg;
+        let spin_key = paint_element_key(spin);
+        let row_key = paint_element_key(find_slot(&root, "marker").expect("row"));
+        let wrap_key = paint_element_key(find_slot(&root, "marker-icon").expect("wrap"));
+        let cluster_key = find_slot(&root, "marker-cluster").map(paint_element_key);
+        let cluster_now =
+            cluster_key.and_then(|ck| now_slots.iter().find(|(k, _)| *k == ck).map(|(_, b)| *b));
+        let icon_dirty = dirty
+            .iter()
+            .find(|d| d.kind == PaintDirtyKind::Node && d.key == spin_key)
+            .cloned();
+        let row_now = now_slots
+            .iter()
+            .find(|(k, _)| *k == row_key)
+            .map(|(_, b)| *b);
+        let wrap_now = now_slots
+            .iter()
+            .find(|(k, _)| *k == wrap_key)
+            .map(|(_, b)| *b);
+        let icon_now = now_slots
+            .iter()
+            .find(|(k, _)| *k == spin_key)
+            .map(|(_, b)| *b);
+        let tex = scale_textured_draws(&later.textured_draws, 1.0);
+        let dump = format!(
+            "i={i} mouse={mouse:?} dt={} elapsed {last_elapsed:.1}->{elapsed:.1} rotate {last_rotate:.1}->{rotate:.1}\n{}\n paints={}\n last-present row={:?} wrap={:?} cluster={:?} icon={:?}",
+            if i % 3 == 1 { 0.0 } else { 1.0 / 60.0 },
+            dump_dirties(&dirty, &root),
+            dump_paints(&later.node_paints, &root),
+            row_now.map(fmt_rect),
+            wrap_now.map(fmt_rect),
+            cluster_now.map(fmt_rect),
+            icon_now.map(fmt_rect),
+        );
+        assert!(
+            icon_dirty.is_some(),
+            "spin must stay a Node dirty while the pointer walks the Marker\n{dump}"
+        );
+        let icon_dirty = icon_dirty.unwrap();
+        assert!(
+            !dirty.iter().any(|d| d.kind == PaintDirtyKind::Node
+                && (d.key == row_key
+                    || d.key == wrap_key
+                    || cluster_key.is_some_and(|k| d.key == k))),
+            "row/wrap/cluster dest-reset nested-skips the loader\n{dump}"
+        );
+        assert!(
+            !paint_dirty_nested_in_larger_node(&icon_dirty, &dirty),
+            "icon dest-reset nested-skipped under a larger Marker dirty\n{dump}"
+        );
+        if let Some(cluster_now) = cluster_now {
+            assert!(
+                cluster_now[3] <= 24.0,
+                "Marker cluster last-present must stay the unrotated caption row, not the loader circumcircle\n{dump}"
+            );
+        }
+        if let Some(wrap_now) = wrap_now {
+            assert!(
+                wrap_now[2] <= 20.0 && wrap_now[3] <= 20.0,
+                "MarkerIcon wrap last-present must stay the unrotated size-4 box\n{dump}"
+            );
+        }
+        let prev_icon = last_present_prev_for_dirty(PaintDirtyKind::Node, spin_key, &prev_slots);
+        let reset = node_present_dest_reset_scaled(
+            spin_key,
+            icon_dirty.bounds,
+            &later.node_paints,
+            &later.instances,
+            &tex,
+            1.0,
+            prev_icon,
+        );
+        assert!(
+            reset.is_some(),
+            "icon dest-reset must run (None leaves the last angle in PartialLoad retain)\n{dump}"
+        );
+        let (wipe, _) = reset.unwrap();
+        for d in &tex {
+            let tb = textured_paint_bounds(d);
+            if tb[2] <= 0.0 || tb[3] <= 0.0 {
+                continue;
+            }
+            let cx = tb[0] + tb[2] * 0.5;
+            let cy = tb[1] + tb[3] * 0.5;
+            assert!(
+                cx >= wipe[0] && cy >= wipe[1] && cx < wipe[0] + wipe[2] && cy < wipe[1] + wipe[3],
+                "dest-reset wipe {} must cover lucide texture {}\n{dump}",
+                fmt_rect(wipe),
+                fmt_rect(tb),
+            );
+        }
+        let scissor = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            spin_key,
+            icon_dirty.bounds,
+            &prev_slots,
+            &later.node_paints,
+            8.0,
+        );
+        assert!(
+            tex.iter().any(|d| textured_hits_damage(d, scissor)),
+            "PartialLoad scissor {} must cover the spinning lucide texture {:?}\n{dump}",
+            fmt_rect(scissor),
+            tex.iter()
+                .map(|d| fmt_rect(textured_paint_bounds(d)))
+                .collect::<Vec<_>>(),
+        );
+        prev_slots = now_slots;
+        if i % 3 != 1 {
+            assert!(
+                elapsed > last_elapsed + 1.0,
+                "spin elapsed must advance on vsync-sized dt\n{dump}"
+            );
+            assert!(
+                (rotate - last_rotate).abs() > 0.5,
+                "spin rotate must change on vsync-sized dt\n{dump}"
+            );
+        }
+        last_elapsed = elapsed;
+        last_rotate = rotate;
+    }
 }
 
 /// MarkerIcon is `size-4` wrapping Icon `size-4`. Parent `NodePaint` ranges include
@@ -1283,9 +1843,10 @@ fn gallery_marker_like_dest_reset_must_not_punch_title_or_sibling() {
     }
 }
 
-/// Gallery animation row: ping scale-2 / bounce translate must not dest-reset the
-/// caption above; pulse opacity must keep a full wipe when a grown ping neighbor
-/// only overlaps visually.
+/// Gallery animation row: absolute ping is layered — dest-reset must wipe the
+/// caption overlap and restore glyphs (else PartialLoad stains the title).
+/// Bounce stays in-flow and must not punch its caption. Pulse opacity must keep
+/// a full wipe (including vertex AA) when a grown ping neighbor only overlaps visually.
 #[test]
 fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
     let _ = take_frame_paint_nodes();
@@ -1293,19 +1854,40 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
 
     let mut ping_label = Element::new().h(14.0).flex_shrink(0.0).text("ping");
     ping_label.set_attr("data-slot", "ping-label");
+    let mut ping_core = Element::new().w(32.0).h(32.0).bg([0.2, 0.2, 0.85, 1.0]);
+    apply_class_list(&mut ping_core, "rounded-full");
     let mut ping = Element::new()
         .w(32.0)
         .h(32.0)
-        .flex_shrink(0.0)
+        .absolute()
+        .inset(0.0)
         .bg([0.2, 0.2, 0.85, 1.0]);
     apply_class_list(&mut ping, "rounded-full animate-ping");
     ping.set_attr("data-slot", "ping-box");
+    let ping_host = Element::new()
+        .w(32.0)
+        .h(32.0)
+        .relative()
+        .flex_shrink(0.0)
+        .items_center()
+        .justify_center()
+        .child(ping_core)
+        .child(ping);
+    // Gallery: 4rem overflow-hidden stage so scale-2 ink cannot src-over the caption.
+    let ping_stage = Element::new()
+        .w(64.0)
+        .h(64.0)
+        .flex_shrink(0.0)
+        .items_center()
+        .justify_center()
+        .overflow("hidden")
+        .child(ping_host);
     let ping_col = Element::new()
         .flex_col()
         .gap(6.0)
         .flex_shrink(0.0)
         .child(ping_label)
-        .child(ping);
+        .child(ping_stage);
 
     let mut bounce_label = Element::new().h(14.0).flex_shrink(0.0).text("bounce");
     bounce_label.set_attr("data-slot", "bounce-label");
@@ -1343,31 +1925,33 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
         .flex_row()
         .gap(20.0)
         .w(400.0)
-        .h(80.0)
+        .h(140.0)
         .bg([0.96, 0.96, 0.96, 1.0])
         .child(ping_col)
         .child(pulse_col)
         .child(bounce_col);
     let mut tree = LayoutTree::new();
-    let _first = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
+    let _first = tree.build_and_layout(&mut root, 400.0, 140.0, [-1.0, -1.0]);
     let _ = take_frame_paint_nodes();
 
-    // Ping scale=2 at 75% of the 1s rule; bounce peak is 50%.
-    crate::style::utility::set_frame_dt(0.75);
+    // CSS ticks clamp dt to 80ms; 10× that lands on ping's 75% scale-2 stop.
+    crate::style::utility::set_frame_dt(0.08);
     let mut impact = LayoutStatus::Clean;
-    tick_active_css_transitions_subtree(
-        &mut root,
-        [0.0, 0.0],
-        "",
-        false,
-        400.0,
-        80.0,
-        [0.0, 0.0],
-        &mut tree,
-        &mut impact,
-    );
+    for _ in 0..10 {
+        tick_active_css_transitions_subtree(
+            &mut root,
+            [0.0, 0.0],
+            "",
+            false,
+            400.0,
+            140.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+    }
     let dirty = take_frame_paint_nodes();
-    let later = tree.build_and_layout_fast(&mut root, 400.0, 80.0, [-1.0, -1.0], false, false);
+    let later = tree.build_and_layout_fast(&mut root, 400.0, 140.0, [-1.0, -1.0], false, false);
 
     let ping_el = find_slot(&root, "ping-box").expect("ping");
     let ping_label_el = find_slot(&root, "ping-label").expect("ping label");
@@ -1395,6 +1979,10 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
         ping_paint.rest.is_some(),
         "ping collect must record the unscaled Taffy box"
     );
+    assert!(
+        ping_paint.layered,
+        "gallery ping overlay is position:absolute (layered stacking)"
+    );
 
     let ping_dirty = dirty
         .iter()
@@ -1412,9 +2000,30 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
     .expect("card behind ping");
     let pl = ping_label_el.layout_bounds;
     assert!(
-        !rect_contains_point(ping_wipe, pl[0] + pl[2] * 0.5, pl[1] + pl[3] * 0.5),
-        "ping dest-reset must not punch the caption\n wipe={} label={}",
+        intersect_rects(ping_wipe, pl).is_none(),
+        "layered ping dest-reset must not punch the caption\n wipe={} label={}",
         fmt_rect(ping_wipe),
+        fmt_rect(pl)
+    );
+    let ping_scissor = node_present_scissor_logical(
+        PaintDirtyKind::Node,
+        ping_dirty.key,
+        ping_dirty.bounds,
+        &[(ping_key, ping_visual)],
+        &later.node_paints,
+        8.0,
+    );
+    assert!(
+        intersect_rects(ping_scissor, pl).is_none(),
+        "layered ping scissor must not paint the caption\n scissor={} label={}",
+        fmt_rect(ping_scissor),
+        fmt_rect(pl)
+    );
+    let encode_scissor = crate::app::damage::union_rects(ping_scissor, ping_wipe);
+    assert!(
+        intersect_rects(encode_scissor, pl).is_none(),
+        "GPU scissor (dest-reset ∪ node-present) must not paint the caption\n scissor={} label={}",
+        fmt_rect(encode_scissor),
         fmt_rect(pl)
     );
 
@@ -1458,12 +2067,362 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
     )
     .expect("card behind pulse");
     assert!(
-        pulse_wipe[0] <= pulse_box[0] + 0.5
-            && pulse_wipe[1] <= pulse_box[1] + 0.5
-            && pulse_wipe[0] + pulse_wipe[2] >= pulse_box[0] + pulse_box[2] - 0.5
-            && pulse_wipe[1] + pulse_wipe[3] >= pulse_box[1] + pulse_box[3] - 0.5,
-        "pulse dest-reset must cover the full rounded box (no nested frames)\n wipe={} pulse={}",
+        pulse_wipe[0] <= pulse_box[0] - 1.5
+            && pulse_wipe[1] <= pulse_box[1] - 1.5
+            && pulse_wipe[0] + pulse_wipe[2] >= pulse_box[0] + pulse_box[2] + 1.5
+            && pulse_wipe[1] + pulse_wipe[3] >= pulse_box[1] + pulse_box[3] + 1.5,
+        "pulse dest-reset must cover the rounded box plus vertex AA\n wipe={} pulse={}",
         fmt_rect(pulse_wipe),
         fmt_rect(pulse_box)
+    );
+}
+
+#[test]
+fn gallery_play_state_pause_dest_reset_must_cover_spin_circumcircle() {
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut label = Element::new().h(14.0).flex_shrink(0.0).text("play-state");
+    label.set_attr("data-slot", "play-state-label");
+    let mut spin = Element::new()
+        .w(40.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .bg([0.1, 0.1, 0.12, 1.0]);
+    apply_class_list(&mut spin, "rounded-md animate-spin");
+    spin.set_attr("data-slot", "play-state-box");
+    let stage = Element::new()
+        .w(80.0)
+        .h(80.0)
+        .flex_shrink(0.0)
+        .items_center()
+        .justify_center()
+        .child(spin);
+    let mut btn = Element::new()
+        .h(28.0)
+        .w(48.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .text("Pause");
+    btn.set_attr("data-slot", "play-state-btn");
+    let col = Element::new()
+        .flex_col()
+        .gap(6.0)
+        .flex_shrink(0.0)
+        .items_center()
+        .child(label)
+        .child(stage)
+        .child(btn);
+    let mut fade = Element::new()
+        .w(48.0)
+        .h(32.0)
+        .flex_shrink(0.0)
+        .bg([0.9, 0.9, 0.92, 1.0]);
+    apply_class_list(&mut fade, "rounded-md");
+    fade.set_attr("data-slot", "fade-box");
+    let mut root = Element::new()
+        .flex_row()
+        .gap(20.0)
+        .w(280.0)
+        .h(180.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(col)
+        .child(fade);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 280.0, 180.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    // 2×80ms ≈ 160ms of a 1s linear spin (~58°), past the 45° diamond.
+    crate::style::utility::set_frame_dt(0.08);
+    let mut impact = LayoutStatus::Clean;
+    for _ in 0..2 {
+        tick_active_css_transitions_subtree(
+            &mut root,
+            [0.0, 0.0],
+            "",
+            false,
+            280.0,
+            180.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+    }
+    let spun = tree.build_and_layout_fast(&mut root, 280.0, 180.0, [-1.0, -1.0], false, false);
+    let spin_el = find_slot(&root, "play-state-box").expect("play-state box");
+    let spin_visual = visual_paint_aabb(spin_el, [0.0, 0.0]);
+    let rest = spin_el.layout_bounds;
+    assert!(
+        spin_visual[2] > rest[2] + 4.0 && spin_visual[3] > rest[3] + 4.0,
+        "spin must be rotated past identity, visual={} rest={}",
+        fmt_rect(spin_visual),
+        fmt_rect(rest)
+    );
+    let prev_slots = last_present_visual_slots(
+        &spun.node_paints,
+        &spun.instances,
+        &[],
+        &spun.text_nodes,
+        &spun.input_chrome_instances,
+    );
+
+    let spin_mut = find_slot_mut(&mut root, "play-state-box").expect("play-state box");
+    assert!(
+        !spin_mut.style.animations.is_empty(),
+        "play-state box must have a CSS animation"
+    );
+    spin_mut.style.animations[0].play_state = crate::style::AnimationPlayState::Paused;
+    if let Some(btn_mut) = find_slot_mut(&mut root, "play-state-btn") {
+        btn_mut.text = Some("Play".to_string());
+    }
+    let _ = take_frame_paint_nodes();
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        280.0,
+        180.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirty = take_frame_paint_nodes();
+    let paused = tree.build_and_layout_fast(&mut root, 280.0, 180.0, [-1.0, -1.0], false, false);
+    let spin_el = find_slot(&root, "play-state-box").expect("play-state box");
+    let spin_key = paint_element_key(spin_el);
+    let spin_visual = visual_paint_aabb(spin_el, [0.0, 0.0]);
+    let spin_dirty = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == spin_key)
+        .cloned();
+    let d = spin_dirty.expect("pause must dest-reset the spinning box");
+    let (wipe, _) = node_present_dest_reset_scaled(
+        d.key,
+        d.bounds,
+        &paused.node_paints,
+        &paused.instances,
+        &[],
+        1.0,
+        last_present_prev_for_dirty(d.kind, d.key, &prev_slots),
+    )
+    .expect("card behind play-state spin");
+    assert!(
+        wipe[0] <= spin_visual[0] + 0.5
+            && wipe[1] <= spin_visual[1] + 0.5
+            && wipe[0] + wipe[2] >= spin_visual[0] + spin_visual[2] - 0.5
+            && wipe[1] + wipe[3] >= spin_visual[1] + spin_visual[3] - 0.5,
+        "pause dest-reset must cover the frozen diamond, not nested leftover frames\n wipe={} visual={} dirty={}",
+        fmt_rect(wipe),
+        fmt_rect(spin_visual),
+        fmt_rect(d.bounds)
+    );
+    let label_el = find_slot(&root, "play-state-label").expect("play-state label");
+    let pl = label_el.layout_bounds;
+    assert!(
+        intersect_rects(wipe, pl).is_none(),
+        "pause dest-reset must not punch the caption\n wipe={} label={}",
+        fmt_rect(wipe),
+        fmt_rect(pl)
+    );
+    let scissor = node_present_scissor_logical(
+        PaintDirtyKind::Node,
+        d.key,
+        d.bounds,
+        &prev_slots,
+        &paused.node_paints,
+        8.0,
+    );
+    let encode = crate::app::damage::union_rects(scissor, wipe);
+    assert!(
+        encode[0] <= spin_visual[0] + 0.5
+            && encode[1] <= spin_visual[1] + 0.5
+            && encode[0] + encode[2] >= spin_visual[0] + spin_visual[2] - 0.5
+            && encode[1] + encode[3] >= spin_visual[1] + spin_visual[3] - 0.5,
+        "GPU scissor after pause must cover the diamond\n scissor={} wipe={} visual={}",
+        fmt_rect(scissor),
+        fmt_rect(wipe),
+        fmt_rect(spin_visual)
+    );
+    assert!(
+        intersect_rects(encode, pl).is_none(),
+        "GPU scissor after pause must not dest-reset the caption\n scissor={} wipe={} label={}",
+        fmt_rect(scissor),
+        fmt_rect(wipe),
+        fmt_rect(pl)
+    );
+}
+
+#[test]
+fn gallery_play_state_pause_must_not_hitch_sibling_css_animations() {
+    // Click Play/Pause: play-state dest-reset must not punch bounce/fade, and
+    // bounce must still advance on that frame (not a one-frame freeze).
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut bounce = Element::new()
+        .w(32.0)
+        .h(32.0)
+        .flex_shrink(0.0)
+        .bg([0.2, 0.6, 0.4, 1.0]);
+    apply_class_list(&mut bounce, "rounded-md animate-spin");
+    bounce.set_attr("data-slot", "bounce-box");
+
+    let mut label = Element::new().h(14.0).flex_shrink(0.0).text("play-state");
+    label.set_attr("data-slot", "play-state-label");
+    let mut spin = Element::new()
+        .w(40.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .bg([0.1, 0.1, 0.12, 1.0]);
+    apply_class_list(&mut spin, "rounded-md animate-spin");
+    spin.set_attr("data-slot", "play-state-box");
+    let stage = Element::new()
+        .w(80.0)
+        .h(80.0)
+        .flex_shrink(0.0)
+        .items_center()
+        .justify_center()
+        .child(spin);
+    let mut btn_wrap = Element::new().min_w(76.0).flex_shrink(0.0).items_center();
+    let mut btn = Element::new()
+        .h(28.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .text("Pause");
+    btn.set_attr("data-slot", "play-state-btn");
+    btn_wrap = btn_wrap.child(btn);
+    let col = Element::new()
+        .flex_col()
+        .gap(6.0)
+        .flex_shrink(0.0)
+        .items_center()
+        .child(label)
+        .child(stage)
+        .child(btn_wrap);
+    let mut fade = Element::new()
+        .w(48.0)
+        .h(32.0)
+        .flex_shrink(0.0)
+        .bg([0.9, 0.9, 0.92, 1.0]);
+    apply_class_list(&mut fade, "rounded-md animate-pulse");
+    fade.set_attr("data-slot", "fade-box");
+
+    let mut root = Element::new()
+        .flex_row()
+        .gap(20.0)
+        .w(320.0)
+        .h(180.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(bounce)
+        .child(col)
+        .child(fade);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 320.0, 180.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    crate::style::utility::set_frame_dt(0.08);
+    let mut impact = LayoutStatus::Clean;
+    for _ in 0..3 {
+        tick_active_css_transitions_subtree(
+            &mut root,
+            [0.0, 0.0],
+            "",
+            false,
+            320.0,
+            180.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+    }
+    let bounce_deg = find_slot(&root, "bounce-box")
+        .expect("bounce")
+        .style
+        .rotate_deg;
+    assert!(
+        bounce_deg.abs() > 4.0,
+        "precondition: sibling spin must have left rest, rotate={bounce_deg}"
+    );
+
+    find_slot_mut(&mut root, "play-state-box")
+        .expect("play-state box")
+        .style
+        .animations[0]
+        .play_state = crate::style::AnimationPlayState::Paused;
+    if let Some(btn_mut) = find_slot_mut(&mut root, "play-state-btn") {
+        btn_mut.text = Some("Play".to_string());
+    }
+    let _ = take_frame_paint_nodes();
+    impact = LayoutStatus::Clean;
+    tick_active_css_transitions_subtree(
+        &mut root,
+        [0.0, 0.0],
+        "",
+        false,
+        320.0,
+        180.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    let dirty = take_frame_paint_nodes();
+    let paused = tree.build_and_layout_fast(&mut root, 320.0, 180.0, [-1.0, -1.0], false, false);
+
+    let bounce_el = find_slot(&root, "bounce-box").expect("bounce");
+    let bounce_deg2 = bounce_el.style.rotate_deg;
+    assert!(
+        (bounce_deg2 - bounce_deg).abs() > 2.0,
+        "pause frame must still tick sibling spin, before={bounce_deg} after={bounce_deg2}"
+    );
+
+    let spin_el = find_slot(&root, "play-state-box").expect("play-state box");
+    let spin_key = paint_element_key(spin_el);
+    let spin_dirty = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == spin_key)
+        .cloned()
+        .expect("pause must dest-reset the spinning box");
+    let prev_slots = last_present_visual_slots(
+        &paused.node_paints,
+        &paused.instances,
+        &[],
+        &paused.text_nodes,
+        &paused.input_chrome_instances,
+    );
+    let (wipe, _) = node_present_dest_reset_scaled(
+        spin_dirty.key,
+        spin_dirty.bounds,
+        &paused.node_paints,
+        &paused.instances,
+        &[],
+        1.0,
+        last_present_prev_for_dirty(spin_dirty.kind, spin_dirty.key, &prev_slots),
+    )
+    .expect("card behind play-state spin");
+    let scissor = node_present_scissor_logical(
+        PaintDirtyKind::Node,
+        spin_dirty.key,
+        spin_dirty.bounds,
+        &prev_slots,
+        &paused.node_paints,
+        8.0,
+    );
+    let encode = crate::app::damage::union_rects(scissor, wipe);
+    let bounce_visual = visual_paint_aabb(bounce_el, [0.0, 0.0]);
+    let fade_el = find_slot(&root, "fade-box").expect("fade");
+    let fade_visual = fade_el.layout_bounds;
+    assert!(
+        intersect_rects(encode, bounce_visual).is_none(),
+        "pause dest-reset must not punch bounce\n encode={} bounce={}",
+        fmt_rect(encode),
+        fmt_rect(bounce_visual)
+    );
+    assert!(
+        intersect_rects(encode, fade_visual).is_none(),
+        "pause dest-reset must not punch fade\n encode={} fade={}",
+        fmt_rect(encode),
+        fmt_rect(fade_visual)
     );
 }

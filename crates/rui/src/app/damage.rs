@@ -600,6 +600,21 @@ pub fn page_scissor_excluding_overlay(
     })
 }
 
+/// Clicked AlertDialog trigger sits under the fullscreen scrim. Skipping dest-reset
+/// alone still lets node-present glyphon src-over that caption onto the retained
+/// scrim while overlay suffix scissors to the panel stamp. Capture and flush must
+/// use the same occupancy test.
+pub fn page_node_present_occluded_by_overlay(
+    dirty_bounds: [f32; 4],
+    overlay_occupied: Option<[f32; 4]>,
+) -> bool {
+    let scissor = super::draw_cull::padded_xywh(
+        dirty_bounds,
+        super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Node),
+    );
+    page_scissor_excluding_overlay(scissor, overlay_occupied).is_none()
+}
+
 /// Overlap of a page node-present scissor with overlay occupancy.
 #[inline]
 pub fn overlay_page_punch_overlap(
@@ -1105,6 +1120,49 @@ pub fn paint_dirty_nested_in_larger_node(dirty: &PaintDirty, nodes: &[PaintDirty
     nodes.iter().any(|o| {
         o.kind == PaintDirtyKind::Node
             && o.key != dirty.key
+            && o.bounds[2] * o.bounds[3] > area + 1.0
+            && cx >= o.bounds[0]
+            && cy >= o.bounds[1]
+            && cx < o.bounds[0] + o.bounds[2]
+            && cy < o.bounds[1] + o.bounds[3]
+    })
+}
+
+/// Whether this Node dirty should skip its own dest-reset because a larger
+/// ancestor dirty will redraw the fill.
+///
+/// In-flow children (Kbd Input inside InputAdornment) skip. Later page-stack
+/// (`layered`) slots — MessageScroller Latest pill, overlay scrollbar — paint in
+/// their own band. Ancestor present does not recapture that band, so skipping
+/// the wipe leaves the last opaque pixels in PartialLoad retain.
+#[inline]
+pub fn paint_dirty_skips_node_dest_reset(
+    dirty: &PaintDirty,
+    nodes: &[PaintDirty],
+    layered: bool,
+) -> bool {
+    !layered && paint_dirty_nested_in_larger_node(dirty, nodes)
+}
+
+/// Node dirty whose center sits in an OverlayRestore hole.
+///
+/// Cover overlays (AvatarGroup +N / Bubble +N) punch overlapping underlay, then
+/// Restore redraws the page prefix in tree order. A follow-up per-face Node
+/// dest-reset CLEARs that stacking (later face wiped by an earlier sibling) for
+/// one frame.
+#[inline]
+pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[PaintDirty]) -> bool {
+    if dirty.kind != PaintDirtyKind::Node {
+        return false;
+    }
+    if dirty.bounds[2] <= 0.0 || dirty.bounds[3] <= 0.0 {
+        return false;
+    }
+    let area = dirty.bounds[2] * dirty.bounds[3];
+    let cx = dirty.bounds[0] + dirty.bounds[2] * 0.5;
+    let cy = dirty.bounds[1] + dirty.bounds[3] * 0.5;
+    nodes.iter().any(|o| {
+        o.kind == PaintDirtyKind::OverlayRestore
             && o.bounds[2] * o.bounds[3] > area + 1.0
             && cx >= o.bounds[0]
             && cy >= o.bounds[1]
@@ -1814,6 +1872,38 @@ pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     out
 }
 
+/// Absolute Latest / jump pill that shares pixels with a blit viewport.
+///
+/// The dock is a later sibling of the scroll viewport, not sticky. Strip blit
+/// copies the overlap (messages under the pill). Overlay rails already pin every
+/// scroll frame; without the same pin Latest only dest-resets on StyleChanged
+/// and the next blit wipes it.
+pub fn message_scroller_jump_scroll_blit_pins(
+    root: &Element,
+    blit_viewports: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if blit_viewports.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        if el.attrs.get("data-slot").map(String::as_str) != Some("message-scroller-button") {
+            return;
+        }
+        if el.attrs.get("data-active").map(String::as_str) != Some("true") {
+            return;
+        }
+        if el.style.opacity <= 0.05 {
+            return;
+        }
+        let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+        if overlay_needs_scroll_blit_pin(b, blit_viewports) {
+            out.push(b);
+        }
+    });
+    out
+}
+
 /// Overlay (inside) scrollbar tracks that share pixels with a blit viewport.
 ///
 /// The rail is a sibling of the viewport, not sticky / portal overlay. Strip blit
@@ -2301,6 +2391,33 @@ mod tests {
         assert!(
             page_scissor_excluding_overlay(inside, Some(occ)).is_none(),
             "page dirty entirely in the overlay must not dest-reset as a Node"
+        );
+    }
+
+    #[test]
+    fn page_trigger_under_modal_scrim_skips_dest_reset() {
+        // Gallery AlertDialog: the clicked trigger sits under the fullscreen scrim,
+        // not under the centered panel. Hover dest-reset of that caption punches
+        // through unless occupancy includes the scrim (not just the card).
+        let scrim = [0.0, 0.0, 1280.0, 800.0];
+        let trigger = [24.0, 80.0, 96.0, 32.0];
+        let trigger_scissor = crate::app::draw_cull::padded_xywh(trigger, 8.0);
+        assert!(
+            overlay_page_punch_overlap(Some(scrim), trigger_scissor).is_some(),
+            "clicked trigger is inside the scrim"
+        );
+        assert!(
+            page_scissor_excluding_overlay(trigger_scissor, Some(scrim)).is_none(),
+            "dest-reset of the trigger would wipe scrim pixels and redraw the caption on top"
+        );
+        assert!(
+            page_node_present_occluded_by_overlay(trigger, Some(scrim)),
+            "glyph capture/flush must skip the same trigger or the caption src-overs the scrim"
+        );
+        let neighbor = [200.0, 80.0, 96.0, 32.0];
+        assert!(
+            !page_node_present_occluded_by_overlay(neighbor, Some([90.0, 140.0, 40.0, 160.0])),
+            "a dropdown occupancy that misses the trigger must still present its glyphs"
         );
     }
 
@@ -2905,6 +3022,84 @@ mod tests {
         assert!(paint_dirty_nested_in_larger_node(&input, &[shell, input]));
         assert!(!paint_dirty_nested_in_larger_node(&shell, &[shell, input]));
         assert!(!paint_dirty_nested_in_larger_node(&input, &[input]));
+    }
+
+    #[test]
+    fn layered_page_stack_dirty_must_not_skip_dest_reset_inside_viewport() {
+        let viewport = PaintDirty {
+            key: 1,
+            bounds: [0.0, 0.0, 320.0, 384.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let latest = PaintDirty {
+            key: 2,
+            bounds: [120.0, 340.0, 80.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(
+            paint_dirty_nested_in_larger_node(&latest, &[viewport, latest]),
+            "precondition: Latest center sits in the viewport dirty"
+        );
+        assert!(
+            !paint_dirty_skips_node_dest_reset(&latest, &[viewport, latest], true),
+            "page-stack Latest / overlay scrollbar must still dest-reset; ancestor in-flow present does not recapture that band"
+        );
+        assert!(
+            paint_dirty_skips_node_dest_reset(&latest, &[viewport, latest], false),
+            "in-flow children still skip under a larger ancestor"
+        );
+    }
+
+    #[test]
+    fn overlay_restore_must_skip_overlapping_avatar_node_dirties() {
+        // AvatarGroup +N close: Restore hole covers A/C/+N. Each face is also a
+        // Node dirty. Dest-reset of A after C punches the overlap (stacking flash).
+        let restore = PaintDirty {
+            key: 9,
+            bounds: [8.0, 40.0, 96.0, 48.0],
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let face_a = PaintDirty {
+            key: 1,
+            bounds: [8.0, 40.0, 32.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let face_c = PaintDirty {
+            key: 2,
+            bounds: [24.0, 40.0, 32.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let nodes = [restore, face_a, face_c];
+        assert!(
+            paint_dirty_covered_by_overlay_restore(&face_a, &nodes),
+            "earlier overlapped face is inside the Restore hole"
+        );
+        assert!(
+            paint_dirty_covered_by_overlay_restore(&face_c, &nodes),
+            "later overlapped face is inside the Restore hole"
+        );
+        assert!(
+            !paint_dirty_covered_by_overlay_restore(&restore, &nodes),
+            "Restore itself is not a Node skip"
+        );
+        let beside = PaintDirty {
+            key: 3,
+            bounds: [200.0, 40.0, 32.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(
+            !paint_dirty_covered_by_overlay_restore(&beside, &nodes),
+            "faces outside the overlay hole still dest-reset"
+        );
+        let page = PaintDirty {
+            key: 0,
+            bounds: [0.0, 0.0, 320.0, 384.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(
+            !paint_dirty_covered_by_overlay_restore(&page, &nodes),
+            "larger page dest-reset is not swallowed by a small Restore hole"
+        );
     }
 
     #[test]
@@ -4082,6 +4277,36 @@ mod tests {
         assert!(
             disjoint.is_empty(),
             "rails of other viewports must not pin, got {disjoint:?}"
+        );
+    }
+
+    #[test]
+    fn message_scroller_jump_on_blit_viewport_is_a_pin() {
+        let mut root = Element::new();
+        let mut btn = Element::new();
+        btn.set_attr("data-slot", "message-scroller-button");
+        btn.set_attr("data-active", "true");
+        btn.style.opacity = 1.0;
+        btn.layout_bounds = [120.0, 340.0, 80.0, 32.0];
+        root.children.push(btn);
+        let vp = [0.0, 0.0, 320.0, 384.0];
+        let pins = message_scroller_jump_scroll_blit_pins(&root, &[vp]);
+        assert_eq!(
+            pins,
+            vec![[120.0, 340.0, 80.0, 32.0]],
+            "active Latest sharing the blit viewport must pin every scroll frame"
+        );
+
+        let mut hidden = Element::new();
+        hidden.set_attr("data-slot", "message-scroller-button");
+        hidden.set_attr("data-active", "false");
+        hidden.style.opacity = 0.0;
+        hidden.layout_bounds = [120.0, 340.0, 80.0, 32.0];
+        let mut idle = Element::new();
+        idle.children.push(hidden);
+        assert!(
+            message_scroller_jump_scroll_blit_pins(&idle, &[vp]).is_empty(),
+            "hidden Latest must not pin"
         );
     }
 }

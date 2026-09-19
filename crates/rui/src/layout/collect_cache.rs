@@ -470,6 +470,16 @@ fn node_is_scrollbar_chrome(el: &Element) -> bool {
     })
 }
 
+/// Jump dock is a later sibling of the scroll viewport, not a scroll subtree.
+/// `reuse_idle` otherwise skip-replays the opacity-0 collect after wheel leaves
+/// the live edge — Latest stays invisible until hover busts the hash.
+fn node_is_message_scroller_jump_chrome(el: &Element) -> bool {
+    el.attrs.get("data-slot").map(String::as_str) == Some("message-scroller-button")
+        || el.children.iter().any(|c| {
+            c.attrs.get("data-slot").map(String::as_str) == Some("message-scroller-button")
+        })
+}
+
 fn node_clips_descendants(el: &Element) -> bool {
     !matches!(el.style.overflow.x, taffy::style::Overflow::Visible)
         || !matches!(el.style.overflow.y, taffy::style::Overflow::Visible)
@@ -537,6 +547,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             && !el.collect_skip_live
             && !el.collect_skip_has_scroll
             && !node_is_scrollbar_chrome(el)
+            && !node_is_message_scroller_jump_chrome(el)
             && el.collect_paint_hash != 0
         {
             return el.collect_paint_hash;
