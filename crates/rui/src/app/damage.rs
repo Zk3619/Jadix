@@ -12,7 +12,7 @@
 //! - Scroll invalidates the **viewport layer** (scissor Clear), not paint nodes.
 //!   A valid retain may **strip-blit** the overlap and Clear only the newly
 //!   exposed band(s) plus pin holes (sticky / overlay / named paint / nested
-//!   inner viewports / overlay scrollbar rails). Nested containment blits the outer and pins the inner.
+//!   inner viewports / overlay scrollbar rails / clip-culled last-present). Nested containment blits the outer and pins the inner.
 //!   Overlapping siblings blit both and pin the intersection occupancy (copy
 //!   smear). `force_full_redraw`, invalid retain, `|delta| ≥ viewport`, and
 //!   `RUI_SCROLL_STRIP_BLIT=0` stay abort / layer-Clear gates. Spawn without
@@ -29,7 +29,7 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -112,14 +112,18 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
 /// scissor in document space while ink is in visual space — dest-reset misses,
 /// PartialLoad stacks the previous offset (Marker labels after scroll).
 pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
-    // Shown/entering at opacity≈0 has no dest-ink. Dest-reset of the empty
-    // fill+shadow AABB punches underlay (Latest pill over wrapping thread).
-    // Hide (`data-active` not `true`) still dest-resets the last faded box.
+    // Entering at opacity≈0 has no dest-ink. Dest-reset of the empty
+    // fill+shadow AABB punches underlay. Hide-settle still dest-resets
+    // the last faded box (`settled_this_tick`).
     if skip_transparent_shown_dest_reset(el) {
         return;
     }
     let b = clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc));
     if b[2] <= 0.0 || b[3] <= 0.0 {
+        return;
+    }
+    if is_table_row_fill_dest_reset(el) {
+        push_table_row_fill_dest_reset(el, b);
         return;
     }
     let spinning = el.attrs.get("rui_animate").map(|s| s.as_str()) == Some("spin")
@@ -144,6 +148,31 @@ pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
         key,
         [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
         kind,
+    );
+}
+
+fn is_table_row_fill_dest_reset(el: &Element) -> bool {
+    matches!(
+        el.attrs.get("data-slot").map(String::as_str),
+        Some("table-row") | Some("table-head")
+    ) || el
+        .button_hover_paint
+        .as_ref()
+        .is_some_and(|p| p.variant == "table-row")
+}
+
+/// Hover only changes the fill. Node dest-reset unions last-present and pads
+/// 8px, which punches the 1px footer `border-t` / neighbor `border-b`.
+fn push_table_row_fill_dest_reset(el: &Element, b: [f32; 4]) {
+    const SEAM: f32 = 1.0;
+    let h = (b[3] - SEAM * 2.0).max(0.0);
+    if b[2] <= 0.0 || h <= 0.0 {
+        return;
+    }
+    push_paint_dirty(
+        paint_element_key(el),
+        [b[0], b[1] + SEAM, b[2], h],
+        PaintDirtyKind::Region,
     );
 }
 
@@ -263,6 +292,32 @@ pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
 /// Nested Structure island / list clip: region Clear (Wave 46/49), not node dest-reset.
 pub fn push_frame_region_paint(key: u64, bounds: [f32; 4]) {
     push_paint_dirty(key, bounds, PaintDirtyKind::Region);
+}
+
+/// Dest-reset a frame around `inner` (Hard ring / 1px border) without wiping the
+/// content hole. Same-key union would collapse four strips into one AABB and
+/// flash placeholder / ⌘K (Gallery InputAdornment blur).
+pub fn push_frame_halo_strips(inner: [f32; 4], pad: f32) {
+    if inner[2] <= 0.5 || inner[3] <= 0.5 || pad <= 0.0 {
+        return;
+    }
+    let outer = [
+        inner[0] - pad,
+        inner[1] - pad,
+        inner[2] + 2.0 * pad,
+        inner[3] + 2.0 * pad,
+    ];
+    let strips = [
+        [outer[0], outer[1], outer[2], pad],
+        [outer[0], inner[1] + inner[3], outer[2], pad],
+        [outer[0], inner[1], pad, inner[3]],
+        [inner[0] + inner[2], inner[1], pad, inner[3]],
+    ];
+    for s in strips {
+        if s[2] > 0.5 && s[3] > 0.5 {
+            push_paint_dirty(bounds_key(s), s, PaintDirtyKind::Region);
+        }
+    }
 }
 
 /// Restore page in the occupancy hole, then region clears, then page nodes, then overlay.
@@ -692,6 +747,16 @@ pub fn overlay_page_dirty_punches_occupancy(
     }
 }
 
+/// Overlay suffix dirty fed to occupancy / scissor.
+///
+/// Must be the raw Overlay [`PaintDirty::bounds`]. Present
+/// [`super::draw_cull::node_present_scissor_logical`] already pads 16px;
+/// encode pads occupancy again, and that extra ring src-overs AlertDialog
+/// card chrome on footer-button hover.
+pub fn overlay_suffix_encode_bounds(dirty_bounds: [f32; 4]) -> [f32; 4] {
+    dirty_bounds
+}
+
 /// Overlay suffix scissor after Restore/Node dest-reset.
 ///
 /// Fade Overlay dirty may sit in the wrong space — occupancy is the GPU footprint
@@ -851,7 +916,14 @@ pub fn overlay_encode_occupancy(
     if let Some(layout) = overlay_stamp_box(stamps, dirty_key) {
         let with_dirty = match dirty {
             Some(d) if overlay_same_footprint(Some(d), Some(layout), overlay_stamp_slack()) => {
-                union_rects(layout, d)
+                // Slack is 32px, so zoom-in-90 (~90% of the card) looks like
+                // the same footprint. Encoding the rest card while opacity is
+                // still 0 PAGE-wipes first-open.
+                if overlay_box_extends_beyond(layout, d, 1.0) {
+                    d
+                } else {
+                    union_rects(layout, d)
+                }
             }
             Some(d) if overlay_dirty_is_contained_keyframe(d, layout) => d,
             _ => layout,
@@ -949,12 +1021,28 @@ pub fn overlay_mounted_replace_holes(
             if let Some(d) = dirty {
                 if trust_dirty(hole, d) || trust_dirty(p, d) || trust_dirty(c, d) {
                     hole = union_rects(hole, d);
+                    // Encode scissor pads occupancy by Overlay pad (16px). Dest-reset
+                    // of the unpadded card leaves elevated chrome in that pad —
+                    // AlertDialog footer hover src-overs the border/shadow thicker.
+                    // Only expand when a sibling is the fullscreen scrim; padding a
+                    // lone popover / nested Select would punch DatePicker captions.
+                    if cur_stamps.iter().any(|(k, b)| {
+                        *k != dirty_key && overlay_sibling_is_scrim_host(*b, hole)
+                    }) {
+                        // zoom-in-90 is same-footprint only because slack is 32px.
+                        // Dest-reset of the rest card with PAGE while encode is
+                        // opacity 0 looks like the dialog never opens.
+                        if overlay_box_extends_beyond(hole, d, 1.0) {
+                            hole = overlay_pad_dest_reset_hole(d);
+                        } else {
+                            hole = overlay_pad_dest_reset_hole(hole);
+                        }
+                    }
                 } else if overlay_dirty_is_contained_keyframe(d, hole) {
-                    // Dialog zoom card lives inside a fullscreen centering stage.
-                    // Dest-reset of the empty host punches the sibling scrim;
-                    // overlay_band_should_encode then skips the underlay because
-                    // the dirty key is the panel stamp.
-                    hole = d;
+                    // Chip dest-reset only. Promoting to the padded card punched
+                    // the backdrop-blur ring around every AlertDialog edge on
+                    // Cancel/OK hover.
+                    hole = overlay_contained_replace_hole(d, hole);
                 }
             }
             vec![hole]
@@ -1036,6 +1124,102 @@ pub fn overlay_band_encode_flags(
     flags
 }
 
+/// Submit sibling overlay bands whose ink a dest-reset hole already wiped.
+///
+/// AlertDialog overlay + centering stage are both fullscreen. Overlay fade
+/// dest-resets the viewport; [`overlay_band_should_encode`] then skips STAGE
+/// (`dirty_has_keyed_band`) and the card vanishes instead of zooming out.
+/// Button hover dest-resets a padded chip that intersects the same-footprint
+/// scrim — that sibling must encode or the pad punches the dim.
+pub fn overlay_band_promote_dest_reset_siblings(
+    flags: &mut [bool],
+    overlay_band_keys: &[u64],
+    overlay_dirty_keys: &[u64],
+    stamps: &[(u64, [f32; 4])],
+    dest_reset_holes: &[[f32; 4]],
+) {
+    if dest_reset_holes.is_empty() || overlay_band_keys.is_empty() {
+        return;
+    }
+    let slack = overlay_stamp_slack();
+    let dirty_stamps: Vec<[f32; 4]> = overlay_dirty_keys
+        .iter()
+        .filter_map(|k| overlay_stamp_box(stamps, *k))
+        .collect();
+    let mut promote_unkeyed_after = false;
+    for (i, &key) in overlay_band_keys.iter().enumerate() {
+        if i >= flags.len() {
+            break;
+        }
+        if key == 0 {
+            if promote_unkeyed_after {
+                flags[i] = true;
+            }
+            continue;
+        }
+        if flags[i] {
+            promote_unkeyed_after = true;
+            continue;
+        }
+        let Some(stamp) = overlay_stamp_box(stamps, key) else {
+            promote_unkeyed_after = false;
+            continue;
+        };
+        let punched = dest_reset_holes
+            .iter()
+            .any(|h| damage_covers_full(stamp, *h));
+        let same_footprint_intersect = dirty_stamps.iter().any(|ds| {
+            overlay_same_footprint(Some(*ds), Some(stamp), slack)
+                && dest_reset_holes
+                    .iter()
+                    .any(|h| intersect_rects(*h, stamp).is_some())
+        });
+        // Runtime stage stamp is the card (empty host uses child-union), not the
+        // fullscreen scrim. A padded card dest-reset spills into the dim ring —
+        // encode the underlay or hover/exit leaves a bright halo / stacked shadow.
+        let scrim_halo_spill = dest_reset_holes.iter().any(|h| {
+            dirty_stamps.iter().any(|ds| {
+                overlay_box_extends_beyond(*h, *ds, 0.5)
+                    && overlay_sibling_is_scrim_host(stamp, *ds)
+            })
+        });
+        if punched || same_footprint_intersect || scrim_halo_spill {
+            flags[i] = true;
+            promote_unkeyed_after = true;
+        } else {
+            promote_unkeyed_after = false;
+        }
+    }
+}
+
+/// Collapse Overlay dirties whose portal stamps share a footprint so Dialog
+/// overlay + stage cannot encode twice in one present (src-over stacks chrome).
+pub fn overlay_merge_same_footprint_dirties(
+    dirties: &[(u64, [f32; 4])],
+    stamps: &[(u64, [f32; 4])],
+) -> Vec<(Vec<u64>, [f32; 4])> {
+    let slack = overlay_stamp_slack();
+    let mut groups: Vec<(Vec<u64>, [f32; 4], [f32; 4])> = Vec::new();
+    for &(key, bounds) in dirties {
+        if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+            continue;
+        }
+        let stamp = overlay_stamp_box(stamps, key).unwrap_or(bounds);
+        if let Some((keys, acc, _group_stamp)) = groups
+            .iter_mut()
+            .find(|(_, _, gs)| overlay_same_footprint(Some(*gs), Some(stamp), slack))
+        {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+            *acc = union_rects(*acc, bounds);
+        } else {
+            groups.push((vec![key], bounds, stamp));
+        }
+    }
+    groups.into_iter().map(|(k, b, _)| (k, b)).collect()
+}
+
 /// OverlayRestore keys that are no longer mounted (closed nested hole).
 pub fn overlay_restore_is_closed_portal(
     restore_keys: &[u64],
@@ -1054,9 +1238,20 @@ pub fn overlay_suffix_submitted(physical_scissor: Option<(u32, u32, u32, u32)>) 
     physical_scissor.is_some()
 }
 
-/// Shown (`data-active=true`) with no current dest-ink.
+/// Opacity≈0 with no current dest-ink. Hide-settle still dest-resets
+/// (CSS transition latch, or a `@keyframes` run that just finished —
+/// Dialog fade-out-0 is keyframes, not a transition).
 fn skip_transparent_shown_dest_reset(el: &Element) -> bool {
-    el.attrs.get("data-active").map(String::as_str) == Some("true") && el.style.opacity < 0.01
+    if el.style.opacity >= 0.01 {
+        return false;
+    }
+    if el.transition_snapshot.settled_this_tick() {
+        return false;
+    }
+    if el.animation_snapshot.runs.iter().any(|r| r.finished) {
+        return false;
+    }
+    true
 }
 
 /// CSS dirty of a descendant (Dialog `{id}__modal_zoom` card) inside a much larger
@@ -1066,6 +1261,39 @@ pub(crate) fn overlay_dirty_is_contained_keyframe(dirty: [f32; 4], stamp: [f32; 
     let slack = overlay_stamp_slack();
     !overlay_box_extends_beyond(dirty, stamp, slack)
         && overlay_box_extends_beyond(stamp, dirty, slack)
+}
+
+/// Dest-reset hole for a contained overlay keyframe. Matches the Overlay encode
+/// scissor pad so parent card chrome in that pad is wiped before redraw.
+pub fn overlay_contained_replace_hole(dirty: [f32; 4], stamp: [f32; 4]) -> [f32; 4] {
+    if !overlay_dirty_is_contained_keyframe(dirty, stamp) {
+        return dirty;
+    }
+    overlay_pad_dest_reset_hole(dirty)
+}
+
+/// Same pad [`overlay_encode_scissor`] adds around occupancy.
+fn overlay_pad_dest_reset_hole(hole: [f32; 4]) -> [f32; 4] {
+    super::draw_cull::padded_xywh(
+        hole,
+        super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay),
+    )
+}
+
+/// Fullscreen underlay around a card-sized dest-reset (AlertDialog overlay vs stage).
+/// Nested DatePicker/Select stay unmerged: parent area is not several times the hole.
+fn overlay_sibling_is_scrim_host(sibling: [f32; 4], hole: [f32; 4]) -> bool {
+    if hole[2] <= 0.0 || hole[3] <= 0.0 {
+        return false;
+    }
+    if intersect_rects(sibling, hole).is_none() {
+        return false;
+    }
+    let pad = super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay);
+    if !overlay_box_extends_beyond(sibling, hole, pad + 1.0) {
+        return false;
+    }
+    sibling[2] * sibling[3] > hole[2] * hole[3] * 3.0
 }
 
 /// True when `outer` sticks out of `inner` by more than `slack` px (`[x,y,w,h]`).
@@ -1583,10 +1811,36 @@ pub fn node_present_slot_moved(prev: [f32; 4], now: [f32; 4]) -> bool {
     // Sub-pixel layout noise stays paint-in-place. Smooth scroll of 1px+ is a
     // page translation: dest-reset of the named spin cannot wipe sibling labels.
     const SLACK: f32 = 0.5;
+    // Zero-area is "no ink" (caret blink OFF), not a box at the layout origin.
+    // Treating `[leaf.x, leaf.y, 0, 0]` vs the I-beam as a translate made
+    // `expand_paint_dirties_for_translated_slots` union the flex leaf into the
+    // blink dirty — dest-reset then punched surrounding glyphs / chrome.
+    if prev[2] <= SLACK || prev[3] <= SLACK || now[2] <= SLACK || now[3] <= SLACK {
+        return false;
+    }
+    if last_present_stroke_resize(prev, now) {
+        return false;
+    }
     (prev[0] - now[0]).abs() > SLACK
         || (prev[1] - now[1]).abs() > SLACK
         || (prev[2] - now[2]).abs() > SLACK * 2.0
         || (prev[3] - now[3]).abs() > SLACK * 2.0
+}
+
+/// Focused Hard-ring vs unfocused 1px `input` stroke: last-present insets 1px
+/// around a stable center. That is not a slot translation — expanding it
+/// dest-resets the content hole (Kbd ⌘K flash). 1px scroll moves the center.
+fn last_present_stroke_resize(prev: [f32; 4], now: [f32; 4]) -> bool {
+    const CENTER: f32 = 0.5;
+    const MAX_SIDE: f32 = 2.5;
+    let pcx = prev[0] + prev[2] * 0.5;
+    let pcy = prev[1] + prev[3] * 0.5;
+    let ncx = now[0] + now[2] * 0.5;
+    let ncy = now[1] + now[3] * 0.5;
+    if (pcx - ncx).abs() > CENTER || (pcy - ncy).abs() > CENTER {
+        return false;
+    }
+    (prev[2] - now[2]).abs() <= MAX_SIDE * 2.0 && (prev[3] - now[3]).abs() <= MAX_SIDE * 2.0
 }
 
 /// Named dirties license paint-in-place, not a page translation.
@@ -1713,6 +1967,107 @@ pub fn expand_paint_dirties_for_translated_slots(
             });
         }
     }
+}
+
+/// Clip-culled scroll children vanish from `current_slots` but their last-present
+/// pixels still sit at the live edge (Builder / On it / Delivered on
+/// `1c-ms) MessageScroller`). Translate expand cannot name them.
+///
+/// Only keys collect actually skipped as outside overflow. Vanished last-present
+/// that is *not* in that set is Taffy recycle / unmount (KbdShowcase keycaps,
+/// previous-page islands) — dest-reset of those CLEARs whatever now occupies
+/// the box (blank 基础 Button card) because Node capture is membership-only.
+///
+/// Present as **Region** so the hole recaptures live occupants (title / card),
+/// not Node membership of a gone key.
+pub fn expand_paint_dirties_for_clip_culled_slots(
+    dirties: &mut Vec<PaintDirty>,
+    current_slots: &[(u64, [f32; 4])],
+    previous_slots: &[(u64, [f32; 4])],
+    clip_culled_keys: &HashSet<u64>,
+) {
+    if previous_slots.is_empty() || clip_culled_keys.is_empty() {
+        return;
+    }
+    for (key, prev) in previous_slots {
+        if prev[2] <= 0.5 || prev[3] <= 0.5 {
+            continue;
+        }
+        if !clip_culled_keys.contains(key) {
+            continue;
+        }
+        if current_slots.iter().any(|(k, _)| k == key) {
+            continue;
+        }
+        if dirties
+            .iter()
+            .any(|d| d.key == *key && d.kind != PaintDirtyKind::Overlay)
+        {
+            continue;
+        }
+        dirties.push(PaintDirty {
+            key: *key,
+            bounds: *prev,
+            kind: PaintDirtyKind::Region,
+        });
+    }
+}
+
+/// Scroll-layer Clear cannot dest-reset (`scroll_layer_clear` skips node-present).
+/// Clip-culled internals still leave last-present pixels in the copied overlap —
+/// Thinking / Reading sit at the live edge on `1c-ms)` until the whole card
+/// leaves and blit finally carries them out. Pin the last in-viewport box (and
+/// the post-blit dest if it still hits the clip) so collect redraws occupants.
+///
+/// One union per viewport so a Marker subtree cannot blow the 12-rect cull cap.
+pub fn clip_culled_scroll_blit_pins(
+    previous_slots: &[(u64, [f32; 4])],
+    clip_culled_keys: &HashSet<u64>,
+    viewports: &[[f32; 4]],
+    deltas: &[[f32; 2]],
+) -> Vec<[f32; 4]> {
+    if previous_slots.is_empty() || clip_culled_keys.is_empty() || viewports.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (i, vp) in viewports.iter().enumerate() {
+        let delta = deltas.get(i).copied().unwrap_or([0.0, 0.0]);
+        let mut acc: Option<[f32; 4]> = None;
+        for (key, prev) in previous_slots {
+            if prev[2] <= 0.5 || prev[3] <= 0.5 {
+                continue;
+            }
+            if !clip_culled_keys.contains(key) {
+                continue;
+            }
+            if let Some(hit) = intersect_rects(*prev, *vp) {
+                acc = Some(match acc {
+                    Some(a) => union_rects(a, hit),
+                    None => hit,
+                });
+            }
+            if delta[0].abs() >= 0.5 || delta[1].abs() >= 0.5 {
+                let dest = [
+                    prev[0] - delta[0],
+                    prev[1] - delta[1],
+                    prev[2],
+                    prev[3],
+                ];
+                if let Some(hit) = intersect_rects(dest, *vp) {
+                    acc = Some(match acc {
+                        Some(a) => union_rects(a, hit),
+                        None => hit,
+                    });
+                }
+            }
+        }
+        if let Some(r) = acc {
+            if r[2] > 0.5 && r[3] > 0.5 {
+                out.push(r);
+            }
+        }
+    }
+    out
 }
 
 /// True when some page slot translated but is not a named Node dirty (dest-reset
@@ -2097,36 +2452,135 @@ pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     out
 }
 
-/// Absolute Latest / jump pill that shares pixels with a blit viewport.
+/// Out-of-flow page chrome (absolute/fixed later sibling of a scroller) that
+/// shares pixels with a blit viewport.
 ///
-/// The dock is a later sibling of the scroll viewport, not sticky. Strip blit
-/// copies the overlap (messages under the pill). Overlay rails already pin every
-/// scroll frame; without the same pin Latest only dest-resets on StyleChanged
-/// and the next blit wipes it.
-pub fn message_scroller_jump_scroll_blit_pins(
+/// The dock is not sticky. Strip blit copies the overlap (messages under a
+/// jump / toast pill). Overlay rails already pin every scroll frame; without
+/// the same pin the pill only dest-resets on StyleChanged and the next blit
+/// wipes it. Descendants of a **blitted** scroll viewport ride the copy;
+/// `contains_scroll_viewport` is only an ancestor flag and must not mark a
+/// sibling dock as in-scroll (Gallery Latest ghosts).
+pub fn out_of_flow_scroll_blit_pins(
     root: &Element,
+    viewport_ids: &[String],
     blit_viewports: &[[f32; 4]],
 ) -> Vec<[f32; 4]> {
     if blit_viewports.is_empty() {
         return Vec::new();
     }
     let mut out = Vec::new();
-    crate::core::tree::walk_elements(root, |el| {
-        if el.attrs.get("data-slot").map(String::as_str) != Some("message-scroller-button") {
-            return;
+    walk_out_of_flow_scroll_blit_pins(root, false, false, viewport_ids, blit_viewports, &mut out);
+    out
+}
+
+/// Strip blit copies `src → src − delta`. Oof chrome is not in the scrolling
+/// layer, so occupancy after the copy is the live box **and** the smeared box.
+/// Pinning only the dock leaves "Latest" stamped into the thread.
+pub fn smear_out_of_flow_after_strip_blit(
+    pins: &[[f32; 4]],
+    blit_viewports: &[[f32; 4]],
+    blit_deltas: &[[f32; 2]],
+) -> Vec<[f32; 4]> {
+    let mut out = Vec::new();
+    for pin in pins {
+        if pin[2] <= 0.0 || pin[3] <= 0.0 {
+            continue;
         }
-        if el.attrs.get("data-active").map(String::as_str) != Some("true") {
-            return;
+        for (vp, delta) in blit_viewports.iter().zip(blit_deltas.iter()) {
+            if !overlay_needs_scroll_blit_pin(*pin, &[*vp]) {
+                continue;
+            }
+            if delta[0].abs() < STRIP_NEAR_ZERO && delta[1].abs() < STRIP_NEAR_ZERO {
+                continue;
+            }
+            let smeared = [pin[0] - delta[0], pin[1] - delta[1], pin[2], pin[3]];
+            if let Some(hit) = intersect_rects(smeared, *vp) {
+                if hit[2] > 0.5 && hit[3] > 0.5 {
+                    push_scroll_blit_pin(&mut out, hit);
+                }
+            }
         }
-        if el.style.opacity <= 0.05 {
-            return;
-        }
+    }
+    out
+}
+
+fn element_is_strip_blit_viewport(
+    el: &Element,
+    viewport_ids: &[String],
+    blit_viewports: &[[f32; 4]],
+) -> bool {
+    let Some(fid) = el.focus_id.as_deref() else {
+        return false;
+    };
+    let Some(vid) = fid.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+    else {
+        return false;
+    };
+    if !viewport_ids.is_empty() {
+        return viewport_ids.iter().any(|id| id == vid);
+    }
+    let b = el.layout_bounds;
+    blit_viewports.iter().any(|vp| {
+        (b[0] - vp[0]).abs() < 1.5
+            && (b[1] - vp[1]).abs() < 1.5
+            && (b[2] - vp[2]).abs() < 1.5
+            && (b[3] - vp[3]).abs() < 1.5
+    })
+}
+
+fn is_out_of_flow_position(el: &Element) -> bool {
+    el.style.position == taffy::style::Position::Absolute || el.style.position_fixed
+}
+
+fn node_has_own_dest_ink(el: &Element) -> bool {
+    el.style.bg_color[3] > 0.05
+        || (el.style.border_color[3] > 0.05
+            && el
+                .style
+                .resolved_border_widths()
+                .into_iter()
+                .any(|w| w > 0.5))
+        || el.text.as_ref().is_some_and(|t| !t.is_empty())
+}
+
+fn walk_out_of_flow_scroll_blit_pins(
+    el: &Element,
+    in_scroll: bool,
+    under_oof: bool,
+    viewport_ids: &[String],
+    blit_viewports: &[[f32; 4]],
+    out: &mut Vec<[f32; 4]>,
+) {
+    // Membership is the blitted viewport, not `contains_scroll_viewport`.
+    // MessageScroller (and a Gallery page ScrollArea) contain a viewport; the
+    // Latest dock is a sibling of that viewport, not scrolling content.
+    let in_scroll = in_scroll || element_is_strip_blit_viewport(el, viewport_ids, blit_viewports);
+    let under_oof = under_oof || is_out_of_flow_position(el);
+    if !in_scroll
+        && under_oof
+        && el.style.opacity > 0.05
+        && node_has_own_dest_ink(el)
+        && el.focus_id.as_deref().is_none_or(|fid| {
+            !fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+                && !fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+        })
+    {
         let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
         if overlay_needs_scroll_blit_pin(b, blit_viewports) {
             out.push(b);
         }
-    });
-    out
+    }
+    for child in &el.children {
+        walk_out_of_flow_scroll_blit_pins(
+            child,
+            in_scroll,
+            under_oof,
+            viewport_ids,
+            blit_viewports,
+            out,
+        );
+    }
 }
 
 /// Focused Input / Textarea I-beam (`input_caret` leaf) sharing a strip-blit viewport.
@@ -2335,6 +2789,54 @@ pub fn plan_scroll_strip_blit(viewport: [f32; 4], delta: [f32; 2]) -> Option<Scr
     })
 }
 
+/// Destination of the overlap copy (`src` moved to `dst_origin`).
+pub fn scroll_blit_copied_dst(plan: &ScrollStripBlit) -> [f32; 4] {
+    [
+        plan.dst_origin[0],
+        plan.dst_origin[1],
+        plan.src[2],
+        plan.src[3],
+    ]
+}
+
+/// Single pass-scissor AABB for a strip-blit frame. `None` = no single AABB
+/// (caller scissors each exposed strip and pin). Never a job viewport — that
+/// AABB covers the copied overlap and lets straddling card fills wipe retain
+/// (gallery page scroll: empty shells, doubled captions, dest-reset icons).
+pub fn scroll_blit_pass_scissor_logical(
+    jobs: &[ScrollStripBlit],
+    pins: &[[f32; 4]],
+) -> Option<[f32; 4]> {
+    if jobs.is_empty() {
+        return None;
+    }
+    // Pins / dual-axis / extra viewports are extra cull holes. Expanding this
+    // AABB to `viewport ∪ pins` equals the scroller and wipes the copy.
+    if jobs.len() > 1 || jobs.iter().any(|j| j.exposed_second.is_some()) || !pins.is_empty() {
+        return None;
+    }
+    Some(jobs[0].exposed)
+}
+
+/// Already-physical `[x,y,w,h]` → wgpu scissor contained in the target.
+pub fn physical_xywh_to_scissor(
+    rect: [f32; 4],
+    target_w: u32,
+    target_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if target_w == 0 || target_h == 0 || rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return None;
+    }
+    let x0 = rect[0].floor().clamp(0.0, target_w as f32) as u32;
+    let y0 = rect[1].floor().clamp(0.0, target_h as f32) as u32;
+    let x1 = (rect[0] + rect[2]).ceil().clamp(0.0, target_w as f32) as u32;
+    let y1 = (rect[1] + rect[3]).ceil().clamp(0.0, target_h as f32) as u32;
+    if x0 >= x1 || y0 >= y1 {
+        return None;
+    }
+    Some((x0, y0, x1 - x0, y1 - y0))
+}
+
 /// Integer copy matching [`plan_scroll_strip_blit`]. `None` when the rounded physical
 /// delta is 0 on both axes or the copy would leave the target.
 pub fn scroll_strip_copy_physical(
@@ -2428,6 +2930,7 @@ pub fn damage_covers_full(viewport: [f32; 4], damage: [f32; 4]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn paint_kind_for_modal_chrome_is_overlay() {
@@ -2543,19 +3046,36 @@ mod tests {
         let mut el = Element::new();
         el.layout_bounds = [120.0, 340.0, 80.0, 32.0];
         el.style.opacity = 0.0;
-        el.set_attr("data-active", "true");
         push_frame_paint_element(&el, [0.0, 0.0]);
         assert!(
             take_frame_paint_nodes().is_empty(),
-            "shown opacity≈0 enter must not dest-reset empty fill+shadow"
+            "opacity≈0 enter must not dest-reset empty fill+shadow"
         );
 
-        el.set_attr("data-active", "false");
+        el.transition_snapshot.mark_settled_this_tick();
         push_frame_paint_element(&el, [0.0, 0.0]);
         assert_eq!(
             take_frame_paint_nodes().len(),
             1,
             "hide settle still dest-resets the last faded box"
+        );
+
+        el.transition_snapshot = Default::default();
+        el.style.opacity = 0.0;
+        let baseline = crate::style::AnimationBaseline::from_style(&el.style);
+        el.animation_snapshot
+            .runs
+            .push(crate::style::AnimationRunState {
+                elapsed_ms: 200.0,
+                baseline,
+                finished: true,
+                entry_fp: 0,
+            });
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        assert_eq!(
+            take_frame_paint_nodes().len(),
+            1,
+            "finished keyframe fade-out must dest-reset (Dialog exit)"
         );
     }
 
@@ -2779,6 +3299,327 @@ mod tests {
         assert!(
             occ.is_some_and(|b| !damage_covers_full(vp, b)),
             "zoom occupancy must be the card, not the empty fullscreen stage; occ={occ:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_exit_overlay_stamp_must_not_punch_card_without_redraw() {
+        // Inverse of panel-stamp: overlay fade dest-resets the fullscreen scrim.
+        // Without promoting STAGE, the card is wiped and later pops off.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let stamps = [(OVERLAY, vp), (STAGE, vp)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, OVERLAY, Some(vp));
+        let mut flags =
+            overlay_band_encode_flags(&[OVERLAY, STAGE], &[OVERLAY], false, &[OVERLAY, STAGE]);
+        overlay_band_promote_dest_reset_siblings(
+            &mut flags,
+            &[OVERLAY, STAGE],
+            &[OVERLAY],
+            &stamps,
+            &holes,
+        );
+        let punches = holes.iter().any(|h| damage_covers_full(vp, *h));
+        assert!(
+            !punches || flags[1],
+            "overlay-stamp dest-reset must not wipe the fullscreen stage/card without encoding the stage band; holes={holes:?} flags={flags:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_button_hover_dest_reset_must_cover_card_halo() {
+        // Footer OK sits on the card corner. Overlay encode pads occupancy 16px;
+        // dest-reset of the chip alone leaves elevated chrome in that pad.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let button = [560.0, 352.0, 72.0, 32.0];
+        let stamps = [(OVERLAY, vp), (STAGE, vp)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(button));
+        let occ = overlay_encode_occupancy(STAGE, Some(button), &stamps, Some(vp));
+        let scissor = overlay_encode_scissor(Some(button), occ, None)
+            .expect("button hover must still have an overlay encode scissor");
+        let card_halo = crate::app::draw_cull::padded_xywh(card, 16.0);
+        let halo_in_scissor = intersect_rects(card_halo, scissor)
+            .expect("OK pad must overlap the elevated card chrome");
+        assert!(
+            holes.iter().any(|h| damage_covers_full(halo_in_scissor, *h)),
+            "button hover dest-reset must cover card chrome in the encode scissor or src-over stacks the halo; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "button hover must not dest-reset the fullscreen viewport; holes={holes:?}"
+        );
+        let mut flags =
+            overlay_band_encode_flags(&[OVERLAY, STAGE], &[STAGE], false, &[OVERLAY, STAGE]);
+        overlay_band_promote_dest_reset_siblings(
+            &mut flags,
+            &[OVERLAY, STAGE],
+            &[STAGE],
+            &stamps,
+            &holes,
+        );
+        let punches_scrim = holes
+            .iter()
+            .any(|h| overlay_box_extends_beyond(*h, card_halo, 0.5));
+        assert!(
+            !punches_scrim || flags[0],
+            "expanded button dest-reset that leaves the card halo must encode the scrim; holes={holes:?} flags={flags:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_card_stamp_same_footprint_dirty_must_dest_reset_encode_halo() {
+        // Runtime: empty centering stage records child-union occupancy (the card),
+        // not the fullscreen host. A card-sized Overlay dirty is same-footprint.
+        // Encode still pads 16px — dest-reset of the unpadded card stacks the
+        // elevated chrome when footer Cancel/OK hover unions onto the card key.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(card));
+        let occ = overlay_encode_occupancy(STAGE, Some(card), &stamps, None);
+        let scissor = overlay_encode_scissor(Some(card), occ, None)
+            .expect("card dirty must still have an overlay encode scissor");
+        assert!(
+            holes.iter().any(|h| damage_covers_full(scissor, *h)),
+            "same-footprint card dirty must dest-reset the encode-padded halo or hover stacks the shadow; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "card dest-reset must not punch the fullscreen scrim; holes={holes:?}"
+        );
+        let mut flags =
+            overlay_band_encode_flags(&[OVERLAY, STAGE], &[STAGE], false, &[OVERLAY, STAGE]);
+        overlay_band_promote_dest_reset_siblings(
+            &mut flags,
+            &[OVERLAY, STAGE],
+            &[STAGE],
+            &stamps,
+            &holes,
+        );
+        let punches_scrim = holes
+            .iter()
+            .any(|h| overlay_box_extends_beyond(*h, card, 0.5));
+        assert!(
+            !punches_scrim || flags[0],
+            "padded card dest-reset that spills into the dim ring must encode the scrim; holes={holes:?} flags={flags:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_button_hover_card_stamp_must_cover_nearby_halo() {
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let button = [560.0, 352.0, 72.0, 32.0];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(button));
+        let occ = overlay_encode_occupancy(STAGE, Some(button), &stamps, None);
+        let scissor = overlay_encode_scissor(Some(button), occ, None)
+            .expect("button hover must still have an overlay encode scissor");
+        let card_halo = crate::app::draw_cull::padded_xywh(card, 16.0);
+        let halo_in_scissor = intersect_rects(card_halo, scissor)
+            .expect("OK pad must overlap the elevated card chrome");
+        assert!(
+            holes.iter().any(|h| damage_covers_full(halo_in_scissor, *h)),
+            "runtime card-stamp button hover must dest-reset nearby chrome; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "button hover must not dest-reset the fullscreen viewport; holes={holes:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_cancel_hover_must_not_clip_card_bottom_chrome() {
+        // Gallery Cancel sits just above the info card's 1px border. Dest-reset
+        // / encode stay on pad(Cancel) so nearby chrome is wiped without PAGE
+        // punching the 16px backdrop-blur ring around every card edge.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let cancel = [400.0, 360.0, 88.0, 32.0];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(cancel));
+        let occ = overlay_encode_occupancy(STAGE, Some(cancel), &stamps, None);
+        let scissor = overlay_encode_scissor(Some(cancel), occ, None)
+            .expect("Cancel hover must still have an overlay encode scissor");
+        let card_bottom = [card[0], card[1] + card[3] - 2.0, card[2], 2.0];
+        let nearby = intersect_rects(card_bottom, scissor)
+            .expect("Cancel pad must overlap the card bottom stroke");
+        assert!(
+            holes.iter().any(|h| damage_covers_full(nearby, *h)),
+            "Cancel dest-reset must cover nearby bottom chrome in the encode scissor; holes={holes:?} nearby={nearby:?}"
+        );
+        let card_pad = crate::app::draw_cull::padded_xywh(card, 16.0);
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
+            "Cancel hover must not dest-reset pad(card) — that punches the blur ring; holes={holes:?} card_pad={card_pad:?}"
+        );
+        assert!(
+            holes.iter().any(|h| damage_covers_full(scissor, *h)),
+            "dest-reset must cover encode or PAGE shows through as residual; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            holes.iter().any(|h| damage_covers_full(*h, scissor)),
+            "encode must cover dest-reset or leftover chrome stacks; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "Cancel hover must not dest-reset the fullscreen viewport; holes={holes:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_button_hover_must_not_punch_scrim_halo() {
+        // Success AlertDialog: Cancel hover used to promote dest-reset to
+        // pad(card). OverlayRestore PAGE-fills that 16px ring and the
+        // backdrop-blur around every edge goes transparent.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let cancel = [400.0, 360.0, 88.0, 32.0];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(cancel));
+        let occ = overlay_encode_occupancy(STAGE, Some(cancel), &stamps, None)
+            .expect("Cancel hover must resolve occupancy");
+        let card_pad = crate::app::draw_cull::padded_xywh(card, 16.0);
+        let far_scrim = [card[0] - 16.0, card[1] - 16.0, 8.0, 8.0];
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
+            "button hover dest-reset must stay on the chip, not pad(card); holes={holes:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| intersect_rects(*h, far_scrim).is_some()),
+            "button hover must not PAGE-punch the far blur ring; holes={holes:?} far={far_scrim:?}"
+        );
+        assert!(
+            !damage_covers_full(card, occ) && !damage_covers_full(card_pad, occ),
+            "occupancy must stay chip-sized; occ={occ:?} card={card:?}"
+        );
+        let mut flags =
+            overlay_band_encode_flags(&[OVERLAY, STAGE], &[STAGE], false, &[OVERLAY, STAGE]);
+        overlay_band_promote_dest_reset_siblings(
+            &mut flags,
+            &[OVERLAY, STAGE],
+            &[STAGE],
+            &stamps,
+            &holes,
+        );
+        let spills = holes
+            .iter()
+            .any(|h| overlay_box_extends_beyond(*h, card, 0.5));
+        assert!(
+            !spills || flags[0],
+            "chip dest-reset that nips the dim ring must encode the scrim; holes={holes:?} flags={flags:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_enter_zoom_dirty_must_not_promote_card_dest_reset() {
+        // zoom-in-90 is contained in the rest card (~90%) but is not a footer
+        // chip. Promoting it dest-resets the rest card with PAGE while encode
+        // is still opacity 0 — first-open looks like the dialog never appears.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let zoom = [
+            card[0] + card[2] * 0.05,
+            card[1] + card[3] * 0.05,
+            card[2] * 0.90,
+            card[3] * 0.90,
+        ];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(zoom));
+        let occ = overlay_encode_occupancy(STAGE, Some(zoom), &stamps, None);
+        let scissor = overlay_encode_scissor(Some(zoom), occ, None)
+            .expect("enter zoom must still encode");
+        let card_pad = crate::app::draw_cull::padded_xywh(card, 16.0);
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
+            "enter zoom dest-reset must not promote to the padded rest card; holes={holes:?} zoom={zoom:?}"
+        );
+        assert!(
+            holes.iter().any(|h| damage_covers_full(scissor, *h)),
+            "enter dest-reset must still cover encode; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "enter zoom must not dest-reset the fullscreen viewport; holes={holes:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_hover_encode_must_not_double_pad_past_dest_reset() {
+        // Footer hover dest-resets and encodes pad(chip). They must mutually
+        // cover that halo — promoting to pad(card) punches the blur ring, and
+        // a chip encode without a matching hole src-overs nearby chrome thicker.
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let button = [560.0, 352.0, 72.0, 32.0];
+        let stamps = [(OVERLAY, vp), (STAGE, card)];
+        let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(button));
+        let encode_dirty = overlay_suffix_encode_bounds(button);
+        let occ = overlay_encode_occupancy(STAGE, Some(encode_dirty), &stamps, None);
+        let scissor = overlay_encode_scissor(Some(encode_dirty), occ, None)
+            .expect("raw hover dirty must still encode");
+        assert!(
+            holes.iter().any(|h| damage_covers_full(scissor, *h)),
+            "dest-reset must cover encode; holes={holes:?} scissor={scissor:?}"
+        );
+        assert!(
+            holes.iter().any(|h| damage_covers_full(*h, scissor)),
+            "encode must cover dest-reset; holes={holes:?} scissor={scissor:?}"
+        );
+        let card_pad = crate::app::draw_cull::padded_xywh(card, 16.0);
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
+            "chip hover must not dest-reset pad(card); holes={holes:?}"
+        );
+        assert!(
+            !holes.iter().any(|h| damage_covers_full(vp, *h)),
+            "hover must not dest-reset the fullscreen viewport; holes={holes:?}"
+        );
+    }
+
+    #[test]
+    fn dialog_sibling_overlay_dirties_encode_once() {
+        const OVERLAY: u64 = 0xA1;
+        const STAGE: u64 = 0xA2;
+        let vp = [0.0, 0.0, 800.0, 600.0];
+        let card = [144.0, 120.0, 512.0, 280.0];
+        let stamps = [(OVERLAY, vp), (STAGE, vp)];
+        let groups = overlay_merge_same_footprint_dirties(&[(OVERLAY, vp), (STAGE, card)], &stamps);
+        assert_eq!(
+            groups.len(),
+            1,
+            "fullscreen overlay+stage must encode once; groups={groups:?}"
+        );
+        assert!(
+            groups[0].0.contains(&OVERLAY) && groups[0].0.contains(&STAGE),
+            "merged group must keep both sibling keys; groups={groups:?}"
+        );
+        let parent = [80.0, 360.0, 280.0, 320.0];
+        let nested = [88.0, 40.0, 144.0, 220.0];
+        let pop = overlay_merge_same_footprint_dirties(
+            &[(PARENT_KEY, parent), (NESTED_KEY, nested)],
+            &[(PARENT_KEY, parent), (NESTED_KEY, nested)],
+        );
+        assert_eq!(
+            pop.len(),
+            2,
+            "DatePicker + flipped Select must keep separate scissors; groups={pop:?}"
         );
     }
 
@@ -3330,7 +4171,10 @@ mod tests {
         };
         let mut nodes = vec![input, shell];
         sort_paint_dirty_nodes(&mut nodes);
-        assert_eq!(nodes[0].key, 1, "shell wipe must precede nested Input redraw");
+        assert_eq!(
+            nodes[0].key, 1,
+            "shell wipe must precede nested Input redraw"
+        );
         assert_eq!(nodes[1].key, 2);
     }
 
@@ -3877,6 +4721,156 @@ mod tests {
             ),
             "first present has no previous pixels to leave behind"
         );
+        let ibeam = [120.0, 40.0, 2.0, 16.0];
+        let empty_at_leaf = [8.0, 36.0, 0.0, 0.0];
+        assert!(
+            !node_present_slot_moved(ibeam, empty_at_leaf),
+            "caret blink OFF is no-ink, not a translate from the flex-leaf origin"
+        );
+        assert!(
+            !node_present_slot_moved(empty_at_leaf, ibeam),
+            "caret blink ON is no-ink→ink, not a translate of the flex leaf"
+        );
+        let fill = [234.0, 166.0, 1020.0, 48.0];
+        let stroke = [235.0, 167.0, 1018.0, 46.0];
+        assert!(
+            !node_present_slot_moved(fill, stroke) && !node_present_slot_moved(stroke, fill),
+            "1px border on/off is not a translate of the InputAdornment (⌘K flash)"
+        );
+        assert!(
+            node_present_slot_moved(fill, [234.0, 167.0, 1020.0, 48.0]),
+            "1px scroll still translates"
+        );
+        let mut blink = vec![PaintDirty {
+            key: 9,
+            bounds: ibeam,
+            kind: PaintDirtyKind::Node,
+        }];
+        expand_paint_dirties_for_translated_slots(&mut blink, &[(9, empty_at_leaf)], &[(9, ibeam)]);
+        assert!(
+            blink[0].bounds[2] < 8.0,
+            "blink OFF must not union the I-beam dirty with the leaf origin\n dirty={:?}",
+            blink[0].bounds
+        );
+        let mut vanished = Vec::new();
+        expand_paint_dirties_for_translated_slots(&mut vanished, &[], &[(9, ibeam)]);
+        assert!(
+            vanished.is_empty(),
+            "omitted last-present is not a translate; I-beam dest-reset is the named caret dirty\n dirties={vanished:?}"
+        );
+        let kbd = [20.0, 8.0, 22.0, 20.0];
+        let mut kbd_live = vec![PaintDirty {
+            key: 9,
+            bounds: ibeam,
+            kind: PaintDirtyKind::Node,
+        }];
+        // Gallery KbdShowcase: presentational keycaps mint new Taffy ids on rebuild.
+        // Vanished-slot expand dest-reset every old keycap → 整个 Kbd 区域闪烁.
+        expand_paint_dirties_for_translated_slots(
+            &mut kbd_live,
+            &[(100, kbd)],
+            &[(9, ibeam), (42, kbd)],
+        );
+        assert!(
+            kbd_live.iter().all(|d| d.key != 42),
+            "omitted kbd last-present key must not dest-reset (KbdShowcase flash)\n dirties={kbd_live:?}"
+        );
+        expand_paint_dirties_for_clip_culled_slots(
+            &mut kbd_live,
+            &[(100, kbd)],
+            &[(9, ibeam), (42, kbd)],
+            &HashSet::new(),
+        );
+        assert!(
+            kbd_live.iter().all(|d| d.key != 42),
+            "kbd last-present is Taffy recycle, not clip-cull; must not dest-reset\n dirties={kbd_live:?}"
+        );
+        let mut culled = Vec::new();
+        expand_paint_dirties_for_clip_culled_slots(
+            &mut culled,
+            &[(80, [0.0, 52.0, 388.0, 28.0])],
+            &[(41, [316.0, 52.0, 44.0, 20.0])],
+            &HashSet::from([41u64]),
+        );
+        assert_eq!(
+            culled.len(),
+            1,
+            "clip-culled Builder/Delivered at the live edge must dest-reset\n dirties={culled:?}"
+        );
+        assert_eq!(culled[0].key, 41);
+        assert!(
+            (culled[0].bounds[1] - 52.0).abs() < 0.5,
+            "wipe the last-present box, not a title-bar phantom\n dirty={:?}",
+            culled[0].bounds
+        );
+        // Gallery 基础: a vanished previous-page island is unmatched last-present
+        // inside the page ScrollArea, not clip-cull. Dest-reset of that island
+        // CLEARs the visible Button card (blank gallery body).
+        let visible_card = [220.0, 64.0, 760.0, 280.0];
+        let vanished_island = [220.0, 60.0, 760.0, 520.0];
+        let live_bubble = [520.0, 56.0, 160.0, 28.0];
+        let mut page = Vec::new();
+        expand_paint_dirties_for_clip_culled_slots(
+            &mut page,
+            &[(1, visible_card)],
+            &[(99, vanished_island), (41, live_bubble)],
+            &HashSet::from([41u64]),
+        );
+        assert!(
+            page.iter().all(|d| d.key != 99),
+            "vanished page island / card must not dest-reset the visible gallery body\n dirties={page:?}"
+        );
+        assert!(
+            page.iter().any(|d| d.key == 41),
+            "clip-culled live-edge bubble must still dest-reset\n dirties={page:?}"
+        );
+        let card_cx = visible_card[0] + visible_card[2] * 0.5;
+        let card_cy = visible_card[1] + visible_card[3] * 0.5;
+        for d in &page {
+            let covers_card = d.bounds[0] <= card_cx
+                && card_cx < d.bounds[0] + d.bounds[2]
+                && d.bounds[1] <= card_cy
+                && card_cy < d.bounds[1] + d.bounds[3]
+                && d.bounds[2] * d.bounds[3] >= visible_card[2] * visible_card[3] * 0.4;
+        assert!(
+            !covers_card,
+            "clip-culled dest-reset wipes the visible 基础 card\n dirty={:?}",
+            d.bounds
+        );
+        }
+        let vp = [0.0, 52.0, 400.0, 160.0];
+        let think_prev = [8.0, 52.0, 200.0, 20.0];
+        let ms_cy = 62.0;
+        let culled_pins = clip_culled_scroll_blit_pins(
+            &[(41, think_prev), (99, vanished_island)],
+            &HashSet::from([41u64]),
+            &[vp],
+            &[[0.0, 24.0]],
+        );
+        assert_eq!(
+            culled_pins.len(),
+            1,
+            "clip-culled Thinking last-present must pin the live edge, not wait until the card fully leaves\n pins={culled_pins:?}"
+        );
+        let pin = culled_pins[0];
+        assert!(
+            pin[1] <= ms_cy && ms_cy < pin[1] + pin[3],
+            "pin must cover 1c-ms) where Thinking leftover sits\n pin={pin:?}"
+        );
+        assert!(
+            pin[2] * pin[3] < vp[2] * vp[3] * 0.5,
+            "pin must be the culled leftover, not the whole ScrollArea\n pin={pin:?}"
+        );
+        let recycle_pins = clip_culled_scroll_blit_pins(
+            &[(99, vanished_island)],
+            &HashSet::new(),
+            &[vp],
+            &[[0.0, 24.0]],
+        );
+        assert!(
+            recycle_pins.is_empty(),
+            "Taffy recycle / previous-page island must not pin-wipe the gallery body\n pins={recycle_pins:?}"
+        );
         let scroll_tick = [PaintDirty {
             key: 7,
             bounds: [10.0, 12.0, 16.0, 16.0],
@@ -4388,6 +5382,60 @@ mod tests {
         assert!(plan_scroll_strip_blit([0.0, 0.0, 0.0, 10.0], [0.0, 4.0]).is_none());
     }
 
+    fn overlap_mid(plan: &ScrollStripBlit) -> [f32; 2] {
+        let dst = scroll_blit_copied_dst(plan);
+        [dst[0] + dst[2] * 0.5, dst[1] + dst[3] * 0.5]
+    }
+
+    fn contains_point(r: [f32; 4], p: [f32; 2]) -> bool {
+        p[0] >= r[0] && p[1] >= r[1] && p[0] < r[0] + r[2] && p[1] < r[1] + r[3]
+    }
+
+    #[test]
+    fn overlay_scrollbar_pin_must_not_expand_pass_scissor_over_copied_overlap() {
+        // Gallery page scroll: overlay scrollbar is a pin. The old expand used
+        // `viewport ∪ pin` as the wgpu scissor. Straddling card fills then
+        // painted the whole card over the blit (empty shells); culled glyphon
+        // only redrew the exposed strip (doubled / missing captions).
+        let vp = [200.0, 0.0, 600.0, 800.0];
+        let plan = plan_scroll_strip_blit(vp, [0.0, 75.0]).expect("down");
+        let pin = [776.0, 0.0, 12.0, 800.0];
+        let mid = overlap_mid(&plan);
+        let legacy = union_rects(plan.viewport, pin);
+        assert!(
+            contains_point(legacy, mid),
+            "sanity: viewport∪pin covers the copied overlap mid {mid:?}"
+        );
+        match scroll_blit_pass_scissor_logical(&[plan], &[pin]) {
+            Some(sc) => assert!(
+                !contains_point(sc, mid),
+                "pass scissor {sc:?} must not cover copied overlap mid {mid:?}"
+            ),
+            None => {}
+        }
+        let no_pin = scroll_blit_pass_scissor_logical(&[plan], &[]).expect("single strip");
+        assert_eq!(no_pin, plan.exposed);
+        assert!(!contains_point(no_pin, mid));
+        assert_eq!(
+            physical_xywh_to_scissor([200.5, 725.2, 600.0, 75.0], 800, 800),
+            Some((200, 725, 600, 75))
+        );
+    }
+
+    #[test]
+    fn dual_axis_pass_scissor_must_not_be_exposed_union() {
+        let plan = plan_scroll_strip_blit([0.0, 0.0, 200.0, 100.0], [12.0, 8.0]).expect("L");
+        let mid = overlap_mid(&plan);
+        assert!(
+            contains_point(plan.exposed_union(), mid),
+            "sanity: L AABB is the viewport"
+        );
+        assert!(
+            scroll_blit_pass_scissor_logical(&[plan], &[]).is_none(),
+            "dual-axis must not collapse to one AABB scissor"
+        );
+    }
+
     #[test]
     fn scroll_strip_copy_physical_integer_delta() {
         let vp = [0.0, 0.0, 200.0, 100.0];
@@ -4760,32 +5808,105 @@ mod tests {
     }
 
     #[test]
-    fn message_scroller_jump_on_blit_viewport_is_a_pin() {
-        let mut root = Element::new();
+    fn out_of_flow_page_chrome_on_blit_viewport_is_a_pin() {
         let mut btn = Element::new();
-        btn.set_attr("data-slot", "message-scroller-button");
-        btn.set_attr("data-active", "true");
         btn.style.opacity = 1.0;
+        btn.style.bg_color = [1.0, 1.0, 1.0, 1.0];
         btn.layout_bounds = [120.0, 340.0, 80.0, 32.0];
-        root.children.push(btn);
+        let mut dock = Element::new();
+        dock.style.position = taffy::style::Position::Absolute;
+        dock.layout_bounds = [0.0, 340.0, 320.0, 32.0];
+        dock.children.push(btn);
+        let mut root = Element::new();
+        root.children.push(dock);
         let vp = [0.0, 0.0, 320.0, 384.0];
-        let pins = message_scroller_jump_scroll_blit_pins(&root, &[vp]);
+        let pins = out_of_flow_scroll_blit_pins(&root, &[], &[vp]);
         assert_eq!(
             pins,
             vec![[120.0, 340.0, 80.0, 32.0]],
-            "active Latest sharing the blit viewport must pin every scroll frame"
+            "visible out-of-flow ink sharing the blit viewport must pin every scroll frame"
         );
 
         let mut hidden = Element::new();
-        hidden.set_attr("data-slot", "message-scroller-button");
-        hidden.set_attr("data-active", "false");
         hidden.style.opacity = 0.0;
+        hidden.style.bg_color = [1.0, 1.0, 1.0, 1.0];
         hidden.layout_bounds = [120.0, 340.0, 80.0, 32.0];
+        let mut idle_dock = Element::new();
+        idle_dock.style.position = taffy::style::Position::Absolute;
+        idle_dock.children.push(hidden);
         let mut idle = Element::new();
-        idle.children.push(hidden);
+        idle.children.push(idle_dock);
         assert!(
-            message_scroller_jump_scroll_blit_pins(&idle, &[vp]).is_empty(),
-            "hidden Latest must not pin"
+            out_of_flow_scroll_blit_pins(&idle, &[], &[vp]).is_empty(),
+            "opacity≈0 out-of-flow chrome must not pin"
+        );
+    }
+
+    #[test]
+    fn out_of_flow_dock_sibling_of_contained_viewport_is_a_pin() {
+        // MessageScroller sets contains_scroll_viewport on the shell. The Latest
+        // dock is a sibling of the viewport, not scrolling content. Using that
+        // ancestor flag as in_scroll copied "Latest" into the thread.
+        let mut btn = Element::new();
+        btn.style.opacity = 1.0;
+        btn.style.bg_color = [1.0, 1.0, 1.0, 1.0];
+        btn.text = Some("Latest".into());
+        btn.layout_bounds = [120.0, 340.0, 80.0, 32.0];
+        let mut dock = Element::new();
+        dock.style.position = taffy::style::Position::Absolute;
+        dock.layout_bounds = [0.0, 340.0, 320.0, 32.0];
+        dock.children.push(btn);
+        let mut viewport = Element::new();
+        viewport.focus_id = Some(format!(
+            "{}ms-inner:viewport",
+            crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX
+        ));
+        viewport.layout_bounds = [0.0, 0.0, 320.0, 384.0];
+        let mut shell = Element::new();
+        shell.contains_scroll_viewport = true;
+        shell.layout_bounds = [0.0, 0.0, 320.0, 384.0];
+        shell.children.push(viewport);
+        shell.children.push(dock);
+        let mut page = Element::new();
+        page.contains_scroll_viewport = true;
+        page.focus_id = Some(format!(
+            "{}page-scroll",
+            crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX
+        ));
+        page.layout_bounds = [0.0, 0.0, 400.0, 800.0];
+        page.children.push(shell);
+        let inner_vp = [0.0, 0.0, 320.0, 384.0];
+        let inner_id = String::from("ms-inner:viewport");
+        let pins = out_of_flow_scroll_blit_pins(&page, &[inner_id], &[inner_vp]);
+        assert!(
+            pins.iter().any(|p| {
+                p[0] <= 121.0 && p[1] <= 341.0 && p[0] + p[2] >= 199.0 && p[1] + p[3] >= 371.0
+            }),
+            "Latest dock sibling of the blitted viewport must pin, got {pins:?}"
+        );
+
+        let outer_vp = [0.0, 0.0, 400.0, 800.0];
+        let outer_id = String::from("page-scroll");
+        let outer_pins = out_of_flow_scroll_blit_pins(&page, &[outer_id], &[outer_vp]);
+        assert!(
+            outer_pins.is_empty(),
+            "Latest rides the outer page blit with the card, got {outer_pins:?}"
+        );
+    }
+
+    #[test]
+    fn out_of_flow_smear_after_strip_blit_is_a_pin() {
+        let live = [120.0, 340.0, 80.0, 32.0];
+        let vp = [0.0, 0.0, 320.0, 384.0];
+        let smeared = smear_out_of_flow_after_strip_blit(&[live], &[vp], &[[0.0, 40.0]]);
+        assert_eq!(
+            smeared,
+            vec![[120.0, 300.0, 80.0, 32.0]],
+            "blit copies oof pixels by −delta; that occupancy must dest-reset, got {smeared:?}"
+        );
+        assert!(
+            smear_out_of_flow_after_strip_blit(&[live], &[vp], &[[0.0, 0.0]]).is_empty(),
+            "zero delta must not emit a smear pin"
         );
     }
 

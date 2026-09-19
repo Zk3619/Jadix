@@ -314,12 +314,18 @@ impl PresentRetainPipeline {
     }
 
     /// Blit the full retain buffer onto the swapchain view (always Clear → full image).
-    pub fn blit_to_surface(
+    ///
+    /// `overlay` runs in the same pass after the blit (I-beam / input caret). GLES
+    /// cannot `Load` the swapchain, so caret cannot be a second pass.
+    pub fn blit_to_surface<F>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
         clear: wgpu::Color,
-    ) {
+        overlay: F,
+    ) where
+        F: FnOnce(&mut wgpu::RenderPass<'_>),
+    {
         let Some(rt) = self.retain.as_ref() else {
             return;
         };
@@ -344,6 +350,7 @@ impl PresentRetainPipeline {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        overlay(&mut pass);
     }
 }
 
@@ -394,7 +401,7 @@ mod tests {
             let mut encoder = gpu
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            retain.blit_to_surface(&mut encoder, &view, clear);
+            retain.blit_to_surface(&mut encoder, &view, clear, |_| {});
             gpu.queue.submit(Some(encoder.finish()));
             let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         }
@@ -403,7 +410,7 @@ mod tests {
             let mut encoder = gpu
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            retain.blit_to_surface(&mut encoder, &view, clear);
+            retain.blit_to_surface(&mut encoder, &view, clear, |_| {});
             gpu.queue.submit(Some(encoder.finish()));
             let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         }

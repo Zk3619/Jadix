@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::{DefaultHasher, Entry};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
@@ -1896,22 +1896,38 @@ fn scroll_viewport_taffy_content_size(
     ]
 }
 
-fn cap_message_scroller_collect_content_h(
+/// Authored block size is `max-content` / `min-content` / `fit-content`.
+///
+/// A scroll viewport's intrinsic-height column is taller than the clip; sibling
+/// band cull of its children drops the live end edge. Detect the column by CSS
+/// dim, not a product `data-slot`.
+fn element_authored_block_is_intrinsic(el: &Element) -> bool {
+    el.style.unit_specs.iter().any(|(slot, dim)| {
+        matches!(
+            *slot,
+            crate::style::UnitSlot::Height | crate::style::UnitSlot::BlockSize
+        ) && dim.is_content_keyword()
+    })
+}
+
+/// Tight-cap Taffy `content_h` to in-flow children of an intrinsic column.
+///
+/// Inflated `min-h-full` / leftover extent would otherwise publish a tail past
+/// the last row; post-render then clamps a follow jump. Product slots are not
+/// consulted — any max-content (etc.) column inside a scroll viewport qualifies.
+fn cap_intrinsic_scroll_column_content_h(
     layout_tree: &LayoutTree,
     viewport_el: &Element,
     viewport_nid: NodeId,
     content_h: f32,
     viewport_h: f32,
 ) -> f32 {
-    const SLOT_CONTENT: &str = "message-scroller-content";
-    const SLOT_ITEM: &str = "message-scroller-item";
-
     let child_nodes = match layout_tree.taffy.children(viewport_nid) {
         Ok(n) => n,
         Err(_) => return content_h,
     };
     for (i, child) in viewport_el.children.iter().enumerate() {
-        if child.attrs.get("data-slot").map(String::as_str) != Some(SLOT_CONTENT) {
+        if !element_authored_block_is_intrinsic(child) {
             continue;
         }
         let Some(&content_nid) = child_nodes.get(i) else {
@@ -1924,17 +1940,16 @@ fn cap_message_scroller_collect_content_h(
         let mut found_item = false;
         let mut incomplete = false;
         let mut max_bottom = origin_y;
-        walk_ms_item_bottoms(
+        walk_intrinsic_column_child_bottoms(
             child,
             layout_tree,
             origin_y,
-            SLOT_ITEM,
             &mut found_item,
             &mut incomplete,
             &mut max_bottom,
         );
         if incomplete {
-            // A newly grafted turn has no Taffy node yet. Do not min() content_h down to
+            // A newly grafted row has no Taffy node yet. Do not min() content_h down to
             // the previous items — post-render would clamp a follow jump back to the old max.
             return content_h;
         }
@@ -1966,37 +1981,30 @@ fn cap_message_scroller_collect_content_h(
     content_h
 }
 
-fn walk_ms_item_bottoms(
-    el: &Element,
+fn walk_intrinsic_column_child_bottoms(
+    column: &Element,
     layout_tree: &LayoutTree,
-    base_y: f32,
-    item_slot: &str,
+    origin_y: f32,
     found_item: &mut bool,
     incomplete: &mut bool,
     max_bottom: &mut f32,
 ) {
-    let lay = el
-        .layout_node
-        .and_then(|nid| layout_tree.taffy.layout(nid).ok());
-    let y = lay.map(|l| base_y + l.location.y).unwrap_or(base_y);
-    if el.attrs.get("data-slot").map(String::as_str) == Some(item_slot) {
-        *found_item = true;
-        if let Some(lay) = lay {
-            *max_bottom = max_bottom.max(y + lay.size.height);
-        } else {
-            *incomplete = true;
+    for item in &column.children {
+        if item.style.position_fixed || item.style.position == Position::Absolute {
+            continue;
         }
-    }
-    for child in &el.children {
-        walk_ms_item_bottoms(
-            child,
-            layout_tree,
-            y,
-            item_slot,
-            found_item,
-            incomplete,
-            max_bottom,
-        );
+        *found_item = true;
+        match item
+            .layout_node
+            .and_then(|nid| layout_tree.taffy.layout(nid).ok())
+        {
+            Some(lay) => {
+                *max_bottom = max_bottom.max(origin_y + lay.location.y + lay.size.height);
+            }
+            None => {
+                *incomplete = true;
+            }
+        }
     }
 }
 
@@ -2012,7 +2020,7 @@ pub(crate) fn scroll_viewport_content_metrics(
     }
     let [_, mut ch] =
         scroll_viewport_taffy_content_size(&layout_tree.taffy, viewport_el, nid, layout.size);
-    ch = cap_message_scroller_collect_content_h(
+    ch = cap_intrinsic_scroll_column_content_h(
         layout_tree,
         viewport_el,
         nid,
@@ -2615,6 +2623,11 @@ impl LayoutTree {
     /// `(skipped_siblings, patched_dl)` from the last collect.
     pub fn last_collect_skip_counts(&self) -> (u32, u32) {
         (self.collect_skip.skipped, self.collect_skip.patched)
+    }
+
+    /// Taffy ids collect skipped as fully outside ancestor overflow (this frame).
+    pub fn last_clip_culled_paint_keys(&self) -> &HashSet<u64> {
+        &self.collect_skip.clip_culled
     }
 }
 
@@ -4555,6 +4568,21 @@ impl LayoutTree {
         );
     }
 
+    /// Band-cull / clip-cull never `record_node_paint` descendants. Last-present of
+    /// those keys still sits at the last collected visual box — dest-reset expand
+    /// may wipe leftover retain, but only for ids recorded here.
+    fn note_clip_culled_subtree(taffy: &TaffyTree<()>, node: NodeId, out: &mut HashSet<u64>) {
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if !out.insert(u64::from(n)) {
+                continue;
+            }
+            if let Ok(children) = taffy.children(n) {
+                stack.extend(children);
+            }
+        }
+    }
+
     /// Overlay tracks/thumbs paint from `scrollbar_track_overlay_abs`. Skip replay must
     /// stamp the same rects — Taffy thumb size is the Full-prepass leftover (min cap at
     /// the unscrolled top) and is not the hit box.
@@ -4812,6 +4840,7 @@ impl LayoutTree {
                     overlay_split,
                     paint_rec,
                     clip_polys,
+                    &mut skip.clip_culled,
                 ) {
                     CollectPaintOutcome::Done(extent) => {
                         skip.store(
@@ -4909,6 +4938,7 @@ impl LayoutTree {
                     overlay_split,
                     paint_rec,
                     scroll_signals_cache,
+                    &mut skip.clip_culled,
                 )
             };
             if let Some(job) = job {
@@ -5026,6 +5056,7 @@ impl LayoutTree {
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
         clip_polys: &mut Vec<crate::style::GpuClipPoly>,
+        clip_culled: &mut HashSet<u64>,
     ) -> CollectPaintOutcome {
         // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
         // Reset clip + scroll accumulation when entering the root portal layer so hoisted
@@ -5463,7 +5494,7 @@ impl LayoutTree {
                                     node,
                                     layout.size,
                                 );
-                                content[1] = cap_message_scroller_collect_content_h(
+                                content[1] = cap_intrinsic_scroll_column_content_h(
                                     self,
                                     element,
                                     node,
@@ -5521,6 +5552,7 @@ impl LayoutTree {
                         scrollbar_overlay_collect,
                         scroll_signals_cache,
                     );
+                    Self::note_clip_culled_subtree(&self.taffy, node, clip_culled);
                     // Parent already has fresh layout_bounds + paint_visual; refresh descendants
                     // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
                     #[cfg(feature = "devtools")]
@@ -5627,8 +5659,12 @@ impl LayoutTree {
         // Hidden `auto` bars keep layout_bounds for hit, but must not emit even
         // alpha-0 quads (maximize tests treat thin rects as a painted rail).
         let auto_bar_hidden = bar_alpha.is_some_and(|v| v <= 1e-4);
+        // Same not-ink gate as glyphs: opacity≈0 chrome is not in the draw list.
+        // Layered overlays (Latest) then dest-reset last-present instead of
+        // skipping wipe because a faded fill was still collected.
         if (has_bg || has_border || has_shadow || has_backdrop)
             && !auto_bar_hidden
+            && opacity >= 0.01
             && paint_visible[2] > 0.0
             && paint_visible[3] > 0.0
         {
@@ -5964,7 +6000,7 @@ impl LayoutTree {
         } else {
             element.style.outline_width
         };
-        if outline_w > 0.0 && lay_w > 0.0 && lay_h > 0.0 {
+        if outline_w > 0.0 && lay_w > 0.0 && lay_h > 0.0 && opacity >= 0.01 {
             // outline-offset: gap between the border edge and the outline.
             let oo = element.style.outline_offset;
             let outline_rect = [
@@ -6575,6 +6611,22 @@ impl LayoutTree {
                                 text_x = text_x0 - sx.max(0.0) * text_scale;
                             }
                         }
+                        // Taffy `leading-none` strut is one line; glyphon still wraps.
+                        // Dest-reset hit-tests this box — a first-line height left
+                        // Latest enter/exit CLEARing wrap lines that never recaptured.
+                        let wrap_ink_h = if !is_icon
+                            && !viewport_nowrap_edit
+                            && !text_style.overflow.allows_caret_scroll()
+                            && text_style.white_space != crate::style::WhiteSpace::Nowrap
+                        {
+                            prepared
+                                .as_ref()
+                                .map(|p| crate::text::layout(p, text_w.max(1.0)).height)
+                                .filter(|h| h.is_finite() && *h > 0.0)
+                                .unwrap_or(text_h)
+                        } else {
+                            text_h
+                        };
                         text_nodes.push(TextLayoutInfo {
                             text: text.clone(),
                             shape_suffix: element.text_shape_suffix.clone(),
@@ -6583,7 +6635,7 @@ impl LayoutTree {
                             x: text_x,
                             y: text_y0,
                             width: text_w,
-                            height: text_h,
+                            height: text_h.max(wrap_ink_h),
                             // Clip/hidden/ellipsis nowrap must scissor to the field. Growing the leaf to
                             // intrinsic (button nowrap) used to make `clip == leaf`, so glyphs and
                             // selection painted past the input border.
@@ -6913,8 +6965,7 @@ impl LayoutTree {
             parent_translates,
             is_carousel_track: element.attrs.get("data-carousel-track").map(|s| s.as_str())
                 == Some("1"),
-            skip_scroll_band_cull: element.attrs.get("data-slot").map(|s| s.as_str())
-                == Some("message-scroller-content"),
+            skip_scroll_band_cull: element_authored_block_is_intrinsic(element),
             any_stacking,
             z_order,
             max_right: abs_x + lay_w,
@@ -7042,6 +7093,7 @@ impl LayoutTree {
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+        clip_culled: &mut HashSet<u64>,
     ) -> Option<CollectChildJob> {
         if walk.stopped {
             return None;
@@ -7156,6 +7208,11 @@ impl LayoutTree {
                                         scrollbar_overlay_collect,
                                         scroll_signals_cache,
                                     );
+                                    Self::note_clip_culled_subtree(
+                                        &self.taffy,
+                                        walk.child_nodes[i],
+                                        clip_culled,
+                                    );
                                     let extent = skipped_sibling_extent(
                                         &element.children[i],
                                         child_abs,
@@ -7191,6 +7248,11 @@ impl LayoutTree {
                                                 j_size,
                                                 scrollbar_overlay_collect,
                                                 scroll_signals_cache,
+                                            );
+                                            Self::note_clip_culled_subtree(
+                                                &self.taffy,
+                                                walk.child_nodes[j],
+                                                clip_culled,
                                             );
                                             let extent = skipped_sibling_extent(
                                                 &element.children[j],
@@ -7405,7 +7467,7 @@ impl LayoutTree {
                 } else {
                     let mut content =
                         scroll_viewport_taffy_content_size(&self.taffy, element, node, layout_size);
-                    content[1] = cap_message_scroller_collect_content_h(
+                    content[1] = cap_intrinsic_scroll_column_content_h(
                         self,
                         element,
                         node,
@@ -8050,16 +8112,18 @@ fn push_chrome_rect(
     h: f32,
     color: [f32; 4],
 ) {
-    // Keep full caret/selection geometry; GPU clip via with_clip. Baking intersect into
-    // rect_size made a short scroll/viewport clip shrink the caret into a flat stub that
-    // matched the squashed glyph band.
-    if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-    let visible = intersect_rect(clip, [x, y, w, h]);
+    let fill = [x, y, w, h];
+    let visible = intersect_rect(clip, fill);
     if visible[2] <= 0.0 || visible[3] <= 0.0 {
         return;
     }
+    // Keep full caret/selection geometry in `rect_*`; GPU clip via with_clip.
+    // Baking intersect into rect_size made a short scroll/viewport clip shrink
+    // the caret into a flat stub that matched the squashed glyph band.
+    //
+    // SDF vertex AA is +2px. A 2px I-beam's entire body is that fringe, which
+    // paints serif caps and src-overs the glyph under the caret (Search「S」叠影).
+    // Clip to the visible fill so hairline chrome ink matches dest-reset.
     out.push(
         InstanceInput {
             rect_pos: [x, y],
@@ -8079,7 +8143,7 @@ fn push_chrome_rect(
             border_extra: 0.0,
             backdrop_blur: 0.0,
         }
-        .with_clip(clip),
+        .with_clip(Some(visible)),
     );
 }
 

@@ -1182,7 +1182,7 @@ fn direction_mark(dir: TextDirection) -> &'static str {
 }
 
 /// Recolor glyphs for a shadcn `shimmer` sweep. Positions stay stable (color-only).
-fn apply_shimmer_sweep(
+pub(crate) fn apply_shimmer_sweep(
     buffer: &mut glyphon::Buffer,
     font_system: &mut glyphon::FontSystem,
     text: &str,
@@ -2226,6 +2226,24 @@ pub fn prepare_text_frame_at(
         // + viewport-sized leaf misses the clip after a caret pan (selection still paints
         // → empty gray block). Restore the layout origin for visibility only.
         let cull_x = x + st.scroll_x.max(0.0) * ui_scale;
+        let visibility_h = if !is_input_text_early {
+            if let Some(c) = scaled_clip {
+                // Dest-reset recapture clip is the pill wipe. First-line strut
+                // can sit above Latest while wrap lines occupy the hole.
+                // Viewport overflow clip is not a wipe — do not inflate to it
+                // or off-screen labels start preparing.
+                let wipe = c[2] < scaled_w * 0.85 && c[3] < visibility_h * 8.0 + 48.0;
+                if wipe {
+                    visibility_h.max(((c[1] + c[3]) - y).max(0.0))
+                } else {
+                    visibility_h
+                }
+            } else {
+                visibility_h
+            }
+        } else {
+            visibility_h
+        };
         let node_rect = [cull_x, y, scaled_w.max(0.0), visibility_h.max(0.0)];
         let visible = clip_rect_to_bounds(node_rect, scaled_clip)
             .and_then(|c| clip_rect_to_bounds(c, Some(viewport_clip)))
@@ -4222,6 +4240,105 @@ mod text_shadow_tests {
             "shadow alpha centroid y={cy} should not sit in the top third of h={}",
             bmp.height
         );
+    }
+}
+
+#[cfg(test)]
+mod shimmer_sweep_tests {
+    use crate::renderer::font_loader;
+    use crate::renderer::text_hit::best_font_family;
+    use crate::style::TextStyle;
+    use crate::text::install_shared_font_system;
+
+    fn buffer_lines(buffer: &glyphon::Buffer) -> Vec<String> {
+        buffer
+            .layout_runs()
+            .map(|run| run.text.to_string())
+            .collect()
+    }
+
+    fn glyph_plain(buffer: &glyphon::Buffer) -> String {
+        let mut s = String::new();
+        for run in buffer.layout_runs() {
+            let line = run.text;
+            let mut starts: Vec<usize> = run
+                .glyphs
+                .iter()
+                .filter(|g| g.w > 0.0)
+                .map(|g| g.start)
+                .collect();
+            starts.sort_unstable();
+            starts.dedup();
+            for start in starts {
+                if start >= line.len() || !line.is_char_boundary(start) {
+                    continue;
+                }
+                if let Some(ch) = line[start..].chars().next() {
+                    s.push(ch);
+                }
+            }
+        }
+        s
+    }
+
+    fn ink_width(buffer: &glyphon::Buffer) -> f32 {
+        buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0_f32, f32::max)
+    }
+
+    /// Gallery Status (Marker inside Message): per-glyph shimmer `set_rich_text`
+    /// used to re-wrap 「Oliver is typing...」 at the hug width into 「Oliver i」
+    /// (second line clipped by the 1-line leaf) and dest-reset flashed the stub.
+    #[test]
+    fn shimmer_recolor_must_keep_oliver_is_typing_on_one_line() {
+        let text = "Oliver is typing...";
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let family = best_font_family(&fs);
+        let size = 14.0_f32;
+        let lh = size * crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
+        let attrs = glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(400));
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        // Default cosmic wrap is Word — same as TextStyle::default white_space Normal.
+        buffer.set_size(Some(400.0), None);
+        buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut fs, false);
+        let hug = ink_width(&buffer).max(1.0);
+        buffer.set_size(Some(hug), None);
+        buffer.shape_until_scroll(&mut fs, false);
+        let before = buffer_lines(&buffer);
+
+        let mut st = TextStyle::default();
+        st.size = Some(size);
+        st.color = Some([115, 115, 115, 255]);
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        for i in 0..8 {
+            super::apply_shimmer_sweep(
+                &mut buffer,
+                &mut fs,
+                text,
+                &st,
+                family,
+                400,
+                glyphon::Shaping::Advanced,
+                &crate::renderer::ShimmerParams::default(),
+            );
+            let lines = buffer_lines(&buffer);
+            let glyphs = glyph_plain(&buffer);
+            assert!(
+                glyphs.contains("typing"),
+                "i={i} shimmer set_rich_text dropped glyphs of 「Oliver is typing...」\n before={before:?}\n after_lines={lines:?}\n glyphs={glyphs:?}\n hug={hug:.1}"
+            );
+            assert!(
+                lines.len() == 1 && glyphs.contains("Oliver is typing"),
+                "i={i} shimmer recolor must not wrap/clip the caption into a stub\n before={before:?}\n after_lines={lines:?}\n glyphs={glyphs:?}\n hug={hug:.1}"
+            );
+        }
     }
 }
 

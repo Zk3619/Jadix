@@ -608,6 +608,9 @@ where
 /// descendants. Not allowed: flashing a label, `variant`, or class — use [`bind_prop`] /
 /// [`bind_text`] / [`crate::core::tree::ReactiveSync`] instead (WP-N.4).
 ///
+/// Table / Stepper / Timeline / Carousel still rebuild through this island — known
+/// structure, not a leaf-bind gap (true-fine-grained-closeout: not this wave).
+///
 /// Stateful components can return this directly when signal changes must mount/unmount descendants.
 /// For style/layout-only changes prefer [`crate::core::tree::ReactiveSync`], which avoids subtree
 /// reconstruction entirely.
@@ -845,6 +848,11 @@ pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str)
     // "Pause") — wrap/height is the only geometry that can still move.
     if bind_text_width_is_specified(el) {
         if newline_bytes(old) == newline_bytes(next) {
+            // Single line + authored width: used box does not wrap. Skip
+            // cosmic `prepare` on the pointer path (Go/Reset, Play/Pause).
+            if newline_bytes(old) == 0 {
+                return false;
+            }
             let box_w = el.layout_bounds[2];
             let box_h = el.layout_bounds[3];
             let avail = if box_w > 1.0 { box_w } else { f32::MAX };
@@ -1815,6 +1823,26 @@ phase={:<8}  stop={}  prevent={}",
             "definite-width Play/Pause must stay paint-only"
         );
         let status = apply_bound_text_value(&mut el, "Play".into());
+        assert_eq!(status, LayoutStatus::StyleChanged);
+    }
+
+    #[test]
+    fn specified_width_go_reset_stays_paint_only() {
+        let mut el = label("Go").w("100%");
+        el.layout_bounds = [8.0, 8.0, 68.0, 28.0];
+        let t0 = std::time::Instant::now();
+        let mut needs = false;
+        for _ in 0..80 {
+            needs |= bind_text_metric_needs_layout(&el, "Go", "Reset");
+            needs |= bind_text_metric_needs_layout(&el, "Reset", "Go");
+        }
+        let metric_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        assert!(!needs, "fixed-width Go/Reset must stay paint-only");
+        assert!(
+            metric_ms < 5.0,
+            "Go/Reset must not cosmic-prepare on click ({metric_ms:.2}ms / 160 ticks)"
+        );
+        let status = apply_bound_text_value(&mut el, "Reset".into());
         assert_eq!(status, LayoutStatus::StyleChanged);
     }
 

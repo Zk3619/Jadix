@@ -1146,6 +1146,59 @@ pub fn get_system_scroll_lines() -> f32 {
     crate::platform::system_scroll_lines()
 }
 
+/// Logical px per `MouseScrollDelta::LineDelta` unit (one line).
+pub(crate) const WHEEL_LINE_HEIGHT_PX: f32 = 25.0;
+
+/// Convert a winit wheel event into layout-space (logical) pixels.
+///
+/// winit 0.31 `LineDelta` is already **lines**. On Windows the backend
+/// multiplies `SPI_GETWHEELSCROLLLINES` (`use_system_wheel_speed` defaults
+/// on). Multiplying by [`get_system_scroll_lines`] again triples a notch
+/// (0.30 sent ±1 per detent). Keyboard arrows still use the SPI helper.
+///
+/// `PixelDelta` is a physical position; divide by `ui_scale`.
+pub(crate) fn wheel_delta_logical_px(
+    delta: winit::event::MouseScrollDelta,
+    ui_scale: f32,
+) -> (f32, f32) {
+    match delta {
+        winit::event::MouseScrollDelta::LineDelta(dx, dy) => {
+            (dx * WHEEL_LINE_HEIGHT_PX, dy * WHEEL_LINE_HEIGHT_PX)
+        }
+        winit::event::MouseScrollDelta::PixelDelta(p) => {
+            let s = ui_scale.max(1e-6);
+            (p.x as f32 / s, p.y as f32 / s)
+        }
+        _ => (0.0, 0.0),
+    }
+}
+
+#[cfg(test)]
+mod wheel_delta_tests {
+    use super::{wheel_delta_logical_px, WHEEL_LINE_HEIGHT_PX};
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    #[test]
+    fn line_delta_is_lines_not_notches_times_spi() {
+        // winit 0.31 Windows: one detent with SPI=3 arrives as LineDelta(0, 3).
+        // Re-multiplying by SPI (old 0.30 path) would be 3 * 3 * 25 = 225.
+        let (dx, dy) = wheel_delta_logical_px(MouseScrollDelta::LineDelta(0.0, 3.0), 1.5);
+        assert!((dx).abs() < 1e-4);
+        assert!((dy - 3.0 * WHEEL_LINE_HEIGHT_PX).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pixel_delta_is_physical_to_logical() {
+        let (dx, dy) = wheel_delta_logical_px(
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 150.0)),
+            1.5,
+        );
+        assert!((dx).abs() < 1e-4);
+        assert!((dy - 100.0).abs() < 1e-4);
+    }
+}
+
 #[cfg(test)]
 mod inertia_tests {
     use super::decay_scroll_velocity;

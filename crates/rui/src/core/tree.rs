@@ -1499,6 +1499,9 @@ pub fn collect_ui(builders: impl IntoIterator<Item = fn() -> Element>) -> Vec<El
 
 /// Argument to [`Element::text`]: a static string, or (via impls in `app/reactive`) a
 /// [`crate::core::reactivity::Signal`] / `FnMut() -> String` live binding.
+///
+/// `.text(sig.get())` is a snapshot (already evaluated). `Memo` / `StoreField` are
+/// not `IntoNodeText` — use `|| memo.get().to_string()` so the leaf effect tracks.
 pub trait IntoNodeText {
     fn apply_node_text(self, el: Element) -> Element;
 }
@@ -4359,15 +4362,26 @@ pub(crate) fn pointer_as_layout_box_xy(
 /// both axes — CSS scroll containers clip on both axes, and gallery `scroll:` shells
 /// must not leak hits into the sidebar.
 #[inline]
-pub(crate) fn overflow_clip_axes(el: &Element) -> (bool, bool) {
-    overflow_clip_axes_from(
-        el.style.overflow.x,
-        el.style.overflow.y,
-        el.focus_id.as_deref().is_some_and(|f| {
+    pub(crate) fn overflow_clip_axes(el: &Element) -> (bool, bool) {
+        let is_scroll_viewport = el.focus_id.as_deref().is_some_and(|f| {
             f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
-        }),
-    )
-}
+        });
+        let (clip_x, clip_y) = overflow_clip_axes_from(
+            el.style.overflow.x,
+            el.style.overflow.y,
+            is_scroll_viewport,
+        );
+        // CSS scroll containers clip both axes. `overflow-x: auto` is Taffy Scroll, so
+        // the generic rule invents a Y clip. table-container is content-height — that
+        // Y clip dest-resets / culls invoice rows inside gallery `scroll-data`.
+        if !is_scroll_viewport
+            && matches!(el.style.overflow.y, taffy::style::Overflow::Visible)
+            && el.attrs.get("data-slot").map(|s| s.as_str()) == Some("table-container")
+        {
+            return (clip_x, false);
+        }
+        (clip_x, clip_y)
+    }
 
 #[inline]
 pub(crate) fn overflow_clip_axes_from(
@@ -4550,94 +4564,131 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
     in_portal: bool,
     collect: &mut ReactiveSyncCollect,
 ) {
-    let mut stack: Vec<(*mut Element, [f32; 2], bool, Option<[f32; 4]>)> =
-        vec![(element as *mut Element, scroll_acc, in_portal, None)];
-    while let Some((ptr, scroll_acc, in_portal, clip_bounds)) = stack.pop() {
-        // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
-        let element = unsafe { &mut *ptr };
-        if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
-            continue;
-        }
-        let in_portal = in_portal
-            || element.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-        let in_clip = clip_bounds.is_some() || element_clips_overflow(element);
-        let clip_bounds = if element_clips_overflow(element) {
-            let b = element.layout_bounds;
-            if b[2] > 0.0 && b[3] > 0.0 {
-                Some(b)
+    let root_ptr = element as *mut Element;
+    let mut stack: Vec<(*mut Element, [f32; 2], bool, Option<[f32; 4]>, Vec<usize>)> =
+        vec![(root_ptr, scroll_acc, in_portal, None, Vec::new())];
+    while let Some((ptr, scroll_acc, in_portal, clip_bounds, path)) = stack.pop() {
+        // Exclusive node borrow ends before any root-wide hash bust (overlapping
+        // `&mut` through `root_ptr` would alias `ptr` when `path` reaches this node).
+        let (child_acc, in_portal, clip_bounds, child_count, style_changed) = {
+            // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
+            let element = unsafe { &mut *ptr };
+            if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
+                continue;
+            }
+            let in_portal = in_portal
+                || element.template_id.as_deref()
+                    == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+            let in_clip = clip_bounds.is_some() || element_clips_overflow(element);
+            let clip_bounds = if element_clips_overflow(element) {
+                let b = element.layout_bounds;
+                if b[2] > 0.0 && b[3] > 0.0 {
+                    Some(b)
+                } else {
+                    clip_bounds
+                }
             } else {
                 clip_bounds
-            }
-        } else {
-            clip_bounds
-        };
-        // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
-        if let Some(sync) = element.reactive_sync.clone() {
-            let before = element.layout_bounds;
-            let status = sync.run(element, layout_tree);
-            match status {
-                LayoutStatus::LayoutChanged => {
-                    push_subtree_layout_nodes(element, &mut collect.layout_dirty);
-                    if in_portal {
-                        collect.portal_layout_changed = true;
-                        crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
-                            element, before,
-                        ));
-                    } else if element.attrs.get("data-slot").map(String::as_str)
-                        == Some("tabs-content")
-                    {
-                        // Display toggle is local to the panel. Page FullClear was the
-                        // Gallery 8b ToggleGroup one-frame text flash.
-                        crate::app::damage::push_frame_paint_key(
-                            crate::app::damage::paint_element_key(element),
-                            estimate_geom_damage(element, before),
-                        );
-                    } else {
-                        collect.page_layout_changed = true;
-                    }
-                }
-                LayoutStatus::StructureChanged => {
-                    // Page remount (route / Show) → FullClear. Overlay Show-mount
-                    // (bubble +N / popover) is portal membership — scissor to the hoisted box.
-                    // Nested For inside a scroll/overflow clip (MessageScroller Send) is
-                    // island-local: do not mark page geometry or the sidebar Footer is
-                    // on the FullClear present path.
-                    let portalish =
-                        in_portal || crate::layout::layout_tree::subtree_declares_portal(element);
-                    if portalish {
-                        collect.portal_layout_changed = true;
-                        crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
-                            element, before,
-                        ));
-                    } else if in_clip {
-                        let d =
-                            clip_bounds.unwrap_or_else(|| estimate_geom_damage(element, before));
-                        if d[2] > 0.0 && d[3] > 0.0 {
-                            crate::app::damage::push_frame_paint_damage(d);
+            };
+            let mut style_changed = false;
+            // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
+            if let Some(sync) = element.reactive_sync.clone() {
+                let before = element.layout_bounds;
+                let before_display = element.style.display;
+                let status = sync.run(element, layout_tree);
+                match status {
+                    LayoutStatus::LayoutChanged => {
+                        push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                        if in_portal {
+                            collect.portal_layout_changed = true;
+                            crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
+                                element, before,
+                            ));
+                        } else if layout_is_local_display_toggle(
+                            before_display,
+                            element.style.display,
+                        ) {
+                            // `display: none` ↔ shown is a local panel (TabsContent,
+                            // Collapsible hide). Page FullClear was the Gallery 8b
+                            // ToggleGroup one-frame text flash — not a product slot.
+                            crate::app::damage::push_frame_paint_key(
+                                crate::app::damage::paint_element_key(element),
+                                estimate_geom_damage(element, before),
+                            );
+                        } else {
+                            collect.page_layout_changed = true;
                         }
-                    } else {
-                        collect.page_layout_changed = true;
                     }
-                    push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                    LayoutStatus::StructureChanged => {
+                        // Page remount (route / Show) → FullClear. Overlay Show-mount
+                        // (bubble +N / popover) is portal membership — scissor to the hoisted box.
+                        // Nested For inside a scroll/overflow clip (MessageScroller Send) is
+                        // island-local: do not mark page geometry or the sidebar Footer is
+                        // on the FullClear present path.
+                        let portalish = in_portal
+                            || crate::layout::layout_tree::subtree_declares_portal(element);
+                        if portalish {
+                            collect.portal_layout_changed = true;
+                            crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
+                                element, before,
+                            ));
+                        } else if in_clip {
+                            let d = clip_bounds
+                                .unwrap_or_else(|| estimate_geom_damage(element, before));
+                            if d[2] > 0.0 && d[3] > 0.0 {
+                                crate::app::damage::push_frame_paint_damage(d);
+                            }
+                        } else {
+                            collect.page_layout_changed = true;
+                        }
+                        push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                    }
+                    LayoutStatus::StyleChanged => {
+                        // Same as bind_text paint-only: StyleChanged is a local dest-reset
+                        // + recapture, not a layout rebuild. Leaving this a no-op kept
+                        // previous ink in PartialLoad (in-page stacking chrome hide/hover).
+                        // Halo-only (InputAdornment blur): strips already queued —
+                        // a second full-box Node wipe flashes placeholder + ⌘K.
+                        if element.attrs.remove("rui_halo_dirty").is_none() {
+                            crate::app::damage::push_frame_paint_element(element, scroll_acc);
+                        }
+                        style_changed = true;
+                    }
+                    LayoutStatus::Clean => {}
                 }
-                LayoutStatus::StyleChanged => {
-                    // Same as bind_text paint-only: StyleChanged is a local dest-reset
-                    // + recapture, not a layout rebuild. Leaving this a no-op kept
-                    // previous ink in PartialLoad (in-page stacking chrome hide/hover).
-                    crate::app::damage::push_frame_paint_element(element, scroll_acc);
-                }
-                LayoutStatus::Clean => {}
+                *impact = impact.merge(status);
             }
-            *impact = impact.merge(status);
+            let child_acc = child_scroll_accumulation(element, scroll_acc);
+            let child_count = element.children.len();
+            (
+                child_acc,
+                in_portal,
+                clip_bounds,
+                child_count,
+                style_changed,
+            )
+        };
+        if style_changed {
+            // ViewportsOnly `reuse_idle` would skip-replay idle ancestors (Gallery
+            // InputAdornment Hard ring after scroll settle: placeholder flicker only).
+            // Same spine bust as bind StyleChanged / Item variant.
+            // SAFETY: exclusive sync root; node borrow above has ended.
+            crate::layout::collect_cache::invalidate_collect_paint_hash_path(
+                unsafe { &mut *root_ptr },
+                &path,
+            );
         }
-        let child_acc = child_scroll_accumulation(element, scroll_acc);
-        let n = element.children.len();
-        for i in (0..n).rev() {
+        // SAFETY: exclusive subtree; push child pointers after hash bust.
+        let element = unsafe { &mut *ptr };
+        for i in (0..child_count).rev() {
+            let mut child_path = path.clone();
+            child_path.push(i);
             stack.push((
                 std::ptr::addr_of_mut!(element.children[i]),
                 child_acc,
                 in_portal,
                 clip_bounds,
+                child_path,
             ));
         }
     }
@@ -4649,6 +4700,11 @@ fn push_subtree_layout_nodes(el: &Element, out: &mut Vec<NodeId>) {
             out.push(n);
         }
     });
+}
+
+/// `display: none` ↔ shown: dest-reset the panel, do not mark page geometry.
+fn layout_is_local_display_toggle(before: Display, after: Display) -> bool {
+    before != after && (before == Display::None || after == Display::None)
 }
 
 /// Old layout box ∪ authored length size after sync (covers expand and collapse).

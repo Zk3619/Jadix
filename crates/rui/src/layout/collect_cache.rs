@@ -7,6 +7,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 #[cfg(test)]
@@ -195,6 +196,11 @@ pub(crate) struct CollectSkipState {
     /// would keep the rest paint-hash and skip-replay the rest Bake (collapsed
     /// reaction hover:scale looks like it lost enlarge). One-shot per collect.
     pub hash_bust: bool,
+    /// Taffy ids skipped this collect because they sit fully outside an ancestor
+    /// overflow (band-cull / clip-cull), including descendants never walked.
+    /// Dest-reset expand uses this set — vanished last-present that is *not*
+    /// here is Taffy recycle / unmount, not leftover scroll ink.
+    pub clip_culled: HashSet<u64>,
 }
 
 impl CollectSkipState {
@@ -202,6 +208,7 @@ impl CollectSkipState {
         self.next.clear();
         self.skipped = 0;
         self.patched = 0;
+        self.clip_culled.clear();
     }
 
     /// Drop fingerprint entries for a Taffy id (node recycled after unmount).
@@ -217,6 +224,7 @@ impl CollectSkipState {
         self.skipped = 0;
         self.patched = 0;
         self.hash_bust = false;
+        self.clip_culled.clear();
     }
 
     pub fn end_frame(&mut self) {
@@ -475,14 +483,12 @@ fn node_is_scrollbar_chrome(el: &Element) -> bool {
     })
 }
 
-/// Jump dock is a later sibling of the scroll viewport, not a scroll subtree.
-/// `reuse_idle` otherwise skip-replays the opacity-0 collect after wheel leaves
-/// the live edge — Latest stays invisible until hover busts the hash.
-fn node_is_message_scroller_jump_chrome(el: &Element) -> bool {
-    el.attrs.get("data-slot").map(String::as_str) == Some("message-scroller-button")
-        || el.children.iter().any(|c| {
-            c.attrs.get("data-slot").map(String::as_str) == Some("message-scroller-button")
-        })
+/// Out-of-flow page chrome (later sibling of a scroller, not sticky / portal).
+/// `reuse_idle` otherwise skip-replays the last opacity collect after wheel
+/// leaves the live edge — a jump / toast pill stays invisible until hover.
+fn node_is_out_of_flow_page_chrome(el: &Element) -> bool {
+    (el.style.position == taffy::style::Position::Absolute || el.style.position_fixed)
+        && !node_is_scrollbar_chrome(el)
 }
 
 fn node_clips_descendants(el: &Element) -> bool {
@@ -609,7 +615,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             && !el.collect_skip_live
             && !el.collect_skip_has_scroll
             && !node_is_scrollbar_chrome(el)
-            && !node_is_message_scroller_jump_chrome(el)
+            && !node_is_out_of_flow_page_chrome(el)
             && el.collect_paint_hash != 0
         {
             return el.collect_paint_hash;
