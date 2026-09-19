@@ -76,7 +76,10 @@ mod drag;
 mod model;
 pub mod view;
 
-pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag_from_tree};
+pub(crate) use drag::{
+    clear_color_drag_if_any, drain_color_drag_apply, is_color_dragging, queue_color_drag_apply,
+    snapshot_color_drag_bounds, tick_color_drag_with_bounds,
+};
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,
@@ -223,8 +226,9 @@ impl From<ColorPickerBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::drag::{
-        apply_color_pointer, begin_color_drag, end_color_drag, tick_color_drag,
-        tick_color_drag_with_bounds, ColorDrag, ColorDragKind,
+        apply_color_pointer, begin_color_drag, drain_color_drag_apply, end_color_drag,
+        queue_color_drag_apply, tick_color_drag, tick_color_drag_with_bounds, ColorDrag,
+        ColorDragKind,
     };
     use super::model::SWATCHES_GITHUB;
     use super::view::{
@@ -817,6 +821,86 @@ mod tests {
 
             end_color_drag();
         });
+    }
+
+    #[test]
+    fn color_picker_drag_sets_after_state_drop() {
+        use crate::app::reactive::{bind_prop, drain_deferred_view_remounts};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+
+        crate::app::reactive::reset_registered_anchors();
+        clear_test_reconcile_root();
+        let tree = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&tree));
+        let (_handle, sat) = crate::core::reactivity::create_root({
+            let tree = Rc::clone(&tree);
+            move || {
+                let rgba = use_signal("sv_drop_rgba", || Rgba::opaque(255, 255, 255));
+                let hue = use_signal("sv_drop_hue", || 210.0f32);
+                let sat = use_signal("sv_drop_sat", || 0.0f32);
+                let val = use_signal("sv_drop_val", || 1.0f32);
+                let out = use_signal("sv_drop_out", || "#ffffff".into());
+                let fmt_sig = use_signal("sv_drop_fmt", || ColorFormat::Hex);
+                create_effect({
+                    let tree = Rc::clone(&tree);
+                    move || {
+                        let leaf = bind_prop(
+                            Element::new().template_id("sv-drop-leaf"),
+                            "sv-drop-leaf",
+                            move || format!("{:.3}", sat.get()),
+                            |el, next| {
+                                el.text = Some(next);
+                                LayoutStatus::StyleChanged
+                            },
+                        );
+                        *tree.borrow_mut() = leaf;
+                    }
+                });
+                begin_color_drag(ColorDrag {
+                    kind: ColorDragKind::Sv,
+                    bounds: Rc::new(Cell::new([0.0, 0.0, 100.0, 100.0])),
+                    rgba,
+                    hue,
+                    sat,
+                    val,
+                    show_alpha: false,
+                    out,
+                    fmt_sig,
+                    sv_id: Some("sv_drop".into()),
+                });
+                sat
+            }
+        });
+        drain_deferred_view_remounts();
+        assert_eq!(tree.borrow().text.as_deref(), Some("0.000"));
+
+        let live_bounds = Some([0.0, 0.0, 100.0, 100.0]);
+        {
+            let held = tree.borrow_mut();
+            queue_color_drag_apply(80.0, 20.0, live_bounds);
+            assert_eq!(sat.peek(), 0.0, "queue under borrow must not Signal::set");
+            assert_eq!(
+                held.text.as_deref(),
+                Some("0.000"),
+                "bind_prop must not patch while AppState is borrowed"
+            );
+        }
+        drain_color_drag_apply();
+        assert!(
+            (sat.peek() - 0.8).abs() < 0.02,
+            "apply after drop must write sat; got {}",
+            sat.peek()
+        );
+        drain_deferred_view_remounts();
+        assert_eq!(
+            tree.borrow().text.as_deref(),
+            Some("0.800"),
+            "leaf bind must land once try_borrow_mut succeeds"
+        );
+
+        end_color_drag();
+        clear_test_reconcile_root();
+        crate::app::reactive::reset_registered_anchors();
     }
 
     fn find_cp_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {

@@ -304,7 +304,7 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
             .into()
     };
 
-    shell = shell.bg(parse_color("transparent")).border(border_c, 1.0);
+    shell = shell.bg(parse_color("background")).border(border_c, 1.0);
     if is_focused {
         let ring = if invalid {
             focus_ring_destructive_color()
@@ -395,9 +395,38 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
         }
     }
     if status != LayoutStatus::Clean {
+        // Shell Node dest-reset clears nested Input / Kbd pixels. Push those
+        // slots too so (after large→small sort) they redraw on top of the wipe.
         crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+        push_adornment_nested_paint_dirties(el);
     }
     status
+}
+
+/// Walk adornment children and dirty each collect slot the shell wipe covers.
+fn push_adornment_nested_paint_dirties(el: &Element) {
+    for child in &el.children {
+        push_adornment_nested_paint_dirties_walk(child);
+    }
+}
+
+fn push_adornment_nested_paint_dirties_walk(el: &Element) {
+    let slot = el.attrs.get("data-slot").map(String::as_str);
+    let nested_slot = matches!(
+        slot,
+        Some("input-adornment-addon")
+            | Some("input-adornment-text")
+            | Some("input-adornment-button")
+            | Some("input-adornment-control")
+            | Some("kbd")
+            | Some("kbd-group")
+    );
+    if el.input_paint_sync.is_some() || nested_slot {
+        crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    }
+    for child in &el.children {
+        push_adornment_nested_paint_dirties_walk(child);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@
 
 use super::model::*;
 use super::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[derive(Clone, Copy)]
 pub(super) enum ColorDragKind {
@@ -24,6 +26,8 @@ pub(super) struct ColorDrag {
 
 thread_local! {
     static COLOR_DRAG: RefCell<Option<ColorDrag>> = const { RefCell::new(None) };
+    static PENDING_COLOR_DRAG: Cell<Option<(f32, f32, Option<[f32; 4]>)>> =
+        const { Cell::new(None) };
 }
 
 pub(super) fn begin_color_drag(drag: ColorDrag) {
@@ -52,8 +56,12 @@ pub(crate) fn tick_color_drag(x: f32, y: f32) -> bool {
     tick_color_drag_with_bounds(x, y, None)
 }
 
-/// Remap SV from the chart's current window-space box (hit-path, else paint AABB).
-pub(crate) fn tick_color_drag_from_tree(root: &crate::core::tree::Element, x: f32, y: f32) -> bool {
+/// Snapshot SV chart bounds. Safe while `AppState` is borrowed (no `Signal::set`).
+pub(crate) fn snapshot_color_drag_bounds(
+    root: &crate::core::tree::Element,
+    x: f32,
+    y: f32,
+) -> Option<[f32; 4]> {
     let live = crate::utils::pointer_drag::peek()
         .filter(|s| s.kind == crate::utils::pointer_drag::DragKind::ColorPicker)
         .and_then(|s| {
@@ -71,6 +79,34 @@ pub(crate) fn tick_color_drag_from_tree(root: &crate::core::tree::Element, x: f3
             crate::app::tree_hit::find_paint_aabb_by_focus_id(root, &fid, [0.0, 0.0])
                 .map(|(aabb, _)| aabb)
         });
+    if let Some(b) = live {
+        if b[2] > 1.0 && b[3] > 1.0 {
+            COLOR_DRAG.with(|d| {
+                if let Some(drag) = d.borrow().as_ref() {
+                    drag.bounds.set(b);
+                }
+            });
+        }
+    }
+    live
+}
+
+pub(crate) fn queue_color_drag_apply(x: f32, y: f32, live_bounds: Option<[f32; 4]>) {
+    PENDING_COLOR_DRAG.with(|p| p.set(Some((x, y, live_bounds))));
+}
+
+/// Apply a queued SV tick. Call only when `AppState` is not mutably borrowed.
+pub(crate) fn drain_color_drag_apply() {
+    let pending = PENDING_COLOR_DRAG.with(|p| p.take());
+    if let Some((x, y, live)) = pending {
+        let _ = tick_color_drag_with_bounds(x, y, live);
+    }
+}
+
+/// Remap SV from the chart's current window-space box (hit-path, else paint AABB).
+#[allow(dead_code)]
+pub(crate) fn tick_color_drag_from_tree(root: &crate::core::tree::Element, x: f32, y: f32) -> bool {
+    let live = snapshot_color_drag_bounds(root, x, y);
     tick_color_drag_with_bounds(x, y, live)
 }
 

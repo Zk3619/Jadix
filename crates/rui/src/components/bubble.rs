@@ -2939,6 +2939,7 @@ mod tests {
                 &result.node_paints,
                 &result.instances,
                 &scaled_tex,
+                &[],
                 1.0,
                 prev,
             ) {
