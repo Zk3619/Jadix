@@ -76,7 +76,7 @@ impl WindowState {
     ///
     /// Size / position are skipped while maximized or minimized so the restored
     /// "normal" bounds stay intact.
-    pub fn capture_from(&mut self, window: &dyn WindowView, flags: StateFlags) {
+    pub fn capture_from(&mut self, window: &(impl WindowView + ?Sized), flags: StateFlags) {
         let maximized = flags
             .intersects(StateFlags::MAXIMIZED | StateFlags::POSITION | StateFlags::SIZE)
             && window.is_maximized();
@@ -108,7 +108,7 @@ impl WindowState {
     }
 
     /// Apply saved fields. Position is ignored when no saved monitor still intersects.
-    pub fn apply_to(&self, window: &dyn WindowView, flags: StateFlags) {
+    pub fn apply_to(&self, window: &(impl WindowView + ?Sized), flags: StateFlags) {
         if self.is_placeholder() {
             return;
         }

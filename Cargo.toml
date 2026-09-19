@@ -21,11 +21,16 @@ jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
 
 # --- window / GPU ---
-winit = "0.30"
+# 0.31-beta.3 shares `winit-core` with `winit-ohos` (no second winit line).
+winit = "0.31.0-beta.3"
+# Official facade has no OHOS backend; this crate is the Ability loop on `target_env = "ohos"`.
+winit-ohos = "0.31.0-beta.3"
+web-sys = "0.3"
+wasm-bindgen = "0.2"
+# HarmonyOS Ability (gpui-template / ohos-rs). Only used on `target_env = "ohos"`.
+openharmony-ability = "1.0.0-beta.2"
+openharmony-ability-derive = "1.0.0-beta.1"
 accesskit = "0.24.1"
-accesskit_winit = { version = "0.33.2", default-features = false, features = [
-    "rwh_06",
-] }
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
 # Vulkan+GLES on Windows). Keep GL/Metal on by default; Vulkan/DX12 stay opt-in
 # so Windows release does not pull multiple native backends at once.
@@ -67,7 +72,7 @@ proc-macro2 = "1.0"
 # Clipboard lives in `jadix_clipboard` (fork of clipboard-rs; Windows → `windows` 0.62).
 clipboard-win = { version = "5.4", features = ["monitor"] }
 x11rb = { version = "0.13", features = ["xfixes"] }
-# objc2 0.6 matches rfd / wgpu-hal (winit still pins 0.5 — do not add a third).
+# objc2 0.6 matches rfd / wgpu-hal / winit 0.31.
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"

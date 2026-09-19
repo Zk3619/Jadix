@@ -27,10 +27,11 @@ default = []
 # Component chrome uses `tr_default` / `tr_with_default`, which return the source
 # string when this feature is off. Enable: cargo test -p rui --lib --features i18n
 i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
-# AccessKit tree + winit adapter. Off by default (`default = []`).
+# AccessKit tree + local 0.31 winit hook. Off by default (`default = []`).
 # Element `accesskit_*` attrs still compile; the bridge is feature-gated.
 # Enable: cargo test -p rui --lib --features a11y
-a11y = ["dep:accesskit", "dep:accesskit_winit"]
+# `accesskit_winit` still tracks winit 0.30; we keep the tree crate only.
+a11y = ["dep:accesskit"]
 # Dev-time TCP hot reload (`rui_hot_reload_cli`). Requires debug build.
 hot-reload = []
 # pqoqubbw animated Lucide recipes — runtime JSON from assets/lucide_animated.json.
@@ -143,7 +144,6 @@ stacker = { workspace = true }
 jadix_clipboard = { workspace = true }
 rfd = { workspace = true }
 accesskit = { workspace = true, optional = true }
-accesskit_winit = { workspace = true, optional = true }
 swash = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
@@ -151,6 +151,25 @@ unicode-linebreak = { workspace = true }
 image = { workspace = true }
 resvg = { workspace = true, optional = true }
 tray-icon = { workspace = true, optional = true }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+openharmony-ability = { workspace = true }
+winit-ohos = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = [
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Node",
+    "Window",
+] }
+wasm-bindgen = { workspace = true }
+wgpu = { workspace = true, features = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }

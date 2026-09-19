@@ -63,7 +63,7 @@ impl WindowStateManager {
     }
 
     /// Restore `label` onto `window`. Unknown labels insert a live snapshot instead.
-    pub fn restore(&self, label: &str, window: &dyn WindowView) -> Result<()> {
+    pub fn restore(&self, label: &str, window: &(impl WindowView + ?Sized)) -> Result<()> {
         let Some(mapped) = self.effective_label(label) else {
             return Ok(());
         };
@@ -89,7 +89,7 @@ impl WindowStateManager {
     }
 
     /// Write live fields into the cache (does not flush unless `autosave` was set by caller).
-    pub fn capture(&self, label: &str, window: &dyn WindowView) -> Result<()> {
+    pub fn capture(&self, label: &str, window: &(impl WindowView + ?Sized)) -> Result<()> {
         let Some(mapped) = self.effective_label(label) else {
             return Ok(());
         };

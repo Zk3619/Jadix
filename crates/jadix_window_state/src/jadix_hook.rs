@@ -31,7 +31,7 @@ impl JadixWindowStateHook {
 }
 
 impl WindowLifecycleHook for JadixWindowStateHook {
-    fn on_created(&self, window: &Window, label: &str) {
+    fn on_created(&self, window: &dyn Window, label: &str) {
         if self.manager.effective_label(label).is_none() {
             return;
         }
@@ -44,7 +44,7 @@ impl WindowLifecycleHook for JadixWindowStateHook {
         }
     }
 
-    fn on_event(&self, window: &Window, event: &WindowEvent) {
+    fn on_event(&self, window: &dyn Window, event: &WindowEvent) {
         let Some(label) = self.label_for(window.id()) else {
             return;
         };
@@ -55,7 +55,7 @@ impl WindowLifecycleHook for JadixWindowStateHook {
                 }
                 self.manager.note_moved(&label, pos.x, pos.y);
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::SurfaceResized(size) => {
                 let maximized = if cfg!(target_os = "macos")
                     && (!window.is_decorated() || !window.is_resizable())
                 {
@@ -71,7 +71,7 @@ impl WindowLifecycleHook for JadixWindowStateHook {
         }
     }
 
-    fn on_closing(&self, window: &Window) {
+    fn on_closing(&self, window: &dyn Window) {
         let Some(label) = self.forget(window.id()) else {
             return;
         };

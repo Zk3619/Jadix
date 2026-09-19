@@ -33,9 +33,9 @@ pub trait WindowView {
 }
 
 #[cfg(feature = "winit")]
-impl WindowView for winit::window::Window {
+impl WindowView for dyn winit::window::Window {
     fn inner_size(&self) -> (u32, u32) {
-        let s = winit::window::Window::inner_size(self);
+        let s = winit::window::Window::surface_size(self);
         (s.width, s.height)
     }
 
@@ -67,27 +67,30 @@ impl WindowView for winit::window::Window {
 
     fn available_monitors(&self) -> Vec<MonitorRect> {
         winit::window::Window::available_monitors(self)
-            .map(|m| {
-                let p = m.position();
-                let s = m.size();
-                MonitorRect {
+            .filter_map(|m| {
+                let p = m.position()?;
+                let s = m.current_video_mode()?.size();
+                Some(MonitorRect {
                     x: p.x,
                     y: p.y,
                     width: s.width,
                     height: s.height,
-                }
+                })
             })
             .collect()
     }
 
     fn set_outer_position(&self, x: i32, y: i32) {
-        winit::window::Window::set_outer_position(self, winit::dpi::PhysicalPosition::new(x, y));
+        winit::window::Window::set_outer_position(
+            self,
+            winit::dpi::PhysicalPosition::new(x, y).into(),
+        );
     }
 
     fn set_inner_size(&self, width: u32, height: u32) {
-        let _ = winit::window::Window::request_inner_size(
+        let _ = winit::window::Window::request_surface_size(
             self,
-            winit::dpi::PhysicalSize::new(width, height),
+            winit::dpi::PhysicalSize::new(width, height).into(),
         );
     }
 
@@ -98,7 +101,7 @@ impl WindowView for winit::window::Window {
     fn set_fullscreen(&self, fullscreen: bool) {
         winit::window::Window::set_fullscreen(
             self,
-            fullscreen.then_some(winit::window::Fullscreen::Borderless(None)),
+            fullscreen.then_some(winit::monitor::Fullscreen::Borderless(None)),
         );
     }
 

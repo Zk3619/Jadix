@@ -57,7 +57,7 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
 - `wgpu` - GPU rendering backend
 - `taffy` - layout engine (Flexbox/Grid)
 - `glyphon` / `cosmic-text` - text shaping and rendering
-- `accesskit` / `accesskit_winit` - accessibility bridge
+- `accesskit` - accessibility tree (`a11y` feature; OS adapter pending winit 0.31)
 - `syn` / `quote` / `proc-macro2` - macro infrastructure
 
 Versions are pinned once in the root `[workspace.dependencies]` table. Member crates use `{ workspace = true }`. Adding or bumping a crate follows `development-docs/ops/crate_deps.md`; licenses and duplicate versions are gated by [`deny.toml`](deny.toml) (`cargo deny check licenses bans sources`).
@@ -77,7 +77,8 @@ rui/
 └─ examples/
    ├─ gallery/              # 组件与能力展示 | Component gallery
    ├─ calculator/           # 体积 / 内存基线 | Size/memory baseline
-   └─ gpu_probe/            # winit+wgpu 驱动探针 | Driver-floor probe
+   ├─ gpu_probe/            # winit+wgpu 驱动探针 | Driver-floor probe
+   └─ harmonyos/            # OpenHarmony Ability 入口 | OHOS Ability host
 ```
 
 ---

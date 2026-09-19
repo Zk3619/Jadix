@@ -48,8 +48,8 @@ allow-wildcard-paths = true
 # Duplicate versions we do not control (winit / cosmic-text / resvg / rfd).
 # Only crates that actually appear twice in the three-target graph; new names still warn.
 skip = [
-  { crate = "windows-sys", reason = "winit 0.30 pins 0.52; rustix 0.38 linux leftover 0.59; rfd/rui IME/stacker/notify 9/tray-icon 0.25 pin 0.61" },
-  { crate = "objc2", reason = "winit/accesskit pin 0.5; rfd/wgpu-hal/jadix_clipboard pin 0.6" },
+  { crate = "windows-sys", reason = "Windows host is 0.61 (winit-win32 0.31-beta + rfd/rui IME/stacker/notify/tray); lock leftover 0.45 is jni android" },
+  { crate = "objc2", reason = "accesskit may still pin 0.5; rfd/wgpu-hal/jadix_clipboard/winit 0.31 pin 0.6" },
   { crate = "objc2-app-kit", reason = "follows objc2 0.5 vs 0.6" },
   { crate = "objc2-foundation", reason = "follows objc2 0.5 vs 0.6" },
   { crate = "block2", reason = "follows objc2 0.5 vs 0.6" },
