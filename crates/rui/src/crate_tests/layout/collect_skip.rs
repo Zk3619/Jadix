@@ -1472,6 +1472,134 @@ fn focused_kbd_input_must_not_replay_unfocused_chrome() {
         "图一: focused InputAdornment shell must emit Hard-ring (spread>1, blur≈0); \
          got only caret / border without ring chrome"
     );
+
+    // Overflow:hidden + rounded must not attach a clip-poly / clip_size that
+    // scissors the shell's own Hard ring (placeholder flicker with no ring).
+    fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+        if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_slot(c, slot))
+    }
+    let shell_el = find_slot(&root, "input-adornment").expect("shell");
+    let shell_key = crate::app::damage::paint_element_key(shell_el);
+    if let Some(p) = focused.node_paints.iter().find(|p| p.key == shell_key) {
+        let lo = p.instance.0.min(focused.instances.len());
+        let hi = p.instance.1.min(focused.instances.len());
+        for (i, inst) in focused.instances[lo..hi].iter().enumerate() {
+            if inst.shadow_spread.abs() > 1.0 && inst.shadow_color[3] > 0.05 {
+                assert!(
+                    inst.clip_size == crate::renderer::InstanceInput::NO_CLIP_SIZE
+                        || inst.clip_size[0] < 0.0,
+                    "shell Hard-ring instance must not be overflow-clipped; clip={:?} idx={}",
+                    inst.clip_size,
+                    lo + i
+                );
+                if let Some(poly) = focused.clip_polys.get(lo + i) {
+                    assert!(
+                        !poly.is_active(),
+                        "shell Hard-ring must not sit under an active overflow clip-poly"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Gallery: scroll settles under ViewportsOnly `reuse_idle`, then one click on
+/// Search. `StyleChanged` Hard ring must bust the idle ancestor spine — otherwise
+/// skip-replays the unfocused DL (placeholder flicker only; no ring/caret).
+#[test]
+fn scroll_settle_click_search_must_recollect_hard_ring_under_reuse_idle() {
+    reset_collect_skip_counters();
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "skip-kbd-settle-click";
+    use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+    use_signal(&scroll_offset_y_signal_key("kbd-settle-main"), || 0.0_f32).set(0.0);
+
+    let mut root = Element::new()
+        .w(400.0)
+        .h(320.0)
+        .bg([0.94, 0.94, 0.95, 1.0])
+        .child(
+            scroll_area("kbd-settle-main").w("100%").h("100%").child(
+                vstack()
+                    .w("100%")
+                    .gap(12.0)
+                    .child(
+                        input_adornment()
+                            .child(input(id).placeholder("Search…").plain_chrome(true))
+                            .addon("inline-end", Element::new().text("⌘K")),
+                    )
+                    .child(Element::new().w("100%").h(480.0).bg([0.9, 0.9, 0.91, 1.0])),
+            ),
+        );
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, 400.0, 320.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+
+    // Scroll + settle while unfocused: stamps idle hashes on wrappers (same as
+    // Gallery page ScrollArea after the wheel stops).
+    use_signal(&scroll_offset_y_signal_key("kbd-settle-main"), || 0.0_f32).set(12.0);
+    let _ = tree.build_and_layout_fast(&mut root, 400.0, 320.0, [-1.0, -1.0], true, false);
+    let _ = tree.build_and_layout_fast(&mut root, 400.0, 320.0, [-1.0, -1.0], true, false);
+
+    // Click Search: focus + adornment StyleChanged under still-ViewportsOnly.
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
+    impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 400.0, 320.0, [0.0, 0.0]);
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    crate::renderer::restart_caret_blink();
+    assert!(
+        matches!(impact, LayoutStatus::StyleChanged),
+        "focus must be paint-only StyleChanged (got {:?})",
+        impact
+    );
+
+    // Frame path keeps `scroll_only` when ViewportsOnly + StyleChanged.
+    let focused = tree.build_and_layout_fast(&mut root, 400.0, 320.0, [-1.0, -1.0], true, false);
+    assert!(
+        focused.instances.iter().any(|i| {
+            i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05 && i.shadow_blur.abs() < 0.5
+        }),
+        "settle-click Search must recollect Hard ring under reuse_idle; \
+         idle ancestors skip-replayed the unfocused DL (placeholder-only flicker)"
+    );
+    assert!(
+        !focused.input_chrome_instances.is_empty(),
+        "settle-click Search must collect caret chrome under reuse_idle"
+    );
+    // Placeholder stays visible while empty+focused (native <input>). Caret must
+    // sit at the inline-start of that run — mid-word means stacked glyphs or a
+    // scroll_x/ellipsis mismatch (Gallery: caret overlaid on "Search…").
+    let ph = focused
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("Search"))
+        .expect("placeholder text node");
+    let caret = focused
+        .input_chrome_instances
+        .iter()
+        .min_by(|a, b| {
+            a.rect_pos[0]
+                .partial_cmp(&b.rect_pos[0])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("caret hairline");
+    assert!(
+        (caret.rect_pos[0] - ph.x).abs() < 4.0,
+        "focused empty Search caret must start at placeholder origin; caret_x={} ph_x={} text={:?}",
+        caret.rect_pos[0],
+        ph.x,
+        ph.text
+    );
 }
 
 /// Gallery 图二: focused Kbd Search stays focused while the page ScrollArea
@@ -1491,11 +1619,12 @@ fn focused_kbd_input_must_keep_caret_chrome_across_scroll() {
 
     // Gallery Kbd Search lives *inside* the page ScrollArea. Scroll a few px so the
     // field stays fully visible — clip-cull must not be the failure mode.
-    let mut root = Element::new().w(400.0).h(320.0).bg([0.94, 0.94, 0.95, 1.0]).child(
-        scroll_area("kbd-scroll-main")
-            .w("100%")
-            .h("100%")
-            .child(
+    let mut root = Element::new()
+        .w(400.0)
+        .h(320.0)
+        .bg([0.94, 0.94, 0.95, 1.0])
+        .child(
+            scroll_area("kbd-scroll-main").w("100%").h("100%").child(
                 vstack()
                     .w("100%")
                     .gap(12.0)
@@ -1506,7 +1635,7 @@ fn focused_kbd_input_must_keep_caret_chrome_across_scroll() {
                     )
                     .child(Element::new().w("100%").h(480.0).bg([0.9, 0.9, 0.91, 1.0])),
             ),
-    );
+        );
 
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
@@ -2548,5 +2677,204 @@ fn item_outline_to_default_must_drop_border_and_keep_title_foreground() {
         )
         .is_some(),
         "title dest-reset must wipe leftover outline glyphs on the parent card"
+    );
+}
+
+/// C5: absolute later-sibling opacity must recollect under `reuse_idle`
+/// without a product `data-slot`.
+#[test]
+fn out_of_flow_page_chrome_opacity_must_recollect_without_product_slot() {
+    reset_collect_skip_counters();
+    let mut pill = Element::new().w(80.0).h(32.0).bg([1.0, 0.2, 0.2, 1.0]);
+    pill.style.opacity = 0.0;
+    let mut dock = Element::new().w(160.0).h(32.0);
+    dock.style.position = taffy::style::Position::Absolute;
+    dock = dock.child(pill);
+    let mut root = Element::new()
+        .w(160.0)
+        .h(80.0)
+        .flex_col()
+        .child(Element::new().w(160.0).h(80.0).bg([0.1, 0.1, 0.2, 1.0]))
+        .child(dock);
+
+    let mut tree = LayoutTree::new();
+    let _first = tree.build_and_layout(&mut root, 160.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let hidden = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        hidden
+            .instances
+            .iter()
+            .all(|i| i.color[0] < 0.9 || i.color[3] < 0.05),
+        "opacity 0 pill must not emit an opaque red fill"
+    );
+
+    root.children[1].children[0].style.opacity = 1.0;
+    crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &[1, 0]);
+    let shown = tree.build_and_layout_fast(&mut root, 160.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        shown
+            .instances
+            .iter()
+            .any(|i| i.color[0] > 0.9 && i.color[3] > 0.9),
+        "out-of-flow opacity 0→1 must recollect without a product slot"
+    );
+}
+
+/// Gallery 基础: Marker/Message card is taller than the page clip. After scroll the
+/// card still straddles while `1c-ms)` sits at the live edge — at the same visual Y
+/// Thinking occupied at rest. Skip-replay at rest Y (or an incomplete parent DL)
+/// stamps those internals onto the next card until the whole region leaves the clip.
+#[test]
+fn straddling_card_internals_must_not_paint_at_rest_y() {
+    reset_collect_skip_counters();
+    let scroll_id = "straddle-msg-card";
+    let mut thinking = Element::new()
+        .w(200.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .child(Element::new().text("Thinking..."));
+    thinking.set_attr("data-slot", "thinking");
+    thinking.set_attr(crate::renderer::ATTR_GLYPH_FX, "shimmer");
+    let mut border = Element::new()
+        .w(200.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .child(Element::new().text("Border"));
+    border.set_attr("data-slot", "border");
+    let card = Element::new()
+        .flex_col()
+        .w(200.0)
+        .flex_shrink(0.0)
+        .child(
+            Element::new()
+                .w(200.0)
+                .h(40.0)
+                .flex_shrink(0.0)
+                .child(Element::new().text("Row0")),
+        )
+        .child(
+            Element::new()
+                .w(200.0)
+                .h(40.0)
+                .flex_shrink(0.0)
+                .child(Element::new().text("Row1")),
+        )
+        .child(thinking)
+        .child(
+            Element::new()
+                .w(200.0)
+                .h(40.0)
+                .flex_shrink(0.0)
+                .child(Element::new().text("Row3")),
+        )
+        .child(border)
+        .child(
+            Element::new()
+                .w(200.0)
+                .h(40.0)
+                .flex_shrink(0.0)
+                .child(Element::new().text("Reactive")),
+        );
+    let mut ms = Element::new()
+        .w(200.0)
+        .h(28.0)
+        .flex_shrink(0.0)
+        .child(Element::new().text("1c-ms) MessageScroller"));
+    ms.set_attr("data-slot", "ms-title");
+    let column = Element::new()
+        .flex_col()
+        .w(200.0)
+        .child(card)
+        .child(ms)
+        .child(Element::new().w(200.0).h(400.0).flex_shrink(0.0));
+    let mut viewport = Element::new()
+        .w(200.0)
+        .h(200.0)
+        .overflow_y("scroll")
+        .overflow_x("hidden")
+        .child(column);
+    viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}{scroll_id}"));
+    use_signal(&scroll_offset_y_signal_key(scroll_id), || 0.0_f32).set_silent(0.0);
+    let mut root = Element::new().w(200.0).h(200.0).child(viewport);
+
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+    let think_rest = first
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("Thinking"))
+        .expect("Thinking at rest");
+    let think_rest_y = think_rest.y;
+    let ms_rest = first
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("1c-ms)"))
+        .map(|n| n.y);
+    tree.set_collect_skip_allowed(true);
+    let _warm = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], true, false);
+
+    // 1c-ms rest Y − Thinking rest Y ≈ card-below-thinking + title. Scroll by that
+    // delta so 1c-ms lands on Thinking's rest Y while the card still straddles.
+    let scroll_y = (ms_rest.unwrap_or(think_rest_y + 160.0) - think_rest_y).max(80.0);
+    root.children[0].scroll_offset[1] = scroll_y;
+    use_signal(&scroll_offset_y_signal_key(scroll_id), || 0.0_f32).set(scroll_y);
+    let scrolled = tree.build_and_layout_fast(&mut root, 200.0, 200.0, [-1.0, -1.0], true, false);
+
+    let texts: Vec<_> = scrolled
+        .text_nodes
+        .iter()
+        .map(|n| format!("{:?} y={:.1}", n.text, n.y))
+        .collect();
+    let dump = format!(
+        "scroll={scroll_y:.1} think_rest={think_rest_y:.1} skipped={:?}\n texts={texts:?}"
+        ,
+        tree.last_collect_skip_counts()
+    );
+
+    let ms = scrolled
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("1c-ms)"))
+        .unwrap_or_else(|| panic!("1c-ms in view after straddle scroll\n{dump}"));
+    let ms_cy = ms.y + ms.height * 0.5;
+    assert!(
+        (ms_cy - think_rest_y).abs() < 20.0,
+        "fixture: 1c-ms must sit at Thinking's rest Y after scroll\n ms_cy={ms_cy:.1}\n{dump}"
+    );
+
+    let think_hits: Vec<_> = scrolled
+        .text_nodes
+        .iter()
+        .filter(|n| n.text.contains("Thinking"))
+        .collect();
+    assert!(
+        think_hits.len() <= 1,
+        "skip-ghost + live double-paint of Thinking\n{dump}"
+    );
+    for n in &think_hits {
+        assert!(
+            (n.y - ms.y).abs() >= 14.0,
+            "straddling Thinking painted at rest Y onto 1c-ms) (错位)\n y={:.1} ms_y={:.1}\n{dump}",
+            n.y,
+            ms.y
+        );
+        assert!(
+            n.y + n.height <= 1.0,
+            "Thinking must leave the clip, not stay at rest Y\n y={:.1}\n{dump}",
+            n.y
+        );
+    }
+
+    let border = scrolled
+        .text_nodes
+        .iter()
+        .find(|n| n.text == "Border")
+        .unwrap_or_else(|| panic!("Border still in the straddling card\n{dump}"));
+    let border_expected = think_rest_y + 80.0 - scroll_y;
+    assert!(
+        (border.y - border_expected).abs() < 2.0,
+        "idle Border inside the straddling card must track page scroll, not rest Y\n y={:.1} expected={border_expected:.1}\n{dump}",
+        border.y
     );
 }

@@ -2163,6 +2163,268 @@ pub(crate) fn WaapiShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// Gallery track (`16rem`) minus ball (`1.75rem`). Bind this, not a shorter 200px.
+fn gen_track_travel_px() -> f32 {
+    const TRACK_REM: f32 = 16.0;
+    const BALL_REM: f32 = 1.75;
+    (TRACK_REM - BALL_REM) * rui::layout::dimension::css_root_font_size_px()
+}
+
+fn gen_track_ball(x: rui::core::reactivity::Signal<f32>, bind_key: &str, tone: &str) -> Element {
+    let ball = {
+        let el: Element = ui! {
+            <Box
+                w="1.75rem"
+                h="1.75rem"
+                class="rounded-full"
+                bg={tone}
+                shrink={0.0}
+            />
+        };
+        rui::app::reactive::bind_prop(
+            el,
+            format!("gal_gen_tx:{bind_key}"),
+            move || x.get(),
+            |el, px| {
+                // `translate` feeds paint AABB / dest-reset. `transform: translateX`
+                // leaves `vis` at the layout box and ghosts the previous pose.
+                el.style.transform = None;
+                if (el.style.translate[0] - px).abs() <= 0.05 {
+                    LayoutStatus::Clean
+                } else {
+                    el.style.translate[0] = px;
+                    LayoutStatus::StyleChanged
+                }
+            },
+        )
+    };
+    ui! {
+        <VStack gap="0.35rem" items="start" w="16rem" shrink={0.0}>
+            <Label font_weight="700" text_size="0.75rem">{ bind_key }</Label>
+            <Box
+                w="16rem"
+                h="2.5rem"
+                class="rounded-full"
+                bg="muted"
+                items="center"
+                overflow="hidden"
+            >
+                { ball }
+            </Box>
+        </VStack>
+    }
+}
+
+fn gen_css_chip(gone: Signal<bool>, timing: &str, tone: &str, caption: &str, key: &str) -> Element {
+    let tid = format!("gal-gen-css-{key}");
+    let bind = format!("gal_gen_css_cls:{key}");
+    let trans = format!("transform {timing}");
+    let ball: Element = ui! {
+        <Box
+            id={tid}
+            w="1.75rem"
+            h="1.75rem"
+            class="rounded-full"
+            bg={tone}
+            transition={trans}
+        />
+    };
+    // Direct translate — do not `bind_class` (replaces ClassSet + clones Style).
+    // Travel = track `14rem` − ball `1.75rem` (not a shorter `translate-x-40`).
+    let travel = (14.0 - 1.75) * rui::layout::dimension::css_root_font_size_px();
+    let ball = rui::app::reactive::bind_prop(ball, bind, move || gone.get(), move |el, gone| {
+        let px = if gone { travel } else { 0.0 };
+        if (el.style.translate[0] - px).abs() <= f32::EPSILON {
+            LayoutStatus::Clean
+        } else {
+            el.style.translate[0] = px;
+            LayoutStatus::StyleChanged
+        }
+    });
+    ui! {
+        <VStack gap="0.35rem" items="start" shrink={0.0}>
+            <Label font_weight="700" text_size="0.75rem">{ caption }</Label>
+            <Box w="14rem" h="2.25rem" items="center" overflow="hidden">
+                { ball }
+            </Box>
+        </VStack>
+    }
+}
+
+/// Motion 生成器内核：CSS `spring()` 解析 + 标量 `animate` / follow / inertia / stagger / 序列。
+#[component]
+pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
+    use rui::style::{
+        use_animated, AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver,
+    };
+
+    let travel = gen_track_travel_px();
+    let mid = travel * 0.5;
+    let css_go = use_signal("gal_gen_css_go", || false);
+    let spring = use_animated("gal_gen_spring", 0.0);
+    let follow_n = {
+        let t0 = 0.0;
+        let sig = use_signal("gal_gen_follow", move || AnimatedNumber::follow(t0));
+        sig.peek()
+    };
+    let inert = use_animated("gal_gen_inert", 0.0);
+    let wave = {
+        let to = travel;
+        let sig = use_signal("gal_gen_wave", move || {
+            let n = AnimatedNumber::tween(0.0, to, 900.0, TimingFunction::EaseInOut)
+                .repeat(RepeatMode::PingPong);
+            n.pause();
+            n
+        });
+        sig.peek()
+    };
+    let seq = use_animated("gal_gen_seq", 0.0);
+    let stagger_on = use_signal("gal_gen_stagger", || false);
+
+    let spring_x = spring.signal();
+    let follow_x = follow_n.signal();
+    let inert_x = inert.signal();
+    let wave_x = wave.signal();
+    let seq_x = seq.signal();
+    let spring_go = spring.clone();
+    let follow_a = follow_n.clone();
+    let follow_b = follow_n.clone();
+    let follow_c = follow_n;
+    let inert_h = inert;
+    let seq_h = seq.clone();
+    let seq_q = seq;
+    let wave_pause = wave.clone();
+    let wave_play = wave.clone();
+    let wave_half = wave.clone();
+    let wave_one = wave.clone();
+    let wave_double = wave;
+
+    ui! {
+        <MyCard title="1i) 生成器内核（Motion）">
+            <VStack w="100%" min_w="0" gap="1rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对照 motion-dom：闭式弹簧 / visualDuration / inertia / follow 改道 / stagger / then_to。上排 CSS spring()；下排句柄绑 translateX（StyleChanged，不绑 w）。pingpong 默认暂停。"
+                </Label>
+
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                        <Label font_weight="700" text_size="0.75rem">"CSS spring()"</Label>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            w="4.25rem"
+                            on_click={move || css_go.set(!css_go.peek())}
+                        >
+                            { rui::app::reactive::bind_text("gal_gen_css_go_lbl", move || {
+                                if css_go.get() {
+                                    "Reset".into()
+                                } else {
+                                    "Go".into()
+                                }
+                            })
+                            .w("100%") }
+                        </Button>
+                    </HStack>
+                    <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
+                        { gen_css_chip(css_go, "spring(800ms, 0.35)", "primary", "spring(800ms, 0.35)", "dur") }
+                        { gen_css_chip(css_go, "spring(visual 0.25)", "chart-2", "spring(visual 0.25)", "vis") }
+                        { gen_css_chip(css_go, "400ms ease-out", "chart-4", "400ms ease-out", "ease") }
+                    </HStack>
+                </VStack>
+
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                        <Label font_weight="700" text_size="0.75rem">"animate / follow"</Label>
+                        <Button size="sm" variant="outline" on_click={move || {
+                            spring_go.set(if spring_go.peek() > travel * 0.4 { 0.0 } else { travel });
+                        }}>"spring 改道"</Button>
+                        <Button size="sm" variant="outline" on_click={move || follow_a.set(0.0)}>"follow ←"</Button>
+                        <Button size="sm" variant="outline" on_click={move || follow_b.set(mid)}>"follow ·"</Button>
+                        <Button size="sm" variant="outline" on_click={move || follow_c.set(travel)}>"follow →"</Button>
+                    </HStack>
+                    <VStack gap="0.5rem" items="start" w="100%">
+                        { gen_track_ball(spring_x, "spring", "primary") }
+                        { gen_track_ball(follow_x, "follow", "chart-2") }
+                    </VStack>
+                </VStack>
+
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                        <Label font_weight="700" text_size="0.75rem">"inertia · pingpong · sequence"</Label>
+                        <Button size="sm" variant="outline" on_click={move || {
+                            let mut opts = InertiaOptions::default();
+                            opts.velocity = 720.0;
+                            opts.max = Some(travel);
+                            opts.min = Some(0.0);
+                            inert_h.restart(inert_h.peek(), ValueDriver::Inertia(opts));
+                        }}>"flick →"</Button>
+                        <Button size="sm" variant="outline" on_click={move || wave_pause.pause()}>"pause"</Button>
+                        <Button size="sm" variant="outline" on_click={move || wave_play.play()}>"play"</Button>
+                        <Button size="sm" variant="outline" on_click={move || wave_half.set_speed(0.5)}>"½×"</Button>
+                        <Button size="sm" variant="outline" on_click={move || wave_one.set_speed(1.0)}>"1×"</Button>
+                        <Button size="sm" variant="outline" on_click={move || wave_double.set_speed(2.0)}>"2×"</Button>
+                        <Button size="sm" variant="outline" on_click={move || {
+                            seq_h.restart(travel, ValueDriver::tween(420.0, TimingFunction::EaseOut));
+                            seq_q.clone().then_to(0.0, ValueDriver::spring());
+                        }}>"then_to"</Button>
+                    </HStack>
+                    <VStack gap="0.5rem" items="start" w="100%">
+                        { gen_track_ball(inert_x, "inert", "chart-4") }
+                        { gen_track_ball(wave_x, "wave", "destructive") }
+                        { gen_track_ball(seq_x, "seq", "primary") }
+                    </VStack>
+                </VStack>
+
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                        <Label font_weight="700" text_size="0.75rem">"stagger"</Label>
+                        <Button size="sm" variant="outline" on_click={move || stagger_on.set(!stagger_on.get())}>
+                            { if stagger_on.get() { "Reset" } else { "Play" } }
+                        </Button>
+                    </HStack>
+                    <HStack gap="0.4rem" items="end" h="4rem">
+                        <Box
+                            w="1.25rem"
+                            class="rounded-md"
+                            bg="primary"
+                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
+                            transition="height 520ms spring(visual 0.28)"
+                        />
+                        <Box
+                            w="1.25rem"
+                            class="rounded-md"
+                            bg="chart-2"
+                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
+                            transition="height 520ms spring(visual 0.28) 50ms"
+                        />
+                        <Box
+                            w="1.25rem"
+                            class="rounded-md"
+                            bg="chart-3"
+                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
+                            transition="height 520ms spring(visual 0.28) 100ms"
+                        />
+                        <Box
+                            w="1.25rem"
+                            class="rounded-md"
+                            bg="chart-4"
+                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
+                            transition="height 520ms spring(visual 0.28) 150ms"
+                        />
+                        <Box
+                            w="1.25rem"
+                            class="rounded-md"
+                            bg="chart-5"
+                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
+                            transition="height 520ms spring(visual 0.28) 200ms"
+                        />
+                    </HStack>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 /// WP-R.7：`format!(…, signal.get())` 走自动 bind_text；`#[component(reactive)]` 体不因 count 重跑。
 #[component(reactive)]
 pub(crate) fn ReactiveCountChip(

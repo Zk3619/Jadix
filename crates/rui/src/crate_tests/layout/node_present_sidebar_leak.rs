@@ -11,10 +11,12 @@ use crate::app::damage::{
     push_frame_paint_element, take_frame_paint_nodes, union_rects, PaintDirty, PaintDirtyKind,
 };
 use crate::app::draw_cull::{
-    instance_paint_bounds, last_present_visual_slots, node_paint_visual_bounds,
-    node_present_capture_text_indices, node_present_dest_reset, node_present_dest_reset_scaled,
-    node_present_foreign_glyph_indices, node_present_glyphs_for_dirty, node_present_needs_glyphs,
-    node_present_scissor_logical, text_paint_bounds,
+    dest_reset_wipe_scissor_logical, instance_paint_bounds, last_present_visual_slots,
+    node_paint_visual_bounds, node_present_capture_text_indices,
+    node_present_clipped_capture_text_wipes, node_present_dest_reset,
+    node_present_dest_reset_scaled, node_present_foreign_glyph_indices,
+    node_present_glyph_clip_logical, node_present_glyphs_for_dirty, node_present_needs_glyphs,
+    node_present_scissor_logical, paint_dirty_is_caret_overlay, text_paint_bounds,
 };
 use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
@@ -463,33 +465,28 @@ fn kbd_adornment_focus_must_dirty_nested_slots_after_shell() {
             .map(|d| format!("{:?} key={}", d.kind, d.key))
             .collect::<Vec<_>>()
     );
+    // Shell post-order range redraws Input/⌘K. Extra nested Node dirties were
+    // what flashed placeholder + Kbd on focus/blur.
     assert!(
-        dirty
-            .iter()
-            .any(|d| d.kind == PaintDirtyKind::Node && d.key == input_key),
-        "nested Input must stay dirty after shell wipe; dirty={:?}",
-        dirty
-            .iter()
-            .map(|d| format!("{:?} key={}", d.kind, d.key))
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        dirty
+        !dirty
             .iter()
             .any(|d| d.kind == PaintDirtyKind::Node && d.key == addon_key),
-        "⌘K addon must stay dirty after shell wipe; dirty={:?}",
+        "⌘K must not be a separate dirty (shell redraw owns it); dirty={:?}",
         dirty
             .iter()
             .map(|d| format!("{:?} key={}", d.kind, d.key))
             .collect::<Vec<_>>()
     );
 
-    let shell_i = dirty.iter().position(|d| d.key == shell_key).unwrap();
-    let input_i = dirty.iter().position(|d| d.key == input_key).unwrap();
-    assert!(
-        shell_i < input_i,
-        "shell wipe must sort before Input redraw (got shell@{shell_i} input@{input_i})"
-    );
+    if let (Some(shell_i), Some(input_i)) = (
+        dirty.iter().position(|d| d.key == shell_key),
+        dirty.iter().position(|d| d.key == input_key),
+    ) {
+        assert!(
+            shell_i < input_i,
+            "shell wipe must sort before Input redraw (got shell@{shell_i} input@{input_i})"
+        );
+    }
 
     let shell_ring = result.instances.iter().any(|i| {
         i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05 && i.shadow_blur.abs() < 0.5
@@ -523,47 +520,582 @@ fn kbd_adornment_focus_must_dirty_nested_slots_after_shell() {
     // Transparent-fill shell used to fail opaque-nesting skip: Input dest-reset
     // after the shell wipe punched the Hard ring (click looks unfocused).
     let shell_dirty = dirty.iter().find(|d| d.key == shell_key).unwrap();
-    let input_dirty = dirty.iter().find(|d| d.key == input_key).unwrap();
-    assert!(
-        crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
-            input_dirty,
-            &dirty,
-            false,
+    if let Some(input_dirty) = dirty.iter().find(|d| d.key == input_key) {
+        assert!(
+            crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
+                input_dirty,
+                &dirty,
+                false,
+                &result.node_paints,
+                &result.instances,
+                1.0,
+            ),
+            "nested Input must skip dest-reset when adornment shell is dirty (else Input wipe punches Hard ring)"
+        );
+        assert!(
+            crate::app::draw_cull::skip_covered_nested_node_present(
+                input_dirty,
+                &dirty,
+                false,
+                &result.node_paints,
+                &result.instances,
+                1.0,
+            ),
+            "encode must skip the nested Input slot; re-submitting stacks placeholder+caret"
+        );
+        let ring = hard_ring_aabb(&result, shell_key).expect("shell Hard ring AABB");
+        let ring_sample = [ring[0] + 1.0, ring[1] + ring[3] * 0.5];
+        if let Some((wipe, _)) = node_present_dest_reset_scaled(
+            input_dirty.key,
+            input_dirty.bounds,
             &result.node_paints,
             &result.instances,
+            &[],
             1.0,
-        ),
-        "nested Input must skip dest-reset when adornment shell is dirty (else Input wipe punches Hard ring)"
+            None,
+        ) {
+            assert!(
+                !rect_contains_point(wipe, ring_sample[0], ring_sample[1])
+                    || crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
+                        input_dirty,
+                        &dirty,
+                        false,
+                        &result.node_paints,
+                        &result.instances,
+                        1.0,
+                    ),
+                "Input dest-reset must not punch shell Hard ring\n wipe={} ring={} sample={:?}",
+                fmt_rect(wipe),
+                fmt_rect(ring),
+                ring_sample
+            );
+        }
+    }
+    let _ = shell_dirty;
+}
+
+/// Blur must not flash placeholder + ⌘K: dest-reset only the Hard-ring halo
+/// (Region strips) and the I-beam. A shell/Input Node wipe of the content hole
+/// recaptures those glyphs and they flash.
+#[test]
+fn kbd_adornment_blur_must_not_flash_placeholder_or_kbd() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+
+    let (leaf_key, leaf_layout) = {
+        let leaf = find_caret_leaf(&root).expect("focused caret leaf");
+        (paint_element_key(leaf), leaf.layout_bounds)
+    };
+    let leaf_slot = focused
+        .node_paints
+        .iter()
+        .find(|p| p.key == leaf_key)
+        .expect("leaf NodePaint");
+    let leaf_prev = node_paint_visual_bounds(
+        leaf_slot,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
     );
-    let ring = hard_ring_aabb(&result, shell_key).expect("shell Hard ring AABB");
-    let ring_sample = [ring[0] + 1.0, ring[1] + ring[3] * 0.5];
-    if let Some((wipe, _)) = node_present_dest_reset_scaled(
-        input_dirty.key,
-        input_dirty.bounds,
+    assert!(
+        leaf_prev[2] > 8.0,
+        "focused caret-leaf last-present is the placeholder run (typing), not empty\n prev={} leaf={}",
+        fmt_rect(leaf_prev),
+        fmt_rect(leaf_layout)
+    );
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+    impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        1280.0,
+        800.0,
+        [0.0, 0.0],
+        false,
+        &mut ReactiveSyncCollect::default(),
+    );
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let dirty = take_frame_paint_nodes();
+    let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let prev_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let now_slots = last_present_visual_slots(
         &result.node_paints,
         &result.instances,
         &[],
-        1.0,
-        None,
-    ) {
-        // Skip means encode will not wipe — if we *did* wipe, ring must stay.
+        &result.text_nodes,
+        &result.input_chrome_instances,
+    );
+    let mut dirty = dirty;
+    expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+
+    let shell = find_slot(&root, "input-adornment").expect("adornment shell");
+    let input_el = find_input(&root).expect("Search Input");
+    let addon_el = find_slot(&root, "input-adornment-addon").expect("⌘K addon");
+    let shell_key = paint_element_key(shell);
+    let input_key = paint_element_key(input_el);
+    let addon_key = paint_element_key(addon_el);
+
+    let leaf_ibeam = dirty
+        .iter()
+        .find(|d| d.kind == PaintDirtyKind::Node && d.key == leaf_key);
+    assert!(
+        leaf_ibeam.is_some(),
+        "blur while I-beam is painted still dirties that hairline (swapchain overlay off); dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} {} {}", d.kind, d.key, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    let leaf_ibeam = leaf_ibeam.unwrap();
+    assert!(
+        leaf_ibeam.bounds[2] < leaf_prev[2] + 4.0,
+        "blur I-beam dirty must stay hairline-sized, not the flex leaf\n dirty={} prev={}",
+        fmt_rect(leaf_ibeam.bounds),
+        fmt_rect(leaf_prev)
+    );
+
+    assert!(
+        !dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == shell_key),
+        "blur must not dest-reset the whole shell (wipes placeholder+⌘K); dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} {} {}", d.kind, d.key, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        dirty.iter().any(|d| d.kind == PaintDirtyKind::Region),
+        "blur must dest-reset Hard-ring halo strips; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} {}", d.kind, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == addon_key),
+        "⌘K must not be a separate dirty on blur; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == input_key),
+        "caret-only blur must not dirty the Input box (placeholder flash); dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+
+    let ph = result
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("Search"))
+        .expect("placeholder run");
+    let kbd = result
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains('⌘') || n.text.contains("Ctrl") || n.text == "⌘K")
+        .expect("⌘K run");
+    let ph_mid = [ph.x + ph.width * 0.5, ph.y + ph.height * 0.5];
+    let kbd_mid = [kbd.x + kbd.width * 0.5, kbd.y + kbd.height * 0.5];
+    let in_rect = |r: [f32; 4], p: [f32; 2]| {
+        p[0] >= r[0] && p[1] >= r[1] && p[0] < r[0] + r[2] && p[1] < r[1] + r[3]
+    };
+    for d in &dirty {
+        if d.kind == PaintDirtyKind::Overlay {
+            continue;
+        }
+        if paint_dirty_is_caret_overlay(d, &focused.node_paints, &focused.instances) {
+            continue;
+        }
+        let prev = focused
+            .node_paints
+            .iter()
+            .find(|p| p.key == d.key)
+            .map(|p| {
+                node_paint_visual_bounds(
+                    p,
+                    &focused.instances,
+                    &[],
+                    &focused.text_nodes,
+                    &focused.input_chrome_instances,
+                )
+            });
+        let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &result.node_paints,
+            &result.instances,
+            &[],
+            1.0,
+            prev,
+        ) else {
+            continue;
+        };
         assert!(
-            !rect_contains_point(wipe, ring_sample[0], ring_sample[1])
-                || crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
-                    input_dirty,
-                    &dirty,
-                    false,
-                    &result.node_paints,
-                    &result.instances,
-                    1.0,
-                ),
-            "Input dest-reset must not punch shell Hard ring\n wipe={} ring={} sample={:?}",
+            !in_rect(wipe, ph_mid),
+            "blur dest-reset must not wipe placeholder (flash)\n wipe={} ph={:?}",
             fmt_rect(wipe),
-            fmt_rect(ring),
-            ring_sample
+            ph_mid
+        );
+        assert!(
+            !in_rect(wipe, kbd_mid),
+            "blur dest-reset must not wipe ⌘K (flash)\n wipe={} kbd={:?}",
+            fmt_rect(wipe),
+            kbd_mid
         );
     }
-    let _ = shell_dirty;
+
+    // Halo strips are Region dirties. AABB-hit capture treats the flex
+    // placeholder / ⌘K as owned by every strip; owner_clip union_xywh then
+    // becomes the content hole and src-overs them (失焦闪一下).
+    let region_only: Vec<PaintDirty> = dirty
+        .iter()
+        .copied()
+        .filter(|d| d.kind == PaintDirtyKind::Region)
+        .collect();
+    let region_cap =
+        node_present_capture_text_indices(&region_only, &result.text_nodes, &result.node_paints);
+    let region_texts: Vec<&str> = region_cap
+        .iter()
+        .filter_map(|&i| result.text_nodes.get(i).map(|n| n.text.as_str()))
+        .collect();
+    assert!(
+        !region_texts.iter().any(|t| t.contains("Search")),
+        "halo Region must not recapture placeholder (src-over flash); captured={region_texts:?}"
+    );
+    assert!(
+        !region_texts
+            .iter()
+            .any(|t| t.contains('⌘') || t.contains("Ctrl") || *t == "⌘K"),
+        "halo Region must not recapture ⌘K (src-over flash); captured={region_texts:?}"
+    );
+
+    let wipe_clips: Vec<(u64, [f32; 4])> = dirty
+        .iter()
+        .filter(|d| d.kind == PaintDirtyKind::Node)
+        .filter_map(|d| {
+            let prev = focused
+                .node_paints
+                .iter()
+                .find(|p| p.key == d.key)
+                .map(|p| {
+                    node_paint_visual_bounds(
+                        p,
+                        &focused.instances,
+                        &[],
+                        &focused.text_nodes,
+                        &focused.input_chrome_instances,
+                    )
+                });
+            let (wipe, _) = node_present_dest_reset_scaled(
+                d.key,
+                d.bounds,
+                &result.node_paints,
+                &result.instances,
+                &[],
+                1.0,
+                prev,
+            )?;
+            Some((d.key, node_present_glyph_clip_logical(d, Some(wipe), 1.0)))
+        })
+        .collect();
+    let hole = node_present_clipped_capture_text_wipes(
+        &dirty,
+        &result.text_nodes,
+        &result.node_paints,
+        &wipe_clips,
+    );
+    for n in &hole {
+        let Some(c) = n.clip_bounds else {
+            continue;
+        };
+        if n.text.contains("Search") {
+            assert!(
+                c[2] < ph.width * 0.5,
+                "blur capture of placeholder must stay I-beam-sized (else 叠影闪一下)\n clip={} ph={}",
+                fmt_rect(c),
+                fmt_rect([ph.x, ph.y, ph.width, ph.height])
+            );
+            if let Some(d) = dirty.iter().find(|d| d.key == leaf_key) {
+                let scissor = dest_reset_wipe_scissor_logical(d.bounds, 1.0);
+                let int_clip = crate::renderer::prepare_text::integerize_clip_rect(c)
+                    .expect("positive blur capture clip");
+                let paint = intersect_rects(int_clip, scissor).expect("blur paint");
+                assert!(
+                    int_clip[0] + int_clip[2] >= scissor[0] + scissor[2] - 0.01,
+                    "blur recapture must cover the I-beam CLEAR through S\n clip={} int={} scissor={}",
+                    fmt_rect(c),
+                    fmt_rect(int_clip),
+                    fmt_rect(scissor)
+                );
+                assert!(
+                    paint[0] >= scissor[0] - 0.01,
+                    "blur GPU scissor must keep the kernel from painting left of CLEAR (叠粗)\n paint={} scissor={}",
+                    fmt_rect(paint),
+                    fmt_rect(scissor)
+                );
+            }
+        }
+        if n.text.contains('⌘') || n.text.contains("Ctrl") || n.text == "⌘K" {
+            panic!(
+                "blur must not recapture ⌘K; clip={} kbd={}",
+                fmt_rect(c),
+                fmt_rect([kbd.x, kbd.y, kbd.width, kbd.height])
+            );
+        }
+    }
+
+    // Caret blink OFF stores an empty last-present box. dest-reset must not
+    // fall back to the flex leaf (placeholder + ⌘K flash).
+    {
+        if let Some(d) = dirty.iter().find(|d| d.key == leaf_key) {
+            let empty_prev = [d.bounds[0], d.bounds[1], 0.0, 0.0];
+            if let Some((wipe, _)) = node_present_dest_reset_scaled(
+                d.key,
+                d.bounds,
+                &result.node_paints,
+                &result.instances,
+                &[],
+                1.0,
+                Some(empty_prev),
+            ) {
+                assert!(
+                    !in_rect(wipe, ph_mid),
+                    "blur from caret-OFF must not dest-reset placeholder\n wipe={} ph={:?}",
+                    fmt_rect(wipe),
+                    ph_mid
+                );
+                assert!(
+                    !in_rect(wipe, kbd_mid),
+                    "blur from caret-OFF must not dest-reset ⌘K\n wipe={} kbd={:?}",
+                    fmt_rect(wipe),
+                    kbd_mid
+                );
+            }
+        }
+    }
+    let _ = (leaf_key, shell_key);
+}
+
+/// Caret blink dirties the I-beam. That dirty is a swapchain overlay — retain
+/// never dest-resets or recaptures Search (竖条 / 叠影).
+#[test]
+fn kbd_adornment_caret_blink_must_clip_capture_to_ibeam() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    push_focused_text_edit_caret_damage(&root);
+    let dirty = take_frame_paint_nodes();
+    let leaf = find_caret_leaf(&root).expect("focused caret leaf");
+    let leaf_key = paint_element_key(leaf);
+    let leaf_dirty = dirty
+        .iter()
+        .find(|d| d.key == leaf_key)
+        .copied()
+        .expect("caret blink dirties the text leaf");
+    assert!(
+        leaf_dirty.bounds[2] < leaf.layout_bounds[2] * 0.25,
+        "blink dirty must be the I-beam, not the flex leaf\n dirty={} leaf={}",
+        fmt_rect(leaf_dirty.bounds),
+        fmt_rect(leaf.layout_bounds)
+    );
+
+    let prev_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let off_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &[],
+    );
+    let mut live = vec![leaf_dirty];
+    expand_paint_dirties_for_translated_slots(&mut live, &off_slots, &prev_slots);
+    expand_paint_dirties_for_translated_slots(&mut live, &prev_slots, &off_slots);
+    let leaf_dirty = live[0];
+    assert!(
+        leaf_dirty.bounds[2] < leaf.layout_bounds[2] * 0.25,
+        "blink dirty must stay I-beam after last-present ON↔OFF expand\n dirty={} leaf={}",
+        fmt_rect(leaf_dirty.bounds),
+        fmt_rect(leaf.layout_bounds)
+    );
+
+    let leaf_slot = focused
+        .node_paints
+        .iter()
+        .find(|p| p.key == leaf_key)
+        .expect("leaf NodePaint");
+    assert!(
+        paint_dirty_is_caret_overlay(&leaf_dirty, &focused.node_paints, &focused.instances),
+        "blink I-beam dirty must be a swapchain overlay (no dest-reset / recapture of Search)"
+    );
+    let prev = node_paint_visual_bounds(
+        leaf_slot,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    if prev[2] > 0.5 && prev[3] > 0.5 {
+        assert!(
+            prev[2] > leaf_dirty.bounds[2] * 2.0,
+            "last-present of the caret leaf is the glyph run, not the I-beam\n prev={} dirty={}",
+            fmt_rect(prev),
+            fmt_rect(leaf_dirty.bounds)
+        );
+    }
+    let caret = focused
+        .input_chrome_instances
+        .iter()
+        .find(|c| c.rect_size[0] <= 2.5 && c.rect_size[1] > 8.0)
+        .expect("I-beam chrome");
+    assert!(
+        caret.clip_size[0] > 0.0
+            && (caret.clip_size[0] - caret.rect_size[0]).abs() < 0.5
+            && (caret.clip_size[1] - caret.rect_size[1]).abs() < 0.5,
+        "I-beam must clip to its fill so SDF AA cannot paint serif caps\n clip={:?} size={:?}",
+        caret.clip_size,
+        caret.rect_size
+    );
+}
+
+/// I-beam is a swapchain overlay. Blink must not dest-reset the first letter of
+/// "Search…" (Gallery 基础 Kbd Search 竖条).
+#[test]
+fn kbd_search_caret_dest_reset_must_recapture_s_punch() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    push_focused_text_edit_caret_damage(&root);
+    let dirty = take_frame_paint_nodes();
+    let leaf = find_caret_leaf(&root).expect("focused caret leaf");
+    let leaf_key = paint_element_key(leaf);
+    let leaf_dirty = dirty
+        .iter()
+        .find(|d| d.key == leaf_key)
+        .copied()
+        .expect("caret blink dirties the text leaf");
+    assert!(
+        leaf_dirty.bounds[2] < leaf.layout_bounds[2] * 0.25,
+        "blink dirty must be the I-beam, not the flex leaf\n dirty={} leaf={}",
+        fmt_rect(leaf_dirty.bounds),
+        fmt_rect(leaf.layout_bounds)
+    );
+
+    let _ = focused
+        .node_paints
+        .iter()
+        .find(|p| p.key == leaf_key)
+        .expect("leaf NodePaint");
+    assert!(
+        paint_dirty_is_caret_overlay(&leaf_dirty, &focused.node_paints, &focused.instances),
+        "blink must not dest-reset Search (I-beam is a swapchain overlay)"
+    );
+    let search = focused
+        .text_nodes
+        .iter()
+        .find(|n| n.text.contains("Search"))
+        .expect("Search placeholder");
+    let search_box = text_paint_bounds(search);
+    let s_box = [
+        search_box[0],
+        search_box[1],
+        search_box[2].min(search_box[3].max(8.0)),
+        search_box[3],
+    ];
+    let caret = focused
+        .input_chrome_instances
+        .iter()
+        .find(|c| c.rect_size[0] <= 2.5 && c.rect_size[1] > 8.0)
+        .expect("I-beam chrome");
+    assert!(
+        caret.clip_size[0] > 0.0
+            && (caret.clip_size[0] - caret.rect_size[0]).abs() < 0.5
+            && (caret.clip_size[1] - caret.rect_size[1]).abs() < 0.5,
+        "I-beam must clip to its fill so SDF AA cannot paint serif caps\n clip={:?} size={:?}",
+        caret.clip_size,
+        caret.rect_size
+    );
+    let painted = instance_paint_bounds(caret);
+    assert!(
+        painted[2] <= caret.rect_size[0] + 0.5,
+        "clipped I-beam paint must not outset +2 AA into S\n paint={} fill_w={}",
+        fmt_rect(painted),
+        caret.rect_size[0]
+    );
+    let caret_box = [
+        caret.rect_pos[0],
+        caret.rect_pos[1],
+        caret.rect_size[0],
+        caret.rect_size[1],
+    ];
+    assert!(
+        intersect_rects(caret_box, s_box).is_some(),
+        "I-beam still sits on S — overlay must not dest-reset that punch\n caret={} s={}",
+        fmt_rect(caret_box),
+        fmt_rect(s_box)
+    );
 }
 
 /// Typing while adornment-focused must keep an Input Node dirty (not Region-coalesced)
@@ -624,7 +1156,10 @@ fn kbd_adornment_typing_must_keep_input_node_and_typed_glyphs() {
             .collect::<Vec<_>>()
     );
     assert!(
-        result.text_nodes.iter().any(|n| n.text.contains('你') || n.text.contains("你好")),
+        result
+            .text_nodes
+            .iter()
+            .any(|n| n.text.contains('你') || n.text.contains("你好")),
         "typed value must be in collect (not placeholder-only); texts={:?}",
         result
             .text_nodes
@@ -967,7 +1502,13 @@ fn focused_input_caret_blink_must_keep_hard_ring() {
     );
     let ring_sample = [ring[0] + 1.0, ring[1] + ring[3] * 0.5];
     for d in &dirties {
-        let prev = prev_slots.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b);
+        if paint_dirty_is_caret_overlay(d, &focused.node_paints, &focused.instances) {
+            continue;
+        }
+        let prev = prev_slots
+            .iter()
+            .find(|(k, _)| *k == d.key)
+            .map(|(_, b)| *b);
         let Some((wipe, _)) = node_present_dest_reset_scaled(
             d.key,
             d.bounds,
@@ -1275,11 +1816,27 @@ fn form_field_caret_blink_must_not_dirty_or_wipe_the_label() {
     );
 
     push_focused_text_edit_caret_damage(&root);
-    let dirties = take_frame_paint_nodes();
+    let mut dirties = take_frame_paint_nodes();
     assert!(
         !dirties.is_empty(),
         "caret blink must record a paint-dirty node"
     );
+    let prev_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let off_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &[],
+    );
+    expand_paint_dirties_for_translated_slots(&mut dirties, &off_slots, &prev_slots);
+    expand_paint_dirties_for_translated_slots(&mut dirties, &prev_slots, &off_slots);
     for d in &dirties {
         assert!(
             intersect_rects(d.bounds, label_box).is_none(),
@@ -1301,6 +1858,9 @@ fn form_field_caret_blink_must_not_dirty_or_wipe_the_label() {
         label_box[1] + label_box[3] - 0.5,
     ];
     for d in &dirties {
+        if paint_dirty_is_caret_overlay(d, &focused.node_paints, &focused.instances) {
+            continue;
+        }
         let prev = focused
             .node_paints
             .iter()
@@ -1329,6 +1889,21 @@ fn form_field_caret_blink_must_not_dirty_or_wipe_the_label() {
             !rect_contains_point(wipe, label_bottom[0], label_bottom[1]),
             "caret dest-reset {} must not erase the 邮箱 label bottom {:?}\n label={}",
             fmt_rect(wipe),
+            label_bottom,
+            fmt_rect(label_box)
+        );
+        let scissor = node_present_scissor_logical(
+            PaintDirtyKind::Node,
+            d.key,
+            d.bounds,
+            &prev_slots,
+            &focused.node_paints,
+            8.0,
+        );
+        assert!(
+            !rect_contains_point(scissor, label_bottom[0], label_bottom[1]),
+            "caret scissor {} must not cover the 邮箱 label bottom {:?}\n label={}",
+            fmt_rect(scissor),
             label_bottom,
             fmt_rect(label_box)
         );

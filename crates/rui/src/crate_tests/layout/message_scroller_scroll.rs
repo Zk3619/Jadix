@@ -8,6 +8,7 @@ use crate::app::draw_cull::{
 use crate::app::reactive::{reactive_view_sized, reset_registered_anchors};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
 use crate::components::bubble::bubble;
+use crate::components::label::label;
 use crate::components::message::{message, message_content};
 use crate::components::message_scroller::{
     message_scroller, message_scroller_button, message_scroller_content, message_scroller_item,
@@ -43,8 +44,105 @@ const GAL_MS_TEXTS: &[&str] = &[
     "And if they've scrolled up to re-read an older answer? I don't want to yank them back down.",
     "You won't. Auto-scroll only runs when the viewport is already pinned to the bottom, so scrolling up is a deliberate opt-out.",
     "Last one — does this work with assistive tech?",
-    "MessageScrollerContent sets role=log and aria-relevant=additions by default, so screen readers announce new messages as they stream in.",
+    "MessageScrollerContent sets role=log and aria-relevant=additions by default, so screen readers announce new messages as they stream in.\n\nThe scroll button is a real button with a label, and it's removed from the tab order when you're already at the bottom — no ghost focus stops.",
 ];
+
+fn gallery_wrap_under_jump_root() -> Element {
+    let mut content = message_scroller_content();
+    for i in 0..5 {
+        content =
+            content.child(message_scroller_item().message_id(format!("m{i}")).child(
+                Element::new().flex_col().w("100%").min_w(0.0).child(
+                    Element::new().w("100%").text(format!(
+                        "Turn {i}: enough text to wrap across multiple lines."
+                    )),
+                ),
+            ));
+    }
+    content = content.child(
+        message_scroller_item()
+            .message_id("m-gallery-wrap")
+            .child(
+                Element::new()
+                    .flex_col()
+                    .w("100%")
+                    .min_w(0.0)
+                    .gap(8.0)
+                    .child(Element::new().w("100%").text(
+                        "MessageScrollerContent sets role=log and aria-relevant=additions by default, so screen readers announce new messages as they stream in.",
+                    ))
+                    .child(Element::new().w("100%").text(
+                        "The scroll button is a real button with a label, and it's removed from the tab order when you're already at the bottom — no ghost focus stops.",
+                    ))
+                    .child(Element::new().w("100%").text(
+                        "Got it. Stay at the live edge and I'll keep following.",
+                    )),
+            ),
+    );
+    let scroller: Element = message_scroller_provider()
+        .id("ms-gallery-wrap")
+        .auto_scroll(true)
+        .default_scroll_position("end")
+        .child(
+            message_scroller()
+                .h("100%")
+                .child(message_scroller_viewport().child(content))
+                .child(message_scroller_button().direction("end")),
+        )
+        .into();
+    Element::new()
+        .w(320.0)
+        .h(384.0)
+        .overflow("hidden")
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(scroller)
+}
+
+/// Gallery `gal_ms_bubble_body`: `\n\n` splits become `<Label leading=normal>`.
+fn gallery_label_wrap_under_jump_root() -> Element {
+    let p2 = "The scroll button is a real button with a label, and it's removed from the tab order when you're already at the bottom — no ghost focus stops.";
+    let body = label("gal-ms-p2")
+        .text(p2)
+        .text_size(14.0)
+        .text_leading_normal()
+        .w("100%");
+    let turn: Element =
+        message_scroller_item()
+            .message_id("m-gallery-label-wrap")
+            .child(message().align("start").child(
+                message_content().child(bubble().variant("ghost").align("start").child(body)),
+            ))
+            .into();
+    let mut content = message_scroller_content();
+    for i in 0..5 {
+        content =
+            content.child(message_scroller_item().message_id(format!("m{i}")).child(
+                Element::new().flex_col().w("100%").min_w(0.0).child(
+                    Element::new().w("100%").text(format!(
+                        "Turn {i}: enough text to wrap across multiple lines."
+                    )),
+                ),
+            ));
+    }
+    content = content.child(turn);
+    let scroller: Element = message_scroller_provider()
+        .id("ms-gallery-label-wrap")
+        .auto_scroll(true)
+        .default_scroll_position("end")
+        .child(
+            message_scroller()
+                .h("100%")
+                .child(message_scroller_viewport().child(content))
+                .child(message_scroller_button().direction("end")),
+        )
+        .into();
+    Element::new()
+        .w(320.0)
+        .h(384.0)
+        .overflow("hidden")
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .child(scroller)
+}
 
 fn tall_message_scroller_root() -> Element {
     let mut content = message_scroller_content();
@@ -799,6 +897,19 @@ fn production_jump_chrome_pass(
 /// Enter is a 200ms CSS tween. Tests that need the settled pill snap the shown
 /// pose; follow now leaves collect at the hide `from` (opacity 0). Do not mix a
 /// virtual clock with tweens started on `Instant` — that samples hide at t≈1.
+fn settle_latest_hide_pose(root: &mut Element) {
+    let Some(btn) = find_slot_ms_mut(root, "message-scroller-button") else {
+        return;
+    };
+    crate::utils::motion::snap_motion_baseline(btn);
+    btn.style.opacity = 0.0;
+    btn.style.scale = [0.95, 0.95];
+    btn.style.translate = [0.0, 8.0];
+    btn.style.translate_pct = [0.0, 0.0];
+    crate::style::patch_class_set_base_motion(btn);
+    crate::utils::motion::snap_motion_baseline(btn);
+}
+
 fn settle_latest_jump_pose(root: &mut Element) {
     let Some(btn) = find_slot_ms_mut(root, "message-scroller-button") else {
         return;
@@ -1226,6 +1337,740 @@ fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
 }
 
 #[test]
+fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
+    // Production CSS enter: dest-reset smaller than the toast-matched SDF left
+    // every fade frame in PartialLoad (stacked ring). Overlay rail occupancy
+    // then nipped a thumb remnant. Hide-settle used hidden last-present as
+    // prev, skipped underlay, and left a pill-sized hole in wrapping copy.
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root().bg([1.0, 1.0, 1.0, 1.0]);
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _enter0 = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+
+            crate::style::set_css_transition_timeline_ms(40.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let enter_early = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let early_present = crate::app::draw_cull::last_present_visual_slots(
+                &enter_early.node_paints,
+                &enter_early.instances,
+                &[],
+                &enter_early.text_nodes,
+                &[],
+            );
+
+            crate::style::set_css_transition_timeline_ms(80.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let enter_dirties = crate::app::damage::take_frame_paint_nodes();
+            let enter_mid = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                btn.style.opacity > 0.08 && btn.style.opacity < 0.92,
+                "enter mid must fade, opacity={}",
+                btn.style.opacity
+            );
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let mid_dirty = crate::app::damage::take_frame_paint_nodes()
+                .into_iter()
+                .chain(enter_dirties)
+                .find(|d| d.key == btn_key)
+                .expect("enter mid dest-reset dirty");
+            let prev_early = early_present
+                .iter()
+                .find(|(k, _)| *k == btn_key)
+                .map(|(_, b)| *b);
+            let btn_paint = enter_mid
+                .node_paints
+                .iter()
+                .find(|p| p.key == btn_key)
+                .expect("Latest collect slot");
+            let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                mid_dirty.key,
+                mid_dirty.bounds,
+                &enter_mid.node_paints,
+                &enter_mid.instances,
+                &[],
+                &[],
+                1.0,
+                prev_early,
+            );
+            assert!(
+                btn_paint.layered,
+                "enter Latest is a stacking layer, layered={}",
+                btn_paint.layered
+            );
+            let reset = reset.expect(
+                "enter fade with last-present dest-resets leftover so the slide cannot ghost",
+            );
+            let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            assert!(
+                reset.rect[2] <= pill[2] + 72.0,
+                "enter fade dest-reset must stay on the pill+halo, wipe={:?} pill={pill:?}",
+                reset.rect
+            );
+            assert!(
+                crate::app::draw_cull::node_present_flush_layered_underlay_glyphs(
+                    mid_dirty.key,
+                    mid_dirty.bounds,
+                    &enter_mid.node_paints,
+                ),
+                "enter fade dest-reset must recapture wrapping in the wipe"
+            );
+            let wipe_clip = crate::app::draw_cull::node_present_glyph_clip_logical(
+                &mid_dirty,
+                Some(reset.rect),
+                1.0,
+            );
+            let wrap_runs: Vec<_> = enter_mid
+                .text_nodes
+                .iter()
+                .filter(|t| t.text != "Latest")
+                .cloned()
+                .collect();
+            if wrap_runs
+                .iter()
+                .any(|t| crate::app::draw_cull::text_hits_damage(t, reset.rect))
+            {
+                let underlay =
+                    crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                        &[mid_dirty],
+                        &enter_mid.text_nodes,
+                        &enter_mid.node_paints,
+                        &[(mid_dirty.key, wipe_clip)],
+                    );
+                assert!(
+                    !underlay.is_empty(),
+                    "enter fade dest-reset must restore wrapping in the wipe or AABB CLEAR is a white ring"
+                );
+            }
+
+            crate::style::set_css_transition_timeline_ms(200.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let shown = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let shown_present = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let shown_prev = shown_present
+                .iter()
+                .find(|(k, _)| *k == btn_key)
+                .map(|(_, b)| *b);
+            assert!(
+                shown_prev.is_some_and(|b| b[2] > 8.0 && b[3] > 8.0),
+                "settled Latest last-present must keep the pill+halo, got {shown_prev:?}"
+            );
+
+            let max_y = use_signal(
+                &scroll_content_h_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek()
+                - use_signal(
+                    &scroll_viewport_h_signal_key("ms-layout-test:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(max_y.max(0.0));
+            crate::style::set_css_transition_timeline_ms(200.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            crate::style::set_css_transition_timeline_ms(400.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let hide_dirties = crate::app::damage::take_frame_paint_nodes();
+            let hidden = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                btn.style.opacity < 0.05,
+                "hide settle must reach opacity 0, got {}",
+                btn.style.opacity
+            );
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let hide_dirty = crate::app::damage::take_frame_paint_nodes()
+                .into_iter()
+                .chain(hide_dirties)
+                .find(|d| d.key == btn_key)
+                .expect("hide settle dest-reset dirty");
+            let hide_reset = crate::app::draw_cull::node_present_dest_reset_full(
+                hide_dirty.key,
+                hide_dirty.bounds,
+                &hidden.node_paints,
+                &hidden.instances,
+                &[],
+                &[],
+                1.0,
+                shown_prev,
+            )
+            .expect("hide settle dest-reset");
+            if let Some(bar) = find_overlay_scrollbar(&root) {
+                let bar_box = bar.layout_bounds;
+                assert!(
+                    crate::app::damage::intersect_rects(hide_reset.rect, bar_box).is_none(),
+                    "hide dest-reset must not punch the overlay scrollbar\n wipe={:?} bar={bar_box:?}",
+                    hide_reset.rect
+                );
+            }
+            let overlapping: Vec<_> = hidden
+                .text_nodes
+                .iter()
+                .filter(|t| t.text != "Latest" && t.text.contains("Turn "))
+                .filter(|t| crate::app::draw_cull::text_hits_damage(t, hide_reset.rect))
+                .cloned()
+                .collect();
+            assert!(
+                !overlapping.is_empty(),
+                "precondition: hide wipe must hit wrapping thread, wipe={:?}",
+                hide_reset.rect
+            );
+            let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            let wipe_below = hide_reset.rect[1] + hide_reset.rect[3] - (pill[1] + pill[3]);
+            assert!(
+                wipe_below <= 22.0,
+                "Latest dest-reset must stay on the pill+halo, not a band below the thread\n wipe_below={wipe_below} wipe={:?} pill={pill:?}",
+                hide_reset.rect
+            );
+            let wipe_clip = crate::app::draw_cull::node_present_glyph_clip_logical(
+                &hide_dirty,
+                Some(hide_reset.rect),
+                1.0,
+            );
+            let underlay = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                &[hide_dirty],
+                &hidden.text_nodes,
+                &hidden.node_paints,
+                &[(hide_dirty.key, wipe_clip)],
+            );
+            assert!(
+                !underlay.is_empty(),
+                "hide settle dest-reset must recapture wrapping in the dest-reset wipe, wipe={:?} dirty={:?}",
+                hide_reset.rect,
+                hide_dirty.bounds
+            );
+            assert!(
+                crate::app::draw_cull::node_present_restore_underlay(
+                    hide_dirty.key,
+                    hide_dirty.bounds,
+                    &hidden.node_paints,
+                ),
+                "hide settle must restore underlay fills under the dest-reset hole"
+            );
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+fn gallery_latest_hide_must_restore_wrapping_under_dest_reset() {
+    // Gallery last turn wraps under Latest. Hide-settle dest-reset CLEARs that
+    // pill hole; PartialLoad must recapture "removed from the tab order…".
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = gallery_wrap_under_jump_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            use_signal(
+                &scroll_offset_y_signal_key("ms-gallery-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            crate::style::set_css_transition_timeline_ms(200.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            settle_latest_jump_pose(&mut root);
+            let shown = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                btn.style.opacity > 0.5,
+                "scrolled away must show Latest, opacity={}",
+                btn.style.opacity
+            );
+            let shown_prev = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            )
+            .into_iter()
+            .find(|(k, _)| *k == btn_key)
+            .map(|(_, b)| b);
+
+            let max_y = use_signal(
+                &scroll_content_h_signal_key("ms-gallery-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .peek()
+                - use_signal(
+                    &scroll_viewport_h_signal_key("ms-gallery-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
+            use_signal(
+                &scroll_offset_y_signal_key("ms-gallery-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(max_y.max(0.0));
+            crate::style::set_css_transition_timeline_ms(200.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            crate::style::set_css_transition_timeline_ms(400.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let hide_dirties = crate::app::damage::take_frame_paint_nodes();
+            let hidden = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            assert!(
+                btn.style.opacity < 0.05,
+                "hide settle must reach opacity 0, got {}",
+                btn.style.opacity
+            );
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let hide_dirty = crate::app::damage::take_frame_paint_nodes()
+                .into_iter()
+                .chain(hide_dirties)
+                .find(|d| d.key == btn_key)
+                .expect("hide settle dest-reset dirty");
+            let hide_reset = crate::app::draw_cull::node_present_dest_reset_full(
+                hide_dirty.key,
+                hide_dirty.bounds,
+                &hidden.node_paints,
+                &hidden.instances,
+                &[],
+                &[],
+                1.0,
+                shown_prev,
+            )
+            .expect("hide settle dest-reset");
+            let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            let wipe_below = hide_reset.rect[1] + hide_reset.rect[3] - (pill[1] + pill[3]);
+            let wipe_pad_x = (hide_reset.rect[2] - pill[2]).max(0.0);
+            assert!(
+                wipe_below <= 22.0,
+                "Latest wipe must not hang a band under wrapping copy\n wipe_below={wipe_below} wipe={:?} pill={pill:?}",
+                hide_reset.rect
+            );
+            assert!(
+                wipe_pad_x <= 32.0,
+                "Latest wipe must stay on the pill+halo, not expand into wrapping\n wipe_pad_x={wipe_pad_x} wipe={:?} pill={pill:?}",
+                hide_reset.rect
+            );
+            let wipe_clip = crate::app::draw_cull::node_present_glyph_clip_logical(
+                &hide_dirty,
+                Some(hide_reset.rect),
+                1.0,
+            );
+            let wrap = hidden
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains("Got it. Stay at the"))
+                .or_else(|| {
+                    hidden
+                        .text_nodes
+                        .iter()
+                        .find(|t| t.text.contains("scroll button is a real button"))
+                })
+                .expect("gallery wrapping copy under Latest");
+            let wrap_ink = [wrap.x, wrap.y, wrap.width.max(0.0), wrap.height.max(0.0)];
+            assert!(
+                crate::app::damage::intersect_rects(wrap_ink, hide_reset.rect).is_some()
+                    || crate::app::draw_cull::text_hits_damage(wrap, hide_reset.rect),
+                "hide wipe must punch the wrapping paragraph, wipe={:?} wrap_ink={wrap_ink:?} clip={:?}",
+                hide_reset.rect,
+                wrap.clip_bounds
+            );
+            let underlay = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                &[hide_dirty],
+                &hidden.text_nodes,
+                &hidden.node_paints,
+                &[(hide_dirty.key, wipe_clip)],
+            );
+            let captured = underlay.iter().find(|t| {
+                t.text.contains("Got it. Stay at the")
+                    || t.text.contains("scroll button is a real button")
+            });
+            let wipe_cx = hide_reset.rect[0] + hide_reset.rect[2] * 0.5;
+            let wipe_cy = hide_reset.rect[1] + hide_reset.rect[3] * 0.5;
+            let clip_covers_wipe_center = captured.and_then(|t| t.clip_bounds).is_some_and(|c| {
+                wipe_cx >= c[0]
+                    && wipe_cy >= c[1]
+                    && wipe_cx <= c[0] + c[2]
+                    && wipe_cy <= c[1] + c[3]
+            });
+            let clip_stays_in_wipe = captured
+                .and_then(|t| t.clip_bounds)
+                .is_some_and(|c| c[2] < wrap.width - 8.0 && c[3] < hide_dirty.bounds[3] + 16.0);
+            let layout_kept = captured
+                .is_some_and(|t| (t.x - wrap.x).abs() < 1.0 && (t.width - wrap.width).abs() < 1.0);
+            assert!(
+                captured.is_some() && clip_covers_wipe_center && clip_stays_in_wipe && layout_kept,
+                "hide settle must recapture wrapping in the dest-reset hole without wrap-box TextBounds\n wipe={:?} dirty={:?} wrap_ink={wrap_ink:?} clip={:?} recapture_clip={:?} underlay={} restore={}",
+                hide_reset.rect,
+                hide_dirty.bounds,
+                wrap.clip_bounds,
+                captured.and_then(|t| t.clip_bounds),
+                underlay.len(),
+                crate::app::draw_cull::node_present_restore_underlay(
+                    hide_dirty.key,
+                    hide_dirty.bounds,
+                    &hidden.node_paints,
+                )
+            );
+            assert!(
+                crate::app::draw_cull::node_present_restore_underlay(
+                    hide_dirty.key,
+                    hide_dirty.bounds,
+                    &hidden.node_paints,
+                ),
+                "hide settle must restore underlay fills under the dest-reset hole"
+            );
+            assert!(
+                crate::app::draw_cull::node_present_needs_glyphs_scaled(
+                    hide_dirty.key,
+                    hide_dirty.bounds,
+                    &hidden.node_paints,
+                    &hidden.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    shown_prev,
+                ),
+                "hide settle dest-reset must enter glyph prepare or encode CLEARs without recapture"
+            );
+            assert!(
+                underlay.iter().all(|t| t.text != "Latest"),
+                "underlay must not stamp Latest into the thread / composer"
+            );
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+/// Production enter/exit dest-reset punched a large hole in Gallery Label wrap
+/// ("removed from the tab order…"). The Element.text hide canary stayed green
+/// because collect height / last-present / dirties differ from `<Label>`.
+#[test]
+fn gallery_label_latest_enter_exit_must_not_punch_wrap() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = gallery_label_wrap_under_jump_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            let max_y0 = use_signal(
+                &scroll_content_h_signal_key("ms-gallery-label-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .peek()
+                - use_signal(
+                    &scroll_viewport_h_signal_key("ms-gallery-label-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
+            // A few px off the live edge: Latest shows and still overlaps the
+            // last Label. A large delta drops that paragraph below the clip.
+            use_signal(
+                &scroll_offset_y_signal_key("ms-gallery-label-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent((max_y0 - 20.0).max(0.0));
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            crate::style::set_css_transition_timeline_ms(200.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            settle_latest_jump_pose(&mut root);
+            let shown = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let dock = find_parent_of_slot(&root, "message-scroller-button").expect("jump dock");
+            let scroller = find_slot(&root, "message-scroller").expect("scroller");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            let dock_key = u64::from(dock.layout_node.expect("dock taffy"));
+            let scroller_key = u64::from(scroller.layout_node.expect("scroller taffy"));
+            assert!(
+                btn.style.opacity > 0.5,
+                "scrolled away must show Latest, opacity={}",
+                btn.style.opacity
+            );
+            let shown_present = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let wrap = shown
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains("scroll button is a real button"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "gallery Label wrap missing; texts={:?}",
+                        shown
+                            .text_nodes
+                            .iter()
+                            .map(|t| t.text.chars().take(40).collect::<String>())
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let wrap_ink = [wrap.x, wrap.y, wrap.width.max(0.0), wrap.height.max(0.0)];
+            let dump =
+                format!(
+                "wrap_ink={wrap_ink:?} clip={:?} btn_prev={:?} dock_prev={:?} scroller_prev={:?}",
+                wrap.clip_bounds,
+                shown_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
+                shown_present.iter().find(|(k, _)| *k == dock_key).map(|(_, b)| *b),
+                shown_present
+                    .iter()
+                    .find(|(k, _)| *k == scroller_key)
+                    .map(|(_, b)| *b),
+            );
+            assert!(
+                wrap.height > 28.0,
+                "Label leading=normal wrap must collect the full ink box, not a first-line strut\n{dump}"
+            );
+
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let mut enter_dirties = crate::app::damage::take_frame_paint_nodes();
+            crate::app::damage::expand_paint_dirties_for_translated_slots(
+                &mut enter_dirties,
+                &shown_present,
+                &[],
+            );
+            assert_latest_wipe_restores_wrap(
+                "enter",
+                &enter_dirties,
+                &shown,
+                &shown_present,
+                wrap,
+                btn,
+                btn_key,
+                dock_key,
+                scroller_key,
+                &dump,
+            );
+
+            crate::app::damage::clear_frame_paint_nodes();
+            settle_latest_hide_pose(&mut root);
+            let hidden = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            crate::app::damage::clear_frame_paint_nodes();
+            crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+            let mut hide_all = crate::app::damage::take_frame_paint_nodes();
+            let hidden_present = crate::app::draw_cull::last_present_visual_slots(
+                &hidden.node_paints,
+                &hidden.instances,
+                &[],
+                &hidden.text_nodes,
+                &[],
+            );
+            crate::app::damage::expand_paint_dirties_for_translated_slots(
+                &mut hide_all,
+                &hidden_present,
+                &shown_present,
+            );
+            let wrap = hidden
+                .text_nodes
+                .iter()
+                .find(|t| t.text.contains("scroll button is a real button"))
+                .expect("gallery Label wrap after hide");
+            assert_latest_wipe_restores_wrap(
+                "hide",
+                &hide_all,
+                &hidden,
+                &shown_present,
+                wrap,
+                btn,
+                btn_key,
+                dock_key,
+                scroller_key,
+                &dump,
+            );
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+fn assert_latest_wipe_restores_wrap(
+    phase: &str,
+    dirties: &[crate::app::damage::PaintDirty],
+    result: &crate::layout::layout_tree::RenderResult,
+    prev: &[(u64, [f32; 4])],
+    wrap: &crate::layout::layout_tree::TextLayoutInfo,
+    btn: &Element,
+    _btn_key: u64,
+    dock_key: u64,
+    scroller_key: u64,
+    dump: &str,
+) {
+    let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+    let wrap_ink = [wrap.x, wrap.y, wrap.width.max(0.0), wrap.height.max(0.0)];
+    assert!(
+        dirties
+            .iter()
+            .any(|d| d.kind == crate::app::damage::PaintDirtyKind::Node),
+        "{phase}: Latest CSS still dirties the overlay slot, got {dirties:?}\n{dump}"
+    );
+    let mut saw_hide_wipe = false;
+    for d in dirties
+        .iter()
+        .filter(|d| d.kind == crate::app::damage::PaintDirtyKind::Node)
+    {
+        let reset = crate::app::draw_cull::node_present_dest_reset_full(
+            d.key,
+            d.bounds,
+            &result.node_paints,
+            &result.instances,
+            &[],
+            &[],
+            1.0,
+            prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
+        );
+        let Some(reset) = reset else {
+            continue;
+        };
+        let wipe = reset.rect;
+        if crate::app::damage::intersect_rects(wipe, wrap_ink).is_none()
+            && !crate::app::draw_cull::text_hits_damage(wrap, wipe)
+        {
+            continue;
+        }
+        assert!(
+            d.key != scroller_key && d.key != dock_key,
+            "{phase}: stacking-context / dock dest-reset punched wrap\n wipe={wipe:?} dirty={:?} pill={pill:?} wrap={wrap_ink:?}\n{dump}",
+            d.bounds
+        );
+        assert!(
+            wipe[2] <= pill[2] + 72.0,
+            "{phase}: Latest wipe too wide for the pill\n key={} wipe={wipe:?} dirty={:?} pill={pill:?} wrap={wrap_ink:?}\n{dump}",
+            d.key,
+            d.bounds
+        );
+        let wipe_clip = crate::app::draw_cull::node_present_glyph_clip_logical(d, Some(wipe), 1.0);
+        let underlay = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+            &[*d],
+            &result.text_nodes,
+            &result.node_paints,
+            &[(d.key, wipe_clip)],
+        );
+        let captured = underlay
+            .iter()
+            .find(|t| t.text.contains("scroll button is a real button"));
+        let cx = wipe[0] + wipe[2] * 0.5;
+        let cy = wipe[1] + wipe[3] * 0.5;
+        let area_covers = captured.is_some_and(|t| {
+            let box_h = t.height.max(t.clip_bounds.map(|c| c[3]).unwrap_or(0.0));
+            let box_w = t.width.max(t.clip_bounds.map(|c| c[2]).unwrap_or(0.0));
+            cx >= t.x && cy >= t.y && cx <= t.x + box_w && cy <= t.y + box_h
+        });
+        let clip_covers = captured
+            .and_then(|t| t.clip_bounds)
+            .is_some_and(|c| cx >= c[0] && cy >= c[1] && cx <= c[0] + c[2] && cy <= c[1] + c[3]);
+        assert!(
+            captured.is_some() && (area_covers || clip_covers),
+            "{phase}: dest-reset must recapture Label wrap in the wipe\n wipe={wipe:?} dirty={:?} wrap={wrap_ink:?} clip={:?} underlay={} area={area_covers} clip_hit={clip_covers}\n{dump}",
+            d.bounds,
+            wrap.clip_bounds,
+            underlay.len()
+        );
+        if let Some(t) = captured {
+            assert!(
+                (t.x - wrap.x).abs() < 1.0 && (t.width - wrap.width).abs() < 1.0,
+                "{phase}: recapture must keep wrap layout origin/width\n run=({},{}) wrap=({},{})\n{dump}",
+                t.x,
+                t.width,
+                wrap.x,
+                wrap.width
+            );
+            let clip = t.clip_bounds.expect("wrap recapture clip");
+            assert!(
+                clip[2] < wrap.width - 8.0 && clip[3] < 80.0,
+                "{phase}: glyphon TextBounds must stay the wipe or wrapping stamps onto Latest\n clip={clip:?} wipe_clip={wipe_clip:?} wrap_w={}\n{dump}",
+                wrap.width
+            );
+        }
+        let late = crate::app::draw_cull::node_present_capture_text_indices(
+            &[*d],
+            &result.text_nodes,
+            &result.node_paints,
+        );
+        let leaked: Vec<&str> = result
+            .text_nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| late.contains(i) && t.text.contains("scroll button is a real button"))
+            .map(|(_, t)| t.text.as_str())
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "{phase}: post-overlay capture must not stamp wrapping onto Latest, leaked={leaked:?}\n{dump}"
+        );
+        saw_hide_wipe = true;
+    }
+    assert!(
+        saw_hide_wipe,
+        "{phase}: hide settle must dest-reset the pill and recapture wrap\n dirties={dirties:?} wrap={wrap_ink:?} pill={pill:?}\n{dump}"
+    );
+}
+
+#[test]
 fn message_scroller_jump_button_hides_after_follow_without_second_sync() {
     // Production: pre-layout reactive_sync walks the dock before the viewport, then
     // `sync_message_scroller_follow_after_layout` snaps offset to end. Without a
@@ -1541,8 +2386,16 @@ fn message_scroller_latest_hover_must_not_dirty_message_list() {
                     "underlay recapture must clip wrapping messages to the dest-reset hole",
                 );
                 assert!(
-                    clip[2] <= hole[2] + 1.0 && clip[3] <= hole[3] + 1.0,
-                    "wrapping message restore must stay in the dest-reset hole\n clip={clip:?} hole={hole:?} run=({},{},{},{})",
+                    crate::app::damage::intersect_rects(clip, hole).is_some(),
+                    "wrapping restore must overlap the dest-reset hole\n clip={clip:?} hole={hole:?} run=({},{},{},{})",
+                    n.x,
+                    n.y,
+                    n.width,
+                    n.height
+                );
+                assert!(
+                    clip[2] < n.width - 8.0 && clip[3] < 80.0,
+                    "glyphon TextBounds must stay the wipe or wrapping stamps onto Latest\n clip={clip:?} hole={hole:?} run=({},{},{},{})",
                     n.x,
                     n.y,
                     n.width,
@@ -1680,18 +2533,37 @@ fn message_scroller_latest_dest_reset_must_not_punch_overlay_scrollbar() {
                     reset.rect
                 );
             }
-            let vp = find_slot(&root, "message-scroller-viewport")
-                .expect("viewport")
-                .layout_bounds;
-            let pins = crate::app::damage::message_scroller_jump_scroll_blit_pins(&root, &[vp]);
+            let vp_el = find_slot(&root, "message-scroller-viewport").expect("viewport");
+            let vp = vp_el.layout_bounds;
+            let vp_id = vp_el
+                .focus_id
+                .as_deref()
+                .and_then(|id| {
+                    id.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+                })
+                .unwrap_or("ms-layout-test:viewport")
+                .to_string();
+            let btn_vis = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            let pins = crate::app::damage::out_of_flow_scroll_blit_pins(&root, &[vp_id], &[vp]);
             assert!(
-                pins.iter().any(|p| p[2] > 0.0 && p[3] > 0.0),
-                "active Latest must pin every scroll blit, got {pins:?}"
+                pins.iter()
+                    .any(|p| crate::app::damage::intersect_rects(*p, btn_vis)
+                        .is_some_and(|h| h[2] > 8.0 && h[3] > 8.0)),
+                "active Latest must pin every scroll blit, got {pins:?} btn={btn_vis:?}"
             );
             assert!(
                 pins.iter()
                     .all(|p| crate::app::damage::intersect_rects(*p, bar_box).is_none()),
                 "Latest scroll-blit pin must stay off the overlay rail, pins={pins:?} bar={bar_box:?}"
+            );
+            let smeared = crate::app::damage::smear_out_of_flow_after_strip_blit(
+                &pins,
+                &[vp],
+                &[[0.0, 48.0]],
+            );
+            assert!(
+                smeared.iter().any(|p| p[3] > 0.5 && p[1] + 1.0 < btn_vis[1]),
+                "strip blit must dest-reset Latest occupancy after the copy, smeared={smeared:?} btn={btn_vis:?}"
             );
         });
     });
@@ -1789,34 +2661,30 @@ fn message_scroller_latest_show_dest_reset_stays_on_the_pill() {
                 hidden_present.iter().find(|(k, _)| *k == dock_key).map(|(_, b)| *b),
                 shown_present.iter().find(|(k, _)| *k == dock_key).map(|(_, b)| *b),
             );
-            let hidden_dock = hidden_present
+            if let Some(hidden_dock) = hidden_present
                 .iter()
                 .find(|(k, _)| *k == dock_key)
                 .map(|(_, b)| *b)
-                .expect("dock last-present while hidden");
-            let shown_dock = shown_present
-                .iter()
-                .find(|(k, _)| *k == dock_key)
-                .map(|(_, b)| *b)
-                .expect("dock last-present while shown");
-            assert!(
-                hidden_dock[2] > pill[2] + 40.0 && shown_dock[2] > pill[2] + 40.0,
-                "precondition: dock last-present is the full-width bar\n{dump}"
-            );
-            assert!(
-                hidden_dock[3] <= pill[3] + 8.0 && shown_dock[3] <= pill[3] + 8.0,
-                "dock last-present must not union the pill shadow/scale\n{dump}"
-            );
-            assert!(
-                !crate::app::damage::node_present_slot_moved(hidden_dock, shown_dock),
-                "Latest show must not look like a translated dock\n{dump}"
-            );
+            {
+                let shown_dock = shown_present
+                    .iter()
+                    .find(|(k, _)| *k == dock_key)
+                    .map(|(_, b)| *b)
+                    .expect("dock last-present while shown");
+                assert!(
+                    hidden_dock[3] <= pill[3] + 8.0 && shown_dock[3] <= pill[3] + 8.0,
+                    "dock last-present must not union the pill shadow/scale\n{dump}"
+                );
+                assert!(
+                    !crate::app::damage::node_present_slot_moved(hidden_dock, shown_dock),
+                    "Latest show must not look like a translated dock\n{dump}"
+                );
+            }
             assert!(
                 !dirties.iter().any(|d| d.key == dock_key),
                 "full-width dock must not dest-reset on Latest show\n{dump}"
             );
             let max_w = pill[2] + 72.0;
-            let max_bottom = pill[1] + pill[3] + 40.0;
             let jump_dirties: Vec<_> = dirties
                 .iter()
                 .filter(|d| d.key == btn_key || d.key == dock_key)
@@ -1824,7 +2692,7 @@ fn message_scroller_latest_show_dest_reset_stays_on_the_pill() {
                 .collect();
             assert!(
                 !jump_dirties.is_empty(),
-                "Latest show must dest-reset the pill\n{dump}"
+                "Latest show still dirties the overlay slot (src-over redraw)\n{dump}"
             );
             for d in &jump_dirties {
                 let scissor = crate::app::draw_cull::node_present_scissor_logical(
@@ -1835,6 +2703,10 @@ fn message_scroller_latest_show_dest_reset_stays_on_the_pill() {
                     &shown.node_paints,
                     crate::app::draw_cull::node_present_scissor_pad(d.kind),
                 );
+                let prev = hidden_present
+                    .iter()
+                    .find(|(k, _)| *k == d.key)
+                    .map(|(_, b)| *b);
                 let reset = crate::app::draw_cull::node_present_dest_reset_full(
                     d.key,
                     d.bounds,
@@ -1843,35 +2715,44 @@ fn message_scroller_latest_show_dest_reset_stays_on_the_pill() {
                     &[],
                     &[],
                     1.0,
-                    hidden_present
-                        .iter()
-                        .find(|(k, _)| *k == d.key)
-                        .map(|(_, b)| *b),
+                    prev,
                 );
-                let reset_rect = reset.as_ref().map(|r| r.rect);
+                if let Some(reset) = reset {
+                    assert!(
+                        reset.rect[2] <= max_w,
+                        "shown Latest dest-reset must stay on the pill, not a wrapping band\n wipe={:?} dirty={:?}\n{dump}",
+                        reset.rect,
+                        d.bounds
+                    );
+                    assert!(
+                        crate::app::damage::intersect_rects(reset.rect, bar_box).is_none(),
+                        "shown Latest dest-reset must not punch the overlay scrollbar\n wipe={:?}\n{dump}",
+                        reset.rect
+                    );
+                    assert!(
+                        crate::app::draw_cull::node_present_flush_layered_underlay_glyphs(
+                            d.key,
+                            d.bounds,
+                            &shown.node_paints,
+                        ),
+                        "leftover dest-reset must recapture wrapping in the wipe\n{dump}"
+                    );
+                } else {
+                    assert!(
+                        prev.is_none_or(|b| b[2] <= 0.5 || b[3] <= 0.5),
+                        "first visible Latest src-overs wrapping; leftover last-present must dest-reset\n prev={prev:?} dirty={:?}\n{dump}",
+                        d.bounds
+                    );
+                }
                 assert!(
                     scissor[2] <= max_w,
-                    "Latest dest-reset/scissor must stay on the pill, not a wrapping band\n scissor={scissor:?} dirty={:?} reset={reset_rect:?}\n{dump}",
+                    "Latest scissor must stay on the pill, not a wrapping band\n scissor={scissor:?} dirty={:?}\n{dump}",
                     d.bounds
                 );
                 assert!(
                     crate::app::damage::intersect_rects(scissor, bar_box).is_none(),
                     "scissor must not punch the overlay scrollbar\n scissor={scissor:?}\n{dump}"
                 );
-                if let Some(wipe) = reset_rect {
-                    assert!(
-                        wipe[2] <= max_w,
-                        "dest-reset wipe too wide\n wipe={wipe:?}\n{dump}"
-                    );
-                    assert!(
-                        wipe[1] + wipe[3] <= max_bottom,
-                        "dest-reset halo must stay near the pill, not a wrapping band\n wipe={wipe:?} pill={pill:?}\n{dump}"
-                    );
-                    assert!(
-                        crate::app::damage::intersect_rects(wipe, bar_box).is_none(),
-                        "dest-reset must not punch the overlay scrollbar\n wipe={wipe:?}\n{dump}"
-                    );
-                }
             }
         });
     });

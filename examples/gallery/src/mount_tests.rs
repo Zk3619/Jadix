@@ -1191,6 +1191,129 @@ fn data_section_scroll_metrics_stable_across_offsets() {
     });
 }
 
+/// First paint of the data page shows invoice + data_table cells; the next
+/// paint-only / hover chrome frame must keep them (gallery flash / empty rows).
+#[test]
+fn data_section_table_texts_survive_skip_and_hover() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree =
+                    rui::core::reactivity::isolate_reads(|| gallery_section_body("data"));
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let first = layout.build_and_layout(&mut tree, 1280.0, 800.0, [-1.0, -1.0]);
+                let texts = |r: &rui::core::tree::RenderResult| {
+                    r.text_nodes
+                        .iter()
+                        .map(|n| n.text.clone())
+                        .collect::<Vec<_>>()
+                };
+                let t0 = texts(&first);
+                // Invoice composite is in-tree (not a reactive_view island).
+                // data_table cells wait on remount drain — assert those in rui table_paint.
+                for needle in ["INV001", "Paid", "$250.00", "INV002", "Invoice"] {
+                    assert!(
+                        t0.iter().any(|t| t.contains(needle)),
+                        "first collect must paint `{needle}`; texts={t0:?}"
+                    );
+                }
+
+                layout.set_collect_skip_allowed(true);
+                let _ = layout.build_and_layout_fast(
+                    &mut tree,
+                    1280.0,
+                    800.0,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                );
+                let skipped = layout.build_and_layout_fast(
+                    &mut tree,
+                    1280.0,
+                    800.0,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                );
+                let t1 = texts(&skipped);
+                for needle in ["INV001", "Paid", "$250.00", "INV002"] {
+                    assert!(
+                        t1.iter().any(|t| t.contains(needle)),
+                        "paint-only skip must keep `{needle}`; texts={t1:?}"
+                    );
+                }
+
+                let (mouse, on_hover) = {
+                    fn find_row<'a>(
+                        el: &'a rui::core::tree::Element,
+                    ) -> Option<&'a rui::core::tree::Element> {
+                        if el.focus_id.as_deref() == Some("inv-0") {
+                            return Some(el);
+                        }
+                        for c in &el.children {
+                            if let Some(hit) = find_row(c) {
+                                return Some(hit);
+                            }
+                        }
+                        None
+                    }
+                    let row = find_row(&tree).expect("inv-0 row");
+                    let b = row.layout_bounds;
+                    (
+                        [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5],
+                        row.on_hover.clone(),
+                    )
+                };
+                if let Some(hover) = on_hover {
+                    hover.borrow_mut()(true);
+                }
+                let mut impact = rui::core::tree::LayoutStatus::Clean;
+                rui::style::sync_class_variants_subtree(
+                    &mut tree,
+                    mouse,
+                    "",
+                    false,
+                    1280.0,
+                    800.0,
+                    &mut layout,
+                    &mut impact,
+                );
+                rui::style::tick_active_css_transitions_subtree(
+                    &mut tree,
+                    mouse,
+                    "",
+                    false,
+                    1280.0,
+                    800.0,
+                    [0.0, 0.0],
+                    &mut layout,
+                    &mut impact,
+                );
+                let hovered = layout.build_and_layout_fast(
+                    &mut tree,
+                    1280.0,
+                    800.0,
+                    mouse,
+                    true,
+                    false,
+                );
+                let t2 = texts(&hovered);
+                for needle in ["INV001", "Paid", "$250.00", "INV002"] {
+                    assert!(
+                        t2.iter().any(|t| t.contains(needle)),
+                        "hover chrome must not drop `{needle}`; texts={t2:?}"
+                    );
+                }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
 #[test]
 fn forms_input_showcase_mark_invalid_button_has_caption() {
     rui::app::reactive::reset_registered_anchors();
@@ -2262,6 +2385,78 @@ fn attachment_live_state_chip_is_not_clipped_by_group() {
                     b[0] >= 0.0 && b[0] + b[2] <= 720.0 + 1.0,
                     "live chip must stay inside the card, not past the overflow clip; bounds={b:?}"
                 );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+/// Gallery 基础「Status (Marker inside Message)」: shimmer caption must keep the
+/// full 「Oliver is typing...」 ink. Nested Message `min-w-0` used to clip it to
+/// 「Oliver i」 while dest-reset flashed the stub.
+#[test]
+fn basics_oliver_is_typing_shimmer_must_keep_full_ink() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MessageShowcase(MessageShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                for &(w, h) in &[(400.0, 900.0), (720.0, 900.0)] {
+                    let result = layout.build_and_layout(&mut tree, w, h, [-1.0, -1.0]);
+                    let caption = result
+                        .text_nodes
+                        .iter()
+                        .find(|n| n.text.contains("Oliver is typing"))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "missing Oliver is typing... at {w}x{h}; olivers={:?}",
+                                result
+                                    .text_nodes
+                                    .iter()
+                                    .filter(|n| n.text.contains("Oliver"))
+                                    .map(|n| format!(
+                                        "{:?} {:.1}x{:.1} clip={:?}",
+                                        n.text, n.width, n.height, n.clip_bounds
+                                    ))
+                                    .collect::<Vec<_>>()
+                            )
+                        });
+                    let ink = caption
+                        .prepared
+                        .as_ref()
+                        .map(rui::text::intrinsic_width)
+                        .unwrap_or(0.0);
+                    assert!(
+                        caption.text.contains("Oliver is typing"),
+                        "caption string truncated at {w}x{h}: {:?}",
+                        caption.text
+                    );
+                    assert!(
+                        caption.width + 1.0 >= ink,
+                        "Status (Marker inside Message) caption box too narrow at {w}x{h}\n \
+                         box={:.1}x{:.1} ink={:.1} clip={:?} fx={:?} text={:?}",
+                        caption.width,
+                        caption.height,
+                        ink,
+                        caption.clip_bounds,
+                        caption.glyph_fx,
+                        caption.text
+                    );
+                    if let Some(clip) = caption.clip_bounds {
+                        assert!(
+                            clip[2] + 1.0 >= ink,
+                            "caption collect clip crops Oliver is typing... at {w}x{h}\n \
+                             clip={clip:?} ink={ink:.1} box_w={:.1}",
+                            caption.width
+                        );
+                    }
+                }
             });
         });
         rui::app::reactive::reset_registered_anchors();

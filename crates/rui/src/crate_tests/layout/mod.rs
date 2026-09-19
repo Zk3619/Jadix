@@ -38,6 +38,7 @@ mod stack_budget;
 mod subtree_promote;
 #[cfg(feature = "svg")]
 mod svg_scene;
+mod table_paint;
 mod tabs_sibling_text_present;
 mod virtual_list_scroll;
 mod virtual_masonry_scroll;

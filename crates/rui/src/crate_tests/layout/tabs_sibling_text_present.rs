@@ -326,3 +326,143 @@ fn equal_height_tab_switch_must_not_fullclear_or_wipe_8b_text() {
         }
     }
 }
+
+/// C5: the handshake is `display: none` ↔ shown, not `data-slot=tabs-content`.
+#[test]
+fn display_none_toggle_without_product_slot_must_not_page_fullclear() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use taffy::style::Display;
+
+    let show = Rc::new(Cell::new(true));
+    let show_sync = show.clone();
+    let mut panel = Element::new().w(200.0).h(40.0).text("panel");
+    panel = panel.reactive_sync(move |el, _lt| {
+        let want = if show_sync.get() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if el.style.display == want {
+            return LayoutStatus::Clean;
+        }
+        el.style.display = want;
+        LayoutStatus::LayoutChanged
+    });
+    let sibling = Element::new().text(SIB_TITLE).w(200.0).h(24.0);
+    let mut root = Element::from(vstack().w(480.0).child(panel).child(sibling));
+
+    let mut tree = LayoutTree::new();
+    let mut impact0 = LayoutStatus::Clean;
+    let mut collect0 = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact0,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect0,
+    );
+    let _ = tree.build_and_layout(&mut root, 640.0, 720.0, [-1.0, -1.0]);
+    assert!(
+        root.children[0].attrs.get("data-slot").is_none(),
+        "repro must not stamp a product slot"
+    );
+
+    show.set(false);
+    let mut impact = LayoutStatus::Clean;
+    let mut collect = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect,
+    );
+    assert_eq!(impact, LayoutStatus::LayoutChanged);
+    assert!(
+        !collect.page_layout_changed,
+        "display:none toggle must not page-FullClear without a product slot; collect={collect:?}"
+    );
+    assert!(
+        !force_full_redraw_after_chrome(
+            LayoutStatus::Clean,
+            impact,
+            collect.page_layout_changed,
+            false,
+            true,
+            false,
+        ),
+        "local display toggle must PartialLoad"
+    );
+}
+
+#[test]
+fn size_layout_changed_still_marks_page_geometry() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let h = Rc::new(Cell::new(40.0_f32));
+    let h_sync = h.clone();
+    let mut box_el = Element::new().w(200.0).h(40.0);
+    box_el = box_el.reactive_sync(move |el, _lt| {
+        let want = h_sync.get();
+        let cur = match crate::core::tree::dim_kind(el.style.size.height) {
+            crate::core::tree::DimKind::Length(v) => v,
+            _ => -1.0,
+        };
+        if (cur - want).abs() <= 0.5 {
+            return LayoutStatus::Clean;
+        }
+        el.style.set_css_dim(
+            crate::core::tree::UnitSlot::Height,
+            crate::layout::dimension::CssDim::Px(want),
+        );
+        LayoutStatus::LayoutChanged
+    });
+    let mut root = Element::from(
+        vstack()
+            .w(480.0)
+            .child(box_el)
+            .child(Element::new().text(SIB_TITLE)),
+    );
+
+    let mut tree = LayoutTree::new();
+    let mut impact0 = LayoutStatus::Clean;
+    let mut collect0 = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact0,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect0,
+    );
+    let _ = tree.build_and_layout(&mut root, 640.0, 720.0, [-1.0, -1.0]);
+
+    h.set(120.0);
+    let mut impact = LayoutStatus::Clean;
+    let mut collect = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect,
+    );
+    assert_eq!(impact, LayoutStatus::LayoutChanged);
+    assert!(
+        collect.page_layout_changed,
+        "authored size change is page geometry, not a display toggle"
+    );
+}

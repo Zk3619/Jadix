@@ -1,6 +1,8 @@
 //! Input clearable + password_toggle adornments.
 
-use crate::app::damage::take_frame_paint_nodes;
+use crate::app::damage::{
+    expand_paint_dirties_for_translated_slots, take_frame_paint_nodes,
+};
 use crate::app::draw_cull::node_present_dest_reset_full;
 use crate::components::input::{
     focus_id_for_input, input, input_password_reveal_signal_key, input_value_signal_key, InputType,
@@ -295,10 +297,9 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
     )
     .set(Some(value.len()));
 
-    let mut el: Element = input(id).clearable(true).w(240.0).into();
+    let el: Element = input(id).clearable(true).w(240.0).into();
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
 
     let mut root = Element::new()
         .w(280.0)
@@ -306,6 +307,10 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
         .p(8.0)
         .bg([0.96, 0.96, 0.97, 1.0])
         .child(el);
+    // Viewport must exist before paint sync: otherwise `scroll_x` stays 0, the
+    // end caret sits past the leaf clip, and collect emits no I-beam.
+    let _ = tree.build_and_layout(&mut root, 280.0, 80.0, [-1.0, -1.0]);
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
     let result = tree.build_and_layout(&mut root, 280.0, 80.0, [-1.0, -1.0]);
 
     let field = find_tid(&root, id).expect("input chrome");
@@ -380,6 +385,10 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
         result.textured_draws.len()
     );
 
+    assert!(
+        !result.input_chrome_instances.is_empty(),
+        "focused long CJK must collect an I-beam after post-layout paint sync"
+    );
     let inner_right = rect_right(field_b) - border_w;
     for caret in &result.input_chrome_instances {
         let caret_r = caret.rect_pos[0] + caret.rect_size[0];
@@ -416,9 +425,35 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
         &result.text_nodes,
         &result.input_chrome_instances,
     );
-    let mut saw_wipe = false;
-    for d in &dirties {
-        let prev = prev_slots.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b);
+    let off_slots = crate::app::draw_cull::last_present_visual_slots(
+        &result.node_paints,
+        &result.instances,
+        &scaled_tex,
+        &result.text_nodes,
+        &[],
+    );
+    let mut live_dirties = dirties.clone();
+    expand_paint_dirties_for_translated_slots(&mut live_dirties, &off_slots, &prev_slots);
+    expand_paint_dirties_for_translated_slots(&mut live_dirties, &prev_slots, &off_slots);
+    let mut saw_overlay = false;
+    for d in &live_dirties {
+        if crate::app::draw_cull::paint_dirty_is_caret_overlay(
+            d,
+            &result.node_paints,
+            &result.instances,
+        ) {
+            saw_overlay = true;
+            assert!(
+                d.bounds[2] < text_b[2] * 0.25,
+                "blink dirty must be the I-beam, not the flex-grown text leaf\n dirty={:?} text={text_b:?}",
+                d.bounds
+            );
+            continue;
+        }
+        let prev = prev_slots
+            .iter()
+            .find(|(k, _)| *k == d.key)
+            .map(|(_, b)| *b);
         let Some(reset) = node_present_dest_reset_full(
             d.key,
             d.bounds,
@@ -431,7 +466,6 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
         ) else {
             continue;
         };
-        saw_wipe = true;
         let wipe = reset.rect;
         assert!(
             !rect_contains_point(wipe, stroke_x, stroke_y),
@@ -445,8 +479,8 @@ fn long_value_must_not_cover_clear_or_paint_caret_on_border() {
         );
     }
     assert!(
-        saw_wipe,
-        "page fill behind a transparent Input must dest-reset the I-beam"
+        saw_overlay,
+        "focused caret blink must be a swapchain overlay (no dest-reset of the I-beam)"
     );
 }
 
@@ -577,14 +611,13 @@ fn gallery_flex_grow_short_value_clear_and_caret_stroke() {
     )
     .set(Some(value.len()));
 
-    let mut a: Element = input(id).clearable(true).flex_grow(1.0).into();
+    let a: Element = input(id).clearable(true).flex_grow(1.0).into();
     let b: Element = input("gal-s2-input-b")
         .clearable(true)
         .flex_grow(1.0)
         .into();
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_text_edit_paint_subtree(&mut a, &mut tree, &mut impact);
 
     let mut root = Element::new()
         .w(480.0)
@@ -599,6 +632,8 @@ fn gallery_flex_grow_short_value_clear_and_caret_stroke() {
                 .child(a)
                 .child(b),
         );
+    let _ = tree.build_and_layout(&mut root, 480.0, 80.0, [-1.0, -1.0]);
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
     let result = tree.build_and_layout(&mut root, 480.0, 80.0, [-1.0, -1.0]);
 
     let field = find_tid(&root, id).expect("input chrome");
@@ -687,9 +722,38 @@ fn gallery_flex_grow_short_value_clear_and_caret_stroke() {
         &result.text_nodes,
         &result.input_chrome_instances,
     );
-    let mut saw_wipe = false;
-    for d in &dirties {
-        let prev = prev_slots.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b);
+    // Blink OFF has no I-beam chrome. Last-present must not record a 0×0 box at
+    // the flex-leaf origin — expand would union that with the I-beam and dirty
+    // "2222" plus the empty stretch (live PartialLoad path).
+    let off_slots = crate::app::draw_cull::last_present_visual_slots(
+        &result.node_paints,
+        &result.instances,
+        &scaled_tex,
+        &result.text_nodes,
+        &[],
+    );
+    let mut live_dirties = dirties.clone();
+    expand_paint_dirties_for_translated_slots(&mut live_dirties, &off_slots, &prev_slots);
+    expand_paint_dirties_for_translated_slots(&mut live_dirties, &prev_slots, &off_slots);
+    let mut saw_overlay = false;
+    for d in &live_dirties {
+        if crate::app::draw_cull::paint_dirty_is_caret_overlay(
+            d,
+            &result.node_paints,
+            &result.instances,
+        ) {
+            saw_overlay = true;
+            assert!(
+                d.bounds[2] < text_b[2] * 0.25,
+                "blink dirty must be the I-beam, not the flex-grown text leaf\n dirty={:?} text={text_b:?}",
+                d.bounds
+            );
+            continue;
+        }
+        let prev = prev_slots
+            .iter()
+            .find(|(k, _)| *k == d.key)
+            .map(|(_, b)| *b);
         let Some(reset) = node_present_dest_reset_full(
             d.key,
             d.bounds,
@@ -702,7 +766,6 @@ fn gallery_flex_grow_short_value_clear_and_caret_stroke() {
         ) else {
             continue;
         };
-        saw_wipe = true;
         let wipe = reset.rect;
         assert!(
             !rect_contains_point(wipe, stroke_x, stroke_y),
@@ -714,14 +777,9 @@ fn gallery_flex_grow_short_value_clear_and_caret_stroke() {
             "caret dest-reset must not erase the clear X\n wipe={wipe:?} clear={clear_b:?} dirty={:?}",
             d.bounds
         );
-        assert!(
-            d.bounds[2] < text_b[2] * 0.5,
-            "blink dirty must be the I-beam, not the flex-grown text leaf\n dirty={:?} text={text_b:?}",
-            d.bounds
-        );
     }
     assert!(
-        saw_wipe,
-        "page fill behind a transparent Input must dest-reset the I-beam (else PartialLoad keeps the remnant)"
+        saw_overlay,
+        "focused caret blink must be a swapchain overlay (else dest-reset punches Search)"
     );
 }

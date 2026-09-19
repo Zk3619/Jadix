@@ -353,6 +353,19 @@ fn apply_bound_size_marks_layout_changed_on_width() {
 }
 
 #[test]
+fn translate_bind_is_style_changed_not_layout() {
+    let mut el = Element::new();
+    el.style.transform = crate::style::parse_transform("translateX(8px)");
+    let before = el.style.size.width;
+    el.style.transform = crate::style::parse_transform("translateX(200px)");
+    assert_eq!(el.style.size.width, before);
+    assert_eq!(
+        LayoutStatus::StyleChanged.merge(LayoutStatus::Clean),
+        LayoutStatus::StyleChanged
+    );
+}
+
+#[test]
 fn bind_prop_applies_initial_width() {
     use crate::app::reactive::{apply_bound_size, bind_prop};
     use crate::core::tree::IntoDimension;

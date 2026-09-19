@@ -371,6 +371,7 @@ pub(crate) fn GallerySectionBasics() -> Element {
                     <RemoteAssetShowcase />
                     <AnimationShowcase />
                     <WaapiShowcase />
+                    <GeneratorShowcase />
                     <TypographyShowcase />
                 </VStack>
             </ScrollArea>
@@ -491,7 +492,7 @@ pub(crate) fn build_gallery_app() -> Element {
                                 </When>
                                 <When when={section.get() == "basics"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
-                                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Marker · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 编程式句柄 · 排版装饰"
+                                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Marker · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 编程式句柄 · 生成器内核 · 排版装饰"
                                     </Label>
                                 </When>
                             </Match>

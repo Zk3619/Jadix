@@ -75,6 +75,50 @@ fn scroll_only_sibling_band_cull_skips_far_offscreen_rows() {
     );
 }
 
+/// End-anchored `scroll_only` must keep the live edge of an intrinsic-height
+/// column. The column is `h(max-content)` with no product `data-slot` — the
+/// collect skip is the CSS dim, not `message-scroller-content`.
+#[test]
+fn scroll_only_intrinsic_column_keeps_end_edge_visible() {
+    let mut col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w(80.0)
+        .h("max-content");
+    assert!(
+        col.attrs.get("data-slot").is_none(),
+        "synthetic column must not carry a product data-slot"
+    );
+    for _ in 0..16 {
+        col = col.child(
+            Element::new()
+                .w(80.0)
+                .h(48.0)
+                .flex_shrink(0.0)
+                .bg([1.0, 0.0, 0.0, 1.0]),
+        );
+    }
+    let mut root = Element::new()
+        .w(80.0)
+        .h(100.0)
+        .overflow_y("hidden")
+        .child(col);
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 80.0, 100.0, [-1.0, -1.0]);
+    root.scroll_offset = [0.0, 16.0 * 48.0 - 100.0];
+    let result = tree.build_and_layout_fast(&mut root, 80.0, 100.0, [-1.0, -1.0], true, false);
+    let visible = result
+        .instances
+        .iter()
+        .filter(|i| i.rect_pos[1] + i.rect_size[1] > -1.0 && i.rect_pos[1] < 101.0)
+        .count();
+    assert!(
+        visible > 0,
+        "max-content column scroll_only must keep the end-edge band (instances={}, visible={visible})",
+        result.instances.len(),
+    );
+}
+
 #[test]
 fn scroll_only_band_cull_keeps_stable_content_extent_with_overflowing_children() {
     // Cards with overflow:visible children taller than the card's Taffy box. Band cull must
