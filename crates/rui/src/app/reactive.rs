@@ -897,16 +897,12 @@ fn bind_text_width_is_specified(el: &Element) -> bool {
     })
 }
 
-/// Definite px/rem inline size (not `%`). A `min-w` Button can absorb Play/Pause
-/// `bind_text` without a page `LayoutChanged` (gallery CSS row hitch).
-fn element_has_definite_px_inline_size(el: &Element) -> bool {
-    crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w > 0.0)
-        || crate::layout::dim_length_px(el.style.min_size.width).is_some_and(|w| w > 0.0)
-}
-
 /// Leaf `bind_text` LayoutChanged whose used box is clamped by a px/`rem`
 /// ancestor (Play/Pause inside `min_w` Button). Skip promoting that to a page
 /// `LayoutChanged` — root Taffy compute hitch other CSS animations for a frame.
+///
+/// Requires a definite inline size **and** a positive laid-out (or authored)
+/// height so wrap rows under `%` width cannot absorb and leave footer Y stale.
 pub(crate) fn bind_layout_absorbed_by_specified_ancestor(root: &Element, path: &[usize]) -> bool {
     let mut el = root;
     for &i in path {
@@ -914,11 +910,24 @@ pub(crate) fn bind_layout_absorbed_by_specified_ancestor(root: &Element, path: &
             return false;
         }
         el = &el.children[i];
-        if element_has_definite_px_inline_size(el) {
+        if element_absorbs_leaf_layout(el) {
             return true;
         }
     }
     false
+}
+
+fn element_absorbs_leaf_layout(el: &Element) -> bool {
+    let definite_w = crate::layout::dim_length_px(el.style.size.width)
+        .or_else(|| crate::layout::dim_length_px(el.style.min_size.width))
+        .is_some_and(|w| w > 0.0);
+    if !definite_w {
+        return false;
+    }
+    let definite_h = crate::layout::dim_length_px(el.style.size.height)
+        .or_else(|| crate::layout::dim_length_px(el.style.min_size.height))
+        .is_some_and(|h| h > 0.0);
+    definite_h || el.layout_bounds[3] > 0.5
 }
 
 fn plain_text_leaf(el: &Element) -> bool {
@@ -1077,6 +1086,11 @@ where
             if status != LayoutStatus::Clean {
                 runtime::request_redraw();
             }
+        } else {
+            // Borrow held (or no tree yet): same idle retry as island reconcile miss.
+            // Unmounted miss is `Some(Clean)` + `note_bind_miss` and must not retry.
+            crate::core::reactivity::queue_running_effect_for_idle_retry();
+            runtime::request_redraw();
         }
     });
     REGISTERED_BINDINGS.with(|registry| {
@@ -1805,7 +1819,7 @@ phase={:<8}  stop={}  prevent={}",
     }
 
     #[test]
-    fn play_pause_inside_min_w_button_is_absorbed() {
+    fn bind_layout_absorb_min_w_button_is_absorbed() {
         let mut text = Element::new().text("Pause");
         text.layout_bounds = [8.0, 80.0, 48.0, 20.0];
         let mut btn = Element::new().min_w(76.0).child(text);
@@ -1823,6 +1837,20 @@ phase={:<8}  stop={}  prevent={}",
         assert!(
             !bind_layout_absorbed_by_specified_ancestor(&page, &[0]),
             "content-sized badge under % width page must still LayoutChanged"
+        );
+    }
+
+    #[test]
+    fn bind_layout_absorb_wrap_row_without_height_still_layouts() {
+        let mut text = Element::new().text("hi");
+        text.layout_bounds = [0.0, 0.0, 40.0, 16.0];
+        let mut row = Element::new().w(320.0).child(text);
+        row.layout_bounds = [0.0, 0.0, 320.0, 0.0];
+        let mut page = Element::new().w("100%").child(row);
+        page.layout_bounds = [0.0, 0.0, 320.0, 200.0];
+        assert!(
+            !bind_layout_absorbed_by_specified_ancestor(&page, &[0, 0]),
+            "% / wrap row with no laid-out height must not swallow leaf LayoutChanged (footer Y)"
         );
     }
 

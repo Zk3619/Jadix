@@ -864,7 +864,8 @@ mod tests {
         let on_b = hit_path(&root, 120.0, 40.0);
         let on_hover = hit_path(&root, 200.0, 40.0);
         assert!(
-            on_a.last().is_some_and(|e| !e.class_pointer_hover && !e.class_group_or_peer),
+            on_a.last()
+                .is_some_and(|e| !e.class_pointer_hover && !e.class_group_or_peer),
             "md:/dark: must not stamp pointer-hover on the hit path"
         );
         assert!(
@@ -1237,6 +1238,39 @@ mod tests {
         let (cb, _) = resolve_click_from_path(&root, &click_path);
         (*cb.expect("button click").borrow_mut())();
         assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn mousemove_on_parent_fires_when_label_child_is_target() {
+        let n = Rc::new(Cell::new(0u32));
+        let n2 = n.clone();
+        let mut child = Element::new();
+        child.layout_bounds = [10.0, 10.0, 80.0, 20.0];
+        child.focus_id = Some("hint".into());
+        child = child.text("hint");
+
+        let mut pad = Element::new();
+        pad.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        pad.focus_id = Some("pad".into());
+        pad = pad.on_mousemove(move |_e| {
+            n2.set(n2.get() + 1);
+        });
+        pad.children.push(child);
+
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        root.children.push(pad);
+
+        let path = hit_path(&root, 50.0, 20.0);
+        assert_eq!(path.last().unwrap().focus_id.as_deref(), Some("hint"));
+        assert!(path.iter().any(|e| e.focus_id.as_deref() == Some("pad")));
+        let mut ev = MouseEvent::new(50.0, 20.0, MouseButton::Left, 0);
+        ev.event_type = "mousemove";
+        dispatch_pointer(&path, &mut ev, PointerKind::Move);
+        assert!(
+            n.get() >= 1,
+            "interactive parent on_mousemove must fire while the pointer slides the child label"
+        );
     }
 
     #[test]

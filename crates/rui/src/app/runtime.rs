@@ -214,6 +214,13 @@ fn test_reconcile_subtree(
         if needs_portal_hoist {
             let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
         }
+        if let Some(path) = crate::core::tree::find_path_in_tree(&root, |n| {
+            n.template_id
+                .as_deref()
+                .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
+        }) {
+            crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &path);
+        }
         Some(crate::core::tree::LayoutStatus::StructureChanged)
     })
 }
@@ -349,10 +356,17 @@ where
 {
     TEST_RECONCILE_ROOT.with(|c| {
         let root = c.borrow().as_ref()?.clone();
-        let mut root = root.borrow_mut();
+        // Match AppState: `try_borrow_mut` fail is `None` (idle retry), not a panic.
+        let mut root = root.try_borrow_mut().ok()?;
         let want = template_id.replace('\\', "/").to_ascii_lowercase();
-        let slot = find_template_id_mut(&mut root, &want)?;
-        Some(patch(slot))
+        match find_template_id_mut(&mut root, &want) {
+            Some(slot) => Some(patch(slot)),
+            None => {
+                // Match AppState: node not in tree is Clean + miss, not idle retry.
+                crate::app::reactive::note_bind_miss(template_id);
+                Some(crate::core::tree::LayoutStatus::Clean)
+            }
+        }
     })
 }
 

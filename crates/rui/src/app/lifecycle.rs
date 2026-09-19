@@ -764,6 +764,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // Hold-repeat typing uses the same Poll: otherwise caret WaitUntil lets the OS
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
+        crate::components::color_picker::drain_color_drag_apply();
         let page_css_needs = crate::style::any_page_css_needs_frame();
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
@@ -1381,6 +1382,24 @@ mod idle_control_flow_tests {
             idle_control_flow(Some(caret), force),
             ControlFlow::Poll,
             "first idle frame after scroll must not WaitUntil caret blink"
+        );
+    }
+
+    #[test]
+    fn coalesced_cursor_move_must_poll_not_caret_wait_until() {
+        // `handle_cursor_moved` defers hit-test to present and arms `force_redraw_count`.
+        // WaitUntil caret would drop that redraw, so the MouseEvent log never flushes.
+        let caret = Instant::now() + Duration::from_millis(520);
+        let force =
+            about_to_wait_force_immediate(false, false, false, false, false, true, false, false);
+        assert!(
+            force,
+            "CursorMoved pending must arm force_redraw_count / Poll"
+        );
+        assert_eq!(
+            idle_control_flow(Some(caret), force),
+            ControlFlow::Poll,
+            "gallery MouseEvent mousemove flush cannot WaitUntil caret blink"
         );
     }
 

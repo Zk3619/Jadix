@@ -1318,15 +1318,14 @@ impl super::App {
         position: winit::dpi::PhysicalPosition<f64>,
         _event_loop: &ActiveEventLoop,
     ) {
-        // Latest sample wins. Hit-testing here used to run on every WM_MOUSEMOVE,
-        // on the same thread as present, so a page slide dropped spin frames and
-        // the late dest-reset flashed the icon.
+        // Latest sample wins. Hit-testing is deferred to present so a page slide
+        // does not starve Marker spin. The wake must still retry: Windows coalesces
+        // the first `request_redraw` with caret `WaitUntil`, and a latched pending
+        // flag would then swallow every later WM_MOUSEMOVE (gallery MouseEvent log).
         self.cursor_pos = position;
         self.cursor_inside_window = true;
-        if self.cursor_move_pending {
-            return;
-        }
         self.cursor_move_pending = true;
+        self.force_redraw_count = self.force_redraw_count.max(1);
         if let Some(st) = self.state.borrow().as_ref() {
             if st.window.id() == id {
                 st.window.request_redraw();
@@ -1602,10 +1601,16 @@ impl super::App {
             Vec::new()
         };
 
-        let color_dragging = if overlay_dragging {
-            false
+        let color_live = if overlay_dragging {
+            None
+        } else if crate::components::color_picker::is_color_dragging() {
+            Some(crate::components::color_picker::snapshot_color_drag_bounds(
+                &state.root_element,
+                x,
+                y,
+            ))
         } else {
-            crate::components::color_picker::tick_color_drag_from_tree(&state.root_element, x, y)
+            None
         };
 
         drop(state_borrow);
@@ -1643,6 +1648,9 @@ impl super::App {
         );
         self.last_client_pos = Some([x, y]);
 
+        let color_dragging = color_live
+            .map(|live| crate::components::color_picker::tick_color_drag_with_bounds(x, y, live))
+            .unwrap_or(false);
         let slider_dragging = crate::components::slider::tick_slider_drag(x, y);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
         let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
@@ -2722,6 +2730,14 @@ impl super::App {
     }
     fn commit_wheel_delta(&mut self, rest: String, dx: f32, dy: f32, max_x: f32, max_y: f32) {
         self.note_user_scroll_after_press();
+        // Keep the I-beam solid across page scroll (Gallery 图二). Strip blit may
+        // copy a blink-OFF retain; restarting before the next collect forces chrome ON
+        // so the caret pin hole redraws a hairline instead of an empty field.
+        if let Some(st) = (*self.state.borrow()).as_ref() {
+            if root_has_input_caret(&st.root_element) {
+                crate::renderer::restart_caret_blink();
+            }
+        }
         let now = std::time::Instant::now();
         if dx.abs() > 0.1 {
             self.bump_scrollbar_visible_until_axis(
@@ -3899,9 +3915,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let hover_cursor_pick =
                     super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
-                // Content moves under a stationary cursor during smooth scroll — re-diff
-                // signal-driven hover (`on_hover` / Button chrome). Class geometric `:hover`
-                // (`hover:bg/text` and `hover:scale/rotate/skew`) is sampled on the freeze path.
+                // Render already fired `on_hover` with the same mouse as CSS `:hover`.
+                // This post-layout pass is an idempotent Rc-refresh if Taffy moved the hit.
                 super::tree_hit::reconcile_pointer_hovers(
                     &state.root_element,
                     hx,
@@ -4695,6 +4710,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
         button: MouseButton,
         event_loop: Option<&ActiveEventLoop>,
     ) {
+        if let Some(event_loop) = event_loop {
+            self.flush_pending_cursor_moved(id, event_loop);
+        }
         self.update_mouse_buttons(button, element_state);
         match button {
             MouseButton::Left => {
@@ -4851,6 +4869,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
                     self.outside_dismiss_on_down = false;
                     crate::utils::popup::arm_underlay_close();
+                    // Paint-only bind_text (LCA click caption / MouseEvent log) dest-resets
+                    // on the next present. `request_redraw` alone is coalesced with caret
+                    // WaitUntil on Windows — Poll or the count stays frozen on screen.
+                    self.force_redraw_count = self.force_redraw_count.max(1);
                     if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }
@@ -4935,4 +4957,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
             }
         }
     }
+}
+
+fn root_has_input_caret(el: &crate::core::tree::Element) -> bool {
+    if el.text_style.input_caret.is_some() {
+        return true;
+    }
+    el.children.iter().any(root_has_input_caret)
 }

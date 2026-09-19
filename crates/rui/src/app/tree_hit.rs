@@ -880,7 +880,7 @@ pub(super) fn pointer_hits_focus_paint(
     .unwrap_or(false)
 }
 
-pub(super) fn find_focus_id_at(
+pub(crate) fn find_focus_id_at(
     el: &Element,
     x: f32,
     y: f32,
@@ -1423,6 +1423,25 @@ pub(crate) fn reconcile_pointer_hovers(
     LAST_HOVER_BY_SCOPE.with(|map| {
         *map.borrow_mut().entry(scope).or_insert(None) = None;
     });
+}
+
+/// Diff pointer hover and fire `on_hover` immediately so `{id}_hover` and CSS `:hover`
+/// leave (and enter) on the same chrome frame.
+///
+/// `immediate_miss_leave`: smooth-scroll, pointer off-window (`[-1,-1]`), or a
+/// StructureChanged sentinel that already forces CSS `:hover` off. Post-render
+/// [`reconcile_pointer_hovers`] stays as an idempotent Rc-refresh after layout.
+pub(crate) fn apply_pointer_hover_reconcile(
+    el: &Element,
+    x: f32,
+    y: f32,
+    immediate_miss_leave: bool,
+) {
+    let mut cbs = Vec::new();
+    reconcile_pointer_hovers(el, x, y, [0.0, 0.0], &mut cbs, immediate_miss_leave);
+    for (cb, is_hover) in cbs {
+        (*cb.borrow_mut())(is_hover);
+    }
 }
 
 /// Soft-invalidate after handler `Rc`s are replaced (DevTools dock / `reactive_view`).
@@ -2645,6 +2664,46 @@ mod hover_occlusion_tests {
             (*cb.borrow_mut())(is_hover);
         }
         assert_eq!(leaves.get(), 1);
+    }
+
+    #[test]
+    fn apply_pointer_hover_reconcile_leaves_same_frame_as_scroll_miss() {
+        clear_hover_tracking();
+        let leaves = Rc::new(Cell::new(0u32));
+        let leaves_cb = leaves.clone();
+
+        let mut btn: Element = interactive(Element::new().w(80.0).h(32.0))
+            .focus_id("unify-btn")
+            .on_hover(move |h| {
+                if !h {
+                    leaves_cb.set(leaves_cb.get() + 1);
+                }
+            })
+            .into();
+        btn.layout_bounds = [20.0, 100.0, 80.0, 32.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:unify".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Visible;
+        viewport.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(btn);
+
+        let mut root = Element::new().child(viewport);
+        root.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+
+        apply_pointer_hover_reconcile(&root, 40.0, 110.0, false);
+        assert_eq!(leaves.get(), 0);
+
+        viewport_scroll_bump(&mut root, 80.0);
+        apply_pointer_hover_reconcile(&root, 40.0, 110.0, true);
+        assert_eq!(
+            leaves.get(),
+            1,
+            "on_hover leave must fire in the same call as the scroll miss (before CSS chrome)"
+        );
+        apply_pointer_hover_reconcile(&root, 40.0, 110.0, true);
+        assert_eq!(leaves.get(), 1, "leave must be idempotent");
     }
 
     fn viewport_scroll_bump(root: &mut Element, sy: f32) {
