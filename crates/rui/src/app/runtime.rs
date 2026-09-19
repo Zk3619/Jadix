@@ -325,8 +325,8 @@ pub fn request_redraw_all() {
 ///
 /// Drops AppState / secondary borrows before calling `f` so OS APIs that re-enter
 /// the event loop (`drag_window`, DWM) cannot `RefCell`-panic.
-pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&Window) -> R) -> Option<R> {
-    let window: Arc<Window> = APP_RUNTIME.with(|c| {
+pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&dyn Window) -> R) -> Option<R> {
+    let window: Arc<dyn Window> = APP_RUNTIME.with(|c| {
         let rt = c.borrow();
         let rt = rt.as_ref()?;
         match window_scope::tree_home_for(window_scope::active()) {
@@ -343,7 +343,7 @@ pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&Window) -> R) -> Optio
             }
         }
     })?;
-    Some(f(&window))
+    Some(f(window.as_ref()))
 }
 
 #[cfg(test)]

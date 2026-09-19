@@ -18,7 +18,7 @@ impl super::App {
         &mut self,
         id: WindowId,
         position: PhysicalPosition<f64>,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
@@ -117,7 +117,7 @@ impl super::App {
         };
 
         super::tree_hit::apply_cursor(
-            &window,
+            window.as_ref(),
             Some(event_loop),
             &mut self.custom_cursors,
             cursor_pick,
@@ -162,7 +162,7 @@ impl super::App {
     pub(super) fn handle_secondary_cursor_left(
         &mut self,
         id: WindowId,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
@@ -183,7 +183,7 @@ impl super::App {
         }
         if let Some(sec) = self.secondaries.borrow().get(&id) {
             super::tree_hit::apply_cursor(
-                &sec.window,
+                sec.window.as_ref(),
                 Some(event_loop),
                 &mut self.custom_cursors,
                 None,
@@ -379,7 +379,7 @@ impl super::App {
                         let (hits, viewport) = {
                             let secs = self.secondaries.borrow();
                             if let Some(sec) = secs.get(&id) {
-                                let size = sec.window.inner_size();
+                                let size = sec.window.surface_size();
                                 let scale = sec.window.scale_factor() as f32;
                                 (
                                     crate::utils::drag::collect_hits(&sec.root_element),
@@ -697,20 +697,13 @@ impl super::App {
     pub(super) fn handle_secondary_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
-        let lines = super::scroll_support::get_system_scroll_lines();
-        let line_height = 25.0;
-        let (dx, dy) = match delta {
-            MouseScrollDelta::LineDelta(dx, dy) => {
-                (dx * lines * line_height, dy * lines * line_height)
-            }
-            MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
-        };
 
         let mut secs = self.secondaries.borrow_mut();
         let Some(sec) = secs.get_mut(&id) else {
             return;
         };
         let scale = sec.window.scale_factor() as f32;
+        let (dx, dy) = super::scroll_support::wheel_delta_logical_px(delta, scale);
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
         let mut rests = Vec::new();

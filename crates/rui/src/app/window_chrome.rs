@@ -107,6 +107,10 @@ pub struct WindowOptions {
     pub default_font_weight: Option<u16>,
     /// CSS `font-synthesis: weight`. `None` = env `RUI_SYNTHETIC_BOLD` (default on).
     pub synthetic_bold: Option<bool>,
+    /// Web only: CSS selector or element id for the winit canvas (Iced `target`).
+    ///
+    /// `None` appends a new canvas to `document.body`. `#foo` / `foo` replaces that node.
+    pub web_canvas_target: Option<String>,
 }
 
 impl Default for WindowOptions {
@@ -136,6 +140,7 @@ impl Default for WindowOptions {
             default_font_size: None,
             default_font_weight: None,
             synthetic_bold: None,
+            web_canvas_target: None,
         }
     }
 }
@@ -347,6 +352,13 @@ impl WindowOptions {
         self
     }
 
+    /// Web canvas mount point (`#id`, `.class`, or bare id). Ignored on native hosts.
+    pub fn canvas_target(mut self, target: impl Into<String>) -> Self {
+        let s = target.into();
+        self.web_canvas_target = if s.trim().is_empty() { None } else { Some(s) };
+        self
+    }
+
     /// Document default `font-family` (CSS comma-separated list).
     pub fn default_font(mut self, family: impl Into<String>) -> Self {
         self.default_font_family = Some(family.into());
@@ -421,7 +433,7 @@ impl WindowOptions {
     /// composition surface / Vulkan premul swapchain can composite over the desktop.
     /// Must stay **off** for DWM SystemBackdrop and the shared GL path.
     pub(crate) fn window_attributes(&self, composition_swapchain: bool) -> WindowAttributes {
-        let mut attrs = Window::default_attributes()
+        let mut attrs = WindowAttributes::default()
             .with_title(&self.title)
             .with_visible(false)
             .with_decorations(self.decorations)
@@ -430,7 +442,7 @@ impl WindowOptions {
 
         if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
             if w > 0.0 && h > 0.0 {
-                attrs = attrs.with_inner_size(LogicalSize::new(w, h));
+                attrs = attrs.with_surface_size(LogicalSize::new(w, h));
             }
         } else if let (Ok(w), Ok(h)) = (
             std::env::var("RUI_WINDOW_WIDTH"),
@@ -438,7 +450,7 @@ impl WindowOptions {
         ) {
             if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
                 if w > 0.0 && h > 0.0 {
-                    attrs = attrs.with_inner_size(LogicalSize::new(w, h));
+                    attrs = attrs.with_surface_size(LogicalSize::new(w, h));
                 }
             }
         }
@@ -456,7 +468,7 @@ impl WindowOptions {
 /// swapchain (`WS_EX_NOREDIRECTIONBITMAP`). In that case DWM empty-region blur-behind
 /// is skipped — it targets the redirection bitmap we just disabled.
 pub(crate) fn apply_created_window(
-    window: &Window,
+    window: &dyn Window,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
@@ -485,7 +497,7 @@ impl From<String> for GlassTintArg {
     }
 }
 
-fn with_active_window<R>(f: impl FnOnce(&Window) -> R) -> Option<R> {
+fn with_active_window<R>(f: impl FnOnce(&dyn Window) -> R) -> Option<R> {
     super::runtime::with_active_winit_window(f)
 }
 
@@ -495,7 +507,9 @@ pub(crate) fn set_window_title(title: impl AsRef<str>) {
 }
 
 pub(crate) fn request_window_inner_size(width: f64, height: f64) {
-    with_active_window(|w| w.request_inner_size(LogicalSize::new(width, height)));
+    with_active_window(|w| {
+        w.request_surface_size(winit::dpi::Size::Logical(LogicalSize::new(width, height)))
+    });
 }
 
 /// Begin an OS window move. Call from **mousedown** on a custom title bar (not `click`).
@@ -532,11 +546,8 @@ pub fn close_window() {
             let Some(id) = super::window_scope::active_window_id() else {
                 return;
             };
-            let Some(proxy) = super::ui_bridge::proxy() else {
-                log::warn!("close_window: event loop proxy not installed");
-                return;
-            };
-            if let Err(e) = proxy.send_event(super::RuiUserEvent::CloseWindow { id }) {
+            if let Err(e) = super::ui_bridge::send_user_event(super::RuiUserEvent::CloseWindow { id })
+            {
                 log::warn!("close_window: {e}");
             }
         }
@@ -556,6 +567,14 @@ mod tests {
         assert!(!o.compositor_alpha());
         assert_eq!(o.persistence_label(true), Some(PRIMARY_WINDOW_LABEL));
         assert_eq!(o.persistence_label(false), None);
+        assert!(o.web_canvas_target.is_none());
+        assert_eq!(
+            WindowOptions::new()
+                .canvas_target("#app")
+                .web_canvas_target
+                .as_deref(),
+            Some("#app")
+        );
         let attrs = o.to_window_attributes();
         assert!(attrs.decorations);
         assert!(!attrs.transparent);

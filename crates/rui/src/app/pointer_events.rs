@@ -60,7 +60,7 @@ pub fn dom_button(button: MouseButton) -> i16 {
         MouseButton::Right => 2,
         MouseButton::Back => 3,
         MouseButton::Forward => 4,
-        MouseButton::Other(n) => i16::try_from(n).unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -72,7 +72,7 @@ pub fn buttons_mask_bit(button: MouseButton) -> u16 {
         MouseButton::Middle => 0x04,
         MouseButton::Back => 0x08,
         MouseButton::Forward => 0x10,
-        MouseButton::Other(_) => 0,
+        _ => 0,
     }
 }
 

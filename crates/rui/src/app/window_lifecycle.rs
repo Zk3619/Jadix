@@ -16,10 +16,10 @@ use winit::window::Window;
 pub trait WindowLifecycleHook: Send + Sync {
     /// Window exists, is still hidden (`WindowOptions` uses `with_visible(false)`).
     /// Restore geometry here so the first layout/swapchain sees the saved size.
-    fn on_created(&self, window: &Window, label: &str);
-    fn on_event(&self, window: &Window, event: &WindowEvent);
+    fn on_created(&self, window: &dyn Window, label: &str);
+    fn on_event(&self, window: &dyn Window, event: &WindowEvent);
     /// Last chance to snapshot before the `Window` is dropped.
-    fn on_closing(&self, window: &Window);
+    fn on_closing(&self, window: &dyn Window);
     /// Process is leaving the event loop; flush to disk.
     fn on_exit(&self);
 }
@@ -38,7 +38,7 @@ pub fn set_window_lifecycle_hook(hook: Option<Arc<dyn WindowLifecycleHook>>) {
     *slot().lock().unwrap_or_else(|p| p.into_inner()) = hook;
 }
 
-pub(crate) fn emit_created(window: &Window, label: Option<&str>) {
+pub(crate) fn emit_created(window: &dyn Window, label: Option<&str>) {
     let Some(label) = label.map(str::trim).filter(|s| !s.is_empty()) else {
         return;
     };
@@ -47,13 +47,13 @@ pub(crate) fn emit_created(window: &Window, label: Option<&str>) {
     }
 }
 
-pub(crate) fn emit_event(window: &Window, event: &WindowEvent) {
+pub(crate) fn emit_event(window: &dyn Window, event: &WindowEvent) {
     if let Some(h) = current() {
         h.on_event(window, event);
     }
 }
 
-pub(crate) fn emit_closing(window: &Window) {
+pub(crate) fn emit_closing(window: &dyn Window) {
     if let Some(h) = current() {
         h.on_closing(window);
     }

@@ -40,12 +40,12 @@ fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
     ]
 }
 
-pub(super) fn try_acquire(window: &Arc<Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
+pub(super) fn try_acquire(window: &Arc<dyn Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
     crate::utils::block_on::block_on(try_acquire_async(window, chrome))
 }
 
-async fn try_acquire_async(window: &Arc<Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
-    if chrome.compositor_alpha() && crate::platform::try_init_custom_glass(window, chrome) {
+async fn try_acquire_async(window: &Arc<dyn Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
+    if chrome.compositor_alpha() && crate::platform::try_init_custom_glass(window.as_ref(), chrome) {
         if let Some(gpu) = try_acquire_dcomp(window).await {
             return Some(gpu);
         }
@@ -53,7 +53,7 @@ async fn try_acquire_async(window: &Arc<Window>, chrome: &WindowOptions) -> Opti
             "dcomp glass: DX12 composition surface failed; recreating without NOREDIRECTIONBITMAP";
         log::warn!("{msg}");
         eprintln!("rui glass: {msg}");
-        crate::platform::glass_detach(window);
+        crate::platform::glass_detach(window.as_ref());
         return None;
     }
     if chrome.wants_dcomp_swapchain() {
@@ -71,10 +71,10 @@ async fn try_acquire_async(window: &Arc<Window>, chrome: &WindowOptions) -> Opti
 }
 
 #[cfg_attr(not(all(windows, feature = "backend-dx12")), allow(dead_code))]
-async fn try_acquire_dcomp(window: &Arc<Window>) -> Option<CompositorGpu> {
+async fn try_acquire_dcomp(window: &Arc<dyn Window>) -> Option<CompositorGpu> {
     #[cfg(all(windows, feature = "backend-dx12"))]
     {
-        let handle = crate::platform::custom_glass_surface_handle(window)?;
+        let handle = crate::platform::custom_glass_surface_handle(window.as_ref())?;
         try_acquire_named(window, wgpu::Backends::DX12, "dx12-dcomp", Some(handle)).await
     }
     #[cfg(not(all(windows, feature = "backend-dx12")))]
@@ -85,7 +85,7 @@ async fn try_acquire_dcomp(window: &Arc<Window>) -> Option<CompositorGpu> {
 }
 
 async fn try_acquire_named(
-    window: &Arc<Window>,
+    window: &Arc<dyn Window>,
     backends: wgpu::Backends,
     name: &str,
     composition_handle: Option<*mut std::ffi::c_void>,
@@ -182,7 +182,7 @@ async fn try_acquire_named(
                 .find(|m| matches!(m, wgpu::PresentMode::FifoRelaxed))
         })
         .unwrap_or(caps.present_modes[0]);
-    let size = window.inner_size();
+    let size = window.surface_size();
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,

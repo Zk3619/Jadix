@@ -168,7 +168,7 @@ pub fn physical_ime_cursor_area(
 
 /// 仅在 allowed 翻转时调用 winit，避免每帧 `ImmAssociateContextEx` 打断组字定位。
 pub(crate) fn set_ime_allowed_latched(
-    window: &winit::window::Window,
+    window: &dyn winit::window::Window,
     allowed: bool,
     latched: &mut bool,
 ) {
@@ -184,7 +184,7 @@ pub(crate) fn set_ime_allowed_latched(
 
 /// Bind/release Windows IME HWND drive to the current text-edit focus id.
 /// `None` / empty = no field owns the candidate window.
-pub(crate) fn sync_ime_focus_owner(window: &winit::window::Window, focus_id: Option<&str>) {
+pub(crate) fn sync_ime_focus_owner(window: &dyn winit::window::Window, focus_id: Option<&str>) {
     let next = focus_id.filter(|s| !s.is_empty());
     crate::platform::sync_ime_focus_owner(window, next, |prev| {
         finish_composition_preserve_text(prev);
@@ -200,7 +200,7 @@ pub(crate) fn sync_ime_focus_owner(window: &winit::window::Window, focus_id: Opt
 /// OS window deactivated: force-end composition (browser-like cancel). Keeps already
 /// committed `value`; discards in-flight preedit (incl. IME syllable `'` marks).
 /// Does **not** clear focus id.
-pub(crate) fn on_os_focus_lost(window: &winit::window::Window) {
+pub(crate) fn on_os_focus_lost(window: &dyn winit::window::Window) {
     let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
     if is_text_edit_focus(&focused) {
         finish_composition_preserve_text(&focused);
@@ -429,7 +429,7 @@ pub(crate) fn on_ime_composition_ended() {
 ///   才 Imm。半裁切、以及焦点已切走但仍是 placeholder 的叶，都不推 Imm
 ///   （`ImmSetCompositionWindow` 会挂死 `WaitUntil`：IME 跟 `focus_id`，画面停在上一字段）。
 pub(crate) fn apply_ime_cursor_area(
-    window: &winit::window::Window,
+    window: &dyn winit::window::Window,
     area_x: f32,
     area_y: f32,
     area_w: f32,

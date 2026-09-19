@@ -26,7 +26,7 @@ use super::window_chrome::WindowOptions;
 #[derive(Clone, Debug)]
 pub struct WindowSlot {
     pub id: WindowId,
-    pub window: Arc<Window>,
+    pub window: Arc<dyn Window>,
 }
 
 /// Lightweight `WindowId` → slot map. Production inserts one primary + N secondary.
@@ -58,7 +58,7 @@ impl WindowRegistry {
     }
 
     /// Insert / replace the primary window slot (idempotent on the same id).
-    pub fn insert_primary(&mut self, window: Arc<Window>) -> WindowId {
+    pub fn insert_primary(&mut self, window: Arc<dyn Window>) -> WindowId {
         let id = window.id();
         self.primary = Some(id);
         self.slots.insert(id, WindowSlot { id, window });
@@ -66,7 +66,7 @@ impl WindowRegistry {
     }
 
     /// Reserve a secondary slot for a live [`Window`].
-    pub fn insert_secondary_slot(&mut self, window: Arc<Window>) -> WindowId {
+    pub fn insert_secondary_slot(&mut self, window: Arc<dyn Window>) -> WindowId {
         let id = window.id();
         self.slots.insert(id, WindowSlot { id, window });
         id
@@ -140,15 +140,11 @@ pub fn open_secondary_window_with(
     options: WindowOptions,
     builder: impl FnMut() -> Element + 'static,
 ) -> Result<(), String> {
-    let proxy = super::ui_bridge::proxy().ok_or_else(|| {
-        "multi-window: event loop proxy not installed (call rui::run first)".to_string()
-    })?;
-    proxy
-        .send_event(super::RuiUserEvent::OpenWindow {
-            options,
-            builder: SecondaryUiBuilder(Box::new(builder)),
-        })
-        .map_err(|e| format!("multi-window: failed to queue OpenWindow: {e}"))
+    super::ui_bridge::send_user_event(super::RuiUserEvent::OpenWindow {
+        options,
+        builder: SecondaryUiBuilder(Box::new(builder)),
+    })
+    .map_err(|e| format!("multi-window: failed to queue OpenWindow: {e}"))
 }
 
 /// Named UI-thread slot shared across windows (and with workers via [`super::ui_bridge::run_on_ui_thread`]).

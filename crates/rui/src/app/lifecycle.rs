@@ -4,11 +4,11 @@ use std::time::Instant;
 #[cfg(feature = "a11y")]
 use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 #[cfg(feature = "a11y")]
-use accesskit_winit::Adapter;
+use crate::a11y::winit_adapter::Adapter;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, TouchPhase, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event::{ElementState, MouseButton, PointerKind, TouchPhase, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::ModifiersState,
     window::{Window, WindowId},
 };
@@ -86,15 +86,15 @@ impl super::App {
     /// `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409).
     fn persist_window_state(&self) {
         if let Some(st) = self.state.borrow().as_ref() {
-            super::window_lifecycle::emit_closing(&st.window);
+            super::window_lifecycle::emit_closing(st.window.as_ref());
         }
         for sec in self.secondaries.borrow().values() {
-            super::window_lifecycle::emit_closing(&sec.window);
+            super::window_lifecycle::emit_closing(sec.window.as_ref());
         }
         super::window_lifecycle::emit_exit();
     }
 
-    fn lifecycle_window(&self, id: WindowId) -> Option<Arc<Window>> {
+    fn lifecycle_window(&self, id: WindowId) -> Option<Arc<dyn Window>> {
         if let Some(st) = (*self.state.borrow()).as_ref() {
             if st.window.id() == id {
                 return Some(st.window.clone());
@@ -120,7 +120,7 @@ impl super::App {
             let glass_window = sec.window.clone();
             drop(sec.take_owner());
             drop(sec);
-            crate::platform::glass_detach(&glass_window);
+            crate::platform::glass_detach(glass_window.as_ref());
             drop(_scope);
             if let Some(token) = super::window_scope::forget_secondary(id) {
                 super::portal_overlay::drop_overlay_stack(
@@ -152,13 +152,13 @@ impl super::App {
         crate::core::reactivity::clear_effects();
         let window = state.window.clone();
         drop(state);
-        crate::platform::glass_detach(&window);
+        crate::platform::glass_detach(window.as_ref());
         self.pointer_window = None;
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
         if let Some(window) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
-            super::window_lifecycle::emit_closing(&window);
+            super::window_lifecycle::emit_closing(window.as_ref());
         }
         if let Some(mut sec) = self.secondaries.borrow_mut().remove(&id) {
             // Keep SIGNAL_KEY_SCOPE on this window while Owner/unmount runs so
@@ -175,7 +175,7 @@ impl super::App {
             let glass_window = sec.window.clone();
             drop(sec.take_owner());
             drop(sec);
-            crate::platform::glass_detach(&glass_window);
+            crate::platform::glass_detach(glass_window.as_ref());
             drop(_scope);
         }
         if let Some(token) = super::window_scope::forget_secondary(id) {
@@ -194,7 +194,10 @@ impl super::App {
     }
 
     fn touch_pinch_distance(
-        touches: &std::collections::HashMap<u64, winit::dpi::PhysicalPosition<f64>>,
+        touches: &std::collections::HashMap<
+            winit::event::FingerId,
+            winit::dpi::PhysicalPosition<f64>,
+        >,
     ) -> Option<f32> {
         if touches.len() < 2 {
             return None;
@@ -240,10 +243,10 @@ impl super::App {
         let pts: Vec<(u64, [f32; 2])> = self
             .active_touches
             .iter()
-            .map(|(&id, p)| (id, [p.x as f32 / scale, p.y as f32 / scale]))
+            .map(|(&id, p)| (id.into_raw() as u64, [p.x as f32 / scale, p.y as f32 / scale]))
             .collect();
         for &(id, pos) in &pts {
-            if Some(id) != self.primary_touch_id {
+            if Some(id) != self.primary_touch_id.map(|f| f.into_raw() as u64) {
                 crate::utils::pointer_drag::tick_pointer(id, pos[0], pos[1]);
             }
         }
@@ -332,15 +335,15 @@ impl accesskit::ActivationHandler for AccessKitBootstrap {
 /// AccessKit panics if the HWND was already shown (WGL/DComp init can do that).
 #[cfg(feature = "a11y")]
 fn create_accesskit_adapter(
-    event_loop: &ActiveEventLoop,
-    window: &Window,
-    proxy: winit::event_loop::EventLoopProxy<super::RuiUserEvent>,
+    event_loop: &dyn ActiveEventLoop,
+    window: &dyn Window,
+    proxy: winit::event_loop::EventLoopProxy,
 ) -> Adapter {
     Adapter::with_mixed_handlers(event_loop, window, AccessKitBootstrap, proxy)
 }
 
-impl ApplicationHandler<super::RuiUserEvent> for super::App {
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: super::RuiUserEvent) {
+impl super::App {
+    fn handle_user_event(&mut self, event_loop: &dyn ActiveEventLoop, event: super::RuiUserEvent) {
         match event {
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             super::RuiUserEvent::HotReloadWake => {
@@ -354,6 +357,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 crate::app::runtime::request_redraw_all();
             }
             super::RuiUserEvent::OpenWindow { options, builder } => {
+                if !crate::platform::host_capabilities().multi_window {
+                    log::warn!(
+                        "multi-window: secondary windows are not supported on {}",
+                        crate::platform::host_kind()
+                    );
+                    return;
+                }
                 let wants_glass = options.compositor_alpha();
                 let mut composition = options.wants_dcomp_swapchain();
                 let Ok(created) = event_loop.create_window(options.window_attributes(composition))
@@ -361,15 +371,15 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     log::warn!("multi-window: create_window failed");
                     return;
                 };
-                let mut window = Arc::new(created);
+                let mut window: Arc<dyn Window> = Arc::from(created);
                 #[cfg(feature = "a11y")]
                 let mut accesskit = Some(create_accesskit_adapter(
                     event_loop,
-                    &window,
+                    window.as_ref(),
                     self.event_loop_proxy.clone(),
                 ));
-                super::window_chrome::apply_created_window(&window, &options, composition);
-                super::window_lifecycle::emit_created(&window, options.persistence_label(false));
+                super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
+                super::window_lifecycle::emit_created(window.as_ref(), options.persistence_label(false));
                 let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
 
                 let secondary = if wants_glass {
@@ -398,18 +408,18 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                                 log::warn!("multi-window: create_window failed");
                                 return;
                             };
-                            window = Arc::new(created);
+                            window = Arc::from(created);
                             #[cfg(feature = "a11y")]
                             {
                                 accesskit = Some(create_accesskit_adapter(
                                     event_loop,
-                                    &window,
+                                    window.as_ref(),
                                     self.event_loop_proxy.clone(),
                                 ));
                             }
-                            super::window_chrome::apply_created_window(&window, &options, false);
+                            super::window_chrome::apply_created_window(window.as_ref(), &options, false);
                             super::window_lifecycle::emit_created(
-                                &window,
+                                window.as_ref(),
                                 options.persistence_label(false),
                             );
                         }
@@ -491,8 +501,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
 
                 window.set_visible(true);
-                crate::platform::glass_on_shown(&window);
-                super::window_chrome::apply_created_window(&window, &options, composition);
+                crate::platform::glass_on_shown(window.as_ref());
+                super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
                 window.request_redraw();
             }
             super::RuiUserEvent::CloseWindow { id } => {
@@ -516,7 +526,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
             #[cfg(feature = "a11y")]
             super::RuiUserEvent::AccessKit(ev) => {
-                use accesskit_winit::WindowEvent as AkWindowEvent;
+                use crate::a11y::winit_adapter::AdapterWindowEvent as AkWindowEvent;
                 let wid = ev.window_id;
                 let is_secondary = self.is_secondary_window(wid);
                 match ev.window_event {
@@ -568,16 +578,100 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             }
                         }
                     }
-                    AkWindowEvent::AccessibilityDeactivated => {
-                        // No visual change; do not pump redraw.
-                        log::debug!("accesskit: accessibility deactivated window={wid:?}");
-                    }
                 }
             }
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.state.borrow().is_none() {
+            let attrs = self.window_options.to_window_attributes();
+            let window = event_loop.create_window(attrs).expect("create window");
+            #[cfg(feature = "a11y")]
+            {
+                log::debug!("lifecycle: before accesskit");
+                self.accesskit_adapter = Some(create_accesskit_adapter(
+                    event_loop,
+                    window.as_ref(),
+                    self.event_loop_proxy.clone(),
+                ));
+                log::debug!("lifecycle: after accesskit");
+            }
+            super::window_chrome::apply_created_window(
+                window.as_ref(),
+                &self.window_options,
+                self.window_options.wants_dcomp_swapchain(),
+            );
+            super::window_lifecycle::emit_created(
+                window.as_ref(),
+                self.window_options.persistence_label(true),
+            );
+            let window: Arc<dyn Window> = Arc::from(window);
+
+            let state = crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
+                window.clone(),
+                self.window_options.clone(),
+            ));
+            *self.state.borrow_mut() = Some(state);
+            self.window_registry.insert_primary(window.clone());
+
+            let state_ref = self.state.clone();
+            crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
+                std::rc::Rc::downgrade(&state_ref),
+                std::rc::Rc::downgrade(&self.secondaries),
+            ));
+            crate::app::reactive::reset_registered_anchors();
+
+            log::debug!("lifecycle: before root create_effect");
+            #[cfg(feature = "devtools")]
+            if self.window_options.devtools {
+                crate::app::devtools::DevToolsState::enable_for_window();
+            }
+            let builder_ref = self.app_builder.clone();
+            crate::core::reactivity::mark_next_effect_as_ui_root();
+            crate::core::reactivity::create_effect(move || {
+                log::debug!("root_effect: before app_builder");
+                let new_root = (builder_ref.borrow_mut())();
+                #[cfg(feature = "devtools")]
+                let new_root = crate::app::devtools::wrap_app(new_root);
+                log::debug!(
+                    "root_effect: after app_builder children={}",
+                    new_root.children.len()
+                );
+                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                    log::debug!("root_effect: before rebuild_ui");
+                    st.rebuild_ui(new_root);
+                    log::debug!("root_effect: after rebuild_ui");
+                    st.window.request_redraw();
+                }
+                log::debug!("root_effect: body done (flush_deferred next)");
+            });
+            log::debug!("lifecycle: after root create_effect");
+
+            window.set_visible(true);
+            crate::platform::glass_on_shown(window.as_ref());
+            let composition = self
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(|s| s.composition_swapchain);
+            super::window_chrome::apply_created_window(window.as_ref(), &self.window_options, composition);
+        }
+    }
+}
+
+impl ApplicationHandler for super::App {
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        while let Ok(event) = self.user_events.try_recv() {
+            self.handle_user_event(event_loop, event);
+        }
+    }
+
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.create_primary_if_needed(event_loop);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         #[cfg(debug_assertions)]
         if self.hot_reload.has_pending() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -696,7 +790,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // Drag / resize / gesture: keep edge auto-scroll alive while held still.
         if crate::utils::drag::is_active() || crate::utils::pointer_action::edge_scroll_active() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
-                let size = state.window.inner_size();
+                let size = state.window.surface_size();
                 let scale = state.window.scale_factor() as f32;
                 let vp = [
                     size.width as f32 / scale.max(1.0),
@@ -714,7 +808,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         }
         if crate::utils::drag::is_coasting() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
-                let size = state.window.inner_size();
+                let size = state.window.surface_size();
                 let scale = state.window.scale_factor() as f32;
                 let vp = [
                     size.width as f32 / scale.max(1.0),
@@ -765,6 +859,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         crate::components::color_picker::drain_color_drag_apply();
+        crate::components::drawer::drain_drawer_layout_bumps();
         let page_css_needs = crate::style::any_page_css_needs_frame();
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
@@ -819,121 +914,35 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         event_loop.set_control_flow(idle_control_flow(next_wake, force_immediate));
     }
 
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.borrow().is_none() {
-            let attrs = self.window_options.to_window_attributes();
-            let window = event_loop.create_window(attrs).unwrap();
-            #[cfg(feature = "a11y")]
-            {
-                log::debug!("lifecycle: before accesskit");
-                self.accesskit_adapter = Some(create_accesskit_adapter(
-                    event_loop,
-                    &window,
-                    self.event_loop_proxy.clone(),
-                ));
-                log::debug!("lifecycle: after accesskit");
-            }
-            super::window_chrome::apply_created_window(
-                &window,
-                &self.window_options,
-                self.window_options.wants_dcomp_swapchain(),
-            );
-            super::window_lifecycle::emit_created(
-                &window,
-                self.window_options.persistence_label(true),
-            );
-            let window = Arc::new(window);
-
-            // Initialize GPU/runtime state with a private bootstrap root. The user app tree must be
-            // built exactly once, inside the tracked root effect below; otherwise startup creates
-            // a throwaway tree whose Drop/on_unmount side effects can invalidate resources still
-            // referenced by the tracked tree.
-            let state = crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
-                window.clone(),
-                self.window_options.clone(),
-            ));
-            *self.state.borrow_mut() = Some(state);
-            self.window_registry.insert_primary(window.clone());
-
-            let state_ref = self.state.clone();
-            crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
-                std::rc::Rc::downgrade(&state_ref),
-                std::rc::Rc::downgrade(&self.secondaries),
-            ));
-            crate::app::reactive::reset_registered_anchors();
-
-            log::debug!("lifecycle: before root create_effect");
-            // Enable Inspector before the root effect so wrap_app sees the flag on first run.
-            #[cfg(feature = "devtools")]
-            if self.window_options.devtools {
-                crate::app::devtools::DevToolsState::enable_for_window();
-            }
-            // create_effect runs synchronously on registration. By the time it returns, the real
-            // root has been reconciled and deferred fine-grained reactive anchors have mounted, so
-            // making the window visible cannot expose the bootstrap root.
-            let builder_ref = self.app_builder.clone();
-            crate::core::reactivity::mark_next_effect_as_ui_root();
-            crate::core::reactivity::create_effect(move || {
-                log::debug!("root_effect: before app_builder");
-                let new_root = (builder_ref.borrow_mut())();
-                #[cfg(feature = "devtools")]
-                let new_root = crate::app::devtools::wrap_app(new_root);
-                log::debug!(
-                    "root_effect: after app_builder children={}",
-                    new_root.children.len()
-                );
-                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
-                    log::debug!("root_effect: before rebuild_ui");
-                    st.rebuild_ui(new_root);
-                    log::debug!("root_effect: after rebuild_ui");
-                    st.window.request_redraw();
-                }
-                log::debug!("root_effect: body done (flush_deferred next)");
-            });
-            log::debug!("lifecycle: after root create_effect");
-
-            window.set_visible(true);
-            crate::platform::glass_on_shown(&window);
-            let composition = self
-                .state
-                .borrow()
-                .as_ref()
-                .is_some_and(|s| s.composition_swapchain);
-            super::window_chrome::apply_created_window(&window, &self.window_options, composition);
-        }
-
+    fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
         if let Some(state) = (*self.state.borrow()).as_ref() {
             state.window.request_redraw();
         }
         self.is_suspended = false;
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+    fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
         self.is_suspended = true;
     }
 
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.shutdown_renderer();
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, id: WindowId, event: WindowEvent) {
         #[cfg(feature = "a11y")]
         {
             if let Some(adapter) = &mut self.accesskit_adapter {
                 if let Some(st) = (*self.state.borrow()).as_ref() {
                     if st.window.id() == id {
-                        adapter.process_event(&st.window, &event);
+                        adapter.process_event(st.window.as_ref(), &event);
                     }
                 }
             }
             if let Some(win) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
                 if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
-                    adapter.process_event(&win, &event);
+                    adapter.process_event(win.as_ref(), &event);
                 }
             }
         }
         if let Some(win) = self.lifecycle_window(id) {
-            super::window_lifecycle::emit_event(&win, &event);
+            super::window_lifecycle::emit_event(win.as_ref(), &event);
         }
         match event {
             WindowEvent::CloseRequested => {
@@ -963,7 +972,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
                 self.shutdown_renderer();
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, source, .. } => {
+                if matches!(PointerKind::from(source), PointerKind::Touch(_)) {
+                    // Touch motion is handled with PointerButton / FingerId below.
+                }
                 if self.is_secondary_window(id) {
                     self.handle_secondary_cursor_moved(id, position, event_loop);
                 } else {
@@ -972,19 +984,61 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     });
                 }
             }
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 if self.is_secondary_window(id) {
                     self.handle_secondary_cursor_left(id, event_loop);
                 } else {
                     self.with_primary_input(id, |app| app.handle_cursor_left(id, event_loop));
                 }
             }
-            WindowEvent::MouseInput {
+            WindowEvent::PointerButton {
                 state: element_state,
                 button,
+                position,
                 ..
             } => {
-                // `on_click` → `signal.set` → `flush_pending` → `run_effect` (stack-safe hotspot).
+                if let winit::event::ButtonSource::Touch { finger_id, .. } = &button {
+                    match element_state {
+                        ElementState::Pressed => {
+                            self.active_touches.insert(*finger_id, position);
+                            if self.primary_touch_id.is_none() {
+                                self.primary_touch_id = Some(*finger_id);
+                            }
+                            if self.active_touches.len() >= 2 {
+                                self.content_scroll_drag = None;
+                                self.pinch_prev_dist = Self::touch_pinch_distance(&self.active_touches);
+                            }
+                            self.sync_pointer_action_touches();
+                        }
+                        ElementState::Released => {
+                            self.active_touches.remove(finger_id);
+                            if self.active_touches.len() < 2 {
+                                self.pinch_prev_dist = None;
+                            }
+                            if self.primary_touch_id == Some(*finger_id) {
+                                self.primary_touch_id = None;
+                                if let Some((&nid, &npos)) = self.active_touches.iter().next() {
+                                    self.primary_touch_id = Some(nid);
+                                    self.cursor_pos = npos;
+                                }
+                            }
+                            self.sync_pointer_action_touches();
+                        }
+                    }
+                }
+                let Some(button) = button.mouse_button() else {
+                    if matches!(element_state, ElementState::Pressed | ElementState::Released) {
+                        let mapped = MouseButton::Left;
+                        if self.is_secondary_window(id) {
+                            self.handle_secondary_mouse_button(id, element_state, mapped);
+                        } else {
+                            self.with_primary_input(id, |app| {
+                                app.handle_mouse_button(id, element_state, mapped, Some(event_loop))
+                            });
+                        }
+                    }
+                    return;
+                };
                 if self.is_secondary_window(id) {
                     self.handle_secondary_mouse_button(id, element_state, button);
                 } else {
@@ -1002,99 +1056,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     self.with_primary_input(id, |app| app.handle_mouse_wheel(id, delta));
                 }
             }
-            // Primary finger → pointer paths; second finger enables pinch scale.
-            // Pinch scale is stored on App + signal `__rui_pinch_scale` (no scroll zoom yet).
-            WindowEvent::Touch(touch) => {
-                match touch.phase {
-                    TouchPhase::Started => {
-                        self.active_touches.insert(touch.id, touch.location);
-                        if self.primary_touch_id.is_none() {
-                            self.primary_touch_id = Some(touch.id);
-                            self.cursor_pos = touch.location;
-                            if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
-                                self.handle_secondary_mouse_button(
-                                    id,
-                                    ElementState::Pressed,
-                                    MouseButton::Left,
-                                );
-                            } else {
-                                self.with_primary_input(id, |app| {
-                                    app.handle_cursor_moved(id, touch.location, event_loop);
-                                    app.handle_mouse_button(
-                                        id,
-                                        ElementState::Pressed,
-                                        MouseButton::Left,
-                                        Some(event_loop),
-                                    );
-                                });
-                            }
-                        }
-                        if self.active_touches.len() >= 2 {
-                            // Cancel content pan when a second finger lands (pinch takes over).
-                            self.content_scroll_drag = None;
-                            self.pinch_prev_dist = Self::touch_pinch_distance(&self.active_touches);
-                        }
-                        self.sync_pointer_action_touches();
-                    }
-                    TouchPhase::Moved => {
-                        self.active_touches.insert(touch.id, touch.location);
-                        if self.active_touches.len() >= 2 {
-                            self.content_scroll_drag = None;
-                            self.update_pinch_scale();
-                        } else if self.primary_touch_id == Some(touch.id) {
-                            self.cursor_pos = touch.location;
-                            if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
-                            } else {
-                                self.with_primary_input(id, |app| {
-                                    app.handle_cursor_moved(id, touch.location, event_loop);
-                                });
-                            }
-                        }
-                        self.sync_pointer_action_touches();
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        self.active_touches.remove(&touch.id);
-                        if self.active_touches.len() < 2 {
-                            self.pinch_prev_dist = None;
-                        }
-                        if self.primary_touch_id == Some(touch.id) {
-                            self.cursor_pos = touch.location;
-                            if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
-                                self.handle_secondary_mouse_button(
-                                    id,
-                                    ElementState::Released,
-                                    MouseButton::Left,
-                                );
-                            } else {
-                                self.with_primary_input(id, |app| {
-                                    app.handle_cursor_moved(id, touch.location, event_loop);
-                                    app.handle_mouse_button(
-                                        id,
-                                        ElementState::Released,
-                                        MouseButton::Left,
-                                        Some(event_loop),
-                                    );
-                                });
-                            }
-                            self.primary_touch_id = None;
-                            // Promote another finger to primary if still down.
-                            if let Some((&nid, &npos)) = self.active_touches.iter().next() {
-                                self.primary_touch_id = Some(nid);
-                                self.cursor_pos = npos;
-                            }
-                        }
-                        self.sync_pointer_action_touches();
-                    }
-                }
-            }
-            WindowEvent::DroppedFile(path) => {
-                super::push_dropped_file(path);
-            }
-            WindowEvent::HoveredFile(_) => {}
-            WindowEvent::HoveredFileCancelled => {}
+            WindowEvent::DragDropped { .. } => {}
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
@@ -1115,13 +1077,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         self.bind_pointer_window(id);
                         super::window_scope::force_secondary_id(id);
                         if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
-                            crate::platform::glass_on_focus(&sec.window, true);
+                            crate::platform::glass_on_focus(sec.window.as_ref(), true);
                             sec.os_focused = true;
                             sec.ime_os_blur_at = None;
                             sec.window.request_redraw();
                         }
                     } else if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
-                        crate::platform::glass_on_focus(&sec.window, false);
+                        crate::platform::glass_on_focus(sec.window.as_ref(), false);
                         // Same TIP-candidate soft-blur as primary: do not drop IME immediately.
                         sec.os_focused = false;
                         let at = std::time::Instant::now() + std::time::Duration::from_millis(200);
@@ -1134,12 +1096,12 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     self.os_window_focused = true;
                     self.ime_os_blur_at = None;
                     if let Some(state) = (*self.state.borrow()).as_ref() {
-                        crate::platform::glass_on_focus(&state.window, true);
+                        crate::platform::glass_on_focus(state.window.as_ref(), true);
                     }
                 } else {
                     self.os_window_focused = false;
                     if let Some(state) = (*self.state.borrow()).as_ref() {
-                        crate::platform::glass_on_focus(&state.window, false);
+                        crate::platform::glass_on_focus(state.window.as_ref(), false);
                     }
                     self.ime_os_blur_at =
                         Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
@@ -1174,7 +1136,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     }
                 }
             }
-            WindowEvent::Resized(physical_size) => {
+            WindowEvent::SurfaceResized(physical_size) => {
                 let is_primary = (*self.state.borrow())
                     .as_ref()
                     .is_some_and(|state| state.window.id() == id);
@@ -1210,10 +1172,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
             WindowEvent::Moved(_) => {
                 if let Some(sec) = self.secondaries.borrow().get(&id) {
-                    crate::platform::glass_on_moved(&sec.window);
+                    crate::platform::glass_on_moved(sec.window.as_ref());
                 } else if let Some(state) = self.state.borrow().as_ref() {
                     if state.window.id() == id {
-                        crate::platform::glass_on_moved(&state.window);
+                        crate::platform::glass_on_moved(state.window.as_ref());
                     }
                 }
             }
@@ -1240,20 +1202,30 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
     }
 }
 
+impl Drop for super::App {
+    fn drop(&mut self) {
+        self.shutdown_renderer();
+    }
+}
+
 pub(super) fn run<F: FnMut() -> Element + 'static>(
     window_options: super::WindowOptions,
     app_builder: F,
 ) {
     crate::logging::init();
 
+    let window_options = crate::platform::apply_ohos_window_options(window_options);
     window_options.install_text_defaults();
     crate::init();
 
-    let event_loop = EventLoop::<super::RuiUserEvent>::with_user_event()
-        .build()
-        .expect("event loop");
+    if let Err(e) = crate::platform::ensure_winit_host() {
+        log::error!("{e}");
+        return;
+    }
+    let event_loop = crate::platform::build_event_loop();
     let event_loop_proxy = event_loop.create_proxy();
-    super::ui_bridge::install_proxy(event_loop_proxy.clone());
+    let (user_tx, user_rx) = std::sync::mpsc::channel();
+    super::ui_bridge::install_proxy(event_loop_proxy.clone(), user_tx);
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = super::App {
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),
@@ -1315,6 +1287,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         os_window_focused: true,
         ime_os_blur_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
+        user_events: user_rx,
         #[cfg(feature = "a11y")]
         accesskit_adapter: None,
         #[cfg(feature = "a11y")]
@@ -1323,12 +1296,20 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         custom_cursors: crate::style::CustomCursorCache::new(),
         window_options,
         #[cfg(debug_assertions)]
-        hot_reload: super::hot_reload::HotReloadState::new(event_loop_proxy),
+        hot_reload: super::hot_reload::HotReloadState::new(),
     };
-    let _ = event_loop.run_app(&mut app);
-    // Belt-and-suspenders: if exit skipped `exiting` / CloseRequested, still drop GPU
-    // before thread-local reactive Runtime destructors run.
-    app.shutdown_renderer();
+    #[cfg(not(any(target_arch = "wasm32", target_env = "ohos")))]
+    {
+        crate::platform::run_winit_app(event_loop, app);
+    }
+    #[cfg(target_env = "ohos")]
+    {
+        crate::platform::run_winit_app(event_loop, app);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::platform::spawn_winit_app(event_loop, app);
+    }
 }
 
 #[cfg(test)]

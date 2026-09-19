@@ -12,10 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::sync::Arc;
-#[cfg(debug_assertions)]
-use winit::event_loop::EventLoopProxy;
-
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use super::RuiUserEvent;
 
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
@@ -30,11 +27,10 @@ pub(super) struct HotReloadState {
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 impl HotReloadState {
     /// `wake`: after TCP thread receives a patch, wake the main event loop (under `ControlFlow::Wait` it may otherwise block until user input).
-    pub(super) fn new(wake: EventLoopProxy<RuiUserEvent>) -> Self {
+    pub(super) fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         let pending_count = Arc::new(AtomicUsize::new(0));
         let pending_count_ref = Arc::clone(&pending_count);
-        let wake_thread = wake.clone();
         let addr =
             std::env::var("RUI_HOT_RELOAD_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
         std::thread::spawn(move || {
@@ -68,7 +64,7 @@ impl HotReloadState {
                     if let Some(cmd) = parse_command(line.trim()) {
                         pending_count_ref.fetch_add(1, Ordering::Relaxed);
                         let _ = tx.send(cmd);
-                        let _ = wake_thread.send_event(RuiUserEvent::HotReloadWake);
+                        let _ = super::ui_bridge::send_user_event(RuiUserEvent::HotReloadWake);
                     }
                 }
             }
@@ -119,7 +115,7 @@ pub(super) struct HotReloadState;
 
 #[cfg(all(debug_assertions, not(feature = "hot-reload")))]
 impl HotReloadState {
-    pub(super) fn new(_wake: EventLoopProxy<RuiUserEvent>) -> Self {
+    pub(super) fn new() -> Self {
         Self
     }
 

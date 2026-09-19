@@ -279,7 +279,7 @@ impl super::App {
     }
 
     /// Complete deferred OS-blur IME release once `ime_os_blur_at` elapses.
-    fn flush_ime_os_blur_if_due(&mut self, window: &winit::window::Window) {
+    fn flush_ime_os_blur_if_due(&mut self, window: &dyn winit::window::Window) {
         let Some(at) = self.ime_os_blur_at else {
             return;
         };
@@ -356,7 +356,7 @@ impl super::App {
         super::tree_hit::pointer_hits_focus_paint(root, focused, x, y, [0.0, 0.0])
     }
 
-    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
+    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &dyn ActiveEventLoop) {
         super::window_scope::force_secondary_id(id);
         super::input_controller::clear_text_edit_frame_mutated();
         let suspended = self.is_suspended;
@@ -367,7 +367,7 @@ impl super::App {
                 return;
             };
             super::input_controller::clear_text_edit_frame_mutated();
-            let inner = sec.window.inner_size();
+            let inner = sec.window.surface_size();
             if suspended || inner.width == 0 || inner.height == 0 {
                 if !suspended && (inner.width == 0 || inner.height == 0) {
                     sec.window.request_redraw();
@@ -418,7 +418,7 @@ impl super::App {
             let render_ok = match sec.render(mouse_pos) {
                 Ok(()) => true,
                 Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
-                    let inner = sec.window.inner_size();
+                    let inner = sec.window.surface_size();
                     if inner.width > 0 && inner.height > 0 {
                         sec.resize(inner);
                     }
@@ -444,10 +444,10 @@ impl super::App {
                         sec.ime_os_blur_at = None;
                         if owner_slot.is_none() || *owner_slot == Some(id) {
                             log::warn!("RUI_IME_DIAG os blur hard-release (secondary)");
-                            super::ime_support::on_os_focus_lost(&sec.window);
-                            super::ime_support::sync_ime_focus_owner(&sec.window, None);
+                            super::ime_support::on_os_focus_lost(sec.window.as_ref());
+                            super::ime_support::sync_ime_focus_owner(sec.window.as_ref(), None);
                             super::ime_support::set_ime_allowed_latched(
-                                &sec.window,
+                                sec.window.as_ref(),
                                 false,
                                 &mut sec.ime_allowed_latched,
                             );
@@ -456,7 +456,7 @@ impl super::App {
                     }
                 }
                 Self::drive_ime_on_painted_window(
-                    &sec.window,
+                    sec.window.as_ref(),
                     id,
                     &sec.root_element,
                     &sec.text_nodes,
@@ -526,7 +526,7 @@ impl super::App {
                 )
             };
             super::tree_hit::apply_cursor(
-                &window,
+                window.as_ref(),
                 Some(event_loop),
                 &mut self.custom_cursors,
                 cursor_pick,
@@ -536,7 +536,7 @@ impl super::App {
 
     /// Bind / release OS IME on `window` from this frame's painted text-edit focus.
     fn drive_ime_on_painted_window(
-        window: &winit::window::Window,
+        window: &dyn winit::window::Window,
         window_id: WindowId,
         root: &crate::core::tree::Element,
         text_nodes: &[crate::core::tree::TextLayoutInfo],
@@ -550,7 +550,7 @@ impl super::App {
         let fid = focused.get();
         let ui_scale = window.scale_factor() as f32;
         let (win_w, win_h) = {
-            let s = window.inner_size();
+            let s = window.surface_size();
             let scale = ui_scale.max(0.001);
             (s.width as f32 / scale, s.height as f32 / scale)
         };
@@ -1194,8 +1194,8 @@ impl super::App {
     /// Hover hit-test cursor, locked while resize / list-reorder / drag-kit owns the pointer.
     fn apply_hover_cursor(
         &mut self,
-        window: &winit::window::Window,
-        event_loop: Option<&ActiveEventLoop>,
+        window: &dyn winit::window::Window,
+        event_loop: Option<&dyn ActiveEventLoop>,
         hit: Option<crate::core::tree::CursorValue>,
     ) {
         super::tree_hit::apply_session_cursor(
@@ -1240,7 +1240,7 @@ impl super::App {
         ev.buttons = self.mouse_buttons;
         ev.alt_key = self.modifiers.alt_key();
         ev.ctrl_key = self.modifiers.control_key();
-        ev.meta_key = self.modifiers.super_key();
+        ev.meta_key = self.modifiers.meta_key();
         ev.shift_key = self.modifiers.shift_key();
         ev.movement_x = mx;
         ev.movement_y = my;
@@ -1316,7 +1316,7 @@ impl super::App {
         &mut self,
         id: WindowId,
         position: winit::dpi::PhysicalPosition<f64>,
-        _event_loop: &ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
     ) {
         // Latest sample wins. Hit-testing is deferred to present so a page slide
         // does not starve Marker spin. The wake must still retry: Windows coalesces
@@ -1336,7 +1336,7 @@ impl super::App {
     pub(super) fn flush_pending_cursor_moved(
         &mut self,
         id: WindowId,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
     ) {
         if !self.cursor_move_pending {
             return;
@@ -1350,7 +1350,7 @@ impl super::App {
         &mut self,
         id: WindowId,
         position: winit::dpi::PhysicalPosition<f64>,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
     ) {
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -1518,6 +1518,7 @@ impl super::App {
         });
         let input_drag_needs_redraw = self.input_drag_rest.is_some() && self.left_button_down;
 
+        let mut pending_drag_hover: Option<(String, usize)> = None;
         if !overlay_dragging && self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
                 // When the pointer is not over any drag handle in this list, fall back to the
@@ -1536,8 +1537,7 @@ impl super::App {
                 }
                 if drag.hover_index != Some(new_hover) {
                     drag.hover_index = Some(new_hover);
-                    let hk = crate::utils::drag_reorder::drag_hover_signal_key(&drag.list_id);
-                    crate::core::reactivity::use_signal(&hk, || None::<usize>).set(Some(new_hover));
+                    pending_drag_hover = Some((drag.list_id.clone(), new_hover));
                     window.request_redraw();
                 }
             }
@@ -1564,7 +1564,7 @@ impl super::App {
         // Default ↔ Grabbing (Windows 默认指针 ↔ 移动指针).
         if !pointer_path_unchanged {
             super::tree_hit::apply_session_cursor(
-                &window,
+                window.as_ref(),
                 Some(event_loop),
                 &mut self.custom_cursors,
                 cursor_pick.clone(),
@@ -1586,7 +1586,7 @@ impl super::App {
         // Active drag: follow from LAST_HITS (no tree walk). Pending still collects
         // so threshold-cross can freeze items. Collision / 跨区 hover runs on vsync.
         let drag_viewport = if crate::utils::drag::is_dragging() {
-            let size = state.window.inner_size();
+            let size = state.window.surface_size();
             let scale = state.window.scale_factor() as f32;
             [
                 size.width as f32 / scale.max(1.0),
@@ -1614,6 +1614,11 @@ impl super::App {
         };
 
         drop(state_borrow);
+        // C1: hover bind must not `Signal::set` while AppState is borrowed.
+        if let Some((list_id, idx)) = pending_drag_hover {
+            crate::utils::drag_reorder::set_drag_hover(&list_id, Some(idx));
+        }
+        crate::components::drawer::drain_drawer_layout_bumps();
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
             let now = std::time::Instant::now();
             self.bump_scrollbar_visible_until_axis(
@@ -1885,11 +1890,11 @@ impl super::App {
             window.request_redraw();
         }
         if !pointer_path_unchanged {
-            self.apply_hover_cursor(&window, Some(event_loop), cursor_pick);
+            self.apply_hover_cursor(window.as_ref(), Some(event_loop), cursor_pick);
         }
     }
 
-    pub(super) fn handle_cursor_left(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
+    pub(super) fn handle_cursor_left(&mut self, id: WindowId, event_loop: &dyn ActiveEventLoop) {
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -1936,14 +1941,14 @@ impl super::App {
         // Always wake a frame: utility-class `:hover` must clear when the pointer leaves
         // the window, even if no scroll-area hover latch was set.
         window.request_redraw();
-        self.apply_hover_cursor(&window, Some(event_loop), None);
+        self.apply_hover_cursor(window.as_ref(), Some(event_loop), None);
     }
 
     pub(super) fn handle_mouse_input(
         &mut self,
         id: WindowId,
         element_state: ElementState,
-        event_loop: Option<&ActiveEventLoop>,
+        event_loop: Option<&dyn ActiveEventLoop>,
     ) {
         if element_state == ElementState::Pressed {
             // Drop a stale press path if this gesture never reaches mousedown dispatch
@@ -2273,7 +2278,7 @@ impl super::App {
                         self.left_button_down = true;
                         if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                             super::tree_hit::apply_cursor(
-                                &st.window,
+                                st.window.as_ref(),
                                 event_loop,
                                 &mut self.custom_cursors,
                                 Some(crate::core::tree::CursorKind::NwseResize.into()),
@@ -2291,8 +2296,7 @@ impl super::App {
                             from_index: idx,
                             hover_index: Some(idx),
                         });
-                        let hk = crate::utils::drag_reorder::drag_hover_signal_key(&list_id);
-                        crate::core::reactivity::use_signal(&hk, || None::<usize>).set(Some(idx));
+                        crate::utils::drag_reorder::set_drag_hover(&list_id, Some(idx));
                         let focus_visible =
                             crate::core::reactivity::use_signal("__rui_focus_visible", || false);
                         focus_visible.set(false);
@@ -2382,7 +2386,7 @@ impl super::App {
             // so delay clocks and sensors see the hold.
             if crate::utils::drag::is_dragging() {
                 let (hits, viewport) = if let Some(st) = (*self.state.borrow()).as_ref() {
-                    let size = st.window.inner_size();
+                    let size = st.window.surface_size();
                     let scale = st.window.scale_factor() as f32;
                     (
                         crate::utils::drag::collect_hits(&st.root_element),
@@ -2647,9 +2651,9 @@ impl super::App {
                 let fid = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
                     .peek();
                 if super::ime_support::is_text_edit_focus(&fid) {
-                    super::ime_support::sync_ime_focus_owner(&st.window, Some(&fid));
+                    super::ime_support::sync_ime_focus_owner(st.window.as_ref(), Some(&fid));
                 } else {
-                    super::ime_support::sync_ime_focus_owner(&st.window, None);
+                    super::ime_support::sync_ime_focus_owner(st.window.as_ref(), None);
                 }
             }
 
@@ -2691,8 +2695,7 @@ impl super::App {
             }
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
-                let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
-                crate::core::reactivity::use_signal(&hk, || None::<usize>).set(None);
+                crate::utils::drag_reorder::set_drag_hover(&st_drag.list_id, None);
                 let h = st_drag.hover_index.unwrap_or(st_drag.from_index);
                 if h != st_drag.from_index {
                     let ck = crate::utils::drag_reorder::drag_commit_signal_key(&st_drag.list_id);
@@ -2790,14 +2793,6 @@ impl super::App {
     pub(super) fn handle_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         #[cfg(debug_assertions)]
         let wheel_start = std::time::Instant::now();
-        let lines = super::scroll_support::get_system_scroll_lines();
-        let line_height = 25.0; // Base line height for scrolling
-        let (dx, dy) = match delta {
-            MouseScrollDelta::LineDelta(dx, dy) => {
-                (dx * lines * line_height, dy * lines * line_height)
-            }
-            MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
-        };
 
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -2806,6 +2801,7 @@ impl super::App {
         };
 
         let scale_factor = state.window.scale_factor() as f32;
+        let (dx, dy) = super::scroll_support::wheel_delta_logical_px(delta, scale_factor);
         let x = self.cursor_pos.x as f32 / scale_factor.max(1.0);
         let y = self.cursor_pos.y as f32 / scale_factor.max(1.0);
 
@@ -3188,7 +3184,7 @@ impl super::App {
         false
     }
 
-    pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
+    pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &dyn ActiveEventLoop) {
         self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();
@@ -3202,7 +3198,7 @@ impl super::App {
                 match guard.as_ref() {
                     Some(st) if st.window.id() == id => {
                         let hits = crate::utils::drag::collect_hits(&st.root_element);
-                        let size = st.window.inner_size();
+                        let size = st.window.surface_size();
                         let scale = st.window.scale_factor() as f32;
                         Some((
                             hits,
@@ -3313,7 +3309,7 @@ impl super::App {
             self.force_redraw_count = self.force_redraw_count.max(2);
         }
 
-        let inner_sz = state.window.inner_size();
+        let inner_sz = state.window.surface_size();
         let suspended = self.is_suspended;
         let win_for_retry = state.window.clone();
         if suspended || inner_sz.width == 0 || inner_sz.height == 0 {
@@ -3930,7 +3926,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // another window — that would wipe secondary I-beam / Pointer mid-hover.
                 if pointer_on_primary {
                     super::tree_hit::apply_session_cursor(
-                        &window,
+                        window.as_ref(),
                         Some(event_loop),
                         &mut self.custom_cursors,
                         hover_cursor_pick.clone(),
@@ -3946,7 +3942,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let fid = focused.get();
                 let ui_scale = state.ui_scale();
                 let (win_w, win_h) = {
-                    let s = state.window.inner_size();
+                    let s = state.window.surface_size();
                     let scale = ui_scale.max(0.001);
                     (s.width as f32 / scale, s.height as f32 / scale)
                 };
@@ -4476,7 +4472,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
                 if pointer_on_primary {
                     super::tree_hit::apply_session_cursor(
-                        &window,
+                        window.as_ref(),
                         Some(event_loop),
                         &mut self.custom_cursors,
                         hover_cursor_pick,
@@ -4489,7 +4485,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
 
                 // Soft-blur (`ime_os_blur_at`): do not cancel yet — TIP candidate click can
                 // briefly steal winit focus. Hard release runs after the deadline.
-                self.flush_ime_os_blur_if_due(&window);
+                self.flush_ime_os_blur_if_due(window.as_ref());
                 if let Some((visual, scroll_acc, fid_clone, source)) = ime_data {
                     if self.os_window_focused {
                         let allow_ime = super::ime_support::text_edit_rest(&fid_clone)
@@ -4506,9 +4502,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             .unwrap_or(true);
                         // Keep focus-owner sync even for password (field-switch cancel);
                         // only `set_ime_allowed` / cursor drive depend on `allows_ime`.
-                        super::ime_support::sync_ime_focus_owner(&window, Some(&fid_clone));
+                        super::ime_support::sync_ime_focus_owner(window.as_ref(), Some(&fid_clone));
                         super::ime_support::set_ime_allowed_latched(
-                            &window,
+                            window.as_ref(),
                             allow_ime,
                             &mut self.ime_allowed_latched,
                         );
@@ -4585,7 +4581,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 ui_scale,
                             );
                             super::ime_support::apply_ime_cursor_area(
-                                &window,
+                                window.as_ref(),
                                 ax,
                                 ay,
                                 caret_w,
@@ -4617,18 +4613,18 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     } else if self.ime_owner_window == Some(window.id())
                         || self.ime_owner_window.is_none()
                     {
-                        super::ime_support::sync_ime_focus_owner(&window, None);
+                        super::ime_support::sync_ime_focus_owner(window.as_ref(), None);
                         super::ime_support::set_ime_allowed_latched(
-                            &window,
+                            window.as_ref(),
                             false,
                             &mut self.ime_allowed_latched,
                         );
                         self.ime_owner_window = None;
                     }
                 } else if self.ime_owner_window == Some(window.id()) {
-                    super::ime_support::sync_ime_focus_owner(&window, None);
+                    super::ime_support::sync_ime_focus_owner(window.as_ref(), None);
                     super::ime_support::set_ime_allowed_latched(
-                        &window,
+                        window.as_ref(),
                         false,
                         &mut self.ime_allowed_latched,
                     );
@@ -4677,7 +4673,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
             Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
                 let mut rb = self.state.borrow_mut();
                 if let Some(state) = rb.as_mut() {
-                    let inner = state.window.inner_size();
+                    let inner = state.window.surface_size();
                     if inner.width > 0 && inner.height > 0 {
                         state.resize(inner);
                     }
@@ -4708,7 +4704,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
         id: WindowId,
         element_state: ElementState,
         button: MouseButton,
-        event_loop: Option<&ActiveEventLoop>,
+        event_loop: Option<&dyn ActiveEventLoop>,
     ) {
         if let Some(event_loop) = event_loop {
             self.flush_pending_cursor_moved(id, event_loop);

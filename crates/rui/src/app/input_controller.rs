@@ -52,10 +52,10 @@ pub(super) fn clear_text_edit_frame_mutated() {
 /// Printable insert / Backspace / Delete — OS key-repeat of these must be 1-per-frame.
 fn is_text_hold_mutation_key(key: &Key) -> bool {
     match key {
-        Key::Named(NamedKey::Backspace | NamedKey::Delete | NamedKey::Space | NamedKey::Enter) => {
-            true
+        Key::Named(NamedKey::Backspace | NamedKey::Delete | NamedKey::Enter) => true,
+        Key::Character(s) => {
+            s.as_str() == " " || (!s.is_empty() && s.chars().any(|c| !c.is_control()))
         }
-        Key::Character(s) => !s.is_empty() && s.chars().any(|c| !c.is_control()),
         _ => false,
     }
 }
@@ -177,7 +177,8 @@ pub(crate) fn named_key_blocks_text_insert(key: &Key) -> bool {
         return true;
     }
     match key {
-        Key::Named(NamedKey::Space | NamedKey::Enter) => false,
+        Key::Named(NamedKey::Enter) => false,
+        Key::Character(s) if s.as_str() == " " => false,
         Key::Named(_) => true,
         _ => false,
     }
@@ -391,6 +392,7 @@ impl super::App {
                     ime_support::record_ime_commit(rest, &filtered);
                 }
             }
+            _ => {}
         }
         self.request_ime_redraw(window_id);
     }
@@ -399,13 +401,13 @@ impl super::App {
         if self.is_secondary_window(window_id) {
             if let Some(sec) = self.secondaries.borrow_mut().get_mut(&window_id) {
                 ime_support::set_ime_allowed_latched(
-                    &sec.window,
+                    sec.window.as_ref(),
                     false,
                     &mut sec.ime_allowed_latched,
                 );
             }
         } else if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-            ime_support::set_ime_allowed_latched(&st.window, false, &mut self.ime_allowed_latched);
+            ime_support::set_ime_allowed_latched(st.window.as_ref(), false, &mut self.ime_allowed_latched);
         }
     }
 
@@ -1758,7 +1760,7 @@ mod tests {
         assert!(is_tab_key(&Key::Named(NamedKey::Tab)));
         assert!(is_tab_key(&Key::Character("\t".into())));
         assert!(!is_tab_key(&Key::Character("a".into())));
-        assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Space)));
+        assert!(!named_key_blocks_text_insert(&Key::Character(" ".into())));
         assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Enter)));
         assert!(!named_key_blocks_text_insert(&Key::Character("a".into())));
         // Character(U+001B) may still appear; discarded by strip_control_insert, not in the Named guard.

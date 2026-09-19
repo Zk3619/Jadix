@@ -659,8 +659,8 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
 }
 
 pub(super) fn apply_cursor(
-    window: &winit::window::Window,
-    event_loop: Option<&winit::event_loop::ActiveEventLoop>,
+    window: &dyn winit::window::Window,
+    event_loop: Option<&dyn winit::event_loop::ActiveEventLoop>,
     cache: &mut crate::style::CustomCursorCache,
     value: Option<CursorValue>,
 ) {
@@ -694,8 +694,8 @@ pub(super) fn session_owned_cursor(
 }
 
 pub(super) fn apply_session_cursor(
-    window: &winit::window::Window,
-    event_loop: Option<&winit::event_loop::ActiveEventLoop>,
+    window: &dyn winit::window::Window,
+    event_loop: Option<&dyn winit::event_loop::ActiveEventLoop>,
     cache: &mut crate::style::CustomCursorCache,
     hit: Option<CursorValue>,
     nwse_resize: bool,
@@ -2068,10 +2068,7 @@ pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &Ke
     if event.state != ElementState::Pressed || event.repeat {
         return false;
     }
-    let activate = matches!(
-        event.logical_key,
-        Key::Named(NamedKey::Space) | Key::Named(NamedKey::Enter)
-    );
+    let activate = crate::utils::keyboard::is_enter_or_space(&event.logical_key);
     if activate && handlers.focusable {
         if let Some(cb) = &handlers.on_click {
             cb.borrow_mut()();

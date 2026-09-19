@@ -38,7 +38,7 @@ unsafe impl Send for SecondaryUiBuilder {}
 /// Per-secondary-window render state (independent UI tree + swapchain).
 pub(super) struct SecondaryWindowState {
     // Drop order: reverse of declaration — surface before device / window.
-    pub(super) window: Arc<Window>,
+    pub(super) window: Arc<dyn Window>,
     /// Owned when this window uses a compositor-alpha GPU (Vulkan sidecar).
     _glass_instance: Option<wgpu::Instance>,
     _glass_adapter: Option<wgpu::Adapter>,
@@ -123,7 +123,7 @@ impl SecondaryWindowState {
     }
 
     pub(super) fn new(
-        window: Arc<Window>,
+        window: Arc<dyn Window>,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         instance: &wgpu::Instance,
@@ -133,7 +133,7 @@ impl SecondaryWindowState {
         chrome: super::window_chrome::WindowOptions,
     ) -> Result<Self, String> {
         let compositor_alpha = chrome.compositor_alpha();
-        let size = window.inner_size();
+        let size = window.surface_size();
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| format!("secondary window: create_surface failed: {e}"))?;
@@ -153,7 +153,7 @@ impl SecondaryWindowState {
             desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
-        super::window_chrome::apply_created_window(&window, &chrome, false);
+        super::window_chrome::apply_created_window(window.as_ref(), &chrome, false);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
         let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
@@ -233,7 +233,7 @@ impl SecondaryWindowState {
     }
 
     pub(super) fn from_compositor(
-        window: Arc<Window>,
+        window: Arc<dyn Window>,
         gpu: super::glass_gpu::CompositorGpu,
         mut root_element: Element,
         chrome: super::window_chrome::WindowOptions,
@@ -248,7 +248,7 @@ impl SecondaryWindowState {
             surface,
             config,
         } = gpu;
-        super::window_chrome::apply_created_window(&window, &chrome, composition_swapchain);
+        super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
         let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
@@ -342,7 +342,7 @@ impl SecondaryWindowState {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         super::window_chrome::apply_created_window(
-            &self.window,
+            self.window.as_ref(),
             &self.chrome,
             self.composition_swapchain,
         );
@@ -359,7 +359,7 @@ impl SecondaryWindowState {
     pub(super) fn recover_surface(&mut self) {
         self.surface.configure(&self.device, &self.config);
         super::window_chrome::apply_created_window(
-            &self.window,
+            self.window.as_ref(),
             &self.chrome,
             self.composition_swapchain,
         );
@@ -373,7 +373,7 @@ impl SecondaryWindowState {
         &mut self,
         mouse_pos: [f32; 2],
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
-        let inner = self.window.inner_size();
+        let inner = self.window.surface_size();
         if inner.width > 0
             && inner.height > 0
             && (inner.width != self.config.width || inner.height != self.config.height)
@@ -727,7 +727,9 @@ impl SecondaryWindowState {
                 );
             }
 
-            // Page input caret / selection chrome (before page glyphs).
+            self.text_renderer.render(&mut render_pass);
+
+            // Page I-beam above page glyphs (swapchain overlay; not baked under text).
             if overlay_chrome_start > 0 {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
@@ -777,8 +779,6 @@ impl SecondaryWindowState {
                 );
             }
 
-            self.text_renderer.render(&mut render_pass);
-
             // Portal overlay: per-band `rects → text` so panels occlude lower glyphs.
             for (band_i, band) in overlay_band_ranges.iter().enumerate() {
                 if band.instance.0 < band.instance.1 {
@@ -808,31 +808,6 @@ impl SecondaryWindowState {
                         band.textured.0,
                         band.textured.1,
                         None,
-                    );
-                }
-
-                if band.chrome.0 < band.chrome.1 {
-                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
-                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
-                    let chrome_buffer =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("Secondary Overlay Input Chrome Buffer"),
-                                contents: bytemuck::cast_slice(chrome_slice),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            });
-                    render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-                    render_pass.set_index_buffer(
-                        self.pipeline.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    render_pass.draw_indexed(
-                        0..self.pipeline.num_indices,
-                        0,
-                        0..chrome_slice.len() as u32,
                     );
                 }
 
@@ -868,6 +843,31 @@ impl SecondaryWindowState {
                     } else {
                         self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
                     }
+                }
+
+                if band.chrome.0 < band.chrome.1 {
+                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                    let chrome_buffer =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Secondary Overlay Input Chrome Buffer"),
+                                contents: bytemuck::cast_slice(chrome_slice),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+                    render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        0..chrome_slice.len() as u32,
+                    );
                 }
             }
         }
