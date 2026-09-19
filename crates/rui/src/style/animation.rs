@@ -574,6 +574,14 @@ pub struct AnimationSnapshot {
 }
 
 impl AnimationSnapshot {
+    /// Drop the CSS-timeline stamp so the next tick advances by the caller-supplied
+    /// `dt` only. Modal shell already caps that `dt`; keeping `last_tick_ms` would
+    /// apply an 80–150ms first-open layout hitch as keyframe wall time and skip a
+    /// 200ms Dialog / AlertDialog fade.
+    pub(crate) fn clear_timeline_stamp(&mut self) {
+        self.last_tick_ms = None;
+    }
+
     /// True while some entry still has time left to play.
     ///
     /// A finished finite animation is deliberately *not* active: `fill-mode: forwards`
@@ -2303,6 +2311,41 @@ pub fn snap_element_transitions_to_current(
             },
         );
     }
+}
+
+/// Freeze-path `:hover` color is geometric: overlay / leave writes the specified fill,
+/// then the following transition tick must not put the previous used color back.
+///
+/// Button `transition-colors` (~150ms) seeds `from=rest` before overlay. Without this
+/// settle, enter never shows hover paint and leave keeps hover ink until scroll settles.
+pub(crate) fn settle_hover_paint_tweens(
+    style: &super::Style,
+    text: &mut super::text_style::TextStyle,
+    snapshot: &mut TransitionSnapshot,
+) {
+    TRANSITION_TEXT.with(|c| *c.borrow_mut() = Some(text as *mut _));
+    for (prop, tween) in snapshot.tweens.iter_mut() {
+        if !is_color_transition_prop(*prop) {
+            continue;
+        }
+        let (cur, n) = extract_prop(style, *prop);
+        if n == 0 {
+            continue;
+        }
+        tween.from = cur;
+        tween.to = cur;
+        tween.written = Some(cur);
+        tween.active = false;
+        tween.vel = [0.0; 8];
+    }
+    if let Some(st) = snapshot.shadow_tween.as_mut() {
+        let cur = shadow_layers(style);
+        st.from = cur.clone();
+        st.to = cur.clone();
+        st.written = Some(cur);
+        st.active = false;
+    }
+    TRANSITION_TEXT.with(|c| *c.borrow_mut() = None);
 }
 
 /// Tick CSS transitions for a single element. Returns `true` if any tween is still active.

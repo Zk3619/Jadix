@@ -516,6 +516,56 @@ pub fn patch_class_set_base_shadow(el: &mut Element, color: [f32; 4], blur: f32)
     cs.last_ctx_fp = None;
 }
 
+/// Keep jump-button opacity / transform / shadow / `transition` in the restore snapshot.
+///
+/// `button()` snapshots class chrome *before* MessageScroller writes hide pose and
+/// `transition: opacity, transform`. [`resolve_class_variants`] clones that snapshot
+/// over the live style every frame, which dropped the motion entries so CSS tick
+/// discarded the tween and Latest popped in at the end pose (dest-reset punching
+/// wrapping thread).
+pub fn patch_class_set_base_motion(el: &mut Element) {
+    let opacity = el.style.opacity;
+    let scale = el.style.scale;
+    let translate = el.style.translate;
+    let translate_pct = el.style.translate_pct;
+    let shadow_color = el.style.shadow_color;
+    let shadow_offset = el.style.shadow_offset;
+    let shadow_blur = el.style.shadow_blur;
+    let shadow_spread = el.style.shadow_spread;
+    let extra_shadows = el.style.extra_shadows.clone();
+    let transition = el.style.transition.clone();
+    let Some(cs) = el.class_set.as_mut() else {
+        return;
+    };
+    let Some(s) = cs.base_style.as_mut() else {
+        return;
+    };
+    let same = (s.opacity - opacity).abs() <= 0.001
+        && s.scale == scale
+        && s.translate == translate
+        && s.translate_pct == translate_pct
+        && s.shadow_color == shadow_color
+        && s.shadow_offset == shadow_offset
+        && (s.shadow_blur - shadow_blur).abs() <= 0.01
+        && (s.shadow_spread - shadow_spread).abs() <= 0.01
+        && s.extra_shadows == extra_shadows
+        && s.transition == transition;
+    if same {
+        return;
+    }
+    s.opacity = opacity;
+    s.scale = scale;
+    s.translate = translate;
+    s.translate_pct = translate_pct;
+    s.shadow_color = shadow_color;
+    s.shadow_offset = shadow_offset;
+    s.shadow_blur = shadow_blur;
+    s.shadow_spread = shadow_spread;
+    s.extra_shadows = extra_shadows;
+    s.transition = transition;
+    cs.last_ctx_fp = None;
+}
+
 /// Copy the chip's resolved text color onto descendant glyphs.
 pub const ATTR_SYNC_LABEL_FG: &str = "rui_sync_label_fg";
 
@@ -916,6 +966,14 @@ pub fn tick_active_css_transitions_subtree(
         let mut local = LayoutStatus::Clean;
         if force_leave {
             local = resolve_stale_class_hover_leave(el, focused_id, dark, viewport_w);
+            // Color `:hover` is geometric. Button `transition-colors` would otherwise
+            // write the last used hover fill back after snapshot restore.
+            let inner = &mut *el.inner;
+            super::animation::settle_hover_paint_tweens(
+                &inner.style,
+                &mut inner.text_style,
+                &mut inner.transition_snapshot,
+            );
         } else if force_hover_enter {
             // Seed idle transform tween slots from the used (rest) value *before*
             // overlaying `hover:scale`. Otherwise `tick` would `or_insert` with
@@ -932,6 +990,12 @@ pub fn tick_active_css_transitions_subtree(
                 );
             }
             local = resolve_scroll_hover_enter(el, focused_id, dark, viewport_w);
+            let inner = &mut *el.inner;
+            super::animation::settle_hover_paint_tweens(
+                &inner.style,
+                &mut inner.text_style,
+                &mut inner.transition_snapshot,
+            );
         }
 
         if has_spin
@@ -994,18 +1058,26 @@ pub fn tick_active_css_transitions_subtree(
                 {
                     mark_hover_paint_dirty();
                 }
-                if spun || css_anim || css_trans || hover_edge {
+                if spun
+                    || css_anim
+                    || css_trans
+                    || hover_edge
+                    || (el.style.opacity - before.opacity).abs() > 1e-5
+                {
                     // Paint-only motion must be a node-present dirty. StyleChanged with an
                     // empty damage list FullClears; a sibling Input PartialLoad would skip
                     // this icon and the retain angle jumps on the next Clear.
                     // Color hover enter/leave has no tween: without a pin, scroll blit
                     // keeps the previous hover/rest ink until settle.
+                    // Opacity tween *complete* returns css_trans=false after writing 0;
+                    // still dest-reset or Latest hide retains the last faded pill.
                     crate::app::damage::push_frame_paint_element(el, scroll_acc);
                 }
                 if css_trans
                     || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
                     || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
                     || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
+                    || (el.style.opacity - before.opacity).abs() > 1e-5
                     || hover_edge
                 {
                     // Hover color leave is paint-only on an idle chip. Passing
@@ -1786,13 +1858,19 @@ fn sync_class_variants_subtree_inner(
                         {
                             mark_hover_paint_dirty();
                         }
-                        if spun || css_anim || css_trans || hover_edge {
+                        if spun
+                            || css_anim
+                            || css_trans
+                            || hover_edge
+                            || (el.style.opacity - before.opacity).abs() > 1e-5
+                        {
                             crate::app::damage::push_frame_paint_element(el, scroll_acc);
                         }
                         if css_trans
                             || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
                             || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
                             || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
+                            || (el.style.opacity - before.opacity).abs() > 1e-5
                             || el.text_style != before_text
                             || hover_edge
                         {
