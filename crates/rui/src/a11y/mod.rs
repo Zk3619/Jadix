@@ -1,10 +1,12 @@
 //! Accessibility layer: AccessKit tree bridge (Element → `TreeUpdate`) and action dispatch.
 //!
-//! Compiled only with crate feature `a11y` (`accesskit` / `accesskit_winit` optional deps).
+//! Compiled only with crate feature `a11y` (`accesskit` optional dep).
 //! Element `accesskit_role` / `accesskit_name` attrs still compile without the feature.
 //!
-//! Runtime wiring (`accesskit_winit::Adapter`) stays in [`crate::app::lifecycle`]; this
+//! Runtime wiring ([`winit_adapter::Adapter`]) stays in [`crate::app::lifecycle`]; this
 //! module owns the pure tree/action mapping.
+
+pub mod winit_adapter;
 //!
 //! **Boundary (WP-1.3 vs identity engineering):**
 //! - **In scope here:** Role/name/value/Action mapping; `Window`→`Document` content tree;
