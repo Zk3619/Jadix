@@ -278,6 +278,37 @@ pub(crate) fn hoisted_expand_measuring(root: &Element) -> bool {
     yes
 }
 
+fn hoisted_portal_own_ink(el: &Element) -> bool {
+    el.style.bg_color[3] > 0.0
+        || el.style.bg_gradient.is_some()
+        || el.style.shadow_color[3] > 0.0
+        || el.style.border_width > 0.0
+        || el.style.backdrop_blur > 0.5
+}
+
+fn hoisted_portal_child_paint_union(el: &Element) -> Option<[f32; 4]> {
+    let mut acc: Option<[f32; 4]> = None;
+    for child in &el.children {
+        let Some(c) = hoisted_portal_paint_box(child) else {
+            continue;
+        };
+        if c[2] <= 0.0 || c[3] <= 0.0 {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(p) => {
+                let x = p[0].min(c[0]);
+                let y = p[1].min(c[1]);
+                let x2 = (p[0] + p[2]).max(c[0] + c[2]);
+                let y2 = (p[1] + p[3]).max(c[1] + c[3]);
+                [x, y, x2 - x, y2 - y]
+            }
+            None => c,
+        });
+    }
+    acc
+}
+
 fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
     if el
         .attrs
@@ -293,6 +324,14 @@ fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
     let mut b = crate::core::tree::visual_paint_aabb(el, [0.0, 0.0]);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return None;
+    }
+    // Dialog/Sheet centering stage is `inset 0` / 100% with no fill. Recording that
+    // empty host as occupancy dest-resets the sibling scrim on a zoom/slide CSS tick.
+    // Occupancy is GPU ink, not the flex host.
+    if !hoisted_portal_own_ink(el) {
+        if let Some(kids) = hoisted_portal_child_paint_union(el) {
+            b = kids;
+        }
     }
     if let Some(h) = crate::layout::dim_length_px(el.style.max_size.height) {
         if h >= 0.0 {
@@ -5539,7 +5578,6 @@ impl LayoutTree {
             // 有圆角时 strip 路径把 radii 钉成 0，ButtonGroup 端段会丢圆角；改走 SDF
             //（零宽侧仍会画一笔，叠在前一段共享边上，观感与 ShadCN border-l-0 一致）。
             && !element.style.radii.iter().any(|r| *r > 0.5);
-        let sdf_border_w = if use_border_strips { 0.0 } else { border_w };
         let paint_bg = crate::components::scrollbar::auto_scrollbar_restore_base_alpha(
             element,
             element.style.bg_color,
@@ -5548,13 +5586,22 @@ impl LayoutTree {
             element,
             representative_border_color(&element.style),
         );
+        // ShadCN `border-transparent` keeps a 1px width for layout. Width-only
+        // `has_border` still pushed an SDF stroke (gallery Item outline→default
+        // left a 1px ring and darkened title AA against that instance).
+        let visible_border = paint_border[3] > 0.001;
+        let sdf_border_w = if use_border_strips || !visible_border {
+            0.0
+        } else {
+            border_w
+        };
         let sdf_border_color = if use_border_strips {
             [0.0, 0.0, 0.0, 0.0]
         } else {
             mul_color_alpha(paint_border, opacity)
         };
         let sdf_border_extra = {
-            let bs = if use_border_strips {
+            let bs = if use_border_strips || !visible_border {
                 0.0
             } else {
                 element.style.border_style.to_shader_f32()
@@ -5566,7 +5613,7 @@ impl LayoutTree {
             )
         };
         let has_bg = paint_bg[3] > 0.0 || element.style.bg_gradient.is_some();
-        let has_border = border_w > 0.0;
+        let has_border = border_w > 0.0 && visible_border;
         let has_shadow = element.style.shadow_color[3] > 0.0;
         // Page-stack `backdrop-filter` is sampled on this element's SDF instance
         // (modal underlays keep the fullscreen blit and must not double-sample).
@@ -7449,22 +7496,22 @@ fn scrollbar_track_overlay_abs(
     let allow_y = !sig.overflow_y.eq_ignore_ascii_case("hidden")
         && !sig.overflow_y.eq_ignore_ascii_case("clip")
         && !sig.overflow_y.eq_ignore_ascii_case("visible");
-    // Overlay Taffy box tracks the live viewport (absolute top/bottom). Maximize
-    // frames still peek last-frame signals; a rail that now covers its content
-    // must not keep painting from those leftovers (nested MessageScroller
-    // overflow must not light the sidebar track).
-    let along_live = if axis == "x" { layout_w } else { layout_h };
-    let (vw_vis, vh_vis) = if along_live > 1.0 {
-        if axis == "x" {
-            (along_live, vh)
-        } else {
-            (vw, along_live)
-        }
-    } else {
-        (vw, vh)
-    };
-    let can_scroll_x = allow_x && cw > vw_vis + 0.5;
-    let can_scroll_y = allow_y && ch > vh_vis + 0.5;
+    // Overflow vs the *viewport*, not the overlay track box. Absolute left/right
+    // (and top/bottom) inset the track by edge-pad + the orthogonal bar, so a
+    // 100% row is ~10–16px “wider” than the track and would paint a phantom
+    // H-bar after Gallery Match page switches (ViewportsOnly overlay collect).
+    let mut can_scroll_x = allow_x && cw > vw + 0.5;
+    let mut can_scroll_y = allow_y && ch > vh + 0.5;
+    // Maximize / leftover signals: if the live overlay box already covers content,
+    // hide even when last-frame vw/vh still look overflowed.
+    if layout_w > 1.0 && cw <= layout_w + 0.5 {
+        can_scroll_x = false;
+    }
+    if layout_h > 1.0 && ch <= layout_h + 0.5 {
+        can_scroll_y = false;
+    }
+    let vw_vis = if vw > 1.0 { vw } else { layout_w.max(1.0) };
+    let vh_vis = if vh > 1.0 { vh } else { layout_h.max(1.0) };
     let allow_axis = if axis == "x" { allow_x } else { allow_y };
     let scrollable = if axis == "x" {
         can_scroll_x

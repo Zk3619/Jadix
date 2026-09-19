@@ -448,6 +448,11 @@ pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
     if el.collect_skip_live {
         return false;
     }
+    // Wave 52: hash surgically zeroed by reconcile / Window FullClear — must
+    // recollect. (Fresh nodes also start at 0; first stamp fills the cache.)
+    if el.collect_paint_hash == 0 {
+        return false;
+    }
     if node_has_collect_side_channel(el) {
         return false;
     }
@@ -532,6 +537,63 @@ fn node_collect_is_live(el: &Element) -> bool {
         return true;
     }
     el.transition_snapshot.has_active_tweens()
+}
+
+/// Zero paint hashes from `root` down `path` so ViewportsOnly `reuse_idle` will
+/// rehash that spine (and only that spine) instead of skip-replaying idle wrappers.
+///
+/// Bind `StyleChanged` (gallery Item `variant={sig}`) writes new chrome on a node
+/// that is not `:hover`. Hovering the clicked button keeps `scroll_only` + idle
+/// ancestors, so `stamp_subtree_paint_hashes(reuse_idle=true)` would return the
+/// previous hash without walking the Item. Pointer leave hash-busts the whole
+/// tree — this is the surgical equivalent for in-place binds.
+pub(crate) fn invalidate_collect_paint_hash_path(root: &mut Element, path: &[usize]) {
+    let mut el = root;
+    el.collect_paint_hash = 0;
+    for &index in path {
+        if index >= el.children.len() {
+            return;
+        }
+        el = &mut el.children[index];
+        el.collect_paint_hash = 0;
+    }
+    // Variant bind zeros the Item spine; title/media leaves must rehash too or
+    // reuse_idle skip-replays "Reactive variant: outline" on top of the new
+    // chrome (stacked glyphs + leftover ring).
+    zero_collect_paint_hash_descendants(el);
+}
+
+fn zero_collect_paint_hash_descendants(el: &mut Element) {
+    for child in &mut el.children {
+        child.collect_paint_hash = 0;
+        zero_collect_paint_hash_descendants(child);
+    }
+}
+
+/// Zero hashes on the DFS path to `template_id` (secondary windows have no child-index cache).
+pub(crate) fn invalidate_collect_paint_hash_for_template(
+    root: &mut Element,
+    template_id: &str,
+) -> bool {
+    fn rec(el: &mut Element, want: &str) -> bool {
+        let hit = el
+            .template_id
+            .as_deref()
+            .is_some_and(|id| id.replace('\\', "/").eq_ignore_ascii_case(want));
+        if hit {
+            el.collect_paint_hash = 0;
+            zero_collect_paint_hash_descendants(el);
+            return true;
+        }
+        for child in &mut el.children {
+            if rec(child, want) {
+                el.collect_paint_hash = 0;
+                return true;
+            }
+        }
+        false
+    }
+    rec(root, template_id)
 }
 
 /// Bottom-up paint hash so a dirty leaf invalidates ancestors but not siblings.
@@ -1472,7 +1534,13 @@ mod tests {
 
     #[test]
     fn ordinary_subtree_with_children_is_skippable() {
-        assert!(subtree_is_skippable(&el_with_child()));
+        let mut el = el_with_child();
+        // Wave 52: hash 0 means surgically invalidated / never stamped — not skippable.
+        el.collect_paint_hash = 1;
+        for c in &mut el.children {
+            c.collect_paint_hash = 1;
+        }
+        assert!(subtree_is_skippable(&el));
     }
 
     #[test]
@@ -1490,9 +1558,15 @@ mod tests {
 
     #[test]
     fn empty_leaf_is_skippable() {
+        let mut el = Element::new();
+        el.collect_paint_hash = 1;
         assert!(
-            subtree_is_skippable(&Element::new()),
-            "leaf replay avoids collect_paint_node on every glyph/rect"
+            subtree_is_skippable(&el),
+            "stamped leaf replay avoids collect_paint_node on every glyph/rect"
+        );
+        assert!(
+            !subtree_is_skippable(&Element::new()),
+            "hash 0 (invalidated / never stamped) must recollect"
         );
     }
 
