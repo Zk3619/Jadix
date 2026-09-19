@@ -5,8 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+use winit::cursor::CustomCursor;
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{CustomCursor, Window};
+use winit::window::Window;
 
 use crate::media::{decode_bytes, decode_data_url, load_src, DecodeOptions, DecodedImage};
 
@@ -165,7 +166,7 @@ fn resolve_hotspot(img: &CursorUrl, decoded: &DecodedCursor) -> Option<(u16, u16
 }
 
 fn try_custom(
-    event_loop: &ActiveEventLoop,
+    event_loop: &dyn ActiveEventLoop,
     cache: &mut CustomCursorCache,
     img: &CursorUrl,
 ) -> Option<CustomCursor> {
@@ -182,7 +183,7 @@ fn try_custom(
     if cache.failed.contains(&key) {
         return None;
     }
-    let source = match CustomCursor::from_rgba(
+    let source = match winit::cursor::CustomCursorSource::from_rgba(
         decoded.rgba,
         decoded.width as u16,
         decoded.height as u16,
@@ -195,14 +196,17 @@ fn try_custom(
             return None;
         }
     };
-    let cursor = event_loop.create_custom_cursor(source);
+    let Ok(cursor) = event_loop.create_custom_cursor(source) else {
+        cache.failed.insert(key);
+        return None;
+    };
     cache.ready.insert(key, cursor.clone());
     Some(cursor)
 }
 
 pub(crate) fn apply_cursor(
-    window: &Window,
-    event_loop: Option<&ActiveEventLoop>,
+    window: &dyn Window,
+    event_loop: Option<&dyn ActiveEventLoop>,
     cache: &mut CustomCursorCache,
     value: Option<CursorValue>,
 ) {
@@ -211,7 +215,7 @@ pub(crate) fn apply_cursor(
         for img in &value.images {
             if let Some(c) = try_custom(el, cache, img) {
                 window.set_cursor_visible(true);
-                window.set_cursor(c);
+                window.set_cursor(winit::cursor::Cursor::Custom(c));
                 return;
             }
         }

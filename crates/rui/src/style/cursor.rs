@@ -1,7 +1,7 @@
 //! CSS [`cursor`](https://developer.mozilla.org/zh-CN/docs/Web/CSS/Reference/Properties/cursor)
 //! 关键字（Level 4 预定义值）与 `url()` 自定义图像列表。
 
-use winit::window::CursorIcon;
+use winit::cursor::CursorIcon;
 
 /// 一条 `url(...)` 图像，可选热点（CSS 像素，图像左上为原点）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -327,12 +327,12 @@ impl CursorKind {
         })
     }
 
-    pub fn apply_to_window(self, window: &winit::window::Window) {
+    pub fn apply_to_window(self, window: &dyn winit::window::Window) {
         match self.to_winit() {
             None => window.set_cursor_visible(false),
             Some(icon) => {
                 window.set_cursor_visible(true);
-                window.set_cursor(icon);
+                window.set_cursor(winit::cursor::Cursor::Icon(icon));
             }
         }
     }

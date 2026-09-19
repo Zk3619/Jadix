@@ -2,7 +2,8 @@
 //! - [`Style`]：盒模型 + 与 Taffy 对齐的字段 + 矩形绘制（背景/边框/阴影）；
 //! - [`TextStyle`] / [`TextDecorationStyle`]：文本排版与装饰线（见 [`text_style`] 模块）；
 //! - 语义色解析；
-//! - CSS [`keyframes`] 曲线 + [`animation`] 运行时（transition / `@keyframes` tick）。
+//! - CSS [`keyframes`] 曲线 + [`animation`] 运行时（transition / `@keyframes` tick）；
+//! - [`generator`]：闭式 spring / inertia / 标量 [`animate`]（对照 Motion 生成器内核）。
 //!
 //! Element 侧 **transition 配方**（`MotionStyle` / `prepare_motion_sync`）在
 //! [`crate::utils::motion`]；分层决策见仓库 `docs/engine/animation_and_motion.md`。
@@ -20,6 +21,7 @@ mod easing;
 mod element_style;
 pub mod filter;
 mod focus_ring;
+mod generator;
 pub(crate) mod gradient;
 mod into_value;
 pub mod keyframes;
@@ -50,7 +52,8 @@ pub use animatable::{
 pub(crate) use animation::note_page_css_needs_frame;
 pub use animation::{
     advance_css_transition_timeline_ms, animation_run_active, any_page_css_needs_frame,
-    any_ui_animation_active, assign_transition_specified, copy_transition_used_values,
+    any_ui_animation_active, assign_transition_specified,
+    commit_style_transitions_after_specified_write, copy_transition_used_values,
     css_animation_needs_frame, css_transition_needs_frame, cubic_bezier_y_at_x,
     keyframes_anim_entry, prefers_reduced_motion, set_css_transition_max_step_ms,
     set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
@@ -99,6 +102,11 @@ pub use focus_ring::{
     focus_ring_params_for, focus_ring_params_for_style, focus_ring_resolved_color,
     focus_ring_shadow_matches, focus_ring_shadow_matches_color, sync_focus_ring_subtree,
     FOCUS_RING_BLUR, FOCUS_RING_HARD_SPREAD, FOCUS_RING_SOFT_BLUR,
+};
+pub use generator::{
+    animate, any_value_generator_active, find_spring, follow, stagger_ms, tick_value_generators,
+    use_animated, AnimatedNumber, GeneratorSample, Inertia, InertiaOptions, RepeatMode, Spring,
+    SpringOptions, SpringPhysics, StaggerFrom, TweenOptions, ValueDriver,
 };
 pub use gradient::{
     ensure_gradient_texture, flush_gradient_textures, gradient_raster_dpi, gradient_texture_radii,

@@ -64,6 +64,7 @@ fn style_needs_taffy_sync(before: &Style, after: &Style) -> bool {
         s.opacity = 1.0;
         s.translate = [0.0; 2];
         s.translate_pct = [0.0; 2];
+        s.radii = [0.0; 4];
         s.rotate_deg = 0.0;
         s.scale = [1.0; 2];
         s.scale_z = 1.0;
@@ -2272,12 +2273,25 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
             LayoutStatus::LayoutChanged
         }
         KnownUtility::RoundedFull => {
-            *el = std::mem::take(el).rounded_full();
-            LayoutStatus::LayoutChanged
+            const FULL: [f32; 4] = [-1.0, -1.0, -1.0, -1.0];
+            if el.style.radii == FULL {
+                LayoutStatus::Clean
+            } else {
+                el.style.radii = FULL;
+                // Radius is paint-only (Taffy does not consume it). Claiming
+                // LayoutChanged on every bind_class re-apply hitch the page
+                // while CSS spring Instant keeps running.
+                LayoutStatus::StyleChanged
+            }
         }
         KnownUtility::Rounded(len) => {
-            *el = std::mem::take(el).rounded(tw_px(len));
-            LayoutStatus::LayoutChanged
+            let r = tw_px(len);
+            if el.style.radii.iter().all(|x| (*x - r).abs() <= f32::EPSILON) {
+                LayoutStatus::Clean
+            } else {
+                el.style.radii = [r, r, r, r];
+                LayoutStatus::StyleChanged
+            }
         }
         KnownUtility::GridCols(n) => {
             *el = std::mem::take(el)
@@ -3529,6 +3543,22 @@ mod tests {
     }
 
     #[test]
+    fn rounded_full_reapply_is_paint_only() {
+        let mut el = Element::new();
+        let first = apply_class_list(&mut el, "rounded-full translate-x-0");
+        assert_eq!(first, LayoutStatus::StyleChanged);
+        assert_eq!(el.style.radii, [-1.0, -1.0, -1.0, -1.0]);
+        let again = apply_class_list(&mut el, "rounded-full translate-x-40");
+        assert_eq!(
+            again,
+            LayoutStatus::StyleChanged,
+            "re-applying rounded-full must not LayoutChanged (Go/Reset hitch)"
+        );
+        let same = apply_class_list(&mut el, "rounded-full translate-x-40");
+        assert_eq!(same, LayoutStatus::Clean);
+    }
+
+    #[test]
     fn apply_translate_and_truncate() {
         let mut el = Element::new();
         apply_class_list(&mut el, "translate-x-4 translate-y-2");
@@ -4499,6 +4529,11 @@ mod p1_utility_tests {
         assert!(
             !style_needs_taffy_sync(&before, &after),
             "offset-path motion must not dirty Taffy"
+        );
+        after.radii = [-1.0, -1.0, -1.0, -1.0];
+        assert!(
+            !style_needs_taffy_sync(&before, &after),
+            "border-radius is paint-only"
         );
         after.padding.top = taffy::style::LengthPercentage::length(8.0);
         assert!(

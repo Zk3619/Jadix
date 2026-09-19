@@ -172,7 +172,8 @@ pub(crate) fn direction_local_t(
     }
 }
 
-/// One implicit-Euler spring step. `pos` is the current value, `target` the rest length.
+/// One spring step. Closed-form (Motion) rather than implicit Euler, so large
+/// `dt` does not dump energy. Settle band stays the historical tight thresholds.
 pub fn spring_step(
     pos: f32,
     vel: f32,
@@ -182,21 +183,12 @@ pub fn spring_step(
     damping: f32,
     mass: f32,
 ) -> (f32, f32, bool) {
-    let dt = dt_secs.clamp(0.0, 0.064);
-    let m = mass.max(1e-4);
-    let x = pos - target;
-    let acc = (-stiffness * x - damping * vel) / m;
-    let vel = vel + acc * dt;
-    let pos = pos + vel * dt;
-    let settled = x.abs() < 8e-4 && vel.abs() < 8e-3;
-    if settled {
-        (target, 0.0, true)
-    } else {
-        (pos, vel, false)
-    }
+    super::generator::spring_step_closed(pos, vel, target, dt_secs, stiffness, damping, mass)
 }
 
-/// `spring` / `spring()` / `spring(stiffness)` / `spring(k, d)` / `spring(k, d, mass)`.
+/// `spring` / `spring()` / `spring(stiffness)` / `spring(k, d)` / `spring(k, d, mass)`
+/// plus Motion duration form: `spring(800ms)` / `spring(800ms, 0.25)` /
+/// `spring(duration 400ms, bounce 0.2)` / `spring(visual 0.3)`.
 pub fn parse_spring_timing(s: &str) -> Option<TimingFunction> {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
@@ -204,38 +196,8 @@ pub fn parse_spring_timing(s: &str) -> Option<TimingFunction> {
         return Some(TimingFunction::default_spring());
     }
     let inner = lower.strip_prefix("spring(")?.strip_suffix(')')?;
-    let parts: Vec<f32> = inner
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .filter_map(|p| p.parse().ok())
-        .collect();
-    let TimingFunction::Spring {
-        damping: dd,
-        mass: dm,
-        ..
-    } = TimingFunction::default_spring()
-    else {
-        return None;
-    };
-    Some(match parts.as_slice() {
-        [] => TimingFunction::default_spring(),
-        [k] => TimingFunction::Spring {
-            stiffness: *k,
-            damping: dd,
-            mass: dm,
-        },
-        [k, d] => TimingFunction::Spring {
-            stiffness: *k,
-            damping: *d,
-            mass: dm,
-        },
-        [k, d, m, ..] => TimingFunction::Spring {
-            stiffness: *k,
-            damping: *d,
-            mass: (*m).max(1e-4),
-        },
-    })
+    let opts = super::generator::parse_spring_options(inner)?;
+    Some(opts.resolve().to_timing_function())
 }
 
 #[cfg(test)]
@@ -294,5 +256,17 @@ mod tests {
         };
         assert!((stiffness - 90.0).abs() < 1e-3);
         assert!(parse_spring_timing("ease").is_none());
+        let TimingFunction::Spring {
+            stiffness: k2,
+            damping: d2,
+            ..
+        } = parse_spring_timing("spring(800ms, 0.25)").unwrap()
+        else {
+            panic!("spring(800ms)");
+        };
+        assert!(k2 > 10.0 && d2 > 1.0, "duration form must resolve physics");
+        assert!(parse_spring_timing("spring(visual 0.3)")
+            .unwrap()
+            .is_spring());
     }
 }

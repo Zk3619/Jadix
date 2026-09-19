@@ -946,7 +946,11 @@ impl TimingFunction {
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_y_at_x(t, *x1, *y1, *x2, *y2),
             Self::Steps { n, jump } => super::easing::eval_steps(t, *n, *jump),
             Self::LinearStops(id) => super::easing::eval_linear_stops(*id, t),
-            Self::Spring { .. } => t,
+            Self::Spring {
+                stiffness,
+                damping,
+                mass,
+            } => super::generator::spring_unit_easing(t, *stiffness, *damping, *mass),
         }
     }
 

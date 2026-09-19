@@ -5,6 +5,7 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use super::animation::{cubic_bezier_y_at_x, CubicTween};
+use super::generator::cycle_duration_clock;
 
 thread_local! {
     static CLOCK: RefCell<Option<Instant>> = const { RefCell::new(None) };
@@ -15,12 +16,8 @@ fn now() -> Instant {
     CLOCK.with(|c| *c.borrow_mut().get_or_insert_with(Instant::now))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Repeat {
-    Once,
-    Loop,
-    PingPong,
-}
+/// Same variants as [`RepeatMode`]; timeline clock and `AnimatedNumber` share one enum.
+pub use super::generator::RepeatMode as Repeat;
 
 #[derive(Clone, Debug)]
 pub struct TimelineInner {
@@ -105,21 +102,11 @@ pub fn tick_timelines(dt: f32) -> bool {
             }
             any = true;
             g.elapsed_s += dt.max(0.0);
-            if g.elapsed_s >= g.duration_s {
-                match g.repeat {
-                    Repeat::Once => {
-                        g.elapsed_s = g.duration_s;
-                        g.playing = false;
-                    }
-                    Repeat::Loop => {
-                        g.elapsed_s %= g.duration_s;
-                    }
-                    Repeat::PingPong => {
-                        g.elapsed_s = (g.elapsed_s - g.duration_s).min(g.duration_s);
-                        g.reverse = !g.reverse;
-                    }
-                }
-            }
+            let (elapsed, reverse, playing) =
+                cycle_duration_clock(g.elapsed_s, g.duration_s, g.repeat, g.reverse);
+            g.elapsed_s = elapsed;
+            g.reverse = reverse;
+            g.playing = playing;
         }
     });
     any

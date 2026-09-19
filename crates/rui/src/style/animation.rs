@@ -137,10 +137,17 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
                 let mut s = tw.borrow_mut();
                 if s.active {
                     s.elapsed += dt;
-                    let linear_t = (s.elapsed / s.duration).min(1.0);
-                    let eased = cubic_bezier_y_at_x(linear_t, s.x1, s.y1, s.x2, s.y2);
-                    s.value = s.from_value + (s.target - s.from_value) * eased;
-                    if linear_t >= 1.0 - 1e-6 {
+                    let sample = generator_tween_sample(
+                        s.from_value,
+                        s.target,
+                        s.elapsed * 1000.0,
+                        TweenOptions {
+                            duration_ms: s.duration * 1000.0,
+                            easing: TimingFunction::CubicBezier(s.x1, s.y1, s.x2, s.y2),
+                        },
+                    );
+                    s.value = sample.value;
+                    if sample.done {
                         s.value = s.target;
                         s.active = false;
                     } else {
@@ -161,9 +168,10 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
     }
 
     let timeline_any = super::timeline::tick_timelines(dt);
+    let generator_any = super::generator::tick_value_generators(dt);
 
     AnimationTick {
-        any: cubic_running || timeline_any,
+        any: cubic_running || timeline_any || generator_any,
         scrollbar_overlay: false,
     }
 }
@@ -177,6 +185,7 @@ pub fn any_ui_animation_active() -> bool {
             .iter()
             .any(|w| w.upgrade().is_some_and(|s| s.borrow().active))
     }) || super::timeline::any_timeline_playing()
+        || super::generator::any_value_generator_active()
 }
 
 thread_local! {
@@ -215,13 +224,17 @@ use super::element_style::{
     TransitionEntry, TransitionProperty, UnitSlot,
 };
 use super::filter::{interpolate_filter_lists, FilterList};
+use super::generator::{
+    tween_sample as generator_tween_sample, Spring, SpringPhysics, TweenOptions,
+};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// After `ControlFlow::Wait`, Instant can jump past `duration`. Cap **only**
-/// those idle jumps (see [`duration_tween_elapsed_ms`]); normal frames keep
-/// wall-clock progress so 30/60 Hz does not crawl.
+/// After `ControlFlow::Wait` or a hitch, Instant can jump past `duration` /
+/// a spring's start. Cap **only** those idle jumps (see
+/// [`duration_tween_elapsed_ms`]); normal frames keep wall-clock progress so
+/// 30/60 Hz does not crawl.
 const CSS_TRANSITION_IDLE_JUMP_MS: f32 = 80.0;
 const CSS_TRANSITION_DEFAULT_MAX_STEP_MS: f32 = 1000.0 / 60.0;
 
@@ -383,6 +396,8 @@ struct PropertyTween {
     written: Option<[f32; 8]>,
     vel: [f32; 8],
     last_ms: f64,
+    /// Held closed-form springs; `next(now − start)` — not a second Euler loop.
+    springs: [Option<Spring>; 8],
 }
 
 /// Filter list tween (cannot fit in `[f32; 8]`).
@@ -432,6 +447,8 @@ pub struct TransitionSnapshot {
     filter_tween: Option<FilterTween>,
     clip_tween: Option<ClipPathTween>,
     shadow_tween: Option<ShadowListTween>,
+    /// Last tick ended the final active tween. Dest-reset hide ghosts once.
+    settled_this_tick: bool,
 }
 
 impl TransitionSnapshot {
@@ -453,6 +470,16 @@ impl TransitionSnapshot {
 
     pub(crate) fn prop_tween_active(&self, prop: TransitionProperty) -> bool {
         self.tweens.get(&prop).is_some_and(|t| t.active)
+    }
+
+    /// Peek the hide-settle latch (`push_frame_paint_element` hide dest-reset).
+    pub(crate) fn settled_this_tick(&self) -> bool {
+        self.settled_this_tick
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_settled_this_tick(&mut self) {
+        self.settled_this_tick = true;
     }
 
     /// Write last-used (computed) values from this snapshot into `style`.
@@ -2038,45 +2065,45 @@ fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 
 fn tween_sample_spring(
     tween: &mut PropertyTween,
     now_ms: f64,
-    dt_secs: f32,
+    _dt_secs: f32,
     stiffness: f32,
     damping: f32,
     mass: f32,
 ) -> ([f32; 8], f32) {
-    let elapsed_ms = (now_ms - tween.start_ms).max(0.0) as f32;
+    // Same idle-jump policy as duration tweens. `Spring::next(t)` is absolute:
+    // a hitch / `ControlFlow::Wait` would otherwise sample mid-flight and skip
+    // the start (gallery Go/Reset).
+    let elapsed_ms = duration_tween_elapsed_ms(tween, now_ms);
     if elapsed_ms < tween.delay_ms {
         return (tween.from, 0.0);
     }
-    let clock_dt = ((now_ms - tween.last_ms) as f32 / 1000.0).max(0.0);
-    let dt = if tween.last_ms <= tween.start_ms + 1e-6 {
-        dt_secs.clamp(1.0 / 240.0, 0.08).max(1.0 / 60.0)
-    } else if clock_dt < 1e-6 {
-        // Monotonic clock did not move (virtual timeline not seeked, or coalesced
-        // scroll frames). Duration tweens can wait; spring integrates velocity and
-        // would freeze until the clock jumps.
-        dt_secs.clamp(1.0 / 240.0, 0.08)
-    } else {
-        clock_dt.clamp(1.0 / 240.0, 0.08)
+    let t_ms = elapsed_ms - tween.delay_ms;
+    let physics = SpringPhysics {
+        stiffness,
+        damping,
+        mass,
     };
-    tween.last_ms = now_ms;
     let mut out = tween.from;
     let mut all_settled = true;
     let n = tween.components as usize;
     for i in 0..n {
-        let (p, v, ok) = super::timing::spring_step(
-            out[i],
-            tween.vel[i],
-            tween.to[i],
-            dt,
-            stiffness,
-            damping,
-            mass,
+        if tween.springs[i].is_none() {
+            tween.springs[i] = Some(
+                Spring::from_physics(tween.from[i], tween.to[i], tween.vel[i], physics)
+                    .with_rest(8e-3, 8e-4),
+            );
+        }
+        let sample = tween.springs[i].as_ref().map(|s| s.next(t_ms)).unwrap_or(
+            super::generator::GeneratorSample {
+                value: tween.to[i],
+                velocity: 0.0,
+                done: true,
+            },
         );
-        out[i] = p;
-        tween.vel[i] = v;
-        all_settled &= ok;
+        out[i] = sample.value;
+        tween.vel[i] = sample.velocity;
+        all_settled &= sample.done;
     }
-    tween.from = out;
     (out, if all_settled { 1.0 } else { 0.0 })
 }
 
@@ -2222,6 +2249,17 @@ fn shadow_layers_close(a: &[BoxShadow], b: &[BoxShadow]) -> bool {
 /// 用于 Carousel 无缝瞬移等：清 snapshot 后若直接写入新目标，首帧 seed 会 `from=to=新目标` 而跳过动画。
 ///
 /// `style.transition` 必须已经挂上：为空时无法选择要建档的属性，只会清空 snapshot。
+/// After a bind writes a new specified value, sample standing transitions so the
+/// used style (and dest-reset AABB) stay at the current pose. Leaving `style` at
+/// the destination until the next render tick dest-resets a hole at the end and
+/// paints one flash frame (gallery Go/Reset).
+pub fn commit_style_transitions_after_specified_write(el: &mut crate::core::tree::Element) {
+    if el.style.transition.is_empty() {
+        return;
+    }
+    let _ = el.tick_css_transitions(0.0);
+}
+
 pub fn snap_element_transitions_to_current(
     style: &super::Style,
     snapshot: &mut TransitionSnapshot,
@@ -2308,6 +2346,7 @@ pub fn snap_element_transitions_to_current(
                 written: Some(val),
                 vel: [0.0; 8],
                 last_ms: now_ms,
+                springs: [const { None }; 8],
             },
         );
     }
@@ -2337,6 +2376,7 @@ pub(crate) fn settle_hover_paint_tweens(
         tween.written = Some(cur);
         tween.active = false;
         tween.vel = [0.0; 8];
+        tween.springs = [const { None }; 8];
     }
     if let Some(st) = snapshot.shadow_tween.as_mut() {
         let cur = shadow_layers(style);
@@ -2377,15 +2417,19 @@ pub fn tick_element_transitions_locked(
     dt_secs: f32,
 ) -> bool {
     if style.transition.is_empty() {
+        let was_active = snapshot.has_active_tweens();
         if !snapshot.tweens.is_empty() {
             snapshot.tweens.clear();
         }
         snapshot.filter_tween = None;
         snapshot.clip_tween = None;
         snapshot.shadow_tween = None;
+        snapshot.settled_this_tick = was_active;
         return false;
     }
 
+    snapshot.settled_this_tick = false;
+    let was_active = snapshot.has_active_tweens();
     let now_ms = css_timeline_now_ms();
 
     // Clone transition config to avoid borrow conflict with style mutation.
@@ -2617,6 +2661,7 @@ pub fn tick_element_transitions_locked(
                     written: Some(current),
                     vel: [0.0; 8],
                     last_ms: now_ms,
+                    springs: [const { None }; 8],
                 },
             );
             continue;
@@ -2643,6 +2688,7 @@ pub fn tick_element_transitions_locked(
                 written: None,
                 vel: [0.0; 8],
                 last_ms: now_ms,
+                springs: [const { None }; 8],
             });
 
         let target = specified_prop_value(tween, current, comps);
@@ -2662,6 +2708,7 @@ pub fn tick_element_transitions_locked(
             tween.active = true;
             tween.start_ms = now_ms;
             tween.last_ms = now_ms;
+            tween.springs = [const { None }; 8];
             // Keep `vel` so a mid-flight retarget carries speed into the new rest pose.
         }
 
@@ -2673,6 +2720,8 @@ pub fn tick_element_transitions_locked(
         let written = if linear_t >= 1.0 - 1e-6 {
             tween.active = false;
             tween.from = tween.to;
+            tween.vel = [0.0; 8];
+            tween.springs = [const { None }; 8];
             tween.to
         } else {
             any_active = true;
@@ -2689,6 +2738,9 @@ pub fn tick_element_transitions_locked(
 
     snapshot.tweens.retain(|p, _| config_map.contains_key(p));
 
+    if was_active && !any_active {
+        snapshot.settled_this_tick = true;
+    }
     any_active
 }
 
@@ -2907,6 +2959,65 @@ mod css_transition_dt_tests {
             style.translate[1] > 1.0 && style.translate[1] < 400.0,
             "first post-idle sample must be a mid, not the end (got {})",
             style.translate[1]
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn spring_tween_idle_instant_jump_keeps_a_mid_frame() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_max_step_ms(Some(1000.0 / 60.0));
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.translate = [0.0, 0.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Translate,
+            duration_ms: 0.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::default_spring(),
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.translate = [0.0, 800.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(400.0);
+        style.translate = [0.0, 800.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            snap.has_active_tweens(),
+            "idle Instant jump must not finish a spring in one tick"
+        );
+        assert!(
+            style.translate[1] > 0.01 && style.translate[1] < 400.0,
+            "first post-idle spring sample must be a start/mid, not the end (got {})",
+            style.translate[1]
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn bind_specified_translate_commit_keeps_first_paint_at_start() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut el = crate::core::tree::Element::new();
+        el.style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 400.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::EaseOut,
+        });
+        let _ = el.tick_css_transitions(0.0);
+        crate::style::apply_class_list(&mut el, "translate-x-40");
+        let specified = el.style.translate[0];
+        assert!(
+            specified > 100.0,
+            "translate-x-40 writes the end pose ({specified})"
+        );
+        crate::style::commit_style_transitions_after_specified_write(&mut el);
+        assert!(
+            el.style.translate[0] < specified * 0.2,
+            "first painted frame must stay near start, not the class target (got {})",
+            el.style.translate[0]
         );
         set_css_transition_virtual_timeline(false);
     }
